@@ -8,12 +8,12 @@ const GRAPHICS_REPLY_START: &[u8] = b"\x1b_G";
 const ESC: u8 = 0x1b;
 
 #[cfg(unix)]
-pub(super) type LiveGraphicsPacer = GraphicsPacer<TtyBarrierSource>;
+pub(crate) type LiveGraphicsPacer = GraphicsPacer<TtyBarrierSource>;
 
 #[cfg(not(unix))]
-pub(super) type LiveGraphicsPacer = NoopGraphicsPacer;
+pub(crate) type LiveGraphicsPacer = NoopGraphicsPacer;
 
-pub(super) struct GraphicsPacer<S: BarrierSource> {
+pub(crate) struct GraphicsPacer<S: BarrierSource> {
     source: S,
     scanner: GraphicsAckScanner,
     active: bool,
@@ -92,7 +92,7 @@ impl<S: BarrierSource> Drop for GraphicsPacer<S> {
     }
 }
 
-pub(super) trait PixelPacer {
+pub(crate) trait PixelPacer {
     fn active(&self) -> bool;
     fn wait_for_barrier(&mut self);
 }
@@ -107,7 +107,7 @@ impl<S: BarrierSource> PixelPacer for GraphicsPacer<S> {
     }
 }
 
-pub(super) trait BarrierSource {
+pub(crate) trait BarrierSource {
     fn poll_read(&mut self, buf: &mut [u8], timeout: Duration) -> io::Result<Option<usize>>;
 
     fn restore(&mut self) {}
@@ -161,7 +161,7 @@ impl Default for ScannerState {
 }
 
 #[cfg(unix)]
-pub(super) struct TtyBarrierSource {
+pub(crate) struct TtyBarrierSource {
     tty: std::fs::File,
     saved: Option<nix::sys::termios::Termios>,
 }
@@ -232,7 +232,7 @@ fn nix_to_io(err: nix::errno::Errno) -> io::Error {
 }
 
 #[cfg(not(unix))]
-pub(super) struct NoopGraphicsPacer;
+pub(crate) struct NoopGraphicsPacer;
 
 #[cfg(not(unix))]
 impl NoopGraphicsPacer {

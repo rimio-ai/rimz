@@ -101,6 +101,19 @@ pub fn load_cell_previews(size: PetGridSize, aspect: CellAspect) -> Vec<PetPrevi
     .collect()
 }
 
+pub fn load_cell_preview(
+    selector: &str,
+    size: PetGridSize,
+    aspect: CellAspect,
+) -> Option<PetPreview> {
+    let source = asset::resolve_pet_source(selector)?;
+    let id = source.id().into_owned();
+    let grid = super::load_pet(source)
+        .map_err(|err| err.to_string())
+        .map(|frames| render_sprite(&frames, size, aspect));
+    Some(PetPreview { id, grid })
+}
+
 pub fn load_pixel_previews() -> Vec<PetPixelPreview> {
     load_preview_results(listable_sources(), |source| {
         super::load_pet(source)
@@ -115,6 +128,20 @@ pub fn load_pixel_previews() -> Vec<PetPixelPreview> {
     .into_iter()
     .map(|(id, frame)| PetPixelPreview { id, frame })
     .collect()
+}
+
+pub fn load_pixel_preview(selector: &str) -> Option<PetPixelPreview> {
+    let source = asset::resolve_pet_source(selector)?;
+    let id = source.id().into_owned();
+    let frame = super::load_pet(source)
+        .map_err(|err| err.to_string())
+        .and_then(|frames| {
+            idle_sprite(&frames)
+                .cloned()
+                .map(PixelPreviewFrame::from)
+                .ok_or_else(|| "pet sheet has no frames".to_owned())
+        });
+    Some(PetPixelPreview { id, frame })
 }
 
 fn render_sprite(

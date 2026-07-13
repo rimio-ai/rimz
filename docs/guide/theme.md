@@ -25,7 +25,7 @@ A [scheme](#color-scheme) restyles the whole column, the [style preset](#style-p
 
 `[theme] style` is the one-line headline that pairs a color depth with a glyph set. `modern` is truecolor plus the [Nerd Font glyphs](#glyphs); `default` is [auto color depth](#color-depth) plus the shipped Unicode glyphs. An explicit `[theme] mode` or `[theme.glyphs] set` overrides the matching half, so you can take the Nerd Font icons at `256` color or pin truecolor with Unicode glyphs.
 
-`modern` expects a terminal that renders both halves — 24-bit color and a Nerd Font face — and the first-run probe writes it only when yours does; where either is missing each degrades on its own to the `default` behaviour. [Installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional) lists terminals and fonts that qualify.
+`modern` expects a terminal that renders both halves — 24-bit color and a Nerd Font face. First-run setup probes those capabilities separately and writes explicit `theme.mode` or `theme.glyphs.set` choices only when an answer changes the effective default, so either half can degrade independently. [Installation](./installation.md#truecolor-terminal-and-a-nerd-font-optional) lists terminals and fonts that qualify.
 
 ```toml
 [theme]

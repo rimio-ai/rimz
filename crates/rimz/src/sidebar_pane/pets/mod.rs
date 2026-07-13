@@ -34,8 +34,8 @@ pub use pixel::{
     write_synchronized_pixel_output,
 };
 pub use preview::{
-    PetPixelPreview, PetPreview, PixelPreviewFrame, PreviewCell, listable_ids, load_cell_previews,
-    load_pixel_previews,
+    PetPixelPreview, PetPreview, PixelPreviewFrame, PreviewCell, listable_ids, load_cell_preview,
+    load_cell_previews, load_pixel_preview, load_pixel_previews,
 };
 
 use asset::PetSource;

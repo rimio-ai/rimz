@@ -4,7 +4,7 @@ RimZ runs with zero configuration, and one setup pass makes it a comfortable dai
 
 - initialize the per-machine config,
 - install the agent hooks that let the sidebar see your agents,
-- turn on true color, Nerd Font glyphs, and a pet,
+- check truecolor and Nerd Font support independently, and preview a pet,
 - switch on the hands-off behaviors that keep agents working while you're away,
 - and give your own Zellij or tmux a baseline worth keeping.
 
@@ -23,10 +23,10 @@ cd ~/code/your-project && rimz
 
 - offers to keep an existing config and refresh it against the current templates,
 - offers hook install for every detected agent,
-- shows a live color-and-icon probe, and
-- asks whether to enable a sidebar pet.
+- shows separate live truecolor and Nerd Font probes, and
+- previews the configured sidebar pet before asking whether to enable it.
 
-The first `rimz` run on a terminal asks the same hook, glyph, and pet questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs or trust grants — which suits a server provisioning script.
+The first `rimz` run on a terminal asks the same hook, color, glyph, and pet questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs or trust grants — which suits a server provisioning script.
 
 Four files carry the settings this guide touches:
 
@@ -94,11 +94,11 @@ style = "modern"       # truecolor + Nerd Font icons; "default" = auto color + U
 
 Schemes, palette slots, and the full display model are in [theming](./theme.md).
 
-The first-run probe prints a truecolor sweep and the sampled sidebar icons, then asks whether to enable the rich look; answering yes writes `style = "modern"`, and no falls back to plain colors and text glyphs.
+First-run setup puts each capability beside its own question: a color sweep checks truecolor, then sampled sidebar icons check the Nerd Font. The detected terminal capability supplies the truecolor default; answers that change the effective defaults write `theme.mode` and `theme.glyphs.set` independently, so either capability can fall back without disabling the other.
 
 ## Pets
 
-Pets add a small animated companion to the sidebar's provider dashboard, following the fleet's state. The setup pet question enables the default `rocky`; one command turns a pet on later:
+Pets add a small animated companion to the sidebar's provider dashboard, following the fleet's state. Setup renders the configured pet at the same pixel or cell-art tier the dashboard will use, then asks whether to enable the default `rocky`; when the best-effort preview is unavailable, the question remains. One command turns a pet on later:
 
 ```sh
 rimz config set theme.pets.enabled true

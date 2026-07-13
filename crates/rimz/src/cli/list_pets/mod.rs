@@ -8,9 +8,9 @@ use rimz::sidebar_pane::pets::{self, PetPixelPreview, PetPreview, PreviewCell};
 
 use super::{GlobalFlags, machine_config};
 use crate::cli::render;
-use pacing::{LiveGraphicsPacer, PixelPacer};
+pub(crate) use pacing::{LiveGraphicsPacer, PixelPacer};
 
-mod pacing;
+pub(crate) mod pacing;
 
 const GAP: u16 = 2;
 
@@ -127,7 +127,7 @@ where
     Ok(())
 }
 
-fn write_pet_row(
+pub(crate) fn write_pet_row(
     out: &mut impl Write,
     chunk: &[PetPreview],
     slot: pets::PetGridSize,
@@ -155,7 +155,7 @@ fn write_pet_row(
     writeln!(out)
 }
 
-fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
+pub(crate) fn write_pixel_pet_row_with_pacer<P: PixelPacer>(
     out: &mut impl Write,
     chunk: &[(u32, PetPixelPreview)],
     wrap: bool,

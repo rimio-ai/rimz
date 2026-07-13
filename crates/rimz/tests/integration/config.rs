@@ -51,6 +51,9 @@ fn run_setup_pty(env: &Env, input: &str) -> String {
     cmd.env("HOME", &env.home_root);
     cmd.env("SHELL", "/bin/sh");
     cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
+    cmd.env("RIMZ_PETS_OFFLINE", "1");
+    cmd.env("TERM", "dumb");
+    cmd.env_remove("COLORTERM");
     let empty_path = env.home_root.join("empty-bin");
     std::fs::create_dir_all(&empty_path).expect("mkdir empty PATH");
     cmd.env("PATH", empty_path);
@@ -315,8 +318,10 @@ fn setup_without_tty_reports_and_writes_nothing() {
 
     assert!(stdout.contains("Rimz setup"));
     assert!(stdout.contains("changed nothing"));
-    assert!(!stdout.contains("Enable the rich sidebar look?"));
-    assert!(!stderr.contains("Enable the rich sidebar look?"));
+    assert!(!stdout.contains("Use truecolor?"));
+    assert!(!stderr.contains("Use truecolor?"));
+    assert!(!stdout.contains("Use Nerd Font icons?"));
+    assert!(!stderr.contains("Use Nerd Font icons?"));
     assert!(!stdout.contains("Want a pet?"));
     assert!(!stderr.contains("Want a pet?"));
 
@@ -337,8 +342,10 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("Wrote"));
     assert!(stdout.contains("No hooks or trust grants were changed"));
-    assert!(!stdout.contains("Enable the rich sidebar look?"));
-    assert!(!stderr.contains("Enable the rich sidebar look?"));
+    assert!(!stdout.contains("Use truecolor?"));
+    assert!(!stderr.contains("Use truecolor?"));
+    assert!(!stdout.contains("Use Nerd Font icons?"));
+    assert!(!stderr.contains("Use Nerd Font icons?"));
     assert!(!stdout.contains("Want a pet?"));
     assert!(!stderr.contains("Want a pet?"));
 
@@ -361,34 +368,54 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
 fn setup_pty_writes_and_reruns_first_run_answers() {
     let env = Env::new();
 
-    let output = run_setup_pty(&env, "y\ny\n");
+    let output = run_setup_pty(&env, "y\ny\ny\n");
 
-    assert!(output.contains("Enable the rich sidebar look?"));
+    assert!(output.contains("Use truecolor?"));
+    assert!(output.contains("Use Nerd Font icons?"));
     assert!(output.contains("Want a pet?"));
-    assert!(output.contains("modern style"));
+    assert!(output.contains("✓ truecolor"));
+    assert!(output.contains("✓ Nerd Font icons"));
     assert!(output.contains("rocky joins the room"));
     let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
-        text.contains("style = \"modern\""),
-        "modern style set:\n{text}"
+        text.contains("mode = \"truecolor\""),
+        "truecolor set:\n{text}"
+    );
+    assert!(
+        text.contains("set = \"nerd_font\""),
+        "Nerd Font glyphs set:\n{text}"
+    );
+    assert!(
+        !text.lines().any(|line| line.trim().starts_with("style =")),
+        "style stays unset:\n{text}"
     );
     assert!(
         text.contains("[theme.pets]") && text.contains("enabled = true"),
         "pet enabled:\n{text}"
     );
 
-    let output = run_setup_pty(&env, "\nn\nn\n");
+    let output = run_setup_pty(&env, "\nn\nn\nn\n");
 
     assert!(output.contains("Keep your current config? [Y/n]"));
-    assert!(output.contains("Enable the rich sidebar look?"));
+    assert!(output.contains("Use truecolor?"));
+    assert!(output.contains("Use Nerd Font icons?"));
     assert!(output.contains("Want a pet? It lives in the sidebar and reacts to your fleet."));
-    assert!(output.matches("[Y/n]").count() >= 3);
-    assert!(output.contains("default style"));
-    assert!(output.contains("pet disabled"));
+    assert!(output.matches("[Y/n]").count() >= 4);
+    assert!(output.contains("256-color palette"));
+    assert!(output.contains("Unicode glyphs"));
+    assert!(output.contains("pet disabled"), "setup output:\n{output}");
     let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
-        text.contains("style = \"default\""),
-        "default style set:\n{text}"
+        text.contains("mode = 256") || text.contains("mode = \"256\""),
+        "indexed color set:\n{text}"
+    );
+    assert!(
+        text.contains("set = \"unicode\""),
+        "Unicode glyphs set:\n{text}"
+    );
+    assert!(
+        !text.lines().any(|line| line.trim().starts_with("style =")),
+        "style stays unset:\n{text}"
     );
     assert!(
         text.contains("[theme.pets]") && text.contains("enabled = false"),

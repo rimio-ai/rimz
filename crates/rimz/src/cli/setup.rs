@@ -54,8 +54,8 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     report_remote_template()?;
     let hook_intro_rendered = room::ensure_detected_agent_hooks()?;
     let config = rimz::config::MachineConfig::load().context("loading per-machine config")?;
-    let defaults = first_run::Defaults::from_config(&config);
-    first_run::run(defaults, hook_intro_rendered)?;
+    let defaults = first_run::Defaults::from_config(&config, rimz::tui::truecolor());
+    first_run::run(defaults, config.theme.pets.clone(), hook_intro_rendered)?;
     print_line("Run `rimz start` when ready.")?;
     Ok(())
 }
