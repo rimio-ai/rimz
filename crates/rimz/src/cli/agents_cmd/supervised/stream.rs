@@ -133,7 +133,11 @@ fn emit_stream_updates(
     sink: &mut StreamSink<'_>,
     record: &RunRecord,
 ) -> Result<()> {
-    for text in cursor.messages(record.transcript_path.as_deref(), adapter) {
+    for text in cursor.messages(
+        record.transcript_path.as_deref(),
+        record.agent_id.as_ref(),
+        adapter,
+    ) {
         sink.message(text)?;
     }
     if let Some(live) = store

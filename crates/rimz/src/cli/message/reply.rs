@@ -38,7 +38,11 @@ impl ReplyTarget {
             agent_id: agent.agent_id.clone(),
             agent_name: agent.name.clone(),
             label,
-            cursor: Some(anchored_cursor(transcript_path.as_deref(), adapter)),
+            cursor: Some(anchored_cursor(
+                transcript_path.as_deref(),
+                Some(&agent.agent_id),
+                adapter,
+            )),
             transcript_path,
         }
     }
@@ -422,10 +426,15 @@ fn advance_leg(
     {
         leg.cursor = Some(anchored_cursor(
             agent.and_then(|agent| agent.transcript_path.as_deref()),
+            agent.map(|agent| &agent.agent_id),
             adapter,
         ));
     } else if let (Some(cursor), Some(agent)) = (&mut leg.cursor, agent) {
-        for message in cursor.messages(agent.transcript_path.as_deref(), adapter) {
+        for message in cursor.messages(
+            agent.transcript_path.as_deref(),
+            Some(&agent.agent_id),
+            adapter,
+        ) {
             leg.last_message = Some(message);
         }
     }
@@ -465,9 +474,13 @@ fn advance_leg(
     }
 }
 
-fn anchored_cursor(path: Option<&str>, adapter: &dyn AgentAdapter) -> TranscriptCursor {
+fn anchored_cursor(
+    path: Option<&str>,
+    session_id: Option<&AgentSessionId>,
+    adapter: &dyn AgentAdapter,
+) -> TranscriptCursor {
     let mut cursor = TranscriptCursor::new(false);
-    let _ = cursor.messages(path, adapter);
+    let _ = cursor.messages(path, session_id, adapter);
     cursor
 }
 
@@ -780,11 +793,11 @@ mod tests {
         )
         .unwrap();
 
-        let messages = target
-            .cursor
-            .as_mut()
-            .unwrap()
-            .messages(agent.transcript_path.as_deref(), adapter);
+        let messages = target.cursor.as_mut().unwrap().messages(
+            agent.transcript_path.as_deref(),
+            Some(&agent.agent_id),
+            adapter,
+        );
         assert_eq!(messages, ["fresh answer"]);
     }
 

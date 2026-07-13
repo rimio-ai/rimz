@@ -16,6 +16,7 @@ pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub mod server;
 pub(crate) mod spend;
+mod transcript;
 
 use std::path::{Path, PathBuf};
 
@@ -510,6 +511,26 @@ impl AgentAdapter for OpencodeAdapter {
         )
     }
 
+    fn last_assistant_message(
+        &self,
+        event_name: &str,
+        _payload: &Value,
+        observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        if !matches!(event_name, "session_idle" | "session_error") {
+            return None;
+        }
+        let session_id = observation.agent_id.as_ref()?;
+        let path = observation
+            .transcript_path
+            .as_deref()
+            .map(Path::new)
+            .filter(|path| path.is_file())
+            .map(Path::to_path_buf)
+            .or_else(|| spend::opencode_db_files().into_iter().next())?;
+        transcript::last_assistant_message(&path, session_id)
+    }
+
     fn context_refresh_spawn(
         &self,
         trigger: RefreshTrigger<'_>,
@@ -550,6 +571,31 @@ impl AgentAdapter for OpencodeAdapter {
             return Some(path.to_path_buf());
         }
         self.transcript_files().into_iter().next()
+    }
+
+    fn read_transcript_messages(
+        &self,
+        path: &Path,
+        session_id: Option<&AgentSessionId>,
+    ) -> std::io::Result<Vec<crate::agents::TranscriptMessage>> {
+        transcript::read_messages(path, session_id)
+    }
+
+    fn transcript_position(
+        &self,
+        path: &Path,
+        session_id: Option<&AgentSessionId>,
+    ) -> Option<crate::agents::TranscriptPosition> {
+        transcript::position(path, session_id)
+    }
+
+    fn read_assistant_transcript_page(
+        &self,
+        path: &Path,
+        session_id: Option<&AgentSessionId>,
+        position: crate::agents::TranscriptPosition,
+    ) -> Option<crate::agents::TranscriptPage> {
+        transcript::read_assistant_page(path, session_id, position)
     }
 
     fn parse_spend(

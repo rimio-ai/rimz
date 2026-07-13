@@ -604,10 +604,12 @@ pub trait AgentAdapter: Send + Sync {
     ///
     /// JSONL adapters inherit the text-file implementation. Adapters backed by
     /// a row store override this method, so history callers never need to know
-    /// whether a recorded transcript path names text or a database.
+    /// whether a recorded transcript path names text or a database. The typed
+    /// session id selects one conversation when a source contains many.
     fn read_transcript_messages(
         &self,
         path: &Path,
+        _session_id: Option<&crate::ids::AgentSessionId>,
     ) -> std::io::Result<Vec<transcript::TranscriptMessage>> {
         std::fs::read_to_string(path).map(|lines| self.parse_transcript_messages(&lines))
     }
@@ -625,8 +627,13 @@ pub trait AgentAdapter: Send + Sync {
     }
 
     /// Return the current monotonic end position for a transcript source.
-    /// JSONL uses bytes; row-backed adapters can use their highest row id.
-    fn transcript_position(&self, path: &Path) -> Option<transcript::TranscriptPosition> {
+    /// JSONL uses bytes; row-backed adapters can use their highest row id. The
+    /// position belongs to the selected session within a shared row store.
+    fn transcript_position(
+        &self,
+        path: &Path,
+        _session_id: Option<&crate::ids::AgentSessionId>,
+    ) -> Option<transcript::TranscriptPosition> {
         std::fs::metadata(path)
             .ok()
             .map(|meta| transcript::TranscriptPosition::new(meta.len()))
@@ -637,6 +644,7 @@ pub trait AgentAdapter: Send + Sync {
     fn read_assistant_transcript_page(
         &self,
         path: &Path,
+        _session_id: Option<&crate::ids::AgentSessionId>,
         position: transcript::TranscriptPosition,
     ) -> Option<transcript::TranscriptPage> {
         let (bytes, next) = read_transcript_lines(path, position.get())?;

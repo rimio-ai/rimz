@@ -104,7 +104,7 @@ mod tests {
         std::fs::write(&path, format!("{line}\n")).unwrap();
 
         let messages = crate::agents::PiAdapter
-            .read_transcript_messages(&path)
+            .read_transcript_messages(&path, None)
             .unwrap();
 
         assert_eq!(messages.len(), 1);
@@ -131,7 +131,7 @@ mod tests {
         .unwrap();
         let adapter = crate::agents::PiAdapter;
         let prices = crate::agents::PriceBook::embedded();
-        let messages = adapter.read_transcript_messages(&path).unwrap();
+        let messages = adapter.read_transcript_messages(&path, None).unwrap();
         let spend = adapter.parse_spend(&path, None, &prices);
 
         let turns =

@@ -52,10 +52,14 @@ pub struct TranscriptPage {
     pub messages: Vec<String>,
 }
 
-/// Incremental reader for adapter-normalized assistant messages in one transcript.
+/// Incremental reader for adapter-normalized assistant messages in one session.
+///
+/// The source identity includes the session id because row-backed adapters can
+/// keep many conversations at one transcript path.
 #[derive(Debug)]
 pub struct TranscriptCursor {
     path: Option<String>,
+    session_id: Option<String>,
     position: TranscriptPosition,
     skip_existing_on_first_path: bool,
 }
@@ -64,6 +68,7 @@ impl TranscriptCursor {
     pub fn new(from_start: bool) -> Self {
         Self {
             path: None,
+            session_id: None,
             position: TranscriptPosition::START,
             skip_existing_on_first_path: !from_start,
         }
@@ -72,30 +77,35 @@ impl TranscriptCursor {
     pub fn messages(
         &mut self,
         transcript_path: Option<&str>,
+        session_id: Option<&crate::ids::AgentSessionId>,
         adapter: &dyn AgentAdapter,
     ) -> Vec<String> {
         let Some(path) = transcript_path else {
             return Vec::new();
         };
         let path_ref = Path::new(path);
-        if self.path.as_deref() != Some(path) {
+        let session_key = session_id.map(crate::ids::AgentSessionId::as_str);
+        if self.path.as_deref() != Some(path) || self.session_id.as_deref() != session_key {
             self.position = if self.skip_existing_on_first_path {
                 adapter
-                    .transcript_position(path_ref)
+                    .transcript_position(path_ref, session_id)
                     .unwrap_or(TranscriptPosition::START)
             } else {
                 TranscriptPosition::START
             };
             self.path = Some(path.to_owned());
+            self.session_id = session_key.map(ToOwned::to_owned);
             self.skip_existing_on_first_path = false;
         }
         if adapter
-            .transcript_position(path_ref)
+            .transcript_position(path_ref, session_id)
             .is_some_and(|current| current < self.position)
         {
             self.position = TranscriptPosition::START;
         }
-        let Some(page) = adapter.read_assistant_transcript_page(path_ref, self.position) else {
+        let Some(page) =
+            adapter.read_assistant_transcript_page(path_ref, session_id, self.position)
+        else {
             return Vec::new();
         };
         self.position = page.next;
@@ -123,7 +133,7 @@ mod tests {
 
         assert!(
             cursor
-                .messages(Some(&first_path), &crate::agents::CodexAdapter)
+                .messages(Some(&first_path), None, &crate::agents::CodexAdapter)
                 .is_empty(),
             "default attach starts at the current end"
         );
@@ -137,7 +147,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            cursor.messages(Some(&first_path), &crate::agents::CodexAdapter),
+            cursor.messages(Some(&first_path), None, &crate::agents::CodexAdapter),
             vec!["new"]
         );
 
@@ -149,7 +159,7 @@ mod tests {
         .unwrap();
         let second_path = second.to_string_lossy().into_owned();
         assert_eq!(
-            cursor.messages(Some(&second_path), &crate::agents::CodexAdapter),
+            cursor.messages(Some(&second_path), None, &crate::agents::CodexAdapter),
             vec!["fresh"],
             "a new transcript path starts at byte zero"
         );

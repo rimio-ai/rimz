@@ -148,6 +148,15 @@ impl Default for Pricing {
 #[derive(Clone, Debug, Default)]
 pub struct PriceBook {
     entries: HashMap<String, Pricing>,
+    /// Memoizes [`PriceBook::fuzzy`]'s boundary-aware scan, keyed by the trimmed
+    /// lookup name, so a model that misses the exact-match map pays the linear
+    /// scan once rather than on every per-entry `price` call across a spend
+    /// walk. Misses cache as `None` to short-circuit the unknown-model chase's
+    /// repeated lookups. `Arc<Mutex<…>>` keeps the derived `Clone` and lets the
+    /// spend walk's worker threads share one memo; entries never mutate after
+    /// construction, so a cached result can never go stale, and a rebuilt book
+    /// (the only way entries change) starts with a fresh memo.
+    fuzzy_cache: Arc<Mutex<HashMap<String, Option<Pricing>>>>,
 }
 
 impl PriceBook {
@@ -156,7 +165,10 @@ impl PriceBook {
         let mut entries = embedded::load();
         builtins::put_builtins(&mut entries);
         apply_builtin_long_context_rates(&mut entries);
-        Self { entries }
+        Self {
+            entries,
+            fuzzy_cache: Arc::default(),
+        }
     }
 
     /// Build a book from an arbitrary LiteLLM-shaped document (tests, tooling).
@@ -165,7 +177,10 @@ impl PriceBook {
         let mut entries = embedded::parse(json);
         builtins::put_builtins(&mut entries);
         apply_builtin_long_context_rates(&mut entries);
-        Self { entries }
+        Self {
+            entries,
+            fuzzy_cache: Arc::default(),
+        }
     }
 
     /// Assemble the merged book: embedded snapshot, then builtins as ccusage's
@@ -181,15 +196,37 @@ impl PriceBook {
             entries.entry(model.clone()).or_insert(*price);
         }
         apply_builtin_long_context_rates(&mut entries);
-        Self { entries }
+        Self {
+            entries,
+            fuzzy_cache: Arc::default(),
+        }
     }
 
     /// Resolve the price for `model`: exact match, then a longest-key fuzzy scan.
     pub fn price(&self, model: &str) -> Option<Pricing> {
-        if let Some(price) = self.entries.get(model.trim()) {
+        let key = model.trim();
+        if let Some(price) = self.entries.get(key) {
             return Some(*price);
         }
-        self.fuzzy(model)
+        // The fuzzy scan is linear over every entry, so memoize it per lookup
+        // name. Read under a short lock, release it for the scan so the spend
+        // walk's worker threads never serialize on the expensive path, then
+        // record the result — a miss included — for the next call.
+        {
+            let cache = self
+                .fuzzy_cache
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(cached) = cache.get(key) {
+                return *cached;
+            }
+        }
+        let result = self.fuzzy(key);
+        self.fuzzy_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key.to_owned(), result);
+        result
     }
 
     /// Longest stored key that is a boundary-prefix of the normalized lookup.
@@ -629,6 +666,29 @@ mod tests {
         assert!(PriceBook::embedded().price("gpt-5.5-codex").is_some());
         assert!(PriceBook::embedded().price("gpt-5.6").is_some());
         assert!(PriceBook::embedded().price("gpt-5.6-sol").is_some());
+    }
+
+    #[test]
+    fn fuzzy_memo_is_transparent_and_survives_a_clone() {
+        let book = book();
+
+        // Repeated fuzzy lookups (hit then cached) stay identical, and a cached
+        // miss keeps reading as a miss rather than flipping to a stale hit.
+        let first = book.price("claude-sonnet-4-20250514-via-bedrock").unwrap();
+        let second = book.price("claude-sonnet-4-20250514-via-bedrock").unwrap();
+        assert_eq!(first, second);
+        assert!((second.input - 3e-6).abs() < 1e-18);
+        assert!(book.price("totally-unknown-model").is_none());
+        assert!(book.price("totally-unknown-model").is_none());
+
+        // A clone shares entries, so a fuzzy lookup on it resolves the same way
+        // whether or not the original primed the memo first.
+        let clone = book.clone();
+        assert_eq!(
+            clone.price("claude-sonnet-4-20250514-via-bedrock").unwrap(),
+            first
+        );
+        assert!(clone.price("gpt-5-9").is_none());
     }
 
     #[test]

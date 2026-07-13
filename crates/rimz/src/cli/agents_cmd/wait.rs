@@ -379,7 +379,11 @@ fn wait_interactive_agent_stream(
     loop {
         let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
         let agent = crate::cli::resolve_agent_one(&snapshot, reference, None, current_channel)?;
-        for text in cursor.messages(agent.transcript_path.as_deref(), adapter) {
+        for text in cursor.messages(
+            agent.transcript_path.as_deref(),
+            Some(&agent.agent_id),
+            adapter,
+        ) {
             sink.message(text)?;
         }
         sink.status(interactive_live_status(agent))?;
