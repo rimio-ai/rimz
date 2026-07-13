@@ -7,6 +7,10 @@ use std::num::NonZeroU16;
 
 use super::SplitDirection;
 
+const AUTO_WIDTH_BREAKPOINT_COLS: u64 = 240;
+const AUTO_WIDTH_NARROW_PERCENT: u16 = 25;
+const AUTO_WIDTH_WIDE_PERCENT: u16 = 30;
+
 /// One user-requested sidebar width step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WidthAdjust {
@@ -14,9 +18,32 @@ pub enum WidthAdjust {
     Wider,
 }
 
+/// Sidebar width policy from `theme.display.width_percent`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WidthPercent {
+    /// An explicit configured percentage, clamped to 10-90 when used.
+    Fixed(u16),
+    /// The width-keyed default: 30% above 240 columns and 25% at or below.
+    Auto,
+}
+
+impl WidthPercent {
+    /// Resolve the policy for a known view width, or use the wide branch when
+    /// geometry is unavailable.
+    pub fn resolve(self, view_cols: Option<u64>) -> u16 {
+        match self {
+            Self::Fixed(percent) => percent.clamp(10, 90),
+            Self::Auto => match view_cols {
+                Some(cols) if cols <= AUTO_WIDTH_BREAKPOINT_COLS => AUTO_WIDTH_NARROW_PERCENT,
+                _ => AUTO_WIDTH_WIDE_PERCENT,
+            },
+        }
+    }
+}
+
 /// Resolve the canonical width for one live view: the room-runtime override
-/// verbatim when present, otherwise the configured percentage capped at
-/// `max_cols`.
+/// verbatim when present, otherwise the explicit or width-keyed percentage
+/// capped at `max_cols`.
 pub(crate) fn live_target_cols(
     width: SidebarWidth,
     width_override: Option<NonZeroU16>,
@@ -28,35 +55,38 @@ pub(crate) fn live_target_cols(
     )
 }
 
-/// Sidebar pane width: a percentage of each live view, capped at `max_cols`
-/// columns (`theme.display.max_cols`). [`SidebarWidth::birth_size`] seeds panes
-/// whose view geometry is not yet known; once live, the canonical width is
-/// [`live_target_cols`] of the current view and room-runtime override. A
-/// `width_percent` or `max_cols` edit therefore applies on the next
-/// convergence.
+/// Sidebar pane width: an explicit or width-keyed percentage of each live view,
+/// capped at `max_cols` columns (`theme.display.max_cols`).
+/// [`SidebarWidth::birth_size`] seeds panes whose view geometry is not yet
+/// known; once live, the canonical width is [`live_target_cols`] of the current
+/// view and room-runtime override. A `width_percent` or `max_cols` edit
+/// therefore applies on the next convergence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SidebarWidth {
-    /// Percentage of the view width — tracks terminal size below the cap.
-    pub percent: u16,
+    /// Percentage policy for the view width — tracks terminal size below the cap.
+    pub percent: WidthPercent,
     /// Column cap the percentage never exceeds (`theme.display.max_cols`).
     pub max_cols: NonZeroU16,
 }
 
 impl SidebarWidth {
-    /// The width a machine config asks for: its configured percentage and
-    /// column cap. Percentage bounds are enforced when the width is used.
+    /// The width a machine config asks for: its explicit or width-keyed
+    /// percentage and column cap. Percentage bounds are enforced when used.
     pub fn from_config(display: &crate::config::DisplayConfig) -> Self {
         Self {
-            percent: display.width_percent,
+            percent: display
+                .width_percent
+                .map_or(WidthPercent::Auto, WidthPercent::Fixed),
             max_cols: display.max_cols,
         }
     }
 
     /// The capped target in columns for a view `total_cols` wide:
-    /// `min(percent, max_cols)`.
+    /// `min(percent × total_cols, max_cols)`.
     pub fn target_cols(self, total_cols: u64) -> u64 {
-        let percent = (total_cols * u64::from(self.percent.clamp(10, 90)) / 100).max(1);
-        percent.min(self.cap_cols())
+        let percent = self.percent.resolve(Some(total_cols));
+        let cols = (total_cols * u64::from(percent) / 100).max(1);
+        cols.min(self.cap_cols())
     }
 
     /// The configured column cap.
@@ -68,9 +98,10 @@ impl SidebarWidth {
     /// wide: [`Self::target_cols`] of the probe — the percentage capped at
     /// `max_cols` — as columns for tmux and as a percentage spelling for
     /// Zellij layouts. An unknown width (`None` — launch outside a tty)
-    /// resolves to the bare cap with the raw percentage.
+    /// resolves to the bare cap with the explicit percentage or the automatic
+    /// policy's wide fallback.
     pub fn birth_size(self, detected_cols: Option<u16>) -> BirthSize {
-        let percent = self.percent.clamp(10, 90);
+        let fallback_percent = self.percent.resolve(None);
         match detected_cols {
             Some(total) if total > 0 => {
                 let target = self.target_cols(u64::from(total));
@@ -89,12 +120,12 @@ impl SidebarWidth {
                 let derived = ((target * 100 + total / 2) / total).clamp(1, 100);
                 BirthSize {
                     cols,
-                    percent: u16::try_from(derived).unwrap_or(percent),
+                    percent: u16::try_from(derived).unwrap_or(fallback_percent),
                 }
             }
             _ => BirthSize {
                 cols: self.max_cols,
-                percent,
+                percent: fallback_percent,
             },
         }
     }
@@ -113,9 +144,9 @@ impl SidebarWidth {
             Some(total) if total > 0 => {
                 let total = u64::from(total);
                 let derived = ((u64::from(cols.get()) * 100 + total / 2) / total).clamp(1, 100);
-                u16::try_from(derived).unwrap_or(self.percent.clamp(10, 90))
+                u16::try_from(derived).unwrap_or_else(|_| self.percent.resolve(Some(total)))
             }
-            _ => self.percent.clamp(10, 90),
+            _ => self.percent.resolve(None),
         };
         BirthSize { cols, percent }
     }
@@ -138,7 +169,7 @@ pub struct BirthSize {
     pub cols: NonZeroU16,
     /// The verdict as a share of the probed width (rounded to nearest, ≥ 1%)
     /// — the unknown-geometry spelling; the configured percentage when no
-    /// terminal was probed.
+    /// terminal was probed; automatic policy uses its wide fallback.
     pub percent: u16,
 }
 
@@ -183,29 +214,42 @@ mod tests {
     fn sidebar_width_uses_configured_percent_and_cap() {
         let mut display = crate::config::DisplayConfig::default();
         let width = SidebarWidth::from_config(&display);
-        assert_eq!(width.percent, 30);
+        assert_eq!(width.percent, WidthPercent::Auto);
         assert_eq!(width.cap_cols(), 72);
-        assert_eq!(width.target_cols(120), 36);
+        assert_eq!(width.target_cols(120), 30);
         assert_eq!(width.target_cols(300), 72);
 
-        display.width_percent = 25;
+        display.width_percent = Some(25);
         let max = NonZeroU16::new(100).expect("nonzero");
         display.max_cols = max;
         let width = SidebarWidth::from_config(&display);
-        assert_eq!(width.percent, 25);
+        assert_eq!(width.percent, WidthPercent::Fixed(25));
         assert_eq!(width.max_cols, max);
         assert_eq!(width.target_cols(120), 30);
 
-        display.width_percent = 5;
+        display.width_percent = Some(5);
         let width = SidebarWidth::from_config(&display);
-        assert_eq!(width.percent, 5, "config stays raw until use");
+        assert_eq!(
+            width.percent,
+            WidthPercent::Fixed(5),
+            "config stays raw until use",
+        );
         assert_eq!(width.target_cols(120), 12);
         assert_eq!(width.birth_size(None).percent, 10);
 
-        display.width_percent = 95;
+        display.width_percent = Some(95);
         let width = SidebarWidth::from_config(&display);
         assert_eq!(width.target_cols(60), 54);
         assert_eq!(width.birth_size(None).percent, 90);
+    }
+
+    #[test]
+    fn automatic_width_switches_at_240_view_columns() {
+        let width = SidebarWidth::default();
+
+        assert_eq!(width.target_cols(200), 50);
+        assert_eq!(width.target_cols(240), 60);
+        assert_eq!(width.target_cols(241), 72);
     }
 
     #[test]
@@ -215,11 +259,13 @@ mod tests {
             cols: NonZeroU16::new(cols).expect("nonzero"),
             percent,
         };
-        // Below the cap the verdict is the percentage share: 30% of 120 is
-        // 36 ≤ 72.
-        assert_eq!(width.birth_size(Some(120)), birth(36, 30));
-        // Exactly at the cap: 30% of 240 is 72.
-        assert_eq!(width.birth_size(Some(240)), birth(72, 30));
+        // Narrow views use the 25% branch below the cap.
+        assert_eq!(width.birth_size(Some(120)), birth(30, 25));
+        assert_eq!(width.birth_size(Some(200)), birth(50, 25));
+        // The breakpoint remains on the narrow branch.
+        assert_eq!(width.birth_size(Some(240)), birth(60, 25));
+        // Above it the 30% branch applies, then the cap bites.
+        assert_eq!(width.birth_size(Some(300)), birth(72, 24));
         // Past it the cap bites, and the percentage spelling rounds to the
         // nearest share of the probed width: round(72·100/340) = 21.
         assert_eq!(width.birth_size(Some(340)), birth(72, 21));
@@ -228,7 +274,7 @@ mod tests {
         // The percentage spelling never rounds below 1%, however wide the view.
         assert_eq!(width.birth_size(Some(7300)), birth(72, 1));
         // Unknown width (no tty, or a zero-width probe) resolves to the bare
-        // cap with the raw percentage for unknown-geometry panes.
+        // cap with the wide fallback percentage for unknown-geometry panes.
         assert_eq!(width.birth_size(None), birth(72, 30));
         assert_eq!(width.birth_size(Some(0)), birth(72, 30));
     }
@@ -262,7 +308,7 @@ mod tests {
         let width = SidebarWidth::default();
 
         assert_eq!(live_target_cols(width, Some(runtime), 120), 90);
-        assert_eq!(live_target_cols(width, None, 120), 36);
+        assert_eq!(live_target_cols(width, None, 120), 30);
         assert_eq!(live_target_cols(width, None, 300), 72);
     }
 
@@ -300,7 +346,7 @@ mod tests {
         assert_eq!(birth.cols.get(), 72);
         assert_eq!(
             width.target_cols(190),
-            57,
+            47,
             "live geometry can differ from the launch seed",
         );
         assert_ne!(u64::from(birth.cols.get()), width.target_cols(190));

@@ -1073,7 +1073,7 @@ impl MuxBackend for ZellijBackend {
                     .percent,
             )
         })()
-        .unwrap_or_else(|| opts.sidebar.width.percent.clamp(10, 90));
+        .unwrap_or_else(|| opts.sidebar.width.percent.resolve(None));
         let layout = TempLayoutFile::new(render_tab_layout(opts, sidebar_percent)?)?;
         let args = [
             "new-tab".to_owned(),

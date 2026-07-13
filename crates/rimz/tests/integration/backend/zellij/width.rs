@@ -120,7 +120,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
 
     // The launch seed came from a 340-column terminal, but this attached client
     // is only 210 columns wide. The detached percentage seed therefore lands
-    // near 44 columns while the live target is 63.
+    // near 44 columns while the live narrow-view target is 52.
     let _client = AttachedClient::attach(xdg.path(), &name, 210, 60);
     wait_for_attached_client(xdg.path(), &name);
     write_topology_cache_from_list_panes(xdg.path(), &sidebar.workspace_id, &name);
@@ -144,32 +144,38 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[53..=65]),
-        "the birth pane converges near the smaller view's 63-column target, got {:?}",
+        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57]),
+        "the birth pane converges near the smaller view's 52-column target, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 
-    // A native tab starts from the policy percentage at the live client width.
+    // A native tab starts from the unknown-geometry wide fallback, then live
+    // convergence applies the narrow-view policy.
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 2);
     assert!(
         wait_for_sidebar_columns(xdg.path(), &name, &[53..=65, 60..=65]),
-        "the native template births the new tab near 30% of the live view, got {:?}",
+        "the native template births the new tab near the 30% fallback, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
     assert_eq!(
         backend
             .converge_sidebar_widths(&sync)
             .expect("verify new tab target"),
-        0,
+        1,
+    );
+    assert!(
+        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57, 47..=57]),
+        "both tabs converge near the 25% live target, got {:?}",
+        sidebar_columns_by_tab(xdg.path(), &name),
     );
 
     // Keep one tab active while three existing tabs need the room override.
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 3);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[53..=65, 60..=65, 60..=65]),
-        "all three tabs start at policy width, got {:?}",
+        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57, 47..=57, 60..=65]),
+        "the new tab starts at the fallback while converged tabs stay narrow, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 

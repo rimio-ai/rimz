@@ -107,10 +107,12 @@ pub struct DisplayConfig {
     /// `max_provider_blocks`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub provider_list: Vec<String>,
-    /// Sidebar pane width as a percentage of each view, capped by `max_cols`
-    /// and clamped to 10-90 when used. A room-wide `a`/`d` width selection
-    /// outranks this percentage and the cap.
-    pub width_percent: u16,
+    /// Sidebar pane width as a percentage of each view, capped by `max_cols`.
+    /// Unset uses 30% above 240 view columns and 25% at or below; an explicit
+    /// value stays fixed and is clamped to 10-90 when used. A room-wide `a`/`d`
+    /// width selection outranks this percentage and the cap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_percent: Option<u16>,
     /// Cap on the sidebar pane width in columns. Reconcile converges live panes
     /// toward the configured percentage up to this cap unless a room-wide
     /// `a`/`d` width selection is present.
@@ -147,7 +149,7 @@ impl Default for DisplayConfig {
             max_provider_blocks: default_max_provider_blocks(),
             provider_tabs: ProviderTabsMode::default(),
             provider_list: Vec::new(),
-            width_percent: default_sidebar_width_percent(),
+            width_percent: None,
             max_cols: default_sidebar_max_cols(),
             scrollbar: ScrollbarMode::default(),
             card_density: CardDensityMode::default(),
@@ -315,11 +317,6 @@ impl Default for HighlightStepsConfig {
             indexed: 4,
         }
     }
-}
-
-/// Default sidebar width as a percentage of each view.
-fn default_sidebar_width_percent() -> u16 {
-    30
 }
 
 /// Default column cap on the sidebar pane width: comfortably past the widest

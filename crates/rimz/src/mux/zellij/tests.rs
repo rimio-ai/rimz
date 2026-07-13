@@ -575,7 +575,7 @@ exit 0
         session_name: "rimz-test".to_owned(),
         workspace_id: workspace_id.clone(),
         width: crate::mux::SidebarWidth {
-            percent: 30,
+            percent: crate::mux::WidthPercent::Fixed(30),
             max_cols: std::num::NonZeroU16::new(72).expect("non-zero cap"),
         },
         width_override: None,
@@ -726,7 +726,7 @@ exit 0
         session_name: "rimz-test".to_owned(),
         workspace_id: workspace_id.clone(),
         width: crate::mux::SidebarWidth {
-            percent: 30,
+            percent: crate::mux::WidthPercent::Fixed(30),
             max_cols: std::num::NonZeroU16::new(72).expect("non-zero cap"),
         },
         width_override: None,

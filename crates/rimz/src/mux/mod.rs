@@ -30,7 +30,8 @@ pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
 pub use width::{
-    BirthSize, SidebarWidth, WidthAdjust, detect_terminal_size, split_along_longer_edge,
+    BirthSize, SidebarWidth, WidthAdjust, WidthPercent, detect_terminal_size,
+    split_along_longer_edge,
 };
 pub use zellij::ZellijBackend;
 

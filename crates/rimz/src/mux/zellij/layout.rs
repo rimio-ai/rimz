@@ -113,7 +113,8 @@ pub(super) fn render_session_layout(
     // The explicit tabs instantiate on the detached background session at
     // birth; only the `new_tab_template` waits for an attached client.
     let sidebar = sidebar_pane_kdl(opts, None, opts.birth_size.percent)?;
-    let new_tab_sidebar = sidebar_pane_kdl(opts, None, opts.width.percent.clamp(10, 90))?;
+    // Auto spells its wide fallback here; convergence owns the per-view width.
+    let new_tab_sidebar = sidebar_pane_kdl(opts, None, opts.width.percent.resolve(None))?;
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {

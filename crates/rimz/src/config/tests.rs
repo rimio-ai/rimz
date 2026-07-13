@@ -1039,7 +1039,7 @@ fn display_numeric_bounds_parse_and_clamp_at_use() {
         "[theme.display]\nmax_cols = 100\nrefresh_ms = 80\n",
     ))
     .expect("load");
-    assert_eq!(absent.theme.display.width_percent, 30);
+    assert_eq!(absent.theme.display.width_percent, None);
 
     let config = load_no_fragments(&write_named(
         &dir,
@@ -1047,14 +1047,14 @@ fn display_numeric_bounds_parse_and_clamp_at_use() {
         "[theme.display]\nwidth_percent = 25\nmax_cols = 100\nrefresh_ms = 80\n",
     ))
     .expect("load");
-    assert_eq!(config.theme.display.width_percent, 25);
+    assert_eq!(config.theme.display.width_percent, Some(25));
     assert_eq!(
         config.theme.display.max_cols,
         NonZeroU16::new(100).expect("nonzero")
     );
     assert_eq!(config.theme.display.refresh_ms, 80);
     assert_eq!(config.theme.display.resolved_refresh_ms(), 80);
-    assert_eq!(MachineConfig::default().theme.display.width_percent, 30);
+    assert_eq!(MachineConfig::default().theme.display.width_percent, None);
     assert_eq!(MachineConfig::default().theme.display.max_cols.get(), 72);
     assert_eq!(
         MachineConfig::default().theme.display.refresh_ms,

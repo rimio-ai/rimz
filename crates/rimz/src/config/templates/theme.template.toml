@@ -34,7 +34,7 @@
 # Sidebar render preferences - cadence, sizing, and dashboard layout. All optional.
 ## refresh_ms = 100                   # render/animation grid; clamped internally
 ## pixel = "auto"                    # "auto" or "off"; master kitty-graphics switch
-## width_percent = 30                 # sidebar share of each view; clamped to 10-90
+## width_percent = 30                 # fixed share; unset uses 30% above 240 cols, 25% at/below
 ## max_cols = 72                      # live column cap for sidebar pane width
 ## scrollbar = "auto"                 # "auto", "always", or "never"
 ## card_density = "auto"              # "auto", "expanded", or "compact"

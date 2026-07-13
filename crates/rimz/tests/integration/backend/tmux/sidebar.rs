@@ -58,8 +58,8 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
     );
     assert_eq!(
         left_pane_width(&server, "verdict:1"),
-        Some(36),
-        "the pre-convergence hook still carries the 36-column birth seed",
+        Some(30),
+        "the pre-convergence hook still carries the 30-column birth seed",
     );
     let sync = rimz::mux::WidthSyncOptions {
         session_name: "verdict".to_owned(),

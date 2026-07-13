@@ -197,7 +197,7 @@ fn session_layout_uses_policy_percent_for_template_and_seed_for_birth() {
     let opts = sidebar_opts("rimz-width", None, Some(120));
     let layout = render_session_layout(&opts, None, &[]).expect("render layout");
     assert!(
-        layout.contains(r#"pane size="30%" name="rimz-sidebar" borderless=true"#),
+        layout.contains(r#"pane size="25%" name="rimz-sidebar" borderless=true"#),
         "the explicit birth tab instantiates detached, so the verdict is \
              its percentage share:\n{layout}",
     );
@@ -205,8 +205,8 @@ fn session_layout_uses_policy_percent_for_template_and_seed_for_birth() {
         layout
             .matches(r#"pane size="30%" name="rimz-sidebar" borderless=true"#)
             .count(),
-        2,
-        "birth and template both use 30% below the cap:\n{layout}",
+        1,
+        "the template uses the wide fallback while the birth uses the probed width:\n{layout}",
     );
     let capped = sidebar_opts("rimz-width", None, Some(340));
     let layout = render_session_layout(&capped, None, &[]).expect("render layout");

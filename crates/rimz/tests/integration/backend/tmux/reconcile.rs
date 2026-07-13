@@ -28,7 +28,7 @@ fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
     assert_eq!(report.redocked, 1);
     assert_eq!(
         server.display(sidebar.raw(), "#{pane_width}"),
-        "72",
+        "60",
         "an out-of-band sidebar snaps exactly to the birth verdict",
     );
     server.tmux(&["resize-pane", "-t", sidebar.raw(), "-x", "74"]);
@@ -39,7 +39,7 @@ fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
     assert_eq!(report.redocked, 1);
     assert_eq!(
         server.display(sidebar.raw(), "#{pane_width}"),
-        "72",
+        "60",
         "a native manual resize beyond the exact backend's band snaps back",
     );
 }
