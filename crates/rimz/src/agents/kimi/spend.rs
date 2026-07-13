@@ -3,12 +3,18 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use crate::agents::pricing::PriceBook;
 use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, record_unknown_model};
 
 use super::wire;
 
-const FALLBACK_MODEL: &str = "moonshot/kimi-k2.5";
+#[derive(Default, Deserialize, Serialize)]
+#[serde(default)]
+struct KimiSpendState {
+    request: Option<wire::RequestAttribution>,
+}
 
 pub fn files() -> Vec<PathBuf> {
     wire::transcript_files()
@@ -26,32 +32,69 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
         };
     };
     let configured = configured_model();
+    let mut state: KimiSpendState = resume
+        .and_then(|cursor| cursor.state.clone())
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
     let mut entries = Vec::new();
     let mut unknown_models = BTreeMap::new();
-    for (timestamp, record) in wire::usage_records(&records) {
-        let model = (!record.model.trim().is_empty())
-            .then_some(record.model.as_str())
+    for wire_record in &records {
+        if wire_record.kind == "llm.request" {
+            state.request = wire_record.parse::<wire::RequestAttribution>();
+            continue;
+        }
+        if wire_record.kind != "usage.record" {
+            continue;
+        }
+        let Some(timestamp) = wire_record.time else {
+            continue;
+        };
+        let Some(record) = wire_record.parse::<wire::UsageRecord>() else {
+            continue;
+        };
+        let request_key = state.request.as_ref().and_then(request_model_key);
+        let model = non_empty(&record.model)
             .filter(|model| prices.price(model).is_some())
+            .or_else(|| {
+                request_key
+                    .as_deref()
+                    .filter(|model| prices.price(model).is_some())
+                    .map(ToOwned::to_owned)
+            })
+            .or_else(|| {
+                state
+                    .request
+                    .as_ref()
+                    .and_then(|request| request.model.as_deref())
+                    .filter(|model| prices.price(model).is_some())
+                    .map(ToOwned::to_owned)
+            })
             .or_else(|| {
                 configured
                     .as_deref()
                     .filter(|model| prices.price(model).is_some())
-            })
-            .unwrap_or(FALLBACK_MODEL);
+                    .map(ToOwned::to_owned)
+            });
+        let unknown_label = state
+            .request
+            .as_ref()
+            .and_then(|request| request.model_alias.as_deref())
+            .map(wire::normalize_model_alias)
+            .or_else(|| non_empty(&record.model))
+            .or_else(|| configured.as_deref().map(wire::normalize_model_alias));
+        let Some(model_label) = model.clone().or(unknown_label) else {
+            continue;
+        };
         let usage = record.usage;
         let fresh = usage.input_other.unwrap_or(0);
         let cache_read = usage.input_cache_read.unwrap_or(0);
         let cache_write = usage.input_cache_creation.unwrap_or(0);
         let output = usage.output.unwrap_or(0);
-        let ts_secs = if timestamp > 100_000_000_000.0 {
-            (timestamp / 1_000.0).max(0.0) as u64
-        } else {
-            timestamp.max(0.0) as u64
-        };
-        let cost_usd = match prices.price(model) {
+        let ts_secs = (timestamp / 1_000.0) as u64;
+        let cost_usd = match model.as_deref().and_then(|model| prices.price(model)) {
             Some(price) => price.cost(fresh, output, cache_write, 0, cache_read, false),
             None => {
-                record_unknown_model(&mut unknown_models, model, ts_secs);
+                record_unknown_model(&mut unknown_models, &model_label, ts_secs);
                 0.0
             }
         };
@@ -74,7 +117,7 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
                 .map(ToOwned::to_owned),
             is_sidechain: false,
             has_speed: false,
-            model: Some(model.to_owned()),
+            model: Some(model_label),
             rolled: false,
         });
     }
@@ -83,11 +126,26 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
         origin: None,
         cursor: SpendCursor {
             offset: next,
-            state: None,
+            state: serde_json::to_value(state).ok(),
         },
         unknown_models,
         replace_entries: false,
     }
+}
+
+fn request_model_key(request: &wire::RequestAttribution) -> Option<String> {
+    let provider = request.provider.as_deref().and_then(non_empty)?;
+    let model = request.model.as_deref().and_then(non_empty)?;
+    if model.starts_with(&format!("{provider}/")) {
+        Some(model)
+    } else {
+        Some(format!("{provider}/{model}"))
+    }
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 pub fn configured_model() -> Option<String> {

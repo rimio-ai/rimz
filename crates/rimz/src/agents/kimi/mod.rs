@@ -5,6 +5,7 @@ mod install;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod spend;
+mod transcript;
 pub mod wire;
 
 use std::path::{Path, PathBuf};
@@ -607,16 +608,12 @@ impl AgentAdapter for KimiAdapter {
             parsed.common.session_id.as_deref()?,
             parsed.common.cwd.as_deref().map(Path::new),
         )?;
-        let tail = super::read_transcript_tail(&path)?;
-        self.parse_transcript_messages(&tail)
-            .into_iter()
-            .rev()
-            .find(|message| message.role == super::TranscriptRole::Assistant)
-            .map(|message| message.text)
+        let lines = std::fs::read_to_string(path).ok()?;
+        transcript::latest_assistant(&lines)
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<super::TranscriptMessage> {
-        lines.lines().filter_map(parse_context_message).collect()
+        transcript::parse_messages(lines)
     }
 
     fn ends_session(&self, event_name: &str) -> bool {
@@ -715,11 +712,11 @@ impl AgentAdapter for KimiAdapter {
         trigger: RefreshTrigger<'_>,
         ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
-        if matches!(trigger, RefreshTrigger::Hook(event) if !matches!(event, "Stop" | "PostToolUse" | "PostToolUseFailure" | "PostCompact" | "Notification"))
+        if matches!(trigger, RefreshTrigger::Hook(event) if !matches!(event, "SessionStart" | "UserPromptSubmit" | "Stop" | "StopFailure" | "Interrupt" | "PostToolUse" | "PostToolUseFailure" | "PostCompact" | "Notification"))
         {
             return None;
         }
-        refresh_wire_context(ctx.agent_id, ctx.prior_transcript_stat)
+        refresh_wire_context(ctx)
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
@@ -743,9 +740,7 @@ impl AgentAdapter for KimiAdapter {
     }
 
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
-        if let Some(path) = prior_path.filter(|path| {
-            path.file_name().is_some_and(|name| name == "wire.jsonl") && path.is_file()
-        }) {
+        if let Some(path) = prior_path.filter(|path| valid_main_wire(path, session_id)) {
             return Some(path.to_path_buf());
         }
         wire::wire_path(session_id, None)
@@ -825,27 +820,31 @@ fn parse_questions(input: &Value) -> Option<Vec<AskQuestion>> {
     (!questions.is_empty()).then_some(questions)
 }
 
-fn refresh_wire_context(
-    session_id: &str,
-    prior_stat: Option<&TranscriptStat>,
-) -> Option<LocalContextRefresh> {
-    let path = wire::wire_path(session_id, None)?;
+fn refresh_wire_context(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {
+    let path =
+        KimiAdapter.session_transcript(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
     let stat = transcript_stat(&path)?;
-    refresh_wire_path(&path, stat, prior_stat)
+    refresh_wire_path(&path, ctx.agent_id, stat, ctx)
 }
 
 fn refresh_wire_path(
     path: &Path,
+    session_id: &str,
     stat: TranscriptStat,
-    prior_stat: Option<&TranscriptStat>,
+    ctx: &LocalContextRefreshCtx<'_>,
 ) -> Option<LocalContextRefresh> {
-    if prior_stat == Some(&stat) {
+    if ctx.prior_transcript_stat == Some(&stat) {
         return None;
     }
     let tail = super::read_transcript_tail(path)?;
     let records = wire::records_from_bytes(tail.as_bytes());
-    let latest_usage = wire::usage_records(&records).into_iter().last();
-    let model_id = latest_model(&records).or_else(spend::configured_model);
+    let attribution = wire::effective_attribution(&records);
+    let latest_usage = wire::latest_turn_usage(&records);
+    let configured = spend::configured_model().map(|model| wire::normalize_model_alias(&model));
+    let model_id = attribution
+        .display_model()
+        .or_else(|| ctx.model_hint.map(wire::normalize_model_alias))
+        .or(configured);
     let context_window_size = configured_context_window(model_id.as_deref()).or(Some(262_144));
     let tokens = if let Some(input) = wire::latest_context_tokens(&records) {
         Some(AgentTokenUsage {
@@ -855,16 +854,14 @@ fn refresh_wire_path(
             current_usage: Some(AgentCurrentUsage {
                 input_tokens: latest_usage
                     .as_ref()
-                    .and_then(|(_, record)| record.usage.input_other),
-                output_tokens: latest_usage
-                    .as_ref()
-                    .and_then(|(_, record)| record.usage.output),
+                    .and_then(|record| record.usage.input_other),
+                output_tokens: latest_usage.as_ref().and_then(|record| record.usage.output),
                 cache_creation_input_tokens: latest_usage
                     .as_ref()
-                    .and_then(|(_, record)| record.usage.input_cache_creation),
+                    .and_then(|record| record.usage.input_cache_creation),
                 cache_read_input_tokens: latest_usage
                     .as_ref()
-                    .and_then(|(_, record)| record.usage.input_cache_read),
+                    .and_then(|record| record.usage.input_cache_read),
             }),
         })
     } else {
@@ -880,40 +877,40 @@ fn refresh_wire_path(
             current_usage: Some(AgentCurrentUsage::default()),
         })
     };
+    let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
+    let cost = super::spending::session_cost_usd(&KimiAdapter, session_id, path, &prices);
     Some(LocalContextRefresh {
         model_id,
-        effort: latest_effort(&records),
+        effort: attribution.thinking_effort,
         tokens,
-        cost: None,
+        cost,
         turn_error: None,
         turn_complete: None,
         turn_interrupted: None,
-        transcript_path: None,
+        transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
     })
 }
 
-fn latest_model(records: &[wire::WireRecord]) -> Option<String> {
-    records.iter().rev().find_map(|record| {
-        let model = match record.kind.as_str() {
-            "usage.record" => record.fields.get("model"),
-            "config.update" => record.fields.get("modelAlias"),
-            _ => None,
-        }?
-        .as_str()?
-        .trim();
-        (!model.is_empty()).then(|| model.to_owned())
-    })
-}
-
-fn latest_effort(records: &[wire::WireRecord]) -> Option<String> {
-    records.iter().rev().find_map(|record| {
-        let effort = (record.kind == "config.update")
-            .then(|| record.fields.get("thinkingEffort"))??
-            .as_str()?
-            .trim();
-        (!effort.is_empty()).then(|| effort.to_owned())
-    })
+fn valid_main_wire(path: &Path, session_id: &str) -> bool {
+    path.is_file()
+        && path.file_name().is_some_and(|name| name == "wire.jsonl")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "main")
+        && path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "agents")
+        && path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some(session_id)
 }
 
 fn percentage(used: u64, capacity: u64) -> u8 {
@@ -963,43 +960,6 @@ fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
         mtime_nanos: modified.subsec_nanos(),
         len: metadata.len(),
     })
-}
-
-fn parse_context_message(line: &str) -> Option<super::TranscriptMessage> {
-    let record = serde_json::from_str::<wire::WireRecord>(line).ok()?;
-    let value = wire::record_message(&record)?;
-    let role = match value.get("role").and_then(Value::as_str)? {
-        "user" => super::TranscriptRole::User,
-        "assistant" => super::TranscriptRole::Assistant,
-        _ => return None,
-    };
-    let content = value.get("content")?;
-    let text = if let Some(text) = content.as_str() {
-        text.to_owned()
-    } else {
-        content
-            .as_array()?
-            .iter()
-            .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let text = text.trim();
-    (!text.is_empty()).then(|| super::TranscriptMessage {
-        role,
-        at: record_time(record.time),
-        text: text.to_owned(),
-    })
-}
-
-fn record_time(time: f64) -> Option<Timestamp> {
-    let millis = if time > 100_000_000_000.0 {
-        time as i64
-    } else {
-        (time * 1_000.0) as i64
-    };
-    Timestamp::from_millisecond(millis).ok()
 }
 
 #[cfg(test)]

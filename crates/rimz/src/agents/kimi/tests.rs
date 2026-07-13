@@ -230,26 +230,39 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
         &path,
         concat!(
             "{\"type\":\"metadata\",\"protocol_version\":\"1.4\"}\n",
+            "{\"type\":\"llm.request\",\"time\":1769999999000,\"provider\":\"moonshot\",\"model\":\"kimi-k2.5\",\"modelAlias\":\"kimi-code/kimi-for-coding\",\"thinkingEffort\":\"high\"}\n",
             "{\"type\":\"usage.record\",\"time\":1770000000000,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"session\",\"usage\":{\"inputOther\":999}}\n",
-            "{\"type\":\"usage.record\",\"time\":1770000001000,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"turn\",\"usage\":{\"inputOther\":40000,\"output\":20,\"inputCacheRead\":10000,\"inputCacheCreation\":0}}\n"
+            "{\"type\":\"usage.record\",\"time\":1770000001000,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"turn\",\"usage\":{\"inputOther\":40000,\"output\":20,\"inputCacheRead\":10000,\"inputCacheCreation\":30}}\n",
+            "{\"type\":\"context.append_loop_event\",\"time\":1770000001001,\"event\":{\"type\":\"step.end\",\"uuid\":\"step-1\",\"usage\":{\"inputOther\":40000,\"output\":20,\"inputCacheRead\":10000,\"inputCacheCreation\":30}}}\n",
+            "{\"type\":\"usage.record\",\"time\":1770000001002,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"session\",\"usage\":{\"inputOther\":5}}\n"
         ),
     )
     .unwrap();
     let records = wire::records_from_bytes(&std::fs::read(&path).unwrap());
-    assert_eq!(wire::usage_records(&records).len(), 2);
+    assert_eq!(wire::usage_records(&records).len(), 3);
     let stat = transcript_stat(&path).unwrap();
-    let tokens = refresh_wire_path(&path, stat, None)
-        .unwrap()
-        .tokens
-        .unwrap();
+    let cache = dir.path().join("prices.json");
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "s1",
+        model_hint: None,
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &cache,
+    };
+    let refresh = refresh_wire_path(&path, "s1", stat, &ctx).unwrap();
+    let tokens = refresh.tokens.clone().unwrap();
     assert_eq!(tokens.used_percentage, Some(19));
     assert_eq!(
         tokens.current_usage.unwrap().cache_read_input_tokens,
         Some(10_000)
     );
+    assert_eq!(refresh.model_id.as_deref(), Some("kimi-for-coding"));
+    assert_eq!(refresh.effort.as_deref(), Some("high"));
+    assert!(refresh.cost.unwrap().total_cost_usd.unwrap() > 0.0);
+    assert_eq!(refresh.transcript_path.as_deref(), path.to_str());
 
     let parsed = spend::parse(&path, None, &super::super::PriceBook::embedded());
-    assert_eq!(parsed.entries.len(), 2);
+    assert_eq!(parsed.entries.len(), 3);
     assert_eq!(
         parsed.entries[1].model.as_deref(),
         Some("moonshot/kimi-k2.5")
@@ -280,13 +293,17 @@ fn compaction_and_effective_model_config_drive_context() {
     let records = wire::records_from_bytes(
         concat!(
             "{\"type\":\"config.update\",\"time\":1,\"modelAlias\":\"large\",\"thinkingEffort\":\"high\"}\n",
-            "{\"type\":\"usage.record\",\"time\":2,\"model\":\"large\",\"usageScope\":\"session\",\"usage\":{\"inputOther\":90000}}\n",
-            "{\"type\":\"context.apply_compaction\",\"time\":3,\"tokensBefore\":90000,\"tokensAfter\":12000}\n",
+            "{\"type\":\"context.append_loop_event\",\"time\":2,\"event\":{\"type\":\"step.end\",\"uuid\":\"a\",\"usage\":{\"inputOther\":50000,\"inputCacheRead\":30000,\"inputCacheCreation\":5000,\"output\":5000}}}\n",
+            "{\"type\":\"context.append_loop_event\",\"time\":3,\"event\":{\"type\":\"step.end\",\"uuid\":\"b\",\"usage\":{}}}\n",
+            "{\"type\":\"context.clear\",\"time\":4}\n",
+            "{\"type\":\"context.append_loop_event\",\"time\":5,\"event\":{\"type\":\"step.end\",\"uuid\":\"c\",\"usage\":{\"inputOther\":20000}}}\n",
+            "{\"type\":\"context.apply_compaction\",\"time\":6,\"tokensBefore\":20000,\"tokensAfter\":12000}\n",
         )
         .as_bytes(),
     );
-    assert_eq!(latest_model(&records).as_deref(), Some("large"));
-    assert_eq!(latest_effort(&records).as_deref(), Some("high"));
+    let attribution = wire::effective_attribution(&records);
+    assert_eq!(attribution.display_model().as_deref(), Some("large"));
+    assert_eq!(attribution.thinking_effort.as_deref(), Some("high"));
     assert_eq!(wire::latest_context_tokens(&records), Some(12_000));
 }
 
@@ -300,7 +317,15 @@ fn wire_without_usage_emits_fresh_sentinel() {
     )
     .unwrap();
     let stat = transcript_stat(&path).unwrap();
-    let tokens = refresh_wire_path(&path, stat, None)
+    let cache = dir.path().join("prices.json");
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "s1",
+        model_hint: None,
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &cache,
+    };
+    let tokens = refresh_wire_path(&path, "s1", stat, &ctx)
         .unwrap()
         .tokens
         .unwrap();
@@ -309,15 +334,213 @@ fn wire_without_usage_emits_fresh_sentinel() {
 }
 
 #[test]
-fn flat_context_messages_hide_thinking_parts() {
+fn current_wire_reconstructs_visible_conversation_without_duplicate_prompts() {
     let lines = concat!(
-        "{\"type\":\"context.append_message\",\"time\":1770000000000,\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n",
-        "{\"type\":\"context.append_message\",\"time\":1770000001000,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"think\",\"think\":\"secret\"},{\"type\":\"text\",\"text\":\"done\"}]}}\n"
+        "{\"type\":\"turn.prompt\",\"time\":1770000000000,\"input\":[{\"type\":\"text\",\"text\":\"hello\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"context.append_message\",\"time\":1770000000001,\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":1770000000100,\"event\":{\"type\":\"step.begin\",\"uuid\":\"s1\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":1770000000200,\"event\":{\"type\":\"content.part\",\"uuid\":\"p1\",\"stepUuid\":\"s1\",\"part\":{\"type\":\"think\",\"think\":\"secret\"}}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":1770000000300,\"event\":{\"type\":\"content.part\",\"uuid\":\"p2\",\"stepUuid\":\"s1\",\"part\":{\"type\":\"text\",\"text\":\"first\"}}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":1770000000400,\"event\":{\"type\":\"tool.call\",\"stepUuid\":\"s1\",\"name\":\"Bash\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":1770000000500,\"event\":{\"type\":\"step.end\",\"uuid\":\"s1\"}}\n",
+        "{\"type\":\"context.append_message\",\"time\":1770000000600,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"injected\"}]}}\n",
+        "{\"type\":\"turn.steer\",\"input\":[{\"type\":\"text\",\"text\":\"continue\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"turn.prompt\",\"time\":1770000000700,\"input\":[{\"type\":\"text\",\"text\":\"<system-reminder>hidden\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"turn.prompt\",\"time\":1770000000800,\"input\":[{\"type\":\"text\",\"text\":\"injected prompt\"}],\"origin\":{\"kind\":\"injection\",\"variant\":\"hook\"}}\n"
     );
     let messages = KimiAdapter.parse_transcript_messages(lines);
-    assert_eq!(messages.len(), 2);
-    assert_eq!(messages[1].role, super::super::TranscriptRole::Assistant);
-    assert_eq!(messages[1].text, "done");
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[0].text, "hello");
+    assert_eq!(messages[1].text, "first");
+    assert_eq!(messages[2].text, "injected");
+    assert_eq!(messages[3].text, "continue");
+    assert!(messages[3].at.is_none());
+}
+
+#[test]
+fn incremental_assistant_pages_keep_torn_lines_and_accept_mid_step_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wire.jsonl");
+    let begin = "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"step.begin\",\"uuid\":\"s1\"}}\n";
+    let first = "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{\"type\":\"text\",\"text\":\"first\"}}}\n";
+    let torn = "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{\"type\":\"text\",\"text\":\"sec";
+    std::fs::write(&path, format!("{begin}{first}{torn}")).unwrap();
+
+    let page = KimiAdapter
+        .read_assistant_transcript_page(
+            &path,
+            None,
+            crate::agents::transcript::TranscriptPosition::START,
+        )
+        .unwrap();
+    assert_eq!(page.messages, ["first"]);
+
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(b"ond\"}}}\n").unwrap();
+    let page = KimiAdapter
+        .read_assistant_transcript_page(&path, None, page.next)
+        .unwrap();
+    assert_eq!(page.messages, ["second"]);
+}
+
+#[test]
+fn latest_answer_cannot_cross_a_newer_unanswered_prompt() {
+    let completed = concat!(
+        "{\"type\":\"turn.prompt\",\"input\":[{\"type\":\"text\",\"text\":\"first\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"event\":{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{\"type\":\"text\",\"text\":\"answer\"}}}\n",
+    );
+    assert_eq!(
+        transcript::latest_assistant(completed).as_deref(),
+        Some("answer")
+    );
+    let failed = format!(
+        "{completed}{{\"type\":\"turn.prompt\",\"input\":[{{\"type\":\"text\",\"text\":\"second\"}}],\"origin\":{{\"kind\":\"user\"}}}}\n"
+    );
+    assert_eq!(transcript::latest_assistant(&failed), None);
+}
+
+#[test]
+fn prior_transcript_path_must_be_the_bound_main_agent_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("s1/agents/main/wire.jsonl");
+    let child = dir.path().join("s1/agents/agent-0/wire.jsonl");
+    std::fs::create_dir_all(main.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(child.parent().unwrap()).unwrap();
+    std::fs::write(&main, "").unwrap();
+    std::fs::write(&child, "").unwrap();
+
+    assert_eq!(
+        KimiAdapter.session_transcript("s1", Some(&main)).as_deref(),
+        Some(main.as_path())
+    );
+    assert!(!valid_main_wire(&child, "s1"));
+    assert!(!valid_main_wire(&main, "other"));
+}
+
+#[test]
+fn live_cost_prices_the_full_file_outside_the_bounded_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s1/agents/main/wire.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let early = "{\"type\":\"usage.record\",\"time\":1770000000000,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"turn\",\"usage\":{\"inputOther\":1000,\"output\":100}}\n";
+    let padding = format!(
+        "{{\"type\":\"tools.update_store\",\"payload\":\"{}\"}}\n",
+        "x".repeat(70_000)
+    );
+    std::fs::write(&path, format!("{early}{padding}")).unwrap();
+    let stat = transcript_stat(&path).unwrap();
+    let cache = dir.path().join("prices.json");
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "s1",
+        model_hint: None,
+        prior_transcript_path: Some(path.to_str().unwrap()),
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &cache,
+    };
+
+    let refresh = refresh_wire_path(&path, "s1", stat, &ctx).unwrap();
+    assert!(refresh.cost.unwrap().total_cost_usd.unwrap() > 0.0);
+    assert!(refresh.tokens.unwrap().current_usage.unwrap().is_zero());
+}
+
+#[test]
+fn unknown_alias_costs_zero_instead_of_guessing_k25() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s1/agents/main/wire.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"type\":\"llm.request\",\"time\":1770000000000,\"provider\":\"custom\",\"model\":\"future-model\",\"modelAlias\":\"kimi-code/future\"}\n",
+            "{\"type\":\"usage.record\",\"time\":1770000001000,\"model\":\"future\",\"usageScope\":\"session\",\"usage\":{\"inputOther\":1000,\"output\":100}}\n",
+        ),
+    )
+    .unwrap();
+
+    let parsed = spend::parse(&path, None, &super::super::PriceBook::embedded());
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(parsed.entries[0].model.as_deref(), Some("future"));
+    assert_eq!(parsed.entries[0].cost_usd, 0.0);
+    assert!(parsed.unknown_models.contains_key("future"));
+}
+
+#[test]
+fn request_attribution_prices_alias_usage_and_history_groups_the_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s1/agents/main/wire.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"type\":\"turn.prompt\",\"time\":1770000000000,\"input\":[{\"type\":\"text\",\"text\":\"fix history\"}],\"origin\":{\"kind\":\"user\"}}\n",
+            "{\"type\":\"llm.request\",\"time\":1770000000100,\"provider\":\"moonshot\",\"model\":\"kimi-k2.5\",\"modelAlias\":\"kimi-code/kimi-for-coding\"}\n",
+            "{\"type\":\"usage.record\",\"time\":1770000000200,\"model\":\"kimi-for-coding\",\"usageScope\":\"turn\",\"usage\":{\"inputOther\":100,\"output\":50,\"inputCacheRead\":10,\"inputCacheCreation\":5}}\n",
+            "{\"type\":\"usage.record\",\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"session\",\"usage\":{\"inputOther\":999}}\n",
+            "{\"type\":\"context.append_loop_event\",\"time\":1770000000300,\"event\":{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}}\n",
+        ),
+    )
+    .unwrap();
+
+    let messages = KimiAdapter.read_transcript_messages(&path, None).unwrap();
+    let parsed = spend::parse(&path, None, &super::super::PriceBook::embedded());
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(
+        parsed.entries[0].model.as_deref(),
+        Some("moonshot/kimi-k2.5")
+    );
+    assert!(parsed.entries[0].cost_usd > 0.0);
+    let turns = crate::agents::turns::session_turns(&messages, &parsed.entries, "s1", false);
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].prompt, "fix history");
+    assert_eq!(turns[0].api_calls, 1);
+    assert_eq!(turns[0].fresh_input, 100);
+    assert_eq!(turns[0].output, 50);
+    assert_eq!(turns[0].outcome, crate::agents::turns::TurnOutcome::Done);
+}
+
+#[test]
+fn refresh_triggers_seed_and_stat_gate_the_stable_transcript_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s1/agents/main/wire.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "{\"type\":\"context.append_loop_event\",\"time\":1770000000000,\"event\":{\"type\":\"step.end\",\"uuid\":\"s1\",\"usage\":{\"inputOther\":100}}}\n",
+    )
+    .unwrap();
+    let cache = dir.path().join("prices.json");
+    let path_text = path.to_string_lossy().into_owned();
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "s1",
+        model_hint: None,
+        prior_transcript_path: Some(&path_text),
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &cache,
+    };
+
+    assert!(
+        KimiAdapter
+            .local_context_refresh(RefreshTrigger::Hook("PreToolUse"), &ctx)
+            .is_none()
+    );
+    let refresh = KimiAdapter
+        .local_context_refresh(RefreshTrigger::Hook("SessionStart"), &ctx)
+        .unwrap();
+    assert_eq!(refresh.transcript_path.as_deref(), Some(path_text.as_str()));
+    let stat = refresh.transcript_stat.unwrap();
+    let unchanged = LocalContextRefreshCtx {
+        prior_transcript_stat: Some(&stat),
+        ..ctx
+    };
+    assert!(
+        KimiAdapter
+            .local_context_refresh(RefreshTrigger::Hook("StopFailure"), &unchanged)
+            .is_none()
+    );
 }
 
 #[test]
