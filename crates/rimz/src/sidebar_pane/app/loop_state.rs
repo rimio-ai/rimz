@@ -349,16 +349,21 @@ impl LoopState {
         });
     }
 
+    /// Dispatch an immediate fetch after absorbing any clamp-deferred request.
+    /// A fold that runs now covers the deferred nudge, so it never leaves a
+    /// redundant echo behind. Absorption also forces a follow-up when a cycle
+    /// is in flight; otherwise the dispatcher could drop the deferred work.
     fn request_now_merging_pending(
         &mut self,
         fetch: &mut FetchDispatcher,
         mut request: FetchRequest,
         force_after: bool,
     ) {
-        if let Some(pending) = self.pending_fetch.take() {
+        let absorbed = self.pending_fetch.take();
+        if let Some(pending) = absorbed {
             request.merge(pending.request);
         }
-        fetch.request(request, force_after);
+        fetch.request(request, force_after || absorbed.is_some());
     }
 
     pub(super) fn clear_pending_fetch(&mut self) {
@@ -511,13 +516,13 @@ impl LoopState {
             && saw_final
             && let Some(request) = fetch.take_pending()
         {
-            fetch.request(request, false);
+            self.request_now_merging_pending(fetch, request, false);
         }
         // A held transient regression asks for one more read so the
         // last-known-good cache heals to the next good frame. Single-flight
         // bounds this to one extra run.
         if !self.should_exit && saw_final && rejected {
-            fetch.request(FetchRequest::default(), false);
+            self.request_now_merging_pending(fetch, FetchRequest::default(), false);
         }
     }
 
@@ -580,7 +585,7 @@ impl LoopState {
             // cache immediately; consumers stay read-only and the producer's
             // own receipt is cheap because the frame is just-published.
             SidebarEvent::PaneFramePublished => {
-                fetch.request(FetchRequest::pane_frame_published(), true);
+                self.request_now_merging_pending(fetch, FetchRequest::pane_frame_published(), true);
             }
             event @ SidebarEvent::Notify { .. } => {
                 self.handle_notification(config, terminal, event, diag);
@@ -928,7 +933,7 @@ impl LoopState {
         wake_room(runtime);
         self.dirty = true;
         self.next_frame = Instant::now();
-        fetch.request(FetchRequest::default(), true);
+        self.request_now_merging_pending(fetch, FetchRequest::default(), true);
     }
 
     /// Mark every readable row read without jumping (`M`): write manual receipts
@@ -980,7 +985,7 @@ impl LoopState {
         wake_room(&runtime);
         self.dirty = true;
         self.next_frame = Instant::now();
-        fetch.request(FetchRequest::default(), true);
+        self.request_now_merging_pending(fetch, FetchRequest::default(), true);
     }
 
     pub(super) fn run_maintenance(
@@ -1004,13 +1009,14 @@ impl LoopState {
             .filter(|_| self.current.own_view.is_some())
             .is_some_and(|until| Instant::now() >= until)
         {
-            fetch.request(FetchRequest::force_fold(), false);
+            self.request_now_merging_pending(fetch, FetchRequest::force_fold(), false);
         }
 
         // Data backstop: catch pane/git drift no store delta announced. It is
-        // self-gated to the data tick and no-ops while a fetch is in flight.
-        if self.pending_fetch.is_none() && self.fetched_at.elapsed() >= ctx.tick {
-            fetch.request(FetchRequest::default(), false);
+        // self-gated to the data tick; an armed clamp-deferred nudge merges
+        // into this fold instead of waiting to echo it.
+        if self.fetched_at.elapsed() >= ctx.tick {
+            self.request_now_merging_pending(fetch, FetchRequest::default(), false);
         }
 
         // Heartbeat: fast in-process atomic write on the main thread so the
@@ -1038,7 +1044,7 @@ impl LoopState {
             } else {
                 FetchRequest::default()
             };
-            fetch.request(request, false);
+            self.request_now_merging_pending(fetch, request, false);
         }
         if self
             .ui
@@ -1046,7 +1052,7 @@ impl LoopState {
             .as_ref()
             .is_some_and(|hold| jiff::Timestamp::now().as_millisecond() >= hold.expires_ms)
         {
-            fetch.request(FetchRequest::default(), false);
+            self.request_now_merging_pending(fetch, FetchRequest::default(), false);
         }
         Ok(())
     }

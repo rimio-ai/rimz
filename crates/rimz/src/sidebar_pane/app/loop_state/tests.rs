@@ -691,6 +691,168 @@ fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
 }
 
 #[test]
+fn pane_frame_published_absorbs_deferred_unwatched_fetch() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
+    hide_consumer(&mut state, &ws);
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+    let (mut fetch, request_rx) = fetch_dispatcher();
+
+    for event in [
+        SidebarEvent::StoreDelta {
+            event_method: None,
+            agent_signal: None,
+        },
+        SidebarEvent::PanesChanged,
+    ] {
+        state
+            .on_event(
+                &config,
+                &mut fetch,
+                &mut terminal,
+                event_envelope(&ws, event),
+                Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
+            .expect("defer identity-free event");
+    }
+    assert!(state.pending_fetch.is_some());
+
+    state
+        .on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(&ws, SidebarEvent::PaneFramePublished),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("published pane frame folds");
+
+    assert!(
+        request_rx
+            .try_recv()
+            .expect("one merged publish fetch")
+            .is_producer_fresh_panes(),
+        "the merged fetch preserves the deferred freshness requirement"
+    );
+    assert!(state.pending_fetch.is_none());
+
+    if let Some(pending) = &mut state.pending_fetch {
+        pending.due_at = Instant::now() - Duration::from_millis(1);
+    }
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+    let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
+    state.last_heartbeat = Some(Instant::now());
+    state.last_self_close_check = Instant::now();
+    state
+        .run_maintenance(
+            &mut fetch,
+            MaintenanceContext {
+                config: &config,
+                runtime: &runtime,
+                socket_path: &socket_path,
+                result_rx: &result_rx,
+                anim_start: Instant::now(),
+                diag: &crate::diag::DiagSink::disabled(),
+                tick: Duration::from_secs(60),
+            },
+        )
+        .expect("maintenance finds no deferred echo");
+
+    assert!(
+        request_rx.try_recv().is_err(),
+        "the absorbed nudge must not fire a second fetch"
+    );
+}
+
+#[test]
+fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
+    hide_consumer(&mut state, &ws);
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+    let (mut fetch, request_rx) = fetch_dispatcher();
+
+    state
+        .on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                SidebarEvent::StoreDelta {
+                    event_method: None,
+                    agent_signal: None,
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("defer store delta");
+    assert!(state.pending_fetch.is_some());
+
+    let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
+    let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
+    let (_result_tx, result_rx) = std::sync::mpsc::channel();
+    state.last_heartbeat = Some(Instant::now());
+    state.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
+    state
+        .run_maintenance(
+            &mut fetch,
+            MaintenanceContext {
+                config: &config,
+                runtime: &runtime,
+                socket_path: &socket_path,
+                result_rx: &result_rx,
+                anim_start: Instant::now(),
+                diag: &crate::diag::DiagSink::disabled(),
+                tick: Duration::from_secs(60),
+            },
+        )
+        .expect("maintenance runs watchdog fetch");
+
+    assert!(
+        request_rx.try_recv().is_ok(),
+        "watchdog dispatches one fetch"
+    );
+    assert!(state.pending_fetch.is_none());
+    assert!(
+        request_rx.try_recv().is_err(),
+        "the deferred nudge merges into the watchdog fetch"
+    );
+}
+
+#[test]
+fn absorbed_deferred_fetch_forces_follow_up_while_in_flight() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    let (mut fetch, request_rx) = fetch_dispatcher();
+    fetch.request(FetchRequest::default(), false);
+    request_rx.try_recv().expect("initial in-flight fetch");
+    state.defer_fetch(FetchRequest::producer_fresh_panes());
+
+    state.request_now_merging_pending(&mut fetch, FetchRequest::default(), false);
+
+    assert!(state.pending_fetch.is_none());
+    assert!(request_rx.try_recv().is_err(), "follow-up stays queued");
+    assert!(
+        fetch
+            .take_pending()
+            .expect("absorbed work forces a follow-up")
+            .is_producer_fresh_panes(),
+        "the queued follow-up preserves the deferred freshness requirement"
+    );
+}
+
+#[test]
 fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
     let ws = workspace();
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
