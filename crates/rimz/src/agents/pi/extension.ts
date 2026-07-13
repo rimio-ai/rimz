@@ -18,6 +18,8 @@ const RIMZ = process.env.RIMZ_BIN || "rimz";
 const usageBySession = new Map();
 const costBySession = new Map();
 const verdictBySession = new Map();
+const nameBySession = new Map();
+const messagePushBySession = new Map();
 let latestWindows = [];
 
 const versionAtLeast = (version, floor) => {
@@ -40,6 +42,33 @@ const numberMaybe = (value) =>
   value == null || !Number.isFinite(Number(value)) ? undefined : Number(value);
 
 const sessionId = (ctx) => ctx?.sessionManager?.getSessionId?.();
+
+const hydrateSession = (ctx) => {
+  const id = sessionId(ctx);
+  if (!id || costBySession.has(id)) return;
+  try {
+    const branch = ctx?.sessionManager?.getBranch?.();
+    if (!Array.isArray(branch) || branch.length === 0) return;
+    let cost = 0;
+    let lastUsage;
+    let name;
+    for (const entry of branch) {
+      if (entry?.type === "session_info" && typeof entry?.name === "string") {
+        name = entry.name;
+      }
+      const message = entry?.message;
+      if (message?.role !== "assistant") continue;
+      lastUsage = message.usage ?? lastUsage;
+      const messageCost = numberMaybe(message?.usage?.cost?.total);
+      if (messageCost != null && messageCost > 0) cost += messageCost;
+    }
+    if (cost > 0) costBySession.set(id, cost);
+    if (lastUsage) recordUsage(id, lastUsage);
+    if (name) nameBySession.set(id, name);
+  } catch {
+    // Older pi releases may not expose getBranch; enrichment stays sparse.
+  }
+};
 
 const recordUsage = (id, usage) => {
   if (!id || usage == null) return;
@@ -157,6 +186,7 @@ export default function rimz(pi) {
       cwd: ctx?.sessionManager?.getCwd?.() ?? ctx?.cwd,
       model: ctx?.model?.id,
       effort: thinkingLevel(),
+      session_name: nameBySession.get(id),
       context_pct: usage?.percent == null ? undefined : Math.round(usage.percent),
       context_window: usage?.contextWindow,
       total_tokens: usage?.tokens == null ? undefined : Math.round(usage.tokens),
@@ -188,7 +218,50 @@ export default function rimz(pi) {
     }
   };
 
-  pi.on("session_start", (ev, ctx) => feed("session_start", ctx, { reason: ev?.reason }));
+  const messageSignature = (ctx) => {
+    const id = sessionId(ctx);
+    const usage = ctx?.getContextUsage?.();
+    return JSON.stringify({
+      context_pct: roundMaybe(usage?.percent),
+      context_window: roundMaybe(usage?.contextWindow),
+      total_tokens: roundMaybe(usage?.tokens),
+      total_cost_usd: costBySession.get(id),
+    });
+  };
+
+  const pushMessageUpdate = (ctx) => {
+    const id = sessionId(ctx);
+    if (!id) return;
+    const signature = messageSignature(ctx);
+    const state = messagePushBySession.get(id) ?? {};
+    if (signature === state.signature || signature === state.pending?.signature) return;
+    const elapsed = Date.now() - (state.pushedAt ?? 0);
+    if (elapsed >= 1000) {
+      if (state.timer) clearTimeout(state.timer);
+      feed("message_update", ctx, {});
+      messagePushBySession.set(id, { signature, pushedAt: Date.now() });
+      return;
+    }
+    state.pending = { ctx, signature };
+    if (!state.timer) {
+      state.timer = setTimeout(() => {
+        const latest = messagePushBySession.get(id);
+        const pending = latest?.pending;
+        if (!pending || pending.signature === latest.signature) return;
+        feed("message_update", pending.ctx, {});
+        messagePushBySession.set(id, {
+          signature: pending.signature,
+          pushedAt: Date.now(),
+        });
+      }, 1000 - elapsed);
+    }
+    messagePushBySession.set(id, state);
+  };
+
+  pi.on("session_start", (ev, ctx) => {
+    hydrateSession(ctx);
+    feed("session_start", ctx, { reason: ev?.reason });
+  });
   pi.on("before_agent_start", (ev, ctx) => {
     verdictBySession.delete(sessionId(ctx));
     feed("before_agent_start", ctx, { prompt: ev?.prompt });
@@ -231,8 +304,22 @@ export default function rimz(pi) {
     const id = sessionId(ctx);
     recordUsage(id, usage);
     addSessionCost(id, usage);
+    feed("turn_end", ctx, {});
   });
-  pi.on("after_provider_response", (ev) => updateWindows(ev?.headers));
+  pi.on("after_provider_response", (ev, ctx) => {
+    updateWindows(ev?.headers);
+    feed("after_provider_response", ctx, {});
+  });
+  pi.on("message_update", (_ev, ctx) => pushMessageUpdate(ctx));
+  pi.on("session_info_changed", (ev, ctx) => {
+    const id = sessionId(ctx);
+    const name = ev?.session_info?.name ?? ev?.sessionInfo?.name ?? ev?.name;
+    if (id) {
+      if (typeof name === "string" && name.length > 0) nameBySession.set(id, name);
+      else nameBySession.delete(id);
+    }
+    feed("session_info_changed", ctx, {});
+  });
   pi.on("tool_execution_end", (ev, ctx) =>
     feed("tool_execution_end", ctx, {
       tool_name: ev?.toolName,
@@ -266,6 +353,10 @@ export default function rimz(pi) {
     usageBySession.delete(id);
     costBySession.delete(id);
     verdictBySession.delete(id);
+    nameBySession.delete(id);
+    const messagePush = messagePushBySession.get(id);
+    if (messagePush?.timer) clearTimeout(messagePush.timer);
+    messagePushBySession.delete(id);
     latestWindows = [];
     feed("session_shutdown", ctx, { reason: ev?.reason });
   });

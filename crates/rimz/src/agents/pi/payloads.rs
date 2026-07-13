@@ -34,6 +34,8 @@ impl PiCompactionReason {
 /// The flattened payload the Rimz pi extension posts for every event.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct PiHookPayload {
+    /// Every event after Pi reports session metadata: the `/name` title.
+    pub session_name: Option<String>,
     /// `before_agent_start`: the user's prompt.
     pub prompt: Option<String>,
     /// `agent_end` and the following `agent_settled`: the last assistant
@@ -60,7 +62,7 @@ pub(crate) struct PiHookPayload {
     /// message's `usage.totalTokens` when present.
     pub total_tokens: Option<u64>,
     /// Every event after the first turn: cumulative session cost the extension
-    /// accumulates from `usage.cost.total`; best-effort and reset on `/resume`.
+    /// accumulates from `usage.cost.total`; resumed branches are hydrated.
     pub total_cost_usd: Option<f64>,
     /// Latest provider call: fresh input, excluding cache reads and cache writes.
     pub input_tokens: Option<u64>,

@@ -15,6 +15,8 @@ fn pi_activity_filter_excludes_the_blocking_gate_and_launch_commands_build() {
     // excluded so creating the ask never instantly un-blocks the row.
     assert!(descriptor.records_activity("tool_execution_end"));
     assert!(descriptor.records_activity("agent_end"));
+    assert!(descriptor.records_activity("message_update"));
+    assert!(descriptor.records_activity("turn_end"));
     assert!(!descriptor.records_activity("tool_call"));
     assert!(!descriptor.records_activity("session_shutdown"));
 
@@ -233,6 +235,7 @@ fn pi_carries_final_assistant_text_through_the_settled_boundary() {
 fn pi_observes_rich_context_from_the_extension_envelope() {
     let context = normalized_context(json!({
         "model": "gpt-5.5",
+        "session_name": "Parser cleanup",
         "effort": "high",
         "context_pct": 42,
         "context_window": 272_000,
@@ -261,6 +264,7 @@ fn pi_observes_rich_context_from_the_extension_envelope() {
     insta::assert_json_snapshot!(context, @r###"
         {
           "source": "pi",
+          "session_name": "Parser cleanup",
           "model_id": "gpt-5.5",
           "effort": "high",
           "cost": {
@@ -558,8 +562,10 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains("visibleAssistantText"));
     assert!(EXTENSION_SOURCE.contains("last_assistant_message"));
     assert!(EXTENSION_SOURCE.contains("total_cost_usd"));
-    assert!(EXTENSION_SOURCE.contains(r#"pi.on("turn_end""#));
-    assert!(EXTENSION_SOURCE.contains(r#"pi.on("after_provider_response""#));
+    assert!(EXTENSION_SOURCE.contains("getBranch"));
+    assert!(EXTENSION_SOURCE.contains("session_name"));
+    assert!(EXTENSION_SOURCE.contains("messageSignature"));
+    assert!(EXTENSION_SOURCE.contains("setTimeout"));
     assert!(EXTENSION_SOURCE.contains("cache_write_input_tokens"));
     assert!(EXTENSION_SOURCE.contains("rate_limits"));
     assert!(EXTENSION_SOURCE.contains("compaction_reason"));

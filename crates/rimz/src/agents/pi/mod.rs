@@ -90,7 +90,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // questions — so Rimz has no surface to route to. It returns neutral
         // with no waiting state.
         native_ask_ui: false,
-        rich_context: false,
+        rich_context: true,
         transcript_tail_context: false,
         context_usage: true,
         account_spend: true,
@@ -124,6 +124,8 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "session_start",
         "before_agent_start",
         "agent_end",
+        "message_update",
+        "turn_end",
         "tool_execution_end",
     ],
     hook_install_unavailable: None,
@@ -206,9 +208,8 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::RichContext,
-        ConcernCoverage::Partial {
-            via: "extension-envelope observe_context (model/effort/cost/account windows)",
-            gap: "rides the lifecycle channel — no out-of-band transport refreshing it between turns, unlike a statusline or app-server poll",
+        ConcernCoverage::Wired {
+            via: "extension envelopes on every value-changing event, including throttled streaming updates and resume hydration",
         },
     ),
     (
@@ -302,15 +303,19 @@ const PI_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
 ];
 
 /// The non-blocking events the embedded extension forwards — the lifecycle
-/// channel, the single source of truth for classification. The model/thinking
-/// selectors are enrichment-only markers: they run the context merge without
-/// emitting a lifecycle signal. Mirrors the `pi.on(...)` registrations in
+/// channel, the single source of truth for classification. The selectors and
+/// context-update events are enrichment-only markers: they run the context
+/// merge without emitting a lifecycle signal. Mirrors the `pi.on(...)` registrations in
 /// [`extension.ts`](./extension.ts) (asserted by test).
 const LIFECYCLE_EVENTS: &[&str] = &[
     "session_start",
     "before_agent_start",
     "agent_end",
     "agent_settled",
+    "turn_end",
+    "after_provider_response",
+    "message_update",
+    "session_info_changed",
     "tool_execution_end",
     "model_select",
     "thinking_level_select",
@@ -326,6 +331,10 @@ const WIRED_EVENTS: &[&str] = &[
     "before_agent_start",
     "agent_end",
     "agent_settled",
+    "turn_end",
+    "after_provider_response",
+    "message_update",
+    "session_info_changed",
     "tool_execution_end",
     "model_select",
     "thinking_level_select",
@@ -400,6 +409,30 @@ impl AgentAdapter for PiAdapter {
             ClassificationSample::new(
                 "agent_settled",
                 json!({ "session_id": "sess-1", "stop_reason": "stop" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "turn_end",
+                json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "after_provider_response",
+                json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "message_update",
+                json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "session_info_changed",
+                json!({ "session_id": "sess-1", "session_name": "Parser cleanup" }),
                 AgentHookClass::Lifecycle,
                 None,
             ),
@@ -727,6 +760,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
         .collect();
     let rate_limits = (!windows.is_empty()).then_some(AgentRateLimits { windows });
     if parsed.model.is_none()
+        && parsed.session_name.is_none()
         && parsed.effort.is_none()
         && tokens.is_none()
         && cost.is_none()
@@ -736,7 +770,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
     }
     Some(AgentContext {
         source: source.to_owned(),
-        session_name: None,
+        session_name: parsed.session_name,
         session_preview: None,
         model_id: parsed.model,
         model_display_name: None,
