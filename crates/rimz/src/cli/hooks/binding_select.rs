@@ -321,10 +321,10 @@ fn binding_candidate_record(
     if incoming_registered_at.is_some_and(|registered_at| {
         pane.pane_process_start
             .is_some_and(|started_at| started_at > registered_at)
-            && !pane
+            && pane
                 .resumed_session_id
                 .as_ref()
-                .is_some_and(|resumed| resumed.as_str() == agent_id)
+                .is_none_or(|resumed| resumed.as_str() != agent_id)
     }) {
         reject_reasons.push(BindingRejectReason::StartedAfterSession);
     }
