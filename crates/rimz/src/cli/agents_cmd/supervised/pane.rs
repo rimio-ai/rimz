@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -10,10 +12,130 @@ use crate::cli::GlobalFlags;
 use crate::cli::room::{MissingSessionReport, pick_mux_for_session};
 use rimz::harness::run::RunRecord;
 use rimz::ids::PaneId;
-use rimz::mux::PaneListOptions;
+use rimz::mux::{PaneCmd, PaneListOptions, SplitDirection, SplitPaneOptions};
+use rimz::pane::PaneRef;
 
 pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
+
+/// Split a run pane into the loop zone, repairing a missing loop panel first.
+/// `Ok(false)` means the caller should fall back to a run tab.
+pub(crate) fn split_into_loop_zone(
+    backend: &dyn rimz::mux::MuxBackend,
+    workspace: &rimz::ResolvedWorkspace,
+    cwd: &Path,
+    env: BTreeMap<String, String>,
+    pane: &PaneCmd,
+) -> Result<bool> {
+    let listing = match list_loop_zone_panes(backend, workspace) {
+        Some(listing) => listing,
+        None => return Ok(false),
+    };
+    let panel = match rimz::remote_control::find_loop_panel(&listing.panes) {
+        Some(panel) => panel.clone(),
+        None => {
+            let Some(anchor) = rimz::remote_control::find_daemon_view_anchor(&listing.panes) else {
+                return Ok(false);
+            };
+            match repair_loop_panel(backend, workspace, anchor) {
+                Some(panel) => panel,
+                None => return Ok(false),
+            }
+        }
+    };
+    match backend.split_pane(SplitPaneOptions {
+        session_name: Some(workspace.session_name.clone()),
+        target_view_id: panel.view_id.clone(),
+        target_pane_id: Some(panel.pane_id.clone()),
+        cwd: Some(cwd.to_string_lossy().into_owned()),
+        command: Some(pane.argv.clone()),
+        env,
+        stacked: true,
+        direction: SplitDirection::Down,
+        focus: false,
+    }) {
+        Ok(()) => Ok(true),
+        Err(err) => {
+            tracing::debug!(
+                session = %workspace.session_name,
+                pane = %panel.pane_id,
+                error = &err as &dyn std::error::Error,
+                "loop zone split failed; falling back to a run tab",
+            );
+            Ok(false)
+        }
+    }
+}
+
+fn list_loop_zone_panes(
+    backend: &dyn rimz::mux::MuxBackend,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Option<rimz::mux::PaneListing> {
+    match backend.list_panes(PaneListOptions {
+        session_name: Some(workspace.session_name.clone()),
+        workspace_id: Some(workspace.workspace_id.clone()),
+        command_timeout: Some(Duration::from_millis(500)),
+        authoritative: true,
+        ..Default::default()
+    }) {
+        Ok(listing) => Some(listing),
+        Err(err) => {
+            tracing::debug!(
+                session = %workspace.session_name,
+                error = &err as &dyn std::error::Error,
+                "loop zone lookup failed; falling back to a run tab",
+            );
+            None
+        }
+    }
+}
+
+fn repair_loop_panel(
+    backend: &dyn rimz::mux::MuxBackend,
+    workspace: &rimz::ResolvedWorkspace,
+    anchor: &PaneRef,
+) -> Option<PaneRef> {
+    let rimz_bin = rimz::proc::rimz_exe().to_string_lossy().into_owned();
+    if let Err(err) = backend.split_pane(SplitPaneOptions {
+        session_name: Some(workspace.session_name.clone()),
+        target_view_id: anchor.view_id.clone(),
+        target_pane_id: Some(anchor.pane_id.clone()),
+        cwd: Some(workspace.worktree_root.to_string_lossy().into_owned()),
+        command: Some(vec![
+            rimz_bin,
+            "loop".to_owned(),
+            "watch".to_owned(),
+            "--hold".to_owned(),
+        ]),
+        env: Default::default(),
+        stacked: false,
+        direction: SplitDirection::Down,
+        focus: false,
+    }) {
+        tracing::debug!(
+            session = %workspace.session_name,
+            pane = %anchor.pane_id,
+            error = &err as &dyn std::error::Error,
+            "loop panel repair failed; falling back to a run tab",
+        );
+        return None;
+    }
+
+    for attempt in 0..5 {
+        let listing = list_loop_zone_panes(backend, workspace)?;
+        if let Some(panel) = rimz::remote_control::find_loop_panel(&listing.panes) {
+            return Some(panel.clone());
+        }
+        if attempt < 4 {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    tracing::debug!(
+        session = %workspace.session_name,
+        "loop panel repair did not appear in pane listing; falling back to a run tab",
+    );
+    None
+}
 
 pub(crate) fn backend_for_workspace_session(
     workspace: &rimz::ResolvedWorkspace,

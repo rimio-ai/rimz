@@ -4,7 +4,6 @@ use super::*;
 use crate::cli::render;
 use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::run_wake::{self, ExpectedRunFrame, SocketGuard};
-use rimz::pane::PaneRef;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::cli::agents_cmd) enum RunPlacement {
@@ -88,13 +87,81 @@ struct PreparedRun {
     output_format: OutputFormat,
 }
 
-struct BlockingAttempt {
-    record: RunRecord,
-    wait_sock: Option<std::os::unix::net::UnixDatagram>,
+struct RunWaiter {
+    sock: std::os::unix::net::UnixDatagram,
     expected: ExpectedRunFrame,
     interrupt: Arc<AtomicBool>,
-    socket_guard: Option<SocketGuard>,
+    _socket_guard: SocketGuard,
     stream_cursor: Option<TranscriptCursor>,
+}
+
+impl RunWaiter {
+    /// Block until the run reaches a terminal record, streaming transcript
+    /// output when the run was started with a stream cursor.
+    fn await_terminal(
+        &mut self,
+        prepared: &PreparedRun,
+        room: &crate::cli::room::RunRoom,
+        args: &AgentsArgs,
+        run_id: &rimz::RunId,
+    ) -> Result<RunRecord> {
+        let record = if prepared.output_format == OutputFormat::StreamJson {
+            let mut stdout = std::io::stdout().lock();
+            let mut sink = supervised::output::StreamSink::ndjson(&mut stdout);
+            supervised::stream::stream_blocking_run(
+                self.sock.try_clone().context("cloning run stream socket")?,
+                self.expected.clone(),
+                &prepared.store,
+                prepared.adapter,
+                args.timeout,
+                &self.interrupt,
+                (
+                    self.stream_cursor
+                        .as_mut()
+                        .context("stream run lost its transcript cursor")?,
+                    &mut sink,
+                ),
+            )?
+        } else if args.stream_text {
+            let mut stdout = render::out();
+            let mut gutter = render::GutterWriter::new(&mut stdout);
+            let mut stderr = render::err();
+            let mut sink = supervised::output::StreamSink::text(&mut gutter, &mut stderr);
+            supervised::stream::stream_blocking_run(
+                self.sock.try_clone().context("cloning run stream socket")?,
+                self.expected.clone(),
+                &prepared.store,
+                prepared.adapter,
+                args.timeout,
+                &self.interrupt,
+                (
+                    self.stream_cursor
+                        .as_mut()
+                        .context("stream run lost its transcript cursor")?,
+                    &mut sink,
+                ),
+            )?
+        } else {
+            let outcome = supervised::wait_for_run(
+                self.sock.try_clone().context("cloning run wait socket")?,
+                self.expected.clone(),
+                args.timeout,
+                &self.interrupt,
+            )?;
+            supervised::terminal_record_after_wait(prepared.store.paths(), run_id, outcome)?
+        };
+        Ok(record_failure_tail_before_cleanup(
+            room.backend(),
+            &prepared.store,
+            &prepared.workspace.session_name,
+            record,
+        ))
+    }
+}
+
+struct BlockingAttempt {
+    record: RunRecord,
+    waiter: RunWaiter,
 }
 
 fn open_attempt_pane(
@@ -148,10 +215,23 @@ fn open_attempt_pane(
                 focus: false,
             })
             .map_err(anyhow::Error::from),
-        RunPlacement::LoopZone => match open_loop_zone_pane(prepared, room, args, pane)? {
-            true => Ok(()),
-            false => tab(),
-        },
+        RunPlacement::LoopZone => {
+            let env = crate::cli::agents_launch::launch_identity_env(
+                &prepared.workspace,
+                prepared.room_channel.as_deref(),
+                args.worktree.is_none() && args.from_pr.is_none(),
+            );
+            match supervised::pane::split_into_loop_zone(
+                room.backend(),
+                &prepared.workspace,
+                &prepared.launch.cwd,
+                env,
+                pane,
+            )? {
+                true => Ok(()),
+                false => tab(),
+            }
+        }
         RunPlacement::Tab => tab(),
     };
     if let Err(err) = open_result {
@@ -171,132 +251,6 @@ fn open_attempt_pane(
         return Err(err).context("opening run pane");
     }
     Ok(())
-}
-
-fn open_loop_zone_pane(
-    prepared: &PreparedRun,
-    room: &crate::cli::room::RunRoom,
-    args: &AgentsArgs,
-    pane: &PaneCmd,
-) -> Result<bool> {
-    let listing = match list_loop_zone_panes(prepared, room) {
-        Some(listing) => listing,
-        None => return Ok(false),
-    };
-    let panel = match rimz::remote_control::find_loop_panel(&listing.panes) {
-        Some(panel) => panel.clone(),
-        None => {
-            let Some(anchor) = rimz::remote_control::find_daemon_view_anchor(&listing.panes) else {
-                return Ok(false);
-            };
-            match repair_loop_panel(prepared, room, anchor) {
-                Some(panel) => panel,
-                None => return Ok(false),
-            }
-        }
-    };
-    match room.backend().split_pane(SplitPaneOptions {
-        session_name: Some(prepared.workspace.session_name.clone()),
-        target_view_id: panel.view_id.clone(),
-        target_pane_id: Some(panel.pane_id.clone()),
-        cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
-        command: Some(pane.argv.clone()),
-        env: crate::cli::agents_launch::launch_identity_env(
-            &prepared.workspace,
-            prepared.room_channel.as_deref(),
-            args.worktree.is_none() && args.from_pr.is_none(),
-        ),
-        stacked: true,
-        direction: SplitDirection::Down,
-        focus: false,
-    }) {
-        Ok(()) => Ok(true),
-        Err(err) => {
-            tracing::debug!(
-                session = %prepared.workspace.session_name,
-                pane = %panel.pane_id,
-                error = &err as &dyn std::error::Error,
-                "loop zone split failed; falling back to a run tab",
-            );
-            Ok(false)
-        }
-    }
-}
-
-fn list_loop_zone_panes(
-    prepared: &PreparedRun,
-    room: &crate::cli::room::RunRoom,
-) -> Option<rimz::mux::PaneListing> {
-    match room.backend().list_panes(PaneListOptions {
-        session_name: Some(prepared.workspace.session_name.clone()),
-        workspace_id: Some(prepared.workspace.workspace_id.clone()),
-        command_timeout: Some(Duration::from_millis(500)),
-        authoritative: true,
-        ..Default::default()
-    }) {
-        Ok(listing) => Some(listing),
-        Err(err) => {
-            tracing::debug!(
-                session = %prepared.workspace.session_name,
-                error = &err as &dyn std::error::Error,
-                "loop zone lookup failed; falling back to a run tab",
-            );
-            None
-        }
-    }
-}
-
-fn repair_loop_panel(
-    prepared: &PreparedRun,
-    room: &crate::cli::room::RunRoom,
-    anchor: &PaneRef,
-) -> Option<PaneRef> {
-    let rimz_bin = rimz::proc::rimz_exe().to_string_lossy().into_owned();
-    if let Err(err) = room.backend().split_pane(SplitPaneOptions {
-        session_name: Some(prepared.workspace.session_name.clone()),
-        target_view_id: anchor.view_id.clone(),
-        target_pane_id: Some(anchor.pane_id.clone()),
-        cwd: Some(
-            prepared
-                .workspace
-                .worktree_root
-                .to_string_lossy()
-                .into_owned(),
-        ),
-        command: Some(vec![
-            rimz_bin,
-            "loop".to_owned(),
-            "watch".to_owned(),
-            "--hold".to_owned(),
-        ]),
-        env: Default::default(),
-        stacked: false,
-        direction: SplitDirection::Down,
-        focus: false,
-    }) {
-        tracing::debug!(
-            session = %prepared.workspace.session_name,
-            pane = %anchor.pane_id,
-            error = &err as &dyn std::error::Error,
-            "loop panel repair failed; falling back to a run tab",
-        );
-        return None;
-    }
-
-    for attempt in 0..5 {
-        let listing = list_loop_zone_panes(prepared, room)?;
-        if let Some(panel) = rimz::remote_control::find_loop_panel(&listing.panes) {
-            return Some(panel.clone());
-        }
-        if attempt < 4 {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
-    tracing::debug!(
-        session = %prepared.workspace.session_name,
-        "loop panel repair did not appear in pane listing; falling back to a run tab",
-    );
-    None
 }
 
 fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<PreparedRun> {
@@ -421,20 +375,14 @@ fn execute_attempt(
         prepared.room_channel.as_deref(),
         Some((prompt, 0)),
     )?;
-    if attempt > 0 {
-        for request in &mut launch_requests {
-            if let AgentLaunchName::Explicit(name) = &request.name {
-                request.name = AgentLaunchName::Soft(name.clone());
-            }
+    for request in &mut launch_requests {
+        if attempt > 0
+            && let AgentLaunchName::Explicit(name) = &request.name
+        {
+            request.name = AgentLaunchName::Soft(name.clone());
         }
+        request.run_id = Some(run_id.clone());
     }
-    let launch_requests = launch_requests
-        .into_iter()
-        .map(|mut request| {
-            request.run_id = Some(run_id.clone());
-            request
-        })
-        .collect::<Vec<_>>();
     let mut launch_identities = prepared.store.append_agent_launches_allocating(
         &launch_requests,
         &AgentLaunchAppend {
@@ -499,86 +447,25 @@ fn execute_attempt(
     let Some((sock, _sock_path)) = bound else {
         bail!("blocking run did not bind its completion socket");
     };
-    let wait_sock = Some(sock);
-    let expected = ExpectedRunFrame {
-        workspace_id: prepared.workspace.workspace_id.clone(),
-        run_id: run_id.clone(),
+    let Some(interrupt) = interrupt else {
+        bail!("blocking run did not install its interrupt flag");
     };
-    let interrupt = interrupt.expect("blocking run has interrupt flag");
-    let mut stream_cursor = (prepared.output_format == OutputFormat::StreamJson
-        || args.stream_text)
-        .then(|| TranscriptCursor::new(true));
-    let record = if prepared.output_format == OutputFormat::StreamJson {
-        let mut stdout = std::io::stdout().lock();
-        let mut sink = supervised::output::StreamSink::ndjson(&mut stdout);
-        supervised::stream::stream_blocking_run(
-            wait_sock
-                .as_ref()
-                .expect("blocking run has wait socket")
-                .try_clone()
-                .context("cloning run stream socket")?,
-            expected.clone(),
-            &prepared.store,
-            prepared.adapter,
-            args.timeout,
-            &interrupt,
-            (
-                stream_cursor
-                    .as_mut()
-                    .expect("stream has transcript cursor"),
-                &mut sink,
-            ),
-        )?
-    } else if args.stream_text {
-        let mut stdout = render::out();
-        let mut gutter = render::GutterWriter::new(&mut stdout);
-        let mut stderr = render::err();
-        let mut sink = supervised::output::StreamSink::text(&mut gutter, &mut stderr);
-        supervised::stream::stream_blocking_run(
-            wait_sock
-                .as_ref()
-                .expect("blocking run has wait socket")
-                .try_clone()
-                .context("cloning run stream socket")?,
-            expected.clone(),
-            &prepared.store,
-            prepared.adapter,
-            args.timeout,
-            &interrupt,
-            (
-                stream_cursor
-                    .as_mut()
-                    .expect("stream has transcript cursor"),
-                &mut sink,
-            ),
-        )?
-    } else {
-        let outcome = supervised::wait_for_run(
-            wait_sock
-                .as_ref()
-                .expect("blocking run has wait socket")
-                .try_clone()
-                .context("cloning run wait socket")?,
-            expected.clone(),
-            args.timeout,
-            &interrupt,
-        )?;
-        supervised::terminal_record_after_wait(prepared.store.paths(), &run_id, outcome)?
+    let Some(socket_guard) = socket_guard else {
+        bail!("blocking run did not guard its completion socket");
     };
-    let record = record_failure_tail_before_cleanup(
-        room.backend(),
-        &prepared.store,
-        &prepared.workspace.session_name,
-        record,
-    );
-    Ok(Some(BlockingAttempt {
-        record,
-        wait_sock,
-        expected,
+    let mut waiter = RunWaiter {
+        sock,
+        expected: ExpectedRunFrame {
+            workspace_id: prepared.workspace.workspace_id.clone(),
+            run_id: run_id.clone(),
+        },
         interrupt,
-        socket_guard,
-        stream_cursor,
-    }))
+        _socket_guard: socket_guard,
+        stream_cursor: (prepared.output_format == OutputFormat::StreamJson || args.stream_text)
+            .then(|| TranscriptCursor::new(true)),
+    };
+    let record = waiter.await_terminal(prepared, room, args, &run_id)?;
+    Ok(Some(BlockingAttempt { record, waiter }))
 }
 
 fn verify_phase(
@@ -586,20 +473,16 @@ fn verify_phase(
     room: &crate::cli::room::RunRoom,
     args: &AgentsArgs,
     blocking: BlockingAttempt,
-) -> Result<(RunRecord, Option<anyhow::Error>, Option<SocketGuard>)> {
+) -> Result<(RunRecord, Option<anyhow::Error>, RunWaiter)> {
     let BlockingAttempt {
         mut record,
-        wait_sock,
-        expected,
-        interrupt,
-        socket_guard,
-        mut stream_cursor,
+        mut waiter,
     } = blocking;
     let Some(cmd) = args.verify.as_deref() else {
-        return Ok((record, None, socket_guard));
+        return Ok((record, None, waiter));
     };
     if record.status != RunStatus::Completed {
-        return Ok((record, None, socket_guard));
+        return Ok((record, None, waiter));
     }
     let max_attempts = args.max_attempts.unwrap_or(3);
     let verify_timeout = args
@@ -635,7 +518,7 @@ fn verify_phase(
             timed_out: detail.timed_out,
             output,
         };
-        if interrupt.load(Ordering::SeqCst) {
+        if waiter.interrupt.load(Ordering::SeqCst) {
             let _reopened = rimz::harness::run::reopen_for_verify(
                 prepared.store.paths(),
                 &record.run_id,
@@ -656,7 +539,7 @@ fn verify_phase(
                 rimz::harness::run::verify_failed(prepared.store.paths(), &record.run_id, verify)?;
             break;
         }
-        let status = verify_status_label(&verify);
+        let status = supervised::output::verify_status_label(&verify);
         writeln!(
             render::err(),
             "rimz: verify `{cmd}` exited {status}; re-prompting (attempt {} of {max_attempts})",
@@ -679,72 +562,10 @@ fn verify_phase(
             verify_error = Some(err);
             break;
         }
-        record = if prepared.output_format == OutputFormat::StreamJson {
-            let mut stdout = std::io::stdout().lock();
-            let mut sink = supervised::output::StreamSink::ndjson(&mut stdout);
-            supervised::stream::stream_blocking_run(
-                wait_sock
-                    .as_ref()
-                    .context("verify run lost its wait socket")?
-                    .try_clone()
-                    .context("cloning verify run stream socket")?,
-                expected.clone(),
-                &prepared.store,
-                prepared.adapter,
-                args.timeout,
-                &interrupt,
-                (
-                    stream_cursor
-                        .as_mut()
-                        .context("verify stream lost its transcript cursor")?,
-                    &mut sink,
-                ),
-            )?
-        } else if args.stream_text {
-            let mut stdout = render::out();
-            let mut gutter = render::GutterWriter::new(&mut stdout);
-            let mut stderr = render::err();
-            let mut sink = supervised::output::StreamSink::text(&mut gutter, &mut stderr);
-            supervised::stream::stream_blocking_run(
-                wait_sock
-                    .as_ref()
-                    .context("verify run lost its wait socket")?
-                    .try_clone()
-                    .context("cloning verify run stream socket")?,
-                expected.clone(),
-                &prepared.store,
-                prepared.adapter,
-                args.timeout,
-                &interrupt,
-                (
-                    stream_cursor
-                        .as_mut()
-                        .context("verify stream lost its transcript cursor")?,
-                    &mut sink,
-                ),
-            )?
-        } else {
-            let outcome = supervised::wait_for_run(
-                wait_sock
-                    .as_ref()
-                    .context("verify run lost its wait socket")?
-                    .try_clone()
-                    .context("cloning verify run wait socket")?,
-                expected.clone(),
-                args.timeout,
-                &interrupt,
-            )?;
-            supervised::terminal_record_after_wait(prepared.store.paths(), &record.run_id, outcome)?
-        };
-        record = record_failure_tail_before_cleanup(
-            room.backend(),
-            &prepared.store,
-            &prepared.workspace.session_name,
-            record,
-        );
+        record = waiter.await_terminal(prepared, room, args, &record.run_id)?;
         verify_attempt += 1;
     }
-    Ok((record, verify_error, socket_guard))
+    Ok((record, verify_error, waiter))
 }
 
 fn close_attempt_pane(
@@ -809,11 +630,11 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
         else {
             return Ok(None);
         };
-        let (record, verify_error, socket_guard) = verify_phase(&prepared, &room, &args, blocking)?;
+        let (record, verify_error, waiter) = verify_phase(&prepared, &room, &args, blocking)?;
         if !args.keep {
             close_attempt_pane(&prepared, &room, &record);
         }
-        drop(socket_guard);
+        drop(waiter);
         if let Some(err) = verify_error {
             return Err(err);
         }
@@ -841,17 +662,6 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
         prompt = rimz::harness::run::retry_prompt(&base_prompt, record.failure_tail.as_deref());
         retry_of = Some(record.run_id.clone());
         attempt += 1;
-    }
-}
-
-fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {
-    if verify.timed_out {
-        "timeout".to_owned()
-    } else {
-        verify
-            .code
-            .map(|code| code.to_string())
-            .unwrap_or_else(|| "signal".to_owned())
     }
 }
 

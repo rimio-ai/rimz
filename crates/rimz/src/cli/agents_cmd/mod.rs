@@ -47,10 +47,7 @@ use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
-use rimz::mux::{
-    LayoutColumn, LayoutPanes, PaneCmd, PaneListOptions, SplitDirection, SplitPaneOptions,
-    TabOptions, own_pane_id,
-};
+use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
 use rimz::store::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::workspace::WorkspaceResolver;
 

@@ -43,14 +43,7 @@ pub(crate) fn print_run_forensics<W: Write + ?Sized>(
             writeln!(err, "{}", render::paint(render::palette::FAINT, tail))?;
         }
         if let Some(verify) = record.verify.as_ref().filter(|verify| !verify.passed) {
-            let status = if verify.timed_out {
-                "timeout".to_owned()
-            } else {
-                verify
-                    .code
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "signal".to_owned())
-            };
+            let status = verify_status_label(verify);
             writeln!(
                 err,
                 "verify `{}` exited {status} (attempt {})",
@@ -92,6 +85,17 @@ pub(crate) fn status_label(status: RunStatus) -> &'static str {
         RunStatus::TimedOut => "timed_out",
         RunStatus::BudgetExceeded => "budget_exceeded",
         RunStatus::Canceled => "canceled",
+    }
+}
+
+pub(crate) fn verify_status_label(verify: &rimz::harness::run::RunVerify) -> String {
+    if verify.timed_out {
+        "timeout".to_owned()
+    } else {
+        verify
+            .code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "signal".to_owned())
     }
 }
 
