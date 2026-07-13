@@ -208,28 +208,24 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: cargo xtask test (compile)
-        id: compile
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           mold -run cargo xtask test --no-run
 
       - name: cargo xtask test (gate)
-        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile gate --no-fail-fast
+          mold -run cargo xtask test --profile gate
 
       - name: cargo xtask test (live)
-        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile live --no-fail-fast
+          mold -run cargo xtask test --profile live
 
       - name: cargo xtask test (journey)
-        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          mold -run cargo xtask test --profile journey --no-fail-fast
+          mold -run cargo xtask test --profile journey
 
       - name: sccache stats
         if: always()

@@ -72,12 +72,17 @@ filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep::/)'
 test-group = 'rendered-journey'
 retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
+# CI tiers suppress passing-test noise, repeat failure output in the final
+# summary, and stop after three terminal failures.
 # `gate` is the fast pre-PR subset: everything except the live-backend and
 # journey tiers. The perf tier stays in this profile because it is deterministic
 # and fast. Escalate to the full suite (`cargo xtask ci` / explicit filters)
 # when a change touches the excluded surfaces.
 [profile.gate]
 default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::/) | test(/^examples::pane_send::pane_send_resolver_completes_full_round_trip$/)))'
+status-level = "retry"
+failure-output = "immediate-final"
+fail-fast = { max-fail = 3 }
 
 # `live` runs both mux backends in one nextest process, letting tmux and Zellij
 # co-schedule on 64-core CI while each stays bounded by its per-backend group.
@@ -85,8 +90,14 @@ default-filter = 'not (package(rimz) & (test(/^backend::tmux::/) | test(/^backen
 # Inherits the live-server groups and the retry budget from `default`.
 [profile.live]
 default-filter = 'package(rimz) & (test(/^backend::tmux::/) | test(/^backend::zellij::/) | test(/^backend::single_backend_room::/) | test(/^journey::deep::/) | test(/^examples::pane_send::pane_send_resolver_completes_full_round_trip$/))'
+status-level = "retry"
+failure-output = "immediate-final"
+fail-fast = { max-fail = 3 }
 
 # CI runs `journey` as its own step after `live`; the deep mux smokes ride in
 # `live` so the per-backend groups bound their real-server load.
 [profile.journey]
 default-filter = 'package(rimz) & test(/^journey::/) & not test(/^journey::deep::/)'
+status-level = "retry"
+failure-output = "immediate-final"
+fail-fast = { max-fail = 3 }
