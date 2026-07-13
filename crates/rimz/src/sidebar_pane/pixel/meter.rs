@@ -293,9 +293,9 @@ impl MeterPainter {
             .get(&image_id)
             .is_some_and(|(_, last)| now_ms.saturating_sub(*last) >= RESIDENT_REFRESH_MS);
         let resend = stale
-            && self
-                .last_resend_ms
-                .is_none_or(|last| now_ms.saturating_sub(last) >= MIN_RESEND_SPACING_MS);
+            && self.last_resend_ms.is_none_or(|last| {
+                last == now_ms || now_ms.saturating_sub(last) >= MIN_RESEND_SPACING_MS
+            });
         if !changed && !resend {
             return Ok(());
         }
@@ -510,6 +510,7 @@ mod tests {
     fn painter_resends_stale_images_with_global_spacing() {
         let first_id = meter_image_id(0x120000, 0);
         let second_id = meter_image_id(0x120000, 1);
+        let third_id = meter_image_id(0x120000, 2);
         let mut painter = MeterPainter::new(false);
         painter
             .ensure_transmitted(&mut Vec::new(), first_id, &raster(0.5), 0)
@@ -517,6 +518,9 @@ mod tests {
         painter
             .ensure_transmitted(&mut Vec::new(), second_id, &raster(0.75), 0)
             .expect("second resident");
+        painter
+            .ensure_transmitted(&mut Vec::new(), third_id, &raster(1.0), 0)
+            .expect("third resident");
 
         let mut first_stale = Vec::new();
         painter
@@ -529,9 +533,25 @@ mod tests {
             .expect("first stale");
         assert!(!first_stale.is_empty());
 
+        let mut same_frame = Vec::new();
+        painter
+            .ensure_transmitted(
+                &mut same_frame,
+                second_id,
+                &raster(0.75),
+                RESIDENT_REFRESH_MS,
+            )
+            .expect("same-frame batch");
+        assert!(!same_frame.is_empty());
+
         let mut too_soon = Vec::new();
         painter
-            .ensure_transmitted(&mut too_soon, second_id, &raster(0.75), RESIDENT_REFRESH_MS)
+            .ensure_transmitted(
+                &mut too_soon,
+                third_id,
+                &raster(1.0),
+                RESIDENT_REFRESH_MS + 1,
+            )
             .expect("globally spaced");
         assert!(too_soon.is_empty());
 
@@ -539,8 +559,8 @@ mod tests {
         painter
             .ensure_transmitted(
                 &mut spaced,
-                second_id,
-                &raster(0.75),
+                third_id,
+                &raster(1.0),
                 RESIDENT_REFRESH_MS + MIN_RESEND_SPACING_MS,
             )
             .expect("spacing elapsed");

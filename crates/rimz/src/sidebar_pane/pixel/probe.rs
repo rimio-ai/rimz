@@ -25,10 +25,25 @@ pub fn detect_env() -> (PixelRenderCaps, bool) {
 
 trait Probe {
     fn tmux_version(&self) -> io::Result<String>;
-    fn tmux_allow_passthrough(&self) -> io::Result<String>;
+    fn tmux_allow_passthrough(&self, target: &str) -> io::Result<String>;
+    fn tmux_set_pane_passthrough_all(&self, pane: &str) -> io::Result<()>;
     fn tmux_client_termnames(&self, session_name: &str) -> io::Result<Vec<String>>;
     fn tmux_session_name(&self) -> io::Result<String>;
     fn env_var(&self, key: &str) -> Option<String>;
+}
+
+pub(crate) fn escalate_own_pane_passthrough() -> io::Result<()> {
+    escalate_with(&LiveProbe)
+}
+
+fn escalate_with(probe: &impl Probe) -> io::Result<()> {
+    let Some(pane) = probe.env_var("TMUX_PANE").filter(|pane| !pane.is_empty()) else {
+        return Ok(());
+    };
+    if probe.tmux_allow_passthrough(&pane)?.trim() == "on" {
+        probe.tmux_set_pane_passthrough_all(&pane)?;
+    }
+    Ok(())
 }
 
 fn detect_with(
@@ -62,7 +77,14 @@ fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PixelRenderCaps) ->
         Ok(termnames) if !termnames.is_empty() => termnames_allowed(&termnames),
         _ => prev.kitty_term,
     };
-    let pixel_transport = match (probe.tmux_version(), probe.tmux_allow_passthrough()) {
+    let passthrough_target = probe
+        .env_var("TMUX_PANE")
+        .filter(|pane| !pane.is_empty())
+        .unwrap_or_else(|| session_name.to_owned());
+    let pixel_transport = match (
+        probe.tmux_version(),
+        probe.tmux_allow_passthrough(&passthrough_target),
+    ) {
         (Ok(version), Ok(allow)) => {
             let version_ok = crate::mux::tmux::parse_version(&version)
                 .is_some_and(|version| version >= MIN_PIXEL_TMUX_VERSION);
@@ -106,8 +128,18 @@ impl Probe for LiveProbe {
         run_tmux(["-V"])
     }
 
-    fn tmux_allow_passthrough(&self) -> io::Result<String> {
-        run_tmux(["show-options", "-gv", "allow-passthrough"])
+    fn tmux_allow_passthrough(&self, target: &str) -> io::Result<String> {
+        run_tmux([
+            "display-message",
+            "-p",
+            "-t",
+            target,
+            "#{allow-passthrough}",
+        ])
+    }
+
+    fn tmux_set_pane_passthrough_all(&self, pane: &str) -> io::Result<()> {
+        run_tmux(["set-option", "-p", "-t", pane, "allow-passthrough", "all"]).map(|_| ())
     }
 
     fn tmux_client_termnames(&self, session_name: &str) -> io::Result<Vec<String>> {
@@ -162,6 +194,7 @@ fn termname_allowed(termname: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::collections::BTreeMap;
 
     const TEST_SESSION: &str = "rimz-test";
@@ -173,6 +206,8 @@ mod tests {
         termnames: Option<Vec<String>>,
         session_name: Option<String>,
         env: BTreeMap<String, String>,
+        passthrough_targets: RefCell<Vec<String>>,
+        passthrough_all_panes: RefCell<Vec<String>>,
     }
 
     impl FakeProbe {
@@ -184,6 +219,8 @@ mod tests {
                 termnames: Some(vec!["xterm-ghostty".to_owned()]),
                 session_name: Some(TEST_SESSION.to_owned()),
                 env: BTreeMap::new(),
+                passthrough_targets: RefCell::new(Vec::new()),
+                passthrough_all_panes: RefCell::new(Vec::new()),
             }
         }
 
@@ -200,10 +237,20 @@ mod tests {
                 .ok_or_else(|| io::Error::other("tmux version unavailable"))
         }
 
-        fn tmux_allow_passthrough(&self) -> io::Result<String> {
+        fn tmux_allow_passthrough(&self, target: &str) -> io::Result<String> {
+            self.passthrough_targets
+                .borrow_mut()
+                .push(target.to_owned());
             self.allow_passthrough
                 .clone()
                 .ok_or_else(|| io::Error::other("tmux passthrough unavailable"))
+        }
+
+        fn tmux_set_pane_passthrough_all(&self, pane: &str) -> io::Result<()> {
+            self.passthrough_all_panes
+                .borrow_mut()
+                .push(pane.to_owned());
+            Ok(())
         }
 
         fn tmux_client_termnames(&self, session_name: &str) -> io::Result<Vec<String>> {
@@ -222,6 +269,60 @@ mod tests {
         fn env_var(&self, key: &str) -> Option<String> {
             self.env.get(key).cloned()
         }
+    }
+
+    #[test]
+    fn tmux_passthrough_probe_targets_own_pane_then_session() {
+        let own_pane = FakeProbe::ok().with_env("TMUX_PANE", "%7");
+        detect_with(
+            MuxName::Tmux,
+            TEST_SESSION,
+            PixelRenderCaps::default(),
+            &own_pane,
+        );
+        assert_eq!(&*own_pane.passthrough_targets.borrow(), &["%7"]);
+
+        let session = FakeProbe::ok();
+        detect_with(
+            MuxName::Tmux,
+            TEST_SESSION,
+            PixelRenderCaps::default(),
+            &session,
+        );
+        assert_eq!(
+            &*session.passthrough_targets.borrow(),
+            &[TEST_SESSION.to_owned()]
+        );
+    }
+
+    #[test]
+    fn tmux_sidebar_escalates_own_inherited_passthrough() {
+        let probe = FakeProbe::ok().with_env("TMUX_PANE", "%7");
+
+        escalate_with(&probe).expect("escalation");
+
+        assert_eq!(&*probe.passthrough_targets.borrow(), &["%7"]);
+        assert_eq!(&*probe.passthrough_all_panes.borrow(), &["%7"]);
+    }
+
+    #[test]
+    fn tmux_sidebar_preserves_all_off_and_missing_pane() {
+        for allow_passthrough in ["all", "off"] {
+            let probe = FakeProbe {
+                allow_passthrough: Some(allow_passthrough.to_owned()),
+                ..FakeProbe::ok().with_env("TMUX_PANE", "%7")
+            };
+
+            escalate_with(&probe).expect("no-op");
+
+            assert_eq!(&*probe.passthrough_targets.borrow(), &["%7"]);
+            assert!(probe.passthrough_all_panes.borrow().is_empty());
+        }
+
+        let missing_pane = FakeProbe::ok();
+        escalate_with(&missing_pane).expect("no-op");
+        assert!(missing_pane.passthrough_targets.borrow().is_empty());
+        assert!(missing_pane.passthrough_all_panes.borrow().is_empty());
     }
 
     #[test]

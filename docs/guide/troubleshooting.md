@@ -158,7 +158,7 @@ rimz reload    # re-exec sidebars onto the current build, repair geometry, close
 RimZ raises a desktop notification by writing a terminal notification escape (OSC 777) from the sidebar; your terminal turns it into the OS banner, even over SSH. When no banner appears, check in order:
 
 - **Zellij rooms.** Zellij currently drops notification escapes, so `desktop = "auto"` skips them there. For OS-level notifications on Zellij, wire a `[[notifications.handler]]` command (`notify-send`, `ntfy`, or anything else); the shape is in [the configuration guide](./configuration.md#notifications).
-- **tmux rooms.** RimZ turns `allow-passthrough` on in its rooms by default, which is what lets the notification bytes through tmux. A personal config that forces it off blocks them.
+- **tmux rooms.** RimZ turns `allow-passthrough` on in its rooms by default, and the sidebar raises its own pane to `all` so notification and graphics bytes keep passing from a hidden window. A personal config that forces it off blocks them.
 - **Terminal and OS.** The terminal must support notification escapes, and the OS must allow notifications from that terminal app (on macOS, System Settings, then Notifications).
 - **Triggers.** Only the statuses in `notifications.triggers` fire, and the default is `["waiting", "failed"]`. Add `"success"` if you expect completion pings.
 

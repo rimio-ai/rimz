@@ -28,6 +28,7 @@ use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};
 use crate::sidebar_pane::pets::{PixelRenderCaps, detect_pixel_render_caps};
+use crate::sidebar_pane::pixel::probe::escalate_own_pane_passthrough;
 use crate::store::paths::PathErr;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
@@ -150,6 +151,15 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
     let pet_render_caps =
         detect_pixel_render_caps(config.mux, &config.session_name, PixelRenderCaps::default());
+    if config.mux == MuxName::Tmux
+        && let Err(err) = escalate_own_pane_passthrough()
+    {
+        warn!(
+            session = %config.session_name,
+            error = %err,
+            "sidebar pane passthrough escalation failed",
+        );
+    }
     spawn_event_waker(socket_path.clone(), config.nav_keys.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
