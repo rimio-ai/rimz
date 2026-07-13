@@ -28,7 +28,7 @@ One row per agent, ordered by support tier — Claude, Codex, Pi, OpenCode, then
 | Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ◐ | ✗ | ✓ | ◐ | ✗ |
-| Kiro | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
+| Kiro | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ |
 
@@ -55,11 +55,13 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
-| Kiro | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
+| Kiro | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
 `lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode, Amp, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
+
+Kiro CLI 2.12.1 v3 did not execute documented user or project standalone hook configs during authenticated stock-TUI verification. RimZ therefore supports Kiro launch, exact resume, and process identity only; hook installation, lifecycle state, and supervised `-p` stay unsupported until a pinned v3 release provides a reproducible executable hook contract.
 
 ## Per-agent mappings
 

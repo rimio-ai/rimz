@@ -380,6 +380,13 @@ pub struct RemoteControlCapability {
 }
 
 impl AgentDescriptor {
+    /// Declared support for one product concern.
+    pub fn concern_coverage(&self, concern: IntegrationConcern) -> Option<ConcernCoverage> {
+        self.coverage
+            .iter()
+            .find_map(|(declared, coverage)| (*declared == concern).then_some(*coverage))
+    }
+
     /// The kind as a typed identity — the one sanctioned mint of an
     /// [`AgentKind`](crate::ids::AgentKind) for a known adapter.
     pub fn kind_id(&self) -> crate::ids::AgentKind {
@@ -677,8 +684,11 @@ mod tests {
         assert!(!kiro.capabilities.blocking_asks);
         assert!(kiro.capabilities.native_ask_ui);
         assert!(!kiro.capabilities.rich_context);
+        assert!(!kiro.capabilities.transcript_tail_context);
         assert!(!kiro.capabilities.context_usage);
         assert!(!kiro.capabilities.account_spend);
+        assert!(!kiro.capabilities.hook_install);
+        assert!(kiro.activity_events.is_empty());
         assert!(!kiro.capabilities.remote_control.pane_sessions);
         assert!(!kiro.capabilities.remote_control.background_sessions);
 

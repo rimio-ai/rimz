@@ -284,7 +284,7 @@ Twelve agents ship built in. **Status** tracks lived confidence, how much each o
 | Droid       | 🧪 Experimental |   ●   |  ○   |    ○    |  ○  |  ○   |     ○     |
 | Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ○  |  ○   |     ○     |
 | Amp         | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ○   |     ○     |
-| Kiro CLI    | 🧪 Experimental |   ●   |  ○   |    ○    |  ○  |  ○   |     ○     |
+| Kiro CLI    | 🧪 Experimental |   ○   |  ○   |    ○    |  ○  |  ○   |     ○     |
 | Qwen Code   | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ●   |     ●     |
 | Kimi        | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ◐     |
 

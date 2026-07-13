@@ -13,6 +13,34 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 #[test]
+fn kiro_supervised_run_fails_before_recording_or_launching() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args(["agents", "kiro", "summarize", "-p"])
+        .output()
+        .expect("spawn Kiro print run");
+
+    assert!(
+        !out.status.success(),
+        "unsupported Kiro print run should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("verified executable turn-lifecycle signal"),
+        "error should name the missing completion contract\nstderr:\n{stderr}"
+    );
+    assert!(
+        rimz::harness::run::list(env.store().paths())
+            .expect("list runs")
+            .is_empty(),
+        "unsupported run must fail before creating state"
+    );
+}
+
+#[test]
 fn hooks_bind_and_complete_supervised_run() {
     let env = Env::new();
     let store = env.store();

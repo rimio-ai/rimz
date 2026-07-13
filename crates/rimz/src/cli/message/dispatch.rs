@@ -690,6 +690,15 @@ fn preflight_reply_hooks(
     agent: &AgentState,
     adapter: &dyn rimz::agents::AgentAdapter,
 ) -> Result<()> {
+    if let Some(rimz::agents::ConcernCoverage::Unsupported { reason }) = adapter
+        .descriptor()
+        .concern_coverage(rimz::agents::IntegrationConcern::TurnLifecycle)
+    {
+        bail!(
+            "--wait cannot use {}: a verified executable turn-lifecycle signal is required; {reason}",
+            agent.kind
+        );
+    }
     if !adapter.hooks_installed() {
         bail!(
             "--wait requires {} hooks so the reply turn can report its boundaries; run `rimz hooks install {}`",

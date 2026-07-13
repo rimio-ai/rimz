@@ -164,6 +164,14 @@ fn doctor_json_reports_agent_hook_install_and_trust_states() {
         fix(hook(hooks, "claude")).contains("rimz hooks install claude"),
         "names the claude wiring command"
     );
+    let kiro = hook(hooks, "kiro");
+    assert_eq!(kiro["status"]["state"], "unsupported");
+    assert!(
+        kiro["status"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("does not execute standalone hook configs")),
+        "Kiro reports the verified hook limitation: {kiro}"
+    );
 
     let env = Env::new();
     env.install_agent_hooks("codex");

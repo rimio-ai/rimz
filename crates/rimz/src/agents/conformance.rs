@@ -111,10 +111,17 @@ fn installed_events_are_covered_by_the_corpus_and_classify_to_a_channel() {
         let kind = adapter.descriptor().kind;
         let samples = corpus(*adapter);
         let installed_events = adapter.installed_hook_events();
-        assert!(
+        assert_eq!(
             !installed_events.is_empty(),
-            "{kind} adapter must declare installed hook events for conformance"
+            adapter.descriptor().capabilities.hook_install,
+            "{kind} installed hook events must match hook-install capability"
         );
+        if installed_events.is_empty() {
+            assert!(
+                samples.is_empty(),
+                "{kind} adapter without installed hooks must not claim a native classification corpus"
+            );
+        }
         for event in installed_events {
             assert!(
                 samples.iter().any(|sample| sample.event_name == event),
@@ -387,13 +394,7 @@ setup-doc = "README.md"
 }
 
 fn corpus(adapter: &dyn AgentAdapter) -> Vec<ClassificationSample> {
-    let samples = adapter.classification_corpus();
-    assert!(
-        !samples.is_empty(),
-        "{} adapter must declare a conformance corpus",
-        adapter.descriptor().kind
-    );
-    samples
+    adapter.classification_corpus()
 }
 
 fn producible_ask_kinds(samples: &[ClassificationSample]) -> Vec<AskKind> {

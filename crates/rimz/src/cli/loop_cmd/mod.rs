@@ -394,6 +394,14 @@ fn preflight_resolved_task(spec: &str, resolved: &ResolvedTaskSpec) -> Result<()
 fn preflight_kind(kind: &str) -> Result<()> {
     let adapter =
         find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+    if let Some(rimz::agents::ConcernCoverage::Unsupported { reason }) = adapter
+        .descriptor()
+        .concern_coverage(rimz::agents::IntegrationConcern::TurnLifecycle)
+    {
+        bail!(
+            "{kind} cannot run as a scheduled turn: a verified executable turn-lifecycle signal is required; {reason}"
+        );
+    }
     if !adapter.hooks_installed() {
         bail!(
             "{kind} hooks are not installed, so a scheduled turn cannot report completion\ninstall them with `rimz hooks install {kind}`"

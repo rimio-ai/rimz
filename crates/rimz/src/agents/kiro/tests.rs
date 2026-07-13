@@ -2,233 +2,110 @@ use super::*;
 
 use std::ffi::OsStr;
 
-use crate::agents::lifecycle::{TurnPhase, step};
-use crate::agents::{AgentErr, AgentStatus, LaunchPreset};
+use crate::agents::descriptor::{ConcernCoverage, IntegrationConcern};
+use crate::agents::lifecycle::LifecycleSignal;
+use crate::agents::{AgentErr, LaunchPreset};
 use serde_json::json;
 
 #[test]
-fn lifecycle_maps_through_the_shared_state_machine() {
-    let registered = observed("SessionStart", json!({ "session_id": "s", "cwd": "/work" }));
-    assert_eq!(registered.agent_id.as_deref(), Some("s"));
-    assert_eq!(registered.worktree_path.as_deref(), Some("/work"));
-    let idle = step(None, &registered.signal).next;
-    assert_eq!(idle.status, AgentStatus::Idle);
+fn native_hooks_are_explicitly_unsupported() {
+    let descriptor = KiroAdapter.descriptor();
+    assert!(!descriptor.capabilities.hook_install);
+    assert!(descriptor.activity_events.is_empty());
+    assert!(KiroAdapter.installed_hook_events().is_empty());
+    assert!(matches!(
+        descriptor
+            .coverage
+            .iter()
+            .find(|(concern, _)| *concern == IntegrationConcern::TurnLifecycle)
+            .map(|(_, coverage)| *coverage),
+        Some(ConcernCoverage::Unsupported { .. })
+    ));
 
-    let prompt = observed(
-        "UserPromptSubmit",
-        json!({ "sessionId": "s", "userPrompt": "  fix auth  " }),
-    );
-    assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
-    assert_eq!(prompt.task.as_deref(), Some("fix auth"));
-    let running = step(Some(&idle), &prompt.signal).next;
-    assert_eq!(running.status, AgentStatus::Running);
-    assert_eq!(running.phase, TurnPhase::Reasoning);
-
-    let edit = observed(
-        "PostToolUse",
-        json!({ "session_id": "s", "tool_name": "fs_write" }),
-    );
-    let acting = step(Some(&running), &edit.signal).next;
-    assert_eq!(acting.status, AgentStatus::Running);
-    assert_eq!(acting.phase, TurnPhase::Acting);
-
-    let clean = observed("Stop", json!({ "session_id": "s" }));
-    assert_eq!(
-        step(Some(&acting), &clean.signal).next.status,
-        AgentStatus::Success
-    );
-    let failed = observed("Stop", json!({ "session_id": "s", "is_error": true }));
-    assert_eq!(
-        step(Some(&acting), &failed.signal).next.status,
-        AgentStatus::Failed
-    );
-}
-
-#[test]
-fn unknown_tools_and_malformed_payloads_stay_silent_and_safe() {
-    for payload in [
-        json!({ "session_id": "s", "tool_name": "fs_read" }),
-        json!({ "session_id": "s" }),
-        json!({ "session_id": "s", "tool_name": 7 }),
-        serde_json::Value::Null,
-    ] {
-        assert!(
-            KiroAdapter
-                .observe_lifecycle("PostToolUse", &payload)
-                .is_none()
+    for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] {
+        let payload = json!({ "session_id": "sess_redacted", "prompt": "ignored" });
+        assert_eq!(
+            KiroAdapter.classify_hook(event, &payload).class,
+            AgentHookClass::Unknown
         );
+        assert!(KiroAdapter.observe_lifecycle(event, &payload).is_none());
+        assert_eq!(KiroAdapter.render_neutral(event).unwrap(), None);
     }
 
-    let idless = observed("SessionStart", json!({ "cwd": "/work" }));
-    assert!(idless.agent_id.is_none());
-    assert_eq!(
-        observed("SessionStart", json!({ "session_id": "  session-1  " }))
-            .agent_id
-            .as_deref(),
-        Some("session-1")
-    );
-    assert!(
-        observed("SessionStart", json!({ "session_id": "   " }))
-            .agent_id
-            .is_none()
-    );
-    assert!(
-        observed("UserPromptSubmit", json!({ "prompt": 7 }))
-            .prompt
-            .is_none()
-    );
+    let observation =
+        super::super::AgentLifecycleObservation::new(None, LifecycleSignal::Registered);
     assert!(
         KiroAdapter
-            .observe_lifecycle("unknown", &json!(null))
+            .last_assistant_message("Stop", &json!({}), &observation)
             .is_none()
     );
 }
 
 #[test]
-fn installed_events_render_empty_stdout() {
-    let rendered: Vec<_> = WIRED_EVENTS
-        .iter()
-        .map(|event| (*event, KiroAdapter.render_neutral(event).unwrap()))
-        .collect();
-    insta::assert_debug_snapshot!(rendered, @r###"
-    [
-        (
-            "SessionStart",
-            None,
-        ),
-        (
-            "UserPromptSubmit",
-            None,
-        ),
-        (
-            "PostToolUse",
-            None,
-        ),
-        (
-            "Stop",
-            None,
-        ),
-    ]
-    "###);
+fn transcript_context_and_spend_surfaces_remain_absent() {
+    let descriptor = KiroAdapter.descriptor();
+    assert!(!descriptor.capabilities.transcript_tail_context);
+    assert!(!descriptor.capabilities.context_usage);
+    assert!(!descriptor.capabilities.rich_context);
+    assert!(!descriptor.capabilities.account_spend);
+    assert!(
+        !descriptor
+            .capabilities
+            .realtime_usage
+            .covers_account_while_live
+    );
+
+    let history = include_str!("tests/fixtures/root/sess_redacted.history");
+    let acp = include_str!("tests/fixtures/acp/11111111-1111-4111-8111-111111111111.jsonl");
+    assert!(KiroAdapter.parse_transcript_messages(history).is_empty());
+    assert!(KiroAdapter.parse_transcript_messages(acp).is_empty());
 }
 
 #[test]
-fn install_preview_drift_and_uninstall_preserve_ownership() {
+fn hook_install_refuses_but_legacy_owned_files_can_be_removed() {
+    for result in [
+        KiroAdapter.install_hooks().map(|_| ()),
+        KiroAdapter.preview_hook_install().map(|_| ()),
+    ] {
+        let err = result.expect_err("Kiro v3 hook install must fail");
+        assert!(
+            err.to_string()
+                .contains("does not execute standalone hook configs")
+        );
+    }
+    assert!(!KiroAdapter.hooks_installed());
+
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks/rimz.json");
-
-    let preview = install::preview_at(&path).unwrap();
-    assert_eq!(preview.planned_events, WIRED_EVENTS);
-    assert!(!preview.merged);
-    assert!(!path.exists());
-
-    let first = install::install_into(&path).unwrap();
-    assert!(!first.merged);
-    let canonical = std::fs::read(&path).unwrap();
-    assert!(install::installed_at(&path));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        r#"{"version":"v1","hooks":[{"action":{"command":"/old/rimz hooks feed --source kiro --event Stop"}}]}"#,
+    )
+    .unwrap();
     assert!(install::managed_at(&path));
-
-    let second = install::install_into(&path).unwrap();
-    assert!(second.merged);
-    assert_eq!(std::fs::read(&path).unwrap(), canonical);
-
-    let mut drift: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
-    drift["hooks"].as_array_mut().unwrap().pop();
-    std::fs::write(&path, serde_json::to_vec_pretty(&drift).unwrap()).unwrap();
-    assert!(!install::installed_at(&path));
-    assert!(install::managed_at(&path));
-
-    let mut disabled: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
-    disabled["hooks"][0]["enabled"] = json!(false);
-    std::fs::write(&path, serde_json::to_vec_pretty(&disabled).unwrap()).unwrap();
-    assert!(!install::installed_at(&path));
-    assert!(install::managed_at(&path));
-
-    let mut schema_drift: serde_json::Value = serde_json::from_slice(&canonical).unwrap();
-    schema_drift["hooks"][0]["description"] = json!("locally edited");
-    std::fs::write(&path, serde_json::to_vec_pretty(&schema_drift).unwrap()).unwrap();
-    assert!(!install::installed_at(&path));
-    assert!(install::managed_at(&path));
-
     let removed = install::uninstall_from(&path).unwrap();
     assert!(removed.existed);
-    assert_eq!(removed.removed_events, WIRED_EVENTS);
-    assert!(!path.exists());
-
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, r#"{"version":"v1","hooks":[]}"#).unwrap();
-    assert!(matches!(
-        install::install_into(&path),
-        Err(AgentErr::Install { .. })
-    ));
-    let untouched = std::fs::read(&path).unwrap();
-    assert!(
-        install::uninstall_from(&path)
-            .unwrap()
-            .removed_events
-            .is_empty()
+    assert_eq!(
+        removed.removed_events,
+        ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]
     );
-    assert_eq!(std::fs::read(&path).unwrap(), untouched);
+    assert!(!path.exists());
 }
 
 #[test]
-fn candidate_config_is_canonical() {
+fn legacy_cleanup_preserves_unowned_files() {
     let dir = tempfile::tempdir().unwrap();
-    let preview = install::preview_at(&dir.path().join("rimz.json")).unwrap();
-    let executable = std::env::current_exe()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-    let stable = preview
-        .candidate_config
-        .replace(&executable, "/path/to/rimz");
-    insta::assert_snapshot!(stable, @r###"
-    {
-      "version": "v1",
-      "hooks": [
-        {
-          "trigger": "SessionStart",
-          "name": "rimz-session-start",
-          "action": {
-            "type": "command",
-            "command": "/path/to/rimz hooks feed --source kiro --event SessionStart"
-          },
-          "timeout": 10,
-          "enabled": true
-        },
-        {
-          "trigger": "UserPromptSubmit",
-          "name": "rimz-user-prompt-submit",
-          "action": {
-            "type": "command",
-            "command": "/path/to/rimz hooks feed --source kiro --event UserPromptSubmit"
-          },
-          "timeout": 10,
-          "enabled": true
-        },
-        {
-          "trigger": "PostToolUse",
-          "name": "rimz-post-tool-use",
-          "action": {
-            "type": "command",
-            "command": "/path/to/rimz hooks feed --source kiro --event PostToolUse"
-          },
-          "timeout": 10,
-          "enabled": true
-        },
-        {
-          "trigger": "Stop",
-          "name": "rimz-stop",
-          "action": {
-            "type": "command",
-            "command": "/path/to/rimz hooks feed --source kiro --event Stop"
-          },
-          "timeout": 10,
-          "enabled": true
-        }
-      ]
-    }
-    "###);
+    let path = dir.path().join("hooks/rimz.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let user_config = r#"{"version":"v1","hooks":[{"action":{"command":"my-hook"}}]}"#;
+    std::fs::write(&path, user_config).unwrap();
+
+    assert!(!install::managed_at(&path));
+    let report = install::uninstall_from(&path).unwrap();
+    assert!(report.existed);
+    assert!(report.removed_events.is_empty());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), user_config);
 }
 
 #[test]
@@ -272,20 +149,21 @@ fn launch_resume_and_presets_use_v3_surface() {
         ])
     );
     assert_eq!(
-        KiroAdapter.resume_command("session-1", Path::new("/work")),
+        KiroAdapter.resume_command("sess_redacted", Path::new("/work")),
         Some(vec![
             "kiro-cli".to_owned(),
             "chat".to_owned(),
             "--v3".to_owned(),
             "--resume-id".to_owned(),
-            "session-1".to_owned(),
+            "sess_redacted".to_owned(),
         ])
     );
     assert!(
         KiroAdapter
-            .fork_command("session-1", Path::new("/work"))
+            .fork_command("sess_redacted", Path::new("/work"))
             .is_none()
     );
+    assert_eq!(KiroAdapter.compact_command(), Some("/compact"));
     assert_eq!(
         KiroAdapter.render_preset(&LaunchPreset {
             model: Some("auto".to_owned()),
@@ -304,16 +182,7 @@ fn launch_resume_and_presets_use_v3_surface() {
 #[test]
 fn presence_matches_launcher_and_chat_engine() {
     let descriptor = KiroAdapter.descriptor();
-    // The launcher and the v3 chat engine both read as Kiro.
     assert!(descriptor.runs_as("kiro-cli"));
     assert!(descriptor.runs_as("kiro-cli-chat"));
-    // The figterm shell-integration daemon runs for every integrated shell, so
-    // it must never bind a pane as an agent.
     assert!(!descriptor.runs_as("kiro-cli-term"));
-}
-
-fn observed(event: &str, payload: serde_json::Value) -> AgentLifecycleObservation {
-    KiroAdapter
-        .observe_lifecycle(event, &payload)
-        .expect("observation")
 }

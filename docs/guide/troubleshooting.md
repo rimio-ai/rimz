@@ -108,11 +108,13 @@ An agent earns a live card only once its reporting hooks are installed. The hook
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # wire every detected agent (claude, codex, amp, gemini, kimi, pi, opencode, droid, kiro)
+rimz hooks install              # wire every detected installable agent (claude, codex, amp, gemini, kimi, pi, opencode, droid)
 rimz hooks install claude       # wire one agent by name
 ```
 
 The install is additive, so your existing hooks stay, and `rimz doctor` reports per-agent hook status afterward. Restart the agent so it picks up the new hooks. To back the change out, `rimz hooks uninstall [AGENT]` removes exactly what RimZ added and restores any statusline it wrapped.
+
+Kiro CLI 2.12.1 v3 remains a process row because its documented standalone hooks did not execute under live verification. `rimz doctor` reports this surface as unsupported; `rimz hooks uninstall kiro` still removes a legacy RimZ-owned hook file.
 
 ### A card went quiet after a config edit
 

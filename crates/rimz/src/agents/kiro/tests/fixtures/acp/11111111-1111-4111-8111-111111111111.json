@@ -1,0 +1,22 @@
+{
+  "session_id": "11111111-1111-4111-8111-111111111111",
+  "session_created_reason": "subagent",
+  "cwd": "/redacted/workspace",
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:01Z",
+  "title": "redacted task",
+  "session_state": {
+    "version": "v1",
+    "agent_name": "kiro_default",
+    "conversation_metadata": {
+      "user_turn_metadatas": [],
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "44444444-4444-4444-8444-444444444444",
+      "context_usage_percentage": 1.0,
+      "model_info": {}
+    }
+  }
+}

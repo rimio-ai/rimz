@@ -52,6 +52,45 @@ fn run_claude_lifecycle(env: &Env, payload: Value) {
 }
 
 #[test]
+fn kiro_hook_install_refuses_and_legacy_uninstall_still_cleans_up() {
+    let env = Env::new();
+    let path = env.home_root.join(".kiro/hooks/rimz.json");
+
+    for args in [
+        vec!["hooks", "install", "kiro"],
+        vec!["hooks", "install", "--dry-run", "kiro"],
+    ] {
+        let out = env.rimz().args(args).output().expect("spawn Kiro install");
+        assert!(!out.status.success(), "unsupported install must fail");
+        assert!(
+            String::from_utf8_lossy(&out.stderr)
+                .contains("does not execute standalone hook configs"),
+            "stderr should explain the verified limitation: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(!path.exists(), "refused install must not write config");
+    }
+
+    std::fs::create_dir_all(path.parent().expect("hook parent")).expect("mkdir hook parent");
+    std::fs::write(
+        &path,
+        r#"{"version":"v1","hooks":[{"action":{"command":"rimz hooks feed --source kiro --event Stop"}}]}"#,
+    )
+    .expect("write legacy hook");
+    let out = env
+        .rimz()
+        .args(["hooks", "uninstall", "kiro"])
+        .output()
+        .expect("spawn Kiro uninstall");
+    assert!(
+        out.status.success(),
+        "legacy uninstall failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!path.exists(), "legacy owned file should be removed");
+}
+
+#[test]
 fn session_start_hooks_write_lifecycle_rows() {
     for (source, payload, expected_id, expected_fields) in [
         (

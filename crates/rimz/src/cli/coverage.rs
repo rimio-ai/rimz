@@ -472,12 +472,12 @@ mod tests {
         assert_eq!(count(&droid, MatrixCellState::Absent), 11);
 
         let kiro = agent_cells(&matrix, "kiro");
-        assert_eq!(count(&kiro, MatrixCellState::Ok), 2);
-        assert_eq!(count(&kiro, MatrixCellState::Partial), 2);
-        assert_eq!(count(&kiro, MatrixCellState::Absent), 12);
+        assert_eq!(count(&kiro, MatrixCellState::Ok), 0);
+        assert_eq!(count(&kiro, MatrixCellState::Partial), 1);
+        assert_eq!(count(&kiro, MatrixCellState::Absent), 15);
         assert_eq!(
             agent_labels(&matrix, "kiro", MatrixCellState::Partial),
-            ["end", "idle"]
+            ["end"]
         );
 
         let qwen = agent_cells(&matrix, "qwen");

@@ -180,6 +180,9 @@ fn agent_kind_matches_known_launch_shapes() {
         ("codex-aarch64-a", "codex", true),
         ("node", "codex", true),
         ("node", "claude", false),
+        ("kiro-cli", "kiro", true),
+        ("kiro-cli-chat", "kiro", true),
+        ("kiro-cli-term", "kiro", false),
         ("zsh", "claude", false),
         ("bash", "codex", false),
     ] {

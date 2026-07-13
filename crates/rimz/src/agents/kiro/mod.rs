@@ -1,32 +1,29 @@
-//! Kiro CLI v3 lifecycle adapter.
+//! Kiro CLI v3 launch and process-presence adapter.
 //!
-//! Kiro's four stock-TUI command hooks provide root-session presence, prompt,
-//! mutating-tool, and turn-end signals. The upstream hook payload schema is
-//! unpublished, so the installer stamps the trigger on argv and the payload
-//! parser stays tolerant until live fixtures can pin the wire.
+//! Kiro CLI 2.12.1 does not execute the documented standalone hook configs in
+//! a stock v3 session. Keep launch, resume, and process identity available;
+//! lifecycle and hook installation stay unsupported until a pinned release
+//! provides a reproducible native signal.
 
 mod install;
-mod payloads;
 #[cfg(test)]
 mod tests;
 
 use std::path::Path;
 
 use serde_json::Value;
-#[cfg(test)]
-use serde_json::json;
 
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
     PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignalKind;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, classify_agent_hook, non_empty_trimmed, sanitize_user_prompt,
-    stop_payload_errored,
+    AgentAdapter, AgentErr, AgentHookClass, ClassifiedHook, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, Result,
 };
-use crate::ids::AgentSessionId;
+
+const HOOK_INSTALL_UNAVAILABLE: &str = "Kiro CLI 2.12.1 v3 does not execute standalone hook configs; re-enable after a pinned v3 release provides a reproducible native hook contract";
 
 static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "kiro",
@@ -40,8 +37,8 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     plan_label: PlanLabel::Prefixed { prefix: "Kiro" },
     sub_providers: &[],
     tools: ToolClassification {
-        mutating: &["fs_write", "str_replace"],
-        editing: &["fs_write", "str_replace"],
+        mutating: &[],
+        editing: &[],
         blocking: &[],
     },
     capabilities: Capabilities {
@@ -57,7 +54,7 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         background_tasks: false,
         registers_lazily: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
+        hook_install: false,
         implicit_unlimited_window_mins: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -79,16 +76,16 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // excluded to avoid false-positive presence.
     process_names: &["kiro-cli", "kiro-cli-chat"],
     extra_bin_dirs: &[],
-    activity_events: WIRED_EVENTS,
-    hook_install_unavailable: None,
+    activity_events: &[],
+    hook_install_unavailable: Some(HOOK_INSTALL_UNAVAILABLE),
     thread_key: ThreadKey::PerFile,
 };
 
 const KIRO_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "SessionStart/UserPromptSubmit/Stop",
+        ConcernCoverage::Unsupported {
+            reason: "Kiro CLI 2.12.1 v3 exposes no verified executable turn-lifecycle signal",
         },
     ),
     (
@@ -142,9 +139,8 @@ const KIRO_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "turn boundaries + stall window",
-            gap: "no idle Notification event",
+        ConcernCoverage::Unsupported {
+            reason: "no verified lifecycle hook or native idle notification",
         },
     ),
     (
@@ -167,8 +163,8 @@ const KIRO_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.kiro/hooks/rimz.json",
+        ConcernCoverage::Unsupported {
+            reason: HOOK_INSTALL_UNAVAILABLE,
         },
     ),
     (
@@ -188,30 +184,32 @@ const KIRO_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
 const KIRO_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     (
         LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "SessionStart",
+        HookCoverage::Absent {
+            reason: "Kiro CLI 2.12.1 v3 did not execute the documented SessionStart hook config",
         },
     ),
     (
         LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "UserPromptSubmit",
+        HookCoverage::Absent {
+            reason: "Kiro CLI 2.12.1 v3 did not execute the documented UserPromptSubmit hook config",
         },
     ),
     (
         LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "Stop" },
+        HookCoverage::Absent {
+            reason: "Kiro CLI 2.12.1 v3 did not execute the documented Stop hook config",
+        },
     ),
     (
         LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "PostToolUse",
+        HookCoverage::Absent {
+            reason: "Kiro CLI 2.12.1 v3 did not execute the documented PostToolUse hook config",
         },
     ),
     (
         LifecycleSignalKind::AwaitingInput,
         HookCoverage::Absent {
-            reason: "no v3 hook announces native prompts",
+            reason: "no verified v3 hook announces native prompts",
         },
     ),
     (
@@ -254,9 +252,6 @@ const KIRO_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     ),
 ];
 
-const LIFECYCLE_EVENTS: &[&str] = &["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
-const WIRED_EVENTS: &[&str] = LIFECYCLE_EVENTS;
-
 #[derive(Clone, Debug, Default)]
 pub struct KiroAdapter;
 
@@ -266,95 +261,17 @@ impl AgentAdapter for KiroAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        classify_agent_hook(event_name, None, LIFECYCLE_EVENTS)
-    }
-
-    #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
-        WIRED_EVENTS.to_vec()
-    }
-
-    #[cfg(test)]
-    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        use super::{AgentHookClass, ClassificationSample};
-
-        vec![
-            ClassificationSample::new(
-                "SessionStart",
-                json!({ "session_id": "s", "cwd": "/tmp/work" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "UserPromptSubmit",
-                json!({ "session_id": "s", "prompt": "fix auth" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PostToolUse",
-                json!({ "session_id": "s", "tool_name": "fs_write" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "Stop",
-                json!({ "session_id": "s" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-        ]
+        ClassifiedHook {
+            class: AgentHookClass::Unknown,
+            ask_kind: None,
+            event_name: event_name.to_owned(),
+        }
     }
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         // Kiro adds stdout to model context on SessionStart and
         // UserPromptSubmit; keep every event silent for one safe contract.
         Ok(None)
-    }
-
-    fn observe_lifecycle(
-        &self,
-        event_name: &str,
-        payload: &Value,
-    ) -> Option<AgentLifecycleObservation> {
-        let parsed = payloads::parse_payload(payload);
-        let signal = match event_name {
-            "SessionStart" => LifecycleSignal::Registered,
-            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
-            "PostToolUse"
-                if parsed
-                    .tool_name
-                    .as_deref()
-                    .is_some_and(|name| self.descriptor().tools.mutating.contains(&name)) =>
-            {
-                LifecycleSignal::ToolUsed {
-                    mutates: true,
-                    edits: parsed
-                        .tool_name
-                        .as_deref()
-                        .is_some_and(|name| self.descriptor().tools.editing.contains(&name)),
-                }
-            }
-            "Stop" => LifecycleSignal::TurnEnded {
-                errored: stop_payload_errored(payload),
-                parked_on_background: false,
-            },
-            _ => return None,
-        };
-        let agent_id = parsed
-            .session_id
-            .as_deref()
-            .and_then(non_empty_trimmed)
-            .map(AgentSessionId::from);
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
-        observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
-        Some(observation)
-    }
-
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "UserPromptSubmit" | "Stop")
     }
 
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
@@ -417,11 +334,17 @@ impl AgentAdapter for KiroAdapter {
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
-        install::install_into(&install::hooks_path()?)
+        Err(AgentErr::Install {
+            agent: self.descriptor().kind,
+            reason: HOOK_INSTALL_UNAVAILABLE.to_owned(),
+        })
     }
 
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        install::preview_at(&install::hooks_path()?)
+        Err(AgentErr::Install {
+            agent: self.descriptor().kind,
+            reason: HOOK_INSTALL_UNAVAILABLE.to_owned(),
+        })
     }
 
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
@@ -429,7 +352,7 @@ impl AgentAdapter for KiroAdapter {
     }
 
     fn hooks_installed(&self) -> bool {
-        install::hooks_path().is_ok_and(|path| install::installed_at(&path))
+        false
     }
 
     fn managed_hook_artifacts_present(&self) -> bool {

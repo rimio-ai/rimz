@@ -1,44 +1,13 @@
-//! Whole-file Kiro v3 hook installation.
+//! Cleanup for legacy whole-file Kiro v3 hook installs.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-use super::WIRED_EVENTS;
-use crate::agents::{
-    AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    read_optional_file,
-};
-use crate::store::atomic;
+use crate::agents::{AgentErr, HookUninstallReport, Result, read_optional_file};
 
 const AGENT: &str = "kiro";
 const RECLAIM_KEY: &str = "hooks feed --source kiro";
-
-#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct HookConfig {
-    version: String,
-    hooks: Vec<HookEntry>,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct HookEntry {
-    trigger: String,
-    name: String,
-    action: HookAction,
-    timeout: u64,
-    enabled: bool,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct HookAction {
-    #[serde(rename = "type")]
-    kind: String,
-    command: String,
-}
+const LEGACY_EVENTS: &[&str] = &["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
 
 pub(super) fn hooks_path() -> Result<PathBuf> {
     resolve_hooks_path(
@@ -69,34 +38,6 @@ pub(super) fn resolve_hooks_path(
     Ok(home.join(".kiro/hooks/rimz.json"))
 }
 
-pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {
-    let original = read_optional_file(AGENT, path)?;
-    refuse_unowned(path, original.as_deref())?;
-    let candidate = canonical_config()?;
-    atomic::write_bytes_atomically(path, candidate.as_bytes())?;
-    Ok(HookInstallReport {
-        agent: AGENT,
-        config_path: path.to_path_buf(),
-        installed_events: event_names(),
-        merged: original.is_some(),
-    })
-}
-
-pub(super) fn preview_at(path: &Path) -> Result<HookInstallPreview> {
-    let original = read_optional_file(AGENT, path)?;
-    refuse_unowned(path, original.as_deref())?;
-    Ok(HookInstallPreview {
-        agent: AGENT,
-        config_path: path.to_path_buf(),
-        planned_events: event_names(),
-        candidate_config: canonical_config()?,
-        merged: original.is_some(),
-        original_config: original,
-        status_line_change: None,
-        subagent_status_line_change: None,
-    })
-}
-
 pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     let original = read_optional_file(AGENT, path)?;
     let existed = original.is_some();
@@ -117,71 +58,8 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     })
 }
 
-pub(super) fn installed_at(path: &Path) -> bool {
-    std::fs::read_to_string(path).is_ok_and(|text| {
-        let Ok(installed) = serde_json::from_str::<HookConfig>(&text) else {
-            return false;
-        };
-        canonical_config()
-            .ok()
-            .and_then(|candidate| serde_json::from_str::<HookConfig>(&candidate).ok())
-            .is_some_and(|candidate| installed == candidate)
-    })
-}
-
 pub(super) fn managed_at(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|text| file_is_owned(&text))
-}
-
-fn canonical_config() -> Result<String> {
-    let executable = std::env::current_exe().map_err(|source| AgentErr::Install {
-        agent: AGENT,
-        reason: format!("cannot resolve the current rimz executable: {source}"),
-    })?;
-    let executable = executable.to_str().ok_or_else(|| AgentErr::Install {
-        agent: AGENT,
-        reason: format!(
-            "the current rimz executable path is not valid UTF-8: {}",
-            executable.display()
-        ),
-    })?;
-    let quoted = shlex::try_quote(executable).map_err(|source| AgentErr::Install {
-        agent: AGENT,
-        reason: format!("cannot shell-quote the current rimz executable: {source}"),
-    })?;
-    let hooks = WIRED_EVENTS
-        .iter()
-        .map(|event| HookEntry {
-            trigger: (*event).to_owned(),
-            name: format!("rimz-{}", trigger_kebab(event)),
-            action: HookAction {
-                kind: "command".to_owned(),
-                command: format!("{quoted} hooks feed --source kiro --event {event}"),
-            },
-            timeout: 10,
-            enabled: true,
-        })
-        .collect();
-    let text = serde_json::to_string_pretty(&HookConfig {
-        version: "v1".to_owned(),
-        hooks,
-    })
-    .map_err(|source| AgentErr::InstallSerialize {
-        agent: AGENT,
-        source: Box::new(source),
-    })?;
-    Ok(format!("{text}\n"))
-}
-
-fn trigger_kebab(trigger: &str) -> String {
-    let mut out = String::with_capacity(trigger.len() + 3);
-    for (index, character) in trigger.chars().enumerate() {
-        if character.is_ascii_uppercase() && index > 0 {
-            out.push('-');
-        }
-        out.push(character.to_ascii_lowercase());
-    }
-    out
 }
 
 fn file_is_owned(text: &str) -> bool {
@@ -200,21 +78,8 @@ fn file_is_owned(text: &str) -> bool {
     })
 }
 
-fn refuse_unowned(path: &Path, original: Option<&str>) -> Result<()> {
-    if original.is_some_and(|text| !file_is_owned(text)) {
-        return Err(AgentErr::Install {
-            agent: AGENT,
-            reason: format!(
-                "refusing to overwrite an unmarked user hook config at {}; move it aside or remove it to let Rimz manage this file",
-                path.display()
-            ),
-        });
-    }
-    Ok(())
-}
-
 fn event_names() -> Vec<String> {
-    WIRED_EVENTS
+    LEGACY_EVENTS
         .iter()
         .map(|event| (*event).to_owned())
         .collect()
