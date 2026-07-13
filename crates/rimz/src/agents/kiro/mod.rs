@@ -269,8 +269,8 @@ impl AgentAdapter for KiroAdapter {
     }
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // Kiro adds stdout to model context on SessionStart and
-        // UserPromptSubmit; keep every event silent for one safe contract.
+        // Keep defensive manual feeds silent; if a future pinned release makes
+        // documented hooks executable, stdout may become an agent input.
         Ok(None)
     }
 
