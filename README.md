@@ -271,26 +271,26 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 
 ## Agent compatibility matrix
 
-Twelve agents ship built in. **Status** tracks lived confidence, how much each one is actually driven in daily work: ✅ Supported · 🟢 Beta · 🟡 Alpha · 🧪 Experimental. The four **surface** columns show what each integration reports (● full · ◐ partial · ○ none): *hooks* is live status from the agent's own events, *transcript* the session read for context and tokens, *live* the context health and cost on the card, and *asks* the blocking prompts routed to your keyboard.
+Twelve agents ship built in. **Status** tracks lived confidence, how much each one is actually driven in daily work: ✅ Supported · 🟢 Beta · 🟡 Alpha · 🧪 Experimental. The three **surface** columns grade how complete each integration feels in use (● full · ◐ partial · ○ none): *state* is the live working/idle/waiting status the sidebar tracks from the agent's own events, *live* the realtime context health and cost on its card, and *history* the full session read behind `agents history`, transcript, and spend. A column is ● when the card reads complete to you, whether a native transport or an in-process extension fills it; the finer per-mechanism view is `rimz coverage`.
 
-| Agent       | Status          | Hooks | Transcript | Live | Asks |
-|-------------|-----------------|:-----:|:----------:|:----:|:----:|
-| Claude Code | ✅ Supported    |   ●   |     ●      |  ●   |  ●   |
-| Codex       | ✅ Supported    |   ●   |     ●      |  ●   |  ●   |
-| Pi          | 🟢 Beta         |   ●   |     ◐      |  ◐   |  ○   |
-| OpenCode    | 🟡 Alpha        |   ●   |     ◐      |  ◐   |  ●   |
-| Gemini CLI  | 🧪 Experimental |   ●   |     ●      |  ◐   |  ●   |
-| Copilot     | 🧪 Experimental |   ●   |     ○      |  ○   |  ●   |
-| Droid       | 🧪 Experimental |   ●   |     ○      |  ○   |  ○   |
-| Cursor      | 🧪 Experimental |   ●   |     ◐      |  ○   |  ○   |
-| Amp         | 🧪 Experimental |   ●   |     ○      |  ○   |  ○   |
-| Kiro CLI    | 🧪 Experimental |   ●   |     ○      |  ○   |  ○   |
-| Qwen Code   | 🧪 Experimental |   ●   |     ●      |  ◐   |  ●   |
-| Kimi        | 🧪 Experimental |   ●   |     ●      |  ●   |  ●   |
+| Agent       | Status          | State | Live | History |
+|-------------|-----------------|:-----:|:----:|:-------:|
+| Claude Code | ✅ Supported    |   ●   |  ●   |    ●    |
+| Codex       | ✅ Supported    |   ●   |  ●   |    ●    |
+| Pi          | 🟢 Beta         |   ●   |  ●   |    ●    |
+| OpenCode    | 🟡 Alpha        |   ●   |  ●   |    ●    |
+| Gemini CLI  | 🧪 Experimental |   ●   |  ●   |    ●    |
+| Copilot     | 🧪 Experimental |   ●   |  ○   |    ○    |
+| Droid       | 🧪 Experimental |   ●   |  ○   |    ○    |
+| Cursor      | 🧪 Experimental |   ●   |  ○   |    ◐    |
+| Amp         | 🧪 Experimental |   ●   |  ○   |    ○    |
+| Kiro CLI    | 🧪 Experimental |   ●   |  ○   |    ○    |
+| Qwen Code   | 🧪 Experimental |   ●   |  ◐   |    ●    |
+| Kimi        | 🧪 Experimental |   ●   |  ●   |    ●    |
 
 Claude and Codex are the daily drivers, with Pi and OpenCode in regular rotation. An experimental row is wired and tested against the agent's documented surface, just not yet proven by daily use, which is why it can still light up most columns. In practice, launch any of them and it mostly just works: the CLI runs stock in your terminal and the official apps stay untouched. When one misbehaves, please [open an issue](https://github.com/rimio-ai/rimz/issues); reports are how an agent graduates a tier.
 
-Pi and OpenCode expose session usage for context and spending, while provider-native conversation history and assistant streaming remain partial.
+Pi and OpenCode read complete on every surface — live context, live cost, and full history — filled by their in-process extensions; they sit below Supported on lived confidence, not capability. Where an agent exposes blocking prompts natively (permissions, plan approvals, questions), RimZ routes them to your keyboard and you answer in the agent's own UI.
 
 Per-agent coverage, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
 
