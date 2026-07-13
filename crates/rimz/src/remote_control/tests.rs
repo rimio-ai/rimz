@@ -340,6 +340,29 @@ fn ensure_codex_daemon_requires_toggle_and_standalone() {
 }
 
 #[test]
+fn codex_toggle_uses_symmetric_start_and_stop_commands() {
+    let bin = Path::new("/home/u/.codex/packages/standalone/current/codex");
+    assert_eq!(
+        codex_command(bin),
+        vec![
+            bin.display().to_string(),
+            "remote-control".to_owned(),
+            "start".to_owned(),
+        ]
+    );
+    assert_eq!(
+        codex_stop_command(bin),
+        vec![
+            bin.display().to_string(),
+            "remote-control".to_owned(),
+            "stop".to_owned(),
+        ]
+    );
+    assert_eq!(codex_daemon_action(true), "start");
+    assert_eq!(codex_daemon_action(false), "stop");
+}
+
+#[test]
 fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("valid id");
     let rimz_bin = Path::new("/usr/bin/rimz");
@@ -498,6 +521,33 @@ fn missing_managed_panes_is_empty_when_every_managed_pane_is_present() {
     ];
 
     assert!(missing_managed_panes(&daemon_view(), &present).is_empty());
+}
+
+#[test]
+fn disabled_claude_host_selection_is_scoped_to_the_daemon_view() {
+    let daemon_host = spawned_pane(
+        "claude",
+        "claude remote-control --spawn worktree",
+        Some(VIEW_NAME),
+    );
+    let daemon_host_id = daemon_host.pane_id.clone();
+    let working_host = spawned_pane(
+        "claude",
+        "claude remote-control --spawn worktree",
+        Some("work"),
+    );
+    let user_pane = spawned_pane("nvim", "nvim remote-control.md", Some(VIEW_NAME));
+    let panes = [daemon_host, working_host, user_pane];
+
+    let mut disabled = daemon_view();
+    disabled
+        .hosts
+        .retain(|host| host_marker(host) != Some(ManagedPaneMarker::ClaudeRemoteControl));
+    assert_eq!(
+        disabled_claude_host_panes(&disabled, &panes),
+        vec![daemon_host_id]
+    );
+    assert!(disabled_claude_host_panes(&daemon_view(), &panes).is_empty());
 }
 
 #[test]

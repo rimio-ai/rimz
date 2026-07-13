@@ -35,6 +35,7 @@
 //! affected releases. Those installed-but-blocked cases stay fail-fast at
 //! `rimz start`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -44,7 +45,8 @@ use crate::agents::version::CliVersion;
 use crate::config::{DaemonConfig, RemoteControlConfig};
 use crate::ids::WorkspaceId;
 use crate::mux::{
-    DaemonView, HostPane, MuxBackend, PaneListOptions, SplitDirection, SplitPaneOptions,
+    CommandSpec, DaemonView, HostPane, MuxBackend, PaneListOptions, SplitDirection,
+    SplitPaneOptions,
 };
 use crate::pane::PaneRef;
 use crate::store::{paths::StatePaths, workspace_record};
@@ -56,6 +58,8 @@ use crate::store::{paths::StatePaths, workspace_record};
 /// Codex app-server broker, the Claude remote-control host, and the loop panel
 /// on the right when they apply.
 pub const VIEW_NAME: &str = "rimzd";
+
+const CODEX_DAEMON_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Inputs that determine the managed panes in one workspace's daemon view.
 pub struct DaemonViewSpecParams<'a> {
@@ -134,6 +138,17 @@ pub fn repair_daemon_view(
             );
         }
     }
+    for pane_id in disabled_claude_host_panes(view, &listing.panes) {
+        if let Err(err) = backend.close_pane(session_name, &pane_id) {
+            tracing::warn!(
+                session = %session_name,
+                view = VIEW_NAME,
+                pane = %pane_id,
+                error = &err as &dyn std::error::Error,
+                "daemon view repair could not stop disabled Claude remote control",
+            );
+        }
+    }
 }
 
 /// Best-effort elder duty that reconstructs the daemon-view spec from durable
@@ -166,13 +181,38 @@ pub fn ensure_daemon_view(
         }
     };
     let machine = crate::config::MachineConfig::load_lenient();
+    ensure_daemon_view_with_config(
+        backend,
+        workspace_id,
+        session_name,
+        &record,
+        machine.as_ref(),
+    );
+}
+
+fn ensure_daemon_view_with_config(
+    backend: &dyn MuxBackend,
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    record: &workspace_record::WorkspaceRecord,
+    machine: &crate::config::MachineConfig,
+) {
     let rimz_bin = crate::proc::rimz_exe();
     let worktree_root = record
         .worktree_root
         .as_deref()
         .unwrap_or(&record.project_root);
+    let mut remote_control = machine.remote_control.clone();
+    if let Err(err) = preflight_claude(&remote_control) {
+        tracing::debug!(
+            workspace = %workspace_id,
+            error = &err as &dyn std::error::Error,
+            "Claude remote-control runtime toggle refused",
+        );
+        remote_control.claude = false;
+    }
     let view = daemon_view_spec(DaemonViewSpecParams {
-        remote_control: &machine.remote_control,
+        remote_control: &remote_control,
         daemon: &machine.daemon,
         rimz_bin: &rimz_bin,
         workspace_id,
@@ -183,6 +223,104 @@ pub fn ensure_daemon_view(
         codex_present: which::which("codex").is_ok(),
     });
     repair_daemon_view(backend, session_name, workspace_id, &view);
+}
+
+/// A provider whose per-machine remote-control toggle changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteControlHost {
+    Claude,
+    Codex,
+}
+
+/// Apply one `rimz config set remote_control.<provider> …` change to the live
+/// machine. Claude panes converge in every running room that retains its daemon
+/// view, Codex starts or stops its per-user daemon, and every known workspace
+/// receives a sidebar wakeup so the provider-dashboard flag follows the
+/// persisted config without a restart.
+pub fn apply_runtime_toggle(
+    host: RemoteControlHost,
+    machine: &crate::config::MachineConfig,
+) -> Result<(), CodexDaemonControlError> {
+    if host == RemoteControlHost::Codex {
+        reconcile_codex_daemon(machine.remote_control.codex)?;
+    }
+
+    let workspaces = match crate::workspace::known_workspaces() {
+        Ok(workspaces) => workspaces,
+        Err(err) => {
+            tracing::warn!(error = %err, "remote-control toggle could not enumerate workspaces");
+            return Ok(());
+        }
+    };
+
+    if host == RemoteControlHost::Claude {
+        let live_zellij = live_sessions(crate::ids::MuxName::Zellij);
+        let live_tmux = live_sessions(crate::ids::MuxName::Tmux);
+        for workspace in &workspaces {
+            let mux = if live_zellij.contains(&workspace.session_name) {
+                Some(crate::ids::MuxName::Zellij)
+            } else if live_tmux.contains(&workspace.session_name) {
+                Some(crate::ids::MuxName::Tmux)
+            } else {
+                None
+            };
+            let Some(mux) = mux else {
+                continue;
+            };
+            let paths = match StatePaths::for_workspace(workspace.workspace_id.clone()) {
+                Ok(paths) => paths,
+                Err(err) => {
+                    tracing::debug!(
+                        workspace = %workspace.workspace_id,
+                        error = &err as &dyn std::error::Error,
+                        "remote-control toggle skipped a workspace with unavailable state paths",
+                    );
+                    continue;
+                }
+            };
+            let record = match workspace_record::read(&paths.workspace_record) {
+                Ok(record) => record,
+                Err(err) => {
+                    tracing::debug!(
+                        workspace = %workspace.workspace_id,
+                        error = &err as &dyn std::error::Error,
+                        "remote-control toggle skipped a workspace with unavailable metadata",
+                    );
+                    continue;
+                }
+            };
+            let backend = crate::mux::backend_for(mux);
+            ensure_daemon_view_with_config(
+                backend.as_ref(),
+                &workspace.workspace_id,
+                &workspace.session_name,
+                &record,
+                machine,
+            );
+        }
+    }
+
+    for workspace in workspaces {
+        let Ok(runtime) = crate::store::RuntimePaths::for_workspace(workspace.workspace_id) else {
+            continue;
+        };
+        if let Err(err) = crate::store::wakeup::wake_sidebars(&runtime) {
+            tracing::debug!(
+                workspace = %runtime.workspace_id,
+                error = &err as &dyn std::error::Error,
+                "remote-control toggle could not wake sidebars",
+            );
+        }
+    }
+    Ok(())
+}
+
+fn live_sessions(mux: crate::ids::MuxName) -> HashSet<String> {
+    crate::mux::backend_for(mux)
+        .list_sessions()
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
 }
 
 fn daemon_hosts(params: &DaemonViewSpecParams<'_>) -> Vec<HostPane> {
@@ -287,6 +425,17 @@ pub fn codex_command(bin: &Path) -> Vec<String> {
     ]
 }
 
+/// The Codex daemon shutdown argv (program first). An explicit
+/// `remote_control.codex = false` transition uses the same managed standalone
+/// install as startup so the per-user remote bridge turns off immediately.
+pub fn codex_stop_command(bin: &Path) -> Vec<String> {
+    vec![
+        bin.to_string_lossy().into_owned(),
+        "remote-control".to_owned(),
+        "stop".to_owned(),
+    ]
+}
+
 /// Ensure the per-user Codex app-server daemon is running when `[remote_control]
 /// codex` is on and the managed standalone install resolves. The daemon is a
 /// per-user singleton (one control socket), so it is ensured once here rather
@@ -301,6 +450,70 @@ pub fn ensure_codex_daemon(config: &RemoteControlConfig) {
     if let Some(bin) = standalone {
         spawn_codex_daemon(&bin);
     }
+}
+
+/// A synchronous Codex remote-control transition requested by `rimz config
+/// set`. The standalone CLI's `start` and `stop` commands return after the
+/// per-user daemon reaches the requested state, which keeps consecutive on/off
+/// toggles ordered. An absent managed standalone install preserves the room
+/// start contract: the enabled host is skipped and `rimz doctor` carries the
+/// install fix.
+pub fn reconcile_codex_daemon(enabled: bool) -> Result<(), CodexDaemonControlError> {
+    let Some(bin) = codex_standalone_bin() else {
+        return Ok(());
+    };
+    let argv = if enabled {
+        codex_command(&bin)
+    } else {
+        codex_stop_command(&bin)
+    };
+    run_codex_daemon_command(&argv, enabled)
+}
+
+fn run_codex_daemon_command(argv: &[String], enabled: bool) -> Result<(), CodexDaemonControlError> {
+    let Some((program, args)) = argv.split_first() else {
+        return Ok(());
+    };
+    let output = CommandSpec::new(program)
+        .args(args.iter().cloned())
+        .output_raw_with_timeout(CODEX_DAEMON_CONTROL_TIMEOUT)
+        .map_err(|source| CodexDaemonControlError::Command {
+            action: codex_daemon_action(enabled),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(CodexDaemonControlError::Exit {
+            action: codex_daemon_action(enabled),
+            program: PathBuf::from(program),
+            status: output.status,
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn codex_daemon_action(enabled: bool) -> &'static str {
+    if enabled { "start" } else { "stop" }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CodexDaemonControlError {
+    #[error("could not {action} Codex remote control: {source}")]
+    Command {
+        action: &'static str,
+        #[source]
+        source: crate::mux::MuxErr,
+    },
+    #[error(
+        "Codex remote-control {action} failed with {status} using {}: {stderr}",
+        program.display()
+    )]
+    Exit {
+        action: &'static str,
+        program: PathBuf,
+        status: std::process::ExitStatus,
+        stderr: String,
+    },
 }
 
 /// The pure ensure-daemon decision, split from [`ensure_codex_daemon`] so the
@@ -648,7 +861,7 @@ enum ManagedPaneMarker {
 
 /// Return managed daemon-view panes absent from the live pane listing.
 ///
-/// The repair pass only adds missing RimZ-owned panes. Extra user panes inside
+/// The repair pass adds missing RimZ-owned panes. Extra user panes inside
 /// `rimzd` are left alone, and geometry is repaired at the next full view birth.
 pub fn missing_managed_panes(view: &DaemonView, panes: &[PaneRef]) -> Vec<HostPane> {
     view.content
@@ -661,6 +874,33 @@ pub fn missing_managed_panes(view: &DaemonView, panes: &[PaneRef]) -> Vec<HostPa
                 .is_some_and(|marker| !pane_listing_contains_marker(panes, marker))
         })
         .cloned()
+        .collect()
+}
+
+/// Select Claude host panes that remain after the machine toggle turns off.
+/// Only the named daemon view and the managed command marker qualify; a user's
+/// Claude command in a working view stays outside this reconciliation.
+fn disabled_claude_host_panes(view: &DaemonView, panes: &[PaneRef]) -> Vec<crate::ids::PaneId> {
+    let claude_enabled = view
+        .hosts
+        .iter()
+        .filter_map(host_marker)
+        .any(|marker| marker == ManagedPaneMarker::ClaudeRemoteControl);
+    if claude_enabled {
+        return Vec::new();
+    }
+    panes
+        .iter()
+        .filter(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
+        .filter(|pane| {
+            [pane.spawn_command.as_deref(), pane.command.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|command| {
+                    command_matches_marker(command, &ManagedPaneMarker::ClaudeRemoteControl)
+                })
+        })
+        .map(|pane| pane.pane_id.clone())
         .collect()
 }
 
@@ -680,7 +920,7 @@ fn host_marker(host: &HostPane) -> Option<ManagedPaneMarker> {
             let command = host.argv.join(" ");
             if command.contains(APP_SERVER_MARKER) {
                 Some(ManagedPaneMarker::CodexAppServer)
-            } else if command.contains(COMMAND_MARKER) {
+            } else if command_is_claude_host(&command) {
                 Some(ManagedPaneMarker::ClaudeRemoteControl)
             } else if command.contains(LOOP_PANEL_MARKER) {
                 Some(ManagedPaneMarker::LoopPanel)
@@ -694,9 +934,23 @@ fn command_matches_marker(command: &str, marker: &ManagedPaneMarker) -> bool {
     match marker {
         ManagedPaneMarker::ContentSlot(slot) => content_slot_from_command(command) == Some(*slot),
         ManagedPaneMarker::CodexAppServer => command.contains(APP_SERVER_MARKER),
-        ManagedPaneMarker::ClaudeRemoteControl => command.contains(COMMAND_MARKER),
+        ManagedPaneMarker::ClaudeRemoteControl => command_is_claude_host(command),
         ManagedPaneMarker::LoopPanel => command.contains(LOOP_PANEL_MARKER),
     }
+}
+
+fn command_is_claude_host(command: &str) -> bool {
+    let mut tokens = command.split_whitespace();
+    while let Some(token) = tokens.next() {
+        let is_claude = Path::new(token)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "claude");
+        if is_claude {
+            return tokens.next() == Some(COMMAND_MARKER);
+        }
+    }
+    false
 }
 
 fn content_slot_from_args(args: &[String]) -> Option<usize> {

@@ -295,10 +295,10 @@ rimz config set remote_control.claude true
 rimz config set remote_control.codex true
 ```
 
-With a toggle on, every `rimz start` brings up the provider's own command, and this is exactly what runs:
+The `config set` command applies either value to running rooms immediately; a deliberately closed whole `rimzd` view remains closed until the next room start. Future `rimz start` calls preserve the configured state. This is exactly what runs:
 
 - **Claude.** `claude remote-control --spawn worktree` runs as a long-lived pane in the room's background `rimzd` tab, from the project root, so a session you start from the phone is carved into its own on-demand worktree instead of touching your checkout. While the host is up, the Claude block on the [provider dashboard](./sidebar.md#the-provider-dashboard) wears a `⇅ rc` flag.
-- **Codex.** `codex remote-control start` runs once, detached: it brings up Codex's per-user app-server daemon with remote control enabled and returns. The daemon is one per machine, shared by every room, and is the same daemon Codex's own TUI already routes through.
+- **Codex.** `codex remote-control start` brings up Codex's per-user app-server daemon with remote control enabled and returns. Room startup invokes it detached; a live `config set` waits for the control command to finish so consecutive on/off changes stay ordered. The daemon is one per machine, shared by every room, and is the same daemon Codex's own TUI already routes through.
 
 The payoff is one session, continuous across surfaces: you start the turn at the terminal, the ask catches you on the phone through the provider's own app, and your answer lands in the same session on your machine. By the time you sit back down, the turn has moved on as if you had answered in the pane, with nothing to hand off and nothing to resume. A fleet that runs while you commute, cook, or sleep stays a fleet you can unblock.
 
@@ -306,7 +306,7 @@ The RimZ toggle covers the machine-level Claude host; Claude's own `remoteContro
 
 Preconditions check both ways at start. An enabled host whose agent is missing is skipped so the room still opens; Codex remote control boots from Codex's managed standalone install, so a `codex` merely on `PATH` is skipped and `rimz doctor` prints the install fix. An installed host with a fixable misconfiguration (a Claude older than remote control, `disableRemoteControl` set, API-key auth on releases where it disables the surface) refuses at `rimz start` with the fix spelled out, so an enabled toggle always means a working bridge.
 
-Undo is the same toggle: set it back to `false` and the next room start leaves that host down. The Claude host is an ordinary pane you can close right now, and the Codex daemon is the provider's own per-user daemon, managed by `codex` itself. One known gap: a session you spawn from the phone runs headless in its worktree with no local pane, and the sidebar does not yet render these remote agents.
+Undo is the same toggle: `rimz config set remote_control.claude false` closes RimZ-managed Claude host panes in every running room, while `rimz config set remote_control.codex false` runs the managed standalone's `codex remote-control stop`. Each command also wakes the sidebars so the `⇅ rc` flag follows the saved value. The Claude host is still an ordinary pane you can close directly, and the Codex daemon remains the provider's own per-user daemon. One known gap: a session you spawn from the phone runs headless in its worktree with no local pane, and the sidebar does not yet render these remote agents.
 
 Key detail and the daemon-view placement live in [configuration → remote control](./configuration.md#remote-control); which providers carry the surface is the `remote` row of the [coverage matrix](../reference/agent-support.md#the-coverage-matrix).
 

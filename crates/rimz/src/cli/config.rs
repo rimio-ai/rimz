@@ -250,8 +250,58 @@ fn get(args: GetArgs) -> Result<()> {
 }
 
 fn set(args: SetArgs) -> Result<()> {
+    let remote_control = remote_control_transition(&args.key, &args.value);
+    if let Some((host, true)) = remote_control {
+        preflight_remote_control_toggle(host)?;
+    }
     set_config_key(&args.key, &args.value)?;
+    if let Some((host, _)) = remote_control {
+        let machine = MachineConfig::load().context("loading the updated per-machine config")?;
+        rimz::remote_control::apply_runtime_toggle(host, &machine)
+            .context("applying the remote-control toggle")?;
+    }
     print_line(&format!("set {}", args.key))
+}
+
+fn remote_control_transition(
+    key: &str,
+    raw_value: &str,
+) -> Option<(rimz::remote_control::RemoteControlHost, bool)> {
+    let host = match key {
+        "remote_control.claude" => rimz::remote_control::RemoteControlHost::Claude,
+        "remote_control.codex" => rimz::remote_control::RemoteControlHost::Codex,
+        _ => return None,
+    };
+    let key = parse_key(key).ok()?;
+    parse_set_value(&key, raw_value)
+        .as_bool()
+        .map(|enabled| (host, enabled))
+}
+
+fn preflight_remote_control_toggle(host: rimz::remote_control::RemoteControlHost) -> Result<()> {
+    let config = match host {
+        rimz::remote_control::RemoteControlHost::Claude => rimz::config::RemoteControlConfig {
+            claude: true,
+            codex: false,
+        },
+        rimz::remote_control::RemoteControlHost::Codex => rimz::config::RemoteControlConfig {
+            claude: false,
+            codex: true,
+        },
+    };
+    let result = match host {
+        rimz::remote_control::RemoteControlHost::Claude => {
+            rimz::remote_control::preflight_claude(&config)
+        }
+        rimz::remote_control::RemoteControlHost::Codex => {
+            rimz::remote_control::preflight_codex(&config)
+        }
+    };
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) if err.is_uninstalled_host() => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 pub(crate) fn set_config_key(key: &str, raw_value: &str) -> Result<()> {

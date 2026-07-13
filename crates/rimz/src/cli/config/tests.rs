@@ -248,6 +248,34 @@ fn validates_config_key_read_and_write_surfaces() {
 }
 
 #[test]
+fn remote_control_set_values_map_to_live_transitions() {
+    assert_eq!(
+        remote_control_transition("remote_control.claude", "true"),
+        Some((rimz::remote_control::RemoteControlHost::Claude, true))
+    );
+    assert_eq!(
+        remote_control_transition("remote_control.claude", "false"),
+        Some((rimz::remote_control::RemoteControlHost::Claude, false))
+    );
+    assert_eq!(
+        remote_control_transition("remote_control.codex", "true"),
+        Some((rimz::remote_control::RemoteControlHost::Codex, true))
+    );
+    assert_eq!(
+        remote_control_transition("remote_control.codex", "false"),
+        Some((rimz::remote_control::RemoteControlHost::Codex, false))
+    );
+    assert_eq!(
+        remote_control_transition("sidebar.focus_key", "Alt+p"),
+        None
+    );
+    assert_eq!(
+        remote_control_transition("remote_control.codex", "not-a-bool"),
+        None
+    );
+}
+
+#[test]
 fn set_top_level_timezone_keeps_core_config_valid() {
     let mut doc = MachineConfig::template_core()
         .parse::<DocumentMut>()

@@ -1,6 +1,7 @@
 //! Integration coverage for `rimz config` and the conservative `rimz setup`.
 
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use assert_cmd::assert::OutputAssertExt;
@@ -256,6 +257,40 @@ fn config_get_set_round_trip_preserves_template_comments() {
         .assert()
         .success()
         .stdout("0x96f\n");
+}
+
+#[test]
+fn remote_control_codex_config_set_applies_start_and_stop_immediately() {
+    let env = Env::new();
+    let codex = env
+        .home_root
+        .join(".codex/packages/standalone/current/codex");
+    let log = env.home_root.join("codex-remote-control.log");
+    std::fs::create_dir_all(codex.parent().expect("standalone parent"))
+        .expect("mkdir standalone install");
+    std::fs::write(
+        &codex,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
+    )
+    .expect("write Codex standalone stub");
+    std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod Codex standalone stub");
+
+    env.rimz()
+        .args(["config", "set", "remote_control.codex", "true"])
+        .assert()
+        .success()
+        .stdout(contains("set remote_control.codex"));
+    env.rimz()
+        .args(["config", "set", "remote_control.codex", "false"])
+        .assert()
+        .success()
+        .stdout(contains("set remote_control.codex"));
+
+    assert_eq!(
+        std::fs::read_to_string(log).expect("read Codex control log"),
+        "remote-control start\nremote-control stop\n"
+    );
 }
 
 #[test]
