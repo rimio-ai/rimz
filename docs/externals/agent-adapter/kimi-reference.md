@@ -8,7 +8,7 @@ Coverage is depth on viable adapter inputs and breadth as an index. The hook pay
 
 ## Refresh target and product identity
 
-This mirror was refreshed against Kimi Code **0.23.5**, package release commit [`352a449240c2d69e519b3b0f9850baf47b99a5a8`](https://github.com/MoonshotAI/kimi-code/tree/352a449240c2d69e519b3b0f9850baf47b99a5a8), and agent-record protocol **1.4**. `kimi --version` prints the product version; the replacement has no `kimi info` command. Each persisted agent log carries its own protocol version in the metadata record.
+This mirror was refreshed against Kimi Code **0.23.6**, package release commit [`b5c236d00fd5d825a814bb5ceef0cd54a2acff96`](https://github.com/MoonshotAI/kimi-code/tree/b5c236d00fd5d825a814bb5ceef0cd54a2acff96), and agent-record protocol **1.4**. `kimi --version` prints the product version; the replacement has no `kimi info` command. Each persisted agent log carries its own protocol version in the metadata record.
 
 The executable is `kimi`. The official installer and Homebrew package install a standalone binary; the npm package remains an alternate installation path. The application root is `~/.kimi-code`, not the retired Python CLI's `~/.kimi` root. The old [`MoonshotAI/kimi-cli`](https://github.com/MoonshotAI/kimi-cli) repository is a legacy product and is outside this reference. `kimi migrate` imports supported legacy configuration and sessions; OAuth credentials, MCP authorizations, and legacy plugins are not migrated.
 
@@ -20,18 +20,18 @@ Re-fetch the published pages and compare the pinned source when refreshing this 
 
 | Surface | Source |
 | --- | --- |
-| Repository, install, and release | <https://github.com/MoonshotAI/kimi-code>, [`apps/kimi-code/package.json`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/apps/kimi-code/package.json) |
-| CLI options and subcommands | <https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html>, [`cli/options.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/apps/kimi-code/src/cli/options.ts) |
-| Hooks | <https://moonshotai.github.io/kimi-code/en/customization/hooks.html>, [`hooks/types.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/session/hooks/types.ts), [`hooks/engine.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/session/hooks/engine.ts), [`hooks/runner.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/session/hooks/runner.ts) |
+| Repository, install, and release | <https://github.com/MoonshotAI/kimi-code>, [`apps/kimi-code/package.json`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/apps/kimi-code/package.json) |
+| CLI options and subcommands | <https://moonshotai.github.io/kimi-code/en/reference/kimi-command.html>, [`cli/options.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/apps/kimi-code/src/cli/options.ts) |
+| Hooks | <https://moonshotai.github.io/kimi-code/en/customization/hooks.html>, [`hooks/types.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/hooks/types.ts), [`hooks/engine.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/hooks/engine.ts), [`hooks/runner.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/hooks/runner.ts) |
 | Sessions and data locations | <https://moonshotai.github.io/kimi-code/en/guides/sessions.html>, <https://moonshotai.github.io/kimi-code/en/configuration/data-locations.html> |
-| Session index and store | [`session-index.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/session/store/session-index.ts), [`session-store.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/session/store/session-store.ts) |
-| Durable agent records | [`records/types.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/agent/records/types.ts), [`records/persistence.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/agent/records/persistence.ts), [`records/migration/index.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/agent/records/migration/index.ts), [`loop/events.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/loop/events.ts) |
-| Live event protocol | [`protocol/events.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/protocol/src/events.ts) |
-| Approvals and questions | [`protocol/approval.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/protocol/src/approval.ts), [`protocol/question.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/protocol/src/question.ts) |
+| Session index and store | [`session-index.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/store/session-index.ts), [`session-store.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/store/session-store.ts) |
+| Durable agent records | [`records/types.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/agent/records/types.ts), [`records/persistence.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/agent/records/persistence.ts), [`records/migration/index.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/agent/records/migration/index.ts), [`loop/events.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/loop/events.ts) |
+| Live event protocol | [`protocol/events.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/protocol/src/events.ts) |
+| Approvals and questions | [`protocol/approval.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/protocol/src/approval.ts), [`protocol/question.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/protocol/src/question.ts) |
 | Configuration and environment | <https://moonshotai.github.io/kimi-code/en/configuration/config-files.html>, <https://moonshotai.github.io/kimi-code/en/configuration/env-vars.html> |
-| Agents and subagents | <https://moonshotai.github.io/kimi-code/en/customization/agents.html>, [`session/subagent-host.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/agent-core/src/session/subagent-host.ts) |
-| OAuth storage and managed usage | [`oauth/storage.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/oauth/src/storage.ts), [`oauth/managed-usage.ts`](https://github.com/MoonshotAI/kimi-code/blob/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/oauth/src/managed-usage.ts) |
-| ACP | <https://moonshotai.github.io/kimi-code/en/reference/kimi-acp.html>, [`packages/acp-adapter`](https://github.com/MoonshotAI/kimi-code/tree/352a449240c2d69e519b3b0f9850baf47b99a5a8/packages/acp-adapter) |
+| Agents and subagents | <https://moonshotai.github.io/kimi-code/en/customization/agents.html>, [`session/subagent-host.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/agent-core/src/session/subagent-host.ts) |
+| OAuth storage and managed usage | [`oauth/storage.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/oauth/src/storage.ts), [`oauth/managed-usage.ts`](https://github.com/MoonshotAI/kimi-code/blob/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/oauth/src/managed-usage.ts) |
+| ACP | <https://moonshotai.github.io/kimi-code/en/reference/kimi-acp.html>, [`packages/acp-adapter`](https://github.com/MoonshotAI/kimi-code/tree/b5c236d00fd5d825a814bb5ceef0cd54a2acff96/packages/acp-adapter) |
 
 ## Recommended adapter shape
 
@@ -103,7 +103,7 @@ command = "rimz hooks feed --source kimi"
 timeout = 10
 ```
 
-Each entry accepts `event`, `command`, optional regex `matcher`, and optional `timeout` in seconds. Published configuration accepts only those four keys and validates timeout as 1–600 seconds. The internal hook type also supports `cwd` and `env`, but they are not part of the documented user configuration surface at 0.23.5.
+Each entry accepts `event`, `command`, optional regex `matcher`, and optional `timeout` in seconds. Published configuration accepts only those four keys and validates timeout as 1–600 seconds. The internal hook type also supports `cwd` and `env`, but they are not part of the documented user configuration surface at 0.23.6.
 
 Commands execute through the platform shell with the session project directory as cwd. Matching rules run in parallel; duplicate `(cwd, command)` pairs run once per trigger. Kimi Code exposes no project-level hook tier or hook trust prompt. Include installed command, matcher, and timeout fields in RimZ's trust hash, preview the exact diff, preserve unrelated entries, and reserve hook stdout for Kimi's decision channel.
 
@@ -216,7 +216,7 @@ Adapter-relevant record families are:
 | Record | Key fields | Meaning |
 | --- | --- | --- |
 | `metadata` | `protocol_version`, `created_at` | file format gate |
-| `turn.prompt` / `turn.steer` | `input`, `origin` | user or injected turn input |
+| `turn.prompt` / `turn.steer` | `input`, `origin` | turn input; `origin.kind: "user"` identifies genuine human input |
 | `turn.cancel` | optional `turnId` | durable cancellation request |
 | `config.update` | cwd/model/profile/thinking fields | effective agent configuration |
 | `permission.set_mode` | `mode` | `manual`, `yolo`, or `auto` |
@@ -224,12 +224,17 @@ Adapter-relevant record families are:
 | `full_compaction.begin` / `.cancel` / `.complete` | source/instruction and bracket | full-context compaction recovery |
 | `context.append_message` | `message` | model-facing transcript message |
 | `context.append_loop_event` | recorded loop event | step, content, tool call, and tool result |
+| `context.clear` | no payload | reset the model context and its token count |
 | `context.apply_compaction` | summary and token counts | rebuilt context state |
 | `usage.record` | `model`, four-way `usage`, optional `usageScope` | additive per-request token accounting; `turn` also contributes to current-turn usage, while `session` covers work such as full compaction |
 | `llm.request` | provider/model/alias, effective options and hashes | request reconstruction and model attribution |
 | `llm.tools_snapshot` | hash and tool schemas | content-addressed request tool table |
 
-Recorded loop events are `step.begin`, `step.end`, `content.part`, `tool.call`, and `tool.result`. Retry, interruption, deltas, and progress are live-only SDK events. `step.end.usage` and `usage.record.usage` split `inputOther`, `output`, `inputCacheRead`, and `inputCacheCreation`; sum all three input fields for total input. Every `usage.record` is additive session spend. `usageScope: "turn"` also updates current-turn usage, while the default `session` scope accounts for work outside a turn such as full compaction; it is not a cumulative session-total record.
+Recorded loop events are `step.begin`, `step.end`, `content.part`, `tool.call`, and `tool.result`. Normal assistant turns are reconstructed from ordered text `content.part` records between the step boundaries; thinking parts and tool plumbing are not chat messages. `context.append_message` carries model-facing context and explicit injected assistant output, not the ordinary assistant-turn reconstruction. Retry, interruption, deltas, and progress are live-only SDK events.
+
+Record `time` is an optional millisecond timestamp. Absence leaves the normalized message or spend row without a time; seconds and file modification times are not timestamp fallbacks.
+
+`step.end.usage` and `usage.record.usage` split `inputOther`, `output`, `inputCacheRead`, and `inputCacheCreation`. Context fill replaces its prior value with the sum of all four fields from the latest nonzero `step.end.usage`, resets on `context.clear`, and becomes `context.apply_compaction.tokensAfter` when compaction lands. Every `usage.record` is additive session spend. `usageScope: "turn"` also updates current-turn usage, while the missing/default `session` scope accounts for work outside a turn such as full compaction; it is not a cumulative session-total record.
 
 `wire.jsonl` does not durably record clean `turn.ended`, `PermissionRequest`, unanswered questions, or the live `agent.status.updated` snapshot. Hooks and pane/process truth supply those facts. Never parse the file as the old Python Wire protocol.
 
@@ -267,9 +272,9 @@ Kimi Code built-in editing tools are `Write` and `Edit`; the shell tool is `Bash
 
 `config.update` records the effective model alias, cwd, thinking effort, profile, and system prompt. Separate records carry permission and plan-mode changes. `llm.request` adds the provider, model id, alias, effective thinking/sampling/output controls, and request hashes. `usage.record` stores the model plus the four-way token split. This removes the old adapter's need to price model-less status updates against a guessed default.
 
-The live SDK emits partial `agent.status.updated` events with model, context tokens, maximum context tokens, context ratio, plan/swarm/permission modes, and usage totals. That event surface is available to SDK, server, web, and ACP clients; it is not persisted wholesale to the stock pane's agent record. A stock-pane observer derives context from the latest durable context/usage/config records and treats the result as turn-grained enrichment.
+The live SDK emits partial `agent.status.updated` events with model, context tokens, maximum context tokens, context ratio, plan/swarm/permission modes, and usage totals. That event surface is available to SDK, server, web, and ACP clients; it is not persisted wholesale to the stock pane's agent record. A stock-pane observer derives context from ordered durable step-end, clear, and compaction boundaries; only turn-scoped usage supplies the current-turn token split.
 
-Kimi Code records tokens but no universal per-request USD price. The server protocol's `SessionUsage.total_cost_usd` currently has no local pricing source for a stock session. Price with RimZ's provider/model table only when the effective provider and model are known; keep Kimi subscription quota units distinct from billable tokens and dollars.
+Kimi Code records tokens but no universal per-request USD price. The server protocol's `SessionUsage.total_cost_usd` currently has no local pricing source for a stock session. Walk records in order so each usage row inherits the latest `llm.request` provider and canonical model when its own model is an alias. Price only an identified model; an unknown alias remains unknown at zero dollars rather than inheriting a guessed Kimi model. Keep Kimi subscription quota units distinct from billable tokens and dollars.
 
 ## Subagents and background work
 

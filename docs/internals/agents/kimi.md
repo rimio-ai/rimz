@@ -39,28 +39,30 @@ Sessions live under `${KIMI_CODE_HOME:-~/.kimi-code}/sessions/wd_<slug>_<sha256-
 
 The main record path is `agents/main/wire.jsonl`; each child owns `agents/<agent-id>/wire.jsonl`. Records are top-level tagged JSON objects, beginning with metadata such as `{"type":"metadata","protocol_version":"1.4",...}`. They are not the retired Python envelope `{timestamp,message:{type,payload}}`. The current tolerant tail parser skips metadata after recognizing the top-level shape; enforcing a supported agent-record version range remains coupled to the deferred CLI compatibility probe.
 
-The adapter reads a bounded tail under a stat gate for live context and transcript enrichment. The spend cursor consumes complete appended lines by byte offset; unknown record types and fields remain forward-compatible.
+The adapter binds the resolved main path into the live context sidecar. Hook refreshes seed that path at session/prompt boundaries and retain it on every changed stat, so the shared filesystem watcher drives record-by-record updates even when the session index is temporarily stale. The adapter reads a bounded tail under the stat gate for context and transcript enrichment; cumulative live cost reparses the full main file after each changed stat. The spend cursor consumes complete appended lines by byte offset, and unknown record types and fields remain forward-compatible.
 
 The current tail mapper consumes:
 
-- `context.append_message` for human/assistant transcript replay;
-- `config.update.modelAlias` and `config.update.thinkingEffort` for the latest effective display identity;
-- every additive `usage.record` for exact token spend and request-grained context evidence;
-- `context.apply_compaction.tokensAfter` so a completed compaction immediately lowers the derived context meter.
+- genuine-user `turn.prompt` and `turn.steer` records for sanitized human transcript anchors;
+- `context.append_loop_event` step boundaries and text parts for ordinary assistant reconstruction, excluding thinking and tool plumbing;
+- visible assistant-role `context.append_message` records for explicit hook/block output while ignoring duplicated user and injected context messages;
+- `config.update` plus `llm.request` for normalized display alias, exact provider/model attribution, and thinking effort;
+- every additive `usage.record` for spend, with only explicit turn scope supplying the current-turn split;
+- nonzero `step.end.usage`, `context.clear`, and `context.apply_compaction.tokensAfter` as ordered context-fill boundaries.
 
-The durable log also exposes `turn.*`, `context.append_loop_event`, `llm.request`, permission, compaction-bracket, tool-snapshot, and child-agent records. Keep effective-provider reconstruction, answered-ask recovery, tool replay, and child-row joins deferred until their consumers can preserve those facts without guessing.
+The durable log also exposes permission, compaction-bracket, tool-snapshot, and child-agent records. Keep answered-ask recovery, tool replay, and child-row joins deferred until their consumers can preserve those facts without guessing.
 
 Clean turn end, open approvals, open questions, retry waits, and live status snapshots are not complete durable-record facts. Hooks own those lifecycle edges; pane/process liveness reconciles missed delivery.
 
 ## Context and transcript
 
-`usage.record` carries its model and the exact `inputOther`, `inputCacheRead`, `inputCacheCreation`, and `output` split. `llm.request` carries provider, model id, model alias, effective thinking controls, and request hashes.
+`usage.record` carries its model and the exact `inputOther`, `inputCacheRead`, `inputCacheCreation`, and `output` split. `llm.request` carries provider, canonical model id, model alias, effective thinking controls, and request hashes. Strip only a leading `kimi-code/` wrapper from display/config aliases.
 
-The stock pane does not persist the live `agent.status.updated` ratio. Derive turn-grained fill from the newest `usage.record` input sum, superseded by `context.apply_compaction.tokensAfter` when compaction lands later. Resolve the window from the effective `[models.<alias>]` entry, honoring `[models.<alias>.overrides].max_context_size`, and fall back to 262,144 tokens. Publish the shared unknown-fill, zero-usage sentinel when the bounded tail contains neither usage nor compaction evidence so an established meter stays stable.
+The stock pane does not persist the live `agent.status.updated` ratio. Replace turn-grained fill from the newest nonzero `step.end.usage` sum across all four fields, reset it on `context.clear`, and replace it with `context.apply_compaction.tokensAfter` after compaction. A zero-usage step preserves earlier evidence. Resolve the window from the normalized effective `[models.<alias>]` entry, honoring `[models.<alias>.overrides].max_context_size`, and fall back to 262,144 tokens. Publish the shared unknown-fill, zero-usage sentinel when the bounded tail contains no context boundary so an established meter stays stable.
 
 ## Cost
 
-Price each usage record with its model when the price book recognizes it, then try the configured default model, then the embedded `moonshot/kimi-k2.5` fallback. The byte-offset cursor prevents re-reading records. `usageScope` says whether an additive request charge also belongs to the current turn; both `turn` and `session` records contribute to session spend, including full-compaction requests.
+Walk records in order and price each usage row from its recognized model, then the latest `llm.request` provider/canonical-model key, then a recognized exact configured model. Unknown aliases stay visible at zero cost and enter the shared unknown-model refresh path; the adapter does not guess K2.5. The byte-offset cursor retains request attribution across appends. `usageScope` says whether an additive request charge also belongs to the current turn; both `turn` and missing/default `session` records contribute to session spend, including full-compaction requests.
 
 Subscription limits remain account enrichment rather than token spend. The managed `/usages` response also exposes optional Booster balance and monthly-cap money fields. The shared `ExtraCredits` projection currently carries USD only, so the adapter publishes USD Booster values and omits other declared currencies rather than mislabeling them.
 
@@ -76,7 +78,7 @@ Binary discovery currently identifies an adapter from executable names and insta
 
 `SubagentStart` and `SubagentStop` refresh parent activity immediately but carry only the profile name and truncated prompt/response. Exact child rows require joining `state.json.agents` with `agents/<agent-id>/wire.jsonl`; the session map supplies child id, parent id, agent type, and home directory. Keep `sub` partial until that join and child liveness land.
 
-Background task state lives under the session's `tasks/` tree, and terminal status reaches the root through `Notification`. A clean `Stop` does not include the active-task set. Keep `bg` unsupported until the adapter joins durable task state and can prove that the parent parked while work remains in flight.
+Background task state lives under the session's `tasks/` tree, and terminal status reaches the root through `Notification`. A clean `Stop` does not include the active-task set. Keep `bg` unsupported until the adapter joins durable task state and can prove that the parent parked while work remains in flight. Main-session transcript and cost deliberately exclude `agents/<child>/wire.jsonl`; child-inclusive history and spend require the same state-map join as exact subagent rows.
 
 ## Launch and supervised runs
 
