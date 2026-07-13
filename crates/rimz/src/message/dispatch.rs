@@ -469,9 +469,7 @@ fn dispatch_one(
     ctx.store
         .queue_message(&message, &ctx.workspace.session_name)?;
     match send_live_with_recovery(
-        ctx.workspace,
-        ctx.store,
-        ctx.snapshot,
+        ctx,
         live_send,
         target.agent.is_some(),
         pane,
@@ -592,9 +590,7 @@ fn push_pending(pending: &mut Option<&mut Vec<MessageRecord>>, message: MessageR
 }
 
 fn send_live_with_recovery(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
-    snapshot: &SidebarSnapshot,
+    ctx: &DispatchContext<'_>,
     live_send: &mut send::LiveSend,
     park_on_failure: bool,
     pane: &PaneAgent,
@@ -602,9 +598,9 @@ fn send_live_with_recovery(
     message: &MessageRecord,
 ) -> Result<LiveAttempt> {
     let sent = match send::send_batch_to_live_pane(
-        workspace,
-        store,
-        snapshot,
+        ctx.workspace,
+        ctx.store,
+        ctx.snapshot,
         pane,
         bound,
         std::slice::from_ref(message),
@@ -612,23 +608,24 @@ fn send_live_with_recovery(
     ) {
         Ok(sent) => sent,
         Err(err) => {
-            if deliver::message_recorded_as_sent(store, &message.message_id)? {
+            if deliver::message_recorded_as_sent(ctx.store, &message.message_id)? {
                 return Ok(LiveAttempt::Sent {
                     message_id: message.message_id.clone(),
                     compacted: false,
                 });
             }
             if park_on_failure {
-                store.record_message_delivery_failure(
+                ctx.store.record_message_delivery_failure(
                     &message.message_id,
                     &err.to_string(),
-                    &workspace.session_name,
+                    &ctx.workspace.session_name,
                 )?;
-                deliver::register_message_wake(workspace, store)?;
+                deliver::register_message_wake(ctx.workspace, ctx.store)?;
                 return Ok(LiveAttempt::ParkInstead);
             }
-            store.record_send_error(message, &err.to_string(), &workspace.session_name)?;
-            deliver::register_message_wake(workspace, store)?;
+            ctx.store
+                .record_send_error(message, &err.to_string(), &ctx.workspace.session_name)?;
+            deliver::register_message_wake(ctx.workspace, ctx.store)?;
             return Err(err.into());
         }
     };
