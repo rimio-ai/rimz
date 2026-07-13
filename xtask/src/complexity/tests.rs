@@ -72,6 +72,7 @@ fn parse_complexity_args_accepts_top_filter_and_json_in_any_order() {
             top_n: DEFAULT_TOP_N,
             filter: SectionFilter::Both,
             path: None,
+            min_score: DEFAULT_MIN_SCORE,
             json: false,
         })
     );
@@ -82,6 +83,8 @@ fn parse_complexity_args_accepts_top_filter_and_json_in_any_order() {
             "5".to_owned(),
             "--path".to_owned(),
             "crates/rimz/src/message".to_owned(),
+            "--min-score".to_owned(),
+            "1.5".to_owned(),
             "--json".to_owned(),
         ])
         .unwrap(),
@@ -89,6 +92,7 @@ fn parse_complexity_args_accepts_top_filter_and_json_in_any_order() {
             top_n: 5,
             filter: SectionFilter::Tests,
             path: Some(PathBuf::from("crates/rimz/src/message")),
+            min_score: 1.5,
             json: true,
         })
     );
@@ -104,6 +108,7 @@ fn parse_complexity_args_accepts_top_filter_and_json_in_any_order() {
             top_n: 7,
             filter: SectionFilter::Code,
             path: None,
+            min_score: DEFAULT_MIN_SCORE,
             json: true,
         })
     );
@@ -144,6 +149,19 @@ fn parse_complexity_args_rejects_invalid_values_duplicates_and_unknowns() {
             "src".to_owned(),
             "--path".to_owned(),
             "tests".to_owned(),
+        ])
+        .is_err()
+    );
+    assert!(parse_complexity_args(&["--min-score".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--min-score".to_owned(), "negative".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--min-score".to_owned(), "-1".to_owned()]).is_err());
+    assert!(parse_complexity_args(&["--min-score".to_owned(), "NaN".to_owned()]).is_err());
+    assert!(
+        parse_complexity_args(&[
+            "--min-score".to_owned(),
+            "1".to_owned(),
+            "--min-score".to_owned(),
+            "2".to_owned(),
         ])
         .is_err()
     );
@@ -282,6 +300,13 @@ fn inline_test_marker_finds_inline_and_sibling_test_modules() {
 }
 
 #[test]
+fn file_loc_splits_at_the_inline_test_marker() {
+    assert_eq!(split_file_loc(100.0, None), (100.0, 0.0));
+    assert_eq!(split_file_loc(100.0, Some(61)), (60.0, 40.0));
+    assert_eq!(split_file_loc(100.0, Some(1)), (0.0, 100.0));
+}
+
+#[test]
 fn build_file_group_excludes_warn_only_files() {
     assert!(
         build_file_group(
@@ -356,6 +381,42 @@ fn file_groups_and_functions_sort_by_score_then_stable_tiebreakers() {
 }
 
 #[test]
+fn largest_files_sort_by_sloc_then_path() {
+    let mut files = [
+        FileLoc {
+            path: PathBuf::from("b.rs"),
+            sloc: 20.0,
+        },
+        FileLoc {
+            path: PathBuf::from("c.rs"),
+            sloc: 30.0,
+        },
+        FileLoc {
+            path: PathBuf::from("a.rs"),
+            sloc: 20.0,
+        },
+    ];
+    files.sort_by(compare_file_locs);
+
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.path.as_path())
+            .collect::<Vec<_>>(),
+        vec![Path::new("c.rs"), Path::new("a.rs"), Path::new("b.rs")]
+    );
+}
+
+#[test]
+fn minimum_score_removes_lower_scoring_groups() {
+    let mut groups = vec![group("low.rs", 1.0), group("high.rs", 3.0)];
+
+    apply_min_score(&mut groups, 2.0);
+
+    assert_eq!(groups, vec![group("high.rs", 3.0)]);
+}
+
+#[test]
 fn split_first_starts_above_five_offenders() {
     let functions = (1..=6)
         .map(|line| function_metrics(&format!("f{line}"), line, 16, 16, 1))
@@ -378,33 +439,59 @@ fn split_first_starts_above_five_offenders() {
 
 #[test]
 fn complexity_json_has_versioned_truncated_shape_and_rounded_scores() {
-    let code_files = vec![
-        FileGroup {
-            path: PathBuf::from("src/example.rs"),
-            score: 2.666,
-            split_first: false,
-            offenders: vec![ScoredFunction {
-                metrics: function_metrics("parse", 12, 15, 30, 80),
-                severity: Severity::High,
+    let code = Section {
+        groups: vec![
+            FileGroup {
+                path: PathBuf::from("src/example.rs"),
                 score: 2.666,
-            }],
-            near: vec![function_metrics("near", 30, 11, 1, 1)],
-        },
-        group("src/second.rs", 1.0),
-    ];
-    let test_files = vec![
-        group("tests/integration.rs", 4.0),
-        group("src/example/tests.rs", 2.0),
-    ];
+                split_first: false,
+                offenders: vec![ScoredFunction {
+                    metrics: function_metrics("parse", 12, 15, 30, 80),
+                    severity: Severity::High,
+                    score: 2.666,
+                }],
+                near: vec![function_metrics("near", 30, 11, 1, 1)],
+            },
+            group("src/second.rs", 1.0),
+        ],
+        largest: vec![
+            FileLoc {
+                path: PathBuf::from("src/large.rs"),
+                sloc: 300.0,
+            },
+            FileLoc {
+                path: PathBuf::from("src/small.rs"),
+                sloc: 100.0,
+            },
+        ],
+    };
+    let tests = Section {
+        groups: vec![
+            group("tests/integration.rs", 4.0),
+            group("src/example/tests.rs", 2.0),
+        ],
+        largest: vec![
+            FileLoc {
+                path: PathBuf::from("tests/large.rs"),
+                sloc: 200.0,
+            },
+            FileLoc {
+                path: PathBuf::from("tests/small.rs"),
+                sloc: 50.0,
+            },
+        ],
+    };
     let value = serde_json::to_value(complexity_json(
-        &code_files,
-        &test_files,
+        &code,
+        &tests,
         1,
+        DEFAULT_MIN_SCORE,
         SectionFilter::Both,
     ))
     .unwrap();
 
-    assert_eq!(value["version"], 2);
+    assert_eq!(value["version"], 3);
+    assert_eq!(value["min_score"], 2.0);
     assert_eq!(value["thresholds"]["warn"]["cognitive"], 15.0);
     assert_eq!(value["code"]["total_files"], 2);
     assert_eq!(value["code"]["files"].as_array().unwrap().len(), 1);
@@ -416,14 +503,20 @@ fn complexity_json_has_versioned_truncated_shape_and_rounded_scores() {
     );
     assert_eq!(value["code"]["files"][0]["offenders"][0]["score"], 2.7);
     assert_eq!(value["code"]["files"][0]["near"][0]["name"], "near");
+    assert_eq!(value["code"]["largest_files"].as_array().unwrap().len(), 1);
+    assert_eq!(value["code"]["largest_files"][0]["path"], "src/large.rs");
+    assert_eq!(value["code"]["largest_files"][0]["sloc"], 300.0);
     assert_eq!(value["tests"]["total_files"], 2);
     assert_eq!(value["tests"]["files"].as_array().unwrap().len(), 1);
     assert_eq!(value["tests"]["files"][0]["path"], "tests/integration.rs");
+    assert_eq!(value["tests"]["largest_files"].as_array().unwrap().len(), 1);
+    assert_eq!(value["tests"]["largest_files"][0]["path"], "tests/large.rs");
 
     let code_only = serde_json::to_value(complexity_json(
-        &code_files,
-        &test_files,
+        &code,
+        &tests,
         1,
+        DEFAULT_MIN_SCORE,
         SectionFilter::Code,
     ))
     .unwrap();
@@ -431,9 +524,10 @@ fn complexity_json_has_versioned_truncated_shape_and_rounded_scores() {
     assert!(code_only.get("tests").is_none());
 
     let tests_only = serde_json::to_value(complexity_json(
-        &code_files,
-        &test_files,
+        &code,
+        &tests,
         1,
+        DEFAULT_MIN_SCORE,
         SectionFilter::Tests,
     ))
     .unwrap();
@@ -474,10 +568,22 @@ fn complexity_json_deserializes_trimmed_rust_code_analysis_report() {
         }
     }"#;
 
-    let report: Space = serde_json::from_str(raw).unwrap();
-    let mut functions = Vec::new();
-    collect_functions(&report, &mut functions);
+    let output_dir = std::env::temp_dir().join(format!(
+        "rimz-complexity-report-test-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&output_dir);
+    fs::create_dir_all(&output_dir).unwrap();
+    let json_file = output_dir.join("example.rs.json");
+    fs::write(&json_file, raw).unwrap();
 
-    assert_eq!(report.metrics.cyclomatic.sum, 9.0);
-    assert_eq!(functions, vec![function_metrics("parse", 5, 7, 4, 8)]);
+    let report = parse_report(&output_dir, &json_file).unwrap();
+
+    assert_eq!(report.path, Path::new("example.rs"));
+    assert_eq!(report.sloc, 20.0);
+    assert_eq!(
+        report.functions,
+        vec![function_metrics("parse", 5, 7, 4, 8)]
+    );
+    fs::remove_dir_all(output_dir).unwrap();
 }

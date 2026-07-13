@@ -20,19 +20,22 @@ use crate::spinner::Spinner;
 
 const COMPLEXITY_OUTPUT_DIR: &str = "target/complexity";
 const DEFAULT_TOP_N: usize = 10;
-const JSON_VERSION: u8 = 2;
+// High multiplier 2.0 × a 100% overrun of the warn cognitive band.
+const DEFAULT_MIN_SCORE: f64 = 2.0;
+const JSON_VERSION: u8 = 3;
 const DIRECTORY_ROLLUP_LIMIT: usize = 10;
 const SPLIT_FIRST_OFFENDER_COUNT: usize = 5;
 
 pub(crate) const USAGE: &str =
-    "cargo xtask complexity [--top N] [--code|--tests] [--path <prefix>] [--json]
+    "cargo xtask complexity [--top N] [--code|--tests] [--path <prefix>] [--min-score S] [--json]
 
-  --top N        top N file groups per section (default 10)
-  --code         only the source-code section
-  --tests        only the tests section
-  --path <path>  only analyze tracked Rust files under this root-relative path
-  --json         versioned JSON agent contract (v2)
-  -h, --help     this help";
+  --top N         top N ranked and largest files per section (default 10)
+  --code          only the source-code section
+  --tests         only the tests section
+  --path <path>   only analyze tracked Rust files under this root-relative path
+  --min-score S   hide file groups scoring below S (default 2, 0 disables)
+  --json          versioned JSON agent contract (v3)
+  -h, --help      this help";
 
 // Thresholds follow McCabe/NIST cyclomatic risk bands, SonarSource's Cognitive
 // Complexity guidance, and Clippy's too_many_lines default. Weights and tier
@@ -51,11 +54,12 @@ const SLOC_WEIGHT: f64 = 0.25;
 const HIGH_MULTIPLIER: f64 = 2.0;
 const CRITICAL_MULTIPLIER: f64 = 4.0;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 struct ComplexityArgs {
     top_n: usize,
     filter: SectionFilter,
     path: Option<PathBuf>,
+    min_score: f64,
     json: bool,
 }
 
@@ -79,7 +83,20 @@ impl SectionFilter {
 #[derive(Debug)]
 struct ComplexityReport {
     path: PathBuf,
+    sloc: f64,
     functions: Vec<FunctionMetrics>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct FileLoc {
+    path: PathBuf,
+    sloc: f64,
+}
+
+#[derive(Debug)]
+struct Section {
+    groups: Vec<FileGroup>,
+    largest: Vec<FileLoc>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -121,6 +138,8 @@ struct FileGroup {
 #[derive(Debug, Serialize)]
 struct ComplexityJson<'a> {
     version: u8,
+    #[serde(serialize_with = "serialize_score")]
+    min_score: f64,
     thresholds: Thresholds,
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<SectionJson<'a>>,
@@ -132,6 +151,7 @@ struct ComplexityJson<'a> {
 struct SectionJson<'a> {
     total_files: usize,
     files: &'a [FileGroup],
+    largest_files: &'a [FileLoc],
 }
 
 #[derive(Debug, Serialize)]
@@ -199,25 +219,48 @@ pub(crate) fn complexity(root: &Path, args: &[String]) -> Result<()> {
     };
     ensure_complexity_prerequisites()?;
     let spinner = Arc::new(Spinner::new("complexity — listing tracked files"));
+    let files = analyzed_files(root, args.path.as_deref())?;
+    let output_dir = root.join(COMPLEXITY_OUTPUT_DIR);
+    run_analysis(root, &output_dir, &files, &spinner)?;
+    spinner.set("complexity — aggregating reports");
+    let reports = load_reports(&output_dir)?;
+    let (mut code, mut tests) = build_sections(root, reports)?;
+    apply_min_score(&mut code.groups, args.min_score);
+    apply_min_score(&mut tests.groups, args.min_score);
+    drop(spinner);
+    if args.json {
+        print_json(&code, &tests, args.top_n, args.min_score, args.filter)?;
+    } else {
+        print_report(args.top_n, &code, &tests, args.min_score, args.filter);
+    }
+    Ok(())
+}
+
+fn analyzed_files(root: &Path, scope: Option<&Path>) -> Result<Vec<PathBuf>> {
     let mut files = source_files::tracked_rust_files(root)?;
     if files.is_empty() {
         bail!("no tracked Rust files found");
     }
-    if let Some(scope) = &args.path {
+    if let Some(scope) = scope {
         files.retain(|file| path_is_in_scope(root, file, scope));
         if files.is_empty() {
             bail!("no tracked Rust files under `{}`", scope.display());
         }
     }
+    Ok(files)
+}
 
-    let output_dir = root.join(COMPLEXITY_OUTPUT_DIR);
+fn run_analysis(
+    root: &Path,
+    output_dir: &Path,
+    files: &[PathBuf],
+    spinner: &Arc<Spinner>,
+) -> Result<()> {
     if output_dir.exists() {
-        fs::remove_dir_all(&output_dir)
+        fs::remove_dir_all(output_dir)
             .with_context(|| format!("removing {}", output_dir.display()))?;
     }
-    fs::create_dir_all(&output_dir)
-        .with_context(|| format!("creating {}", output_dir.display()))?;
-
+    fs::create_dir_all(output_dir).with_context(|| format!("creating {}", output_dir.display()))?;
     let mut command_args = vec![
         OsString::from("-m"),
         OsString::from("-l"),
@@ -227,7 +270,7 @@ pub(crate) fn complexity(root: &Path, args: &[String]) -> Result<()> {
         OsString::from("-o"),
         output_dir.as_os_str().to_owned(),
     ];
-    for file in &files {
+    for file in files {
         let relative = file
             .strip_prefix(root)
             .with_context(|| format!("making {} relative to {}", file.display(), root.display()))?;
@@ -237,8 +280,8 @@ pub(crate) fn complexity(root: &Path, args: &[String]) -> Result<()> {
     spinner.set(format!("complexity — analyzing 0/{} files", files.len()));
     let watcher_stop = Arc::new(AtomicBool::new(false));
     let worker_stop = Arc::clone(&watcher_stop);
-    let worker_spinner = Arc::clone(&spinner);
-    let worker_output_dir = output_dir.clone();
+    let worker_spinner = Arc::clone(spinner);
+    let worker_output_dir = output_dir.to_path_buf();
     let total = files.len();
     let watcher = thread::spawn(move || {
         while !worker_stop.load(AtomicOrdering::Relaxed) {
@@ -257,51 +300,67 @@ pub(crate) fn complexity(root: &Path, args: &[String]) -> Result<()> {
     if watcher.join().is_err() {
         bail!("complexity progress watcher panicked");
     }
-    analysis?;
+    analysis
+}
 
-    spinner.set("complexity — aggregating reports");
+fn load_reports(output_dir: &Path) -> Result<Vec<ComplexityReport>> {
     let mut json_files = Vec::new();
-    walk_json_files(&output_dir, &mut json_files)?;
-    let reports = json_files
+    walk_json_files(output_dir, &mut json_files)?;
+    json_files
         .iter()
-        .map(|json_file| parse_report(&output_dir, json_file))
-        .collect::<Result<Vec<_>>>()?;
+        .map(|json_file| parse_report(output_dir, json_file))
+        .collect()
+}
 
-    let mut code_groups = Vec::new();
-    let mut test_groups = Vec::new();
+fn build_sections(root: &Path, reports: Vec<ComplexityReport>) -> Result<(Section, Section)> {
+    let mut code = Section {
+        groups: Vec::new(),
+        largest: Vec::new(),
+    };
+    let mut tests = Section {
+        groups: Vec::new(),
+        largest: Vec::new(),
+    };
     for report in reports {
         if is_test_file(&report.path) {
+            tests.largest.push(FileLoc {
+                path: report.path.clone(),
+                sloc: report.sloc,
+            });
             if let Some(group) = build_file_group(report.path, report.functions) {
-                test_groups.push(group);
+                tests.groups.push(group);
             }
             continue;
         }
-
         let source_path = root.join(&report.path);
         let source = fs::read_to_string(&source_path)
             .with_context(|| format!("reading {}", source_path.display()))?;
-        let (code_group, test_group) = build_source_file_groups(
-            report.path,
-            report.functions,
-            inline_test_marker_line(&source),
-        );
+        let marker = inline_test_marker_line(&source);
+        let (code_sloc, test_sloc) = split_file_loc(report.sloc, marker);
+        code.largest.push(FileLoc {
+            path: report.path.clone(),
+            sloc: code_sloc,
+        });
+        if marker.is_some() {
+            tests.largest.push(FileLoc {
+                path: report.path.clone(),
+                sloc: test_sloc,
+            });
+        }
+        let (code_group, test_group) =
+            build_source_file_groups(report.path, report.functions, marker);
         if let Some(group) = code_group {
-            code_groups.push(group);
+            code.groups.push(group);
         }
         if let Some(group) = test_group {
-            test_groups.push(group);
+            tests.groups.push(group);
         }
     }
-
-    code_groups.sort_by(compare_file_groups);
-    test_groups.sort_by(compare_file_groups);
-    drop(spinner);
-    if args.json {
-        print_json(&code_groups, &test_groups, args.top_n, args.filter)?;
-    } else {
-        print_report(args.top_n, &code_groups, &test_groups, args.filter);
-    }
-    Ok(())
+    code.groups.sort_by(compare_file_groups);
+    tests.groups.sort_by(compare_file_groups);
+    code.largest.sort_by(compare_file_locs);
+    tests.largest.sort_by(compare_file_locs);
+    Ok((code, tests))
 }
 
 fn parse_complexity_args(args: &[String]) -> Result<Option<ComplexityArgs>> {
@@ -310,67 +369,50 @@ fn parse_complexity_args(args: &[String]) -> Result<Option<ComplexityArgs>> {
     }
 
     let mut top_n = None;
-    let mut filter = SectionFilter::Both;
+    let mut filter = None;
     let mut path = None;
-    let mut json = false;
+    let mut min_score = None;
+    let mut json = None;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         match arg.as_str() {
             "--top" => {
-                if top_n.is_some() {
-                    bail!("complexity --top may only be passed once");
-                }
-                let value = args
-                    .get(index + 1)
-                    .context("complexity --top requires a value")?;
+                let value = flag_value(args, index, "--top")?;
                 let parsed = value.parse::<usize>().with_context(|| {
                     format!("complexity --top requires a positive integer, got `{value}`")
                 })?;
                 if parsed == 0 {
                     bail!("complexity --top must be greater than zero");
                 }
-                top_n = Some(parsed);
+                set_once(&mut top_n, parsed, "--top")?;
                 index += 2;
             }
             "--code" => {
-                match filter {
-                    SectionFilter::Both => filter = SectionFilter::Code,
-                    SectionFilter::Code => {
-                        bail!("complexity --code may only be passed once")
-                    }
-                    SectionFilter::Tests => {
-                        bail!("complexity --code and --tests are mutually exclusive")
-                    }
-                }
+                set_section(&mut filter, SectionFilter::Code, "--code")?;
                 index += 1;
             }
             "--tests" => {
-                match filter {
-                    SectionFilter::Both => filter = SectionFilter::Tests,
-                    SectionFilter::Tests => {
-                        bail!("complexity --tests may only be passed once")
-                    }
-                    SectionFilter::Code => {
-                        bail!("complexity --code and --tests are mutually exclusive")
-                    }
-                }
+                set_section(&mut filter, SectionFilter::Tests, "--tests")?;
                 index += 1;
             }
             "--path" => {
-                if path.is_some() {
-                    bail!("complexity --path may only be passed once");
+                let value = flag_value(args, index, "--path")?;
+                set_once(&mut path, PathBuf::from(value), "--path")?;
+                index += 2;
+            }
+            "--min-score" => {
+                let value = flag_value(args, index, "--min-score")?;
+                let parsed = value.parse::<f64>().with_context(|| {
+                    format!("complexity --min-score requires a non-negative number, got `{value}`")
+                })?;
+                if !parsed.is_finite() || parsed < 0.0 {
+                    bail!("complexity --min-score requires a finite non-negative number");
                 }
-                let value = args
-                    .get(index + 1)
-                    .context("complexity --path requires a value")?;
-                path = Some(PathBuf::from(value));
+                set_once(&mut min_score, parsed, "--min-score")?;
                 index += 2;
             }
             "--json" => {
-                if json {
-                    bail!("complexity --json may only be passed once");
-                }
-                json = true;
+                set_once(&mut json, true, "--json")?;
                 index += 1;
             }
             _ => bail!("unknown complexity argument `{arg}`"),
@@ -378,10 +420,40 @@ fn parse_complexity_args(args: &[String]) -> Result<Option<ComplexityArgs>> {
     }
     Ok(Some(ComplexityArgs {
         top_n: top_n.unwrap_or(DEFAULT_TOP_N),
-        filter,
+        filter: filter.unwrap_or(SectionFilter::Both),
         path,
-        json,
+        min_score: min_score.unwrap_or(DEFAULT_MIN_SCORE),
+        json: json.unwrap_or(false),
     }))
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T, flag: &str) -> Result<()> {
+    if slot.is_some() {
+        bail!("complexity {flag} may only be passed once");
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+fn flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str> {
+    args.get(index + 1)
+        .map(String::as_str)
+        .with_context(|| format!("complexity {flag} requires a value"))
+}
+
+fn set_section(
+    filter: &mut Option<SectionFilter>,
+    requested: SectionFilter,
+    flag: &str,
+) -> Result<()> {
+    match *filter {
+        None => *filter = Some(requested),
+        Some(current) if current == requested => {
+            bail!("complexity {flag} may only be passed once")
+        }
+        Some(_) => bail!("complexity --code and --tests are mutually exclusive"),
+    }
+    Ok(())
 }
 
 fn path_is_in_scope(root: &Path, file: &Path, scope: &Path) -> bool {
@@ -419,7 +491,11 @@ fn parse_report(output_dir: &Path, json_file: &Path) -> Result<ComplexityReport>
     let path = source_path_from_report_path(relative_json)?;
     let mut functions = Vec::new();
     collect_functions(&space, &mut functions);
-    Ok(ComplexityReport { path, functions })
+    Ok(ComplexityReport {
+        path,
+        sloc: space.metrics.loc.sloc,
+        functions,
+    })
 }
 
 fn source_path_from_report_path(path: &Path) -> Result<PathBuf> {
@@ -485,6 +561,14 @@ fn inline_test_marker_line(source: &str) -> Option<u64> {
         }
     }
     None
+}
+
+fn split_file_loc(sloc: f64, inline_test_marker: Option<u64>) -> (f64, f64) {
+    let Some(marker) = inline_test_marker else {
+        return (sloc, 0.0);
+    };
+    let code_sloc = marker.saturating_sub(1) as f64;
+    (code_sloc, (sloc - code_sloc).max(0.0))
 }
 
 fn classify(metrics: &FunctionMetrics) -> Option<Severity> {
@@ -596,6 +680,17 @@ fn compare_file_groups(left: &FileGroup, right: &FileGroup) -> Ordering {
         .then_with(|| left.path.cmp(&right.path))
 }
 
+fn compare_file_locs(left: &FileLoc, right: &FileLoc) -> Ordering {
+    right
+        .sloc
+        .total_cmp(&left.sloc)
+        .then_with(|| left.path.cmp(&right.path))
+}
+
+fn apply_min_score(groups: &mut Vec<FileGroup>, min_score: f64) {
+    groups.retain(|group| group.score >= min_score);
+}
+
 fn directory_rollups(groups: &[FileGroup]) -> Vec<DirectoryRollup> {
     let mut rollups = BTreeMap::<PathBuf, (f64, usize)>::new();
     for group in groups {
@@ -641,28 +736,27 @@ fn thresholds() -> Thresholds {
     }
 }
 
-fn section_json(groups: &[FileGroup], top_n: usize) -> SectionJson<'_> {
+fn section_json(section: &Section, top_n: usize) -> SectionJson<'_> {
     SectionJson {
-        total_files: groups.len(),
-        files: &groups[..groups.len().min(top_n)],
+        total_files: section.groups.len(),
+        files: &section.groups[..section.groups.len().min(top_n)],
+        largest_files: &section.largest[..section.largest.len().min(top_n)],
     }
 }
 
 fn complexity_json<'a>(
-    code_groups: &'a [FileGroup],
-    test_groups: &'a [FileGroup],
+    code: &'a Section,
+    tests: &'a Section,
     top_n: usize,
+    min_score: f64,
     filter: SectionFilter,
 ) -> ComplexityJson<'a> {
     ComplexityJson {
         version: JSON_VERSION,
+        min_score,
         thresholds: thresholds(),
-        code: filter
-            .includes_code()
-            .then(|| section_json(code_groups, top_n)),
-        tests: filter
-            .includes_tests()
-            .then(|| section_json(test_groups, top_n)),
+        code: filter.includes_code().then(|| section_json(code, top_n)),
+        tests: filter.includes_tests().then(|| section_json(tests, top_n)),
     }
 }
 
@@ -682,13 +776,14 @@ fn round_score(score: f64) -> f64 {
     reason = "xtask complexity report is a command stdout contract"
 )]
 fn print_json(
-    code_groups: &[FileGroup],
-    test_groups: &[FileGroup],
+    code: &Section,
+    tests: &Section,
     top_n: usize,
+    min_score: f64,
     filter: SectionFilter,
 ) -> Result<()> {
     let rendered =
-        serde_json::to_string_pretty(&complexity_json(code_groups, test_groups, top_n, filter))
+        serde_json::to_string_pretty(&complexity_json(code, tests, top_n, min_score, filter))
             .context("rendering complexity JSON")?;
     println!("{rendered}");
     Ok(())
@@ -700,18 +795,19 @@ fn print_json(
 )]
 fn print_report(
     top_n: usize,
-    code_groups: &[FileGroup],
-    test_groups: &[FileGroup],
+    code: &Section,
+    tests: &Section,
+    min_score: f64,
     filter: SectionFilter,
 ) {
     if filter.includes_code() {
-        print_report_section("Source", "source", top_n, code_groups);
+        print_report_section("Source", "source", top_n, code, min_score);
     }
     if filter.includes_code() && filter.includes_tests() {
         println!();
     }
     if filter.includes_tests() {
-        print_report_section("Test", "test", top_n, test_groups);
+        print_report_section("Test", "test", top_n, tests, min_score);
     }
 }
 
@@ -719,64 +815,98 @@ fn print_report(
     clippy::print_stdout,
     reason = "xtask complexity report is a command stdout contract"
 )]
-fn print_report_section(title: &str, directory_kind: &str, top_n: usize, groups: &[FileGroup]) {
-    let displayed = groups.len().min(top_n);
-    println!(
-        "{title} refactor targets (top {displayed} of {} files; severity: critical/high, near = warn-level context)",
-        groups.len()
-    );
-    if groups.is_empty() {
+fn print_report_section(
+    title: &str,
+    directory_kind: &str,
+    top_n: usize,
+    section: &Section,
+    min_score: f64,
+) {
+    print_section_heading(title, top_n, &section.groups, min_score);
+    if section.groups.is_empty() {
         println!("  (none)");
     }
-    for (index, group) in groups.iter().take(top_n).enumerate() {
+    for (index, group) in section.groups.iter().take(top_n).enumerate() {
         println!();
-        let offender_label = if group.offenders.len() == 1 {
-            "offender"
-        } else {
-            "offenders"
-        };
-        if group.split_first {
-            println!(
-                "#{}   {}    score {:.1}   split-first ({} {offender_label})",
-                index + 1,
-                group.path.display(),
-                round_score(group.score),
-                group.offenders.len()
-            );
-        } else {
-            println!(
-                "#{}   {}    score {:.1}   ({} {offender_label})",
-                index + 1,
-                group.path.display(),
-                round_score(group.score),
-                group.offenders.len()
-            );
-        }
-        let function_width = group
-            .offenders
-            .iter()
-            .map(|function| function_label(&function.metrics).len())
-            .chain(
-                group
-                    .near
-                    .iter()
-                    .map(|function| function_label(function).len()),
-            )
-            .max()
-            .unwrap_or(0);
-        for function in &group.offenders {
-            print_function(
-                severity_label(function.severity),
-                &function.metrics,
-                function_width,
-            );
-        }
-        for function in &group.near {
-            print_function("near", function, function_width);
-        }
+        print_file_group(index, group);
     }
-
     println!();
+    print_directory_rollups(directory_kind, &section.groups);
+    println!();
+    print_largest_files(directory_kind, &section.largest, top_n);
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask complexity report is a command stdout contract"
+)]
+fn print_section_heading(title: &str, top_n: usize, groups: &[FileGroup], min_score: f64) {
+    let displayed = groups.len().min(top_n);
+    if min_score > 0.0 {
+        println!(
+            "{title} refactor targets (top {displayed} of {} files ≥ score {}; severity: critical/high, near = warn-level context)",
+            groups.len(),
+            metric_label(min_score)
+        );
+    } else {
+        println!(
+            "{title} refactor targets (top {displayed} of {} files; severity: critical/high, near = warn-level context)",
+            groups.len()
+        );
+    }
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask complexity report is a command stdout contract"
+)]
+fn print_file_group(index: usize, group: &FileGroup) {
+    let offender_label = if group.offenders.len() == 1 {
+        "offender"
+    } else {
+        "offenders"
+    };
+    let split_first = if group.split_first {
+        "split-first "
+    } else {
+        ""
+    };
+    println!(
+        "#{}   {}    score {:.1}   {split_first}({} {offender_label})",
+        index + 1,
+        group.path.display(),
+        round_score(group.score),
+        group.offenders.len()
+    );
+    let function_width = group
+        .offenders
+        .iter()
+        .map(|function| function_label(&function.metrics).len())
+        .chain(
+            group
+                .near
+                .iter()
+                .map(|function| function_label(function).len()),
+        )
+        .max()
+        .unwrap_or(0);
+    for function in &group.offenders {
+        print_function(
+            severity_label(function.severity),
+            &function.metrics,
+            function_width,
+        );
+    }
+    for function in &group.near {
+        print_function("near", function, function_width);
+    }
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask complexity report is a command stdout contract"
+)]
+fn print_directory_rollups(directory_kind: &str, groups: &[FileGroup]) {
     println!("Hot {directory_kind} directories");
     let rollups = directory_rollups(groups);
     if rollups.is_empty() {
@@ -796,6 +926,35 @@ fn print_report_section(title: &str, directory_kind: &str, top_n: usize, groups:
                 round_score(rollup.score)
             );
         }
+    }
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask complexity report is a command stdout contract"
+)]
+fn print_largest_files(directory_kind: &str, files: &[FileLoc], top_n: usize) {
+    let displayed = files.len().min(top_n);
+    println!(
+        "Largest {directory_kind} files (top {displayed} of {})",
+        files.len()
+    );
+    let files = &files[..displayed];
+    if files.is_empty() {
+        println!("  (none)");
+        return;
+    }
+    let path_width = files
+        .iter()
+        .map(|file| file.path.display().to_string().len())
+        .max()
+        .unwrap_or(0);
+    for file in files {
+        println!(
+            "     {:<path_width$}   {} lines",
+            file.path.display(),
+            metric_label(file.sloc)
+        );
     }
 }
 
