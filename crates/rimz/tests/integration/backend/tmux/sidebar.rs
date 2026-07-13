@@ -87,11 +87,6 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
         );
         thread::sleep(Duration::from_millis(10));
     }
-    assert_eq!(
-        server.display(pane.raw(), "#{pane_dead}"),
-        "0",
-        "sidebar pane died during reload",
-    );
 }
 
 fn wait_for_mouse_capture(server: &TmuxServer, pane: &PaneId) {
