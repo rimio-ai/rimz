@@ -71,7 +71,7 @@ fn normalize(bytes: &[u8]) -> Vec<u8> {
                 }
                 index += 1;
             }
-            State::BlockComment { start } => {
+            State::BlockComment { .. } => {
                 if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
                     normalized[index] = b' ';
                     normalized[index + 1] = b' ';
@@ -82,14 +82,15 @@ fn normalize(bytes: &[u8]) -> Vec<u8> {
                         normalized[index] = b' ';
                     }
                     index += 1;
-                    if index == bytes.len() {
-                        // Leave the opener visible so an unterminated comment remains invalid JSON.
-                        normalized[start] = b'/';
-                        normalized[start + 1] = b'*';
-                    }
                 }
             }
         }
+    }
+
+    if let State::BlockComment { start } = state {
+        // Leave the opener visible so an unterminated comment remains invalid JSON.
+        normalized[start] = b'/';
+        normalized[start + 1] = b'*';
     }
 
     normalized
@@ -143,5 +144,6 @@ mod tests {
     fn malformed_json_and_unterminated_comments_still_error() {
         assert!(from_slice::<serde_json::Value>(br#"{"value": [1,,]}"#).is_err());
         assert!(from_slice::<serde_json::Value>(br#"{"value": 1} /* open"#).is_err());
+        assert!(from_slice::<serde_json::Value>(br#"{"value": 1} /*"#).is_err());
     }
 }
