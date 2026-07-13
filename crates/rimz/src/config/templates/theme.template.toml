@@ -173,6 +173,7 @@
 ## mana_filled = "▰"
 ## mana_track = "▱"
 ## reset = "↻"
+## unlimited = "∞"
 ## scroll_thumb = "▐"
 ## scroll_track = "▕"
 
@@ -272,6 +273,7 @@
 ## mana_filled = "▰"
 ## mana_track = "▱"
 ## reset = "󰑐"
+## unlimited = "∞"
 ## scroll_thumb = "▐"
 ## scroll_track = "▕"
 

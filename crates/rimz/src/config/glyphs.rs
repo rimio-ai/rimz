@@ -77,6 +77,7 @@ glyph_roles! {
         MeterManaFilled => "mana_filled",
         MeterManaTrack => "mana_track",
         MeterReset => "reset",
+        MeterUnlimited => "unlimited",
         MeterScrollThumb => "scroll_thumb",
         MeterScrollTrack => "scroll_track",
     }

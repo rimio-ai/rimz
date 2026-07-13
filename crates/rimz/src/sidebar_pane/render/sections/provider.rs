@@ -1311,8 +1311,8 @@ fn metered_bar_row(
         spans.extend(mana_bar_spans(theme, 100, bar_width, zones));
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
-            theme.glyph(GlyphRole::ChromeInfinity).to_owned(),
-            theme.money_style(Modifier::BOLD),
+            theme.glyph(GlyphRole::MeterUnlimited).to_owned(),
+            theme.body(),
         ));
         spans.push(Span::raw(
             " ".repeat(PROVIDER_VALUE_WIDTH.saturating_sub(1)),

@@ -121,6 +121,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::MeterManaFilled => "▰",
         GlyphRole::MeterManaTrack => "▱",
         GlyphRole::MeterReset => "↻",
+        GlyphRole::MeterUnlimited => "∞",
         GlyphRole::MeterScrollThumb => "▐",
         GlyphRole::MeterScrollTrack => "▕",
         GlyphRole::ClockQ1 => "◔",
@@ -211,10 +212,12 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         GlyphRole::TokensCacheWrite => "\u{f1c0}", // nf-fa-database
         GlyphRole::TokensFilled => "\u{f0fe6}", // nf-md-texture_box (filled context)
         GlyphRole::TokensCompaction => "\u{f0e2}", // nf-fa-arrow_rotate_left
-        // meter context tiles and the budget-reset marker.
+        // meter context tiles and the budget-reset marker. The unlimited marker
+        // stays Unicode so it shares the reset marker's visual scale.
         GlyphRole::MeterContextFull => "\u{f0570}", // nf-md-view_grid (full context)
         GlyphRole::MeterContextEmpty => "\u{f11d9}", // nf-md-view_grid_outline (empty context)
         GlyphRole::MeterReset => "\u{f0450}",       // nf-md-refresh (rate-limit reset)
+        GlyphRole::MeterUnlimited => return None,
         // the drawn bars, mana fill, and scrollbar keep their box-drawing shape.
         GlyphRole::MeterBarFilled
         | GlyphRole::MeterBarTrack
@@ -330,6 +333,7 @@ mod tests {
             GlyphRole::MeterManaTrack,
             GlyphRole::MeterScrollThumb,
             GlyphRole::MeterScrollTrack,
+            GlyphRole::MeterUnlimited,
             GlyphRole::ClockQ1,
             GlyphRole::ClockQ2,
             GlyphRole::ClockQ3,

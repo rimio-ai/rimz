@@ -239,6 +239,36 @@ fn lifted_window_is_a_full_unlimited_row_aligned_with_live_windows() {
 }
 
 #[test]
+fn lifted_window_infinity_stays_unicode_and_neutral_with_nerd_font() {
+    let theme = Theme::fixed_for_theme(
+        false,
+        &crate::config::ThemeConfig {
+            glyphs: crate::config::ThemeGlyphsConfig {
+                set: Some("nerd_font".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    let mut panel = provider_panel("codex", "Codex", 33, true, false, None);
+    panel.windows = vec![RateLimitWindow {
+        duration_mins: Some(5 * 60),
+        lifted: true,
+        ..Default::default()
+    }];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    let infinity = rows[0]
+        .spans
+        .iter()
+        .find(|span| span.content == "∞")
+        .expect("lifted window uses the Unicode infinity");
+    assert_eq!(infinity.style, theme.body());
+    assert_eq!(theme.glyph(GlyphRole::MeterUnlimited), "∞");
+    assert_ne!(theme.glyph(GlyphRole::ChromeInfinity), "∞");
+}
+
+#[test]
 fn spent_longer_window_gates_a_lifted_row_as_exhausted() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("codex", "Codex", 33, true, false, None);
