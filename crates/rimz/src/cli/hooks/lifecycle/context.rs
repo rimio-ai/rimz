@@ -14,6 +14,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         payload,
         agent_id,
         model_hint,
+        transcript_path,
         turn_ended,
         observed_turn_error,
     } = context;
@@ -55,6 +56,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
             payload,
             context_agent_id,
             model_hint,
+            transcript_path,
             turn_ended,
             observed_turn_error,
         });
@@ -84,6 +86,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         payload,
         context_agent_id,
         model_hint,
+        transcript_path,
         turn_ended,
         observed_turn_error,
     } = input;
@@ -159,15 +162,22 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             .and_then(|record| record.context.model_id.as_deref())
     });
     let shared_pricing_cache_path = store.runtime_paths().shared_pricing_cache_path();
+    let prior_transcript_path = prior
+        .as_ref()
+        .and_then(|record| record.transcript_path.as_deref());
+    let selected_transcript_path = transcript_path.or(prior_transcript_path);
+    let prior_transcript_stat = (selected_transcript_path == prior_transcript_path)
+        .then(|| {
+            prior
+                .as_ref()
+                .and_then(|record| record.transcript_stat.as_ref())
+        })
+        .flatten();
     let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
         agent_id: context_agent_id,
         model_hint: local_model_hint,
-        prior_transcript_path: prior
-            .as_ref()
-            .and_then(|record| record.transcript_path.as_deref()),
-        prior_transcript_stat: prior
-            .as_ref()
-            .and_then(|record| record.transcript_stat.as_ref()),
+        prior_transcript_path: selected_transcript_path,
+        prior_transcript_stat,
         shared_pricing_cache_path: &shared_pricing_cache_path,
     };
     let mut refresh =
@@ -232,7 +242,8 @@ pub(super) fn supplement_realtime_cost(
     let Some(stat) = local_transcript_stat(&path) else {
         return;
     };
-    if prior_total_cost(prior).is_some()
+    if !partial
+        && prior_total_cost(prior).is_some()
         && prior
             .and_then(|record| record.transcript_stat.as_ref())
             .is_some_and(|prior_stat| *prior_stat == stat)

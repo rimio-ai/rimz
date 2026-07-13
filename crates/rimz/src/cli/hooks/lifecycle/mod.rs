@@ -52,6 +52,9 @@ pub(crate) fn handle_lifecycle_hook(
             LifecycleSignal::TurnEnded { .. }
         )
     });
+    let transcript_path = recorded
+        .as_ref()
+        .and_then(|recorded| recorded.observation.transcript_path.as_deref());
     if let Some(agent_id) = agent_id {
         let observed_turn_error = recorded
             .as_ref()
@@ -65,6 +68,7 @@ pub(crate) fn handle_lifecycle_hook(
                 payload,
                 agent_id,
                 model_hint,
+                transcript_path,
                 turn_ended,
                 observed_turn_error,
             },
@@ -143,6 +147,7 @@ struct LifecycleEventContext<'a> {
     payload: &'a Value,
     agent_id: &'a str,
     model_hint: Option<&'a str>,
+    transcript_path: Option<&'a str>,
     turn_ended: bool,
     observed_turn_error: Option<rimz::agents::AgentTurnError>,
 }
@@ -155,6 +160,7 @@ struct ContextSidecarInput<'a> {
     payload: &'a Value,
     context_agent_id: &'a str,
     model_hint: Option<&'a str>,
+    transcript_path: Option<&'a str>,
     turn_ended: bool,
     observed_turn_error: Option<rimz::agents::AgentTurnError>,
 }
@@ -474,17 +480,19 @@ mod tests {
         let mut file = std::fs::File::create(&transcript).unwrap();
         writeln!(
             file,
-            r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","model":"gpt-5","usage":{{"input":100,"output":50,"cost":{{"total":0.42}}}}}}}}"#
+            r#"{{"sessionId":"sess-1"}}
+{{"id":"a","type":"gemini","timestamp":"2026-06-02T10:00:00.000Z","model":"gemini-3-pro-preview","tokens":{{"input":1000000,"output":500000,"total":1500000}}}}"#
         )
         .unwrap();
 
         let observed_at = jiff::Timestamp::from_second(1_780_394_400).unwrap();
         let mut prior = rimz::store::agent_context::new_record(
-            "pi",
+            "gemini",
             "sess-1",
-            rimz::store::agent_context::empty_context("pi", observed_at),
+            rimz::store::agent_context::empty_context("gemini", observed_at),
         );
         prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
+        prior.transcript_stat = local_transcript_stat(&transcript);
         prior.context.cost = Some(rimz::agents::AgentCost {
             total_cost_usd: Some(0.25),
             ..rimz::agents::AgentCost::default()
@@ -503,7 +511,7 @@ mod tests {
 
         let mut skipped = None;
         supplement_realtime_cost(
-            &rimz::agents::PiAdapter,
+            &rimz::agents::GeminiAdapter,
             "sess-1",
             &pricing_cache_path,
             false,
@@ -514,7 +522,7 @@ mod tests {
 
         let mut refresh = None;
         supplement_realtime_cost(
-            &rimz::agents::PiAdapter,
+            &rimz::agents::GeminiAdapter,
             "sess-1",
             &pricing_cache_path,
             true,
@@ -528,7 +536,7 @@ mod tests {
             .as_ref()
             .and_then(|cost| cost.total_cost_usd)
             .expect("supplemented total cost");
-        assert!((cost - 0.42).abs() < 1e-9);
+        assert!(cost > 0.25);
         assert_eq!(
             refresh.transcript_path.as_deref(),
             Some(transcript.to_string_lossy().as_ref())
@@ -540,7 +548,7 @@ mod tests {
                 .as_ref()
                 .and_then(|tokens| tokens.used_percentage),
             Some(10),
-            "the reconciling walk keeps live tokens when Pi's JSONL has none"
+            "the reconciling walk keeps watcher-published live tokens"
         );
 
         let workspace_id =
@@ -549,22 +557,22 @@ mod tests {
         runtime.ensure_dirs().unwrap();
         rimz::store::agent_context::merge_local_context(
             &runtime,
-            "pi",
+            "gemini",
             "sess-1",
             Some(prior),
             refresh,
             observed_at,
         )
         .unwrap();
-        let merged = rimz::store::agent_context::read_one(&runtime, "pi", "sess-1").unwrap();
+        let merged = rimz::store::agent_context::read_one(&runtime, "gemini", "sess-1").unwrap();
         assert_eq!(
             merged
                 .context
                 .cost
                 .as_ref()
                 .and_then(|cost| cost.total_cost_usd),
-            Some(0.42),
-            "the turn-end transcript walk overwrites the live push with the authoritative sum"
+            Some(cost),
+            "the turn-end transcript walk overwrites the watcher-era total with the authoritative sum"
         );
     }
 

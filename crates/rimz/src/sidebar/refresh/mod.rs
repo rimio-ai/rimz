@@ -37,6 +37,7 @@ pub use pr::{PrLink, PrStateCache};
 pub use rate_limits::{drop_kind_rate_limits, merge_account_rate_limits};
 pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,
+    refresh_session_transcript_context_from_watch,
 };
 pub use usage::merge_oauth_usage_if_due;
 

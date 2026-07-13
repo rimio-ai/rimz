@@ -117,7 +117,7 @@ fn watch_while_elected(
                 return Ok(());
             }
             for target in due_refreshes(&pending, &roster) {
-                crate::sidebar::refresh::refresh_session_transcript_context(
+                crate::sidebar::refresh::refresh_session_transcript_context_from_watch(
                     runtime,
                     &target.kind,
                     &target.session_id,
@@ -277,20 +277,32 @@ mod tests {
         with_path.transcript_path = Some("/t/a.jsonl".to_owned());
         with_path.context.model_id = Some("gpt-5.5-codex".to_owned());
         let pathless = new_record("codex", "sess-b", context("codex"));
+        let mut gemini = new_record("gemini", "sess-g", context("gemini"));
+        gemini.transcript_path = Some("/t/g.jsonl".to_owned());
         let mut claude = new_record("claude", "sess-c", context("claude"));
         claude.transcript_path = Some("/t/c.jsonl".to_owned());
 
-        let targets = transcript_targets(&[with_path, pathless, claude]);
+        let targets = transcript_targets(&[with_path, pathless, gemini, claude]);
         assert_eq!(
             targets,
-            BTreeMap::from([(
-                PathBuf::from("/t/a.jsonl"),
-                WatchTarget {
-                    kind: "codex".to_owned(),
-                    session_id: "sess-a".to_owned(),
-                    model_hint: Some("gpt-5.5-codex".to_owned()),
-                }
-            )])
+            BTreeMap::from([
+                (
+                    PathBuf::from("/t/a.jsonl"),
+                    WatchTarget {
+                        kind: "codex".to_owned(),
+                        session_id: "sess-a".to_owned(),
+                        model_hint: Some("gpt-5.5-codex".to_owned()),
+                    }
+                ),
+                (
+                    PathBuf::from("/t/g.jsonl"),
+                    WatchTarget {
+                        kind: "gemini".to_owned(),
+                        session_id: "sess-g".to_owned(),
+                        model_hint: None,
+                    }
+                )
+            ])
         );
     }
 }

@@ -39,6 +39,7 @@ pub(crate) fn refresh_live_sessions(snapshot: &SidebarSnapshot, runtime: &Runtim
             &refresh.kind,
             &refresh.session_id,
             refresh.model_hint.as_deref(),
+            RefreshTrigger::Tick,
         );
         let spawn = session_context_refresh_spawn(
             runtime,
@@ -64,7 +65,31 @@ pub fn refresh_session_transcript_context(
     session_id: &str,
     model_hint: Option<&str>,
 ) {
-    refresh_session_transcript_context_with_snapshot(None, runtime, kind, session_id, model_hint);
+    refresh_session_transcript_context_with_snapshot(
+        None,
+        runtime,
+        kind,
+        session_id,
+        model_hint,
+        RefreshTrigger::Tick,
+    );
+}
+
+/// Refresh one watched transcript without running adapter full-history work.
+pub fn refresh_session_transcript_context_from_watch(
+    runtime: &RuntimePaths,
+    kind: &str,
+    session_id: &str,
+    model_hint: Option<&str>,
+) {
+    refresh_session_transcript_context_with_snapshot(
+        None,
+        runtime,
+        kind,
+        session_id,
+        model_hint,
+        RefreshTrigger::Watch,
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +116,7 @@ pub fn force_refresh_session_context(
         session_id,
         model_hint,
         true,
+        RefreshTrigger::Tick,
     )?;
     let spawn = session_context_refresh_spawn(runtime, kind, session_id, model_hint);
     let helper_spawned = spawn.is_some();
@@ -131,9 +157,10 @@ fn refresh_session_transcript_context_with_snapshot(
     kind: &str,
     session_id: &str,
     model_hint: Option<&str>,
+    trigger: RefreshTrigger<'_>,
 ) {
     if let Err(err) = refresh_session_transcript_context_core(
-        snapshot, runtime, kind, session_id, model_hint, false,
+        snapshot, runtime, kind, session_id, model_hint, false, trigger,
     ) {
         warn_session_transcript_merge(kind, session_id, &err);
     }
@@ -146,6 +173,7 @@ fn refresh_session_transcript_context_core(
     session_id: &str,
     model_hint: Option<&str>,
     force: bool,
+    trigger: RefreshTrigger<'_>,
 ) -> SessionRefreshResult<bool> {
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return Ok(false);
@@ -167,7 +195,7 @@ fn refresh_session_transcript_context_core(
         },
         shared_pricing_cache_path: &shared_pricing_cache_path,
     };
-    let refresh = adapter.local_context_refresh(RefreshTrigger::Tick, &ctx);
+    let refresh = adapter.local_context_refresh(trigger, &ctx);
     let Some(refresh) = refresh else {
         return retry_unconfirmed_codex_turn_death(
             snapshot,
