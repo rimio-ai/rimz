@@ -331,7 +331,7 @@ pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, S
                 let at = at.ok_or_else(|| ScheduleErr::EveryNeedsAt {
                     name: name.to_owned(),
                 })?;
-                let (hour, minute) = parse_hhmm(name, at)?;
+                let (hour, minute) = parse_task_hhmm(name, at)?;
                 Schedule::Calendar(CalendarSpec {
                     minute,
                     hour,
@@ -340,7 +340,7 @@ pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, S
             }
         },
         (None, None, Some(at)) => {
-            let (hour, minute) = parse_hhmm(name, at)?;
+            let (hour, minute) = parse_task_hhmm(name, at)?;
             Schedule::Calendar(CalendarSpec {
                 minute,
                 hour,
@@ -383,18 +383,19 @@ fn parse_every(name: &str, raw: &str) -> Result<EverySpec, ScheduleErr> {
     })
 }
 
-fn parse_hhmm(name: &str, value: &str) -> Result<(u8, u8), ScheduleErr> {
+fn parse_task_hhmm(name: &str, value: &str) -> Result<(u8, u8), ScheduleErr> {
     let bad = || ScheduleErr::BadTime {
         name: name.to_owned(),
         value: value.to_owned(),
     };
-    let (hh, mm) = value.trim().split_once(':').ok_or_else(bad)?;
-    let hour: u8 = hh.parse().map_err(|_| bad())?;
-    let minute: u8 = mm.parse().map_err(|_| bad())?;
-    if hour > 23 || minute > 59 {
-        return Err(bad());
-    }
-    Ok((hour, minute))
+    parse_hhmm(value).ok_or_else(bad)
+}
+
+pub fn parse_hhmm(value: &str) -> Option<(u8, u8)> {
+    let (hh, mm) = value.trim().split_once(':')?;
+    let hour: u8 = hh.parse().ok()?;
+    let minute: u8 = mm.parse().ok()?;
+    (hour <= 23 && minute <= 59).then_some((hour, minute))
 }
 
 fn parse_days(days: &str) -> Option<Vec<Weekday>> {

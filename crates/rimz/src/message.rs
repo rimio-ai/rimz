@@ -895,7 +895,7 @@ pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, Stri
             .map(|target| target.timestamp())
             .map_err(|err| format!("schedule `{raw}` cannot be resolved: {err}"));
     }
-    let (hour, minute) = parse_hhmm(raw).ok_or_else(|| {
+    let (hour, minute) = crate::harness::schedule::parse_hhmm(raw).ok_or_else(|| {
         format!(
             "invalid schedule `{raw}`; use a duration like `60m` or a 24-hour time like `14:30`"
         )
@@ -915,13 +915,6 @@ pub fn parse_schedule_at(raw: &str, now: &jiff::Zoned) -> Result<Timestamp, Stri
         .to_zoned(now.time_zone().clone())
         .map(|target| target.timestamp())
         .map_err(|err| format!("schedule `{raw}` cannot be resolved tomorrow: {err}"))
-}
-
-fn parse_hhmm(raw: &str) -> Option<(u8, u8)> {
-    let (hh, mm) = raw.trim().split_once(':')?;
-    let hour: u8 = hh.parse().ok()?;
-    let minute: u8 = mm.parse().ok()?;
-    (hour <= 23 && minute <= 59).then_some((hour, minute))
 }
 
 pub fn delivery_checkpoint(signal: &LifecycleSignal) -> bool {

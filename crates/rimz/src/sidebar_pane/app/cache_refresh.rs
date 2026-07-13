@@ -45,8 +45,7 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::D
             Err(err) => {
                 debug!(error = %err, "sidebar cache refresh state paths unavailable");
                 let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
-                crate::harness::schedule::fire::fire_due_tasks(&runtime, &now);
-                crate::message::fire::wake_due_messages(&runtime, &now);
+                fire_elder_timers(&runtime, &now);
                 continue;
             }
         };
@@ -68,8 +67,7 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::D
             debug!(error = %err, "sidebar cache refresh failed");
         }
         let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
-        crate::harness::schedule::fire::fire_due_tasks(&runtime, &now);
-        crate::message::fire::wake_due_messages(&runtime, &now);
+        fire_elder_timers(&runtime, &now);
         if daemon_view_repaired_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
             daemon_view_repaired_at = Instant::now();
             crate::remote_control::ensure_daemon_view(
@@ -79,6 +77,11 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::D
             );
         }
     }
+}
+
+fn fire_elder_timers(runtime: &RuntimePaths, now: &jiff::Zoned) {
+    crate::harness::schedule::fire::fire_due_tasks(runtime, now);
+    crate::message::fire::wake_due_messages(runtime, now);
 }
 
 fn refresh_guarded(

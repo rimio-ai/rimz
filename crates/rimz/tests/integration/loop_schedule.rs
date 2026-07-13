@@ -872,6 +872,51 @@ fn loop_run_check_only_logs_command_result() {
 }
 
 #[test]
+fn loop_run_records_daily_budget_skip() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "daily-bounded",
+            "--agent",
+            "claude",
+            "--prompt",
+            "bounded work",
+            "--every",
+            "15m",
+            "--budget",
+            "$5.00",
+            "--budget-per-day",
+            "$5.00",
+        ],
+    );
+    let mut spent = LoopRunRecord::new(
+        "daily-bounded",
+        LoopRunResult::Completed,
+        rimz::harness::schedule::run_log::LoopRunMode::Manual,
+        1,
+    );
+    spent.cost_usd = Some(5.0);
+    write_loop_run_records(&env, &[spent]);
+
+    loop_ok(&env, &["loop", "run", "daily-bounded"]);
+
+    let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), 2);
+    let skip = records.last().expect("budget skip record");
+    assert_eq!(skip.result, LoopRunResult::BudgetSkipped);
+    assert!(
+        skip.error
+            .as_deref()
+            .is_some_and(|error| error.contains("daily budget")),
+        "runner should record the daily-budget reason: {skip:?}"
+    );
+}
+
+#[test]
 fn loop_check_failure_show_prints_exit_and_output() {
     let env = Env::new();
     let command = "definitely-missing-rimz-loop-command";

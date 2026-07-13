@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use jiff::{Timestamp, Zoned};
 
@@ -16,12 +15,11 @@ use super::{instances, pauses};
 use crate::RuntimePaths;
 use crate::agents::longest_window_reset_at;
 use crate::config::effective;
-use crate::config::{MachineConfig, TaskEntry, Tasks};
+use crate::config::{TaskEntry, Tasks};
 use crate::harness::schedule;
-use crate::harness::schedule::run_log::{self, LoopRunMode, LoopRunRecord, LoopRunResult};
 use crate::ids::WorkspaceId;
 use crate::store::atomic::write_temp_then_rename_cache;
-use crate::store::paths::{StatePaths, config_home, state_home};
+use crate::store::paths::{StatePaths, config_home};
 use crate::store::workspace_record;
 use crate::trust::TrustState;
 
@@ -61,94 +59,9 @@ pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     }
     for (name, action) in actions {
         if action == Action::Fire {
-            let Some(entry) = tasks.get(&name) else {
-                continue;
-            };
-            match run_log::daily_budget_gate(&state_home(), &name, entry, now) {
-                Ok(Some(gate)) => {
-                    let reason = gate.reason();
-                    run_log::append(&LoopRunRecord {
-                        task: name.clone(),
-                        at: now.timestamp(),
-                        result: LoopRunResult::BudgetSkipped,
-                        mode: Some(LoopRunMode::Scheduled),
-                        duration_ms: Some(0),
-                        error: Some(reason.clone()),
-                        check: None,
-                        run_id: None,
-                        transcript_path: None,
-                        last_message: None,
-                        target: None,
-                        cost_usd: None,
-                        input_tokens: None,
-                        output_tokens: None,
-                    });
-                    tracing::info!(task = name, reason, "sidebar: loop fire skipped by budget");
-                    continue;
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    tracing::warn!(task = name, error = %err, "invalid loop budget skipped by scheduler");
-                    continue;
-                }
-            }
-            let config = MachineConfig::load_lenient();
-            if let Some(kind) = task_agent_kind(entry, project_root.as_deref(), &config)
-                && let Some(reason) =
-                    crate::harness::budget::scope_gate(runtime, &kind, &config, now.timestamp())
-            {
-                run_log::append(&LoopRunRecord {
-                    task: name.clone(),
-                    at: now.timestamp(),
-                    result: LoopRunResult::BudgetSkipped,
-                    mode: Some(LoopRunMode::Scheduled),
-                    duration_ms: Some(0),
-                    error: Some(reason.clone()),
-                    check: None,
-                    run_id: None,
-                    transcript_path: None,
-                    last_message: None,
-                    target: None,
-                    cost_usd: None,
-                    input_tokens: None,
-                    output_tokens: None,
-                });
-                tracing::info!(
-                    task = name,
-                    reason,
-                    "sidebar: loop fire skipped by scope budget"
-                );
-                continue;
-            }
             spawn_loop_run(runtime, project_root.as_deref(), &name);
         }
     }
-}
-
-fn task_agent_kind(
-    entry: &TaskEntry,
-    project_root: Option<&Path>,
-    config: &MachineConfig,
-) -> Option<crate::ids::AgentKind> {
-    if let Some(target) = entry.wake.as_ref() {
-        return Some(crate::ids::AgentKind::new_unchecked(target.kind.clone()));
-    }
-    let spec = entry.agent.as_deref()?;
-    let root = project_root.unwrap_or(&entry.root);
-    let launch = effective::load(&config.agents, root, &config_home()).ok()?;
-    let layout = crate::harness::spec::resolve_spec(
-        Some(spec),
-        &launch.profiles,
-        &config.agents.commands,
-        &launch.teams,
-    )
-    .ok()?;
-    let mut kinds = layout.agent_kinds();
-    let kind = kinds.next()?;
-    kinds
-        .next()
-        .is_none()
-        .then(|| crate::ids::AgentKind::new_unchecked(kind))
 }
 
 fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
@@ -286,25 +199,17 @@ fn state_path(runtime: &RuntimePaths) -> PathBuf {
 }
 
 fn spawn_loop_run(runtime: &RuntimePaths, project_root: Option<&Path>, name: &str) {
-    let exe = crate::proc::rimz_exe();
-    let mut cmd = Command::new(exe);
+    let mut cmd = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
     if let Some(project_root) = project_root {
         cmd.arg("--root").arg(project_root);
     }
-    cmd.args(["loop", "run", name])
-        .current_dir(&runtime.root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args(["loop", "run", name]);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         task = name,
         "sidebar: firing loop task",
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "loop-run") {
-        // The CWD anchor clears gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH stays
-        // an environment fact. Keep it at debug! so Sentry ignores it, and the
-        // next elder tick retries.
         tracing::debug!(
             task = name,
             tags.operation = "loop_fire.spawn",

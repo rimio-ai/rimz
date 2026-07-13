@@ -6,7 +6,6 @@
 //! that helper.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use jiff::{Timestamp, Zoned};
 
@@ -35,24 +34,16 @@ fn read_stamp(path: &Path) -> Option<Timestamp> {
 }
 
 fn spawn_message_sweep(runtime: &RuntimePaths) {
-    let exe = crate::proc::rimz_exe();
-    let mut cmd = Command::new(exe);
+    let mut cmd = crate::child_process::detached_rimz_command(crate::proc::rimz_exe(), runtime);
     if let Ok(root) = std::env::var(crate::workspace::ENV_PROJECT_ROOT) {
         cmd.args(["--root", &root]);
     }
-    cmd.args(["message", "sweep"])
-        .current_dir(&runtime.root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.args(["message", "sweep"]);
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         "sidebar: sweeping scheduled messages",
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "message-sweep") {
-        // The CWD anchor clears gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH stays
-        // an environment fact. Keep it at debug! so Sentry ignores it, and the
-        // next elder tick retries.
         tracing::debug!(
             tags.operation = "message.fire.spawn",
             error = &err as &dyn std::error::Error,
