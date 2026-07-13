@@ -6,6 +6,7 @@ use super::gate::apply_gate;
 use super::health::degraded_too_long;
 use super::lifecycle::self_close_decision;
 use super::paint::FramePainter;
+use super::reload::{ReloadAction, reload_action};
 use super::remind::RemindState;
 use super::selection::{reconcile_selection, row_index_of_pane};
 use super::state::{
@@ -308,10 +309,6 @@ impl LoopState {
         own_tab_viewed(&self.current, view, own_pane)
     }
 
-    pub(super) fn help_visible(&self) -> bool {
-        self.ui.help_visible
-    }
-
     /// Whether a dirty data fold should paint even though animation may be idle.
     /// Suppress dirty frames only when an attached client is known to be looking
     /// elsewhere. Detached sessions have no terminal stream to spam, and keeping
@@ -402,6 +399,58 @@ impl LoopState {
         };
         self.finish_snapshot_requests(fetch, saw_final, rejected);
         Ok(())
+    }
+
+    pub(super) fn on_wakeup(
+        &mut self,
+        config: &ServeConfig,
+        runtime: &RuntimePaths,
+        fetch: &mut FetchDispatcher,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        result_rx: &Receiver<FetchOutcome>,
+        anim_start: Instant,
+        diag: &crate::diag::DiagSink,
+        wakeup: Wakeup,
+    ) -> Result<LoopFlow> {
+        match wakeup {
+            Wakeup::Snapshot => {
+                self.on_snapshot(config, fetch, result_rx, anim_start, diag)?;
+                Ok(LoopFlow::Continue)
+            }
+            Wakeup::Event(envelope) => {
+                self.on_event(config, fetch, terminal, envelope, anim_start, diag)
+            }
+            // A recv timeout: the active grid reached a frame boundary, or the
+            // idle backstop interval elapsed. It carries no state of its own —
+            // the frame phase below advances the spin and paints, and the
+            // backstop poll runs there too.
+            Wakeup::Tick => Ok(LoopFlow::Continue),
+            Wakeup::Resize => {
+                self.on_resize(config, runtime, fetch, terminal, anim_start)?;
+                Ok(LoopFlow::Continue)
+            }
+            Wakeup::Reload => Ok(self.handle_reload(config, fetch)),
+            // The local `r` key uses a key-specific wakeup so the help overlay
+            // can close on the keypress before it reaches the reload path.
+            Wakeup::ReloadKey if self.ui.help_visible => {
+                self.on_input(config, Wakeup::ReloadKey, terminal, fetch, anim_start, diag)?;
+                Ok(LoopFlow::Continue)
+            }
+            Wakeup::ReloadKey => Ok(self.handle_reload(config, fetch)),
+            wakeup => {
+                self.on_input(config, wakeup, terminal, fetch, anim_start, diag)?;
+                Ok(LoopFlow::Continue)
+            }
+        }
+    }
+
+    fn handle_reload(&mut self, config: &ServeConfig, fetch: &mut FetchDispatcher) -> LoopFlow {
+        self.clear_pending_fetch();
+        if reload_or_refetch(&config.session_name, fetch) {
+            self.reload_requested = true;
+            return LoopFlow::Exit;
+        }
+        LoopFlow::Continue
     }
 
     fn apply_latest_snapshot(
@@ -523,11 +572,7 @@ impl LoopState {
         let sent_at_ms = envelope.sent_at_ms;
         match envelope.event {
             SidebarEvent::Reload => {
-                self.clear_pending_fetch();
-                if reload_or_refetch(&config.session_name, fetch) {
-                    self.reload_requested = true;
-                    return Ok(LoopFlow::Exit);
-                }
+                return Ok(self.handle_reload(config, fetch));
             }
             // The producer published a fresh shared pane frame: fold it from
             // cache immediately; consumers stay read-only and the producer's
@@ -1598,6 +1643,42 @@ impl LoopState {
             }
         }
     }
+}
+
+/// Resolve a reload request — the `r` keypress and the typed `Reload` event
+/// share this. `true` means a differing on-disk binary: the caller exits with
+/// the supervisor reload code so the pane command converges onto the new
+/// binary. A byte-identical or missing binary skips reload but still honours
+/// the intent with an immediate producing refetch, so a reload always pulls
+/// live data and un-sticks a tab whose producer has stalled.
+fn reload_or_refetch(session_name: &str, fetch: &mut FetchDispatcher) -> bool {
+    match reload_action() {
+        ReloadAction::Reexec(target) => {
+            debug!(
+                session = %session_name,
+                target = %target.display(),
+                "reload: on-disk binary differs; asking supervisor to re-exec",
+            );
+            return true;
+        }
+        ReloadAction::AlreadyCurrent => {
+            debug!(
+                session = %session_name,
+                "reload: binary unchanged; refetching in place without re-exec",
+            );
+        }
+        // A reload that cannot find its replacement (a partial or in-flight
+        // install) must never make the sidebar vanish — keep serving the
+        // current build and refetch.
+        ReloadAction::Missing => {
+            warn!(
+                session = %session_name,
+                "reload requested but no renderer binary is on disk; refetching in place",
+            );
+        }
+    }
+    fetch.request(FetchRequest::hard_refresh(), true);
+    false
 }
 
 /// Ping every sidebar in the room to refold after a mark read/unread — the

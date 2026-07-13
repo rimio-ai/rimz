@@ -1,7 +1,8 @@
 //! Runtime loop for the native sidebar process.
 //!
-//! `serve` owns the fixed-timestep event loop and the wiring; each concern the
-//! loop folds lives in its own submodule — [`fetch`] (the two-speed off-thread
+//! `serve` owns the fixed-timestep event loop shell and wiring; [`loop_state`]
+//! dispatches wakeups, and each concern the loop folds lives in its own
+//! submodule — [`fetch`] (the two-speed off-thread
 //! fetch cycle), [`state`] (the pure `compute_next_state` reducer and the fold
 //! integrator), [`gate`] (the last-known-good regression hold), [`health`]
 //! (failure debounce and give-up), [`lifecycle`] (self-close and the bounded
@@ -68,7 +69,6 @@ use fetch::{FetchDispatcher, FetchOutcome, FetchRequest, spawn_fetch_worker};
 use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 use lifecycle::{PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
-use reload::{ReloadAction, reload_action};
 use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane};
 use state::placeholder_snapshot;
 
@@ -262,68 +262,19 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     while !state.should_exit {
         let (active, timeout) = state.frame_timing(tick, anim_start);
         socket.set_read_timeout(Some(timeout))?;
-        match wait_for_wakeup(&socket)? {
-            Wakeup::Snapshot => {
-                state.on_snapshot(&config, &mut fetch, &result_rx, anim_start, &diag)?;
-            }
-            Wakeup::Event(envelope) => {
-                match state.on_event(
-                    &config,
-                    &mut fetch,
-                    &mut terminal,
-                    envelope,
-                    anim_start,
-                    &diag,
-                )? {
-                    LoopFlow::Continue => {}
-                    LoopFlow::Repoll => continue,
-                    LoopFlow::Exit => break,
-                }
-            }
-            // A recv timeout: the active grid reached a frame boundary, or the
-            // idle backstop interval elapsed. It carries no state of its own —
-            // the frame phase below advances the spin and paints, and the
-            // backstop poll runs there too.
-            Wakeup::Tick => {}
-            Wakeup::Resize => {
-                state.on_resize(&config, &runtime, &mut fetch, &mut terminal, anim_start)?;
-            }
-            Wakeup::Reload => {
-                state.clear_pending_fetch();
-                if reload_or_refetch(&config.session_name, &mut fetch) {
-                    state.reload_requested = true;
-                    break;
-                }
-            }
-            // The local `r` key uses a key-specific wakeup so the help overlay
-            // can close on the keypress before it reaches the reload path.
-            Wakeup::ReloadKey if state.help_visible() => {
-                state.on_input(
-                    &config,
-                    Wakeup::ReloadKey,
-                    &mut terminal,
-                    &mut fetch,
-                    anim_start,
-                    &diag,
-                )?;
-            }
-            Wakeup::ReloadKey => {
-                state.clear_pending_fetch();
-                if reload_or_refetch(&config.session_name, &mut fetch) {
-                    state.reload_requested = true;
-                    break;
-                }
-            }
-            wakeup => {
-                state.on_input(
-                    &config,
-                    wakeup,
-                    &mut terminal,
-                    &mut fetch,
-                    anim_start,
-                    &diag,
-                )?;
-            }
+        match state.on_wakeup(
+            &config,
+            &runtime,
+            &mut fetch,
+            &mut terminal,
+            &result_rx,
+            anim_start,
+            &diag,
+            wait_for_wakeup(&socket)?,
+        )? {
+            LoopFlow::Continue => {}
+            LoopFlow::Repoll => continue,
+            LoopFlow::Exit => break,
         }
 
         state.run_maintenance(
@@ -370,21 +321,11 @@ fn install_panic_diagnostic_hook(diag: crate::diag::DiagSink) {
             return;
         }
         diag.emit_unlimited(crate::diag::record::DiagEvent::RendererPanic {
-            message: panic_message(info),
+            message: panic_payload_message(info.payload(), "renderer panicked"),
             backtrace: Some(std::backtrace::Backtrace::force_capture().to_string()),
         });
         prior(info);
     }));
-}
-
-fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {
-    if let Some(message) = info.payload().downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else if let Some(message) = info.payload().downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "renderer panicked".to_owned()
-    }
 }
 
 #[cfg(unix)]
@@ -424,13 +365,13 @@ fn reap_inherited_zombies() {
 #[cfg(not(unix))]
 fn reap_inherited_zombies() {}
 
-fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+fn panic_payload_message(payload: &(dyn std::any::Any + Send), fallback: &str) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_owned()
     } else if let Some(message) = payload.downcast_ref::<String>() {
         message.clone()
     } else {
-        "unknown panic payload".to_owned()
+        fallback.to_owned()
     }
 }
 
@@ -532,42 +473,6 @@ fn focus_stranded_target(
 
 #[cfg(test)]
 pub(crate) static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Resolve a reload request — the `r` keypress and the typed `Reload` event
-/// share this. `true` means a differing on-disk binary: the caller exits with
-/// the supervisor reload code so the pane command converges onto the new
-/// binary. A byte-identical or missing binary skips reload but still honours
-/// the intent with an immediate producing refetch, so a reload always pulls
-/// live data and un-sticks a tab whose producer has stalled.
-fn reload_or_refetch(session_name: &str, fetch: &mut FetchDispatcher) -> bool {
-    match reload_action() {
-        ReloadAction::Reexec(target) => {
-            debug!(
-                session = %session_name,
-                target = %target.display(),
-                "reload: on-disk binary differs; asking supervisor to re-exec",
-            );
-            return true;
-        }
-        ReloadAction::AlreadyCurrent => {
-            debug!(
-                session = %session_name,
-                "reload: binary unchanged; refetching in place without re-exec",
-            );
-        }
-        // A reload that cannot find its replacement (a partial or in-flight
-        // install) must never make the sidebar vanish — keep serving the
-        // current build and refetch.
-        ReloadAction::Missing => {
-            warn!(
-                session = %session_name,
-                "reload requested but no renderer binary is on disk; refetching in place",
-            );
-        }
-    }
-    fetch.request(FetchRequest::hard_refresh(), true);
-    false
-}
 
 /// Focus the pane on a detached thread so the keypress/click returns instantly:
 /// `focus_pane` forks the mux client (`zellij action focus-pane-id` / the tmux

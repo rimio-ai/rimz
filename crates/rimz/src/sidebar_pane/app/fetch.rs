@@ -49,7 +49,7 @@ fn run_produce_guarded(
             *cursor = RollupCursor::new();
             Err(format!(
                 "sidebar produce panicked: {}",
-                super::panic_payload_message(payload.as_ref())
+                super::panic_payload_message(payload.as_ref(), "unknown panic payload")
             ))
         }
     }

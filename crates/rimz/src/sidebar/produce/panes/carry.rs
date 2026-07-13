@@ -27,6 +27,34 @@ struct CarryDecision<'a> {
     carried: CarriedPane,
 }
 
+#[derive(Clone, Copy)]
+struct LiveEvidence {
+    pid: u32,
+    start_ticks: u64,
+}
+
+#[derive(Clone, Copy)]
+enum Liveness {
+    Live(LiveEvidence),
+    DeadProven,
+    Dead,
+    Unknown,
+}
+
+struct ClassifiedPane<'a> {
+    tab: &'a TabFrame,
+    pane: &'a PaneState,
+    prior_meta: Option<&'a CarriedPane>,
+    verdict: Liveness,
+    expired: Option<ExpiredCarry>,
+}
+
+struct CarryClassification<'a> {
+    panes: Vec<ClassifiedPane<'a>>,
+    decisions: HashMap<PaneId, CarryDecision<'a>>,
+    confirmed_tabs: HashSet<crate::ids::ViewId>,
+}
+
 pub(super) fn apply_carry_forward(
     mut fresh: PaneFrame,
     prior: Option<&PaneFrame>,
@@ -71,79 +99,23 @@ pub(super) fn apply_carry_forward(
         .filter(|(_, pane)| !fresh_ids.contains(&pane.pane_id))
         .collect::<Vec<_>>();
 
-    let mut expired = Vec::new();
-    let mut decisions: HashMap<PaneId, CarryDecision<'_>> = HashMap::new();
-    let mut confirmed_tabs = HashSet::new();
+    let mut classification = classify_missing(
+        &missing,
+        &prior_carried,
+        own_pane,
+        bindings,
+        read_start_ticks,
+        now_ms,
+    );
+    apply_tab_coherence(&mut classification, now_ms);
+    let ambiguous_loss = has_ambiguous_loss(&classification);
+    let expired = classification
+        .panes
+        .iter()
+        .filter_map(|record| record.expired.clone())
+        .collect();
 
-    for (tab, pane) in &missing {
-        let prior_meta = prior_carried.get(&pane.pane_id).copied();
-        // The producer runs inside its own pane, so that pane is provably alive
-        // for as long as we are producing; its carry never expires.
-        let is_own_pane = own_pane.is_some_and(|own| *own == pane.pane_id);
-        if !is_own_pane && let Some(expired_meta) = expired_carry(&pane.pane_id, prior_meta, now_ms)
-        {
-            expired.push(expired_meta);
-            continue;
-        }
-        let Some((carried, confirmed_pid)) = direct_carry_metadata(
-            pane,
-            prior_meta,
-            own_pane,
-            bindings,
-            read_start_ticks,
-            now_ms,
-        ) else {
-            continue;
-        };
-        if confirmed_pid {
-            confirmed_tabs.insert(tab.view_id.clone());
-        }
-        decisions.insert(pane.pane_id.clone(), CarryDecision { tab, pane, carried });
-    }
-
-    for (tab, pane) in &missing {
-        if decisions.contains_key(&pane.pane_id) || !confirmed_tabs.contains(&tab.view_id) {
-            continue;
-        }
-        let prior_meta = prior_carried.get(&pane.pane_id).copied();
-        if prior_meta.is_some_and(|meta| expired_at(meta.carried_since_ms, now_ms)) {
-            continue;
-        }
-        if has_dead_liveness_evidence(pane, prior_meta, bindings, read_start_ticks) {
-            continue;
-        }
-        let carried = CarriedPane {
-            pane_id: pane.pane_id.clone(),
-            pid: prior_meta.and_then(|meta| meta.pid),
-            start_ticks: prior_meta.and_then(|meta| meta.start_ticks),
-            carried_since_ms: prior_meta
-                .map(|meta| meta.carried_since_ms)
-                .unwrap_or(now_ms),
-        };
-        decisions.insert(pane.pane_id.clone(), CarryDecision { tab, pane, carried });
-    }
-
-    let ambiguous_loss = missing.iter().any(|(tab, pane)| {
-        if decisions.contains_key(&pane.pane_id)
-            || expired
-                .iter()
-                .any(|expired| expired.pane_id == pane.pane_id)
-        {
-            return false;
-        }
-        let prior_meta = prior_carried.get(&pane.pane_id).copied();
-        if has_authoritative_dead_liveness_evidence(pane, prior_meta, bindings, read_start_ticks) {
-            return false;
-        }
-        if confirmed_tabs.contains(&tab.view_id)
-            && has_dead_liveness_evidence(pane, prior_meta, bindings, read_start_ticks)
-        {
-            return false;
-        }
-        true
-    });
-
-    let mut decisions = decisions.into_values().collect::<Vec<_>>();
+    let mut decisions = classification.decisions.into_values().collect::<Vec<_>>();
     decisions.sort_by_key(|decision| {
         (
             decision.tab.view_id.to_string(),
@@ -172,118 +144,208 @@ pub(super) fn apply_carry_forward(
     }
 }
 
-fn direct_carry_metadata(
-    pane: &PaneState,
-    prior_meta: Option<&CarriedPane>,
+fn classify_missing<'a>(
+    missing: &[(&'a TabFrame, &'a PaneState)],
+    prior_carried: &HashMap<PaneId, &'a CarriedPane>,
     own_pane: Option<&PaneId>,
     bindings: &HashMap<PaneId, PaneRootBinding>,
     read_start_ticks: &dyn Fn(u32) -> Option<u64>,
     now_ms: u64,
-) -> Option<(CarriedPane, bool)> {
+) -> CarryClassification<'a> {
+    let mut classification = CarryClassification {
+        panes: Vec::with_capacity(missing.len()),
+        decisions: HashMap::new(),
+        confirmed_tabs: HashSet::new(),
+    };
+    for &(tab, pane) in missing {
+        let prior_meta = prior_carried.get(&pane.pane_id).copied();
+        let (record, decision, confirmed) = classify_pane(
+            tab,
+            pane,
+            prior_meta,
+            own_pane,
+            bindings,
+            read_start_ticks,
+            now_ms,
+        );
+        if confirmed {
+            classification.confirmed_tabs.insert(tab.view_id.clone());
+        }
+        if let Some(decision) = decision {
+            classification
+                .decisions
+                .insert(pane.pane_id.clone(), decision);
+        }
+        classification.panes.push(record);
+    }
+    classification
+}
+
+fn classify_pane<'a>(
+    tab: &'a TabFrame,
+    pane: &'a PaneState,
+    prior_meta: Option<&'a CarriedPane>,
+    own_pane: Option<&PaneId>,
+    bindings: &HashMap<PaneId, PaneRootBinding>,
+    read_start_ticks: &dyn Fn(u32) -> Option<u64>,
+    now_ms: u64,
+) -> (ClassifiedPane<'a>, Option<CarryDecision<'a>>, bool) {
+    // The producer runs inside its own pane, so that pane is provably alive
+    // for as long as we are producing; its carry never expires.
+    let is_own_pane = own_pane.is_some_and(|own| *own == pane.pane_id);
+    let expired = if is_own_pane {
+        None
+    } else {
+        expired_carry(&pane.pane_id, prior_meta, now_ms)
+    };
+    if expired.is_some() {
+        return (
+            ClassifiedPane {
+                tab,
+                pane,
+                prior_meta,
+                verdict: Liveness::Unknown,
+                expired,
+            },
+            None,
+            false,
+        );
+    }
+
+    let verdict = scan_evidence(pane, prior_meta, bindings, read_start_ticks);
+    let evidence = match verdict {
+        Liveness::Live(evidence) => Some(evidence),
+        Liveness::DeadProven | Liveness::Dead | Liveness::Unknown => None,
+    };
+    let carried = direct_carry(pane, prior_meta, evidence, is_own_pane, now_ms);
+    (
+        ClassifiedPane {
+            tab,
+            pane,
+            prior_meta,
+            verdict,
+            expired,
+        },
+        carried.map(|carried| CarryDecision { tab, pane, carried }),
+        evidence.is_some(),
+    )
+}
+
+fn direct_carry(
+    pane: &PaneState,
+    prior_meta: Option<&CarriedPane>,
+    evidence: Option<LiveEvidence>,
+    is_own_pane: bool,
+    now_ms: u64,
+) -> Option<CarriedPane> {
     let carried_since_ms = prior_meta
         .map(|meta| meta.carried_since_ms)
         .unwrap_or(now_ms);
-
-    if own_pane.is_some_and(|own| *own == pane.pane_id) {
-        let evidence = liveness_evidence(pane, prior_meta, bindings, read_start_ticks);
-        return Some((
-            CarriedPane {
-                pane_id: pane.pane_id.clone(),
-                pid: evidence.map(|evidence| evidence.pid).or(pane.current.pid),
-                start_ticks: evidence.map(|evidence| evidence.start_ticks),
-                carried_since_ms,
-            },
-            evidence.is_some(),
-        ));
-    }
-
-    let evidence = liveness_evidence(pane, prior_meta, bindings, read_start_ticks)?;
-    Some((
-        CarriedPane {
+    if is_own_pane {
+        return Some(CarriedPane {
             pane_id: pane.pane_id.clone(),
-            pid: Some(evidence.pid),
-            start_ticks: Some(evidence.start_ticks),
+            pid: evidence.map(|evidence| evidence.pid).or(pane.current.pid),
+            start_ticks: evidence.map(|evidence| evidence.start_ticks),
             carried_since_ms,
-        },
-        true,
-    ))
-}
-
-#[derive(Clone, Copy)]
-struct LiveEvidence {
-    pid: u32,
-    start_ticks: u64,
-}
-
-fn liveness_evidence(
-    pane: &PaneState,
-    prior_meta: Option<&CarriedPane>,
-    bindings: &HashMap<PaneId, PaneRootBinding>,
-    read_start_ticks: &dyn Fn(u32) -> Option<u64>,
-) -> Option<LiveEvidence> {
-    if let Some(meta) = prior_meta
-        && let (Some(pid), Some(start_ticks)) = (meta.pid, meta.start_ticks)
-        && read_start_ticks(pid) == Some(start_ticks)
-    {
-        return Some(LiveEvidence { pid, start_ticks });
-    }
-    if let Some(binding) = bindings.get(&pane.pane_id)
-        && read_start_ticks(binding.pid) == Some(binding.start_ticks)
-    {
-        return Some(LiveEvidence {
-            pid: binding.pid,
-            start_ticks: binding.start_ticks,
         });
     }
-    let pid = pane.current.pid?;
-    let start_ticks = read_start_ticks(pid)?;
-    Some(LiveEvidence { pid, start_ticks })
+    evidence.map(|evidence| CarriedPane {
+        pane_id: pane.pane_id.clone(),
+        pid: Some(evidence.pid),
+        start_ticks: Some(evidence.start_ticks),
+        carried_since_ms,
+    })
 }
 
-fn has_dead_liveness_evidence(
+fn apply_tab_coherence(classification: &mut CarryClassification<'_>, now_ms: u64) {
+    for record in &classification.panes {
+        if classification.decisions.contains_key(&record.pane.pane_id)
+            || !classification.confirmed_tabs.contains(&record.tab.view_id)
+            || record.expired.is_some()
+            || record
+                .prior_meta
+                .is_some_and(|meta| expired_at(meta.carried_since_ms, now_ms))
+            || matches!(record.verdict, Liveness::DeadProven | Liveness::Dead)
+        {
+            continue;
+        }
+        let carried = CarriedPane {
+            pane_id: record.pane.pane_id.clone(),
+            pid: record.prior_meta.and_then(|meta| meta.pid),
+            start_ticks: record.prior_meta.and_then(|meta| meta.start_ticks),
+            carried_since_ms: record
+                .prior_meta
+                .map(|meta| meta.carried_since_ms)
+                .unwrap_or(now_ms),
+        };
+        classification.decisions.insert(
+            record.pane.pane_id.clone(),
+            CarryDecision {
+                tab: record.tab,
+                pane: record.pane,
+                carried,
+            },
+        );
+    }
+}
+
+fn has_ambiguous_loss(classification: &CarryClassification<'_>) -> bool {
+    classification.panes.iter().any(|record| {
+        if classification.decisions.contains_key(&record.pane.pane_id) || record.expired.is_some() {
+            return false;
+        }
+        match record.verdict {
+            Liveness::DeadProven => false,
+            Liveness::Dead if classification.confirmed_tabs.contains(&record.tab.view_id) => false,
+            Liveness::Live(_) | Liveness::Dead | Liveness::Unknown => true,
+        }
+    })
+}
+
+fn scan_evidence(
     pane: &PaneState,
     prior_meta: Option<&CarriedPane>,
     bindings: &HashMap<PaneId, PaneRootBinding>,
     read_start_ticks: &dyn Fn(u32) -> Option<u64>,
-) -> bool {
+) -> Liveness {
+    let mut dead_proven = false;
+    let mut dead = false;
     if let Some(meta) = prior_meta
         && let (Some(pid), Some(start_ticks)) = (meta.pid, meta.start_ticks)
-        && read_start_ticks(pid) != Some(start_ticks)
     {
-        return true;
+        match read_start_ticks(pid) {
+            Some(live_ticks) if live_ticks == start_ticks => {
+                return Liveness::Live(LiveEvidence { pid, start_ticks });
+            }
+            Some(_) => dead_proven = true,
+            None => dead = true,
+        }
     }
-    if let Some(binding) = bindings.get(&pane.pane_id)
-        && read_start_ticks(binding.pid) != Some(binding.start_ticks)
-    {
-        return true;
+    if let Some(binding) = bindings.get(&pane.pane_id) {
+        match read_start_ticks(binding.pid) {
+            Some(live_ticks) if live_ticks == binding.start_ticks => {
+                return Liveness::Live(LiveEvidence {
+                    pid: binding.pid,
+                    start_ticks: binding.start_ticks,
+                });
+            }
+            Some(_) => dead_proven = true,
+            None => dead = true,
+        }
     }
-    pane.current
-        .pid
-        .is_some_and(|pid| read_start_ticks(pid).is_none())
-}
-
-// Only pid-reuse proof explains a missing pane strongly enough to publish the
-// loss without the confirmation pull. A plain prior pid that cannot be read may
-// be a real exit or a transient `/proc` miss; the carry path still refuses to
-// ghost it, but the publish path verifies the omission once before committing.
-fn has_authoritative_dead_liveness_evidence(
-    pane: &PaneState,
-    prior_meta: Option<&CarriedPane>,
-    bindings: &HashMap<PaneId, PaneRootBinding>,
-    read_start_ticks: &dyn Fn(u32) -> Option<u64>,
-) -> bool {
-    if let Some(meta) = prior_meta
-        && let (Some(pid), Some(start_ticks)) = (meta.pid, meta.start_ticks)
-        && read_start_ticks(pid).is_some_and(|live| live != start_ticks)
-    {
-        return true;
+    if let Some(pid) = pane.current.pid {
+        if let Some(start_ticks) = read_start_ticks(pid) {
+            return Liveness::Live(LiveEvidence { pid, start_ticks });
+        }
+        dead = true;
     }
-    if let Some(binding) = bindings.get(&pane.pane_id)
-        && read_start_ticks(binding.pid).is_some_and(|live| live != binding.start_ticks)
-    {
-        return true;
+    if dead_proven {
+        Liveness::DeadProven
+    } else if dead {
+        Liveness::Dead
+    } else {
+        Liveness::Unknown
     }
-    false
 }
 
 fn expired_carry(

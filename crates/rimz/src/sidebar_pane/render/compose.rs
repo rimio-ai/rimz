@@ -232,6 +232,68 @@ pub(crate) fn compose_lines(
 /// alert is active the body is a stale/empty fetch, so the panel and footer step
 /// aside and the alert speaks alone. Every chrome line is gutter-padded so it
 /// breathes in the same one-cell frame as the body.
+#[derive(Clone, Copy)]
+struct DashboardPlan {
+    tabbed: bool,
+    owns_store: bool,
+}
+
+#[derive(Clone, Copy)]
+enum BottomCorner {
+    FleetTotal,
+    FleetStore,
+    None,
+}
+
+/// Selects alert-only, dashboard-folded, dashboard-with-totals, or bare-store
+/// chrome before rendering any lines.
+struct BottomPlan {
+    alert_active: bool,
+    dashboard: Option<DashboardPlan>,
+    folded_footer: bool,
+    corner: BottomCorner,
+    truth_notice: bool,
+    gate_notice: bool,
+    footer: bool,
+    alert: bool,
+}
+
+fn plan_bottom_chrome(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    ui: &UiState,
+) -> BottomPlan {
+    let alert_active = alert.is_some_and(Alert::is_active);
+    let dashboard = dashboard_present(snapshot, alert_active).then(|| {
+        let tabbed = dashboard_tabbed(snapshot);
+        DashboardPlan {
+            tabbed,
+            owns_store: tabbed && !snapshot.providers.is_empty() && snapshot.theme.pets.enabled,
+        }
+    });
+    let folded_footer = dashboard.is_some_and(|dashboard| dashboard.owns_store)
+        && snapshot.truth_degraded.is_none()
+        && ui.gate_notice.is_none()
+        && alert.is_none();
+    let corner = if alert_active || dashboard.is_some_and(|dashboard| dashboard.owns_store) {
+        BottomCorner::None
+    } else if dashboard.is_some() {
+        BottomCorner::FleetTotal
+    } else {
+        BottomCorner::FleetStore
+    };
+    BottomPlan {
+        alert_active,
+        dashboard,
+        folded_footer,
+        corner,
+        truth_notice: !alert_active && snapshot.truth_degraded.is_some(),
+        gate_notice: !alert_active && ui.gate_notice.is_some(),
+        footer: !alert_active && !folded_footer,
+        alert: alert.is_some(),
+    }
+}
+
 pub(super) fn build_bottom_chrome(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -239,22 +301,13 @@ pub(super) fn build_bottom_chrome(
     inner: usize,
     ui: &UiState,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
-    let active = alert.is_some_and(Alert::is_active);
+    let plan = plan_bottom_chrome(snapshot, alert, ui);
     let mut bottom: Vec<Line<'static>> = Vec::new();
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
-    let dashboard_present = dashboard_present(snapshot, active);
-    let tabbed = dashboard_present && dashboard_tabbed(snapshot);
-    let dashboard_owns_store = dashboard_present
-        && tabbed
-        && !snapshot.providers.is_empty()
-        && snapshot.theme.pets.enabled;
-    let fold_footer_into_dashboard = dashboard_owns_store
-        && !active
-        && snapshot.truth_degraded.is_none()
-        && ui.gate_notice.is_none()
-        && alert.is_none();
-    let folded_footer = fold_footer_into_dashboard.then(|| footer_parts(snapshot, theme, inner));
-    if dashboard_present {
+    let folded_footer = plan
+        .folded_footer
+        .then(|| footer_parts(snapshot, theme, inner));
+    if let Some(dashboard) = plan.dashboard {
         // The pinned separator lifts the dashboard off the cards. It is part
         // of bottom chrome, so the viewport reserves it before windowing.
         bottom.push(Line::from(""));
@@ -266,7 +319,7 @@ pub(super) fn build_bottom_chrome(
             theme,
             &snapshot.providers,
             active_tab.as_ref(),
-            tabbed,
+            dashboard.tabbed,
             snapshot.value_tally.as_ref(),
             ui.pet.as_ref(),
             snapshot.theme.pets.enabled,
@@ -291,32 +344,40 @@ pub(super) fn build_bottom_chrome(
     }
     // The static `W:`/`M:` rows seal the main dashboard. The pet-enabled tall
     // provider block owns those totals inside its `Total:` section.
-    if !active && !dashboard_owns_store {
-        let corner = if dashboard_present {
-            fleet_total_lines(theme, snapshot.value_tally.as_ref(), inner)
-        } else {
-            fleet_store_lines(theme, snapshot.value_tally.as_ref(), inner)
+    if !plan.alert_active && !matches!(plan.corner, BottomCorner::None) {
+        let corner = match plan.corner {
+            BottomCorner::FleetTotal => {
+                fleet_total_lines(theme, snapshot.value_tally.as_ref(), inner)
+            }
+            BottomCorner::FleetStore => {
+                fleet_store_lines(theme, snapshot.value_tally.as_ref(), inner)
+            }
+            BottomCorner::None => Vec::new(),
         };
         if !corner.is_empty() {
-            if !dashboard_present {
+            if plan.dashboard.is_none() {
                 bottom.push(pad_chrome(hairline_rule(theme, inner)));
             }
             bottom.extend(corner.into_iter().map(pad_chrome));
         }
     }
-    if !active && let Some(notice) = snapshot.truth_degraded.as_ref() {
+    if plan.truth_notice
+        && let Some(notice) = snapshot.truth_degraded.as_ref()
+    {
         bottom.extend(
             truth_notice_lines(theme, notice, snapshot.now)
                 .into_iter()
                 .map(pad_chrome),
         );
     }
-    if !active && let Some(notice) = ui.gate_notice.as_ref() {
+    if plan.gate_notice
+        && let Some(notice) = ui.gate_notice.as_ref()
+    {
         bottom.extend(gate_notice_lines(theme, notice).into_iter().map(pad_chrome));
     }
-    if !active {
+    if plan.footer {
         let footer = footer_lines(snapshot, theme, inner);
-        if folded_footer.is_none() && !footer.is_empty() {
+        if !footer.is_empty() {
             // No rule above the footer — it sits quietly under the dashboard's
             // own top rule, with one blank line of breathing room when a
             // dashboard is present (skipped in an empty room so the footer
@@ -327,7 +388,9 @@ pub(super) fn build_bottom_chrome(
             bottom.extend(footer.into_iter().map(pad_chrome));
         }
     }
-    if let Some(alert) = alert {
+    if plan.alert
+        && let Some(alert) = alert
+    {
         bottom.extend(
             alert_lines(theme, alert, snapshot.now)
                 .into_iter()

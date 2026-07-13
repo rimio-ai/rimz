@@ -96,14 +96,14 @@ fn refresh_guarded(
         Ok(Err(err)) => Err(err.to_string()),
         Err(payload) => {
             error!(
-                panic = %super::panic_payload_message(payload.as_ref()),
+                panic = %super::panic_payload_message(payload.as_ref(), "unknown panic payload"),
                 "sidebar spending cache refresh panicked"
             );
             *cursor = RollupCursor::new();
             *spending_walker = SpendingWalker::new();
             Err(format!(
                 "sidebar cache refresh panicked: {}",
-                super::panic_payload_message(payload.as_ref())
+                super::panic_payload_message(payload.as_ref(), "unknown panic payload")
             ))
         }
     }
