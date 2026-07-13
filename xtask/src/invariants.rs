@@ -45,6 +45,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_no_zellij_runtime_list_panes(root, &files)?;
     ensure_sidebar_event_log_reads_through_rollup(root, &files)?;
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
+    ensure_snapshot_projection_stays_quiet(root, &files)?;
     ensure_diag_writes_stay_in_diag(root, &files)?;
     ensure_sidebar_enrich_folds_before_live_panes(root)?;
     ensure_card_admission_predicate(root)?;
@@ -905,6 +906,19 @@ fn ensure_snapshot_json_writes_stay_in_produce(root: &Path, files: &[PathBuf]) -
         "published pane-frame writes belong in sidebar::produce; realtime events must not patch snapshot.json\n{}",
         violations.join("\n")
     );
+}
+
+fn ensure_snapshot_projection_stays_quiet(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let snapshot_root = root.join("crates/rimz/src/store/snapshot");
+    for needle in ["warn!(", "error!("] {
+        ensure_no_match(
+            files,
+            needle,
+            |path| !path.starts_with(&snapshot_root) || is_test_source_path(root, path),
+            "store/snapshot projection re-folds per frame: diagnostics stay debug!-level (warn!/error! there floods the off-box channel per fold)",
+        )?;
+    }
+    Ok(())
 }
 
 fn ensure_diag_writes_stay_in_diag(root: &Path, files: &[PathBuf]) -> Result<()> {

@@ -160,6 +160,35 @@ fn sidebar_enrich_stays_projection_only() {
 }
 
 #[test]
+fn snapshot_projection_diagnostics_stay_debug_level() {
+    let root = temp_repo_root("snapshot-projection-diagnostics");
+    let bad = root.join("crates/rimz/src/store/snapshot/view/bad.rs");
+    let test_file = root.join("crates/rimz/src/store/snapshot/view/tests/logging.rs");
+    for path in [&bad, &test_file] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+    }
+    std::fs::write(
+        &bad,
+        "fn f() { tracing::warn!(\"repeated projection\"); }\n",
+    )
+    .expect("write bad source");
+    std::fs::write(
+        &test_file,
+        "fn f() { tracing::warn!(\"test diagnostic\"); }\n",
+    )
+    .expect("write test source");
+
+    let err = ensure_snapshot_projection_stays_quiet(&root, &[bad.clone(), test_file.clone()])
+        .unwrap_err();
+    assert!(err.to_string().contains("diagnostics stay debug!-level"));
+    assert!(err.to_string().contains(&bad.display().to_string()));
+    assert!(!err.to_string().contains(&test_file.display().to_string()));
+
+    ensure_snapshot_projection_stays_quiet(&root, &[test_file]).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn pane_auto_use_invariant_allows_marked_run_failure_capture_only() {
     let root = temp_repo_root("pane-capture-boundary");
     let allowed = root.join("crates/rimz/src/cli/agents_cmd/supervised/pane.rs");

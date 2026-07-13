@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::agents::{AgentState, AgentStatus};
 use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent};
@@ -30,9 +30,12 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
         let parent_has_turn_boundary = parent_turn_started_at.is_some();
         let superseded =
             parent_turn_started_at.is_some_and(|started| started > child.last_activity);
+        // Projection diagnostics stay at debug: persisted state deterministically
+        // re-folds per frame per renderer, so warn would repeatedly reach Sentry.
+        // Durable reaping belongs to store/writer/reap.rs.
         let keep = if child.status == AgentStatus::Running {
             if superseded {
-                warn!(
+                debug!(
                     target: "rimz::agent::lifecycle",
                     kind = %child.kind,
                     parent = parent_id,
@@ -41,7 +44,7 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
                 );
                 false
             } else if idle_secs(child) >= GHOST_SESSION_TTL_SECS {
-                warn!(
+                debug!(
                     target: "rimz::agent::lifecycle",
                     kind = %child.kind,
                     parent = parent_id,
@@ -69,10 +72,8 @@ pub(in crate::store::snapshot) fn attach_sub_agents(
             parent.sub_agents.push(sub_agent_from_state(child, now));
         } else {
             // Transient projection state: the child was observed before its
-            // parent's row materialized within this fold. Diagnostic-only — the
-            // sidebar re-folds every frame, so a warn! here floods the off-box
-            // channel with a per-frame repeat of an expected race. Keep it at
-            // debug! for local sidebar diagnosis; it never reaches Sentry.
+            // parent's row materialized within this fold. Keep it locally
+            // diagnosable without escalating an expected race.
             debug!(
                 target: "rimz::agent::lifecycle",
                 kind = %child.kind,
@@ -135,7 +136,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
         .clone()
         .filter(|task| !task.is_empty())
         .unwrap_or_else(|| {
-            warn!(
+            debug!(
                 target: "rimz::agent::lifecycle",
                 kind = %child.kind,
                 child = %child.agent_id,
