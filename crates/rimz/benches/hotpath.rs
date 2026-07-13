@@ -198,8 +198,10 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
                     cache_read: 800,
                     message_id: Some(format!("msg-{index}")),
                     request_id: Some(format!("req-{index}")),
+                    dedup_key: None,
                     thread_id: Some(format!("thread-{index}")),
                     is_sidechain: false,
+                    has_speed: false,
                     model: Some("claude-opus-4-8".to_owned()),
                     rolled: false,
                 }

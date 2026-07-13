@@ -277,8 +277,8 @@ Twelve agents ship built in. **Status** tracks lived confidence, how much each o
 |-------------|-----------------|:-----:|:----------:|:----:|:----:|
 | Claude Code | ✅ Supported    |   ●   |     ●      |  ●   |  ●   |
 | Codex       | ✅ Supported    |   ●   |     ●      |  ●   |  ●   |
-| Pi          | 🟢 Beta         |   ●   |     ●      |  ◐   |  ○   |
-| OpenCode    | 🟡 Alpha        |   ●   |     ●      |  ◐   |  ●   |
+| Pi          | 🟢 Beta         |   ●   |     ◐      |  ◐   |  ○   |
+| OpenCode    | 🟡 Alpha        |   ●   |     ◐      |  ◐   |  ●   |
 | Gemini CLI  | 🧪 Experimental |   ●   |     ●      |  ◐   |  ●   |
 | Copilot     | 🧪 Experimental |   ●   |     ○      |  ○   |  ●   |
 | Droid       | 🧪 Experimental |   ●   |     ○      |  ○   |  ○   |
@@ -289,6 +289,8 @@ Twelve agents ship built in. **Status** tracks lived confidence, how much each o
 | Kimi        | 🧪 Experimental |   ●   |     ●      |  ●   |  ●   |
 
 Claude and Codex are the daily drivers, with Pi and OpenCode in regular rotation. An experimental row is wired and tested against the agent's documented surface, just not yet proven by daily use, which is why it can still light up most columns. In practice, launch any of them and it mostly just works: the CLI runs stock in your terminal and the official apps stay untouched. When one misbehaves, please [open an issue](https://github.com/rimio-ai/rimz/issues); reports are how an agent graduates a tier.
+
+Pi and OpenCode expose session usage for context and spending, while provider-native conversation history and assistant streaming remain partial.
 
 Per-agent coverage, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
 

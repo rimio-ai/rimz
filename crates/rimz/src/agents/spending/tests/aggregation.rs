@@ -543,6 +543,102 @@ fn claude_replay_dedup_collapses_before_store_and_rollups() {
 }
 
 #[test]
+fn claude_duplicate_dedup_keeps_the_richest_main_thread_record() {
+    let dir = TempDir::new().unwrap();
+    let paths = [
+        "sidechain.jsonl",
+        "small.jsonl",
+        "large.jsonl",
+        "fast.jsonl",
+    ]
+    .map(|name| write_jsonl(dir.path(), name, &[]));
+    let base = CachedEntry {
+        ts_secs: NOW_SECS,
+        cost_usd: 9.0,
+        input: 9_000,
+        output: 0,
+        cache_write: 0,
+        cache_read: 0,
+        message_id: Some("msg-rich".to_owned()),
+        request_id: Some("req-rich".to_owned()),
+        dedup_key: None,
+        thread_id: None,
+        is_sidechain: true,
+        has_speed: false,
+        model: Some("claude-opus-4-8".to_owned()),
+        rolled: false,
+    };
+    let small = CachedEntry {
+        cost_usd: 1.0,
+        input: 10,
+        is_sidechain: false,
+        ..base.clone()
+    };
+    let large = CachedEntry {
+        cost_usd: 2.0,
+        input: 20,
+        ..small.clone()
+    };
+    let fast = CachedEntry {
+        cost_usd: 4.0,
+        has_speed: true,
+        ..large.clone()
+    };
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file(&paths[0], vec![base]),
+            cached_file(&paths[1], vec![small]),
+            cached_file(&paths[2], vec![large]),
+            cached_file(&paths[3], vec![fast]),
+        ]),
+        ..Default::default()
+    };
+    let files = paths
+        .into_iter()
+        .map(|path| (claude_adapter(), path))
+        .collect::<Vec<_>>();
+
+    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    assert_eq!(counted.len(), 1);
+    let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
+    assert_eq!(spending.total.headline.input, 20);
+    assert_eq!(spending.total.headline.usd, 4.0);
+}
+
+#[test]
+fn codex_cross_file_dedup_uses_the_exact_native_event_fingerprint() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let duplicate = codex_token_line(&today, 1_000, 400, 500);
+    let distinct_millisecond = duplicate.replace("15:00:00.000Z", "15:00:00.001Z");
+    let model = r#"{"type":"turn_context","payload":{"model":"gpt-4o"}}"#;
+    let files = [
+        write_codex(&dir.path().join("one"), &[model, &duplicate]),
+        write_codex(&dir.path().join("two"), &[model, &duplicate]),
+        write_codex(&dir.path().join("three"), &[model, &distinct_millisecond]),
+    ];
+    let tagged = files
+        .into_iter()
+        .map(|path| (codex_adapter(), path))
+        .collect::<Vec<_>>();
+
+    let spending = compute_spending(
+        &tagged,
+        &mut SpendingDiskCache::default(),
+        &gpt4o_book(),
+        NOW_SECS,
+    );
+    assert_eq!(spending.total.headline.input, 1_200);
+    assert_eq!(spending.total.headline.cache_read, 800);
+    assert_eq!(spending.total.headline.output, 1_000);
+    assert_eq!(
+        spending.total.headline.sessions, 3,
+        "event dedup preserves the fact that each session ran"
+    );
+    assert!((spending.total.headline.usd - 0.003_28).abs() < 1e-9);
+}
+
+#[test]
 fn codex_resume_pricing_provider_origin_and_unknown_heal_stay_intact() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
@@ -664,8 +760,10 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         cache_read: 70,
         message_id: Some("msg-1".to_owned()),
         request_id: Some("req-1".to_owned()),
+        dedup_key: None,
         thread_id: None,
         is_sidechain: false,
+        has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
     };
@@ -685,8 +783,10 @@ fn daily_and_model_rollups_share_the_dedup_pass() {
         cache_read: 40,
         message_id: None,
         request_id: None,
+        dedup_key: None,
         thread_id: None,
         is_sidechain: false,
+        has_speed: false,
         model: Some("gpt-5-codex".to_owned()),
         rolled: false,
     };

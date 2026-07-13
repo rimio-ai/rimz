@@ -211,8 +211,10 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         cache_read: 4,
         message_id: Some("msg-1".to_owned()),
         request_id: Some("req-1".to_owned()),
+        dedup_key: None,
         thread_id: Some("thread-1".to_owned()),
         is_sidechain: true,
+        has_speed: true,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: true,
     };
@@ -225,8 +227,10 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
         cache_read: 25,
         message_id: None,
         request_id: None,
+        dedup_key: Some("codex:event".to_owned()),
         thread_id: None,
         is_sidechain: false,
+        has_speed: false,
         model: Some("gpt-5-codex".to_owned()),
         rolled: false,
     };
@@ -247,10 +251,12 @@ fn spending_cursor_cache_wire_shape_uses_short_keys() {
             "s": true,
             "t": 12345,
             "u": 0.125,
+            "v": true,
             "w": 3
           },
           {
             "i": 100,
+            "k": "codex:event",
             "l": "gpt-5-codex",
             "o": 50,
             "r": 25,

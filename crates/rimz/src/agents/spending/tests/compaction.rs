@@ -123,8 +123,10 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         cache_read: 0,
         message_id: Some("msg-1".to_owned()),
         request_id: Some("req-1".to_owned()),
+        dedup_key: None,
         thread_id: None,
         is_sidechain: false,
+        has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
     };
@@ -172,8 +174,10 @@ fn cache_compaction_handles_sidechain_replay_edges() {
         cache_read: 0,
         message_id: Some("msg-1".to_owned()),
         request_id: Some("req-1".to_owned()),
+        dedup_key: None,
         thread_id: None,
         is_sidechain: false,
+        has_speed: false,
         model: Some("claude-opus-4-8".to_owned()),
         rolled: false,
     };

@@ -116,8 +116,8 @@ fn codex_session_files_from_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
 /// output rate. Codex records `cache_write: 0`, so its aggregate `◇` total stays
 /// input + output. Events whose model has no known price still contribute
 /// tokens and sessions with zero dollars while recording an unknown-model chase.
-/// Codex entries carry no message/request IDs, so they bypass the Claude dedup
-/// and bucket directly under the `codex` provider.
+/// Codex entries carry no message/request IDs, so a provider-namespaced event
+/// fingerprint deduplicates copied rollout events across files.
 pub(crate) fn parse_codex_spend(
     path: &Path,
     resume: Option<&SpendCursor>,
@@ -168,8 +168,10 @@ pub(crate) fn parse_codex_spend(
             cache_read: event.cached_input_tokens,
             message_id: None,
             request_id: None,
+            dedup_key: Some(codex_event_dedup_key(&event.timestamp, model, &event)),
             thread_id: None,
             is_sidechain: false,
+            has_speed: false,
             model: Some(model.to_owned()),
             rolled: false,
         });
@@ -189,4 +191,15 @@ pub(crate) fn parse_codex_spend(
         unknown_models,
         replace_entries: false,
     }
+}
+
+fn codex_event_dedup_key(timestamp: &str, model: &str, event: &wire::CodexTokenEvent) -> String {
+    format!(
+        "codex:{}:{timestamp}:{}:{model}:{}:{}:{}",
+        timestamp.len(),
+        model.len(),
+        event.input_tokens,
+        event.cached_input_tokens,
+        event.output_tokens,
+    )
 }

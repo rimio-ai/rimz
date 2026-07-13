@@ -114,8 +114,10 @@ fn priced_entry(
         cache_read: cached,
         message_id: message.id.clone(),
         request_id: None,
+        dedup_key: None,
         thread_id: session_id.map(ToOwned::to_owned),
         is_sidechain: false,
+        has_speed: false,
         model: Some(model.to_owned()),
         rolled: false,
     })

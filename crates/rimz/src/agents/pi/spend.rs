@@ -34,22 +34,36 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path};
 
-use crate::agents::transcript_fs::{collect_jsonl, home_dir, read_spend_lines};
+use crate::agents::transcript_fs::{
+    collect_jsonl, deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
+    deserialize_optional_string_lossy, deserialize_optional_u64_lossy, home_dir, read_spend_lines,
+};
 
 // ── Typed structs ─────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct PiEntry {
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     timestamp: Option<String>,
-    #[serde(rename = "type")]
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
     entry_type: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     message: Option<PiMessage>,
 }
 
 #[derive(Deserialize)]
 struct PiSessionHeader {
-    #[serde(rename = "type")]
+    #[serde(
+        rename = "type",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
     entry_type: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     cwd: Option<String>,
 }
 
@@ -61,24 +75,39 @@ struct PiSpendState {
 
 #[derive(Deserialize)]
 struct PiMessage {
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     role: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     model: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     usage: Option<PiUsage>,
 }
 
 #[derive(Deserialize)]
 struct PiUsage {
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     input: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     output: Option<u64>,
-    #[serde(rename = "cacheWrite")]
+    #[serde(
+        rename = "cacheWrite",
+        default,
+        deserialize_with = "deserialize_optional_u64_lossy"
+    )]
     cache_write: Option<u64>,
-    #[serde(rename = "cacheRead")]
+    #[serde(
+        rename = "cacheRead",
+        default,
+        deserialize_with = "deserialize_optional_u64_lossy"
+    )]
     cache_read: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     cost: Option<PiCost>,
 }
 
 #[derive(Deserialize)]
 struct PiCost {
+    #[serde(default, deserialize_with = "deserialize_optional_f64_lossy")]
     total: Option<f64>,
 }
 
@@ -205,8 +234,10 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
             cache_read: usage.and_then(|u| u.cache_read).unwrap_or(0),
             message_id: None,
             request_id: None,
+            dedup_key: None,
             thread_id: None,
             is_sidechain: false,
+            has_speed: false,
             model: msg.model.clone(),
             rolled: false,
         });
@@ -310,5 +341,34 @@ mod tests {
         }
 
         assert!(parse_pi_spend(&path, None).entries.is_empty());
+    }
+
+    #[test]
+    fn parses_numeric_strings_and_ignores_malformed_nested_values() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        for line in [
+            r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","usage":{"input":"100","output":"50","cacheRead":"30","cacheWrite":"20","cost":{"total":"0.42"}}}}"#,
+            r#"{"type":"message","timestamp":"2026-06-02T11:00:00.000Z","message":{"role":"assistant","model":42,"usage":{"input":true,"output":25,"cacheRead":[],"cacheWrite":{},"cost":{"total":0.21}}}}"#,
+            r#"{"type":"message","timestamp":"2026-06-02T12:00:00.000Z","message":{"role":"assistant","usage":{"input":10,"cost":"unavailable"}}}"#,
+        ] {
+            writeln!(f, "{line}").unwrap();
+        }
+
+        let entries = parse_pi_spend(&path, None).entries;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            (
+                entries[0].input,
+                entries[0].output,
+                entries[0].cache_read,
+                entries[0].cache_write,
+            ),
+            (100, 50, 30, 20)
+        );
+        assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
+        assert_eq!((entries[1].input, entries[1].output), (0, 25));
+        assert!((entries[1].cost_usd - 0.21).abs() < 1e-9);
     }
 }

@@ -17,6 +17,10 @@ use crate::agents::pricing::PriceBook;
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, origin_path, record_unknown_model,
 };
+use crate::agents::transcript_fs::{
+    deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
+    deserialize_optional_string_lossy, deserialize_optional_u64_lossy,
+};
 
 // ── Discovery ────────────────────────────────────────────────────────────────
 
@@ -103,38 +107,59 @@ pub(crate) fn open_readonly(path: &Path) -> Option<Connection> {
 
 #[derive(Deserialize)]
 struct MessageData {
+    #[serde(default, deserialize_with = "deserialize_optional_f64_lossy")]
     cost: Option<f64>,
-    #[serde(rename = "modelID")]
+    #[serde(
+        rename = "modelID",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
     model_id: Option<String>,
-    #[serde(rename = "providerID")]
+    #[serde(
+        rename = "providerID",
+        default,
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
     provider_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     path: Option<MessagePath>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     time: Option<MessageTime>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     tokens: Option<MessageTokens>,
 }
 
 #[derive(Deserialize)]
 struct MessagePath {
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     cwd: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     root: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct MessageTime {
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     created: Option<u64>,
 }
 
 #[derive(Deserialize)]
 struct MessageTokens {
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     total: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     input: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     output: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     cache: Option<MessageCache>,
 }
 
 #[derive(Deserialize)]
 struct MessageCache {
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     read: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
     write: Option<u64>,
 }
 
@@ -299,8 +324,10 @@ fn parse_message_entry(
             cache_read,
             message_id: None,
             request_id: None,
+            dedup_key: None,
             thread_id,
             is_sidechain: false,
+            has_speed: false,
             model: Some(model.to_owned()),
             rolled: false,
         },
@@ -583,6 +610,58 @@ mod tests {
         assert_eq!(parsed.entries[0].output, 50);
         assert!((parsed.entries[0].cost_usd - 50.0 * 0.000004).abs() < 1e-12);
         assert!((parsed.entries[1].cost_usd - (10.0 * 0.000005 + 10.0 * 0.000006)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn parses_numeric_strings_and_ignores_malformed_nested_values() {
+        let dir = TempDir::new().unwrap();
+        let path = create_db(dir.path(), "opencode.db");
+        insert_message(
+            &path,
+            r#"{
+                "cost": "0.42",
+                "modelID": "gpt-priced",
+                "providerID": "openai",
+                "time": { "created": "1780590149011" },
+                "tokens": {
+                    "input": "100",
+                    "output": "20",
+                    "cache": { "read": "30", "write": "40" }
+                }
+            }"#,
+        );
+        insert_message(
+            &path,
+            r#"{
+                "cost": 0.21,
+                "modelID": "gpt-priced",
+                "providerID": "openai",
+                "path": { "cwd": 42 },
+                "time": "unknown",
+                "tokens": {
+                    "input": true,
+                    "output": 5,
+                    "cache": 0
+                }
+            }"#,
+        );
+
+        let parsed = parse_opencode_spend(&path, None, &prices());
+        assert_eq!(parsed.entries.len(), 2);
+        assert_eq!(
+            (
+                parsed.entries[0].input,
+                parsed.entries[0].output,
+                parsed.entries[0].cache_read,
+                parsed.entries[0].cache_write,
+            ),
+            (100, 20, 30, 40)
+        );
+        assert_eq!(parsed.entries[0].ts_secs, 1_780_590_149);
+        assert!((parsed.entries[0].cost_usd - 0.42).abs() < 1e-9);
+        assert_eq!((parsed.entries[1].input, parsed.entries[1].output), (0, 5));
+        assert_eq!(parsed.entries[1].ts_secs, 0);
+        assert!((parsed.entries[1].cost_usd - 0.21).abs() < 1e-9);
     }
 
     #[test]

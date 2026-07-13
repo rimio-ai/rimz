@@ -49,7 +49,7 @@ use super::aggregate::{
 /// apply per token class, and fast-mode turns apply the model multiplier. v14
 /// adds Claude advisor calls, Codex replay suppression, and request-selected
 /// OpenAI long-context pricing; finalized files need one cold reprice.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 14;
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 15;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///
@@ -143,10 +143,11 @@ pub struct SpendParse {
 
 /// A single cost entry with dedup keys for cross-file deduplication.
 ///
-/// `message_id` and `request_id` are present for Claude entries and absent for
-/// Codex and Pi entries. `thread_id` is present when the provider's durable
-/// transcript store exposes a native session id. `is_sidechain` drives the
-/// sidechain-replay suppression logic in the spending walk.
+/// `message_id` and `request_id` identify Claude responses. `dedup_key`
+/// identifies provider-namespaced records such as Codex events whose wire has
+/// no message ID. `thread_id` is present when the provider's durable transcript
+/// store exposes a native session id. `is_sidechain` drives the sidechain-replay
+/// suppression logic in the spending walk.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
@@ -180,6 +181,9 @@ pub struct CachedEntry {
     /// `requestId` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, rename = "q", skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// Provider-namespaced exact-record key for wires without message IDs.
+    #[serde(default, rename = "k", skip_serializing_if = "Option::is_none")]
+    pub dedup_key: Option<String>,
     /// Provider-native billing thread/session id, used for stores where many
     /// sessions live in one transcript file or database.
     #[serde(default, rename = "h", skip_serializing_if = "Option::is_none")]
@@ -187,6 +191,9 @@ pub struct CachedEntry {
     /// `isSidechain` flag from Claude entries.
     #[serde(default, rename = "s", skip_serializing_if = "is_false")]
     pub is_sidechain: bool,
+    /// The source usage carried speed metadata, used to keep the richest Claude duplicate.
+    #[serde(default, rename = "v", skip_serializing_if = "is_false")]
+    pub has_speed: bool,
     /// Model id as the transcript named it (`claude-opus-4-8`, `gpt-5-codex`, …),
     /// kept for the per-model token breakdown. `None` for an entry whose
     /// transcript named no model. Carried through dedup so a kept turn keeps its
@@ -378,8 +385,10 @@ fn rolled_entry_from(entry: &CachedEntry) -> CachedEntry {
         cache_read: entry.cache_read,
         message_id: None,
         request_id: None,
+        dedup_key: None,
         thread_id: entry.thread_id.clone(),
         is_sidechain: false,
+        has_speed: false,
         model: entry.model.clone(),
         rolled: true,
     }

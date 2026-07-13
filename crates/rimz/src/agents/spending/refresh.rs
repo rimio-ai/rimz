@@ -317,8 +317,21 @@ pub(crate) fn has_healed_unknown(
 pub(crate) fn dedup_chunk(entries: &mut Vec<CachedEntry>) {
     let mut deduped = Vec::with_capacity(entries.len());
     let mut by_exact_key = FastHashMap::<(String, Option<String>), usize>::default();
+    let mut by_provider_key = FastHashMap::<String, usize>::default();
     for entry in entries.drain(..) {
         let Some(msg_id) = entry.message_id.clone() else {
+            if let Some(key) = entry.dedup_key.clone() {
+                if let Some(index) = by_provider_key.get(&key) {
+                    let existing = &mut deduped[*index];
+                    if super::aggregate::should_replace_duplicate(&entry, existing) {
+                        *existing = entry;
+                    }
+                } else {
+                    by_provider_key.insert(key, deduped.len());
+                    deduped.push(entry);
+                }
+                continue;
+            }
             deduped.push(entry);
             continue;
         };
@@ -326,7 +339,7 @@ pub(crate) fn dedup_chunk(entries: &mut Vec<CachedEntry>) {
         match by_exact_key.entry(exact_key) {
             std::collections::hash_map::Entry::Occupied(slot) => {
                 let existing = &mut deduped[*slot.get()];
-                if existing.is_sidechain && !entry.is_sidechain {
+                if super::aggregate::should_replace_duplicate(&entry, existing) {
                     *existing = entry;
                 }
             }
@@ -353,8 +366,10 @@ mod tests {
             cache_read: 0,
             message_id: Some(format!("m-{ts_secs}")),
             request_id: None,
+            dedup_key: None,
             thread_id: None,
             is_sidechain: false,
+            has_speed: false,
             model: Some("fixture".to_owned()),
             rolled: false,
         }

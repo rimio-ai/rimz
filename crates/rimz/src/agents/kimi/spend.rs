@@ -64,6 +64,7 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
             cache_read,
             message_id: None,
             request_id: None,
+            dedup_key: None,
             thread_id: path
                 .parent()
                 .and_then(Path::parent)
@@ -72,6 +73,7 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
                 .and_then(|name| name.to_str())
                 .map(ToOwned::to_owned),
             is_sidechain: false,
+            has_speed: false,
             model: Some(model.to_owned()),
             rolled: false,
         });

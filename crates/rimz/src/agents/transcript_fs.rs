@@ -14,6 +14,7 @@
 //! [`AgentAdapter::transcript_files`]: super::AgentAdapter::transcript_files
 
 use std::fs;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn home_dir() -> PathBuf {
@@ -50,6 +51,123 @@ pub(crate) fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
         return false;
     }
     haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Deserialize an optional object while treating non-object JSON values as absent.
+pub(crate) fn deserialize_optional_object_lossy<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    struct Visitor<T>(PhantomData<T>);
+
+    impl<'de, T: serde::Deserialize<'de>> serde::de::Visitor<'de> for Visitor<T> {
+        type Value = Option<T>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an optional object")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok(None)
+        }
+
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserialize_optional_object_lossy(deserializer)
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+            T::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(Some)
+        }
+    }
+
+    deserializer.deserialize_any(Visitor(PhantomData))
+}
+
+/// Deserialize an optional unsigned integer from a JSON number or numeric string.
+pub(crate) fn deserialize_optional_u64_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| match value {
+        serde_json::Value::Number(value) => value.as_u64(),
+        serde_json::Value::String(value) => value.trim().parse().ok(),
+        _ => None,
+    }))
+}
+
+/// Deserialize an optional finite float from a JSON number or numeric string.
+pub(crate) fn deserialize_optional_f64_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(value
+        .and_then(|value| match value {
+            serde_json::Value::Number(value) => value.as_f64(),
+            serde_json::Value::String(value) => value.trim().parse().ok(),
+            _ => None,
+        })
+        .filter(|value| value.is_finite()))
+}
+
+/// Deserialize a non-empty optional string while treating other JSON values as absent.
+pub(crate) fn deserialize_optional_string_lossy<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| match value {
+        serde_json::Value::String(value) => {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        }
+        _ => None,
+    }))
 }
 
 /// Read the trailing window of a transcript/rollout JSONL as lossy UTF-8, for

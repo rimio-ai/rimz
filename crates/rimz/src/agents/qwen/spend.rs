@@ -106,8 +106,10 @@ pub(crate) fn parse_qwen_spend(path: &Path, from_offset: u64, prices: &PriceBook
             cache_read: cached,
             message_id: entry.uuid,
             request_id: None,
+            dedup_key: None,
             thread_id: entry.session_id,
             is_sidechain: entry.is_sidechain == Some(true) || entry.agent_id.is_some(),
+            has_speed: false,
             model: Some(model.to_owned()),
             rolled: false,
         });

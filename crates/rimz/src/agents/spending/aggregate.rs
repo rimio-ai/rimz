@@ -516,6 +516,7 @@ pub(crate) trait CountedPayload: DedupPayload {
 
 pub(crate) struct SidechainDedup<P> {
     by_exact_key: FastHashMap<(String, Option<String>), P>,
+    by_provider_key: FastHashMap<String, P>,
     msg_has_non_sidechain: FastHashMap<String, bool>,
     free: Vec<P>,
 }
@@ -524,6 +525,7 @@ impl<P> Default for SidechainDedup<P> {
     fn default() -> Self {
         Self {
             by_exact_key: FastHashMap::default(),
+            by_provider_key: FastHashMap::default(),
             msg_has_non_sidechain: FastHashMap::default(),
             free: Vec::new(),
         }
@@ -533,6 +535,10 @@ impl<P> Default for SidechainDedup<P> {
 impl<P: DedupPayload> SidechainDedup<P> {
     pub(crate) fn insert(&mut self, payload: P) {
         let Some(msg_id) = payload.entry().message_id.clone() else {
+            if let Some(key) = payload.entry().dedup_key.clone() {
+                self.by_provider_key.entry(key).or_insert(payload);
+                return;
+            }
             self.free.push(payload);
             return;
         };
@@ -548,7 +554,7 @@ impl<P: DedupPayload> SidechainDedup<P> {
         let exact_key = (msg_id, request_id);
         match self.by_exact_key.entry(exact_key) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
-                if entry.get().entry().is_sidechain && !is_sidechain {
+                if should_replace_duplicate(payload.entry(), entry.get().entry()) {
                     entry.insert(payload);
                 }
             }
@@ -573,9 +579,34 @@ impl<P: DedupPayload> SidechainDedup<P> {
                 counted.push(payload);
             }
         }
+        let mut provider_keyed = self.by_provider_key.into_iter().collect::<Vec<_>>();
+        provider_keyed.sort_by(|(left, _), (right, _)| left.cmp(right));
+        counted.extend(provider_keyed.into_iter().map(|(_, payload)| payload));
         counted.extend(self.free);
         counted
     }
+}
+
+pub(crate) fn should_replace_duplicate(candidate: &CachedEntry, existing: &CachedEntry) -> bool {
+    if candidate.is_sidechain != existing.is_sidechain {
+        return existing.is_sidechain;
+    }
+
+    let candidate_tokens = entry_token_total(candidate);
+    let existing_tokens = entry_token_total(existing);
+    if candidate_tokens != existing_tokens {
+        return candidate_tokens > existing_tokens;
+    }
+
+    candidate.has_speed && !existing.has_speed
+}
+
+fn entry_token_total(entry: &CachedEntry) -> u64 {
+    entry
+        .input
+        .saturating_add(entry.output)
+        .saturating_add(entry.cache_write)
+        .saturating_add(entry.cache_read)
 }
 
 pub(crate) struct Counted<'a> {

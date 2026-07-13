@@ -292,8 +292,10 @@ fn cached_entry(ts_secs: u64, cost_usd: f64, thread_id: &str) -> CachedEntry {
         cache_read: 0,
         message_id: None,
         request_id: None,
+        dedup_key: None,
         thread_id: Some(thread_id.to_owned()),
         is_sidechain: false,
+        has_speed: false,
         model: None,
         rolled: false,
     }

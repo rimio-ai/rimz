@@ -353,8 +353,10 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             cache_read,
             message_id: entry.message.id.clone(),
             request_id: entry.request_id.clone(),
+            dedup_key: None,
             thread_id: None,
             is_sidechain: entry.is_sidechain == Some(true),
+            has_speed: usage.speed.is_some(),
             model: entry.message.model.clone(),
             rolled: false,
         });
@@ -425,8 +427,10 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
                     .as_ref()
                     .map(|message_id| format!("{message_id}:advisor:{index}")),
                 request_id: entry.request_id.clone(),
+                dedup_key: None,
                 thread_id: None,
                 is_sidechain: entry.is_sidechain == Some(true),
+                has_speed: advisor.speed.is_some(),
                 model: Some(model.to_owned()),
                 rolled: false,
             });

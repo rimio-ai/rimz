@@ -103,8 +103,10 @@ pub(super) fn spend(
                 cache_read: entry.cache_read.unwrap_or(0),
                 message_id: None,
                 request_id: None,
+                dedup_key: None,
                 thread_id: entry.thread_id,
                 is_sidechain: false,
+                has_speed: false,
                 model: entry.model,
                 rolled: false,
             })

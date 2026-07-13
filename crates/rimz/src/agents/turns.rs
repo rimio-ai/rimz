@@ -153,8 +153,10 @@ mod tests {
             cache_read: 40,
             message_id: None,
             request_id: None,
+            dedup_key: None,
             thread_id: thread_id.map(ToOwned::to_owned),
             is_sidechain: false,
+            has_speed: false,
             model: None,
             rolled: false,
         }
