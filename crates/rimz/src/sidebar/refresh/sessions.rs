@@ -183,6 +183,7 @@ fn refresh_session_transcript_context_core(
     let ctx = LocalContextRefreshCtx {
         agent_id: session_id,
         model_hint,
+        current_transcript_path: None,
         prior_transcript_path: prior
             .as_ref()
             .and_then(|record| record.transcript_path.as_deref()),

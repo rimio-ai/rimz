@@ -11,6 +11,7 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
     let mut signals = vec![
         LifecycleSignal::Registered,
         LifecycleSignal::TurnStarted,
+        LifecycleSignal::TurnInterrupted,
         LifecycleSignal::SubagentStarted,
         LifecycleSignal::Compacting,
         LifecycleSignal::Ended,

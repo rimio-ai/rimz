@@ -35,6 +35,31 @@ pub(crate) fn handle_lifecycle_hook(
     let agent_id = payload_agent_id(payload);
     let recorded =
         record_lifecycle_observation(workspace, store, agent, event_name, payload, globals);
+    let assistant_message = record_assistant_response(
+        workspace,
+        store,
+        agent,
+        event_name,
+        payload,
+        recorded.as_ref(),
+    );
+    if let (Some(run_id), Some((agent_id, message))) = (env_run_id(), assistant_message)
+        && let Err(err) = rimz::harness::run::record_assistant_message(
+            store.paths(),
+            &run_id,
+            agent.descriptor().kind,
+            &agent_id,
+            message,
+        )
+    {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            run_id = %run_id,
+            error = %err,
+            "lifecycle: failed to seed supervised response",
+        );
+    }
     record_native_answer(
         workspace,
         store,
@@ -49,7 +74,7 @@ pub(crate) fn handle_lifecycle_hook(
     let turn_ended = recorded.as_ref().is_some_and(|recorded| {
         matches!(
             recorded.observation.signal,
-            LifecycleSignal::TurnEnded { .. }
+            LifecycleSignal::TurnEnded { .. } | LifecycleSignal::TurnInterrupted
         )
     });
     let transcript_path = recorded

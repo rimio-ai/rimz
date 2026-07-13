@@ -189,22 +189,30 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
     assert_eq!(clean.cache_read_input_tokens, Some(30));
     assert_eq!(clean.output_tokens, Some(20));
 
-    for payload in [
-        json!({ "session_id": "sess-1", "stop_reason": "aborted" }),
-        json!({ "session_id": "sess-1", "stop_reason": "error" }),
-        json!({ "session_id": "sess-1", "stop_reason": "stop", "error_message": "boom" }),
-    ] {
-        let observation = PiAdapter
-            .observe_lifecycle("agent_settled", &payload)
-            .expect("observation");
-        assert_eq!(
-            observation.signal,
+    for (payload, expected) in [
+        (
+            json!({ "session_id": "sess-1", "stop_reason": "aborted" }),
+            LifecycleSignal::TurnInterrupted,
+        ),
+        (
+            json!({ "session_id": "sess-1", "stop_reason": "error" }),
             LifecycleSignal::TurnEnded {
                 errored: true,
                 parked_on_background: false,
             },
-            "payload {payload}",
-        );
+        ),
+        (
+            json!({ "session_id": "sess-1", "stop_reason": "stop", "error_message": "boom" }),
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            },
+        ),
+    ] {
+        let observation = PiAdapter
+            .observe_lifecycle("agent_settled", &payload)
+            .expect("observation");
+        assert_eq!(observation.signal, expected, "payload {payload}",);
     }
 }
 

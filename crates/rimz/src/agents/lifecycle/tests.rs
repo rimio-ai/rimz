@@ -104,6 +104,23 @@ fn root_turn_edges_follow_the_contract() {
     ] {
         assert_next(label, Some(reasoning), turn_end(errored, parked), expected);
     }
+
+    for prior in [
+        reasoning,
+        state(AgentStatus::Waiting, TurnPhase::Idle, false),
+        state(AgentStatus::Running, TurnPhase::Acting, true),
+    ] {
+        let interrupted = assert_next(
+            "interrupted",
+            Some(prior),
+            LifecycleSignal::TurnInterrupted,
+            idle,
+        );
+        assert_eq!(
+            (interrupted.waiting_cleared, interrupted.compaction_closed),
+            (prior.status == AgentStatus::Waiting, prior.compacting,)
+        );
+    }
 }
 
 #[test]
@@ -331,6 +348,7 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
         (LifecycleSignal::Registered, "registered"),
         (LifecycleSignal::TurnStarted, "turn_started"),
         (turn_end(false, true), "turn_ended"),
+        (LifecycleSignal::TurnInterrupted, "turn_interrupted"),
         (tool(true), "tool_used"),
         (
             LifecycleSignal::AwaitingInput {

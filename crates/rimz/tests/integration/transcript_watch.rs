@@ -81,3 +81,49 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
     let after = std::fs::read(runtime.agent_context_path("codex", SESSION_ID)).expect("sidecar");
     assert_eq!(before, after, "unchanged rollout tail refreshes nothing");
 }
+
+#[test]
+fn cursor_transcript_event_recovers_terminal_state_without_content() {
+    let harness = Harness::new();
+    let runtime = &harness.runtime_paths;
+    runtime.ensure_dirs().expect("runtime dirs");
+    let transcripts = tempfile::tempdir().expect("transcript dir");
+    let path = transcripts.path().join("cursor-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"THINKING_SENTINEL_DO_NOT_INGEST\"}]}}\n",
+    )
+    .unwrap();
+    let mut record = new_record(
+        "cursor",
+        SESSION_ID,
+        empty_context("cursor", jiff::Timestamp::UNIX_EPOCH),
+    );
+    record.transcript_path = Some(path.to_string_lossy().into_owned());
+    agent_context::write_record(runtime, &record).expect("seed cursor sidecar");
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    std::io::Write::write_all(
+        &mut file,
+        b"{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+    )
+    .unwrap();
+    drop(file);
+    refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
+
+    let merged = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("merged sidecar");
+    assert!(merged.context.turn_complete.is_some());
+    assert_eq!(merged.context.model_id.as_deref(), Some("cursor/model"));
+    assert!(merged.context.tokens.is_none());
+    assert!(merged.transcript_stat.is_some());
+    let serialized = serde_json::to_string(&merged).unwrap();
+    assert!(!serialized.contains("THINKING_SENTINEL_DO_NOT_INGEST"));
+
+    let before = std::fs::read(runtime.agent_context_path("cursor", SESSION_ID)).unwrap();
+    refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
+    let after = std::fs::read(runtime.agent_context_path("cursor", SESSION_ID)).unwrap();
+    assert_eq!(before, after, "unchanged Cursor tail is stat-gated");
+}

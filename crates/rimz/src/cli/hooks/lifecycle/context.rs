@@ -176,6 +176,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
         agent_id: context_agent_id,
         model_hint: local_model_hint,
+        current_transcript_path: transcript_path,
         prior_transcript_path: selected_transcript_path,
         prior_transcript_stat,
         shared_pricing_cache_path: &shared_pricing_cache_path,

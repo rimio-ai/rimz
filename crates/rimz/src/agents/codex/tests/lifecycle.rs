@@ -465,6 +465,7 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     let ctx = crate::agents::LocalContextRefreshCtx {
         agent_id: "sess-1",
         model_hint: Some("gpt-5"),
+        current_transcript_path: None,
         prior_transcript_path: Some(&path),
         prior_transcript_stat: None,
         shared_pricing_cache_path: &pricing_cache_path,

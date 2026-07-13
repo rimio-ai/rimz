@@ -12,7 +12,8 @@ Cursor runs as `agent` or its `cursor-agent` alias; `cursor` names the IDE and i
 | `beforeSubmitPrompt` | `TurnStarted` | sanitized `prompt` |
 | `postToolUse` for `Shell`/`Write`/`Delete` | `ToolUsed { mutates: true, edits }` | `Write` and `Delete` edit; `Shell` only mutates |
 | `postToolUseFailure` | — | activity heartbeat only |
-| `stop` | `TurnEnded` | only `status: completed` is clean; `aborted` and `error` set `errored` |
+| `afterAgentResponse` | — | safe final visible assistant text; content only |
+| `stop` | `TurnEnded` or `TurnInterrupted` | `completed` is clean, `error` fails, and `aborted` lands idle |
 | `preCompact` | `Compacting` | context percentage and window |
 | `sessionEnd` | `Ended` | tombstones the session |
 
@@ -22,9 +23,11 @@ Cursor's local hooks expose no permission request, plan approval, question, or i
 
 ## Context and transcript
 
-`preCompact.context_usage_percent` supplies the rounded, clamped context gauge, and `context_window_size` supplies the window. `context_tokens` is occupancy rather than cumulative usage, so it does not populate `total_tokens`. `model_id` labels the row, with legacy `model` as fallback; the common `model_params` entry named `effort` supplies the displayed effort and unknown parameters remain forward-compatible.
+`preCompact.context_usage_percent` supplies the rounded, clamped context gauge, and `context_window_size` supplies the window. `context_tokens` is occupancy rather than cumulative usage, so it does not populate `total_tokens`. `stop` supplies per-turn fresh input, output, cache-read, and cache-write counts; explicit zeroes remain visible and these counters never populate cumulative `total_tokens`. `model_id` labels the row, with legacy `model` as fallback; the common `model_params` entry named `effort` supplies the displayed effort and malformed or unknown parameters remain field-locally ignorable.
 
-Cursor publishes `transcript_path` but not the transcript schema. RimZ carries the path as metadata and does not parse or tail the file. Workspace ownership continues to come from the stamped pane/session relationship; `postToolUse.cwd` is enrichment only.
+Cursor CLI `2026.07.09-a3815c0` writes one JSONL file at `~/.cursor/projects/<workspace>/agent-transcripts/<conversation_id>/<conversation_id>.jsonl`. RimZ reads only a bounded tail of complete `turn_ended` records to recover missed success, interruption, or error boundaries; it never models or consumes assistant, thinking, user, tool, or message content from this file. Resolution prefers the current hook path, then the persisted path, then one unambiguous exact conversation match beneath the immediate project directories. Workspace ownership continues to come from the stamped pane/session relationship; `postToolUse.cwd` is enrichment only.
+
+`afterAgentResponse.text` is Cursor's sole safe final-text source. Hook ingestion appends that trimmed response to RimZ's durable transcript and seeds an active supervised run without ending it; the later `stop` remains the delivery checkpoint and terminal status transition. Cursor's native JSONL merges visible assistant commentary with model thinking into indistinguishable text blocks, so native history paging and reply streaming deliberately remain empty.
 
 ## Account and balance
 
@@ -32,7 +35,7 @@ Cursor documents `status --format json` and `about --format json` without publis
 
 ## Cost
 
-The documented hook and headless streams expose no machine-readable tokens, dollars, or price attribution. Realtime cost and historical account spend remain unsupported, and the adapter has no spend parser.
+The stop hook exposes per-turn token composition but no dollars or trustworthy historical model-priced totals. Realtime cost and historical account spend remain unsupported, and the adapter has no spend parser.
 
 ## Launch and permission modes
 
@@ -42,16 +45,11 @@ The shared command classifier now reads adapter `bin_names`, so both stock entry
 
 ## Wired now
 
-Session identity, turn boundaries, mutating-tool activity and the acting phase, the compaction-open bracket, the context gauge and window, session end, hook install/uninstall, resume, the four permission modes, and manual `/summarize` compaction. The launch-flag surface (`--mode=plan`, `--auto-review`, `--force`, `--sandbox disabled`, `--resume`) is verified against the installed `2026.07.09-a3815c0` build; the runtime *interaction* of those flags with neutral `{}` output still needs a live session.
+Session identity, turn boundaries including native interruption, safe final responses, per-turn token composition, bounded transcript-tail recovery, mutating-tool activity and the acting phase, the compaction-open bracket, the context gauge and window, session end, hook install/uninstall, resume, the four permission modes, and manual `/summarize` compaction. The launch-flag surface (`--mode=plan`, `--auto-review`, `--force`, `--sandbox disabled`, `--resume`) is verified against the installed `2026.07.09-a3815c0` build; the runtime *interaction* of those flags with neutral `{}` output still needs a live session.
 
 ## Deferred to a later round
 
-- **Interrupted turns read as failed.** A user Esc lands `stop.status: "aborted"`, which the adapter maps to the errored bit, so the row escalates to `!` rather than settling at rest — the same conservative approximation Pi takes for its aborted `stopReason` ([model.md → Extending the signal vocabulary](./model.md#the-state-machine)). Cursor's `stop` is a stronger interruption certificate than the derived markers Codex and Claude rely on, so a future round can settle the row to `idle` (see the abstraction note below).
 - **Subagents.** `subagentStop` omits the child id `subagentStart` supplies, so neither signal is wired until a live capture proves a stable stop-side correlation key.
 - **Account and cost.** Blocked on a logged-in `about --format json` capture (above) and, for spend, on any machine-readable per-user usage feed Cursor does not yet ship.
-- **Supervised `-p` runs.** The shared run abstraction extracts the final answer from an interactive terminal hook or a supported transcript; Cursor exposes its final response on a separate `afterAgentResponse` event and keeps the transcript schema opaque. A future `-p` transport can teach the run layer to correlate that event with the following `stop`, or host Cursor's documented stream-JSON mode; the adapter does not persist response text merely to bridge that gap.
+- **Full native history and streaming.** Safe final responses reach RimZ's transcript and supervised output, but native assistant-history replay and incremental reply streaming remain empty because Cursor's JSONL text merges visible output with thinking.
 - **Live verification** remains required for the hook command's shell and `$PPID` semantics on each platform, the `--` prompt terminator, neutral `{}` under every approval mode, `conversation_id` stability across resume and clear, and Claude-compatible third-party-hook cross-fire.
-
-## A note for the RimZ abstraction
-
-`LifecycleSignal::TurnEnded` carries only `errored` and `parked_on_background`, so it cannot express a turn that *ended at rest because it was interrupted* — a clean landing that is neither `success` nor `failed`. Today both Cursor (`stop.status: "aborted"`) and Pi (aborted `stopReason`) collapse that case onto `errored`, painting a false failure, while Codex and Claude reach `idle` only through the projection-side turn-interruption marker ([model.md → Displayed status](./model.md#displayed-status)), which rescues a still-`running` row and never a `failed` one. A provider that reports its own interruption on the turn-end event has no clean path to the calm landing. Worth considering in a future round: an interrupted variant of `TurnEnded`, or folding a native interrupted end into the same `turn_interrupted` enrichment the projection already reads.

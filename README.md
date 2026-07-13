@@ -282,7 +282,7 @@ Twelve agents ship built in. **Status** tracks lived confidence, how much each o
 | Gemini CLI  | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ○     |
 | Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |  ○   |     ○     |
 | Droid       | 🧪 Experimental |   ●   |  ○   |    ○    |  ○  |  ○   |     ○     |
-| Cursor      | 🧪 Experimental |   ●   |  ○   |    ◐    |  ○  |  ○   |     ○     |
+| Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ○  |  ○   |     ○     |
 | Amp         | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ○   |     ○     |
 | Kiro CLI    | 🧪 Experimental |   ●   |  ○   |    ○    |  ○  |  ○   |     ○     |
 | Qwen Code   | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ●   |     ●     |

@@ -82,6 +82,8 @@ The detail for each agent — its full coverage rationale, permission-mode mappi
 
 Two agents carry a deliberate absence worth stating here: Cursor and Droid appear and report their work, but their stock local hooks cannot signal that a native question is open, so they have no waiting row or ask routing — answer those prompts in the agent's own pane.
 
+Cursor's Live coverage is partial rather than absent: `preCompact` reports occupancy, `stop` reports per-turn fresh/cache/output composition, `afterAgentResponse` supplies safe final text, and a bounded terminal-only transcript tail recovers missed turn ends. Full native assistant history and incremental reply streaming remain unavailable because Cursor's JSONL merges visible assistant output with thinking.
+
 ## Versions
 
 RimZ tracks each agent's own release surface, and behaviour can shift with the agent's version — Codex, for example, moved to daemon-routed hooks at 0.137 and adjusted turn-completion signals through the 0.14x line. RimZ adapts at runtime rather than pinning a hard floor here, and `rimz doctor` reports version drift it detects per agent after an upgrade ([troubleshooting](../guide/troubleshooting.md)). For the exact event surface a given agent version exposes, the authority is that agent's [mapping doc](#per-agent-mappings) and external reference.

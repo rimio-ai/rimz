@@ -96,6 +96,9 @@ pub enum LifecycleSignal {
         errored: bool,
         parked_on_background: bool,
     },
+    /// A turn was canceled by the user or provider. This closes the turn
+    /// without reporting either success or failure and leaves the session idle.
+    TurnInterrupted,
     /// A subagent began (`SubagentStart`) — only ever observed for a child
     /// entity, keyed by its own child id.
     SubagentStarted,
@@ -155,7 +158,7 @@ impl LifecycleSignal {
         match self {
             Self::Registered => LifecycleSignalKind::Registered,
             Self::TurnStarted => LifecycleSignalKind::TurnStarted,
-            Self::TurnEnded { .. } => LifecycleSignalKind::TurnEnded,
+            Self::TurnEnded { .. } | Self::TurnInterrupted => LifecycleSignalKind::TurnEnded,
             Self::SubagentStarted => LifecycleSignalKind::SubagentStarted,
             Self::SubagentStopped { .. } => LifecycleSignalKind::SubagentStopped,
             Self::ToolUsed { .. } => LifecycleSignalKind::ToolUsed,
@@ -179,6 +182,7 @@ impl LifecycleSignal {
             Self::Registered => "registered",
             Self::TurnStarted => "turn_started",
             Self::TurnEnded { .. } => "turn_ended",
+            Self::TurnInterrupted => "turn_interrupted",
             Self::SubagentStarted => "subagent_started",
             Self::SubagentStopped { .. } => "subagent_stopped",
             Self::ToolUsed { .. } => "tool_used",
@@ -393,6 +397,7 @@ fn map_status(
                 AgentStatus::Success
             }
         }
+        LifecycleSignal::TurnInterrupted => AgentStatus::Idle,
         LifecycleSignal::ToolUsed { .. } => {
             // A completed tool proves the agent is working; if the rollup thinks
             // it is resting (or it is unknown), reconcile to running. Attention
@@ -487,6 +492,7 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
         LifecycleSignal::CompactionEnded { auto: Some(false) } => TurnPhase::Idle,
         LifecycleSignal::Registered
         | LifecycleSignal::TurnEnded { .. }
+        | LifecycleSignal::TurnInterrupted
         | LifecycleSignal::SubagentStopped { .. } => TurnPhase::Idle,
         // Handled above.
         LifecycleSignal::Ended | LifecycleSignal::Lost => {

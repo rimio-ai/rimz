@@ -7,8 +7,9 @@
 
 mod install;
 mod payloads;
+mod transcript;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 use serde_json::json as test_json;
@@ -45,7 +46,7 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking_asks: false,
         native_ask_ui: false,
         rich_context: false,
-        transcript_tail_context: false,
+        transcript_tail_context: true,
         context_usage: true,
         account_spend: false,
         subagents: false,
@@ -75,6 +76,7 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "beforeSubmitPrompt",
         "postToolUse",
         "postToolUseFailure",
+        "afterAgentResponse",
         "stop",
     ],
     hook_install_unavailable: None,
@@ -85,7 +87,7 @@ const CURSOR_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::TurnLifecycle,
         ConcernCoverage::Wired {
-            via: "sessionStart/beforeSubmitPrompt/stop",
+            via: "sessionStart/beforeSubmitPrompt/stop including native interruption",
         },
     ),
     (
@@ -145,13 +147,13 @@ const CURSOR_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::ContextUsage,
         ConcernCoverage::Wired {
-            via: "preCompact context_usage_percent/context_window_size",
+            via: "preCompact occupancy plus stop token composition",
         },
     ),
     (
         IntegrationConcern::RealtimeCost,
         ConcernCoverage::Unsupported {
-            reason: "no machine-readable token or dollar feed",
+            reason: "stop reports per-turn tokens but no model-priced dollar feed",
         },
     ),
     (
@@ -254,6 +256,7 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "beforeSubmitPrompt",
     "postToolUse",
     "postToolUseFailure",
+    "afterAgentResponse",
     "stop",
     "sessionEnd",
     "preCompact",
@@ -309,6 +312,12 @@ impl AgentAdapter for CursorAdapter {
                 None,
             ),
             ClassificationSample::new(
+                "afterAgentResponse",
+                test_json!({ "conversation_id": "c1", "text": "done", "cursor_version": "1.7" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
                 "stop",
                 test_json!({ "conversation_id": "c1", "status": "completed", "cursor_version": "1.7" }),
                 AgentHookClass::Lifecycle,
@@ -346,8 +355,11 @@ impl AgentAdapter for CursorAdapter {
                 mutates: true,
                 edits: self.descriptor().tool_edits_files(payload),
             },
+            "stop" if parsed.stop_outcome() == payloads::StopOutcome::Aborted => {
+                LifecycleSignal::TurnInterrupted
+            }
             "stop" => LifecycleSignal::TurnEnded {
-                errored: parsed.status.as_deref() != Some("completed"),
+                errored: parsed.stop_outcome() == payloads::StopOutcome::Error,
                 parked_on_background: false,
             },
             "sessionEnd" => LifecycleSignal::Ended,
@@ -374,7 +386,45 @@ impl AgentAdapter for CursorAdapter {
             .filter(|value| value.is_finite())
             .map(|value| value.round().clamp(0.0, 100.0) as u8);
         observation.context_window = parsed.context_window_size;
+        if event_name == "stop" {
+            observation.fresh_input_tokens = parsed.input_tokens;
+            observation.output_tokens = parsed.output_tokens;
+            observation.cache_read_input_tokens = parsed.cache_read_tokens;
+            observation.cache_write_input_tokens = parsed.cache_write_tokens;
+        }
         Some(observation)
+    }
+
+    fn observe_assistant_message(&self, event_name: &str, payload: &Value) -> Option<String> {
+        (event_name == "afterAgentResponse")
+            .then(|| payloads::parse_payload(payload).text)
+            .flatten()
+    }
+
+    fn local_context_refresh(
+        &self,
+        trigger: super::RefreshTrigger<'_>,
+        ctx: &super::LocalContextRefreshCtx<'_>,
+    ) -> Option<super::LocalContextRefresh> {
+        if let super::RefreshTrigger::Hook(event) = trigger
+            && !matches!(
+                event,
+                "sessionStart"
+                    | "beforeSubmitPrompt"
+                    | "postToolUse"
+                    | "postToolUseFailure"
+                    | "afterAgentResponse"
+                    | "stop"
+                    | "preCompact"
+            )
+        {
+            return None;
+        }
+        transcript::refresh(ctx)
+    }
+
+    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        transcript::resolve_transcript(session_id, None, prior_path)
     }
 
     fn ends_session(&self, event_name: &str) -> bool {

@@ -49,6 +49,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
         LifecycleSignal::Registered
             | LifecycleSignal::TurnStarted
             | LifecycleSignal::TurnEnded { .. }
+            | LifecycleSignal::TurnInterrupted
             | LifecycleSignal::AwaitingInput { .. }
             | LifecycleSignal::SubagentStarted
             | LifecycleSignal::SubagentStopped { .. }

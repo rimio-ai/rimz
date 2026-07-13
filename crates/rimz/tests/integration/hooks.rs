@@ -302,6 +302,106 @@ fn cursor_progress_hook_touches_activity_by_conversation_id() {
 }
 
 #[test]
+fn cursor_response_tokens_and_interruption_flow_end_to_end() {
+    let env = Env::new();
+    let transcript_path = env.project_root.join("conv-cursor-flow.jsonl");
+    std::fs::write(
+        &transcript_path,
+        concat!(
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"THINKING_SENTINEL_DO_NOT_INGEST\"}]}}\n",
+            "{\"type\":\"turn_ended\",\"status\":\"success\"}\n"
+        ),
+    )
+    .unwrap();
+    let transcript_path = transcript_path.to_string_lossy().into_owned();
+    let run = |event: &str, extra: Value| {
+        let mut payload = json!({
+            "hook_event_name": event,
+            "conversation_id": "conv-cursor-flow",
+            "cursor_version": "2026.07.09-a3815c0",
+            "transcript_path": transcript_path,
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().expect("hook extra is an object").clone());
+        let output = env.run_hook("cursor", &serde_json::to_string(&payload).unwrap());
+        assert!(
+            output.status.success(),
+            "{event} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
+    };
+
+    run("sessionStart", json!({"model_id": "cursor/model"}));
+    run("beforeSubmitPrompt", json!({"prompt": "fix it"}));
+    run(
+        "afterAgentResponse",
+        json!({"text": "  safe final response  "}),
+    );
+    run(
+        "stop",
+        json!({
+            "status": "completed",
+            "input_tokens": 0,
+            "output_tokens": 12,
+            "cache_read_tokens": 3,
+            "cache_write_tokens": 4,
+        }),
+    );
+
+    let snapshot = env.snapshot_json();
+    let agent = &snapshot["agents"][0];
+    assert_eq!(agent["status"], "success");
+    assert_eq!(agent["fresh_input_tokens"], 0);
+    assert_eq!(agent["output_tokens"], 12);
+    assert_eq!(agent["cache_read_input_tokens"], 3);
+    assert_eq!(agent["cache_write_input_tokens"], 4);
+    let entries = rimz::transcript::read_all(env.store().paths()).unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| entry.entry == rimz::transcript::TranscriptKind::Assistant)
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        ["safe final response"]
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !entry.text.contains("THINKING_SENTINEL_DO_NOT_INGEST"))
+    );
+    let context = rimz::store::agent_context::read_one(
+        env.store().runtime_paths(),
+        "cursor",
+        "conv-cursor-flow",
+    )
+    .expect("cursor sidecar");
+    assert_eq!(
+        context.transcript_path.as_deref(),
+        Some(transcript_path.as_str())
+    );
+    assert!(context.transcript_stat.is_some());
+
+    let aborted = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "stop",
+        "conversation_id": "conv-cursor-aborted",
+        "status": "aborted",
+    }))
+    .unwrap();
+    let output = aborted.run_hook("cursor", &payload);
+    assert!(output.status.success());
+    assert_eq!(aborted.snapshot_json()["agents"][0]["status"], "idle");
+    assert!(
+        rimz::transcript::read_all(aborted.store().paths())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn internal_app_server_hook_is_suppressed_and_records_nothing() {
     // A `codex app-server` that Rimz cold-spawns for read-only enrichment fires
     // its own `SessionStart` hook on startup. The internal-app-server marker

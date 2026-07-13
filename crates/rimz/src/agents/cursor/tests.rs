@@ -74,20 +74,30 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
             .is_none()
     );
 
-    for (status, errored) in [("completed", false), ("aborted", true), ("error", true)] {
+    for (status, signal) in [
+        (
+            "completed",
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+        ),
+        ("aborted", LifecycleSignal::TurnInterrupted),
+        (
+            "error",
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            },
+        ),
+    ] {
         let observation = CursorAdapter
             .observe_lifecycle(
                 "stop",
                 &json!({ "conversation_id": "conv-1", "status": status }),
             )
             .expect("stop observation");
-        assert_eq!(
-            observation.signal,
-            LifecycleSignal::TurnEnded {
-                errored,
-                parked_on_background: false,
-            }
-        );
+        assert_eq!(observation.signal, signal);
     }
 
     let compacting = CursorAdapter
@@ -157,6 +167,132 @@ fn malformed_payloads_degrade_without_losing_the_event() {
 }
 
 #[test]
+fn malformed_fields_preserve_identity_response_and_token_composition() {
+    let payload = json!({
+        "conversation_id": "conv-1",
+        "model_id": "cursor/model",
+        "model": 7,
+        "model_params": [false, {"id": "effort", "value": "high"}, {"id": 9, "value": []}],
+        "transcript_path": "/tmp/conv.jsonl",
+        "status": "completed",
+        "input_tokens": 0,
+        "output_tokens": "12",
+        "cache_read_tokens": 3,
+        "cache_write_tokens": {},
+        "context_tokens": 999
+    });
+    let observed = CursorAdapter
+        .observe_lifecycle("stop", &payload)
+        .expect("stop survives malformed siblings");
+    assert_eq!(observed.agent_id.as_deref(), Some("conv-1"));
+    assert_eq!(observed.launch.model.as_deref(), Some("cursor/model"));
+    assert_eq!(observed.launch.effort.as_deref(), Some("high"));
+    assert_eq!(observed.fresh_input_tokens, Some(0));
+    assert_eq!(observed.output_tokens, Some(12));
+    assert_eq!(observed.cache_read_input_tokens, Some(3));
+    assert_eq!(observed.cache_write_input_tokens, None);
+    assert_eq!(observed.total_tokens, None);
+
+    assert_eq!(
+        CursorAdapter.observe_assistant_message(
+            "afterAgentResponse",
+            &json!({"conversation_id": "conv-1", "text": "  safe final  ", "input_tokens": 9})
+        ),
+        Some("safe final".to_owned())
+    );
+    assert!(
+        CursorAdapter
+            .observe_assistant_message("stop", &json!({"text": "unsafe fallback"}))
+            .is_none()
+    );
+}
+
+#[test]
+fn transcript_tail_reads_only_terminal_rows_and_resolves_exact_paths() {
+    const SENTINEL: &str = "THINKING_SENTINEL_DO_NOT_INGEST";
+    let fixture = include_str!("tests/fixtures/transcript.jsonl");
+    assert!(
+        fixture.contains(SENTINEL),
+        "fixture exercises the privacy boundary"
+    );
+    assert_eq!(transcript::parse_terminal_for_test(fixture), Some("error"));
+    let healed = format!("{}}}\n", fixture.trim_end());
+    assert_eq!(
+        transcript::parse_terminal_for_test(&healed),
+        Some("complete")
+    );
+    assert!(CursorAdapter.parse_transcript_messages(fixture).is_empty());
+    let page = CursorAdapter.stream_assistant_messages(fixture);
+    assert!(page.is_empty());
+
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project-a/agent-transcripts/conv-1");
+    std::fs::create_dir_all(&project).unwrap();
+    let discovered = project.join("conv-1.jsonl");
+    std::fs::write(&discovered, fixture).unwrap();
+    assert_eq!(
+        transcript::discover_under(dir.path(), "conv-1"),
+        Some(discovered.clone())
+    );
+    assert!(transcript::discover_under(dir.path(), "../conv-1").is_none());
+
+    let project_b = dir.path().join("project-b/agent-transcripts/conv-1");
+    std::fs::create_dir_all(&project_b).unwrap();
+    std::fs::write(project_b.join("conv-1.jsonl"), fixture).unwrap();
+    assert!(transcript::discover_under(dir.path(), "conv-1").is_none());
+
+    let current = dir.path().join("current.jsonl");
+    let prior = dir.path().join("prior.jsonl");
+    std::fs::write(&current, fixture).unwrap();
+    std::fs::write(&prior, fixture).unwrap();
+    assert_eq!(
+        transcript::resolve_transcript("conv-1", Some(&current), Some(&prior)),
+        Some(current)
+    );
+}
+
+#[test]
+fn transcript_refresh_registers_live_file_and_recovers_interruption() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("conv-1.jsonl");
+    std::fs::write(&path, "{\"type\":\"user\"}\n").unwrap();
+    let path_string = path.to_string_lossy().into_owned();
+    let pricing = dir.path().join("pricing-cache.json");
+    let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        agent_id: "conv-1",
+        model_hint: Some("cursor/model"),
+        current_transcript_path: Some(&path_string),
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing,
+    })
+    .expect("file identity refresh");
+    assert_eq!(first.transcript_path.as_deref(), Some(path_string.as_str()));
+    assert_eq!(first.model_id.as_deref(), Some("cursor/model"));
+    assert!(first.turn_complete.is_none());
+    assert!(first.turn_interrupted.is_none());
+    assert!(first.turn_error.is_none());
+
+    std::fs::write(
+        &path,
+        "{\"type\":\"user\"}\n{\"type\":\"turn_ended\",\"status\":\"aborted\"}\n",
+    )
+    .unwrap();
+    let interrupted = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        agent_id: "conv-1",
+        model_hint: None,
+        current_transcript_path: Some(&path_string),
+        prior_transcript_path: None,
+        prior_transcript_stat: first.transcript_stat.as_ref(),
+        shared_pricing_cache_path: &pricing,
+    })
+    .expect("changed transcript refresh");
+    assert!(interrupted.turn_interrupted.is_some());
+    assert!(interrupted.tokens.is_none());
+    assert!(interrupted.cost.is_none());
+}
+
+#[test]
 fn every_wired_event_returns_cursor_neutral_json() {
     let neutrals: Vec<_> = WIRED_EVENTS
         .iter()
@@ -186,6 +322,10 @@ fn every_wired_event_returns_cursor_neutral_json() {
       ],
       [
         "postToolUseFailure",
+        {}
+      ],
+      [
+        "afterAgentResponse",
         {}
       ],
       [

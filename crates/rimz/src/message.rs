@@ -930,7 +930,8 @@ pub fn delivery_checkpoint(signal: &LifecycleSignal) -> bool {
         LifecycleSignal::TurnEnded {
             parked_on_background: false,
             ..
-        } | LifecycleSignal::CompactionEnded { .. }
+        } | LifecycleSignal::TurnInterrupted
+            | LifecycleSignal::CompactionEnded { .. }
     )
 }
 

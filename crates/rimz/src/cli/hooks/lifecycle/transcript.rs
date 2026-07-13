@@ -5,6 +5,79 @@ use super::*;
 #[cfg(test)]
 mod tests;
 
+pub(super) fn record_assistant_response(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    payload: &Value,
+    recorded: Option<&RecordedLifecycle>,
+) -> Option<(rimz::ids::AgentSessionId, String)> {
+    let message = agent
+        .observe_assistant_message(event_name, payload)?
+        .trim()
+        .to_owned();
+    if message.is_empty() {
+        return None;
+    }
+    let agent_id = rimz::ids::AgentSessionId::from(payload_agent_id(payload)?);
+    let state = store.snapshot_cached().ok().and_then(|snapshot| {
+        snapshot
+            .agents
+            .into_iter()
+            .find(|state| state.kind == agent.descriptor().kind && state.agent_id == agent_id)
+    });
+    let worktree_path = recorded
+        .and_then(|recorded| recorded.observation.worktree_path.as_deref())
+        .or_else(|| payload.get("worktree_path").and_then(Value::as_str))
+        .or_else(|| payload.get("cwd").and_then(Value::as_str))
+        .or_else(|| {
+            state
+                .as_ref()
+                .and_then(|state| state.worktree_path.as_deref())
+        });
+    let channel = rimz::transcript::entry_channel(
+        recorded
+            .and_then(|recorded| recorded.observation.launch.channel.as_deref())
+            .or_else(|| state.as_ref().and_then(|state| state.channel.as_deref())),
+        worktree_path,
+    )
+    .or_else(|| {
+        workspace
+            .worktree_root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    });
+    let mut entry = rimz::transcript::TranscriptEntry::new(
+        jiff::Timestamp::now(),
+        rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        agent_id.clone(),
+        rimz::transcript::TranscriptKind::Assistant,
+        message.clone(),
+    );
+    entry.channel = channel;
+    entry.name = recorded
+        .and_then(|recorded| recorded.observation.agent_name.clone())
+        .or_else(|| state.as_ref().and_then(|state| state.name.clone()));
+    entry.profile = recorded
+        .and_then(|recorded| recorded.observation.launch.profile.clone())
+        .or_else(|| state.as_ref().and_then(|state| state.profile.clone()));
+    entry.role = recorded
+        .and_then(|recorded| recorded.observation.launch.role.clone())
+        .or_else(|| state.as_ref().and_then(|state| state.role.clone()));
+    entry.reply_to = turn_opened_by(store, agent, &agent_id);
+    if let Err(err) = rimz::transcript::append(store.paths(), &entry) {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            agent_id = %agent_id,
+            error = %err,
+            "lifecycle: failed to record assistant response",
+        );
+    }
+    Some((agent_id, message))
+}
+
 pub(super) fn record_native_answer(
     workspace: &ResolvedWorkspace,
     store: &Store,
@@ -215,6 +288,7 @@ pub(super) fn record_conversation(
                 rimz::transcript::append(store.paths(), &entry)?;
             }
         }
+        LifecycleSignal::TurnInterrupted => {}
         LifecycleSignal::AwaitingInput { ask_id, .. } => {
             let questions = agent
                 .ask_question_detail(event_name, payload)

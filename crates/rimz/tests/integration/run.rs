@@ -168,6 +168,80 @@ fn copilot_hooks_bind_transcript_and_capture_supervised_final_text() {
 }
 
 #[test]
+fn cursor_response_hook_seeds_run_before_terminal_outcome() {
+    let env = Env::new();
+    let store = env.store();
+    let create_run = || {
+        let record = RunRecord::new(
+            env.workspace_id.clone(),
+            AgentKind::new_unchecked("cursor"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            env.project_root.clone(),
+        );
+        rimz::harness::run::create(store.paths(), &record).unwrap();
+        record
+    };
+    let hook = |run: &RunRecord, payload: serde_json::Value| {
+        let mut command = env.hook_command("cursor");
+        command.env(rimz::harness::run::ENV_RUN_ID, run.run_id.as_str());
+        let output = env
+            .spawn_payload(command, &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "hook stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    let completed = create_run();
+    hook(
+        &completed,
+        json!({
+            "hook_event_name": "afterAgentResponse",
+            "conversation_id": "conv-completed",
+            "text": "safe final"
+        }),
+    );
+    let active = rimz::harness::run::load(store.paths(), &completed.run_id).unwrap();
+    assert_eq!(active.status, RunStatus::Pending);
+    assert_eq!(active.last_message.as_deref(), Some("safe final"));
+    assert_eq!(active.completed_at, None);
+    hook(
+        &completed,
+        json!({
+            "hook_event_name": "stop",
+            "conversation_id": "conv-completed",
+            "status": "completed"
+        }),
+    );
+    let completed = rimz::harness::run::load(store.paths(), &completed.run_id).unwrap();
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(completed.last_message.as_deref(), Some("safe final"));
+
+    for (status, expected) in [
+        ("aborted", RunStatus::Canceled),
+        ("completed", RunStatus::Completed),
+    ] {
+        let run = create_run();
+        hook(
+            &run,
+            json!({
+                "hook_event_name": "stop",
+                "conversation_id": format!("conv-{status}"),
+                "status": status,
+                "message": {"content": [{"type": "text", "text": "unsafe"}]}
+            }),
+        );
+        let terminal = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+        assert_eq!(terminal.status, expected);
+        assert_eq!(terminal.last_message, None);
+    }
+}
+
+#[test]
 fn run_rejects_invalid_agent_env_before_recording() {
     let env = Env::new();
     env.write_config(

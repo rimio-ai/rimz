@@ -369,6 +369,8 @@ fn is_zero_u32(value: &u32) -> bool {
 pub struct LocalContextRefreshCtx<'a> {
     pub agent_id: &'a str,
     pub model_hint: Option<&'a str>,
+    /// Transcript path carried by the current hook payload, if any.
+    pub current_transcript_path: Option<&'a str>,
     pub prior_transcript_path: Option<&'a str>,
     pub prior_transcript_stat: Option<&'a TranscriptStat>,
     /// Persistent shared `pricing-cache.json`, for adapters that price token
@@ -727,6 +729,13 @@ pub trait AgentAdapter: Send + Sync {
     /// pending native ask expiry; `None` means this event carries no native ask
     /// answer.
     fn native_ask_answer(&self, _event_name: &str, _payload: &Value) -> Option<Vec<AskAnswer>> {
+        None
+    }
+
+    /// Extract provider-declared final visible assistant output from a native
+    /// content event. Implementations accept only a provider's dedicated final
+    /// response field, never transcript text, reasoning, or partial deltas.
+    fn observe_assistant_message(&self, _event_name: &str, _payload: &Value) -> Option<String> {
         None
     }
 

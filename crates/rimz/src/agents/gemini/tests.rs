@@ -359,6 +359,7 @@ fn context_tail_maps_usage_zero_unreadable_and_model_windows() {
         &LocalContextRefreshCtx {
             agent_id: "12345678-abcd",
             model_hint: None,
+            current_transcript_path: None,
             prior_transcript_path: Some(&path),
             prior_transcript_stat: None,
             shared_pricing_cache_path: &pricing,
@@ -382,6 +383,7 @@ fn context_tail_maps_usage_zero_unreadable_and_model_windows() {
             &LocalContextRefreshCtx {
                 agent_id: "12345678-abcd",
                 model_hint: None,
+                current_transcript_path: None,
                 prior_transcript_path: Some(&path),
                 prior_transcript_stat: Some(&stat),
                 shared_pricing_cache_path: &pricing,
@@ -398,6 +400,7 @@ fn context_tail_maps_usage_zero_unreadable_and_model_windows() {
         &LocalContextRefreshCtx {
             agent_id: "87654321-abcd",
             model_hint: Some("gemma-4-local"),
+            current_transcript_path: None,
             prior_transcript_path: Some(&empty_path),
             prior_transcript_stat: None,
             shared_pricing_cache_path: &pricing,
@@ -439,6 +442,7 @@ fn live_cost_covers_messages_before_the_context_tail() {
         &LocalContextRefreshCtx {
             agent_id: "12345678-abcd",
             model_hint: None,
+            current_transcript_path: None,
             prior_transcript_path: Some(&path),
             prior_transcript_stat: None,
             shared_pricing_cache_path: &pricing,

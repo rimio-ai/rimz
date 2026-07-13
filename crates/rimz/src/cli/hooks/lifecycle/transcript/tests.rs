@@ -159,3 +159,69 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
         None
     );
 }
+
+#[test]
+fn cursor_response_hook_is_the_only_assistant_text_authority() {
+    let (_dir, store) = store();
+    let workspace = workspace();
+    let opener = rimz::ids::MessageId::parse("msg_0123456789abcdef").unwrap();
+    rimz::store::agent_context::merge_turn_opened_by(
+        store.runtime_paths(),
+        "cursor",
+        "conv-1",
+        vec![opener.clone()],
+    )
+    .unwrap();
+
+    let recorded_response = record_assistant_response(
+        &workspace,
+        &store,
+        &rimz::agents::CursorAdapter,
+        "afterAgentResponse",
+        &serde_json::json!({
+            "conversation_id": "conv-1",
+            "text": "  safe final  ",
+            "thinking": "must not persist"
+        }),
+        None,
+    )
+    .expect("safe response");
+    assert_eq!(recorded_response.1, "safe final");
+
+    for signal in [
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        },
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+        },
+        LifecycleSignal::TurnInterrupted,
+    ] {
+        let mut stopped = recorded(signal);
+        stopped.observation.agent_id = Some(rimz::ids::AgentSessionId::from("conv-1"));
+        record_conversation(
+            &workspace,
+            &store,
+            &rimz::agents::CursorAdapter,
+            "stop",
+            &serde_json::json!({
+                "conversation_id": "conv-1",
+                "message": {"content": [{"type": "text", "text": "unsafe transcript text"}]}
+            }),
+            &stopped,
+            &[],
+        )
+        .unwrap();
+    }
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].entry,
+        rimz::transcript::TranscriptKind::Assistant
+    );
+    assert_eq!(entries[0].text, "safe final");
+    assert_eq!(entries[0].reply_to, vec![opener]);
+}

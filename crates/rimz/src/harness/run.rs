@@ -503,6 +503,29 @@ pub fn record_lifecycle(
     }
 }
 
+/// Store provider-declared final visible output without ending the run.
+pub fn record_assistant_message(
+    paths: &StatePaths,
+    run_id: &RunId,
+    kind: &str,
+    agent_id: &AgentSessionId,
+    message: String,
+) -> Result<()> {
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut record = load(paths, run_id)?;
+    if record.kind.as_str() != kind || record.status.is_terminal() {
+        return Ok(());
+    }
+    match &record.agent_id {
+        Some(bound) if bound != agent_id => return Ok(()),
+        None => record.agent_id = Some(agent_id.clone()),
+        Some(_) => {}
+    }
+    record.last_message = Some(message);
+    record.updated_at = Timestamp::now();
+    run_store::write(&paths.runs_dir, &record)
+}
+
 pub fn live_status(record: &RunRecord, snapshot: &SidebarSnapshot) -> Option<RunLiveStatus> {
     if record.status.is_terminal() {
         return None;
@@ -551,6 +574,7 @@ pub fn terminal_status_for_signal(signal: &LifecycleSignal) -> Option<RunStatus>
         } else {
             RunStatus::Completed
         }),
+        LifecycleSignal::TurnInterrupted => Some(RunStatus::Canceled),
         LifecycleSignal::Ended => Some(RunStatus::Failed),
         _ => None,
     }

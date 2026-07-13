@@ -637,7 +637,7 @@ mod tests {
         assert!(!cursor.capabilities.remote_control.pane_sessions);
         assert!(!cursor.capabilities.remote_control.background_sessions);
         assert!(!cursor.capabilities.rich_context);
-        assert!(!cursor.capabilities.transcript_tail_context);
+        assert!(cursor.capabilities.transcript_tail_context);
         assert!(!cursor.capabilities.daemon_hooked_sessions);
         assert!(cursor.capabilities.context_usage);
         assert!(!cursor.capabilities.account_spend);

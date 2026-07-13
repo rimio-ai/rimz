@@ -135,6 +135,7 @@ fn when_parser_accepts_literal_statuses_and_duration_units() {
 
 #[test]
 fn delivery_checkpoint_requires_unparked_turn_end() {
+    assert!(delivery_checkpoint(&LifecycleSignal::TurnInterrupted));
     assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
         errored: false,
         parked_on_background: false,

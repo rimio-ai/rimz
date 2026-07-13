@@ -6,7 +6,7 @@ This is the single home for the **Cursor CLI upstream protocol surface** relevan
 
 Refresh baseline: the official Cursor documentation and CLI changelog available on **2026-07-10**, whose latest listed CLI release is **2026-07-06**. Cursor auto-updates by default and identifies installed builds with `agent --version`; re-capture the exact supported binary before implementation because the public docs are rolling rather than versioned.
 
-Coverage is **depth on surfaces an adapter should wire, breadth as an index**. Hook inputs and outputs are recorded in implementation detail because they are the strongest stock-UI seam. The transcript path, authentication JSON, local chat store, token/cost accounting, and native permission prompts remain opaque where Cursor publishes no schema.
+Coverage is **depth on surfaces an adapter should wire, breadth as an index**. Hook inputs and outputs are recorded in implementation detail because they are the strongest stock-UI seam. The `2026.07.09-a3815c0` transcript capture pins only file identity and terminal rows; assistant text, authentication JSON, local chat storage, historical cost accounting, and native permission prompts remain opaque where Cursor publishes no safe schema.
 
 ## Upstream sources
 
@@ -68,10 +68,10 @@ The candidate transport matrix is:
 | subagent start | `subagentStart.subagent_id` | strong unique child identity |
 | subagent stop | `subagentStop` | published stop payload omits `subagent_id`; capture correlation before wiring |
 | model and effort | common hook `model_id` and `model_params` | `model` is the legacy slug |
-| transcript | common `transcript_path`, `CURSOR_TRANSCRIPT_PATH` | format and enablement switch are undocumented |
+| transcript | common `transcript_path`, exact per-conversation JSONL | captured `turn_ended` tail only; assistant text is privacy-unsafe |
 | supervised streaming | `-p --output-format stream-json` | failures may end without a terminal JSON event |
 | auth/account | `status --format json`, `about --format json` | official docs publish no JSON response schema or credential path |
-| tokens, cost, quota | none machine-readable in the documented hook/headless surfaces | do not scrape the terminal status line or `/usage` display |
+| tokens, cost, quota | stop-hook input/output/cache split | per-turn composition only; dollars, historical spend, and quota remain absent |
 
 ## Session identity, resume, fork, and clear
 
@@ -204,7 +204,7 @@ Do not persist `user_email`, prompts, tool inputs, tool outputs, file contents, 
 | `beforeSubmitPrompt` | after send, before backend request | `prompt`, `attachments[]` | `TurnStarted`, task/prompt subject to privacy policy |
 | `postToolUse` | a tool succeeds | `tool_name`, `tool_input`, `tool_output`, `tool_use_id`, `cwd`, `duration` | `ToolUsed`; heartbeat; `edits` from a pinned tool-name table |
 | `postToolUseFailure` | a tool errors, times out, or is denied | `tool_name`, `tool_input`, `tool_use_id`, `cwd`, `error_message`, `failure_type`, `duration`, `is_interrupt` | heartbeat/diagnostic only; a tool failure is not necessarily turn death |
-| `stop` | the main agent loop ends | `status: completed | aborted | error`, `loop_count` | `TurnEnded`; clean only for `completed` |
+| `stop` | the main agent loop ends | `status: completed | aborted | error`, input/output/cache token fields, `loop_count` | completed/error end the turn; aborted is an interruption |
 | `sessionEnd` | a conversation ends | `session_id`, `reason`, `duration_ms`, `is_background_agent`, `final_status`, optional `error_message` | `Ended` tombstone |
 | `preCompact` | automatic or manual summarization begins | trigger and live context fields | `Compacting` plus `AgentContext` refresh |
 | `subagentStart` | before a Task subagent spawns | unique child ID, type, task, parent, call ID, model, parallel bit, optional branch | child `SubagentStarted` |
@@ -214,7 +214,7 @@ Do not persist `user_email`, prompts, tool inputs, tool outputs, file contents, 
 
 Use a conservative, captured `tool_edits_files` table. The matcher docs name `Shell`, `Read`, `Write`, `Grep`, `Delete`, `Task`, and `MCP:<tool_name>`. At minimum `Write` and `Delete` edit files; do not classify `Shell` or an arbitrary MCP tool as editing even though it may mutate the workspace.
 
-`stop.status == "aborted"` is a non-clean turn boundary. Map it to the existing errored bit unless a captured interruption sidecar gives the displayed-status projection a stronger `idle` certificate. `postToolUseFailure.is_interrupt` is tool-grained and must not by itself end the turn.
+`stop.status == "aborted"` is a native turn-interruption certificate and lands the shared lifecycle at idle. `postToolUseFailure.is_interrupt` is tool-grained and must not by itself end the turn.
 
 ### Compaction and context
 
@@ -272,7 +272,7 @@ Cursor supports foreground and background subagents, parallel execution, preserv
 | `afterMCPExecution` | tool name/input, full JSON result, duration | redundant heartbeat; sensitive result |
 | `beforeReadFile` | absolute path, full contents, attachments | access-control seam; avoid persisting content |
 | `afterFileEdit` | absolute path and old/new strings | redundant acting proof; avoid persisting source text |
-| `afterAgentResponse` | final assistant text | transcript enrichment only, subject to privacy policy |
+| `afterAgentResponse` | final assistant text | sole safe assistant-text source; content only, never a turn boundary |
 | `afterAgentThought` | aggregated thinking text and optional duration | exclude from lifecycle and durable transcript by default |
 | `beforeTabFileRead`, `afterTabFileEdit` | editor inline-completion activity | not Cursor CLI agent lifecycle |
 | `workspaceOpen` | workspace roots and optional plugin paths | app lifecycle and executable loading, not session lifecycle |
@@ -341,19 +341,13 @@ ACP has first-class permission, question, and plan requests, described below. Th
 
 ## Transcript and local state
 
-Hooks expose `transcript_path` and `CURSOR_TRANSCRIPT_PATH` when transcripts are enabled. Subagent stop separately exposes `agent_transcript_path`. Cursor's official docs do not publish:
+Cursor CLI `2026.07.09-a3815c0` writes per-conversation JSONL at `~/.cursor/projects/<workspace>/agent-transcripts/<conversation_id>/<conversation_id>.jsonl`. Hooks expose the same file through `transcript_path` and `CURSOR_TRANSCRIPT_PATH`; subagent stop separately exposes `agent_transcript_path`.
 
-- the transcript file format or record schema;
-- the setting that enables or disables transcripts;
-- append, flush, rotation, truncation, or durability behavior;
-- whether a resumed session keeps one path;
-- whether hook transcript paths in CLI, desktop, and ACP share a format;
-- how child transcript IDs relate to `subagent_id`;
-- a supported directory for CLI chat history.
+The captured terminal subset is a top-level `type: "turn_ended"` record with `status: "success" | "aborted" | "error"` and optional error text. RimZ models only those fields, parses complete lines independently, reads a bounded tail, and uses file mtime as the observation timestamp only after a semantic terminal record exists. Path discovery joins the exact conversation directory and filename under each immediate project directory and rejects zero or multiple matches.
 
-Treat the path as opaque metadata until the exact supported CLI is captured. Do not scan undocumented `~/.cursor` files in a first adapter, and do not bind implementation to community-reported chat directories.
+The same JSONL carries user, assistant, thinking, and tool records, but assistant `message.content[type=text]` blocks merge visible commentary and model thinking without a safe discriminator. RimZ never normalizes, pages, streams, persists, or uses those text blocks as final output. `afterAgentResponse.text` is the sole assistant-text authority.
 
-The transcript capture suite needs new, resumed, continued, cleared, forked, summarized, interrupted, errored, and concurrent-subagent sessions. It must verify event framing, identity, timestamps, token fields, model changes, permission asks, user questions, compaction markers, tool failures, final answers, flush timing, and death certificates before any parser lands.
+Cursor still publishes no transcript enablement, append/rotation/durability, cross-surface compatibility, child-identity, or local chat-history contract. Resumed, continued, cleared, forked, summarized, and concurrent-subagent behavior remains a capture target; terminal-tail support does not imply full native-history support.
 
 ## Headless `--print` mode
 
@@ -483,7 +477,7 @@ The common hook field `user_email` can enrich a known logged-in account but is n
 
 ## Usage, tokens, pricing, and quota
 
-The documented hook wire has no per-turn input/output/cache token counts, dollar cost, quota window, plan, balance, or rate-limit reset. The headless terminal result has durations but no usage. `preCompact` exposes context occupancy, which is not billable usage.
+The captured `stop` hook carries `input_tokens`, `output_tokens`, `cache_read_tokens`, and `cache_write_tokens`. RimZ treats them as per-turn composition, preserves explicit zeroes, and keeps them out of cumulative totals. The headless terminal result still has durations but no usage, and `preCompact.context_tokens` remains occupancy rather than billable fresh input.
 
 The CLI changelog mentions a human `/usage` display, while the current slash-command reference does not list a machine-readable usage command or schema. Do not scrape the TUI or undocumented output.
 
@@ -552,7 +546,7 @@ Before declaring Cursor supported:
 9. Establish a compaction-close certificate or report compaction completion unsupported.
 10. Establish `subagentStop` identity for concurrent same-type children before emitting child stop observations.
 11. Confirm whether any supported local event exposes permission, question, or plan waits; otherwise declare awaiting-user unsupported and emit no false waiting state.
-12. Treat transcript files as opaque until their schema, flush behavior, privacy, resume, compaction, and death markers are fixture-backed.
+12. Keep transcript parsing limited to the fixture-backed terminal subset until privacy-safe schemas for any additional records exist.
 13. Exercise `-p` text, JSON, stream JSON, partial streaming, non-zero exit, signal interruption, timeout, missing terminal result, stdin prompts, and resume.
 14. Exercise ACP initialization, auth, session new/load, streaming updates, permission replies, questions, plans, cancellation, and child task notifications if ACP backs supervised runs.
 15. Define explicit RimZ permission-profile mappings across mode, approval mode, sandbox, force, MCP approval, and workspace trust.
@@ -564,10 +558,10 @@ Before declaring Cursor supported:
 - `preToolUse.permission = "ask"` is accepted by schema but not enforced, while specialized before-hooks use `ask`; the surfaces are not interchangeable.
 - There is no documented post-compaction event or continuous context query.
 - The published `subagentStop` payload omits the unique `subagent_id` provided at start.
-- Transcript paths are exposed but the transcript format and enablement contract are unpublished.
+- The captured transcript terminal subset is unpublished upstream, and the enablement/durability contract remains undocumented.
 - Local CLI chat storage and fork lineage have no official schema.
 - Status/about JSON commands exist and their logged-out arms are now captured, but the logged-in `about` schema (tier strings, `userEmail` shape) is still unverified.
-- Hooks and headless output expose no token usage, spend, balance, quota, or rate-limit reset.
+- Stop hooks expose per-turn token composition; spend, balance, quota, rate-limit reset, and headless token usage remain absent.
 - Hook parallel-response merge details, command-shell rules, stdout limits, and timeout defaults are unpublished.
 - Third-party compatibility may execute existing Claude hooks in Cursor, while the official docs do not define input-payload translation or a source discriminator.
 - ACP documents richer asks but changes RimZ from observing the stock CLI into hosting its UI protocol.

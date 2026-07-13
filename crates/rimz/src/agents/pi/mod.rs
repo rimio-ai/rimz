@@ -510,6 +510,9 @@ impl AgentAdapter for PiAdapter {
             // The last assistant message is the in-band death certificate:
             // `stopReason: "error" | "aborted"` plus `errorMessage`, no
             // transcript forensics needed. Pi has no background-task parking.
+            "agent_settled" if parsed.stop_reason.as_deref() == Some("aborted") => {
+                LifecycleSignal::TurnInterrupted
+            }
             "agent_settled" => LifecycleSignal::TurnEnded {
                 errored: payloads::agent_end_errored(&parsed),
                 parked_on_background: false,
