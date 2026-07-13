@@ -38,7 +38,7 @@ What each concern column drives: `turn` live status (session start and every tur
 
 Claude Code is the reference integration and carries every concern natively; each other agent exposes less of its internals to a local observer. How much a given agent exposes is independent of how much it has been dogfooded — some experimental agents wire up a wide surface, and some higher-tier ones deliberately leave cells derived. A ✗ is an honest declared absence — the sidebar and `rimz doctor` read the same declaration, so a missing surface renders as a stated gap rather than a silent bug.
 
-Copilot history and supervised final output read its per-session `events.jsonl`. Its partial live usage and rich context come from opt-in, metadata-only OTel `chat` spans: the card can show the resolved model and latest-call token composition, but Copilot publishes no authoritative context-window denominator, quota, account metadata, or session-dollar total through that narrow source.
+Copilot history and supervised final output read its per-session `events.jsonl`. Its partial live usage and rich context come from opt-in, metadata-only OTel `chat` spans: the card can show the resolved model and latest-call token composition, but that narrow source publishes no authoritative context-window denominator, quota, or session-dollar total. A separate local `config.json` probe reads only the non-secret GitHub login identity for idle provider presence; plan, quota, and spend remain unsupported.
 
 ## The lifecycle hook surface
 

@@ -450,13 +450,9 @@ Environment-token precedence is:
 
 Supported tokens are fine-grained PATs with the **Copilot Requests** permission, Copilot CLI OAuth tokens, and GitHub CLI OAuth tokens. Classic `ghp_` PATs are unsupported. `COPILOT_GH_HOST` overrides `GH_HOST` for Copilot only.
 
-The official CLI command list has no `copilot auth status --json` equivalent. `/user show`, `/user list`, and `/user switch` are interactive slash commands. An idle account probe therefore needs one of:
+The official CLI command list has no `copilot auth status --json` equivalent. `/user show`, `/user list`, and `/user switch` are interactive slash commands. Captured `$COPILOT_HOME/config.json` state exposes the non-secret current identity as `lastLoggedInUser: {host, login}` and the known identity list as `loggedInUsers: [{host, login}]`. RimZ uses the last identity, falling back to the first list entry, as a presence-only idle account probe.
 
-- a documented GitHub API authenticated through `gh`, with care not to expose token material;
-- a harmless, bounded Copilot command whose machine-readable result is documented in a future release;
-- `Unsupported` account coverage until such a surface exists.
-
-Do not parse keychain entries or `config.json` secrets. Presence of an environment variable is not proof that the token is valid or that the account has an enabled Copilot CLI policy.
+Model only these identity fields. Leave keychain entries and `config.json` token fields such as `copilotTokens` untouched and unmodeled. Presence of an environment variable is not proof that the token is valid or that the account has an enabled Copilot CLI policy. Plan, quota, and spend still need a documented API or harmless bounded command before RimZ can claim those surfaces.
 
 GitHub AI Credits represent cost at **$0.01 per credit**, but model usage and plan quota behavior can change. OTel publishes `github.copilot.aiu` and `github.copilot.cost`; verify units with fixtures and current billing docs before mapping `cost` to dollars or AI units to credits.
 
@@ -481,7 +477,7 @@ The hooks-first adapter implements the lifecycle, transcript, and narrow OTel su
 7. Extend OTel only after shared-file interactive concurrency, cumulative-versus-turn replacement, `github.copilot.cost` units, subagent span identity, compaction close, and long-running flush behavior are pinned.
 8. Confirm process names, argv, parent/child tree, cwd, and environment stamping under normal, resume, remote, `-p`, ACP, worktree, and auto-update/restart paths for PID attribution.
 9. Decide whether RimZ owns a statusline wrapper; OTel stays user-opt-in unless a managed exporter path and its trust/privacy contract become product behavior.
-10. Keep coverage honest: transcript/history are captured compatibility, usage/model are partial, and cost/account/quota/subagent remain unsupported until their own sources are proven.
+10. Keep coverage honest: transcript/history are captured compatibility, login identity is presence-only, usage/model are partial, and cost/plan/quota/subagent remain unsupported until their own sources are proven.
 
 The expected initial lifecycle mapping is:
 

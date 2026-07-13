@@ -53,7 +53,9 @@ The bounded tail reader requires an exact `gen_ai.conversation.id`, prefers `gen
 
 ## Account and balance
 
-Copilot publishes no machine-readable authentication or usage-status probe. The adapter reports no account plan, quota windows, or balance rather than inferring them from interactive output.
+The adapter reads only the non-secret login identity in `$COPILOT_HOME/config.json` (`lastLoggedInUser`, falling back to the first `loggedInUsers` entry). It leaves `copilotTokens` unmodeled and reports the GitHub login as `account_id`, which keeps a logged-in idle Copilot visible without treating identity as spend coverage.
+
+No machine-readable plan, quota, or spend probe is wired. The adapter reports no plan label, quota windows, or balance rather than inferring them from interactive output; `AccountSpend` stays unsupported.
 
 ## Cost
 
@@ -61,7 +63,7 @@ Realtime and historical cost remain unsupported. The narrow OTel reader delibera
 
 ## Deferred integration
 
-Wired now: the turn lifecycle (`sessionStart`/`userPromptSubmitted`/`agentStop`), permission and `ask_user` asks, mutating-tool activity and the acting-phase edge, the `preCompact` bracket, the non-recoverable `errorOccurred` marker, `sessionEnd` tombstoning, install/uninstall of the whole `rimz.json` hook file, interactive and prompt-seeded launch with permission-mode and model/effort presets, `--resume` restore, provider-native transcript/history/final output, and optional OTel model/token enrichment. Deferred: subagents, context-window fill, quota/cost/account enrichment, a machine-readable account probe, and remote control.
+Wired now: the turn lifecycle (`sessionStart`/`userPromptSubmitted`/`agentStop`), permission and `ask_user` asks, mutating-tool activity and the acting-phase edge, the `preCompact` bracket, the non-recoverable `errorOccurred` marker, `sessionEnd` tombstoning, install/uninstall of the whole `rimz.json` hook file, interactive and prompt-seeded launch with permission-mode and model/effort presets, `--resume` restore, provider-native transcript/history/final output, the local login-identity probe, and optional OTel model/token enrichment. Deferred: subagents, context-window fill, plan/quota/cost enrichment, spend, and remote control.
 
 A logged-in Copilot CLI 1.0.70 prompt-mode capture verified successful-turn ordering, `agentStop.transcriptPath`, visible transcript message shapes, metadata-only OTel `chat` spans, resolved/requested model fields, token fields, and asynchronous exporter shutdown. Permission variants, `ask_user` options, resume PID ancestry, multi-turn interactive streaming, and remote sessions remain live-verification gaps.
 
