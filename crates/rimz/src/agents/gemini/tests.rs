@@ -354,13 +354,16 @@ fn context_tail_maps_usage_zero_unreadable_and_model_windows() {
     )
     .unwrap();
     let path = transcript.to_string_lossy().into_owned();
-    let refresh = refresh_transcript_context(&LocalContextRefreshCtx {
-        agent_id: "12345678-abcd",
-        model_hint: None,
-        prior_transcript_path: Some(&path),
-        prior_transcript_stat: None,
-        shared_pricing_cache_path: &pricing,
-    })
+    let refresh = refresh_transcript_context(
+        RefreshTrigger::Tick,
+        &LocalContextRefreshCtx {
+            agent_id: "12345678-abcd",
+            model_hint: None,
+            prior_transcript_path: Some(&path),
+            prior_transcript_stat: None,
+            shared_pricing_cache_path: &pricing,
+        },
+    )
     .unwrap();
     assert_eq!(refresh.model_id.as_deref(), Some("gemini-3-pro-preview"));
     let tokens = refresh.tokens.unwrap();
@@ -374,29 +377,35 @@ fn context_tail_maps_usage_zero_unreadable_and_model_windows() {
 
     let stat = transcript_stat(&transcript).unwrap();
     assert!(
-        refresh_transcript_context(&LocalContextRefreshCtx {
-            agent_id: "12345678-abcd",
-            model_hint: None,
-            prior_transcript_path: Some(&path),
-            prior_transcript_stat: Some(&stat),
-            shared_pricing_cache_path: &pricing,
-        })
+        refresh_transcript_context(
+            RefreshTrigger::Tick,
+            &LocalContextRefreshCtx {
+                agent_id: "12345678-abcd",
+                model_hint: None,
+                prior_transcript_path: Some(&path),
+                prior_transcript_stat: Some(&stat),
+                shared_pricing_cache_path: &pricing,
+            }
+        )
         .is_none()
     );
 
     let empty = dir.path().join("session-empty-87654321.jsonl");
     std::fs::write(&empty, "{\"sessionId\":\"87654321-abcd\"}\n").unwrap();
     let empty_path = empty.to_string_lossy().into_owned();
-    let empty_refresh = refresh_transcript_context(&LocalContextRefreshCtx {
-        agent_id: "87654321-abcd",
-        model_hint: Some("gemma-4-local"),
-        prior_transcript_path: Some(&empty_path),
-        prior_transcript_stat: None,
-        shared_pricing_cache_path: &pricing,
-    })
+    let empty_refresh = refresh_transcript_context(
+        RefreshTrigger::Tick,
+        &LocalContextRefreshCtx {
+            agent_id: "87654321-abcd",
+            model_hint: Some("gemma-4-local"),
+            prior_transcript_path: Some(&empty_path),
+            prior_transcript_stat: None,
+            shared_pricing_cache_path: &pricing,
+        },
+    )
     .unwrap();
     let empty_tokens = empty_refresh.tokens.unwrap();
-    assert_eq!(empty_tokens.used_percentage, Some(0));
+    assert_eq!(empty_tokens.used_percentage, None);
     assert_eq!(empty_tokens.context_window_size, Some(GEMMA_CONTEXT_WINDOW));
 
     assert!(transcript_snapshot(&dir.path().join("missing.jsonl")).is_none());
@@ -425,13 +434,16 @@ fn live_cost_covers_messages_before_the_context_tail() {
         .iter()
         .map(|entry| entry.cost_usd)
         .sum::<f64>();
-    let refresh = refresh_transcript_context(&LocalContextRefreshCtx {
-        agent_id: "12345678-abcd",
-        model_hint: None,
-        prior_transcript_path: Some(&path),
-        prior_transcript_stat: None,
-        shared_pricing_cache_path: &pricing,
-    })
+    let refresh = refresh_transcript_context(
+        RefreshTrigger::Tick,
+        &LocalContextRefreshCtx {
+            agent_id: "12345678-abcd",
+            model_hint: None,
+            prior_transcript_path: Some(&path),
+            prior_transcript_stat: None,
+            shared_pricing_cache_path: &pricing,
+        },
+    )
     .unwrap();
     assert_eq!(
         refresh.cost.and_then(|cost| cost.total_cost_usd),
@@ -440,17 +452,107 @@ fn live_cost_covers_messages_before_the_context_tail() {
 }
 
 #[test]
-fn session_transcript_matches_only_the_first_eight_id_characters() {
-    let files = vec![
-        PathBuf::from("session-2026-06-02T10-00-deadbeef.jsonl"),
-        PathBuf::from("session-2026-06-02T10-00-12345678.jsonl"),
-        PathBuf::from("session-12345678-collision.jsonl"),
-    ];
+fn watcher_refresh_maps_tokens_without_cold_folding_cost() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session-12345678.jsonl");
+    let pricing = dir.path().join("pricing.json");
+    std::fs::write(
+        &transcript,
+        r#"{"sessionId":"12345678-abcd"}
+{"id":"a","timestamp":"2026-06-02T10:00:00Z","type":"gemini","model":"gemini-3-pro-preview","tokens":{"input":100,"output":20,"cached":40,"thoughts":5,"tool":7,"total":132}}"#,
+    )
+    .unwrap();
+    let path = transcript.to_string_lossy().into_owned();
+    let refresh = refresh_transcript_context(
+        RefreshTrigger::Watch,
+        &LocalContextRefreshCtx {
+            agent_id: "12345678-abcd",
+            model_hint: None,
+            prior_transcript_path: Some(&path),
+            prior_transcript_stat: None,
+            shared_pricing_cache_path: &pricing,
+        },
+    )
+    .unwrap();
+    assert!(refresh.cost.is_none());
+    let usage = refresh.tokens.unwrap().current_usage.unwrap();
+    assert_eq!(usage.input_tokens, Some(67));
+    assert_eq!(usage.output_tokens, Some(25));
+    assert_eq!(usage.cache_read_input_tokens, Some(40));
+}
+
+#[test]
+fn normalized_conversation_and_spend_form_a_history_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session-12345678.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"sessionId":"12345678-abcd"}
+{"id":"u","timestamp":"2026-06-02T10:00:00Z","type":"user","content":"fix auth"}
+{"id":"a","timestamp":"2026-06-02T10:00:01Z","type":"gemini","content":"done","model":"gemini-3-pro-preview","tokens":{"input":100,"output":20,"cached":40,"thoughts":5,"tool":7,"total":132}}"#,
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let messages = GeminiAdapter.parse_transcript_messages(&text);
+    let spend = spend::parse_gemini_spend(&path, None, &crate::agents::PriceBook::embedded());
+    let turns =
+        crate::agents::turns::session_turns(&messages, &spend.entries, "12345678-abcd", false);
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].prompt, "fix auth");
+    assert_eq!(turns[0].fresh_input, 67);
+    assert_eq!(turns[0].cache_read, 40);
+    assert_eq!(turns[0].output, 25);
+    assert!(turns[0].cost_usd.is_some());
+    assert_eq!(turns[0].outcome, crate::agents::turns::TurnOutcome::Done);
+}
+
+#[test]
+fn final_assistant_falls_back_to_the_active_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    std::fs::write(
+        &path,
+        r#"{"id":"old","type":"gemini","content":"old"}
+{"$set":{"messages":[{"id":"new","type":"gemini","content":"final"}]}}"#,
+    )
+    .unwrap();
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        },
+    );
+    observation.transcript_path = Some(path.to_string_lossy().into_owned());
     assert_eq!(
-        find_session_transcript(files.clone(), "12345678"),
+        GeminiAdapter.last_assistant_message(
+            "AfterAgent",
+            &json!({"prompt_response":"  "}),
+            &observation,
+        ),
+        Some("final".to_owned())
+    );
+}
+
+#[test]
+fn session_transcript_shortlists_by_prefix_and_requires_full_metadata_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = vec![
+        dir.path().join("session-2026-06-02T10-00-deadbeef.jsonl"),
+        dir.path().join("session-2026-06-02T10-00-12345678.jsonl"),
+        dir.path().join("session-12345678-collision.jsonl"),
+    ];
+    std::fs::write(&files[0], r#"{"sessionId":"deadbeef-full"}"#).unwrap();
+    std::fs::write(&files[1], r#"{"sessionId":"12345678-abcd"}"#).unwrap();
+    std::fs::write(&files[2], r#"{"sessionId":"12345678-other"}"#).unwrap();
+    assert_eq!(
+        find_session_transcript(files.clone(), "12345678", "12345678-abcd"),
         Some(files[1].clone())
     );
-    assert_eq!(find_session_transcript(files, "12345678-abcd"), None);
+    assert_eq!(
+        find_session_transcript(files, "12345678", "12345678-missing"),
+        None
+    );
 }
 
 fn observe(event: &str, payload: Value) -> AgentLifecycleObservation {

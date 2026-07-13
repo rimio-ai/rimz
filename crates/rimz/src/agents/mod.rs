@@ -333,11 +333,14 @@ pub enum RefreshTrigger<'a> {
     Hook(&'a str),
     /// Sidebar producer periodic pass over live root sessions.
     Tick,
+    /// Filesystem watcher response to transcript growth.
+    Watch,
 }
 
 /// Context for [`AgentAdapter::context_refresh_spawn`]: the session and
 /// workspace to refresh, plus the model hint its latest observation resolved.
-/// On [`RefreshTrigger::Tick`], callers pass `server_url: None`.
+/// On [`RefreshTrigger::Tick`] and [`RefreshTrigger::Watch`], callers pass
+/// `server_url: None`.
 pub struct LifecycleRefreshCtx<'a> {
     pub agent_id: &'a str,
     pub workspace_id: &'a str,

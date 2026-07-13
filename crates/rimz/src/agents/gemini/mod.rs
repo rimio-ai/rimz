@@ -9,6 +9,7 @@ mod account;
 mod install;
 mod payloads;
 mod spend;
+mod transcript;
 
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -26,7 +27,8 @@ use super::pricing;
 use super::{
     AgentAdapter, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview, HookInstallReport,
     HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result,
-    SessionOrigin, TranscriptStat, classify_agent_hook, non_empty_trimmed, sanitize_user_prompt,
+    SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole,
+    TranscriptStat, classify_agent_hook, non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
@@ -481,13 +483,40 @@ impl AgentAdapter for GeminiAdapter {
         &self,
         event_name: &str,
         payload: &Value,
-        _observation: &AgentLifecycleObservation,
+        observation: &AgentLifecycleObservation,
     ) -> Option<String> {
-        (event_name == "AfterAgent")
-            .then(|| payloads::parse_hook(payload).prompt_response)
-            .flatten()
+        if event_name != "AfterAgent" {
+            return None;
+        }
+        payloads::parse_hook(payload)
+            .prompt_response
             .as_deref()
             .and_then(non_empty_trimmed)
+            .or_else(|| {
+                let path = observation.transcript_path.as_deref()?;
+                std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|text| {
+                        transcript::messages(&text)
+                            .into_iter()
+                            .rev()
+                            .find(|message| message.role == TranscriptRole::Assistant)
+                    })
+                    .map(|message| message.text)
+            })
+    }
+
+    fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
+        transcript::messages(lines)
+    }
+
+    fn read_assistant_transcript_page(
+        &self,
+        path: &Path,
+        _session_id: Option<&AgentSessionId>,
+        position: TranscriptPosition,
+    ) -> Option<TranscriptPage> {
+        transcript::assistant_page(path, position)
     }
 
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
@@ -584,7 +613,7 @@ impl AgentAdapter for GeminiAdapter {
         {
             return None;
         }
-        refresh_transcript_context(ctx)
+        refresh_transcript_context(trigger, ctx)
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {
@@ -599,7 +628,7 @@ impl AgentAdapter for GeminiAdapter {
         if prefix.len() != 8 {
             return None;
         }
-        find_session_transcript(self.transcript_files(), &prefix)
+        find_session_transcript(self.transcript_files(), &prefix, session_id.trim())
     }
 
     fn parse_spend(
@@ -714,28 +743,18 @@ fn notification_ask_kind(details: Option<&payloads::GeminiNotificationDetails>) 
 
 struct TranscriptSnapshot {
     model: Option<String>,
-    total: Option<u64>,
-    input: Option<u64>,
-    cached: Option<u64>,
-    output: Option<u64>,
+    usage: Option<payloads::NormalizedUsage>,
 }
 
 fn transcript_snapshot(path: &Path) -> Option<TranscriptSnapshot> {
     let tail = super::read_transcript_tail(path)?;
     let folded = payloads::fold_transcript(&tail);
     let latest = folded.latest_gemini();
-    let tokens = latest.and_then(|message| message.tokens.as_ref());
     Some(TranscriptSnapshot {
         model: latest.and_then(|message| message.model.clone()),
-        total: tokens.and_then(|tokens| tokens.total),
-        input: tokens.and_then(|tokens| tokens.input),
-        cached: tokens.and_then(|tokens| tokens.cached),
-        output: tokens.map(|tokens| {
-            tokens
-                .output
-                .unwrap_or(0)
-                .saturating_add(tokens.thoughts.unwrap_or(0))
-        }),
+        usage: latest
+            .and_then(|message| message.tokens.as_ref())
+            .and_then(payloads::GeminiTokens::normalized),
     })
 }
 
@@ -746,16 +765,19 @@ fn apply_snapshot_to_observation(
     let window = model_context_window(snapshot.model.as_deref());
     observation.launch.model = snapshot.model.clone();
     observation.context_window = Some(window);
-    observation.total_tokens = snapshot.total;
-    observation.context_pct = snapshot.total.map(|total| percent(total, window));
-    observation.cache_read_input_tokens = snapshot.cached;
-    observation.fresh_input_tokens = snapshot
-        .input
-        .map(|input| input.saturating_sub(snapshot.cached.unwrap_or(0)));
-    observation.output_tokens = snapshot.output;
+    observation.total_tokens = snapshot.usage.map(|usage| usage.context_total);
+    observation.context_pct = snapshot
+        .usage
+        .map(|usage| percent(usage.context_total, window));
+    observation.cache_read_input_tokens = snapshot.usage.map(|usage| usage.cache_read);
+    observation.fresh_input_tokens = snapshot.usage.map(|usage| usage.fresh_input);
+    observation.output_tokens = snapshot.usage.map(|usage| usage.billable_output);
 }
 
-fn refresh_transcript_context(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {
+fn refresh_transcript_context(
+    trigger: RefreshTrigger<'_>,
+    ctx: &LocalContextRefreshCtx<'_>,
+) -> Option<LocalContextRefresh> {
     let path =
         GeminiAdapter.session_transcript(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
     let stat = transcript_stat(&path)?;
@@ -769,41 +791,39 @@ fn refresh_transcript_context(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalC
         .and_then(|message| message.model.clone())
         .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
     let window = model_context_window(model_id.as_deref());
-    let latest_tokens = latest.and_then(|message| message.tokens.as_ref());
-    let total = latest_tokens.and_then(|tokens| tokens.total).unwrap_or(0);
-    let current_usage = latest_tokens.map(|tokens| AgentCurrentUsage {
-        input_tokens: tokens
-            .input
-            .map(|input| input.saturating_sub(tokens.cached.unwrap_or(0))),
-        output_tokens: Some(
-            tokens
-                .output
-                .unwrap_or(0)
-                .saturating_add(tokens.thoughts.unwrap_or(0)),
-        ),
+    let usage = latest
+        .and_then(|message| message.tokens.as_ref())
+        .and_then(payloads::GeminiTokens::normalized);
+    let current_usage = usage.map(|usage| AgentCurrentUsage {
+        input_tokens: Some(usage.fresh_input),
+        output_tokens: Some(usage.billable_output),
         cache_creation_input_tokens: None,
-        cache_read_input_tokens: tokens.cached,
+        cache_read_input_tokens: Some(usage.cache_read),
     });
     let tokens = Some(AgentTokenUsage {
         context_window_size: Some(window),
-        used_percentage: Some(percent(total, window)),
+        used_percentage: usage.map(|usage| percent(usage.context_total, window)),
         remaining_percentage: None,
-        current_usage,
+        current_usage: Some(current_usage.unwrap_or_default()),
     });
-    let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
-    let cost_usd = spend::parse_gemini_spend(&path, None, &prices)
-        .entries
-        .iter()
-        .map(|entry| entry.cost_usd)
-        .sum::<f64>();
+    let cost = matches!(trigger, RefreshTrigger::Tick).then(|| {
+        let prices = pricing::cached_book(ctx.shared_pricing_cache_path);
+        spend::parse_gemini_spend(&path, None, &prices)
+            .entries
+            .iter()
+            .map(|entry| entry.cost_usd)
+            .sum::<f64>()
+    });
     Some(LocalContextRefresh {
         model_id,
         effort: None,
         tokens,
-        cost: (cost_usd > 0.0).then_some(AgentCost {
-            total_cost_usd: Some(cost_usd),
-            ..AgentCost::default()
-        }),
+        cost: cost
+            .filter(|cost_usd| *cost_usd > 0.0)
+            .map(|cost_usd| AgentCost {
+                total_cost_usd: Some(cost_usd),
+                ..AgentCost::default()
+            }),
         turn_error: None,
         turn_complete: None,
         turn_interrupted: None,
@@ -823,15 +843,21 @@ fn model_context_window(model: Option<&str>) -> u64 {
 fn find_session_transcript(
     files: impl IntoIterator<Item = PathBuf>,
     session_prefix: &str,
+    session_id: &str,
 ) -> Option<PathBuf> {
     files.into_iter().find(|path| {
-        path.file_name()
+        let shortlisted = path
+            .file_name()
             .and_then(|name| name.to_str())
             .and_then(|name| {
                 name.strip_suffix(".jsonl")
                     .or_else(|| name.strip_suffix(".json"))
             })
-            .is_some_and(|stem| stem.ends_with(&format!("-{session_prefix}")))
+            .is_some_and(|stem| stem.ends_with(&format!("-{session_prefix}")));
+        shortlisted
+            && std::fs::read_to_string(path).is_ok_and(|text| {
+                payloads::fold_transcript(&text).session_id.as_deref() == Some(session_id)
+            })
     })
 }
 

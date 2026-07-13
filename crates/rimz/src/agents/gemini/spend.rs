@@ -87,19 +87,21 @@ fn priced_entry(
     unknown_models: &mut BTreeMap<String, u64>,
 ) -> Option<CachedEntry> {
     let tokens = message.tokens.as_ref()?;
+    let usage = tokens.normalized()?;
     let model = message.model.as_deref()?.trim();
     if model.is_empty() {
         return None;
     }
     let ts_secs = message.timestamp.as_deref().and_then(iso_to_unix_secs)?;
-    let cached = tokens.cached.unwrap_or(0);
-    let input = tokens.input.unwrap_or(0).saturating_sub(cached);
-    let output = tokens
-        .output
-        .unwrap_or(0)
-        .saturating_add(tokens.thoughts.unwrap_or(0));
     let cost_usd = match prices.price(model) {
-        Some(price) => price.cost(input, output, 0, 0, cached, false),
+        Some(price) => price.cost(
+            usage.fresh_input,
+            usage.billable_output,
+            0,
+            0,
+            usage.cache_read,
+            false,
+        ),
         None => {
             record_unknown_model(unknown_models, model, ts_secs);
             0.0
@@ -108,10 +110,10 @@ fn priced_entry(
     Some(CachedEntry {
         ts_secs,
         cost_usd,
-        input,
-        output,
+        input: usage.fresh_input,
+        output: usage.billable_output,
         cache_write: 0,
-        cache_read: cached,
+        cache_read: usage.cache_read,
         message_id: message.id.clone(),
         request_id: None,
         dedup_key: None,

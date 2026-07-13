@@ -171,19 +171,79 @@ where
 }
 
 /// Read the trailing window of a transcript/rollout JSONL as lossy UTF-8, for
-/// tail-scanning the most recent records newest-first. Returns `None` on any IO
-/// error — context enrichment is best-effort, never correctness. A truncated
-/// leading line from the seek simply fails to parse in the caller's walk.
+/// tail-scanning the most recent records newest-first. The suffix starts at a
+/// record boundary. A newest record larger than the normal budget expands the
+/// read far enough to return that record whole; a valid final record needs no
+/// newline, while a torn final fragment stays out of the result.
 pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
 
     const TAIL_BYTES: u64 = 64 * 1024;
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
-        .ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
+    let normal_start = len.saturating_sub(TAIL_BYTES);
+    let mut start = normal_start;
+    let mut expanding = false;
+    let mut buf;
+    loop {
+        let starts_at_boundary = if start == 0 {
+            true
+        } else {
+            file.seek(SeekFrom::Start(start - 1)).ok()?;
+            let mut previous = [0];
+            file.read_exact(&mut previous).ok()?;
+            previous[0] == b'\n'
+        };
+        file.seek(SeekFrom::Start(start)).ok()?;
+        buf = Vec::new();
+        file.read_to_end(&mut buf).ok()?;
+        if starts_at_boundary {
+            if expanding {
+                let cutoff = usize::try_from(normal_start.saturating_sub(start))
+                    .unwrap_or(usize::MAX)
+                    .min(buf.len());
+                if let Some(newline) = buf[..cutoff].iter().rposition(|byte| *byte == b'\n') {
+                    buf.drain(..=newline);
+                }
+            }
+            break;
+        }
+        if expanding {
+            let cutoff = usize::try_from(normal_start.saturating_sub(start)).unwrap_or(usize::MAX);
+            if let Some(newline) = buf
+                .get(..cutoff.min(buf.len()))
+                .and_then(|prefix| prefix.iter().rposition(|byte| *byte == b'\n'))
+            {
+                buf.drain(..=newline);
+                break;
+            }
+        } else if let Some(newline) = buf.iter().position(|byte| *byte == b'\n') {
+            let remainder = &buf[newline + 1..];
+            if remainder.contains(&b'\n')
+                || serde_json::from_slice::<serde::de::IgnoredAny>(remainder).is_ok()
+            {
+                buf.drain(..=newline);
+                break;
+            }
+        }
+        expanding = true;
+        start = start.saturating_sub(TAIL_BYTES);
+    }
+
+    let complete = match buf.iter().rposition(|byte| *byte == b'\n') {
+        Some(newline) if newline + 1 < buf.len() => {
+            let fragment = &buf[newline + 1..];
+            if serde_json::from_slice::<serde::de::IgnoredAny>(fragment).is_ok() {
+                buf.len()
+            } else {
+                newline + 1
+            }
+        }
+        Some(_) => buf.len(),
+        None if serde_json::from_slice::<serde::de::IgnoredAny>(&buf).is_ok() => buf.len(),
+        None => 0,
+    };
+    buf.truncate(complete);
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
@@ -252,5 +312,40 @@ mod tests {
 
         // Nothing new past the cursor.
         assert!(read_spend_lines(&path, next).is_none());
+    }
+
+    #[test]
+    fn transcript_tail_starts_at_a_complete_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        let padding = "x".repeat(70 * 1024);
+        fs::write(
+            &path,
+            format!("{{\"old\":{padding:?}}}\n{{\"new\":true}}\n"),
+        )
+        .unwrap();
+        assert_eq!(read_transcript_tail(&path).unwrap(), "{\"new\":true}\n");
+    }
+
+    #[test]
+    fn transcript_tail_expands_for_a_large_newest_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        let content = "y".repeat(70 * 1024);
+        let newest = format!("{{\"content\":{content:?}}}");
+        fs::write(&path, format!("{{\"old\":true}}\n{newest}")).unwrap();
+        assert_eq!(read_transcript_tail(&path).unwrap(), newest);
+        fs::write(&path, format!("{{\"old\":true}}\n{newest}\n")).unwrap();
+        assert_eq!(read_transcript_tail(&path).unwrap(), format!("{newest}\n"));
+    }
+
+    #[test]
+    fn transcript_tail_keeps_valid_no_newline_and_drops_torn_fragment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        fs::write(&path, "{\"a\":1}\n{\"b\":2}").unwrap();
+        assert_eq!(read_transcript_tail(&path).unwrap(), "{\"a\":1}\n{\"b\":2}");
+        fs::write(&path, "{\"a\":1}\n{\"b\":").unwrap();
+        assert_eq!(read_transcript_tail(&path).unwrap(), "{\"a\":1}\n");
     }
 }
