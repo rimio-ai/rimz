@@ -518,7 +518,8 @@ fn assert_coverage_honest(
             "{kind} RemoteControl coverage must match remote-control capabilities"
         ),
         IntegrationConcern::ContextUsage => assert_eq!(
-            wired, descriptor.capabilities.context_usage,
+            !matches!(coverage, ConcernCoverage::Unsupported { .. }),
+            descriptor.capabilities.context_usage,
             "{kind} ContextUsage coverage must match the context_usage capability"
         ),
         IntegrationConcern::RealtimeCost => assert_eq!(
