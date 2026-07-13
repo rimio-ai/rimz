@@ -14,7 +14,8 @@ use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::{MessageBody, MessageStatus};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::store::event::{
-    AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind, MessageEventPayload,
+    AgentLaunchPayload, AgentLaunchState, AgentLifecyclePayload, EventEnvelope, EventKind,
+    MessageEventPayload,
 };
 
 mod identity;
@@ -118,33 +119,25 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
     let mut identity = CardIdentityAllocator::from_map_and_state(&map, identity_state);
     for event in events {
         let envelope = event.envelope;
-        // A mux rebirth renumbers panes from zero, so every stamp recorded
-        // before the boundary names a pane that no longer exists — and the
-        // reborn session reuses those ids for new panes. Clear them all here,
-        // in log order, so a prior incarnation's session can never bind (or
-        // block recovery of) a reused pane id; a stamp recorded by a later
-        // event is the new incarnation's and stays. Sessions themselves are
-        // kept — the boundary unstamps, it never tombstones.
-        let payload = match &event.kind {
+        match &event.kind {
             EventKind::SessionRebirth => {
                 for state in map.values_mut() {
                     state.pane = None;
                     state.kind_ordinal = None;
                 }
                 identity.reset_ordinals();
-                continue;
             }
             EventKind::AgentLaunch(payload) => {
                 let kind = AgentKind::new_unchecked(envelope.source.clone());
                 reduce_agent_launch(&mut map, &mut identity, envelope, &kind, payload);
-                continue;
             }
-            EventKind::AgentLifecycle(payload) => payload,
+            EventKind::AgentLifecycle(payload) => {
+                reduce_lifecycle_event(&mut map, &mut identity, envelope, payload);
+            }
             EventKind::Message { payload, .. } => {
                 stamp_compact_command(map.values_mut(), payload);
-                continue;
             }
-            EventKind::SessionDeath(_) => continue,
+            EventKind::SessionDeath(_) => {}
             EventKind::Other {
                 method: "agent.lifecycle",
                 ..
@@ -154,140 +147,149 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
                     event_id = %envelope.event_id,
                     "non-conforming agent.lifecycle event ignored",
                 );
-                continue;
             }
-            EventKind::Other { .. } => continue,
-        };
-        let kind = AgentKind::new_unchecked(envelope.source.clone());
-        // The agent-agnostic lifecycle intent this event carries. The status
-        // and the phase/compacting heads are all derived from it through the
-        // one shared `lifecycle::step` table — never taken verbatim — so an
-        // illegal jump can't slip through unvalidated. Replay is silent here;
-        // the ingestion path logs anomalies once per fresh event.
-        let observation = &payload.observation;
-        let signal = observation.signal.clone();
-        // Identity is required: a session-less event is quarantined (folded
-        // to nothing), mirroring the malformed-subagent-identity rule —
-        // never silently merged into a shared per-kind bucket where two
-        // distinct instances would collapse into one row. The ingestion path
-        // warns once with the event in hand; here a `debug!` keeps every
-        // cold rebuild's re-fold quiet.
-        let Some(agent_id) = observation.agent_id.clone() else {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                event_id = %envelope.event_id,
-                workspace = %envelope.workspace_id,
-                kind = %kind,
-                "session-less agent.lifecycle event quarantined",
-            );
-            continue;
-        };
-        let key = (kind.clone(), agent_id.clone());
-        let mut provisional_prior = None;
-        if let Some(agent_name) = observation.agent_name.as_deref()
-            && !map.contains_key(&key)
-            && let Some(provisional_key) =
-                identity.adoptable_owner_for_name(&map, &kind, agent_name, &key)
-        {
-            provisional_prior = map.remove(&provisional_key);
-            identity.release_key(&provisional_key);
-            identity.consume_launch_key(&provisional_key);
+            EventKind::Other { .. } => {}
         }
-        if provisional_prior.is_none()
-            && !map.contains_key(&key)
-            && let Some(pane_id) = observation.pane_id.as_ref()
-            && let Some(provisional_key) =
-                identity.adoptable_owner_for_pane(&map, &kind, pane_id, &key)
-        {
-            provisional_prior = map.remove(&provisional_key);
-            identity.release_key(&provisional_key);
-            identity.consume_launch_key(&provisional_key);
-        }
-        let event_name = payload.event_name.as_deref();
-        let event_parent_agent_id =
-            non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
-        let event_task = non_empty_string(observation.task.as_deref());
-        if matches!(&signal, lifecycle::LifecycleSignal::Ended) {
-            identity.release_key(&key);
-            map.remove(&key);
-            continue;
-        }
-        let prior = map.get(&key).or(provisional_prior.as_ref());
-        if matches!(&signal, lifecycle::LifecycleSignal::Lost) && prior.is_none() {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                event_id = %envelope.event_id,
-                workspace = %envelope.workspace_id,
-                kind = %kind,
-                agent_id = %agent_id,
-                "lost marker for unknown session ignored by agent-state reducer",
-            );
-            continue;
-        }
-        if matches!(
-            &signal,
-            lifecycle::LifecycleSignal::Compacting
-                | lifecycle::LifecycleSignal::CompactionEnded { .. }
-        ) && prior.is_none()
-        {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                event_id = %envelope.event_id,
-                workspace = %envelope.workspace_id,
-                kind = %kind,
-                agent_id = %agent_id,
-                "compaction signal for unknown session ignored by agent-state reducer",
-            );
-            continue;
-        }
-        if matches!(&signal, lifecycle::LifecycleSignal::SubagentStopped { .. })
-            && prior.is_none()
-            && event_parent_agent_id.is_some()
-            && event_task.is_none()
-        {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                event_id = %envelope.event_id,
-                workspace = %envelope.workspace_id,
-                session = %envelope.session_name,
-                kind = %kind,
-                source_kind = %envelope.source_kind,
-                timestamp = %envelope.timestamp,
-                event_name = event_name.unwrap_or(""),
-                parent = event_parent_agent_id.as_deref().unwrap_or(""),
-                child = %agent_id,
-                "typeless SubagentStop for unknown child — ignored",
-            );
-            continue;
-        }
-        let establishes_identity = signal.establishes_identity();
-        if prior.is_none() && !establishes_identity {
-            debug!(
-                target: "rimz::agent::binding",
-                kind = %kind,
-                agent_id = %agent_id,
-                signal = ?signal,
-                event_name = event_name.unwrap_or(""),
-                "non-start lifecycle event created an unseen session in the reducer",
-            );
-        }
-        let card_identity = identity.assign(&kind, &agent_id, observation, prior);
-        let state = assemble_agent_state(AgentStateInput {
-            kind: &kind,
-            agent_id: &agent_id,
-            event: envelope,
-            event_name,
-            observation,
-            signal,
-            prior,
-            event_parent_agent_id,
-            event_task,
-            establishes_identity,
-            card_identity,
-        });
-        map.insert(key, state);
     }
     (map, identity.state())
+}
+
+fn reduce_lifecycle_event(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    identity: &mut CardIdentityAllocator,
+    event: &EventEnvelope,
+    payload: &AgentLifecyclePayload,
+) {
+    let kind = AgentKind::new_unchecked(event.source.clone());
+    // The agent-agnostic lifecycle intent this event carries. The status
+    // and the phase/compacting heads are all derived from it through the
+    // one shared `lifecycle::step` table — never taken verbatim — so an
+    // illegal jump can't slip through unvalidated. Replay is silent here;
+    // the ingestion path logs anomalies once per fresh event.
+    let observation = &payload.observation;
+    let signal = observation.signal.clone();
+    // Identity is required: a session-less event is quarantined (folded
+    // to nothing), mirroring the malformed-subagent-identity rule —
+    // never silently merged into a shared per-kind bucket where two
+    // distinct instances would collapse into one row. The ingestion path
+    // warns once with the event in hand; here a `debug!` keeps every
+    // cold rebuild's re-fold quiet.
+    let Some(agent_id) = observation.agent_id.clone() else {
+        debug!(
+            target: "rimz::agent::lifecycle",
+            event_id = %event.event_id,
+            workspace = %event.workspace_id,
+            kind = %kind,
+            "session-less agent.lifecycle event quarantined",
+        );
+        return;
+    };
+    let key = (kind.clone(), agent_id.clone());
+    let provisional_prior = (!map.contains_key(&key))
+        .then(|| adopt_provisional(map, identity, &kind, &key, observation))
+        .flatten();
+    let event_name = payload.event_name.as_deref();
+    let event_parent_agent_id =
+        non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
+    let event_task = non_empty_string(observation.task.as_deref());
+    if matches!(&signal, lifecycle::LifecycleSignal::Ended) {
+        identity.release_key(&key);
+        map.remove(&key);
+        return;
+    }
+    let prior = map.get(&key).or(provisional_prior.as_ref());
+    if let Some(reason) = quarantine_reason(
+        &signal,
+        prior,
+        event_parent_agent_id.as_ref(),
+        event_task.as_deref(),
+    ) {
+        debug!(
+            target: "rimz::agent::lifecycle",
+            event_id = %event.event_id,
+            workspace = %event.workspace_id,
+            kind = %kind,
+            agent_id = %agent_id,
+            reason,
+            "agent.lifecycle event quarantined",
+        );
+        return;
+    }
+    let establishes_identity = signal.establishes_identity();
+    if prior.is_none() && !establishes_identity {
+        debug!(
+            target: "rimz::agent::binding",
+            kind = %kind,
+            agent_id = %agent_id,
+            signal = ?signal,
+            event_name = event_name.unwrap_or(""),
+            "non-start lifecycle event created an unseen session in the reducer",
+        );
+    }
+    let card_identity = identity.assign(&kind, &agent_id, observation, prior);
+    let state = assemble_agent_state(AgentStateInput {
+        kind: &kind,
+        agent_id: &agent_id,
+        event,
+        event_name,
+        observation,
+        signal,
+        prior,
+        event_parent_agent_id,
+        event_task,
+        establishes_identity,
+        card_identity,
+    });
+    map.insert(key, state);
+}
+
+fn quarantine_reason(
+    signal: &lifecycle::LifecycleSignal,
+    prior: Option<&AgentState>,
+    event_parent_agent_id: Option<&AgentSessionId>,
+    event_task: Option<&str>,
+) -> Option<&'static str> {
+    if prior.is_some() {
+        return None;
+    }
+    match signal {
+        lifecycle::LifecycleSignal::Lost => {
+            Some("lost marker for unknown session ignored by agent-state reducer")
+        }
+        lifecycle::LifecycleSignal::Compacting
+        | lifecycle::LifecycleSignal::CompactionEnded { .. } => {
+            Some("compaction signal for unknown session ignored by agent-state reducer")
+        }
+        lifecycle::LifecycleSignal::SubagentStopped { .. }
+            if event_parent_agent_id.is_some() && event_task.is_none() =>
+        {
+            Some("typeless SubagentStop for unknown child — ignored")
+        }
+        _ => None,
+    }
+}
+
+fn adopt_provisional(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    identity: &mut CardIdentityAllocator,
+    kind: &AgentKind,
+    key: &(AgentKind, AgentSessionId),
+    observation: &AgentLifecycleObservation,
+) -> Option<AgentState> {
+    let provisional_key = observation
+        .agent_name
+        .as_deref()
+        .and_then(|name| identity.adoptable_owner_for_name(map, kind, name, key))
+        .or_else(|| {
+            observation
+                .pane_id
+                .as_ref()
+                .and_then(|pane_id| identity.adoptable_owner_for_pane(map, kind, pane_id, key))
+        })?;
+    let prior = map.remove(&provisional_key);
+    identity.release_key(&provisional_key);
+    identity.consume_launch_key(&provisional_key);
+    prior
 }
 
 fn reduce_agent_launch(
