@@ -230,6 +230,7 @@ fn doctor_human_report_renders_titled_sections() {
 
     for title in [
         "WORKSPACE",
+        "MACHINE CONFIG",
         "HOOKS",
         "STORAGE",
         "PROTOCOLS",
@@ -259,6 +260,51 @@ fn doctor_human_report_renders_titled_sections() {
             || stdout.contains("warnings")
             || stdout.contains("no problems found"),
         "the report ends with a verdict line:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_reports_unparseable_machine_config_in_json_and_human_output() {
+    let env = Env::new();
+    let path = env.config_root().join("rimz/theme.toml");
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config");
+    std::fs::write(&path, "[theme.display]\nmax_cols = 64\nmax_cols = 72\n")
+        .expect("write broken theme config");
+
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn doctor"),
+    );
+    let broken = report["machine_config"]["broken_files"]
+        .as_array()
+        .expect("broken files array");
+    assert_eq!(broken.len(), 1, "one broken config file: {broken:?}");
+    assert_eq!(broken[0]["path"], path.display().to_string());
+    assert!(
+        broken[0]["error"]
+            .as_str()
+            .expect("error string")
+            .contains("duplicate key")
+            && broken[0]["error"]
+                .as_str()
+                .expect("error string")
+                .contains("max_cols"),
+        "precise parse error: {broken:?}",
+    );
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor succeeds with broken config"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8 human report");
+    assert!(stdout.contains("MACHINE CONFIG"), "{stdout}");
+    assert!(stdout.contains("theme.toml is unparseable"), "{stdout}");
+    assert!(
+        stdout.contains("duplicate key") && stdout.contains("max_cols"),
+        "{stdout}",
     );
 }
 

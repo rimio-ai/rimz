@@ -17,9 +17,9 @@ use rimz::trust::TrustState;
 
 use super::model::{
     AgentCounts, AgentRollup, Capabilities, Diagnostics, DoctorReport, DuplicateSessions,
-    HookStatus, Host, LoopTasks, MessageProblemRow, Messages, Mux, MuxBinaryRow, MuxLog, PluginRow,
-    Presence, Probe, Protocols, RemoteAgent, RemoteControl, SessionHealth, Storage, Terminal,
-    TopologyWriterHealth, Trust, Version, Workspace,
+    HookStatus, Host, LoopTasks, MachineConfigHealth, MessageProblemRow, Messages, Mux,
+    MuxBinaryRow, MuxLog, PluginRow, Presence, Probe, Protocols, RemoteAgent, RemoteControl,
+    SessionHealth, Storage, Terminal, TopologyWriterHealth, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -120,6 +120,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_workspace(w, &report.workspace, &mut tally)?;
     render_mux(w, &report.mux, &mut tally)?;
     render_terminal(w, &report.terminal, &mut tally)?;
+    render_machine_config(w, &report.machine_config, &mut tally)?;
     render_hooks(w, report, &mut tally)?;
     render_plugins(w, report, &mut tally)?;
     render_loop(w, &report.loop_tasks, &mut tally)?;
@@ -138,6 +139,35 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_diagnostics(w, report, &mut tally)?;
     render_last_incident(w, report, &mut tally)?;
     render_tally(w, &tally)?;
+    Ok(())
+}
+
+fn render_machine_config(
+    w: &mut impl Write,
+    config: &MachineConfigHealth,
+    tally: &mut Tally,
+) -> io::Result<()> {
+    section(w, "MACHINE CONFIG")?;
+    if config.broken_files.is_empty() {
+        let mut kv = KeyVals::new().indent(2);
+        kv.push(
+            "config files",
+            verdict(tally, Health::Ok, "all present files parse"),
+        );
+        return kv.render(w);
+    }
+    for problem in &config.broken_files {
+        note(
+            tally,
+            w,
+            Health::Warn,
+            &format!(
+                "{} is unparseable: {}; settings in this file use built-in defaults",
+                home_relative(&problem.path),
+                problem.error,
+            ),
+        )?;
+    }
     Ok(())
 }
 
@@ -1299,6 +1329,9 @@ mod tests {
                 error: "test".to_owned(),
             },
             terminal: terminal_fixture(),
+            machine_config: MachineConfigHealth {
+                broken_files: Vec::new(),
+            },
             hooks: Vec::new(),
             plugins: Vec::new(),
             loop_tasks: LoopTasks { tasks: Vec::new() },

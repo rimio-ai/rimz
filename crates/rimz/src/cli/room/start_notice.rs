@@ -5,7 +5,29 @@ use std::io::Write;
 use anyhow::Result;
 use rimz::ids::MuxName;
 
+use crate::cli::render;
+
 use super::session_record::session_probe_timeout;
+
+fn one_line(message: &str) -> String {
+    message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
+    let path = render::home_relative(&err.path().display().to_string());
+    let detail = std::error::Error::source(err)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| err.to_string());
+    format!(
+        "{path} is unparseable — every setting in it is ignored and built-in defaults apply: {}; fix the file, then restart",
+        one_line(&detail),
+    )
+}
 
 fn root_class_notice(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
     use rimz::workspace::RootClass;
@@ -59,7 +81,10 @@ pub(crate) fn live_session_names() -> std::collections::BTreeSet<String> {
 /// names the standing situation rather than blocking it. Notices go to stderr;
 /// stdout stays the protocol surface.
 pub(super) fn report_start_notices(workspace: &rimz::ResolvedWorkspace) -> Result<()> {
-    let mut notices = Vec::new();
+    let mut notices: Vec<_> = rimz::config::broken_machine_files()
+        .iter()
+        .map(broken_config_notice)
+        .collect();
     notices.extend(root_class_notice(workspace));
     if let Ok(known) = rimz::workspace::known_workspaces() {
         let candidates = overlapping_known(workspace, &known);
@@ -156,5 +181,32 @@ mod tests {
             .map(|ws| ws.project_root.display().to_string())
             .collect();
         assert_eq!(hits, vec!["/home/m/code/query", "/home/m"]);
+    }
+
+    #[test]
+    fn broken_config_notice_is_one_line_and_names_the_fallback() {
+        let err = rimz::config::MachineConfig::parse_text(
+            std::path::Path::new("/tmp/theme.toml"),
+            "[theme.display]\nmax_cols = 64\nmax_cols = 72\n",
+            std::path::Path::new("/tmp/missing-agents-home"),
+        )
+        .expect_err("duplicate key fails");
+
+        let notice = broken_config_notice(&err);
+
+        assert_eq!(
+            notice.lines().count(),
+            1,
+            "notice stays on one line: {notice}"
+        );
+        assert!(
+            notice.contains("/tmp/theme.toml is unparseable"),
+            "{notice}"
+        );
+        assert!(
+            notice.contains("duplicate key") && notice.contains("max_cols"),
+            "{notice}",
+        );
+        assert!(notice.contains("built-in defaults apply"), "{notice}");
     }
 }

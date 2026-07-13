@@ -471,6 +471,32 @@ on_force_close = "explode"
 }
 
 #[test]
+fn setup_yes_leaves_unparseable_config_untouched() {
+    let env = Env::new();
+    let path = theme_config_path(&env);
+    let broken = b"[theme.display]\nmax_cols = 64\nmax_cols = 72\n";
+    write_machine_file(&path, std::str::from_utf8(broken).expect("utf8 fixture"));
+
+    env.rimz()
+        .args(["setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains(format!(
+            "Left {} untouched - unparseable:",
+            path.display()
+        )))
+        .stdout(contains("duplicate key"))
+        .stdout(contains("max_cols"))
+        .stdout(contains("fix the file and rerun rimz setup"));
+
+    assert_eq!(
+        std::fs::read(&path).expect("read preserved config"),
+        broken,
+        "setup preserves the broken file byte-for-byte",
+    );
+}
+
+#[test]
 fn setup_yes_preserves_sentry_keys_during_merge() {
     let env = Env::new();
     write_machine_file(

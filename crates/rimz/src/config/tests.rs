@@ -132,6 +132,37 @@ fn missing_or_empty_file_is_default_off() {
 }
 
 #[test]
+fn broken_machine_files_reports_only_the_unparseable_file() {
+    let dir = tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join(CONFIG_FILE),
+        "[sidebar]\nfocus_key = \"Alt+p\"\n",
+    )
+    .expect("write core config");
+    std::fs::write(
+        dir.path().join(THEME_FILE),
+        "[theme.display]\nmax_cols = 64\nmax_cols = 72\n",
+    )
+    .expect("write broken theme config");
+    std::fs::write(dir.path().join(AGENTS_FILE), "").expect("write agents config");
+
+    let errors = broken_machine_files_in(dir.path());
+
+    assert_eq!(errors.len(), 1, "only theme.toml is broken: {errors:?}");
+    match &errors[0] {
+        ConfigErr::Parse { path, source } => {
+            assert_eq!(path, &dir.path().join(THEME_FILE));
+            let detail = source.to_string();
+            assert!(
+                detail.contains("duplicate key") && detail.contains("max_cols"),
+                "precise duplicate-key error: {detail}",
+            );
+        }
+        other => panic!("expected theme parse error, got {other:?}"),
+    }
+}
+
+#[test]
 fn lenient_load_falls_back_only_for_the_broken_file() {
     let dir = tempdir().expect("tempdir");
     let config_path = write(&dir, "not = = toml");

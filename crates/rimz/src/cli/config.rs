@@ -108,6 +108,7 @@ pub(crate) struct FileMergeOutcome {
 pub(crate) enum MergeAction {
     Wrote,
     Merged { kept: usize },
+    LeftUnparseable { error: String },
 }
 
 #[derive(Debug)]
@@ -143,17 +144,17 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
             skipped: Vec::new(),
         });
     };
-    let Ok(old_doc) = old_text.parse::<DocumentMut>() else {
-        write_bytes_atomically(path, template.as_bytes())
-            .with_context(|| format!("writing {}", path.display()))?;
-        return Ok(FileMergeOutcome {
-            path: path.to_path_buf(),
-            action: MergeAction::Wrote,
-            skipped: vec![SkippedKey {
-                key: "<file>".to_owned(),
-                reason: "unparseable; rewritten from template".to_owned(),
-            }],
-        });
+    let old_doc = match old_text.parse::<DocumentMut>() {
+        Ok(doc) => doc,
+        Err(err) => {
+            return Ok(FileMergeOutcome {
+                path: path.to_path_buf(),
+                action: MergeAction::LeftUnparseable {
+                    error: one_line(&err.to_string()),
+                },
+                skipped: Vec::new(),
+            });
+        }
     };
 
     let mut new_doc = template
@@ -188,6 +189,15 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
         action: MergeAction::Merged { kept },
         skipped,
     })
+}
+
+fn one_line(message: &str) -> String {
+    message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn init(args: InitArgs) -> Result<()> {

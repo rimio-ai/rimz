@@ -164,6 +164,20 @@ pub enum ConfigErr {
     RemovedTable { path: PathBuf, detail: String },
 }
 
+impl ConfigErr {
+    /// The per-machine file that failed to load.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Io { path, .. }
+            | Self::Parse { path, .. }
+            | Self::Agents { path, .. }
+            | Self::Notifications { path, .. }
+            | Self::Loop { path, .. }
+            | Self::RemovedTable { path, .. } => path,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ConfigErr>;
 
 /// Per-machine configuration. Lenient on unknown keys so a newer config never
@@ -502,6 +516,24 @@ impl MachineConfig {
             .map(|stamp| hash_config_stamp(&stamp))
             .unwrap_or(0)
     }
+}
+
+/// Strictly parse the four per-machine config files, returning one error per
+/// file that exists but cannot load. Runtime loading remains lenient; this
+/// feeds the start notice and `rimz doctor`.
+pub fn broken_machine_files() -> Vec<ConfigErr> {
+    let config_path = MachineConfig::config_path();
+    broken_machine_files_in(config_path.parent().unwrap_or_else(|| Path::new(".")))
+}
+
+fn broken_machine_files_in(dir: &Path) -> Vec<ConfigErr> {
+    let checks = [
+        load_optional(&dir.join(CONFIG_FILE), parse_core_text).map(|_| ()),
+        load_optional(&dir.join(THEME_FILE), parse_theme_text).map(|_| ()),
+        load_optional(&dir.join(AGENTS_FILE), parse_agents_text).map(|_| ()),
+        load_optional(&dir.join(LOOP_FILE), parse_loop_text).map(|_| ()),
+    ];
+    checks.into_iter().filter_map(Result::err).collect()
 }
 
 fn hash_config_stamp(stamp: &ConfigStamp) -> u64 {

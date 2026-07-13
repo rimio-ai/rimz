@@ -189,6 +189,12 @@ fn render_merge_report(report: &config::MergeReport) -> Result<()> {
                     file.path.display()
                 ))?;
             }
+            config::MergeAction::LeftUnparseable { ref error } => {
+                print_line(&format!(
+                    "Left {} untouched - unparseable: {error}; fix the file and rerun rimz setup",
+                    file.path.display(),
+                ))?;
+            }
         }
         for skipped in &file.skipped {
             let reason = format!("invalid: {}", one_line(&skipped.reason));

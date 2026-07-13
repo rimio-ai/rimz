@@ -32,6 +32,7 @@ pub(super) struct DoctorReport {
     pub(super) workspace: Probe<Workspace>,
     pub(super) mux: Probe<Mux>,
     pub(super) terminal: Terminal,
+    pub(super) machine_config: MachineConfigHealth,
     pub(super) hooks: Vec<HookRow>,
     pub(super) plugins: Vec<PluginRow>,
     pub(super) loop_tasks: LoopTasks,
@@ -49,6 +50,17 @@ pub(super) struct DoctorReport {
     pub(super) diagnostics: Option<Diagnostics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_incident: Option<LastIncident>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MachineConfigHealth {
+    pub(super) broken_files: Vec<MachineConfigProblem>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct MachineConfigProblem {
+    pub(super) path: String,
+    pub(super) error: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -4,7 +4,7 @@ When something looks off, `rimz doctor` is the first move, this page is the symp
 
 ## Start with `rimz doctor`
 
-`rimz doctor` reports the whole room in one pass: the multiplexer backend and whether its version clears the floor, per-agent hook status, workspace and store health, project trust state, terminal color depth, scheduled loop tasks, and the Zellij presence grant. It resolves the workspace, probes each of those surfaces, and prints a verdict. It writes nothing, so you can run it as often as you like.
+`rimz doctor` reports the whole room in one pass: the multiplexer backend and whether its version clears the floor, per-machine config parsing, per-agent hook status, workspace and store health, project trust state, terminal color depth, scheduled loop tasks, and the Zellij presence grant. It resolves the workspace, probes each of those surfaces, and prints a verdict. It writes nothing, so you can run it as often as you like.
 
 ```sh
 rimz doctor
@@ -74,6 +74,8 @@ Each row carries a glyph that sets its tone:
 The last line tallies the run (`✗ 2 problems, ⚠ 9 warnings`, or `✓ no problems found`). Work top down and clear the `✗` rows first. The rest of this page expands the common ones.
 
 The tail sections (`AGENTS`, `MESSAGES`, `DIAGNOSTICS`) report live state rather than machine setup: the agents doctor observed, messages that failed to land, and RimZ's own record of transient rendering hiccups. They are mostly context for a bug report, not a to-do list.
+
+The `MACHINE CONFIG` section names any `config.toml`, `theme.toml`, `agents.toml`, or `loop.toml` file RimZ cannot parse and includes the precise error. `rimz start` also warns on stderr and opens the room with built-in defaults for every setting in that file; fix it, then restart so RimZ loads the intended values.
 
 ## The room won't start
 
