@@ -740,9 +740,6 @@ fn pane_frame_published_absorbs_deferred_unwatched_fetch() {
     );
     assert!(state.pending_fetch.is_none());
 
-    if let Some(pending) = &mut state.pending_fetch {
-        pending.due_at = Instant::now() - Duration::from_millis(1);
-    }
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
     let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
     let socket_path = sidebar_socket_path(&runtime, &SidebarInstanceId::new());
