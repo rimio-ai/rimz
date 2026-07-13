@@ -238,6 +238,7 @@ impl Env {
                 .join("agent")
                 .join("extensions")
                 .join("rimz.ts"),
+            "qwen" => self.home_root.join(".qwen").join("settings.json"),
             other => panic!("unknown agent `{other}`"),
         }
     }
@@ -268,7 +269,7 @@ impl Env {
         };
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
-            "claude" | "pi" => text.contains("_rimz_managed"),
+            "claude" | "pi" | "qwen" => text.contains("_rimz_managed"),
             _ => false,
         }
     }

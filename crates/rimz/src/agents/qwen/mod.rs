@@ -33,8 +33,8 @@ use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, PresetErr, Result, RootIdentity,
     SessionOrigin, SubagentIdentity, TurnErrorClass, classify_agent_hook, non_empty_trimmed,
-    optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    optional_payload_string, resolve_root_identity, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored,
 };
 use crate::harness::run::PermissionMode;
 use crate::transcript::AskQuestion;
@@ -178,7 +178,7 @@ const QWEN_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::RealtimeCost,
         ConcernCoverage::Partial {
             via: "priced transcript tokens",
-            gap: "multi-provider billing; rewind branch pruning is not reconstructed; off-book models cost $0",
+            gap: "multi-provider billing; sidechain branch pruning is not reconstructed; off-book models cost $0",
         },
     ),
     (
@@ -195,7 +195,7 @@ const QWEN_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         IntegrationConcern::AccountSpend,
         ConcernCoverage::Partial {
             via: "credential presence/transcripts",
-            gap: "multi-provider billing; rewind branch pruning is not reconstructed; subscription metering unknown",
+            gap: "multi-provider billing; sidechain branch pruning is not reconstructed; subscription metering unknown",
         },
     ),
     (
@@ -424,9 +424,9 @@ impl AgentAdapter for QwenAdapter {
         let signal = lifecycle_signal(self.descriptor(), event_name, payload)?;
         let (agent_id, parent_agent_id) = observation_identity(event_name, payload)?;
         let transcript_path = optional_payload_string(payload, &["transcript_path"]);
-        let usage = transcript_path
-            .as_deref()
-            .map(usage_from_transcript)
+        let usage = matches!(event_name, "SessionStart" | "Stop")
+            .then(|| transcript_path.as_deref().map(usage_from_transcript))
+            .flatten()
             .unwrap_or_default();
         let start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let stop = (event_name == "Stop").then(|| parse_stop(payload));
@@ -457,9 +457,9 @@ impl AgentAdapter for QwenAdapter {
             .or(usage.context_window);
         observation.total_tokens = payload_total_tokens(
             payload,
-            stop.as_ref()
-                .and_then(|value| value.input_tokens)
-                .or(usage.total_tokens),
+            usage
+                .total_tokens
+                .or_else(|| stop.as_ref().and_then(|value| value.input_tokens)),
         );
         if event_name == "SessionStart"
             && start.as_ref().is_some_and(|value| {
@@ -521,6 +521,10 @@ impl AgentAdapter for QwenAdapter {
         parse_messages(lines)
     }
 
+    fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
+        parse_physical_assistant_messages(new_lines)
+    }
+
     fn wrapped_status_line_command(&self) -> Option<String> {
         let root = read_existing_json(&qwen_settings_path().ok()?).ok()?;
         wrapped_status_line_command_from(&root)
@@ -553,7 +557,7 @@ impl AgentAdapter for QwenAdapter {
         resume: Option<&super::spending::SpendCursor>,
         prices: &PriceBook,
     ) -> super::spending::SpendParse {
-        spend::parse_qwen_spend(path, resume.map_or(0, |cursor| cursor.offset), prices)
+        spend::parse_qwen_spend(path, resume, prices)
     }
 
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
@@ -744,17 +748,12 @@ fn observation_identity(
 /// record's visible text comes from its non-thought `text` parts; tool
 /// call/result records, system records, and sidechain/subagent records
 /// (`isSidechain` or an `agentId`) stay out of the root stream. This drives
-/// `rimz agents history`, `rimz message --wait`, and `-p --stream` reply
-/// extraction.
+/// complete `rimz agents history` replay. Incremental reply extraction uses
+/// the physical parser below because an appended page may omit its ancestors.
 fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
-    lines
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() {
-                return None;
-            }
-            let record = serde_json::from_str::<payloads::TranscriptRecord>(line).ok()?;
+    payloads::fold_transcript(lines)
+        .active_root()
+        .filter_map(|record| {
             if record.is_sidechain == Some(true) || record.agent_id.is_some() {
                 return None;
             }
@@ -773,6 +772,21 @@ fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
         .collect()
 }
 
+fn parse_physical_assistant_messages(lines: &str) -> Vec<String> {
+    lines
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str::<payloads::TranscriptRecord>(line).ok())
+        .filter(|record| {
+            record.r#type.as_deref() == Some("assistant")
+                && record.is_sidechain != Some(true)
+                && record.agent_id.is_none()
+        })
+        .filter_map(|record| non_empty_trimmed(&record.message.visible_text()))
+        .collect()
+}
+
 #[derive(Default)]
 struct TranscriptUsage {
     total_tokens: Option<u64>,
@@ -781,30 +795,19 @@ struct TranscriptUsage {
 }
 
 fn usage_from_transcript(path: &str) -> TranscriptUsage {
-    let Some(text) = read_transcript_tail(Path::new(path)) else {
+    let Ok(text) = std::fs::read_to_string(path) else {
         return TranscriptUsage::default();
     };
-    for line in text.lines().rev() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if value.get("type").and_then(Value::as_str) != Some("assistant")
-            || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
-            || value.get("agentId").is_some_and(|value| !value.is_null())
-        {
-            continue;
-        }
-        let Some(usage) = value.get("usageMetadata") else {
-            continue;
-        };
+    let folded = payloads::fold_transcript(&text);
+    if let Some(record) = folded.latest_active_assistant_with_usage() {
         return TranscriptUsage {
-            total_tokens: usage.get("totalTokenCount").and_then(Value::as_u64),
-            model: value
-                .get("model")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned),
-            context_window: value.get("contextWindowSize").and_then(Value::as_u64),
+            total_tokens: record
+                .usage_metadata
+                .as_ref()
+                .and_then(payloads::TranscriptUsage::live_total)
+                .or(Some(0)),
+            model: record.model.clone().filter(|value| !value.is_empty()),
+            context_window: record.context_window_size,
         };
     }
     TranscriptUsage {

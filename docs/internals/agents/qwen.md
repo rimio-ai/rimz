@@ -22,11 +22,13 @@ Hook stdout stays empty on the neutral path. `PermissionRequest` and the `PreToo
 
 ## Context and transcript
 
-The hook-time tail scan takes the newest root `assistant` record with `usageMetadata`, excluding `isSidechain: true` and records with `agentId`. It publishes `totalTokenCount`, `model`, and `contextWindowSize`; a readable usage-free transcript means fresh zero, while an unreadable path stays unknown.
+At `SessionStart` and `Stop`, the hook path reads the complete transcript and follows the latest root record's `uuid`/`parentUuid` ancestry. The newest active root `assistant` with `usageMetadata` publishes its model and context window plus explicit `totalTokenCount`, or a derived total from known prompt, candidate, thought, and tool-use prompt components. Numeric strings are accepted and malformed optional usage fields stay absent without discarding the record. A readable usage-free transcript means fresh zero, while an unreadable path stays unknown. Tool hooks skip this complete-file enrichment.
 
 Command-mode `ui.statusLine` is wrapped so `rimz statusline feed --source qwen` receives Qwen's rich JSON. It supplies the provider-selected context window and percentage, latest prompt-token gauge, model display name, version, Vim mode, and file-line totals. Cumulative `metrics.models` token totals stay out of the live gauge because they span the session and every routed model. A preset statusline has no command transport, so install leaves it untouched and context falls back to the transcript tail.
 
-Main-thread conversation replay reads the same session JSONL. Each `user`/`assistant` record carries the Google `Content` shape, so a message's visible text joins its non-thought `text` parts, dropping thought parts and `functionCall`/`functionResponse` parts that hold no prose; `tool_result` and `system` records, and any record marked `isSidechain` or carrying an `agentId`, stay out of the root stream. This feeds `rimz agents history`, `rimz message --wait` reply extraction, and `-p --stream` assistant streaming. The parser walks physical records in file order; it does not yet reconstruct the active `parentUuid` branch, so a transcript replayed after `/rewind` can surface an abandoned branch's messages.
+Main-thread conversation replay uses the same UUID-parent fold as hook-boundary usage. It indexes identity-bearing records last-wins, selects the latest record without `agentId` or `isSidechain: true`, and walks its ancestry with missing-parent and cycle guards; unknown and system records remain valid links but stay out of visible replay. A transcript with no usable root UUID graph preserves legacy physical order.
+
+Each visible `user`/`assistant` record carries the Google `Content` shape, so replay joins its non-thought `text` parts and drops thought, `functionCall`, and `functionResponse` parts without prose. Incremental `rimz message --wait` and `-p --stream` reads use a separate physical append parser: an appended assistant can point to a parent before the byte cursor, so streaming validates and emits each new visible root assistant without requiring the page to contain its ancestry.
 
 Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
 
@@ -36,19 +38,19 @@ The account probe reads `security.auth.selectedType` and checks only whether the
 
 ## Cost
 
-Session files live below `<runtime-base>/projects/*/chats/`, where runtime base is `$QWEN_RUNTIME_DIR`, then `$QWEN_HOME`, then `~/.qwen`. Each assistant record prices uncached prompt, cache-read, and candidate-plus-thought tokens through RimZ's price book. Unknown or off-book models retain tokens at zero dollars and register for pricing refresh.
+Session files are direct regular `.jsonl` children of `<runtime-base>/projects/<project>/chats/`, where runtime base is `$QWEN_RUNTIME_DIR`, then `$QWEN_HOME`, then `~/.qwen`. Nested child logs, sidecars, other extensions, and JSONL outside that exact tree stay out of discovery.
+
+Each refresh cold-folds every readable changed file and authoritatively replaces that file's cached entries, so a root rewind retracts abandoned assistant spend. Active-root assistant records price known uncached prompt, cache-read, and candidate-plus-thought tokens through RimZ's price book; an unexplained `totalTokenCount` remainder never receives a guessed billing category. Unknown or off-book models retain known tokens at zero dollars and register for pricing refresh.
 
 The transcript groups explicit and implicit cache hits in `cachedContentTokenCount`, so RimZ prices the whole category at the conservative implicit-cache rate of 20% of input; explicit hits may therefore be slightly overcounted.
 
-`uuid` is the message dedup key, `sessionId` is the billing thread, and `agentId`/`isSidechain` retain sidechain attribution so copied fork and child records can be deduplicated downstream. The current parser prices physical assistant records and does not reconstruct the `parentUuid` chain after `/rewind`, so abandoned branch records can overstate spend. Multi-provider endpoints, rewind pruning, and subscription metering remain the declared cost gaps.
+`uuid` is the message dedup key, `sessionId` is the billing thread, and `agentId`/`isSidechain` retain physical sidechain attribution so copied fork and child records can be deduplicated downstream. Root branch rewinds are pruned; sidechain branch pruning remains unavailable from the captured wire. Multi-provider endpoints, subscription metering, and provider-specific off-book pricing remain the declared cost gaps.
 
 ## Integration boundary and deferred work
 
 RimZ preserves Qwen's configured model by default because `security.auth.selectedType` can route to provider-specific catalogs; an `agents.toml` model preset adds `--model` explicitly. Qwen 0.19.9 also exposes direct `--system-prompt` text, while RimZ presets currently model system prompts as file paths, so Qwen system-prompt presets remain rejected until the shared preset abstraction can express text or a safe file-to-text rendering contract.
 
 Hooks bind the session to the pane through the hook child process and `RIMZ_AGENT_PID`. Qwen's `<session>.runtime.json` can establish that binding before the first hook and recover it after hook gaps, but consuming it needs a shared adapter-owned pane/session attribution seam with descendant-process and PID-reuse validation; the adapter leaves that sidecar deferred rather than adding a Qwen-only binding path.
-
-Active-branch spend requires a parser result that can retract cached entries when a later `system/rewind` changes the selected `parentUuid` chain. The shared append-only spend cursor accepts additions only, so branch-aware accounting remains deferred to a replacement/retraction-capable parser contract.
 
 Dual output (`--json-file` plus `--input-file`) remains optional. It can improve prompt and permission coverage, but adopting it changes pane launch ownership and adds control-channel races; hooks and the native pane remain the current decision path.
 

@@ -933,6 +933,99 @@ fn statusline_feed_with_no_wrap_captures_context_and_folds_snapshot() {
 }
 
 #[test]
+fn qwen_statusline_and_hook_fold_into_snapshot() {
+    let env = Env::new();
+    env.install_agent_hooks("qwen");
+    assert!(env.agent_hooks_installed("qwen"));
+
+    let statusline = json!({
+        "session_id": "sess-qwen-rewind",
+        "version": "0.19.9",
+        "model": {"display_name": "qwen-statusline-selected"},
+        "context_window": {
+            "context_window_size": 444444,
+            "used_percentage": 9.4,
+            "current_usage": 40000
+        },
+        "metrics": {
+            "files": {"total_lines_added": 17, "total_lines_removed": 4}
+        },
+        "vim": {"mode": "NORMAL"}
+    })
+    .to_string();
+    let out = env.run_statusline_feed("qwen", &statusline);
+    assert!(
+        out.status.success(),
+        "Qwen statusline stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "unwrapped Qwen statusline is neutral"
+    );
+
+    let contexts = env.agent_contexts();
+    assert_eq!(contexts.len(), 1);
+    let context = &contexts[0];
+    assert_eq!(context.agent_id, "sess-qwen-rewind");
+    assert_eq!(context.context.agent_version.as_deref(), Some("0.19.9"));
+    assert_eq!(
+        context.context.model_display_name.as_deref(),
+        Some("qwen-statusline-selected")
+    );
+    assert_eq!(context.context.vim_mode.as_deref(), Some("NORMAL"));
+    let tokens = context.context.tokens.as_ref().unwrap();
+    assert_eq!(tokens.context_window_size, Some(444_444));
+    assert_eq!(tokens.used_percentage, Some(9));
+    assert_eq!(tokens.used_tokens(), Some(40_000));
+    let cost = context.context.cost.as_ref().unwrap();
+    assert_eq!(cost.total_lines_added, Some(17));
+    assert_eq!(cost.total_lines_removed, Some(4));
+
+    let transcript = env.project_root.join("qwen-rewound-session.jsonl");
+    std::fs::write(
+        &transcript,
+        include_str!("../../src/agents/qwen/tests/fixtures/rewound-session.jsonl"),
+    )
+    .unwrap();
+    let hook = json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-qwen-rewind",
+        "source": "startup",
+        "transcript_path": transcript
+    })
+    .to_string();
+    let out = env.run_installed_hook("qwen", &hook);
+    assert_hook_succeeded_neutral("qwen", out);
+
+    let snapshot = env.snapshot_json();
+    let agents = snapshot["agents"].as_array().expect("agents array");
+    assert_eq!(
+        agents.len(),
+        1,
+        "statusline and hook fold onto one Qwen row"
+    );
+    let agent = &agents[0];
+    assert_eq!(agent["kind"], "qwen");
+    assert_eq!(agent["agent_id"], "sess-qwen-rewind");
+    assert_eq!(agent["model"], "qwen-active-final");
+    assert_eq!(agent["total_tokens"], 555);
+    assert_eq!(agent["context_window"], 333_333);
+    assert_eq!(
+        agent["context"]["model_display_name"],
+        "qwen-statusline-selected"
+    );
+    assert_eq!(agent["context"]["tokens"]["context_window_size"], 444_444);
+    assert_eq!(agent["context"]["tokens"]["used_percentage"], 9);
+    assert_eq!(
+        agent["context"]["tokens"]["current_usage"]["input_tokens"],
+        40_000
+    );
+    assert_eq!(agent["context"]["cost"]["total_lines_added"], 17);
+    assert_eq!(agent["context"]["cost"]["total_lines_removed"], 4);
+}
+
+#[test]
 fn statusline_feed_captures_claude_turn_interruption() {
     let env = Env::new();
     env.install_agent_hooks("claude");

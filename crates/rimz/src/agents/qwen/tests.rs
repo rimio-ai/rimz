@@ -1,9 +1,13 @@
 use std::fs;
+use std::io::Write as _;
 
 use serde_json::{Value, json};
 
 use super::*;
+use crate::agents::transcript::TranscriptCursor;
 use crate::agents::{AgentHookClass, AskKind};
+
+const REWOUND_SESSION: &str = include_str!("tests/fixtures/rewound-session.jsonl");
 
 #[test]
 fn classifies_native_asks_and_keeps_neutral_stdout_silent() {
@@ -218,7 +222,103 @@ fn transcript_tail_and_statusline_supply_context() {
 }
 
 #[test]
-fn parses_main_thread_transcript_and_excludes_sidechains() {
+fn rewound_transcript_supplies_active_hook_boundary_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rewound-session.jsonl");
+    fs::write(&path, REWOUND_SESSION).unwrap();
+    let adapter = QwenAdapter;
+    for event in ["SessionStart", "Stop"] {
+        let observation = adapter
+            .observe_lifecycle(
+                event,
+                &json!({
+                    "hook_event_name": event,
+                    "session_id": "sess-rewind",
+                    "source": "startup",
+                    "transcript_path": path,
+                    "input_tokens": 12
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            observation.launch.model.as_deref(),
+            Some("qwen-active-final")
+        );
+        assert_eq!(observation.total_tokens, Some(555));
+        assert_eq!(observation.context_window, Some(333_333));
+    }
+}
+
+#[test]
+fn rewound_fixture_replays_only_the_active_root_branch() {
+    let messages = QwenAdapter.parse_transcript_messages(REWOUND_SESSION);
+    let text = messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        text,
+        [
+            "Start the task",
+            "Initial answer",
+            "Replacement question",
+            "Replacement answer"
+        ]
+    );
+    assert_eq!(messages[0].role, TranscriptRole::User);
+    assert_eq!(messages[1].role, TranscriptRole::Assistant);
+    assert!(messages.iter().all(|message| message.at.is_some()));
+}
+
+#[test]
+fn transcript_cursor_streams_physical_appends_across_a_rewind() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stream.jsonl");
+    fs::write(
+        &path,
+        concat!(
+            r#"{"uuid":"u1","type":"user","message":{"parts":[{"text":"old user"}]}}"#,
+            "\n",
+            r#"{"uuid":"a1","parentUuid":"u1","type":"assistant","message":{"parts":[{"text":"old answer"}]}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    let path_text = path.to_string_lossy().into_owned();
+    let mut cursor = TranscriptCursor::new(false);
+    assert!(
+        cursor
+            .messages(Some(&path_text), None, &QwenAdapter)
+            .is_empty()
+    );
+
+    let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(
+        file,
+        r#"{{"uuid":"rewind","parentUuid":"a1","type":"system"}}"#
+    )
+    .unwrap();
+    writeln!(file, r#"{{"uuid":"u2","parentUuid":"rewind","type":"user","message":{{"parts":[{{"text":"replacement user"}}]}}}}"#).unwrap();
+    writeln!(file, r#"{{"uuid":"a2","parentUuid":"u2","type":"assistant","message":{{"parts":[{{"text":"replacement answer"}}]}}}}"#).unwrap();
+    assert_eq!(
+        cursor.messages(Some(&path_text), None, &QwenAdapter),
+        ["replacement answer"]
+    );
+    assert!(
+        cursor
+            .messages(Some(&path_text), None, &QwenAdapter)
+            .is_empty()
+    );
+
+    let mut from_start = TranscriptCursor::new(true);
+    assert_eq!(
+        from_start.messages(Some(&path_text), None, &QwenAdapter),
+        ["old answer", "replacement answer"]
+    );
+}
+
+#[test]
+fn parses_legacy_main_thread_transcript_and_excludes_sidechains() {
     let adapter = QwenAdapter;
     let lines = concat!(
         r#"{"type":"user","timestamp":"2026-06-02T10:00:00Z","message":{"role":"user","parts":[{"text":"hello"}]}}"#,

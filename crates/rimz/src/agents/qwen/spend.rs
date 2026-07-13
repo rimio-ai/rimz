@@ -3,36 +3,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
 use crate::agents::pricing::PriceBook;
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, origin_path, record_unknown_model,
 };
-use crate::agents::transcript_fs::{collect_jsonl, home_dir, read_spend_lines};
+use crate::agents::transcript_fs::home_dir;
 
-#[derive(Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct Entry {
-    uuid: Option<String>,
-    session_id: Option<String>,
-    timestamp: Option<String>,
-    r#type: Option<String>,
-    cwd: Option<String>,
-    model: Option<String>,
-    usage_metadata: Usage,
-    agent_id: Option<String>,
-    is_sidechain: Option<bool>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct Usage {
-    prompt_token_count: u64,
-    candidates_token_count: u64,
-    cached_content_token_count: u64,
-    thoughts_token_count: u64,
-}
+use super::payloads::{TranscriptRecord, fold_transcript};
 
 fn runtime_base() -> PathBuf {
     std::env::var_os("QWEN_RUNTIME_DIR")
@@ -43,87 +20,125 @@ fn runtime_base() -> PathBuf {
 }
 
 pub(crate) fn all_jsonl_files() -> Vec<PathBuf> {
+    session_files_under(&runtime_base())
+}
+
+fn session_files_under(runtime: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    collect_jsonl(&runtime_base().join("projects"), &mut files);
-    files.retain(|path| path.components().any(|part| part.as_os_str() == "chats"));
+    let Ok(projects) = std::fs::read_dir(runtime.join("projects")) else {
+        return files;
+    };
+    for project in projects.filter_map(Result::ok) {
+        if !project.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Ok(chats) = std::fs::read_dir(project.path().join("chats")) else {
+            continue;
+        };
+        for entry in chats.filter_map(Result::ok) {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_file())
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "jsonl")
+            {
+                files.push(path);
+            }
+        }
+    }
     files.sort();
     files.dedup();
     files
 }
 
-pub(crate) fn parse_qwen_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> SpendParse {
-    let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
-        return SpendParse {
-            cursor: SpendCursor {
-                offset: from_offset,
-                state: None,
-            },
-            ..SpendParse::default()
-        };
+/// Qwen rewinds can invalidate any earlier root assistant, so a readable file
+/// is cold-folded and atomically replaces that file's cached entry set.
+pub(crate) fn parse_qwen_spend(
+    path: &Path,
+    _resume: Option<&SpendCursor>,
+    prices: &PriceBook,
+) -> SpendParse {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return SpendParse::default();
     };
+    let folded = fold_transcript(&text);
     let mut entries = Vec::new();
     let mut origin = None;
     let mut unknown_models = BTreeMap::new();
-    for line in content
-        .split(|byte| *byte == b'\n')
-        .filter(|line| !line.is_empty())
+    for record in folded
+        .active_root()
+        .filter(|record| record.is_sidechain != Some(true) && record.agent_id.is_none())
+        .chain(
+            folded
+                .physical
+                .iter()
+                .filter(|record| record.is_sidechain == Some(true) || record.agent_id.is_some()),
+        )
     {
-        let Ok(entry) = serde_json::from_slice::<Entry>(line) else {
+        let Some(entry) = priced_entry(record, prices, &mut unknown_models) else {
             continue;
-        };
-        if entry.r#type.as_deref() != Some("assistant") {
-            continue;
-        }
-        let Some(model) = entry.model.as_deref().filter(|value| !value.is_empty()) else {
-            continue;
-        };
-        let Some(timestamp) = entry.timestamp.as_deref().and_then(iso_to_unix_secs) else {
-            continue;
-        };
-        let cached = entry.usage_metadata.cached_content_token_count;
-        let input = entry
-            .usage_metadata
-            .prompt_token_count
-            .saturating_sub(cached);
-        let output =
-            entry.usage_metadata.candidates_token_count + entry.usage_metadata.thoughts_token_count;
-        let cost = match prices.price(model) {
-            Some(price) => price.cost(input, output, 0, 0, cached, false),
-            None => {
-                record_unknown_model(&mut unknown_models, model, timestamp);
-                0.0
-            }
         };
         if origin.is_none() {
-            origin = origin_path(entry.cwd.as_deref());
+            origin = origin_path(record.cwd.as_deref());
         }
-        entries.push(CachedEntry {
-            ts_secs: timestamp,
-            cost_usd: cost,
-            input,
-            output,
-            cache_write: 0,
-            cache_read: cached,
-            message_id: entry.uuid,
-            request_id: None,
-            dedup_key: None,
-            thread_id: entry.session_id,
-            is_sidechain: entry.is_sidechain == Some(true) || entry.agent_id.is_some(),
-            has_speed: false,
-            model: Some(model.to_owned()),
-            rolled: false,
-        });
+        entries.push(entry);
     }
     SpendParse {
         entries,
         origin,
-        cursor: SpendCursor {
-            offset: next_offset,
-            state: None,
-        },
+        cursor: SpendCursor::default(),
         unknown_models,
-        replace_entries: false,
+        replace_entries: true,
     }
+}
+
+fn priced_entry(
+    record: &TranscriptRecord,
+    prices: &PriceBook,
+    unknown_models: &mut BTreeMap<String, u64>,
+) -> Option<CachedEntry> {
+    if record.r#type.as_deref() != Some("assistant") {
+        return None;
+    }
+    let usage = record.usage_metadata.as_ref()?;
+    if usage.prompt_token_count.is_none()
+        && usage.cached_content_token_count.is_none()
+        && usage.candidates_token_count.is_none()
+        && usage.thoughts_token_count.is_none()
+    {
+        return None;
+    }
+    let model = record.model.as_deref()?.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let timestamp = record.timestamp.as_deref().and_then(iso_to_unix_secs)?;
+    let input = usage.uncached_prompt();
+    let output = usage.output();
+    let cached = usage.cache_read();
+    let cost_usd = match prices.price(model) {
+        Some(price) => price.cost(input, output, 0, 0, cached, false),
+        None => {
+            record_unknown_model(unknown_models, model, timestamp);
+            0.0
+        }
+    };
+    Some(CachedEntry {
+        ts_secs: timestamp,
+        cost_usd,
+        input,
+        output,
+        cache_write: 0,
+        cache_read: cached,
+        message_id: record.uuid.clone(),
+        request_id: None,
+        dedup_key: None,
+        thread_id: record.session_id.clone(),
+        is_sidechain: record.is_sidechain == Some(true) || record.agent_id.is_some(),
+        has_speed: false,
+        model: Some(model.to_owned()),
+        rolled: false,
+    })
 }
 
 #[cfg(test)]
@@ -131,13 +146,119 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_usage_and_preserves_dedup_identity() {
+    fn fold_retracts_rewound_root_and_prices_known_categories() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
-        std::fs::write(&path, r#"{"uuid":"msg-1","sessionId":"s1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"unknown-model","usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":25,"candidatesTokenCount":10,"thoughtsTokenCount":5}}"#).unwrap();
-        let parsed = parse_qwen_spend(&path, 0, &PriceBook::default());
-        assert_eq!(parsed.entries[0].input, 75);
-        assert_eq!(parsed.entries[0].output, 15);
-        assert_eq!(parsed.entries[0].message_id.as_deref(), Some("msg-1"));
+        std::fs::write(
+            &path,
+            r#"{"uuid":"u1","type":"user"}
+{"uuid":"a1","parentUuid":"u1","sessionId":"s1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":25,"candidatesTokenCount":10,"thoughtsTokenCount":5}}
+{"uuid":"u2","parentUuid":"a1","type":"user"}
+{"uuid":"a2","parentUuid":"u2","sessionId":"s1","timestamp":"2026-06-02T10:01:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":200,"candidatesTokenCount":20}}"#,
+        )
+        .unwrap();
+        let first = parse_qwen_spend(&path, None, &PriceBook::embedded());
+        assert_eq!(first.entries.len(), 2);
+
+        use std::io::Write as _;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(
+            concat!(
+                "\n",
+                r#"{"uuid":"rewind","parentUuid":"a1","type":"system"}"#,
+                "\n",
+                r#"{"uuid":"u3","parentUuid":"rewind","type":"user"}"#,
+                "\n",
+                r#"{"uuid":"a3","parentUuid":"u3","sessionId":"s1","timestamp":"2026-06-02T10:02:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":"120","cachedContentTokenCount":"20","candidatesTokenCount":"12","thoughtsTokenCount":false}}"#,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        let resumed = SpendCursor {
+            offset: 999,
+            state: Some("ignored".into()),
+        };
+        let second = parse_qwen_spend(&path, Some(&resumed), &PriceBook::embedded());
+        assert!(second.replace_entries);
+        assert_eq!(second.cursor, SpendCursor::default());
+        assert_eq!(second.entries.len(), 2);
+        assert!(
+            second
+                .entries
+                .iter()
+                .all(|entry| entry.message_id.as_deref() != Some("a2"))
+        );
+        let replacement = second
+            .entries
+            .iter()
+            .find(|entry| entry.message_id.as_deref() == Some("a3"))
+            .unwrap();
+        assert_eq!(replacement.input, 100);
+        assert_eq!(replacement.cache_read, 20);
+        assert_eq!(replacement.output, 12);
+    }
+
+    #[test]
+    fn total_only_usage_does_not_fabricate_spend() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"uuid":"a1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"totalTokenCount":100}}"#,
+        )
+        .unwrap();
+        let parsed = parse_qwen_spend(&path, None, &PriceBook::embedded());
+        assert!(parsed.entries.is_empty());
+        assert!(parsed.replace_entries);
+    }
+
+    #[test]
+    fn preserves_physical_sidechain_attribution() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"uuid":"u1","type":"user"}
+{"uuid":"a1","parentUuid":"u1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":10}}
+{"uuid":"child","parentUuid":"a1","timestamp":"2026-06-02T10:01:00Z","type":"assistant","agentId":"child-1","model":"qwen3-coder-plus","usageMetadata":{"promptTokenCount":20}}"#,
+        )
+        .unwrap();
+        let parsed = parse_qwen_spend(&path, None, &PriceBook::embedded());
+        assert_eq!(parsed.entries.len(), 2);
+        assert!(!parsed.entries[0].is_sidechain);
+        assert!(parsed.entries[1].is_sidechain);
+    }
+
+    #[test]
+    fn unreadable_transcript_is_not_authoritative() {
+        let dir = tempfile::tempdir().unwrap();
+        let parsed = parse_qwen_spend(dir.path(), None, &PriceBook::embedded());
+        assert!(!parsed.replace_entries);
+    }
+
+    #[test]
+    fn discovery_accepts_only_direct_chat_jsonl_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = dir.path().join("projects/project-a/chats");
+        std::fs::create_dir_all(chats.join("nested")).unwrap();
+        std::fs::create_dir_all(dir.path().join("projects/project-b/other/chats")).unwrap();
+        std::fs::write(chats.join("session.jsonl"), "{}\n").unwrap();
+        std::fs::write(chats.join("session.json"), "{}").unwrap();
+        std::fs::write(chats.join("session.jsonl.sidecar"), "{}").unwrap();
+        std::fs::write(chats.join("nested/child.jsonl"), "{}\n").unwrap();
+        std::fs::write(
+            dir.path()
+                .join("projects/project-b/other/chats/outside.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            session_files_under(dir.path()),
+            [chats.join("session.jsonl")]
+        );
     }
 }
