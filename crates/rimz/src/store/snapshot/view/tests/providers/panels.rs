@@ -255,6 +255,59 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
     assert_eq!(claude.spending.as_ref().unwrap().year.usd, 9.0);
 }
 
+#[test]
+fn idle_provider_presence_requires_account_substance() {
+    let panel_count = |account: AgentAccount, spending: BTreeMap<String, SpendTally>| {
+        let accounts = BTreeMap::from([("gemini".to_owned(), account)]);
+        room(Vec::new())
+            .with_provider_aggregates(&accounts, &BTreeMap::new(), &spending)
+            .providers
+            .len()
+    };
+    let credentials_only = AgentAccount {
+        plan: Some("API Key".to_owned()),
+        metered: Some(false),
+        ..Default::default()
+    };
+
+    assert_eq!(panel_count(credentials_only.clone(), BTreeMap::new()), 0);
+    assert_eq!(
+        panel_count(
+            credentials_only.clone(),
+            provider_sessions([("gemini", 0, 0, 1)])
+        ),
+        1
+    );
+    assert_eq!(
+        panel_count(
+            AgentAccount {
+                metered: Some(true),
+                ..Default::default()
+            },
+            BTreeMap::new()
+        ),
+        1
+    );
+    assert_eq!(
+        panel_count(
+            AgentAccount {
+                account_id: Some("octocat".to_owned()),
+                ..Default::default()
+            },
+            BTreeMap::new()
+        ),
+        1
+    );
+
+    let accounts = BTreeMap::from([("gemini".to_owned(), credentials_only)]);
+    let live = room(vec![agent("gemini", "g1", AgentStatus::Idle, 10)]).with_provider_aggregates(
+        &accounts,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    );
+    assert_eq!(provider_kinds(&live), vec!["gemini"]);
+}
+
 fn provider_sessions(
     entries: impl IntoIterator<Item = (&'static str, u32, u32, u32)>,
 ) -> BTreeMap<String, SpendTally> {

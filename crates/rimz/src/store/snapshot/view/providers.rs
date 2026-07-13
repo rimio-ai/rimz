@@ -11,9 +11,10 @@ use super::{SidebarProviderPanel, SidebarSnapshot};
 
 impl SidebarSnapshot {
     /// Fold the agent rollup into per-provider dashboard blocks — one per agent
-    /// kind, plus one for any provider with no active session this run that is
-    /// logged in (an account-only block, so the dashboard shows your accounts
-    /// and budgets between turns).
+    /// kind, plus one for any provider with no active session this run whose
+    /// probed account has something to show: a metered login, a non-empty
+    /// identity, or recorded spend (an account-only block, so the dashboard
+    /// shows substantive accounts and budgets between turns).
     /// Sums each kind's spend, tokens, and edited lines; takes the plan, version,
     /// and rate-limit windows from the freshest session (account state is shared,
     /// so the latest reading is truest). `probed_accounts` carries out-of-band
@@ -39,7 +40,7 @@ impl SidebarSnapshot {
         remote_control: &BTreeMap<String, bool>,
         provider_spending: &BTreeMap<String, SpendTally>,
     ) -> Self {
-        let kinds = provider_kinds(&self.agents, probed_accounts);
+        let kinds = provider_kinds(&self.agents, probed_accounts, provider_spending);
         let mut panels = Vec::new();
         for kind in kinds {
             let sessions: Vec<&AgentState> = self
@@ -47,13 +48,13 @@ impl SidebarSnapshot {
                 .iter()
                 .filter(|agent| agent.parent_agent_id.is_none() && agent.kind == kind)
                 .collect();
-            // Nothing to show without a session or a logged-in account. Recorded
-            // spend enriches an existing provider block but never creates the
-            // provider section by itself.
+            // Nothing to show without a session or a substantive logged-in
+            // account. Recorded spend qualifies a probed account but never
+            // creates the provider section for a logged-out provider by itself.
             if sessions.is_empty()
-                && !probed_accounts
-                    .get(&kind)
-                    .is_some_and(account_creates_provider_panel)
+                && !probed_accounts.get(&kind).is_some_and(|account| {
+                    account_creates_provider_panel(account, provider_spending.get(&kind))
+                })
             {
                 continue;
             }
@@ -141,7 +142,7 @@ impl SidebarSnapshot {
                 year_sessions: tally.map_or(0, |tally| tally.year.sessions),
                 logged_in: probed_accounts
                     .get(&kind)
-                    .is_some_and(account_creates_provider_panel),
+                    .is_some_and(|account| account_creates_provider_panel(account, tally)),
                 credentials_updated_at_ms: probed_accounts
                     .get(&kind)
                     .and_then(|account| account.credentials_updated_at_ms),
@@ -209,6 +210,7 @@ impl ProviderRank {
 fn provider_kinds(
     agents: &[AgentState],
     probed_accounts: &BTreeMap<String, AgentAccount>,
+    provider_spending: &BTreeMap<String, SpendTally>,
 ) -> Vec<String> {
     let mut kinds: Vec<String> = Vec::new();
     for agent in agents {
@@ -217,20 +219,22 @@ fn provider_kinds(
         }
     }
     for (kind, account) in probed_accounts {
-        if account_creates_provider_panel(account) && !kinds.iter().any(|known| known == kind) {
+        if account_creates_provider_panel(account, provider_spending.get(kind))
+            && !kinds.iter().any(|known| known == kind)
+        {
             kinds.push(kind.clone());
         }
     }
     kinds
 }
 
-fn account_creates_provider_panel(account: &AgentAccount) -> bool {
-    account.plan.as_deref().is_some_and(|plan| !plan.is_empty())
-        || account.metered.is_some()
+fn account_creates_provider_panel(account: &AgentAccount, tally: Option<&SpendTally>) -> bool {
+    account.metered == Some(true)
         || account
-            .sub_provider
+            .account_id
             .as_deref()
-            .is_some_and(|provider| !provider.is_empty())
+            .is_some_and(|id| !id.is_empty())
+        || tally.is_some_and(|tally| tally.year.sessions > 0)
 }
 
 fn resolve_provider_panels(

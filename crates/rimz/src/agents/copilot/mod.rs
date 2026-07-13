@@ -6,6 +6,7 @@
 //! decision UI. Per-session events provide conversation history and optional
 //! metadata-only OTel chat spans provide the live model/token composition.
 
+mod account;
 mod otel;
 mod paths;
 pub(crate) mod payloads;
@@ -179,7 +180,7 @@ const COPILOT_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::AccountSpend,
         ConcernCoverage::Unsupported {
-            reason: "no machine-readable auth or usage surface",
+            reason: "login identity probe only; no plan, quota, or spend surface",
         },
     ),
     (
@@ -699,6 +700,10 @@ impl AgentAdapter for CopilotAdapter {
 
     fn managed_hook_artifacts_present(&self) -> bool {
         self.hooks_installed()
+    }
+
+    fn probe_account(&self) -> crate::agents::account::AccountProbe {
+        account::probe()
     }
 }
 

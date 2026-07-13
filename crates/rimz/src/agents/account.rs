@@ -45,7 +45,8 @@ pub(crate) fn credentials_updated_at_ms(path: &Path) -> Option<u64> {
 /// the full success window.
 #[derive(Debug)]
 pub enum AccountProbe {
-    /// A logged-in account with its plan/metering resolved.
+    /// A logged-in account with the identity, plan, and metering facts its
+    /// provider exposes.
     Found(super::AgentAccount),
     /// The probe ran and authoritatively found no login (logged out, or an auth
     /// file naming no credential). Cache it like a success: it changes about never.
