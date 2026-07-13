@@ -41,7 +41,7 @@ fn probe_at(path: &Path) -> AccountProbe {
         }
         Err(_) => return AccountProbe::Unavailable,
     };
-    let Ok(config) = serde_json::from_slice::<Config>(&bytes) else {
+    let Ok(config) = crate::agents::jsonc::from_slice::<Config>(&bytes) else {
         return AccountProbe::Unavailable;
     };
     let login = config
@@ -93,6 +93,26 @@ mod tests {
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, None);
         assert!(account.credentials_updated_at_ms.is_some());
+    }
+
+    #[test]
+    fn commented_config_with_trailing_commas_resolves_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{
+                // Copilot writes JSONC-compatible user configuration.
+                "lastLoggedInUser": {"host":"github.com","login":"octocat",},
+                "loggedInUsers": [],
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            found(probe_at(&path)).account_id.as_deref(),
+            Some("octocat")
+        );
     }
 
     #[test]

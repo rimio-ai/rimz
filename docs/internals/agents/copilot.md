@@ -53,7 +53,7 @@ The bounded tail reader requires an exact `gen_ai.conversation.id`, prefers `gen
 
 ## Account and balance
 
-The adapter reads only the non-secret login identity in `$COPILOT_HOME/config.json` (`lastLoggedInUser`, falling back to the first `loggedInUsers` entry). It leaves `copilotTokens` unmodeled and reports the GitHub login as `account_id`, which keeps a logged-in idle Copilot visible without treating identity as spend coverage.
+The adapter reads only the non-secret login identity in `$COPILOT_HOME/config.json` (`lastLoggedInUser`, falling back to the first `loggedInUsers` entry). The file is JSONC, so the read-only probe accepts comments and trailing commas through the shared comment-tolerant reader. It leaves `copilotTokens` unmodeled and reports the GitHub login as `account_id`, which keeps a logged-in idle Copilot visible without treating identity as spend coverage.
 
 No machine-readable plan, quota, or spend probe is wired. The adapter reports no plan label, quota windows, or balance rather than inferring them from interactive output; `AccountSpend` stays unsupported.
 

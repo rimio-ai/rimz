@@ -44,7 +44,7 @@ fn probe_at_with(path: &Path, env_present: impl Fn(&str) -> bool) -> AccountProb
     let Ok(bytes) = std::fs::read(path) else {
         return AccountProbe::Unavailable;
     };
-    let Ok(settings) = serde_json::from_slice::<Settings>(&bytes) else {
+    let Ok(settings) = crate::agents::jsonc::from_slice::<Settings>(&bytes) else {
         return AccountProbe::LoggedOut;
     };
     let Some(provider) = settings
@@ -89,5 +89,25 @@ mod tests {
             panic!("configured credential must report an account");
         };
         assert!(account.credentials_updated_at_ms.is_some());
+    }
+
+    #[test]
+    fn commented_settings_resolve_auth_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+                /* Qwen settings accept JSONC. */
+                "security": {"auth": {"selectedType": "openai",},},
+            }"#,
+        )
+        .unwrap();
+
+        let AccountProbe::Found(account) = probe_at_with(&path, |name| name == "OPENAI_API_KEY")
+        else {
+            panic!("commented provider config must report an account");
+        };
+        assert_eq!(account.sub_provider.as_deref(), Some("openai"));
     }
 }

@@ -88,7 +88,7 @@ fn probe_at(settings_path: &Path, accounts_path: &Path) -> AccountProbe {
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, ()> {
     std::fs::read(path)
         .map_err(|_| ())
-        .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|_| ()))
+        .and_then(|bytes| crate::agents::jsonc::from_slice(&bytes).map_err(|_| ()))
 }
 
 #[cfg(test)]
@@ -133,6 +133,23 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("API Key"));
         assert_eq!(account.metered, Some(false));
         assert!(account.credentials_updated_at_ms.is_some());
+    }
+
+    #[test]
+    fn commented_settings_resolve_auth_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.json");
+        std::fs::write(
+            &settings,
+            r#"{
+                // Gemini settings accept comments and trailing commas.
+                "security": {"auth": {"selectedType": "gemini-api-key",},},
+            }"#,
+        )
+        .unwrap();
+
+        let account = found(probe_at(&settings, &dir.path().join("missing.json")));
+        assert_eq!(account.plan.as_deref(), Some("API Key"));
     }
 
     #[test]

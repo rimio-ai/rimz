@@ -45,7 +45,7 @@ Local refreshes stat-gate a normally 64 KiB tail whose first record is complete;
 
 ## Account and balance
 
-The account probe reads only local non-secret metadata: `security.auth.selectedType` in settings names the method, and `google_accounts.json.active` labels an `oauth-personal` login. API-key, Vertex, environment, and gateway methods retain their auth label without reading credentials.
+The account probe reads only local non-secret metadata: `security.auth.selectedType` in JSONC settings names the method, and `google_accounts.json.active` labels an `oauth-personal` login. The read-only probe accepts comments and trailing commas through the shared comment-tolerant reader. API-key, Vertex, environment, and gateway methods retain their auth label without reading credentials.
 
 The Code Assist `retrieveUserQuota` probe is deferred. It depends on an internal API and OAuth material held in OS secure storage, so Gemini's account-spend coverage remains partial and no quota windows are reported in this round.
 

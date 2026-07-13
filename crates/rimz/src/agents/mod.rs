@@ -28,6 +28,7 @@ mod emblems;
 pub mod gemini;
 pub(crate) mod hook_types;
 pub(crate) mod identity;
+pub(crate) mod jsonc;
 pub mod kimi;
 pub mod kiro;
 pub mod lifecycle;

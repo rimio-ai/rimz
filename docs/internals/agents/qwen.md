@@ -34,7 +34,7 @@ Manual compaction sends `/compress` (`/summarize` is Qwen's alias).
 
 ## Account and balance
 
-The account probe reads `security.auth.selectedType` and checks only whether the selected provider's documented credential environment variable is present. It never reads a secret value into output. Qwen publishes no stable cross-provider quota API, so the adapter reports no balance or rate-limit windows.
+The account probe reads `security.auth.selectedType` from JSONC settings through the shared comment-tolerant reader and checks only whether the selected provider's documented credential environment variable is present. It never reads a secret value into output. Qwen publishes no stable cross-provider quota API, so the adapter reports no balance or rate-limit windows.
 
 ## Cost
 
