@@ -20,7 +20,7 @@ impl SidebarSnapshot {
     /// so the latest reading is truest). `probed_accounts` carries out-of-band
     /// login facts the context cannot (Claude's `auth status`, Codex's
     /// `auth.json`), preferred only when the freshest context has none — and a kind
-    /// whose only signal is such a login still earns a block;
+    /// whose only signal is a qualifying probed account still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
     /// name) resolves from `self.theme.providers` over the built-in defaults, so
     /// the renderer gets a ready-to-paint block. With no explicit

@@ -14,9 +14,9 @@
 //! up, in [`crate::sidebar::cache`]'s producer cache.
 //!
 //! A probe also detects a *logged-in but idle* provider — one with no active
-//! session this run — so the dashboard can show your accounts and their budgets
-//! whenever you are logged in, not only while an agent is mid-turn. A live
-//! session's richer context still wins where both exist.
+//! session this run — so the dashboard can show substantive accounts and their
+//! budgets between turns. A live session's richer context still wins where both
+//! exist.
 //!
 //! Best-effort by contract: a missing binary, a logged-out account, or
 //! unparseable output yields no account. It never fails a snapshot — account is
