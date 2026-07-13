@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 use notify::{RecursiveMode, Watcher};
 use serde::Deserialize;
 
+use crate::child_process::{SupervisedChild, register_signal_wake, wait_wake};
 use crate::config::{DaemonConfig, DaemonPane, MachineConfig};
 
 pub const STATS_TOKEN: &str = "stats";
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
-const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
 const CONFIG_RELOAD_DEBOUNCE: Duration = Duration::from_millis(300);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,14 +100,23 @@ pub fn run_supervisor(slot: usize, worktree_root: &Path) -> io::Result<ExitStatu
     let config_path = MachineConfig::config_path();
     let daemon = load_daemon_config(&config_path).unwrap_or_default();
     let mut current = resolve_slot(&daemon, slot, &rimz_bin, worktree_root);
-    let mut child = spawn_child(&current)?;
-    let watch = watch_config(&config_path);
+    let (wake_tx, wake_rx) = mpsc::channel();
+    let mut child = SupervisedChild::adopt(spawn_child(&current)?, wake_tx.clone());
+    #[cfg(unix)]
+    let terminate_signals = {
+        use signal_hook::consts::signal::{SIGHUP, SIGTERM};
+        vec![SIGHUP, SIGTERM]
+    };
+    #[cfg(not(unix))]
+    let terminate_signals = Vec::new();
+    register_signal_wake(terminate_signals, wake_tx.clone())?;
+    let watch = watch_config(&config_path, wake_tx.clone());
     let mut reload_due_at: Option<Instant> = None;
 
     loop {
         let now = Instant::now();
         if terminate_signal_received() {
-            return terminate_child(&mut child);
+            return terminate_child(&mut child, &wake_rx);
         }
 
         if drain_config_changes(watch.as_ref()) {
@@ -118,7 +127,7 @@ pub fn run_supervisor(slot: usize, worktree_root: &Path) -> io::Result<ExitStatu
             if let Some(daemon) = load_daemon_config(&config_path) {
                 let next = resolve_slot(&daemon, slot, &rimz_bin, worktree_root);
                 if needs_restart(&current, &next) {
-                    match reload_child(&mut child, &next)? {
+                    match reload_child(&mut child, &next, &wake_tx, &wake_rx)? {
                         ReloadedChild::Next(next_child) => {
                             child = next_child;
                             current = next;
@@ -129,9 +138,9 @@ pub fn run_supervisor(slot: usize, worktree_root: &Path) -> io::Result<ExitStatu
             }
         }
 
-        match try_wait_child(&mut child)? {
+        match child.try_wait()? {
             Some(status) => return Ok(status),
-            None => std::thread::sleep(CHILD_WAIT_POLL),
+            None => wait_wake(&wake_rx, reload_due_at),
         }
     }
 }
@@ -179,15 +188,21 @@ fn needs_restart(current: &ResolvedPane, next: &ResolvedPane) -> bool {
 }
 
 enum ReloadedChild {
-    Next(Child),
+    Next(SupervisedChild),
     Current,
 }
 
-fn reload_child(child: &mut Child, next: &ResolvedPane) -> io::Result<ReloadedChild> {
+fn reload_child(
+    child: &mut SupervisedChild,
+    next: &ResolvedPane,
+    wake_tx: &mpsc::Sender<()>,
+    wake_rx: &mpsc::Receiver<()>,
+) -> io::Result<ReloadedChild> {
     match spawn_child(next) {
-        Ok(mut next_child) => {
-            if let Err(err) = terminate_child(child) {
-                let _ = terminate_child(&mut next_child);
+        Ok(next_child) => {
+            let mut next_child = SupervisedChild::adopt(next_child, wake_tx.clone());
+            if let Err(err) = terminate_child(child, wake_rx) {
+                let _ = terminate_child(&mut next_child, wake_rx);
                 return Err(err);
             }
             Ok(ReloadedChild::Next(next_child))
@@ -222,7 +237,7 @@ struct ConfigWatch {
     rx: mpsc::Receiver<()>,
 }
 
-fn watch_config(config_path: &Path) -> Option<ConfigWatch> {
+fn watch_config(config_path: &Path, wake: mpsc::Sender<()>) -> Option<ConfigWatch> {
     let Some(parent) = config_path.parent() else {
         tracing::debug!(
             path = %config_path.display(),
@@ -241,6 +256,7 @@ fn watch_config(config_path: &Path) -> Option<ConfigWatch> {
                     .any(|path| path.parent() == Some(watched_parent.as_path()))
             {
                 let _ = event_tx.send(());
+                let _ = wake.send(());
             }
         }) {
             Ok(watcher) => watcher,
@@ -313,69 +329,31 @@ fn install_signal_handlers() -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn terminate_child(child: &mut Child) -> io::Result<ExitStatus> {
-    if let Some(status) = try_wait_child(child)? {
+fn terminate_child(
+    child: &mut SupervisedChild,
+    wake_rx: &mpsc::Receiver<()>,
+) -> io::Result<ExitStatus> {
+    if let Some(status) = child.try_wait()? {
         return Ok(status);
     }
-    signal_child(child.id(), ChildSignal::Term);
+    child.signal_term();
     let deadline = Instant::now() + CHILD_SIGNAL_GRACE;
     loop {
-        if let Some(status) = try_wait_child(child)? {
+        if let Some(status) = child.try_wait()? {
             return Ok(status);
         }
         if Instant::now() >= deadline {
             break;
         }
-        std::thread::sleep(CHILD_WAIT_POLL);
+        wait_wake(wake_rx, Some(deadline));
     }
-    signal_child(child.id(), ChildSignal::Kill);
-    wait_child(child)
-}
-
-#[cfg(not(unix))]
-fn terminate_child(child: &mut Child) -> io::Result<ExitStatus> {
-    if let Some(status) = try_wait_child(child)? {
-        return Ok(status);
-    }
-    child.kill()?;
-    wait_child(child)
-}
-
-fn try_wait_child(child: &mut Child) -> io::Result<Option<ExitStatus>> {
+    child.signal_kill();
     loop {
-        match child.try_wait() {
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            result => return result,
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
         }
+        wait_wake(wake_rx, None);
     }
-}
-
-fn wait_child(child: &mut Child) -> io::Result<ExitStatus> {
-    loop {
-        match child.wait() {
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            result => return result,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum ChildSignal {
-    Term,
-    Kill,
-}
-
-#[cfg(unix)]
-fn signal_child(pid: u32, signal: ChildSignal) {
-    use nix::sys::signal::{Signal, kill};
-    use nix::unistd::Pid;
-
-    let signal = match signal {
-        ChildSignal::Term => Signal::SIGTERM,
-        ChildSignal::Kill => Signal::SIGKILL,
-    };
-    let _ = kill(Pid::from_raw(pid as i32), signal);
 }
 
 #[cfg(test)]

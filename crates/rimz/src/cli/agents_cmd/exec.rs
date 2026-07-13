@@ -1,6 +1,7 @@
 use super::launch::*;
 use super::*;
 use crate::cli::{open_store, worktree};
+use std::sync::mpsc;
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
@@ -758,7 +759,19 @@ struct ExecOutcome {
     abrupt: bool,
 }
 
-fn supervise_child(mut child: Child, run_monitor: Option<&RunExecContext>) -> Result<ExecOutcome> {
+fn supervise_child(child: Child, run_monitor: Option<&RunExecContext>) -> Result<ExecOutcome> {
+    let (wake_tx, wake_rx) = mpsc::channel();
+    let mut child = rimz::child_process::SupervisedChild::adopt(child, wake_tx.clone());
+    #[cfg(unix)]
+    let cleanup_signals = {
+        use signal_hook::consts::signal::{SIGHUP, SIGTERM};
+        vec![SIGHUP, SIGTERM]
+    };
+    #[cfg(not(unix))]
+    let cleanup_signals = Vec::new();
+    rimz::child_process::register_signal_wake(cleanup_signals, wake_tx)
+        .context("registering cleanup signal wakeups")?;
+
     let mut signal_seen_at = cleanup_signal_received().then(Instant::now);
     let mut term_sent_at: Option<Instant> = None;
     let mut kill_sent = false;
@@ -785,7 +798,7 @@ fn supervise_child(mut child: Child, run_monitor: Option<&RunExecContext>) -> Re
             next_run_check = now + RUN_MONITOR_POLL;
             if monitor.is_terminal() {
                 run_completed = true;
-                signal_child(child.id(), ChildSignal::Term);
+                child.signal_term();
                 term_sent_at = Some(now);
             }
         }
@@ -793,7 +806,7 @@ fn supervise_child(mut child: Child, run_monitor: Option<&RunExecContext>) -> Re
         if cleanup_signal_received() {
             let first_seen = *signal_seen_at.get_or_insert(now);
             if term_sent_at.is_none() && now.duration_since(first_seen) >= CHILD_SIGNAL_GRACE {
-                signal_child(child.id(), ChildSignal::Term);
+                child.signal_term();
                 term_sent_at = Some(now);
             }
         }
@@ -801,11 +814,23 @@ fn supervise_child(mut child: Child, run_monitor: Option<&RunExecContext>) -> Re
             && !kill_sent
             && now.duration_since(sent_at) >= CHILD_SIGNAL_GRACE
         {
-            signal_child(child.id(), ChildSignal::Kill);
+            child.signal_kill();
             kill_sent = true;
         }
 
-        std::thread::sleep(CHILD_WAIT_POLL);
+        let deadline = [
+            (!run_completed && run_monitor.is_some()).then_some(next_run_check),
+            signal_seen_at
+                .filter(|_| term_sent_at.is_none())
+                .map(|seen_at| seen_at + CHILD_SIGNAL_GRACE),
+            term_sent_at
+                .filter(|_| !kill_sent)
+                .map(|sent_at| sent_at + CHILD_SIGNAL_GRACE),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        rimz::child_process::wait_wake(&wake_rx, deadline);
     }
 }
 
@@ -854,27 +879,6 @@ fn install_interrupt_signal_handler() -> Result<()> {
 fn install_interrupt_signal_handler() -> Result<()> {
     Ok(())
 }
-
-#[derive(Clone, Copy, Debug)]
-enum ChildSignal {
-    Term,
-    Kill,
-}
-
-#[cfg(unix)]
-fn signal_child(pid: u32, signal: ChildSignal) {
-    use nix::sys::signal::{Signal, kill};
-    use nix::unistd::Pid;
-
-    let signal = match signal {
-        ChildSignal::Term => Signal::SIGTERM,
-        ChildSignal::Kill => Signal::SIGKILL,
-    };
-    let _ = kill(Pid::from_raw(pid as i32), signal);
-}
-
-#[cfg(not(unix))]
-fn signal_child(_pid: u32, _signal: ChildSignal) {}
 
 fn session_accepts_agent_close(globals: &GlobalFlags, session_name: &str) -> bool {
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
