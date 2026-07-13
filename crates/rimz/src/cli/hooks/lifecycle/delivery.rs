@@ -76,6 +76,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     let agent_name = recorded.observation.agent_name.as_deref();
     if pending.iter().any(|message| {
         message.status == rimz::message::MessageStatus::Queued
+            && delivery_checkpoint
             && message.after.iter().any(|condition| {
                 condition.met_at.is_none()
                     && rimz::message::card_matches(
@@ -88,6 +89,7 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
                     )
             })
             || message.status == rimz::message::MessageStatus::Queued
+                && condition_checkpoint
                 && message.when.iter().any(|condition| {
                     condition.met_at.is_none()
                         && rimz::message::card_matches(
