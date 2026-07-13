@@ -14,7 +14,7 @@ Native event or derived surface → internal mapping; the upstream events, paylo
 | `UserPromptSubmit`                   | lifecycle     | `TurnStarted`                       | sanitized `task`/`prompt`; root lineage          |
 | `SubagentStart`                      | lifecycle     | `SubagentStarted`                   | keyed by child `agent_id`; `task` = `agent_type` |
 | `SubagentStop`                       | lifecycle     | `SubagentStopped`                   | child row; keeps the type label                  |
-| `Stop`                               | lifecycle     | `TurnEnded { errored, parked_on_background: false }`; `errored` reads the native payload or a rollout turn-error marker | clear task; refresh context/tokens; merge rollout turn-error marker |
+| `Stop`                               | lifecycle / awaiting-user | `AwaitingInput { PlanApproval }` when the resting rollout carries a same-turn `Plan` item; otherwise `TurnEnded { errored, parked_on_background: false }` | plan detail or clear task; refresh context/tokens; merge rollout markers |
 | `PermissionRequest`                  | awaiting-user | `AwaitingInput { Permission }` → `waiting` | —                                          |
 | `PreToolUse: request_user_input`     | awaiting-user | `AwaitingInput { Question }` → `waiting`   | user question                              |
 | `PostToolUse`                        | lifecycle     | `ToolUsed { mutates, edits }` for every observed tool completion | `edits` for `apply_patch`; non-mutating completions use proof-of-work persistence, including answered asks |
@@ -23,13 +23,15 @@ Native event or derived surface → internal mapping; the upstream events, paylo
 | `PostCompact`                        | lifecycle     | `CompactionEnded` with known trigger | safely redundant as a close; carries the auto/manual trigger bit |
 | pane liveness + rollup reaper        | derived       | session removal for the hooks matrix `ended` row | gap: no `SessionEnd` hook; cleared on a snapshot tick, not at session exit |
 
-`request_user_input` self-classifies from `tool_name` on the broad `PreToolUse` hook. Its own non-mutating `PostToolUse` clears waiting when the answer lands. Codex has no plan-approval gate: `update_plan` is a non-blocking todo tracker, and every non-question `PreToolUse` remains lifecycle proof-of-work only.
+`request_user_input` self-classifies from `tool_name` on the broad `PreToolUse` hook. RimZ parses its question ids, headings, labels, and descriptions into structured ask options; its own non-mutating `PostToolUse` records the id-keyed native answers and clears waiting. `update_plan` remains a non-blocking todo tracker. Plan mode has a separate client-side approval gate: a `Stop` resting on a rollout `Plan` item records `AwaitingInput { PlanApproval }`, while every other non-question `PreToolUse` remains lifecycle proof-of-work only.
 
 Codex provider-error evidence comes from the rollout tail. RimZ checks explicit error records on `Stop`; the stat-gated local refresh also checks the resting tail, so a provider-killed turn that writes no `Stop` still publishes `AgentContext.turn_error`. Timestamped rollout error records and the resting message-less `task_complete` shape write the marker, while newer live rollout records clear it. Explicit error evidence marks the `TurnEnded` lifecycle signal errored so a provider-killed `Stop` never reduces as success. The row then pauses or fails through the shared display projection ([Turn-death marker](#turn-death-marker)). Token and cost enrichment still refreshes on `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` through the stat-gated local context path. Codex's hook coverage is a progress signal rather than an enforcement boundary: upstream currently intercepts simple shell calls, `apply_patch`, and MCP calls, while unified-exec, web search, and other tool paths can bypass `PreToolUse`/`PostToolUse`.
 
 Codex shares the same keyed subagent identity as Claude (`resolve_subagent_identity`): a `SubagentStart`/`SubagentStop` with no distinct child id is quarantined, never folded onto the parent. The root arm shares Claude's drop rule too (`resolve_root_identity`): a non-`Subagent*` event carrying a distinct `agent_id` folds to nothing rather than keying a parentless phantom root — latent today, since Codex stamps `agent_id` only on `Subagent*`. Codex has no `SessionEnd` or `Notification` hook, so `ends_session` is never true — a Codex session leaves the rollup by liveness alone (see [model.md](./model.md#liveness-and-presence)). It has no background-task parking, so `parked_on_background` is always `false`.
 
 **Neutral output.** Codex's neutral path is empty stdout. Permission and user-input prompts remain in Codex's own UI, and the sidebar's `?` row routes you there.
+
+**Structured answers.** `rimz answer` drives the verified Codex 0.144.3 subset: `implement` presses Enter on the plan selector's default “Yes, implement this plan” row, and one option per `request_user_input` question moves down from the default first row before Enter commits and advances; the last question submits. Multi-select, custom free-text options, refinement text, alternate plan actions, and permission decisions stay in the Codex pane. A native `PostToolUse` answers-map closes a question ask with the selected labels, and the next `UserPromptSubmit` closes a plan ask with the submitted prompt.
 
 **Timeout & install.** Installed ask hooks use the short lifecycle timeout because they record the waiting observation and return neutral. Install writes inline `[[hooks.Event]]` tables in `~/.codex/config.toml` with the same `--event`-free command and substring reclaim as Claude; the legacy `[hooks.rimz]` table is ignored by Codex and removed on uninstall. Codex gates installed hooks behind its own per-hash trust state and **silently skips** an untrusted hook ([codex-reference.md → Trust state](../../externals/agent-adapter/codex-reference.md#trust-state)) — only the user can open the channel (`/hooks` inside Codex), so the adapter reports installed-but-untrusted events (`untrusted_installed_hooks`) and `rimz start`/`rimz doctor` surface the fix.
 
@@ -61,6 +63,7 @@ Codex writes one rollout file per session at `~/.codex/sessions/YYYY/MM/DD/rollo
 | `token_count`   | `payload.info.total_token_usage`               | `cost` (cumulative totals priced through [providers.md](./providers.md#token-pricing)) |
 | `turn_context`  | `payload.model`                                | `model` (display name)                    |
 | `turn_context`  | `payload.effort`                               | `effort` (live reasoning effort)          |
+| `item_completed` + clean `task_complete` | same-turn `item.type = "Plan"`, non-empty `item.text` | plan approval ask / `plan_proposed` backstop |
 
 Unlike Claude — which stores raw tokens and derives the window from the payload model — Codex stores a **precomputed `context_pct`**, because the rollout carries the window (`model_context_window`) directly.
 
@@ -77,6 +80,12 @@ The app-server trigger is never inline: a turn-boundary hook spawns `rimz codex 
 3. **A fresh cold-spawned `codex app-server`** — the always-present fallback, so headless / no-mux still enriches.
 
 The one datapoint the app-server does **not** expose read-only is token / context-window usage: it rides only the live `thread/tokenUsage/updated` notification behind a subscribing `thread/resume`. RimZ therefore treats the rollout as authoritative for live Codex usage, including the `AgentContext.tokens` value the card reads; app-server unavailability can stale rate limits, display-name metadata, or the thread preview/name, but it cannot stall the context meter, token composition, or per-session cost.
+
+### Plan-approval marker
+
+Codex plan mode ends a planning turn with an `item_completed` record whose item is a non-empty `Plan`, followed by a clean same-turn `task_complete`; the plan body is absent from `last_agent_message`. [`detect_plan_proposed`](../../../crates/rimz/src/agents/codex/transcript.rs) matches those turn ids in the bounded tail. On `Stop`, that evidence replaces the normal `TurnEnded` signal with `AwaitingInput { PlanApproval }`, so the existing ask feed persists the plan and a supervised `-p` run waits rather than completing with an empty final message. `UserPromptSubmit` starts the selected implementation or continued-planning turn and clears the ask.
+
+The stat-gated local refresh stamps `AgentContext.plan_proposed` with the completing record's timestamp and suppresses `turn_complete` for the same tail. This is the missed-`Stop` backstop: while the marker postdates `last_activity`, a falsely-`running` row projects to `waiting`, which keeps message delivery out of the selector. Enrichment does not invent a durable ask when the hook was missed. A newer live record clears the marker. Leaving Plan mode with Shift+Tab without submitting a prompt can leave the durable ask open until the next hook, matching the native-prompt dismissal gap on other adapters.
 
 ### Turn-death marker
 

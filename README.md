@@ -276,7 +276,7 @@ Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and
 | Agent       | Status          | State | Live | History | Ask | Plan | Subagents |
 |-------------|-----------------|:-----:|:----:|:-------:|:---:|:----:|:---------:|
 | Claude Code | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
-| Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ✗   |     ●     |
+| Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
 | Pi          | 🧪 Experimental |   ●   |  ●   |    ●    |  ✗  |  ✗   |     ✗     |
 | OpenCode    | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ✗   |     ●     |
 | Gemini CLI  | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ✗     |
@@ -288,7 +288,7 @@ Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and
 | Qwen Code   | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ●   |     ●     |
 | Kimi        | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ◐     |
 
-<sub>● full · ◐ partial · ✗ the agent exposes no such surface today (Codex ships no plan gate, Pi no prompts or subagents), so there is nothing for RimZ to wire; an agent-side extension could add it.</sub>
+<sub>● full · ◐ partial · ✗ the agent exposes no such surface today (Pi ships no prompts or subagents), so there is nothing for RimZ to wire; an agent-side extension could add it.</sub>
 
 *See it* — **State** live working/idle/waiting, **Live** realtime context health and cost on the card, **History** full session read (transcript, per-turn tokens, spend). *Do it* — **Ask** blocking prompts routed to your keyboard, **Plan** the plan-approval gate, **Subagents** the child-agent tree. The full per-mechanism detail, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md), and `rimz coverage` prints the live grid on your own machine with a reason on every cell.
 

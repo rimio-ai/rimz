@@ -100,13 +100,13 @@ RimZ parses around `permission_mode` without consuming it — the upstream still
 | `SubagentStart` | a subagent launches | `turn_id`, `agent_id`, `agent_type`, `permission_mode` | ✓ |
 | `PreToolUse` | before `exec_command` / `apply_patch` / MCP tools and the question pseudo-tool | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`; `tool_name = "request_user_input"` is a user question; `update_plan` is non-blocking and is not a plan-approval gate | ✓ |
 | `PermissionRequest` | approval needed (shell escalation, network) | `turn_id`, `tool_name`, `tool_input`, `tool_input.description?` | ✓ |
-| `PostToolUse` | after tool output is produced | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`, `tool_response` | ✓ |
+| `PostToolUse` | after tool output is produced | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`, `tool_response`; `request_user_input` returns its id-keyed answers map | ✓ |
 | `SubagentStop` | a subagent stops | `turn_id`, `agent_id`, `agent_type`, `agent_transcript_path`, `stop_hook_active`, `last_assistant_message` | ✓ |
 | `Stop` | turn completes | `turn_id`, `stop_hook_active`, `last_assistant_message` | ✓ |
 | `PreCompact` | before conversation compaction | `turn_id`, `trigger` (`manual`\|`auto`) | ✓ |
 | `PostCompact` | after compaction | `turn_id`, `trigger` | ✓ |
 
-Codex has **no `SessionEnd`, `Notification`, or plan-approval hook**. Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed.
+Codex has **no `SessionEnd`, `Notification`, or dedicated plan-approval hook**. The client-side plan gate is derived from the rollout after the ordinary `Stop` hook; its wire shape is in [Plan mode, approval, and questions](#plan-mode-approval-and-questions). Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed.
 
 Hook tool names are not the same vocabulary as rollout function-call names. The current hook contract reports canonical `Bash`, `apply_patch`, and `mcp__server__tool` names; `apply_patch` matcher aliases include `Edit` and `Write`. Hook interception remains partial: simple shell calls, `apply_patch`, and MCP calls are covered, while unified-exec, web search, and other non-shell/non-MCP paths are not a complete enforcement boundary. Current rollouts can still record `exec_command`, `apply_patch`, `update_plan`, and `request_user_input`, with older or compatibility traces mentioning `shell` / `local_shell`. RimZ reads the payload's actual `tool_name`, treats `request_user_input` as the only blocking `PreToolUse` question tool, and treats `update_plan` as ordinary non-blocking progress state.
 
@@ -267,7 +267,7 @@ Client connection preference (broker → daemon → cold-spawn) and the refresh 
 
 ## Rollout transcript JSONL
 
-Codex writes one rollout file per session — its session log — at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`, and moves archived rollouts into the sibling `~/.codex/archived_sessions/` tree. The format is defined by the open-source `codex-rs` types (no standalone published schema; the path tree and event shapes are the **official source**, linked above). Rollout events feed RimZ's context gauge, supervised-run streaming, and the local turn-death marker:
+Codex writes one rollout file per session — its session log — at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`, and moves archived rollouts into the sibling `~/.codex/archived_sessions/` tree. The format is defined by the open-source `codex-rs` types (no standalone published schema; the path tree and event shapes are the **official source**, linked above). Rollout events feed RimZ's context gauge, supervised-run streaming, plan approval, and the local turn-settle markers:
 
 ```jsonc
 // session metadata; forked_from_id appears on /side, /btw, and /fork children
@@ -313,6 +313,38 @@ Codex writes one rollout file per session — its session log — at `~/.codex/s
 ```
 
 Unlike Claude (raw tokens, window derived from the payload model), Codex carries the window directly (`model_context_window`), so the gauge is a precomputed `context_pct`. `session_meta.payload.forked_from_id` carries fork lineage for `/side` / `/btw` / `/fork`; a parentless head is a fresh root such as `/clear` / `/new`. Fork and subagent rollouts copy the parent's historical token-count records into a single timestamp second before appending their own work, so spend readers retain that cumulative prefix as a baseline and suppress it as billable usage. `thread_source` identifies `user` and `subagent` origins. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `input_tokens − cached_input_tokens` the `↘` fresh input (`input_tokens` includes the cached slice), and `output_tokens` the `↗` — the protocol reports no per-call cache-write, so the card grows no `◍`. `agent_message.message` is the main-thread assistant text RimZ emits as `rimz agents <spec> -p --stream` / `rimz agents wait --stream` progress; duplicate `response_item` rows are ignored for streaming. Error records use the app-server `TurnError` vocabulary generated by `codex app-server generate-json-schema --out DIR`: `codexErrorInfo = usageLimitExceeded` pauses for a rate limit, `serverOverloaded` and `internalServerError` pause for the backoff class, and other known variants fail the row. Label fallback maps "spend limit" to the spend-limit paused class; "usage limit", "session limit", "rate limit", "quota", and "too many requests" map to the rate-limit paused class; "at capacity" maps to the overload backoff class. Observed Codex 0.142.x serving-capacity failures render `⚠ Selected model is at capacity. Please try a different model.` in the TUI only; observed usage-limit failures render `■ You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage … try again at 6:35 AM.` in the TUI only. Both shapes leave the rollout resting on `event_msg` / `task_complete` with `last_agent_message: null`, no `error` field, no `Stop` hook, and no app-server `thread/read` error field; upstream issue threads include openai/codex #22277, #19579, #28507, and #29760. RimZ matches banner keywords, never glyphs, so `⚠`, `■`, and future ornaments are not protocol. Observed interrupted turns render `event_msg` / `turn_aborted` with `reason: "interrupted"` on Esc and `/clear` of a running turn, and no `Stop` hook; RimZ treats any resting `turn_aborted` reason as an interrupted marker and lets a later live record clear it. The field → internal mapping, date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root), and self-clear rule are in [codex.md → Context and transcript](../../internals/agents/codex.md#context-and-transcript).
+
+### Plan mode, approval, and questions
+
+Plan-mode shapes were verified against local Codex 0.144.3 rollouts and the installed TUI on 2026-07-13. A plan turn identifies its collaboration mode in `turn_context.payload.collaboration_mode.mode = "plan"` and `task_started.payload.collaboration_mode_kind = "plan"`; hook payloads report `permission_mode = "plan"`. The authoritative approval evidence is the completed item and same-turn clean completion:
+
+```jsonc
+{ "timestamp": "2026-07-13T10:00:01Z", "type": "event_msg",
+  "payload": { "type": "item_completed", "turn_id": "turn-1",
+    "item": { "type": "Plan", "id": "turn-1-plan", "text": "# Plan\n\n..." } } }
+{ "timestamp": "2026-07-13T10:00:03Z", "type": "event_msg",
+  "payload": { "type": "task_complete", "turn_id": "turn-1", "last_agent_message": "Codex says:" } }
+```
+
+The parallel assistant response item wraps the body in `<proposed_plan>…</proposed_plan>`, while `task_complete.last_agent_message` excludes it. The TUI draws “Implement this plan?” only after the turn, with “Yes, implement this plan”, “Yes, clear context and implement”, and “No, stay in Plan mode”; the first row switches to Default mode and submits `Implement the plan.`. This selector is client-side and emits no dedicated hook or `notify` event ([openai/codex#19921](https://github.com/openai/codex/issues/19921)); the version-pinned implementation strings and actions live in [`plan_implementation.rs`](https://github.com/openai/codex/blob/78ad6e6bfd1d3b6a209acd3ef82172a96b25179c/codex-rs/tui/src/chatwidget/plan_implementation.rs). RimZ therefore derives the ask from the rollout at the ordinary `Stop` boundary.
+
+Plan clarifications and default-mode questionnaires use the same `request_user_input` tool. Verified hook input and output:
+
+```jsonc
+// PreToolUse.tool_input
+{ "questions": [
+  { "id": "path", "header": "Migration", "question": "Pick a path?",
+    "options": [
+      { "label": "Blue", "description": "Safer rollout" },
+      { "label": "Green", "description": "Faster rollout" }
+    ] }
+] }
+
+// PostToolUse.tool_response
+{ "answers": { "path": { "answers": ["Blue"] } } }
+```
+
+The questionnaire starts each option list on its first row; Down moves selection and Enter commits, advances, and submits on the final question. The current UI also supports notes/custom text, while RimZ tolerantly parses `multi_select` and `multiSelect` if a producer supplies either spelling. The version-pinned interaction state machine lives in [`request_user_input/mod.rs`](https://github.com/openai/codex/blob/78ad6e6bfd1d3b6a209acd3ef82172a96b25179c/codex-rs/tui/src/bottom_pane/request_user_input/mod.rs).
 
 ## Auth file
 
