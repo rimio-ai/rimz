@@ -343,6 +343,7 @@ fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
     let ctx = LocalContextRefreshCtx {
         agent_id: "T-live",
         model_hint: None,
+        current_transcript_path: None,
         prior_transcript_path: Some(&path_text),
         prior_transcript_stat: None,
         shared_pricing_cache_path: &pricing,

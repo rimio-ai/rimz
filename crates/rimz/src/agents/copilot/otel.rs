@@ -265,6 +265,7 @@ mod tests {
         let first = refresh(&LocalContextRefreshCtx {
             agent_id: "session-fixture",
             model_hint: None,
+            current_transcript_path: None,
             prior_transcript_path: Some(path.to_str().unwrap()),
             prior_transcript_stat: None,
             shared_pricing_cache_path: &pricing,
@@ -276,6 +277,7 @@ mod tests {
             refresh(&LocalContextRefreshCtx {
                 agent_id: "session-fixture",
                 model_hint: None,
+                current_transcript_path: None,
                 prior_transcript_path: first.transcript_path.as_deref(),
                 prior_transcript_stat: Some(&stat),
                 shared_pricing_cache_path: &pricing,
@@ -292,6 +294,7 @@ mod tests {
         let next = refresh(&LocalContextRefreshCtx {
             agent_id: "session-fixture",
             model_hint: None,
+            current_transcript_path: None,
             prior_transcript_path: first.transcript_path.as_deref(),
             prior_transcript_stat: Some(&stat),
             shared_pricing_cache_path: &pricing,
