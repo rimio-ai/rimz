@@ -154,8 +154,14 @@ fn gauge_bars_map_severity_and_quantize_segments() {
     }
 
     assert_eq!(filled_half_cells(0.0, 4), (0, false));
+    assert_eq!(filled_half_cells(f64::EPSILON, 4), (0, true));
     assert_eq!(filled_half_cells(87.5, 4), (3, true));
     assert_eq!(filled_half_cells(100.0, 4), (4, false));
+    assert_eq!(
+        text(&context_gauge_spans(&plain, 0.5, &[], f64::EPSILON, 4)),
+        "╸───",
+        "a nonzero fill keeps a half-cell floor"
+    );
     assert_eq!(
         text(&context_gauge_spans(&plain, 0.5, &[], 87.5, 4)),
         "━━━╸",

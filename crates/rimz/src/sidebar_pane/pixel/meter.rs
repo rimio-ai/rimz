@@ -100,7 +100,9 @@ pub(crate) fn rasterize(spec: &MeterBarSpec) -> RgbaImage {
     };
     paint_rect(&mut image, 0, 7, width, 2, spec.track);
 
-    let fill_px = (spec.fill.clamp(0.0, 1.0) * f64::from(width)).round() as u32;
+    let fill = spec.fill.clamp(0.0, 1.0);
+    let fill_px = (fill * f64::from(width)).round() as u32;
+    let fill_px = if fill > 0.0 { fill_px.max(1) } else { 0 };
     if fill_px == 0 {
         return image;
     }
@@ -276,7 +278,7 @@ mod tests {
 
     #[test]
     fn rasterize_rounds_fill_to_exact_pixel_columns() {
-        for (fill, columns) in [(0.0, 0), (0.25, 4), (0.51, 8), (1.0, 16)] {
+        for (fill, columns) in [(0.0, 0), (f64::EPSILON, 1), (0.25, 4), (0.51, 8), (1.0, 16)] {
             let image = rasterize(&spec(fill));
             let painted = (0..image.width)
                 .filter(|x| pixel(&image, *x, 6)[3] == 255)

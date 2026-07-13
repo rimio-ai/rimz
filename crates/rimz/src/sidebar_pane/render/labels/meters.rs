@@ -161,7 +161,9 @@ fn filled_cells(percent: u8, width: usize) -> usize {
 
 /// Quantize a percentage to the nearest horizontal half cell.
 pub(super) fn filled_half_cells(fill_pct: f64, width: usize) -> (usize, bool) {
-    let half_cells = (fill_pct.clamp(0.0, 100.0) * width as f64 * 2.0 / 100.0).round() as usize;
+    let fill_pct = fill_pct.clamp(0.0, 100.0);
+    let half_cells = (fill_pct * width as f64 * 2.0 / 100.0).round() as usize;
+    let half_cells = if fill_pct > 0.0 { half_cells.max(1) } else { 0 };
     (half_cells / 2, half_cells % 2 == 1)
 }
 
