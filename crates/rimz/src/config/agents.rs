@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use super::{AttentionConfig, WorktreeConfig};
 use crate::harness::run::PermissionMode;
 
-/// Agent-launch preferences. Team entries bind role names to profiles; inline
-/// launch specs still resolve through profile/command parsing in
-/// [`crate::harness::spec`].
+/// Agent-launch preferences. Machine-team entries bind role names to profiles
+/// or registered agent kinds; inline launch specs resolve through the same
+/// profile/command rules in [`crate::harness::spec`].
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentsConfig {
@@ -126,6 +126,8 @@ pub struct Team {
 #[serde(deny_unknown_fields)]
 pub struct RoleBinding {
     pub role: String,
+    /// A named profile or registered agent kind. A same-named machine profile
+    /// overrides the kind's implicit base.
     pub profile: String,
     #[serde(default)]
     pub mode: Option<PermissionMode>,

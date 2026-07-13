@@ -356,6 +356,34 @@ fn agents_home_fragments_merge_profiles_commands_and_teams() {
 }
 
 #[test]
+fn agents_home_teams_can_bind_implicit_builtin_profiles() {
+    let root = tempdir().expect("tempdir");
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "forge",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.forge]\n\
+             [[agents.teams.forge.roles]]\n\
+             role = \"planner\"\n\
+             profile = \"claude\"\n\
+             [[agents.teams.forge.roles]]\n\
+             role = \"coder\"\n\
+             profile = \"codex\"\n",
+    );
+
+    let mut agents = AgentsConfig::default();
+    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml"))
+        .expect("built-in profiles resolve after fragment merge");
+
+    assert_eq!(
+        agents.teams.0.get("forge").map(|team| team.roles.len()),
+        Some(2)
+    );
+    assert!(agents.profiles.0.is_empty());
+}
+
+#[test]
 fn agents_toml_entries_override_agents_home_fragments() {
     let root = tempdir().expect("tempdir");
     write_agents_home_fragment(

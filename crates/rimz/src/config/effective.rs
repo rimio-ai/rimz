@@ -148,6 +148,10 @@ pub fn load(
             }
         })?;
     }
+    validate_repo_team_profile_closure(&repo).map_err(|source| EffectiveConfigErr::Agents {
+        path: config_path.clone(),
+        source,
+    })?;
     agents_spec::validate_config(&repo.profiles, &CommandsConfig::default(), &repo.teams).map_err(
         |source| EffectiveConfigErr::Agents {
             path: config_path.clone(),
@@ -165,6 +169,21 @@ pub fn load(
         state: report.state,
         config_path,
     })
+}
+
+fn validate_repo_team_profile_closure(repo: &RepoConfig) -> agents_spec::Result<()> {
+    for (team_name, team) in &repo.teams.0 {
+        for binding in &team.roles {
+            if !repo.profiles.0.contains_key(&binding.profile) {
+                return Err(LayoutErr::UnknownRoleProfile {
+                    team: team_name.clone(),
+                    role: binding.role.clone(),
+                    profile: binding.profile.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn project_tasks(project_root: &Path, config_root: &Path) -> Result<Option<ProjectTasks>> {

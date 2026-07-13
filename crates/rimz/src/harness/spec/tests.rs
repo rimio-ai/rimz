@@ -543,6 +543,24 @@ fn profile_inheritance_folds_child_wins_and_args_replace() {
 }
 
 #[test]
+fn builtin_kinds_are_implicit_profiles_and_explicit_overrides_win() {
+    let implicit = resolve_profile("claude", &no_profiles()).expect("built-in profile resolves");
+    assert_eq!(implicit, ResolvedProfile::bare("claude"));
+
+    let profiles = profiles([(
+        "claude",
+        Profile {
+            agent: "claude".to_owned(),
+            effort: Some("high".to_owned()),
+            ..profile("claude")
+        },
+    )]);
+    let explicit = resolve_profile("claude", &profiles).expect("explicit override resolves");
+    assert_eq!(explicit.kind.as_str(), "claude");
+    assert_eq!(explicit.effort.as_deref(), Some("high"));
+}
+
+#[test]
 fn profile_resolution_reports_unknown_base_cycles_depth_and_unsupported_fields() {
     let unknown = profiles([("planner", profile("ghost"))]);
     assert_eq!(
@@ -1373,6 +1391,32 @@ fn team_validation_rejects_bad_role_names_duplicates_and_unknown_profiles() {
     assert!(matches!(
         validate_config(&profiles, &no_commands(), &missing_profile),
         Err(LayoutErr::UnknownRoleProfile { profile, .. }) if profile == "missing"
+    ));
+}
+
+#[test]
+fn team_roles_accept_implicit_builtin_profiles() {
+    let teams = TeamsConfig(BTreeMap::from([(
+        "forge".to_owned(),
+        team(vec![role("planner", "claude"), role("coder", "codex")]),
+    )]));
+
+    validate_config(&no_profiles(), &no_commands(), &teams).expect("built-in profiles validate");
+    let spec = resolve_spec(Some("forge"), &no_profiles(), &no_commands(), &teams)
+        .expect("built-in profiles resolve");
+    assert!(matches!(
+        &spec.columns[0].rows[0],
+        Cell::Agent { kind, profile, role, .. }
+            if kind.as_str() == "claude"
+                && profile.as_deref() == Some("claude")
+                && role.as_deref() == Some("planner")
+    ));
+    assert!(matches!(
+        &spec.columns[1].rows[0],
+        Cell::Agent { kind, profile, role, .. }
+            if kind.as_str() == "codex"
+                && profile.as_deref() == Some("codex")
+                && role.as_deref() == Some("coder")
     ));
 }
 

@@ -42,8 +42,9 @@
 ## htop = "htop"
 
 [agents.teams]
-# Teams bind ordered role names to profiles. By default each role opens as one
-# side-by-side column in the same tab; optional `layout` uses the same
+# Teams bind ordered role names to profiles or built-in agent kinds. A profile
+# named like a kind overrides that implicit base. By default each role opens as
+# one side-by-side column in the same tab; optional `layout` uses the same
 # comma=column / plus=row grammar as inline specs, resolving role names first.
 # Each role answers to `@<role>` in that channel.
 [agents.teams.peer]

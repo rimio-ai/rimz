@@ -526,6 +526,32 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
 }
 
 #[test]
+fn repo_team_roles_require_repo_profiles_even_for_builtin_kinds() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"claude\"\n",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
+
+    let err = effective_teams(&TeamsConfig::default(), project.path(), config.path())
+        .expect_err("repo team stays closed over repo profiles");
+
+    assert!(matches!(
+        err,
+        EffectiveConfigErr::Agents {
+            source: crate::harness::spec::LayoutErr::UnknownRoleProfile {
+                team,
+                role,
+                profile,
+            },
+            ..
+        } if team == "review" && role == "planner" && profile == "claude"
+    ));
+}
+
+#[test]
 fn untrusted_repo_team_reference_is_blocked() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");

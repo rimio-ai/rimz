@@ -135,7 +135,9 @@ pub(crate) fn merge_default_config() -> Result<MergeReport> {
 }
 
 fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
+    let agents_home = paths::agents_home();
     let Some(old_text) = read_existing(path)? else {
+        validate_merged_text(path, template, &agents_home)?;
         write_bytes_atomically(path, template.as_bytes())
             .with_context(|| format!("writing {}", path.display()))?;
         return Ok(FileMergeOutcome {
@@ -173,15 +175,10 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
             }
         }
     }
-    let kept = apply_merge_keys(
-        path,
-        &mut new_doc,
-        pending,
-        &mut skipped,
-        &paths::agents_home(),
-    );
+    let kept = apply_merge_keys(path, &mut new_doc, pending, &mut skipped, &agents_home);
 
     let rendered = new_doc.to_string();
+    validate_merged_text(path, &rendered, &agents_home)?;
     write_bytes_atomically(path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(FileMergeOutcome {
@@ -189,6 +186,12 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
         action: MergeAction::Merged { kept },
         skipped,
     })
+}
+
+fn validate_merged_text(path: &Path, text: &str, agents_home: &Path) -> Result<()> {
+    MachineConfig::parse_text(path, text, agents_home)
+        .map(|_| ())
+        .with_context(|| format!("validating merged {}", path.display()))
 }
 
 fn init(args: InitArgs) -> Result<()> {

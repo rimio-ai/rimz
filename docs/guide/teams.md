@@ -59,7 +59,7 @@ The planner comes back to you at its design gates; the sidebar lifts the whole t
 
 ## Define your own team
 
-A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a list of roles, each bound to a profile, with an optional `layout` using the same row and column operators as inline specs (commas split columns, plus signs tile rows, slashes stack them). Its cells name declared roles or roleless cells, while ad-hoc `cell:role` suffixes stay exclusive to inline specs:
+A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a list of roles, each bound to a configured profile or registered agent kind, with an optional `layout` using the same row and column operators as inline specs (commas split columns, plus signs tile rows, slashes stack them). A same-named machine profile overrides the kind's implicit base. Its cells name declared roles or roleless cells, while ad-hoc `cell:role` suffixes stay exclusive to inline specs:
 
 ```toml
 [agents.teams.forge]

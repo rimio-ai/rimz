@@ -657,6 +657,9 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             });
         }
         let Some(profile) = profiles.0.get(&cur) else {
+            if layers.is_empty() && crate::agents::find_adapter(&cur).is_some() {
+                break cur;
+            }
             return Err(LayoutErr::UnknownProfileBase {
                 profile: name.to_owned(),
                 base: cur,
@@ -1222,7 +1225,9 @@ fn validate_team(
                 role: binding.role.clone(),
             });
         }
-        if !profiles.0.contains_key(&binding.profile) {
+        if !profiles.0.contains_key(&binding.profile)
+            && crate::agents::find_adapter(&binding.profile).is_none()
+        {
             return Err(LayoutErr::UnknownRoleProfile {
                 team: name.to_owned(),
                 role: binding.role.clone(),

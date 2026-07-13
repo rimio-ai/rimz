@@ -722,6 +722,101 @@ agent = "claude"
 }
 
 #[test]
+fn setup_yes_preserves_kind_profiles_required_by_agents_home_team() {
+    let env = Env::new();
+    write_machine_file(
+        &env.home_root
+            .join(".agents")
+            .join("teams")
+            .join("forge")
+            .join("team.toml"),
+        r#"
+[agents.teams.forge]
+[[agents.teams.forge.roles]]
+role = "planner"
+profile = "claude"
+[[agents.teams.forge.roles]]
+role = "coder"
+profile = "codex"
+"#,
+    );
+    write_machine_file(
+        &agents_config_path(&env),
+        r#"
+[agents.profiles.claude]
+agent = "claude"
+mode = "auto"
+effort = "high"
+args = "--strict-mcp-config"
+
+[agents.profiles.codex]
+agent = "codex"
+effort = "high"
+args = "--search"
+"#,
+    );
+
+    env.rimz()
+        .args(["setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains(format!(
+            "Merged {} - kept 7 setting(s)",
+            agents_config_path(&env).display()
+        )));
+
+    let text = std::fs::read_to_string(agents_config_path(&env)).expect("read merged agents");
+    assert!(
+        text.contains("[agents.profiles.claude]")
+            && text.contains("[agents.profiles.codex]")
+            && text.contains("args = \"--strict-mcp-config\"")
+            && text.contains("args = \"--search\""),
+        "kind profile overrides should survive:\n{text}"
+    );
+    env.rimz()
+        .args(["config", "get", "agents", "--json"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn setup_yes_leaves_agents_file_when_fragments_keep_merge_invalid() {
+    let env = Env::new();
+    write_machine_file(
+        &env.home_root
+            .join(".agents")
+            .join("teams")
+            .join("broken")
+            .join("team.toml"),
+        r#"
+[agents.teams.broken]
+[[agents.teams.broken.roles]]
+role = "planner"
+profile = "missing"
+"#,
+    );
+    let original = "# keep this file byte-for-byte\n[agents]\n";
+    write_machine_file(&agents_config_path(&env), original);
+
+    env.rimz()
+        .args(["setup", "--yes"])
+        .assert()
+        .failure()
+        .stderr(contains(format!(
+            "validating merged {}",
+            agents_config_path(&env).display()
+        )))
+        .stderr(contains(
+            "team `broken` role `planner` references unknown profile `missing`",
+        ));
+
+    assert_eq!(
+        std::fs::read_to_string(agents_config_path(&env)).expect("read untouched agents"),
+        original
+    );
+}
+
+#[test]
 fn setup_yes_preserves_template_comments_for_untouched_config() {
     let env = Env::new();
     write_machine_file(
