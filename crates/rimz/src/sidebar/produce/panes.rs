@@ -328,7 +328,8 @@ fn backfill_pane_cwds(frame: &mut PaneFrame, proc_cwd: &dyn Fn(u32) -> Option<Pa
 /// it can retain a finished `CommandChanged` foreground after the shell has
 /// returned to idle. The mux-repaired root pid is live truth; if neither the
 /// root nor any descendant still matches the active command, the command is
-/// stale and the pane should fold as its idle shell.
+/// stale and the pane should fold as its idle shell. The synthetic sidebar
+/// chrome marker is classification metadata and stays exempt from this probe.
 fn drop_finished_active_commands(
     frame: &mut PaneFrame,
     proc_cmdline: &dyn Fn(u32) -> Option<String>,
@@ -339,6 +340,13 @@ fn drop_finished_active_commands(
         let Some(command) = pane.current.command.as_deref() else {
             continue;
         };
+        // The sidebar chrome marker is classification metadata, not a live
+        // foreground claim: the renderer process is labelled `rimz`, so a
+        // process probe for `rimz-sidebar` would always clear it and break
+        // chrome admission and sibling classification downstream.
+        if crate::store::snapshot::command_is_sidebar_chrome(command) {
+            continue;
+        }
         if !crate::store::snapshot::process_is_active(command) {
             continue;
         }

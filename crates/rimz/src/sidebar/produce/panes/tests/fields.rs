@@ -995,8 +995,8 @@ fn assert_active_command_case(
 }
 
 #[test]
-fn idle_and_agent_commands_are_not_process_gated() {
-    for command in ["zsh", "codex"] {
+fn idle_agent_and_chrome_commands_are_not_process_gated() {
+    for command in ["zsh", "codex", "rimz-sidebar"] {
         let mut frame = frame(vec![pane("terminal_1", Some(command), Some("/repo"))]);
         first_mut(&mut frame).current.pid = Some(100);
 
