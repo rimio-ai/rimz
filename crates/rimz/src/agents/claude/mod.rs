@@ -105,6 +105,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // recovered by cwd, and a pane with no session, such as the login
         // screen before SessionStart, is idle-synthesized like any wired agent.
         registers_lazily: false,
+        local_session_discovery: false,
         daemon_hooked_sessions: false,
         hook_install: true,
         implicit_unlimited_window_mins: &[],

@@ -1,98 +1,70 @@
 # Kiro CLI protocol reference
 
-> RimZ's verified Kiro behavior is in [kiro.md](../../internals/agents/kiro.md). This document records the upstream surfaces, the Kiro CLI 2.12.1 observations that bound the adapter, and the evidence required before support expands.
+> RimZ's verified mapping is in [kiro.md](../../internals/agents/kiro.md). This document records the pinned upstream surface and stock Kiro CLI 2.12.1 evidence.
 
-This reference targets the early-access v3 engine selected by `kiro-cli chat --v3`, not the older embedded engine. Kiro ships both engines inside a 2.x package, so the package version alone does not identify the hook, permission, or session protocol.
-
-Verification baseline: **2026-07-13**, Kiro CLI **2.12.1**, authenticated stock interactive TUI.
+This reference targets the early-access v3 engine selected by `kiro-cli chat --v3`, not the older embedded engine. Verification baseline: **2026-07-13**, Kiro CLI **2.12.1**, authenticated stock interactive TUI.
 
 ## Upstream sources
 
 | Surface | Official source |
 | --- | --- |
-| v3 overview and compatibility boundary | <https://kiro.dev/docs/cli/v3/> · <https://kiro.dev/docs/cli/v3/feature-overview/> |
-| v3 hooks and trigger catalog | <https://kiro.dev/docs/cli/v3/hooks/> · <https://kiro.dev/docs/hooks/> · <https://kiro.dev/docs/hooks/types/> |
+| v3 overview and compatibility | <https://kiro.dev/docs/cli/v3/> · <https://kiro.dev/docs/cli/v3/feature-overview/> |
+| v3 hooks and triggers | <https://kiro.dev/docs/cli/v3/hooks/> · <https://kiro.dev/docs/hooks/types/> |
 | capability permissions | <https://kiro.dev/docs/cli/v3/permissions/> |
-| CLI commands, sessions, and context | <https://kiro.dev/docs/cli/reference/cli-commands/> · <https://kiro.dev/docs/cli/chat/session-management/> · <https://kiro.dev/docs/cli/chat/context/> |
-| ACP | <https://kiro.dev/docs/cli/acp/> · <https://agentclientprotocol.com/> |
-| authentication and headless operation | <https://kiro.dev/docs/cli/authentication/> · <https://kiro.dev/docs/cli/headless/> |
+| sessions and context | <https://kiro.dev/docs/cli/chat/session-management/> · <https://kiro.dev/docs/cli/chat/context/> |
 | models and credits | <https://kiro.dev/docs/cli/models/> · <https://kiro.dev/docs/cli/billing/related-questions/> |
 | configuration and `KIRO_HOME` | <https://kiro.dev/docs/cli/chat/configuration/> · <https://kiro.dev/docs/cli/reference/settings/> |
 
-Refresh discovery with the installed executable:
+## Launch and process surface
 
-```sh
-kiro-cli --version
-kiro-cli --help-all
-kiro-cli chat --v3 --help
-kiro-cli diagnostic --format json
-kiro-cli whoami --format json
-kiro-cli settings list --all --format json
-kiro-cli chat --list-models --format json
+Fresh interactive launch is `kiro-cli chat --v3`; exact resume is `kiro-cli chat --v3 --resume-id <sess_uuid>`. The installed launcher runs `kiro-cli`, while the v3 engine can appear as `kiro-cli-chat`. `kiro-cli-term` is the shell-integration daemon and does not identify an agent pane.
+
+Kiro accepts chat-level model and effort flags and the interactive `/compact` command. `/rewind` is interactive-only. ACP and `--no-interactive` remain separate supervised-client contracts rather than implicit substitutes for the stock TUI.
+
+## Verified stock session store
+
+Kiro writes the stock v3 session under:
+
+```text
+${KIRO_HOME:-~/.kiro}/sessions/
+  <first 16 lowercase hex characters of sha256(exact absolute cwd bytes)>/
+    sess_<uuid>/
+      session.json
+      messages.jsonl
 ```
 
-## Verified stock-v3 surface
+Observed `session.json` fields include `id`, `schemaVersion: "1.0.0"`, `dataModelVersion: 1`, `workspacePaths`, `createdAt`, `lastModifiedAt`, and `status`. The `id` matches the directory basename.
 
-Launch a fresh interactive session with:
+Each `messages.jsonl` line carries `{id,timestamp,payload}`. Observed payload types are:
 
-```sh
-kiro-cli chat --v3
-```
+- `user` with `content`;
+- `assistant` with `operationType` and `content`;
+- `turn_start` and `turn_end` with `executionId`;
+- `pending_interaction` and `interaction_resolved` keyed by `toolCallId`;
+- `tool_call` and `tool_result` keyed by `toolCallId`;
+- `session_metadata` with `key: "contextUsage"` and numeric `value.usagePercentage`;
+- `usage_summary` with credit-denominated prompt-turn summaries;
+- `session_event` with `category: "session_pause"` and success context;
+- `steering_inclusion` and `session_start` internal/bootstrap records.
 
-Use the explicit `chat` subcommand before profile options. Kiro CLI 2.12.1 accepts `--model`, `--effort`, `--resume-id`, and the interactive `/compact` command on this surface. Exact resume is `kiro-cli chat --v3 --resume-id <session-id>`.
+Physical order is authoritative. In the captured successful turn, `session_start` arrived after assistant output, usage, pause, and `turn_end`; timestamp sorting or treating `session_start.content` as conversation text would corrupt the transcript.
 
-The install runs a `kiro-cli` launcher and a `kiro-cli-chat` v3 engine. RimZ recognizes both process names. `kiro-cli-term` is the figterm shell-integration daemon for ordinary shells and does not identify an agent pane.
+The captured approval turn ordered `pending_interaction(tool_approval)` → `interaction_resolved` → approved `tool_call(fs_write)` → successful `tool_result` → assistant `Say` → successful pause/turn end. This proves visible waiting and acting transitions. It does not establish failure, rejection, or cancellation shapes.
 
-The authenticated root UI reported an identity shaped as `sess_<uuid>`. After two completed turns, including an approved file write, the only matching file under `${KIRO_HOME:-~/.kiro}/sessions/cli/` was `<session-id>.history`. Its final observed lines contained the submitted prompts and slash commands. The file carried no assistant text, timestamps, model, context usage, credits, tool records, or structured envelope. The capture did not establish append-versus-rewrite timing or resume persistence, so the adapter makes neither claim.
+`usage_summary` reports credits. Credits do not prove token counts, context-window size, USD price, or historical/account spend, so RimZ exposes none of those figures. Only the explicit context percentage is mapped.
 
-This `.history` file is readline history rather than a provider transcript. Feeding it to `agents history` would create answerless cut turns and imply timing that the source does not contain.
+## Excluded session classes
 
-## Negative hook evidence
+`${KIRO_HOME:-~/.kiro}/sessions/cli/<session-id>.history` is readline history: it contains submitted prompt and slash-command text without assistant output, timestamps, context, or tool results. It is exclusion evidence rather than the structured transcript.
 
-The v3 documentation describes standalone JSON hook configurations and trigger names such as `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop`. Kiro CLI 2.12.1 did not execute them in the verified stock interactive run.
+UUID-only ACP/v2 JSON and JSONL paths describe a different session class and are excluded. `KIRO_ACP_RECORD_PATH`, manual transcript exports, and pane capture are opt-in or point-in-time diagnostics rather than durable stock-session truth.
 
-The attempts covered:
+## Negative hook and supervised evidence
 
-- the existing user `~/.kiro/hooks/rimz.json`;
-- an additional user hook file;
-- replacement commands in the canonical user file;
-- a project `.kiro/hooks` file in the disposable working directory.
+Kiro CLI 2.12.1 did not execute attempted user or project standalone hook configurations for `SessionStart`, `UserPromptSubmit`, `PostToolUse`, or `Stop`. No command invocation or stdin payload was observed, and the CLI exposed no validation command that made the configuration reproducible. RimZ therefore installs no Kiro hooks.
 
-None produced a command invocation or stdin payload. The CLI help exposed no hook listing, validation, or diagnostic command that made the configuration reproducible. No native payload keys or event ordering were captured.
+Pulled store records support live display and history but cannot block on completion or guarantee final output. `rimz agents kiro -p` remains unsupported until one executable transport proves permission handling, cancellation, exact completion, output, exit status, transcript retention, and session identity with fixtures.
 
-RimZ therefore treats lifecycle and hook installation as unsupported for 2.12.1 v3. It retains uninstall-only recognition of a legacy RimZ-owned `rimz.json` so upgrades can remove stale files without touching user-authored configurations.
+## Evidence boundary
 
-The older Kiro/Amazon Q engine's embedded lowercase hooks and payload conventions do not fill this gap. They select a different engine and cannot prove a stock-v3 wire.
-
-## ACP and debug recordings
-
-`kiro-cli acp` is a structured JSON-RPC transport that can create or load sessions and stream model and tool updates. Running it makes RimZ the protocol client rather than observing the user's stock TUI, so it is a separate product and security contract.
-
-A paired UUID-only `<uuid>.json` metadata file and `<uuid>.jsonl` event file was observed under `sessions/cli/` for a non-interactive ACP-hosted session. Its metadata said `session_created_reason: "subagent"`; its identity did not match the stock root `sess_<uuid>` shape. RimZ excludes this session class from the stock adapter.
-
-`KIRO_ACP_RECORD_PATH` records internal TUI ACP traffic for debugging. It is opt-in and has no published stability or durability contract, so a stock adapter cannot require or parse it as lifecycle truth.
-
-Manual `/transcript save --json` exports a point-in-time user action rather than a live sidecar. Pane capture remains a rendering and explicit user primitive, not a producer enrichment source.
-
-## Context, usage, and account gaps
-
-Kiro displays context through `/context show` and credits through `/usage`, but 2.12.1 exposes no verified stock-session file, hook payload, statusline, or API response that RimZ can consume continuously. Kiro meters credits rather than raw token dollars; no faithful USD conversion follows from the displayed credit number alone.
-
-`kiro-cli whoami --format json` is the account candidate. The captured signed-out shape is `{"account":null}`; the signed-in schema remains unpublished. RimZ reports no Kiro account spend or realtime dollars.
-
-## Supervised execution boundary
-
-The `chat --v3` parser accepts `--no-interactive`, and Kiro also exposes ACP, but neither is an implicit replacement for a stock interactive lifecycle hook. Before RimZ can support `agents kiro -p`, one transport must prove permission handling, cancellation, exact turn completion, final assistant output, exit status, transcript retention, and session identity under fixture-backed tests.
-
-Until then `rimz agents kiro -p` fails before pane or run-record creation. Ordinary interactive launch and exact resume remain available.
-
-## Re-enable checklist
-
-Re-enable Kiro lifecycle and hook installation only when a pinned v3 release supplies all of the following:
-
-1. A user or project hook configuration that executes reproducibly in a stock interactive session.
-2. Redacted stdin fixtures for every installed trigger, with cwd, process attribution, stdout behavior, and event ordering.
-3. Stable root identity across start, prompts, tools, successful completion, errors, cancellation, exact resume, and process exit.
-4. A test showing installation succeeds on the pinned release and fails fast when its preconditions are absent.
-
-Treat transcript, context, spend, and supervised ACP support as independent additions with their own native evidence. A lifecycle hook capture does not prove any of those surfaces.
+Expand claims only with redacted stock captures. Preserve physical record order and prove any new schema version, error/cancel boundary, tool vocabulary, permission outcome, or account surface independently. Hook execution, pulled transcript state, supervised execution, and spend remain separate capabilities.

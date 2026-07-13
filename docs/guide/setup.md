@@ -76,7 +76,7 @@ rimz hooks install claude       # one agent kind
 
 The install is additive — your existing hooks stay — and each report names the file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, RimZ wraps the command so the sidebar reads live context, and restores yours on uninstall. The first `rimz` run and interactive `rimz setup` offer the same install with a consent prompt and diff preview, so `rimz hooks install` is mainly for adding an agent later or re-checking the surface. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
 
-Kiro CLI 2.12.1 v3 does not execute its documented standalone hook configs, so RimZ leaves Kiro out of installation and keeps only launch, resume, and process presence.
+Kiro CLI 2.12.1 v3 does not execute its documented standalone hook configs, so RimZ leaves Kiro out of hook installation. Its validated stock local session store supplies transcript and live display without a setup step.
 
 ## True color
 

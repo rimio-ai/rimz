@@ -302,6 +302,7 @@ impl HookCoverage {
 /// gate behavior today: `rich_context` (the provider-owned live context
 /// transport), `context_usage` and `account_spend` (the token/cost read
 /// paths), `registers_lazily` (cwd session binding),
+/// `local_session_discovery` (provider-owned store bootstrapping),
 /// `hook_install` (the install and doctor surfaces), and `native_ask_ui`
 /// (whether an unresolved blocking ask has a native pane prompt). The
 /// rest state the adapter contract up front — pinned by each adapter's tests,
@@ -336,6 +337,9 @@ pub struct Capabilities {
     /// an instance can be present without a stamped session. The sidebar binds
     /// such a session to its pane by cwd.
     pub registers_lazily: bool,
+    /// Discovers live session identity and lifecycle from a provider-owned
+    /// machine-local store, without executable hooks or Rimz store writes.
+    pub local_session_discovery: bool,
     /// Sessions route hooks through a per-user daemon that outlives any one
     /// conversation, so a new session may succeed another in the same pane
     /// before the reaper clears the stamp.
@@ -684,13 +688,23 @@ mod tests {
         assert!(!kiro.capabilities.blocking_asks);
         assert!(kiro.capabilities.native_ask_ui);
         assert!(!kiro.capabilities.rich_context);
-        assert!(!kiro.capabilities.transcript_tail_context);
-        assert!(!kiro.capabilities.context_usage);
+        assert!(kiro.capabilities.transcript_tail_context);
+        assert!(kiro.capabilities.context_usage);
         assert!(!kiro.capabilities.account_spend);
+        assert!(kiro.capabilities.registers_lazily);
+        assert!(kiro.capabilities.local_session_discovery);
         assert!(!kiro.capabilities.hook_install);
         assert!(kiro.activity_events.is_empty());
         assert!(!kiro.capabilities.remote_control.pane_sessions);
         assert!(!kiro.capabilities.remote_control.background_sessions);
+
+        for adapter in crate::agents::registry::ADAPTERS {
+            assert_eq!(
+                adapter.descriptor().capabilities.local_session_discovery,
+                adapter.descriptor().kind == "kiro",
+                "local session discovery is an explicit Kiro-only capability"
+            );
+        }
 
         let qwen = crate::agents::registry::descriptor_by_kind("qwen").unwrap();
         assert!(!qwen.capabilities.remote_control.pane_sessions);

@@ -17,6 +17,24 @@ pub(super) fn hooks_path() -> Result<PathBuf> {
     )
 }
 
+pub(super) fn home() -> Option<PathBuf> {
+    resolve_home(
+        std::env::var_os("KIRO_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
+pub(super) fn resolve_home(kiro_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
+    kiro_home
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(|home| home.join(".kiro"))
+        })
+}
+
 pub(super) fn resolve_hooks_path(
     override_path: Option<&OsStr>,
     kiro_home: Option<&OsStr>,
@@ -25,17 +43,11 @@ pub(super) fn resolve_hooks_path(
     if let Some(path) = override_path.filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    if let Some(home) = kiro_home.filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home).join("hooks/rimz.json"));
-    }
-    let home = home
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| AgentErr::Install {
-            agent: AGENT,
-            reason: "$HOME is not set; cannot resolve ~/.kiro/hooks/rimz.json".to_owned(),
-        })?;
-    Ok(home.join(".kiro/hooks/rimz.json"))
+    let home = resolve_home(kiro_home, home).ok_or_else(|| AgentErr::Install {
+        agent: AGENT,
+        reason: "$HOME is not set; cannot resolve ~/.kiro/hooks/rimz.json".to_owned(),
+    })?;
+    Ok(home.join("hooks/rimz.json"))
 }
 
 pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {

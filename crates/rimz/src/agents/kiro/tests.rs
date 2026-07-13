@@ -1,10 +1,11 @@
 use super::*;
 
 use std::ffi::OsStr;
+use std::io::Write as _;
 
 use crate::agents::descriptor::{ConcernCoverage, IntegrationConcern};
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::agents::{AgentErr, LaunchPreset};
+use crate::agents::{AgentErr, LaunchPreset, TranscriptPosition, TranscriptRole};
 use serde_json::json;
 
 #[test]
@@ -19,7 +20,7 @@ fn native_hooks_are_explicitly_unsupported() {
             .iter()
             .find(|(concern, _)| *concern == IntegrationConcern::TurnLifecycle)
             .map(|(_, coverage)| *coverage),
-        Some(ConcernCoverage::Unsupported { .. })
+        Some(ConcernCoverage::Partial { .. })
     ));
 
     for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] {
@@ -42,10 +43,11 @@ fn native_hooks_are_explicitly_unsupported() {
 }
 
 #[test]
-fn transcript_context_and_spend_surfaces_remain_absent() {
+fn stock_store_transcript_context_and_lifecycle_are_normalized() {
     let descriptor = KiroAdapter.descriptor();
-    assert!(!descriptor.capabilities.transcript_tail_context);
-    assert!(!descriptor.capabilities.context_usage);
+    assert!(descriptor.capabilities.local_session_discovery);
+    assert!(descriptor.capabilities.transcript_tail_context);
+    assert!(descriptor.capabilities.context_usage);
     assert!(!descriptor.capabilities.rich_context);
     assert!(!descriptor.capabilities.account_spend);
     assert!(
@@ -55,10 +57,167 @@ fn transcript_context_and_spend_surfaces_remain_absent() {
             .covers_account_while_live
     );
 
+    let ping = include_str!("tests/fixtures/stock_ping/messages.jsonl");
+    let messages = KiroAdapter.parse_transcript_messages(ping);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].role, TranscriptRole::User);
+    assert_eq!(messages[0].text, "ping");
+    assert_eq!(messages[1].role, TranscriptRole::Assistant);
+    assert_eq!(messages[1].text, "pong");
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.text.contains("bootstrap"))
+    );
+
     let history = include_str!("tests/fixtures/root/sess_redacted.history");
     let acp = include_str!("tests/fixtures/acp/11111111-1111-4111-8111-111111111111.jsonl");
     assert!(KiroAdapter.parse_transcript_messages(history).is_empty());
     assert!(KiroAdapter.parse_transcript_messages(acp).is_empty());
+}
+
+#[test]
+fn discovery_validates_layout_and_folds_ordered_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let bucket = dir
+        .path()
+        .join("sessions")
+        .join(session::workspace_bucket(&workspace).unwrap());
+    let session_dir = bucket.join("sess_11111111-1111-4111-8111-111111111111");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(
+        session_dir.join("session.json"),
+        format!(
+            r#"{{"id":"sess_11111111-1111-4111-8111-111111111111","schemaVersion":"1.0.0","dataModelVersion":1,"workspacePaths":[{}],"createdAt":"2025-01-01T00:00:00Z","status":"idle"}}"#,
+            serde_json::to_string(&workspace).unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        session_dir.join("messages.jsonl"),
+        include_str!("tests/fixtures/stock_ping/messages.jsonl"),
+    )
+    .unwrap();
+
+    let observations = session::discover_under(dir.path(), &workspace);
+    assert_eq!(observations.len(), 1);
+    let observation = &observations[0];
+    assert_eq!(
+        observation.session_id.as_str(),
+        "sess_11111111-1111-4111-8111-111111111111"
+    );
+    assert_eq!(observation.status, crate::agents::AgentStatus::Success);
+    assert_eq!(observation.phase, crate::agents::TurnPhase::Idle);
+    assert_eq!(observation.latest_prompt.as_deref(), Some("ping"));
+    assert_eq!(observation.context_pct, Some(13));
+
+    std::fs::write(
+        session_dir.join("session.json"),
+        r#"{"id":"sess_11111111-1111-4111-8111-111111111111","schemaVersion":"2.0.0","dataModelVersion":1,"workspacePaths":[],"createdAt":"2025-01-01T00:00:00Z","status":"idle"}"#,
+    )
+    .unwrap();
+    assert!(session::discover_under(dir.path(), &workspace).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn discovery_rejects_symlinked_workspace_buckets() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let bucket_name = session::workspace_bucket(&workspace).unwrap();
+    let escaped = dir.path().join("escaped").join(&bucket_name);
+    let session_dir = escaped.join("sess_11111111-1111-4111-8111-111111111111");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(
+        session_dir.join("session.json"),
+        format!(
+            r#"{{"id":"sess_11111111-1111-4111-8111-111111111111","schemaVersion":"1.0.0","dataModelVersion":1,"workspacePaths":[{}],"createdAt":"2025-01-01T00:00:00Z","status":"idle"}}"#,
+            serde_json::to_string(&workspace).unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        session_dir.join("messages.jsonl"),
+        include_str!("tests/fixtures/stock_ping/messages.jsonl"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("sessions")).unwrap();
+    symlink(&escaped, dir.path().join("sessions").join(bucket_name)).unwrap();
+
+    assert!(session::discover_under(dir.path(), &workspace).is_empty());
+}
+
+#[test]
+fn approval_waiting_resolution_tool_activity_and_context_clamp_follow_file_order() {
+    let lines = include_str!("tests/fixtures/stock_approval/messages.jsonl");
+    let pending_end = lines.find("{\"id\":\"context-2a\"").unwrap();
+    let pending = session::fold_for_test(&lines[..pending_end]);
+    assert_eq!(pending.0, crate::agents::AgentStatus::Waiting);
+    assert_eq!(pending.2.as_deref(), Some("Write File"));
+
+    let tool_end = lines.find("{\"id\":\"tool-2-result\"").unwrap();
+    let acting = session::fold_for_test(&lines[..tool_end]);
+    assert_eq!(acting.0, crate::agents::AgentStatus::Running);
+    assert_eq!(acting.1, crate::agents::TurnPhase::Acting);
+
+    let settled = session::fold_for_test(lines);
+    assert_eq!(settled.0, crate::agents::AgentStatus::Success);
+    assert_eq!(settled.1, crate::agents::TurnPhase::Idle);
+    assert_eq!(settled.3, Some(100));
+}
+
+#[test]
+fn transcript_cursor_retains_torn_final_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("messages.jsonl");
+    let mut file = std::fs::File::create(&path).unwrap();
+    file.write_all(b"{\"id\":\"a\",\"timestamp\":\"2025-01-01T00:00:00Z\",\"payload\":{\"type\":\"assistant\",\"operationType\":\"Say\",\"content\":\"one\"}}\n{\"id\":\"b\"").unwrap();
+    let page = KiroAdapter
+        .read_assistant_transcript_page(&path, None, TranscriptPosition::START)
+        .unwrap();
+    assert_eq!(page.messages, ["one"]);
+    let next = page.next;
+    file.write_all(b",\"timestamp\":\"2025-01-01T00:00:01Z\",\"payload\":{\"type\":\"assistant\",\"operationType\":\"Say\",\"content\":\"two\"}}").unwrap();
+    let page = KiroAdapter
+        .read_assistant_transcript_page(&path, None, next)
+        .unwrap();
+    assert_eq!(page.messages, ["two"]);
+}
+
+#[test]
+fn workspace_hash_and_resume_parser_are_exact() {
+    assert_eq!(
+        session::workspace_bucket(Path::new("/workspace/project")).as_deref(),
+        Some("e3af8a7251583e76")
+    );
+    for command in [
+        "kiro-cli chat --v3 --resume-id sess_11111111-1111-4111-8111-111111111111",
+        "kiro-cli --resume-id=sess_11111111-1111-4111-8111-111111111111",
+        "kiro-cli-chat --resume-id sess_11111111-1111-4111-8111-111111111111",
+    ] {
+        assert_eq!(
+            KiroAdapter
+                .resumed_session_id_from_cmdline(command)
+                .as_deref(),
+            Some("sess_11111111-1111-4111-8111-111111111111")
+        );
+    }
+    for command in [
+        "kiro-cli-term --resume-id sess_11111111-1111-4111-8111-111111111111",
+        "kiro-cli --resume-id unrelated",
+        "echo --resume-id sess_11111111-1111-4111-8111-111111111111",
+    ] {
+        assert!(
+            KiroAdapter
+                .resumed_session_id_from_cmdline(command)
+                .is_none()
+        );
+    }
 }
 
 #[test]
@@ -129,6 +288,14 @@ fn hooks_path_prefers_override_then_kiro_home() {
         install::resolve_hooks_path(None, None, None),
         Err(AgentErr::Install { .. })
     ));
+    assert_eq!(
+        install::resolve_home(Some(kiro_home), Some(home)).unwrap(),
+        std::path::PathBuf::from("/tmp/kiro")
+    );
+    assert_eq!(
+        install::resolve_home(None, Some(home)).unwrap(),
+        std::path::PathBuf::from("/home/user/.kiro")
+    );
 }
 
 #[test]

@@ -394,7 +394,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         let resumed_session_id = pane.resumed_session_id.or_else(|| {
             pane.command
                 .as_deref()
-                .and_then(crate::agents::codex::codex_resumed_session_id_from_cmdline)
+                .and_then(crate::agents::resumed_session_id_from_cmdline)
         });
         tab.panes.push(PaneState {
             pane_id: pane.pane_id,

@@ -10,6 +10,21 @@ fn frame(panes: Vec<crate::pane::PaneRef>) -> crate::sidebar::frame::PaneFrame {
     crate::sidebar::frame::assemble_frame(panes, 1, "s")
 }
 
+#[test]
+fn resume_stamping_dispatches_for_kiro_panes() {
+    let mut pane = pane("terminal_1", Some("kiro-cli chat --v3"), Some("/repo/main"));
+    pane.pane_pid = Some(42);
+    let mut frame = frame(vec![pane]);
+    stamp_pane_resumed_session_ids(&mut frame, &|pid| {
+        (pid == 42)
+            .then(|| crate::ids::AgentSessionId::from("sess_11111111-1111-4111-8111-111111111111"))
+    });
+    assert_eq!(
+        first(&frame).current.resumed_session_id.as_deref(),
+        Some("sess_11111111-1111-4111-8111-111111111111")
+    );
+}
+
 fn first(frame: &crate::sidebar::frame::PaneFrame) -> &crate::sidebar::frame::PaneState {
     &frame.tabs[0].panes[0]
 }

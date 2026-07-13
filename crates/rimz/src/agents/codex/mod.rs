@@ -214,6 +214,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // its pane by cwd and renders a wired-but-unprompted `codex` pane as
         // an idle agent.
         registers_lazily: true,
+        local_session_discovery: false,
         daemon_hooked_sessions: true,
         hook_install: true,
         implicit_unlimited_window_mins: &[5 * 60],
@@ -494,6 +495,10 @@ impl AgentAdapter for CodexAdapter {
             "resume".to_owned(),
             session_id.to_owned(),
         ])
+    }
+
+    fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<crate::ids::AgentSessionId> {
+        codex_resumed_session_id_from_cmdline(cmdline)
     }
 
     fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {

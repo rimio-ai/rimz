@@ -40,11 +40,13 @@ pub(super) fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::Resol
 pub(super) fn preflight_agent(adapter: &dyn AgentAdapter) -> Result<()> {
     let descriptor = adapter.descriptor();
     let kind = descriptor.kind;
-    if let Some(rimz::agents::ConcernCoverage::Unsupported { reason }) =
+    if let Some(coverage) =
         descriptor.concern_coverage(rimz::agents::IntegrationConcern::TurnLifecycle)
+        && !matches!(coverage, rimz::agents::ConcernCoverage::Wired { .. })
     {
         bail!(
-            "`rimz agents -p` cannot supervise {kind}: a verified executable turn-lifecycle signal is required; {reason}"
+            "`rimz agents -p` cannot supervise {kind}: a verified executable turn-lifecycle signal is required; {}",
+            coverage.detail()
         );
     }
     if !adapter.hooks_installed() {

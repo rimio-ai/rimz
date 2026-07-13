@@ -65,6 +65,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         subagents: true,
         background_tasks: false,
         registers_lazily: true,
+        local_session_discovery: false,
         daemon_hooked_sessions: false,
         hook_install: true,
         implicit_unlimited_window_mins: &[],

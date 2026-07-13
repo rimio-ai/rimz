@@ -47,6 +47,26 @@ fn floating_flag_survives_frame_round_trip() {
 }
 
 #[test]
+fn kiro_resume_id_is_stamped_from_direct_mux_command() {
+    let session = "sess_11111111-1111-4111-8111-111111111111";
+    for command in [
+        format!("kiro-cli chat --v3 --resume-id {session}"),
+        format!("kiro-cli-chat --resume-id={session}"),
+    ] {
+        let frame = assemble_frame(
+            vec![pane("terminal_1", "tab_0", Some(&command), true)],
+            7,
+            "rimz-test",
+        );
+        assert_eq!(
+            frame.tabs[0].panes[0].current.resumed_session_id.as_deref(),
+            Some(session),
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn client_view_sets_session_focus_register() {
     let viewed = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {

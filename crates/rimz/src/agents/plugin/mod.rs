@@ -509,6 +509,7 @@ fn build_descriptor(
             subagents: manifest.capabilities.subagents,
             background_tasks: manifest.capabilities.background_tasks,
             registers_lazily: manifest.capabilities.registers_lazily,
+            local_session_discovery: false,
             daemon_hooked_sessions: false,
             hook_install: false,
             implicit_unlimited_window_mins: &[],

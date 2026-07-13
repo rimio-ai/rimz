@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::agent_activity::AgentActivity;
-use crate::agents::{AccountBudget, AgentState};
+use crate::agents::{AccountBudget, AgentState, LocalSessionObservation};
 use crate::diag::record::DiagEvent;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
@@ -20,6 +20,66 @@ mod projection;
 pub(crate) use projection::row_identity_violations;
 
 impl SidebarSnapshot {
+    /// Merge provider-owned local sessions only after strict one-to-one binding
+    /// to the current pane incarnation. These agents are transient snapshot
+    /// rows: the durable rollup and event log remain untouched.
+    #[doc(hidden)]
+    pub fn with_local_sessions(
+        mut self,
+        panes: &[PaneRef],
+        mut observations: Vec<LocalSessionObservation>,
+    ) -> Self {
+        observations.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then(left.session_id.cmp(&right.session_id))
+        });
+        let mut used_panes = HashSet::new();
+        let mut used_sessions = BTreeSet::new();
+        let mut bindings = Vec::new();
+
+        for (observation_index, observation) in observations.iter().enumerate() {
+            let Some(pane) = panes.iter().find(|pane| {
+                pane.resumed_session_id.as_ref() == Some(&observation.session_id)
+                    && local_pane_matches(pane, observation)
+                    && !used_panes.contains(&pane.pane_id)
+            }) else {
+                continue;
+            };
+            used_panes.insert(pane.pane_id.clone());
+            used_sessions.insert(observation_index);
+            bindings.push((observation_index, pane.clone()));
+        }
+
+        for (observation_index, observation) in observations.iter().enumerate() {
+            if used_sessions.contains(&observation_index) || observation.first_event_at.is_none() {
+                continue;
+            }
+            let first_event = observation.first_event_at.unwrap_or(observation.created_at);
+            let viable = panes
+                .iter()
+                .filter(|pane| !used_panes.contains(&pane.pane_id))
+                .filter(|pane| pane.resumed_session_id.is_none())
+                .filter(|pane| local_pane_matches(pane, observation))
+                .filter(|pane| {
+                    pane.pane_process_start.is_none_or(|start| {
+                        start <= first_event && observation.last_activity >= start
+                    })
+                })
+                .collect::<Vec<_>>();
+            let Some(pane) = unique_closest_pane(&viable) else {
+                continue;
+            };
+            used_panes.insert(pane.pane_id.clone());
+            bindings.push((observation_index, pane.clone()));
+        }
+
+        for (observation_index, pane) in bindings {
+            merge_bound_local_session(&mut self.agents, &observations[observation_index], &pane);
+        }
+        self
+    }
+
     /// Fold live multiplexer panes into the sidebar view-model. This reducer is
     /// pure: callers own pane discovery and pass the result in, so snapshot
     /// building stays independent of any backend command.
@@ -241,6 +301,128 @@ impl SidebarSnapshot {
             }
         }
         self
+    }
+}
+
+fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> bool {
+    crate::store::snapshot::process::pane_agent_kind(pane) == Some(observation.kind.as_str())
+        && crate::store::snapshot::process::pane_worktree_path(pane)
+            == observation.workspace.to_str()
+}
+
+fn unique_closest_pane<'a>(viable: &[&'a PaneRef]) -> Option<&'a PaneRef> {
+    if let [pane] = viable {
+        return Some(*pane);
+    }
+    let newest_start = viable
+        .iter()
+        .filter_map(|pane| pane.pane_process_start)
+        .max()?;
+    let mut newest = viable
+        .iter()
+        .copied()
+        .filter(|pane| pane.pane_process_start == Some(newest_start));
+    let selected = newest.next()?;
+    newest.next().is_none().then_some(selected)
+}
+
+fn merge_bound_local_session(
+    agents: &mut Vec<AgentState>,
+    observation: &LocalSessionObservation,
+    pane: &PaneRef,
+) {
+    let prior_index = agents
+        .iter()
+        .position(|agent| {
+            agent.kind == observation.kind && agent.agent_id == observation.session_id
+        })
+        .or_else(|| {
+            agents.iter().position(|agent| {
+                agent.kind == observation.kind
+                    && agent.agent_id.is_provisional()
+                    && agent
+                        .pane
+                        .as_ref()
+                        .is_some_and(|stamped| stamped.pane_id == pane.pane_id)
+            })
+        });
+    let prior = prior_index.map(|index| agents.remove(index));
+    agents.retain(|agent| {
+        !(agent.kind == observation.kind && agent.agent_id == observation.session_id)
+    });
+    let mut state = prior.unwrap_or_else(|| empty_local_agent(observation));
+    state.agent_id = observation.session_id.clone();
+    state.kind = observation.kind.clone();
+    state.status = observation.status;
+    state.phase = observation.phase;
+    state.pane = Some(pane.clone());
+    state.parent_agent_id = None;
+    state.worktree_path = Some(observation.workspace.to_string_lossy().into_owned());
+    state.task = observation.native_prompt_detail.clone();
+    state.prompt = observation.latest_prompt.clone();
+    state.recent_prompts = observation.latest_prompt.clone().into_iter().collect();
+    state.transcript_path = Some(observation.transcript_path.to_string_lossy().into_owned());
+    state.context_pct = observation.context_pct;
+    state.turn_started_at = observation.first_event_at;
+    state.waiting_since = observation.waiting_since;
+    // Native Kiro approvals are observable but not routable through `rimz asks`.
+    state.open_ask = None;
+    state.last_seen = observation.last_activity;
+    state.last_activity = observation.last_activity;
+    state.registered_at = Some(observation.created_at);
+    agents.push(state);
+}
+
+fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
+    AgentState {
+        agent_id: observation.session_id.clone(),
+        kind: observation.kind.clone(),
+        name: None,
+        name_explicit: false,
+        kind_ordinal: None,
+        profile: None,
+        mode: None,
+        role: None,
+        team: None,
+        launch_group: None,
+        launch_ordinal: None,
+        channel: None,
+        status: observation.status,
+        phase: observation.phase,
+        pane: None,
+        runtime_owner: None,
+        parent_agent_id: None,
+        worktree_path: None,
+        worktree_branch: None,
+        task: None,
+        prompt: None,
+        description: None,
+        transcript_path: None,
+        origin: None,
+        recent_prompts: Vec::new(),
+        model: None,
+        effort: None,
+        budget: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        context: None,
+        budget_park: None,
+        subagent_description: None,
+        subagent_started_at: None,
+        turn_started_at: None,
+        waiting_since: None,
+        open_ask: None,
+        compacting_since: None,
+        compaction_count: 0,
+        last_compact_command_tokens: None,
+        last_seen: observation.last_activity,
+        last_activity: observation.last_activity,
+        registered_at: Some(observation.created_at),
     }
 }
 

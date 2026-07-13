@@ -1,41 +1,40 @@
 # Kiro adapter
 
-> The agent-agnostic boundary and state machine are in [model.md](./model.md). The pinned upstream surface and live evidence are in [kiro-reference.md](../../externals/agent-adapter/kiro-reference.md).
+> The agent-agnostic boundary and state machine are in [model.md](./model.md). The pinned upstream surface and record evidence are in [kiro-reference.md](../../externals/agent-adapter/kiro-reference.md).
 
-Kiro support targets the v3 engine selected by `kiro-cli chat --v3`. RimZ owns verified launch, exact resume, profile arguments, manual compaction input, and process identity. Kiro CLI 2.12.1 exposes no verified executable lifecycle, transcript, context, or usage channel to a stock interactive observer.
+Kiro support targets the stock v3 engine selected by `kiro-cli chat --v3`. RimZ owns launch, exact resume, process identity, validated local-session discovery, transcript history, assistant streaming, and transient live state. Provider files are pulled display truth: the adapter and snapshot fold never append them to the RimZ event log.
 
 ## Launch, resume, and presence
 
-Fresh sessions run `kiro-cli chat --v3`. Profiles map `model` and `effort` to the chat-level `--model <model>` and `--effort low|medium|high|xhigh|max` flags. These flags stay after the `chat` subcommand because the installed parser rejects them after the root-level `--v3` shortcut.
+Fresh sessions run `kiro-cli chat --v3`. Profiles map `model` and `effort` to chat-level flags. Exact resume runs `kiro-cli chat --v3 --resume-id <session_id>`; both split and joined flag forms are recognized on the launcher and `kiro-cli-chat` engine process. `kiro-cli-term` remains excluded because it is the shell-integration daemon.
 
-Exact resume runs `kiro-cli chat --v3 --resume-id <session_id>`. Kiro's `/rewind` remains interactive-only, so `rimz agents fork` is unsupported. Manual smart compaction types `/compact` into the native composer.
+Fresh session binding starts from a live pane's effective Kiro kind and exact absolute cwd. RimZ hashes the cwd into Kiro's 16-hex workspace bucket, validates provider metadata, then pairs exact resume IDs first. Fresh sessions require record time compatible with the pane's current process incarnation and a unique one-to-one assignment. Indistinguishable candidates remain process rows.
 
-Presence matches `kiro-cli` and `kiro-cli-chat`. The first is the launcher and the second is the v3 chat engine. RimZ excludes `kiro-cli-term`, the figterm shell-integration daemon that runs for ordinary integrated shells, so it cannot bind a non-agent pane.
+A provider session replacing a provisional launch row inherits launch-owned name, profile, permission mode, role, team, cohort, channel, description, model and effort fallbacks, worktree metadata, and budget. Provider sessions are transient in the snapshot; a dead pane removes the card while history remains on disk.
 
-Permission-mode suffixes add no flags. Kiro v3 expresses permissions through capability-policy files; RimZ does not claim that legacy `--trust-all-tools` or `--trust-tools` flags override those files.
+## Local store validation
 
-## Lifecycle and hooks
+The stock layout is `${KIRO_HOME:-~/.kiro}/sessions/<sha256(cwd)[0..16]>/<sess_uuid>/{session.json,messages.jsonl}`. Discovery inspects direct `sess_*` children of the requested workspace bucket only.
 
-Authenticated Kiro CLI 2.12.1 testing found no executable stock-v3 hook contract. The documented user `~/.kiro/hooks/rimz.json`, an auxiliary user hook file, a replacement canonical command, and a project `.kiro/hooks` file produced no command invocation or stdin payload. The CLI exposes no hook validation command that makes the configuration reproducible.
+A session is accepted when the directory and paired files are regular, non-symlink entries under the bucket, the ID is `sess_<uuid>` and matches metadata, `schemaVersion` is `1.0.0`, `dataModelVersion` is `1`, `workspacePaths` contains the requested absolute cwd, and `createdAt` parses. ACP UUID directories, v2/readline history, mismatched metadata, unsupported schema, and symlink escapes stay excluded.
 
-The adapter therefore classifies every manually fed Kiro event as unknown, produces no lifecycle observation, installs no hooks, and advertises no native registered, turn, tool, idle, ask, compaction, or session-end event. Pane liveness and the rollup reaper can still clear a process-owned row after exit, while the `rimz exec` wrapper derives a lost mux session.
+## Transcript, lifecycle, and context
 
-`rimz hooks install kiro` and its dry run fail with the verified limitation and the condition for re-enabling the surface. `rimz hooks uninstall kiro` remains available as cleanup for a legacy RimZ-owned `${KIRO_HOME:-~/.kiro}/hooks/rimz.json`; ownership is the stable `hooks feed --source kiro` command marker, and unowned files stay untouched.
+The adapter walks complete JSONL records in physical order and ignores malformed or unknown complete records. Cursor reads retain a torn final record until it becomes complete.
 
-## Supervised runs
+- Non-empty `user.content` becomes user transcript text.
+- Non-empty assistant `content` becomes assistant text only when `operationType` is `Say`.
+- Late `session_start`, steering, tools, metadata, usage summaries, and internal context never enter conversation history.
+- `turn_start` enters running/reasoning.
+- Verified approved tool calls and successful results refresh work; observed `fs_write` enters acting/editing.
+- An unresolved `pending_interaction` with `interactionType: tool_approval` enters waiting. Matching `interaction_resolved` clears it. This is visible native waiting, not a routable RimZ ask.
+- Successful `session_pause` and `turn_end` settle the turn. Uncaptured failure and cancellation shapes remain unknown.
+- The latest finite `contextUsage.usagePercentage` is rounded and clamped to `0..=100`.
 
-`rimz agents kiro -p` fails before pane creation or run-record creation. A supervised run needs an executable turn-completion signal, and opening a stock Kiro pane without one can only time out. Interactive `rimz agents kiro` remains available.
+Kiro usage summaries report credits. RimZ does not infer tokens, a context-window denominator, dollars, realtime cost, or historical/account spend from credits.
 
-ACP is not an implicit fallback. Switching to `kiro-cli acp` would make RimZ the protocol client and would require a separately verified supervised transport, cancellation, permissions, final-output, and session-retention contract.
+## Hooks and supervised runs
 
-## Transcript, context, and spend
+Kiro CLI 2.12.1 did not execute the documented standalone hook configurations in authenticated stock-v3 verification. The adapter classifies manually fed Kiro events as unknown, installs no hooks, and retains uninstall-only cleanup for legacy RimZ-owned hook files.
 
-The observed stock root session used a `sess_<uuid>` identity and left only `~/.kiro/sessions/cli/<session-id>.history`. The final observed file held submitted prompts and slash commands, with no assistant text, timestamps, model, context usage, credits, or tool results. RimZ treats it as readline history rather than a provider transcript.
-
-A UUID-only `.json`/`.jsonl` pair observed beside it belonged to an ACP-hosted non-interactive session whose metadata identified `session_created_reason: "subagent"`. The stock adapter does not parse that different session class. It also does not depend on manual `/transcript save --json`, pane capture, or opt-in `KIRO_ACP_RECORD_PATH` debug recordings.
-
-Context usage, transcript replay, final assistant output, live credits, realtime dollars, and historical spend remain unsupported. Kiro is credit-metered, and RimZ does not convert credits into USD.
-
-## Re-enabling lifecycle
-
-Re-enable hooks only after a pinned Kiro v3 release executes a reproducible user or project configuration and a redacted capture proves stdin keys, event ordering, root identity, cwd and process attribution, success/error/cancellation boundaries, and stdout behavior. Add fixture-backed lifecycle and supervised tests with that implementation; do not infer the contract from v2 embedded hooks or Amazon Q lineage.
+`rimz agents kiro -p` fails before pane or run-record creation. Pulled files can describe a turn after the fact but cannot provide the executable completion, cancellation, and output contract a supervised run requires. Native Ask/Answer routing, plan/question handling, compaction events, subagents, background parking, remote control, and account probing remain unsupported.

@@ -91,6 +91,7 @@ pub(crate) use payload::{
 pub use pricing::{PriceBook, Pricing};
 pub use registry::{
     ADAPTERS, adapter_by_kind, all_adapters, descriptor_by_kind, find_adapter, known_kinds,
+    resumed_session_id_for_root, resumed_session_id_from_cmdline,
 };
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
 pub(crate) use state::WindowSurplus;
@@ -405,6 +406,26 @@ pub struct LocalContextRefresh {
     pub transcript_stat: Option<TranscriptStat>,
 }
 
+/// Provider-owned local session truth normalized for transient sidebar
+/// projection. Adapters validate native paths and payloads before constructing
+/// this shape; snapshot code never sees provider wire records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalSessionObservation {
+    pub kind: crate::ids::AgentKind,
+    pub session_id: crate::ids::AgentSessionId,
+    pub workspace: PathBuf,
+    pub transcript_path: PathBuf,
+    pub created_at: Timestamp,
+    pub first_event_at: Option<Timestamp>,
+    pub last_activity: Timestamp,
+    pub status: AgentStatus,
+    pub phase: TurnPhase,
+    pub latest_prompt: Option<String>,
+    pub native_prompt_detail: Option<String>,
+    pub waiting_since: Option<Timestamp>,
+    pub context_pct: Option<u8>,
+}
+
 /// A detached `rimz` helper an adapter requests after a lifecycle event lands
 /// — just the argv. The CLI owns the spawn discipline (fresh, fully-nulled
 /// stdio; fire-and-forget), so adapters stay pure mappers.
@@ -517,6 +538,13 @@ pub trait AgentAdapter: Send + Sync {
     /// registry-wide conformance suite can prove the claim is backed by behavior.
     #[cfg(test)]
     fn spend_fixture(&self) -> Option<SpendFixture> {
+        None
+    }
+
+    /// Test-only representative provider-owned local session observation.
+    /// Conformance keeps this evidence separate from executable-hook corpus.
+    #[cfg(test)]
+    fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
         None
     }
 
@@ -764,6 +792,24 @@ pub trait AgentAdapter: Send + Sync {
         _trigger: RefreshTrigger<'_>,
         _ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
+        None
+    }
+
+    /// Discover validated sessions for one absolute workspace from the
+    /// provider's machine-local store. The result is pulled display truth;
+    /// callers bind it only to currently live panes and never append it to the
+    /// Rimz event log.
+    fn discover_local_sessions(&self, _workspace: &Path) -> Vec<LocalSessionObservation> {
+        Vec::new()
+    }
+
+    /// Parse a provider-native resumed-session command line. Implementations
+    /// accept only their actual interactive launcher/engine forms and return a
+    /// typed, non-empty session identity.
+    fn resumed_session_id_from_cmdline(
+        &self,
+        _cmdline: &str,
+    ) -> Option<crate::ids::AgentSessionId> {
         None
     }
 

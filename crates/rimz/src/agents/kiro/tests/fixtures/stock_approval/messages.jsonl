@@ -1,0 +1,12 @@
+{"id":"user-2","timestamp":"2025-01-02T00:00:01Z","payload":{"type":"user","content":"create a redacted sentinel"}}
+{"id":"turn-2-start","timestamp":"2025-01-02T00:00:01.100Z","payload":{"type":"turn_start","executionId":"turn-2"}}
+{"id":"tool-2-pending","timestamp":"2025-01-02T00:00:02Z","payload":{"type":"pending_interaction","interactionType":"tool_approval","toolCallId":"tool-2","question":"Write File"}}
+{"id":"context-2a","timestamp":"2025-01-02T00:00:02.100Z","payload":{"type":"session_metadata","key":"contextUsage","value":{"usagePercentage":2.09}}}
+{"id":"tool-2-resolved","timestamp":"2025-01-02T00:00:04Z","payload":{"type":"interaction_resolved","toolCallId":"tool-2","outcome":"selected","selectedOption":"accept"}}
+{"id":"tool-2-call","timestamp":"2025-01-02T00:00:04.100Z","payload":{"type":"tool_call","toolCallId":"tool-2","toolName":"fs_write","status":"approved","kind":"edit","actionType":"create","title":"Write File"}}
+{"id":"tool-2-result","timestamp":"2025-01-02T00:00:05Z","payload":{"type":"tool_result","toolCallId":"tool-2","success":true,"content":"Created the redacted file."}}
+{"id":"assistant-2","timestamp":"2025-01-02T00:00:06Z","payload":{"type":"assistant","operationType":"Say","content":"created"}}
+{"id":"context-2b","timestamp":"2025-01-02T00:00:06.100Z","payload":{"type":"session_metadata","key":"contextUsage","value":{"usagePercentage":101.5}}}
+{"id":"pause-2","timestamp":"2025-01-02T00:00:07Z","payload":{"type":"session_event","category":"session_pause","context":{"status":"success","executionId":"turn-2"}}}
+{"id":"turn-2-end","timestamp":"2025-01-02T00:00:07.100Z","payload":{"type":"turn_end","executionId":"turn-2","stopReason":"end_turn"}}
+{"id":"session_start_sess_22222222-2222-4222-8222-222222222222","timestamp":"2025-01-02T00:00:08Z","payload":{"type":"session_start","content":"internal late bootstrap content"}}

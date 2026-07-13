@@ -9,6 +9,7 @@ use crate::remote_control::{APP_SERVER_MARKER, COMMAND_MARKER};
 const CODEX_BINARY_MARKER: &str = "codex";
 // Same shallow single-child walk as `proc::pane_probe`: direct CLI, shell, and
 // wrapper chains are expected; deeper trees abstain instead of guessing.
+#[cfg(test)]
 const CODEX_PROCESS_DESCENT_DEPTH: usize = 8;
 
 /// PIDs of the per-user Codex app-server daemon — the process a remote-control
@@ -53,9 +54,10 @@ fn is_codex_daemon_cmdline(cmdline: &str) -> bool {
 /// children abstain so a shell doing other work cannot donate the wrong resumed
 /// session id.
 pub fn codex_resumed_session_id_for_root(root_pid: u32) -> Option<AgentSessionId> {
-    codex_resumed_session_id_for_root_with(root_pid, &crate::proc::cmdline, &crate::proc::children)
+    crate::agents::registry::resumed_session_id_for_root(root_pid)
 }
 
+#[cfg(test)]
 fn codex_resumed_session_id_for_root_with(
     root_pid: u32,
     cmdline: &dyn Fn(u32) -> Option<String>,

@@ -1,15 +1,17 @@
-//! Kiro CLI v3 launch and process-presence adapter.
+//! Kiro CLI v3 launch, local-session, transcript, and live-state adapter.
 //!
 //! Kiro CLI 2.12.1 does not execute the documented standalone hook configs in
 //! a stock v3 session. Keep launch, resume, and process identity available;
-//! lifecycle and hook installation stay unsupported until a pinned release
-//! provides a reproducible native signal.
+//! executable hook installation stays unsupported. The stock structured
+//! session store supplies validated pulled truth for live display and history.
 
 mod install;
+mod session;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use serde_json::Value;
 
@@ -20,7 +22,8 @@ use super::descriptor::{
 use super::lifecycle::LifecycleSignalKind;
 use super::{
     AgentAdapter, AgentErr, AgentHookClass, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result,
+    HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx, LocalSessionObservation,
+    RefreshTrigger, Result, TranscriptMessage, TranscriptStat,
 };
 
 const HOOK_INSTALL_UNAVAILABLE: &str = "Kiro CLI 2.12.1 v3 does not execute standalone hook configs; re-enable after a pinned v3 release provides a reproducible native hook contract";
@@ -37,8 +40,8 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     plan_label: PlanLabel::Prefixed { prefix: "Kiro" },
     sub_providers: &[],
     tools: ToolClassification {
-        mutating: &[],
-        editing: &[],
+        mutating: &["fs_write"],
+        editing: &["fs_write"],
         blocking: &[],
     },
     capabilities: Capabilities {
@@ -47,12 +50,13 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // them for Rimz routing.
         native_ask_ui: true,
         rich_context: false,
-        transcript_tail_context: false,
-        context_usage: false,
+        transcript_tail_context: true,
+        context_usage: true,
         account_spend: false,
         subagents: false,
         background_tasks: false,
-        registers_lazily: false,
+        registers_lazily: true,
+        local_session_discovery: true,
         daemon_hooked_sessions: false,
         hook_install: false,
         implicit_unlimited_window_mins: &[],
@@ -84,14 +88,16 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
 const KIRO_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Unsupported {
-            reason: "Kiro CLI 2.12.1 v3 exposes no verified executable turn-lifecycle signal",
+        ConcernCoverage::Partial {
+            via: "ordered stock-v3 session store records",
+            gap: "pulled display truth; no executable hook or uncaptured failure/cancel shapes",
         },
     ),
     (
         IntegrationConcern::Permission,
-        ConcernCoverage::Unsupported {
-            reason: "no v3 hook announces the native ask; PreToolUse fires before policy decides",
+        ConcernCoverage::Partial {
+            via: "unresolved pending_interaction tool_approval records",
+            gap: "waiting is visible but not routable through rimz asks/answer",
         },
     ),
     (
@@ -139,14 +145,16 @@ const KIRO_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::IdleNotification,
-        ConcernCoverage::Unsupported {
-            reason: "no verified lifecycle hook or native idle notification",
+        ConcernCoverage::Partial {
+            via: "successful session_pause and turn_end records",
+            gap: "pulled state has no native notification wakeup",
         },
     ),
     (
         IntegrationConcern::ContextUsage,
-        ConcernCoverage::Unsupported {
-            reason: "no machine-readable context usage surface",
+        ConcernCoverage::Partial {
+            via: "latest contextUsage session_metadata percentage",
+            gap: "percentage only; no token counts or context-window size",
         },
     ),
     (
@@ -184,32 +192,37 @@ const KIRO_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
 const KIRO_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     (
         LifecycleSignalKind::Registered,
-        HookCoverage::Absent {
-            reason: "Kiro CLI 2.12.1 v3 did not execute the documented SessionStart hook config",
+        HookCoverage::Derived {
+            via: "validated local session metadata",
+            gap: "provider store discovery replaces an executable registration hook",
         },
     ),
     (
         LifecycleSignalKind::TurnStarted,
-        HookCoverage::Absent {
-            reason: "Kiro CLI 2.12.1 v3 did not execute the documented UserPromptSubmit hook config",
+        HookCoverage::Derived {
+            via: "ordered turn_start records",
+            gap: "pulled provider state, not an installed hook",
         },
     ),
     (
         LifecycleSignalKind::TurnEnded,
-        HookCoverage::Absent {
-            reason: "Kiro CLI 2.12.1 v3 did not execute the documented Stop hook config",
+        HookCoverage::Derived {
+            via: "verified successful turn_end/session_pause records",
+            gap: "failure and cancellation records remain uncaptured",
         },
     ),
     (
         LifecycleSignalKind::ToolUsed,
-        HookCoverage::Absent {
-            reason: "Kiro CLI 2.12.1 v3 did not execute the documented PostToolUse hook config",
+        HookCoverage::Derived {
+            via: "verified tool_call/tool_result records",
+            gap: "only observed stock-v3 tool vocabulary is classified",
         },
     ),
     (
         LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Absent {
-            reason: "no verified v3 hook announces native prompts",
+        HookCoverage::Derived {
+            via: "unresolved pending_interaction tool approval",
+            gap: "native prompt is visible but has no structured Rimz answer route",
         },
     ),
     (
@@ -260,6 +273,11 @@ impl AgentAdapter for KiroAdapter {
         &KIRO_DESCRIPTOR
     }
 
+    #[cfg(test)]
+    fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
+        Some(session::fixture_observation())
+    }
+
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
         ClassifiedHook {
             class: AgentHookClass::Unknown,
@@ -282,6 +300,53 @@ impl AgentAdapter for KiroAdapter {
             "--resume-id".to_owned(),
             session_id.to_owned(),
         ])
+    }
+
+    fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<crate::ids::AgentSessionId> {
+        session::resumed_session_id(cmdline)
+    }
+
+    fn discover_local_sessions(&self, workspace: &Path) -> Vec<LocalSessionObservation> {
+        session::discover(workspace)
+    }
+
+    fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
+        session::messages(lines)
+    }
+
+    fn transcript_files(&self) -> Vec<PathBuf> {
+        session::transcript_files()
+    }
+
+    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(path) = prior_path.filter(|path| session::valid_transcript(path, session_id)) {
+            return Some(path.to_path_buf());
+        }
+        session::transcript_for_session(session_id)
+    }
+
+    fn local_context_refresh(
+        &self,
+        _trigger: RefreshTrigger<'_>,
+        ctx: &LocalContextRefreshCtx<'_>,
+    ) -> Option<LocalContextRefresh> {
+        let path =
+            self.session_transcript(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
+        let stat = transcript_stat(&path)?;
+        if ctx.prior_transcript_stat == Some(&stat) {
+            return None;
+        }
+        Some(LocalContextRefresh {
+            model_id: None,
+            effort: None,
+            tokens: None,
+            cost: None,
+            turn_error: None,
+            turn_complete: None,
+            turn_interrupted: None,
+            transcript_path: Some(path.to_string_lossy().into_owned()),
+            transcript_stat: Some(stat),
+        })
     }
 
     fn compact_command(&self) -> Option<&'static str> {
@@ -358,4 +423,14 @@ impl AgentAdapter for KiroAdapter {
     fn managed_hook_artifacts_present(&self) -> bool {
         install::hooks_path().is_ok_and(|path| install::managed_at(&path))
     }
+}
+
+fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(TranscriptStat {
+        mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
+        mtime_nanos: modified.subsec_nanos(),
+        len: metadata.len(),
+    })
 }

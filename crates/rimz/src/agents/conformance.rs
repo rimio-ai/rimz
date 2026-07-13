@@ -183,6 +183,19 @@ fn capability_honesty() {
                 "{kind} realtime account-usage channel requires rich_context"
             );
         }
+
+        assert_eq!(
+            capabilities.local_session_discovery,
+            adapter.local_session_fixture().is_some(),
+            "{kind} local-session discovery requires fixture-backed behavior"
+        );
+        if let Some(observation) = adapter.local_session_fixture() {
+            assert_eq!(observation.kind.as_str(), kind);
+            assert!(!observation.session_id.as_str().is_empty());
+            assert!(observation.workspace.is_absolute());
+            assert!(observation.transcript_path.is_absolute());
+            assert!(observation.last_activity >= observation.created_at);
+        }
     }
 }
 

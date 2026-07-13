@@ -669,6 +669,13 @@ pub(crate) fn alive_snapshot(
 ) -> Result<rimz::SidebarSnapshot> {
     let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     apply_cached_daemon_reap(&mut snapshot, runtime, session);
+    if let Some(frame) =
+        rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
+    {
+        let panes = rimz::SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
+        let observations = rimz::sidebar::enrich::discover_local_sessions_for_panes(&panes);
+        snapshot = snapshot.with_local_sessions(&panes, observations);
+    }
     Ok(snapshot)
 }
 

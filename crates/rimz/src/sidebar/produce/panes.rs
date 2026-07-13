@@ -142,18 +142,20 @@ fn stamp_pane_resumed_session_ids(
         if pane.current.resumed_session_id.is_some() {
             continue;
         }
-        let is_codex = pane
+        let supports_resume_discovery = pane
             .current
             .command
             .as_deref()
             .and_then(crate::store::snapshot::command_agent_kind)
-            == Some("codex")
-            || pane
-                .current
-                .hosted_agent_kind
-                .as_ref()
-                .is_some_and(|kind| kind.as_str() == "codex");
-        if !is_codex {
+            .or_else(|| {
+                pane.current
+                    .hosted_agent_kind
+                    .as_ref()
+                    .map(crate::ids::AgentKind::as_str)
+            })
+            .and_then(crate::agents::find_adapter)
+            .is_some();
+        if !supports_resume_discovery {
             continue;
         }
         if let Some(resumed) = pane.current.pid.and_then(root_resume) {
@@ -185,10 +187,7 @@ fn repair_pane_frame(
     );
     stamp_hosted_agent_processes(frame, &crate::proc::in_pane_agent_process_for_root);
     backfill_pane_cwds(frame, &|pid| crate::proc::cwd(pid));
-    stamp_pane_resumed_session_ids(
-        frame,
-        &crate::agents::codex::codex_resumed_session_id_for_root,
-    );
+    stamp_pane_resumed_session_ids(frame, &crate::agents::resumed_session_id_for_root);
     stamp_pane_process_starts(
         frame,
         &unstamped,

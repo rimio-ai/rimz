@@ -204,10 +204,10 @@ pub(crate) fn classify_trunk_sync(
     Some(WorktreeTrunkSync::Diverged)
 }
 
-/// The wired agent kinds whose Rimz hooks are installed — the gate for idle
-/// synthesis on a pane no session has claimed yet. Per-agent hook checks keep an
-/// unwired pane as a process row, where it cannot become a forever-idle agent
-/// Rimz can report no status for. Environment, not store.
+/// The hook-wired agent kinds eligible for sessionless idle synthesis. Local-
+/// store adapters join as agent cards only after strict session binding, so an
+/// ambiguous provider session remains a process row instead of a forever-idle
+/// card Rimz can report no identity for. Environment, not store.
 pub fn wired_kinds() -> Vec<String> {
     crate::agents::ADAPTERS
         .iter()
@@ -327,6 +327,21 @@ pub fn enrich(
         );
     }
 
+    // Wiring state gates the live-pane fold (idle synthesis), so set it before
+    // any pane-backed projection.
+    snapshot.wired_kinds = wired_kinds();
+    snapshot.wired_default_models = wired_default_models();
+
+    // Pull provider-owned local sessions before context/activity enrichment so
+    // a hookless Kiro session joins the same downstream projection as durable
+    // rollup agents. Binding is strict and transient; paneless observations are
+    // discarded by `with_local_sessions`.
+    if let Some(frame) = frame {
+        let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude);
+        let observations = discover_local_sessions_for_panes(&panes);
+        snapshot = snapshot.with_local_sessions(&panes, observations);
+    }
+
     // Fold each session's rich statusline context onto its agent state
     // (read-only; CLI producers write it). Both the context sidecar
     // and the per-tool activity heartbeats fold only onto existing agents, so
@@ -349,10 +364,6 @@ pub fn enrich(
         crate::harness::budget::project_parks(&mut snapshot, runtime, &machine_config);
     }
 
-    // Wiring state gates the live-pane fold (idle synthesis), so set it before
-    // folding panes, not after.
-    snapshot.wired_kinds = wired_kinds();
-    snapshot.wired_default_models = wired_default_models();
     let episodes = super::unread::UnreadEpisodes::load(runtime);
     let read_marks = super::read_marks::ReadMarks::load_merged(runtime);
     let unread_row_ids = episodes.unread_row_ids(&read_marks);
@@ -471,6 +482,36 @@ pub fn enrich(
     // so publish the spine once both ranking inputs are present.
     snapshot.sort_groups_for_presentation();
     snapshot
+}
+
+#[doc(hidden)]
+pub fn discover_local_sessions_for_panes(
+    panes: &[crate::pane::PaneRef],
+) -> Vec<crate::agents::LocalSessionObservation> {
+    let mut candidates = HashSet::new();
+    for pane in panes {
+        let Some(kind) = crate::store::snapshot::pane_agent_kind(pane) else {
+            continue;
+        };
+        let Some(adapter) = crate::agents::find_adapter(kind) else {
+            continue;
+        };
+        if !adapter.descriptor().capabilities.local_session_discovery {
+            continue;
+        }
+        let Some(workspace) = crate::store::snapshot::pane_worktree_path(pane) else {
+            continue;
+        };
+        candidates.insert((kind, PathBuf::from(workspace)));
+    }
+    candidates
+        .into_iter()
+        .flat_map(|(kind, workspace)| {
+            crate::agents::find_adapter(kind)
+                .into_iter()
+                .flat_map(move |adapter| adapter.discover_local_sessions(&workspace))
+        })
+        .collect()
 }
 
 fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<crate::TruthNotice> {

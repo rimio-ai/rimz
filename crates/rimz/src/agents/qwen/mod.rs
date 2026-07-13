@@ -75,6 +75,7 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         subagents: true,
         background_tasks: true,
         registers_lazily: false,
+        local_session_discovery: false,
         daemon_hooked_sessions: false,
         hook_install: true,
         implicit_unlimited_window_mins: &[],
