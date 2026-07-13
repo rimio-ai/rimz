@@ -7,22 +7,21 @@
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::config::{WorktreeBase, WorktreeConfig};
-use crate::forge;
 
 mod include;
 mod link;
+mod pr;
+
+pub use pr::{create_from_pr, fork_push_destination};
 
 const MARKER_FILE: &str = "rimz-worktree.json";
 const MARKER_VERSION: u32 = 4;
 const LANDED_BASE_SCAN_CAP: u32 = 500;
-const PR_HEAD_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTO_ADJECTIVES: &[&str] = &[
     "brisk", "calm", "clear", "daring", "fleet", "fresh", "keen", "lively", "nimble", "quiet",
     "rapid", "ready", "sharp", "steady", "swift", "vivid",
@@ -210,7 +209,7 @@ pub fn create(
     let checkout_base_ref = base.as_refspec().to_owned();
     let base_ref = resolve_base_commit(repo_root, &checkout_base_ref)?;
     let base_branch = resolve_base_branch(repo_root, &base);
-    add_and_seed(
+    add_worktree(
         repo_root,
         name,
         path,
@@ -220,386 +219,8 @@ pub fn create(
             base_ref,
             from_pr: None,
         },
-        &checkout_base_ref,
+        Checkout::NewBranch(&checkout_base_ref),
     )
-}
-
-pub fn create_from_pr(
-    repo_root: &Path,
-    config: &WorktreeConfig,
-    pr: &forge::PrTarget,
-    name: Option<&str>,
-    branch: Option<&str>,
-    reuse_existing: bool,
-) -> Result<CreatedWorktree> {
-    ensure_repo(repo_root)?;
-    let default_name = format!("pr-{}", pr.number);
-    let FreshWorktree {
-        name,
-        path,
-        branch: derived_branch,
-    } = match resolve_fresh_worktree(
-        repo_root,
-        config,
-        name,
-        Some(default_name.as_str()),
-        reuse_existing,
-    )? {
-        WorktreeCreateTarget::Fresh(fresh) => fresh,
-        WorktreeCreateTarget::Reuse(reused) => return Ok(reused),
-    };
-    let review_branch = branch.or(derived_branch.as_deref());
-
-    let remote = git_stdout(repo_root, ["config", "--get", "remote.origin.url"]).map_err(
-        |err| match err {
-            WorktreeErr::Git { .. } => WorktreeErr::Parse(format!(
-                "could not fetch PR #{}: git remote `origin` is not configured",
-                pr.number
-            )),
-            other => other,
-        },
-    )?;
-    let forge = pr.forge.unwrap_or_else(|| forge::forge_for_remote(&remote));
-    let refspec = forge.pr_refspec(pr.number);
-
-    if let Some(branch) = review_branch {
-        let branch = resolve_branch(Some(branch), None, &name)?;
-        let pr_head = fetch_pr_head(repo_root, pr.number, &remote, &refspec)?;
-        return add_pr_worktree(
-            repo_root,
-            name,
-            path,
-            branch,
-            pr_head.clone(),
-            pr_head.as_str(),
-            pr.number,
-        );
-    }
-
-    let advertised = git_stdout(repo_root, ["ls-remote", "origin"]).map_err(|err| match err {
-        WorktreeErr::Git { stderr, .. } => WorktreeErr::PrFetch {
-            number: pr.number,
-            remote: remote.clone(),
-            stderr,
-        },
-        other => other,
-    })?;
-    let (_advertised_head, head_branches) = forge::pr_head_branches(&advertised, &refspec)
-        .ok_or_else(|| WorktreeErr::PrFetch {
-            number: pr.number,
-            remote: remote.clone(),
-            stderr: format!("remote did not advertise {refspec}"),
-        })?;
-
-    let same_repo_branch = match head_branches.as_slice() {
-        [branch] => Some(branch.clone()),
-        [] => None,
-        branches => {
-            let head = resolve_pr_head_with_cli(repo_root, pr.number, &remote)?;
-            Some(
-                branches
-                    .contains(&head.branch)
-                    .then_some(head.branch)
-                    .ok_or_else(|| WorktreeErr::PrHeadUnresolved {
-                        number: pr.number,
-                        reason: "forge CLI head branch did not match an advertised origin branch"
-                            .to_owned(),
-                    })?,
-            )
-        }
-    };
-
-    if let Some(branch) = same_repo_branch {
-        validate_pr_branch(repo_root, pr.number, &branch)?;
-        let remote_ref = format!("origin/{branch}");
-        let fetch_refspec = format!("+refs/heads/{branch}:refs/remotes/{remote_ref}");
-        git_run(repo_root, ["fetch", "origin", fetch_refspec.as_str()]).map_err(
-            |err| match err {
-                WorktreeErr::Git { stderr, .. } => WorktreeErr::PrFetch {
-                    number: pr.number,
-                    remote: remote.clone(),
-                    stderr,
-                },
-                other => other,
-            },
-        )?;
-        let remote_head = git_stdout(repo_root, ["rev-parse", remote_ref.as_str()])?;
-        let base_branch = trunk_ref(repo_root);
-        let base_ref_name = base_branch.as_deref().unwrap_or("origin/HEAD");
-        let base_ref =
-            resolve_base_commit(repo_root, base_ref_name).unwrap_or_else(|_| remote_head.clone());
-        return match prepare_local_pr_branch(repo_root, &branch, &remote_ref, &remote_head)? {
-            LocalPrBranch::New => add_tracking_and_seed(
-                repo_root,
-                name,
-                path,
-                branch,
-                MarkerProvenance {
-                    base_branch,
-                    base_ref,
-                    from_pr: Some(pr.number),
-                },
-                &remote_ref,
-            ),
-            LocalPrBranch::Existing => add_existing_and_seed(
-                repo_root,
-                name,
-                path,
-                branch,
-                MarkerProvenance {
-                    base_branch,
-                    base_ref,
-                    from_pr: Some(pr.number),
-                },
-            ),
-        };
-    }
-
-    let head = resolve_pr_head_with_cli(repo_root, pr.number, &remote)?;
-    validate_pr_branch(repo_root, pr.number, &head.branch)?;
-    let owner = head
-        .owner
-        .filter(|owner| !owner.trim().is_empty())
-        .ok_or_else(|| WorktreeErr::PrHeadUnresolved {
-            number: pr.number,
-            reason: "forge CLI output did not identify the head repository owner".to_owned(),
-        })?;
-    let repo_full_name = head
-        .repo_full_name
-        .ok_or_else(|| WorktreeErr::PrHeadUnresolved {
-            number: pr.number,
-            reason: "forge CLI output did not identify the head repository".to_owned(),
-        })?;
-    let fork_url = forge::sibling_repo_url(&remote, &repo_full_name).ok_or_else(|| {
-        WorktreeErr::PrHeadUnresolved {
-            number: pr.number,
-            reason: "could not build the fork clone URL from origin".to_owned(),
-        }
-    })?;
-    let pr_head = fetch_pr_head(repo_root, pr.number, &remote, &refspec)?;
-    let head_branch = head.branch;
-    let branch = if local_branch_tip(repo_root, &head_branch).is_none() {
-        head_branch.clone()
-    } else {
-        let prefixed = format!("{owner}/{head_branch}");
-        validate_pr_branch(repo_root, pr.number, &prefixed)?;
-        if local_branch_tip(repo_root, &prefixed).is_some() {
-            return Err(WorktreeErr::PrBranchConflict {
-                branch: prefixed,
-                detail: "both the bare and owner-prefixed branch names already exist".to_owned(),
-            });
-        }
-        prefixed
-    };
-    let created = add_pr_worktree(
-        repo_root,
-        name,
-        path,
-        branch.clone(),
-        pr_head.clone(),
-        pr_head.as_str(),
-        pr.number,
-    )?;
-    let remote_key = format!("branch.{branch}.remote");
-    git_run(
-        repo_root,
-        ["config", remote_key.as_str(), fork_url.as_str()],
-    )?;
-    let merge_key = format!("branch.{branch}.merge");
-    let merge_ref = format!("refs/heads/{head_branch}");
-    git_run(
-        repo_root,
-        ["config", merge_key.as_str(), merge_ref.as_str()],
-    )?;
-    Ok(created)
-}
-
-/// Push destination for a branch whose config points at a fork remote
-/// (set by `create_from_pr`); `None` for origin-tracking or unconfigured branches.
-pub fn fork_push_destination(repo_root: &Path, branch: &str) -> Option<(String, String)> {
-    let remote_key = format!("branch.{branch}.remote");
-    let remote = git_stdout(repo_root, ["config", "--get", remote_key.as_str()])
-        .ok()
-        .filter(|remote| !remote.is_empty())?;
-    if matches!(remote.as_str(), "origin" | ".") {
-        return None;
-    }
-    let merge_key = format!("branch.{branch}.merge");
-    let merge_ref = git_stdout(repo_root, ["config", "--get", merge_key.as_str()])
-        .ok()
-        .filter(|merge_ref| !merge_ref.is_empty())?;
-    Some((remote, merge_ref))
-}
-
-fn fetch_pr_head(repo_root: &Path, number: u64, remote: &str, refspec: &str) -> Result<String> {
-    git_run(repo_root, ["fetch", "origin", refspec]).map_err(|err| match err {
-        WorktreeErr::Git { stderr, .. } => WorktreeErr::PrFetch {
-            number,
-            remote: remote.to_owned(),
-            stderr,
-        },
-        other => other,
-    })?;
-    git_stdout(repo_root, ["rev-parse", "FETCH_HEAD"])
-}
-
-fn add_pr_worktree(
-    repo_root: &Path,
-    name: String,
-    path: PathBuf,
-    branch: String,
-    pr_head: String,
-    checkout_ref: &str,
-    pr_number: u64,
-) -> Result<CreatedWorktree> {
-    let base_branch = trunk_ref(repo_root);
-    let base_ref_name = base_branch.as_deref().unwrap_or("origin/HEAD");
-    let base_ref =
-        resolve_base_commit(repo_root, base_ref_name).unwrap_or_else(|_| pr_head.clone());
-    add_and_seed(
-        repo_root,
-        name,
-        path,
-        branch,
-        MarkerProvenance {
-            base_branch,
-            base_ref,
-            from_pr: Some(pr_number),
-        },
-        checkout_ref,
-    )
-}
-
-fn resolve_pr_head_with_cli(repo_root: &Path, number: u64, remote: &str) -> Result<forge::PrHead> {
-    let cli = forge::forge_cli_for_remote(remote).ok_or_else(|| WorktreeErr::PrHeadUnresolved {
-        number,
-        reason: "origin has no supported forge CLI".to_owned(),
-    })?;
-    let number_arg = number.to_string();
-    let (program, args) = match cli {
-        forge::ForgeCli::Gh => (
-            "gh",
-            vec![
-                "pr",
-                "view",
-                number_arg.as_str(),
-                "--json",
-                "headRefName,headRepository,headRepositoryOwner",
-            ],
-        ),
-        forge::ForgeCli::Tea => {
-            let repo =
-                forge::remote_repo_slug(remote).ok_or_else(|| WorktreeErr::PrHeadUnresolved {
-                    number,
-                    reason: "could not derive the origin repository for tea".to_owned(),
-                })?;
-            let args = vec![
-                "pr",
-                number_arg.as_str(),
-                "--output",
-                "json",
-                "--repo",
-                repo.as_str(),
-            ];
-            let raw = pr_command_stdout(repo_root, "tea", &args)
-                .map_err(|reason| WorktreeErr::PrHeadUnresolved { number, reason })?;
-            return forge::parse_tea_pr_head_json(&raw)
-                .map_err(|reason| WorktreeErr::PrHeadUnresolved { number, reason });
-        }
-    };
-    let raw = pr_command_stdout(repo_root, program, &args)
-        .map_err(|reason| WorktreeErr::PrHeadUnresolved { number, reason })?;
-    forge::parse_gh_pr_view_json(&raw)
-        .map_err(|reason| WorktreeErr::PrHeadUnresolved { number, reason })
-}
-
-fn pr_command_stdout(
-    cwd: &Path,
-    program: &str,
-    args: &[&str],
-) -> std::result::Result<String, String> {
-    let mut command = Command::new(program);
-    command.current_dir(cwd).args(args).env("LC_ALL", "C");
-    let output = crate::proc::run_bounded_output(&mut command, PR_HEAD_COMMAND_TIMEOUT)
-        .map_err(|err| format!("could not run {program}: {err}"))?;
-    if output.timed_out {
-        return Err(format!("{program} timed out"));
-    }
-    if !output.status.success() {
-        return Err(format!(
-            "{program} exited with {} (install it and log in)",
-            output.status
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn validate_pr_branch(repo_root: &Path, number: u64, branch: &str) -> Result<()> {
-    git_run(repo_root, ["check-ref-format", "--branch", branch]).map_err(|_| {
-        WorktreeErr::PrHeadUnresolved {
-            number,
-            reason: format!("forge reported invalid branch name `{branch}`"),
-        }
-    })
-}
-
-enum LocalPrBranch {
-    New,
-    Existing,
-}
-
-fn prepare_local_pr_branch(
-    repo_root: &Path,
-    branch: &str,
-    remote_ref: &str,
-    remote_head: &str,
-) -> Result<LocalPrBranch> {
-    let Some(local_head) = local_branch_tip(repo_root, branch) else {
-        return Ok(LocalPrBranch::New);
-    };
-    if let Some(path) = branch_worktree(repo_root, branch)? {
-        return Err(WorktreeErr::PrBranchConflict {
-            branch: branch.to_owned(),
-            detail: format!("it is checked out at {}", path.display()),
-        });
-    }
-    if local_head != remote_head {
-        if is_ancestor(repo_root, &local_head, remote_head) {
-            git_run(repo_root, ["branch", "-f", branch, remote_ref])?;
-        } else {
-            let detail = if is_ancestor(repo_root, remote_head, &local_head) {
-                "the local branch is ahead of the PR head"
-            } else {
-                "the local branch has diverged from the PR head"
-            };
-            return Err(WorktreeErr::PrBranchConflict {
-                branch: branch.to_owned(),
-                detail: detail.to_owned(),
-            });
-        }
-    }
-    git_run(
-        repo_root,
-        ["branch", "--set-upstream-to", remote_ref, branch],
-    )?;
-    Ok(LocalPrBranch::Existing)
-}
-
-fn local_branch_tip(repo_root: &Path, branch: &str) -> Option<String> {
-    let ref_name = format!("refs/heads/{branch}^{{commit}}");
-    git_stdout(
-        repo_root,
-        ["rev-parse", "--verify", "--quiet", ref_name.as_str()],
-    )
-    .ok()
-}
-
-fn branch_worktree(repo_root: &Path, branch: &str) -> Result<Option<PathBuf>> {
-    let rows = parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
-    Ok(rows
-        .into_iter()
-        .find(|row| row.branch.as_deref() == Some(branch))
-        .map(|row| row.path))
 }
 
 pub fn remove(
@@ -891,74 +512,53 @@ fn resolve_fresh_worktree(
     }))
 }
 
-fn add_and_seed(
-    repo_root: &Path,
-    name: String,
-    path: PathBuf,
-    branch: String,
-    provenance: MarkerProvenance,
-    checkout_ref: &str,
-) -> Result<CreatedWorktree> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let path_arg = path.to_string_lossy().into_owned();
-    git_run(
-        repo_root,
-        vec![
-            "worktree",
-            "add",
-            "-b",
-            branch.as_str(),
-            path_arg.as_str(),
-            checkout_ref,
-        ],
-    )?;
-    finish_worktree(repo_root, name, path, branch, provenance)
+enum Checkout<'a> {
+    NewBranch(&'a str),
+    Tracking(&'a str),
+    Existing,
 }
 
-fn add_tracking_and_seed(
+fn add_worktree(
     repo_root: &Path,
     name: String,
     path: PathBuf,
     branch: String,
     provenance: MarkerProvenance,
-    remote_ref: &str,
+    checkout: Checkout<'_>,
 ) -> Result<CreatedWorktree> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let path_arg = path.to_string_lossy().into_owned();
-    git_run(
-        repo_root,
-        [
-            "worktree",
-            "add",
-            "--track",
-            "-b",
-            branch.as_str(),
-            path_arg.as_str(),
-            remote_ref,
-        ],
-    )?;
-    finish_worktree(repo_root, name, path, branch, provenance)
-}
-
-fn add_existing_and_seed(
-    repo_root: &Path,
-    name: String,
-    path: PathBuf,
-    branch: String,
-    provenance: MarkerProvenance,
-) -> Result<CreatedWorktree> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    match checkout {
+        Checkout::NewBranch(checkout_ref) => git_run(
+            repo_root,
+            [
+                "worktree",
+                "add",
+                "-b",
+                branch.as_str(),
+                path_arg.as_str(),
+                checkout_ref,
+            ],
+        )?,
+        Checkout::Tracking(remote_ref) => git_run(
+            repo_root,
+            [
+                "worktree",
+                "add",
+                "--track",
+                "-b",
+                branch.as_str(),
+                path_arg.as_str(),
+                remote_ref,
+            ],
+        )?,
+        Checkout::Existing => git_run(
+            repo_root,
+            ["worktree", "add", path_arg.as_str(), branch.as_str()],
+        )?,
     }
-    let path_arg = path.to_string_lossy().into_owned();
-    git_run(
-        repo_root,
-        ["worktree", "add", path_arg.as_str(), branch.as_str()],
-    )?;
     finish_worktree(repo_root, name, path, branch, provenance)
 }
 
@@ -1300,9 +900,7 @@ fn delete_branch(repo_root: &Path, marker: &WorktreeMarker, force: bool) -> Resu
     let flag = if force { "-D" } else { "-d" };
     match git_run(repo_root, ["branch", flag, branch]) {
         Ok(()) => Ok(BranchDeletion::Deleted),
-        Err(WorktreeErr::Git { stderr, .. })
-            if stderr.contains("not found") || stderr.contains("not a branch") =>
-        {
+        Err(WorktreeErr::Git { stderr, .. }) if branch_already_gone(&stderr) => {
             Ok(BranchDeletion::Deleted)
         }
         Err(err) if force => Err(err),
@@ -1321,6 +919,10 @@ fn branch_delete_failed_unmerged(stderr: &str) -> bool {
     stderr.contains("not fully merged") || stderr.contains("not merged")
 }
 
+fn branch_already_gone(stderr: &str) -> bool {
+    stderr.contains("not found") || stderr.contains("not a branch")
+}
+
 fn branch_landed(repo_root: &Path, marker: &WorktreeMarker) -> bool {
     let Some(comparison) = comparison_ref(repo_root, marker) else {
         return false;
@@ -1331,9 +933,7 @@ fn branch_landed(repo_root: &Path, marker: &WorktreeMarker) -> bool {
 fn force_delete_branch(repo_root: &Path, branch: &str) -> Result<BranchDeletion> {
     match git_run(repo_root, ["branch", "-D", branch]) {
         Ok(()) => Ok(BranchDeletion::Deleted),
-        Err(WorktreeErr::Git { stderr, .. })
-            if stderr.contains("not found") || stderr.contains("not a branch") =>
-        {
+        Err(WorktreeErr::Git { stderr, .. }) if branch_already_gone(&stderr) => {
             Ok(BranchDeletion::Deleted)
         }
         Err(err) => Err(err),
@@ -1551,36 +1151,6 @@ branch refs/heads/swift-otter
 
         assert_eq!(marker.version, 3);
         assert_eq!(marker.from_pr, None);
-    }
-
-    #[test]
-    fn pr_worktree_marker_records_pr_number() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let repo = dir.path().join("repo");
-        std::fs::create_dir_all(&repo).expect("repo dir");
-        git_run(&repo, ["init"]).expect("git init");
-        git_run(&repo, ["config", "user.email", "rimz@example.test"]).expect("git email");
-        git_run(&repo, ["config", "user.name", "Rimz Test"]).expect("git name");
-        git_run(&repo, ["commit", "--allow-empty", "-m", "base"]).expect("initial commit");
-        let head = git_stdout(&repo, ["rev-parse", "HEAD"]).expect("head");
-        let path = dir.path().join("review-69");
-
-        add_pr_worktree(
-            &repo,
-            "review-69".to_owned(),
-            path.clone(),
-            "review-69".to_owned(),
-            head.clone(),
-            &head,
-            69,
-        )
-        .expect("PR worktree");
-
-        let marker = read_marker_for_worktree(&path)
-            .expect("read marker")
-            .expect("marker");
-        assert_eq!(marker.version, 4);
-        assert_eq!(marker.from_pr, Some(69));
     }
 
     #[test]
