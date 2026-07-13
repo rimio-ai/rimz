@@ -402,6 +402,117 @@ fn cursor_response_tokens_and_interruption_flow_end_to_end() {
 }
 
 #[test]
+fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
+    let env = Env::new();
+    let transcript_path = env.project_root.join("conv-cursor-recovery.jsonl");
+    let terminal = "{\"type\":\"turn_ended\",\"status\":\"success\"}\n";
+    std::fs::write(&transcript_path, terminal).unwrap();
+    let transcript_path_string = transcript_path.to_string_lossy().into_owned();
+    let run = |event: &str, extra: Value| {
+        let mut payload = json!({
+            "hook_event_name": event,
+            "conversation_id": "conv-cursor-recovery",
+            "transcript_path": transcript_path_string,
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().expect("hook extra is an object").clone());
+        let output = env.run_hook("cursor", &serde_json::to_string(&payload).unwrap());
+        assert!(
+            output.status.success(),
+            "{event} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run("sessionStart", json!({}));
+    run("beforeSubmitPrompt", json!({"prompt": "turn two"}));
+    std::fs::write(
+        &transcript_path,
+        format!(
+            "{terminal}{{\"type\":\"user\"}}\n{{\"type\":\"tool\"}}\n{{\"type\":\"assistant\"}}\n"
+        ),
+    )
+    .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&transcript_path)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() + Duration::from_secs(60)),
+        )
+        .unwrap();
+    rimz::sidebar::refresh::refresh_session_transcript_context(
+        &env.runtime_paths(),
+        "cursor",
+        "conv-cursor-recovery",
+        None,
+    );
+
+    let snapshot = env
+        .store()
+        .snapshot()
+        .unwrap()
+        .with_agent_context(env.agent_contexts());
+    let active = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "conv-cursor-recovery")
+        .unwrap();
+    assert_eq!(
+        active.effective_status(),
+        rimz::agents::AgentStatus::Running
+    );
+    assert!(!rimz::message::gate_open_for_agent(
+        rimz::message::DeliveryGate::Done,
+        active,
+        false,
+        Timestamp::now(),
+    ));
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript_path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, terminal.as_bytes()).unwrap();
+    file.set_times(
+        std::fs::FileTimes::new()
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(61)),
+    )
+    .unwrap();
+    drop(file);
+    rimz::sidebar::refresh::refresh_session_transcript_context(
+        &env.runtime_paths(),
+        "cursor",
+        "conv-cursor-recovery",
+        None,
+    );
+
+    let snapshot = env
+        .store()
+        .snapshot()
+        .unwrap()
+        .with_agent_context(env.agent_contexts());
+    let settled = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "conv-cursor-recovery")
+        .unwrap();
+    assert_eq!(
+        settled.effective_status(),
+        rimz::agents::AgentStatus::Success
+    );
+    assert!(rimz::message::gate_open_for_agent(
+        rimz::message::DeliveryGate::Done,
+        settled,
+        false,
+        Timestamp::now(),
+    ));
+}
+
+#[test]
 fn internal_app_server_hook_is_suppressed_and_records_nothing() {
     // A `codex app-server` that Rimz cold-spawns for read-only enrichment fires
     // its own `SessionStart` hook on startup. The internal-app-server marker

@@ -176,6 +176,18 @@ where
 /// read far enough to return that record whole; a valid final record needs no
 /// newline, while a torn final fragment stays out of the result.
 pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
+    read_transcript_tail_with_status(path).map(|tail| tail.text)
+}
+
+pub(crate) struct TranscriptTail {
+    pub(crate) text: String,
+    pub(crate) torn_suffix: bool,
+}
+
+/// The bounded transcript tail plus whether an incomplete final record was
+/// excluded. Cursor uses the extra bit to prove its transcript is resting at
+/// a terminal row; other adapters retain the string-only wrapper above.
+pub(crate) fn read_transcript_tail_with_status(path: &Path) -> Option<TranscriptTail> {
     use std::io::{Read, Seek, SeekFrom};
 
     const TAIL_BYTES: u64 = 64 * 1024;
@@ -230,21 +242,27 @@ pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
         start = start.saturating_sub(TAIL_BYTES);
     }
 
-    let complete = match buf.iter().rposition(|byte| *byte == b'\n') {
+    let (complete, torn_suffix) = match buf.iter().rposition(|byte| *byte == b'\n') {
         Some(newline) if newline + 1 < buf.len() => {
             let fragment = &buf[newline + 1..];
             if serde_json::from_slice::<serde::de::IgnoredAny>(fragment).is_ok() {
-                buf.len()
+                (buf.len(), false)
             } else {
-                newline + 1
+                (
+                    newline + 1,
+                    fragment.iter().any(|byte| !byte.is_ascii_whitespace()),
+                )
             }
         }
-        Some(_) => buf.len(),
-        None if serde_json::from_slice::<serde::de::IgnoredAny>(&buf).is_ok() => buf.len(),
-        None => 0,
+        Some(_) => (buf.len(), false),
+        None if serde_json::from_slice::<serde::de::IgnoredAny>(&buf).is_ok() => (buf.len(), false),
+        None => (0, buf.iter().any(|byte| !byte.is_ascii_whitespace())),
     };
     buf.truncate(complete);
-    Some(String::from_utf8_lossy(&buf).into_owned())
+    Some(TranscriptTail {
+        text: String::from_utf8_lossy(&buf).into_owned(),
+        torn_suffix,
+    })
 }
 
 /// Read a torn-write-safe JSONL suffix from a transcript path, returning the
@@ -347,5 +365,23 @@ mod tests {
         assert_eq!(read_transcript_tail(&path).unwrap(), "{\"a\":1}\n{\"b\":2}");
         fs::write(&path, "{\"a\":1}\n{\"b\":").unwrap();
         assert_eq!(read_transcript_tail(&path).unwrap(), "{\"a\":1}\n");
+    }
+
+    #[test]
+    fn transcript_tail_reports_only_a_nonempty_torn_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+
+        for (content, text, torn_suffix) in [
+            ("{\"a\":1}\n", "{\"a\":1}\n", false),
+            ("{\"a\":1}", "{\"a\":1}", false),
+            ("{\"a\":1}\n{\"b\":", "{\"a\":1}\n", true),
+            ("{\"a\":1}\n   ", "{\"a\":1}\n", false),
+        ] {
+            fs::write(&path, content).unwrap();
+            let tail = read_transcript_tail_with_status(&path).unwrap();
+            assert_eq!(tail.text, text, "{content:?}");
+            assert_eq!(tail.torn_suffix, torn_suffix, "{content:?}");
+        }
     }
 }

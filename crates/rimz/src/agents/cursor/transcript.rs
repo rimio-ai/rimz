@@ -41,9 +41,10 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     if ctx.prior_transcript_stat == Some(&stat) {
         return None;
     }
-    let outcome = crate::agents::read_transcript_tail(&path)
-        .as_deref()
-        .and_then(latest_terminal);
+    let tail = crate::agents::transcript_fs::read_transcript_tail_with_status(&path)?;
+    let outcome = (!tail.torn_suffix)
+        .then(|| latest_terminal(&tail.text))
+        .flatten();
     let at = timestamp_from_stat(stat)?;
     let (turn_complete, turn_interrupted, turn_error) = match outcome {
         Some(TerminalOutcome::Complete) => (Some(at), None, None),
@@ -73,23 +74,19 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
 }
 
 fn latest_terminal(tail: &str) -> Option<TerminalOutcome> {
-    for line in tail.lines().rev() {
-        let Ok(record) = serde_json::from_str::<TerminalRecord>(line) else {
-            continue;
-        };
-        if record.r#type.as_deref() != Some("turn_ended") {
-            continue;
-        }
-        return match record.status.as_deref() {
-            Some("success" | "completed") => Some(TerminalOutcome::Complete),
-            Some("aborted") => Some(TerminalOutcome::Interrupted),
-            Some("error") => Some(TerminalOutcome::Error(
-                record.error.map(|error| error.chars().take(500).collect()),
-            )),
-            _ => None,
-        };
+    let line = tail.lines().rev().find(|line| !line.trim().is_empty())?;
+    let record = serde_json::from_str::<TerminalRecord>(line).ok()?;
+    if record.r#type.as_deref() != Some("turn_ended") {
+        return None;
     }
-    None
+    match record.status.as_deref() {
+        Some("success" | "completed") => Some(TerminalOutcome::Complete),
+        Some("aborted") => Some(TerminalOutcome::Interrupted),
+        Some("error") => Some(TerminalOutcome::Error(
+            record.error.map(|error| error.chars().take(500).collect()),
+        )),
+        _ => None,
+    }
 }
 
 pub(super) fn transcript_stat(path: &Path) -> Option<TranscriptStat> {

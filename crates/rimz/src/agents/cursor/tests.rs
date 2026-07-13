@@ -215,7 +215,7 @@ fn transcript_tail_reads_only_terminal_rows_and_resolves_exact_paths() {
         fixture.contains(SENTINEL),
         "fixture exercises the privacy boundary"
     );
-    assert_eq!(transcript::parse_terminal_for_test(fixture), Some("error"));
+    assert_eq!(transcript::parse_terminal_for_test(fixture), None);
     let healed = format!("{}}}\n", fixture.trim_end());
     assert_eq!(
         transcript::parse_terminal_for_test(&healed),
@@ -249,6 +249,56 @@ fn transcript_tail_reads_only_terminal_rows_and_resolves_exact_paths() {
         transcript::resolve_transcript("conv-1", Some(&current), Some(&prior)),
         Some(current)
     );
+}
+
+#[test]
+fn transcript_recovery_requires_the_terminal_row_to_be_last() {
+    let terminal = "{\"type\":\"turn_ended\",\"status\":\"success\"}";
+    for later in [
+        "{\"type\":\"user\"}",
+        "{\"type\":\"assistant\"}",
+        "{\"type\":\"tool\"}",
+        "{\"type\":\"future_record\"}",
+        "not-json",
+    ] {
+        let tail = format!("{terminal}\n{later}\n");
+        assert_eq!(transcript::parse_terminal_for_test(&tail), None, "{later}");
+
+        let healed = format!("{tail}{terminal}\n");
+        assert_eq!(
+            transcript::parse_terminal_for_test(&healed),
+            Some("complete"),
+            "{later}",
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("conv-1.jsonl");
+    std::fs::write(&path, format!("{terminal}\n{{\"type\":\"user\"")).unwrap();
+    let path_string = path.to_string_lossy().into_owned();
+    let pricing = dir.path().join("pricing-cache.json");
+    let refresh = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        agent_id: "conv-1",
+        model_hint: None,
+        current_transcript_path: Some(&path_string),
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing,
+    })
+    .expect("torn transcript still registers its path");
+    assert!(refresh.turn_complete.is_none());
+
+    std::fs::write(&path, format!("{terminal}\n{terminal}\n")).unwrap();
+    let healed = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        agent_id: "conv-1",
+        model_hint: None,
+        current_transcript_path: Some(&path_string),
+        prior_transcript_path: None,
+        prior_transcript_stat: refresh.transcript_stat.as_ref(),
+        shared_pricing_cache_path: &pricing,
+    })
+    .expect("new complete terminal refresh");
+    assert!(healed.turn_complete.is_some());
 }
 
 #[test]
@@ -447,6 +497,74 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
         uninstalled["hooks"]["futureEvent"][0]["command"],
         "future-hook"
     );
+}
+
+#[test]
+fn legacy_hook_install_is_detected_and_repaired_additively() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hooks.json");
+    let legacy_events: Vec<_> = WIRED_EVENTS
+        .iter()
+        .copied()
+        .filter(|event| *event != "afterAgentResponse")
+        .collect();
+    let mut hooks = serde_json::Map::new();
+    for event in &legacy_events {
+        hooks.insert(
+            (*event).to_owned(),
+            json!([
+                { "command": format!("user-{event}-hook") },
+                { "command": RIMZ_HOOK_COMMAND }
+            ]),
+        );
+    }
+    hooks.insert(
+        "futureEvent".to_owned(),
+        json!([{ "command": "future-user-hook" }]),
+    );
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&json!({
+            "version": 1,
+            "hooks": hooks,
+            "future": { "kept": true }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert!(!install::hooks_installed_at(&path));
+    let preview = install::preview_at(&path).expect("legacy repair preview");
+    let candidate: Value = serde_json::from_str(&preview.candidate_config).unwrap();
+    assert_eq!(candidate["future"]["kept"], true);
+    assert_eq!(
+        candidate["hooks"]["futureEvent"][0]["command"],
+        "future-user-hook"
+    );
+    for event in WIRED_EVENTS {
+        let entries = candidate["hooks"][event].as_array().unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry["command"] == RIMZ_HOOK_COMMAND)
+                .count(),
+            1,
+            "{event}",
+        );
+        if legacy_events.contains(event) {
+            assert!(
+                entries.iter().any(|entry| {
+                    entry["command"] == Value::String(format!("user-{event}-hook"))
+                })
+            );
+        }
+    }
+
+    install::install_into(&path).expect("repair legacy install");
+    assert!(install::hooks_installed_at(&path));
+    let once = std::fs::read(&path).unwrap();
+    install::install_into(&path).expect("second repair install");
+    assert_eq!(std::fs::read(&path).unwrap(), once);
 }
 
 #[test]

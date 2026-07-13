@@ -84,6 +84,8 @@ Two agents carry a deliberate absence worth stating here: Cursor and Droid appea
 
 Cursor's Live coverage is partial rather than absent: `preCompact` reports occupancy, `stop` reports per-turn fresh/cache/output composition, `afterAgentResponse` supplies safe final text, and a bounded terminal-only transcript tail recovers missed turn ends. Full native assistant history and incremental reply streaming remain unavailable because Cursor's JSONL merges visible assistant output with thinking.
 
+Cursor hook sets installed before `afterAgentResponse` need a one-time repair after upgrade: run `rimz hooks install cursor`. Incomplete-hook detection and `rimz doctor` report the same command instead of claiming safe replies are wired.
+
 ## Versions
 
 RimZ tracks each agent's own release surface, and behaviour can shift with the agent's version — Codex, for example, moved to daemon-routed hooks at 0.137 and adjusted turn-completion signals through the 0.14x line. RimZ adapts at runtime rather than pinning a hard floor here, and `rimz doctor` reports version drift it detects per agent after an upgrade ([troubleshooting](../guide/troubleshooting.md)). For the exact event surface a given agent version exposes, the authority is that agent's [mapping doc](#per-agent-mappings) and external reference.

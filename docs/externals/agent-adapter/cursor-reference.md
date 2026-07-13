@@ -134,11 +134,11 @@ The config schema version is `1`:
     "sessionStart": [{ "command": "rimz hooks feed --source cursor" }],
     "beforeSubmitPrompt": [{ "command": "rimz hooks feed --source cursor" }],
     "postToolUse": [{ "command": "rimz hooks feed --source cursor" }],
+    "postToolUseFailure": [{ "command": "rimz hooks feed --source cursor" }],
+    "afterAgentResponse": [{ "command": "rimz hooks feed --source cursor" }],
     "stop": [{ "command": "rimz hooks feed --source cursor" }],
     "sessionEnd": [{ "command": "rimz hooks feed --source cursor" }],
-    "preCompact": [{ "command": "rimz hooks feed --source cursor" }],
-    "subagentStart": [{ "command": "rimz hooks feed --source cursor" }],
-    "subagentStop": [{ "command": "rimz hooks feed --source cursor" }]
+    "preCompact": [{ "command": "rimz hooks feed --source cursor" }]
   }
 }
 ```
@@ -204,6 +204,7 @@ Do not persist `user_email`, prompts, tool inputs, tool outputs, file contents, 
 | `beforeSubmitPrompt` | after send, before backend request | `prompt`, `attachments[]` | `TurnStarted`, task/prompt subject to privacy policy |
 | `postToolUse` | a tool succeeds | `tool_name`, `tool_input`, `tool_output`, `tool_use_id`, `cwd`, `duration` | `ToolUsed`; heartbeat; `edits` from a pinned tool-name table |
 | `postToolUseFailure` | a tool errors, times out, or is denied | `tool_name`, `tool_input`, `tool_use_id`, `cwd`, `error_message`, `failure_type`, `duration`, `is_interrupt` | heartbeat/diagnostic only; a tool failure is not necessarily turn death |
+| `afterAgentResponse` | the assistant produces its final visible response | `text` | safe assistant content only; never a turn boundary |
 | `stop` | the main agent loop ends | `status: completed | aborted | error`, input/output/cache token fields, `loop_count` | completed/error end the turn; aborted is an interruption |
 | `sessionEnd` | a conversation ends | `session_id`, `reason`, `duration_ms`, `is_background_agent`, `final_status`, optional `error_message` | `Ended` tombstone |
 | `preCompact` | automatic or manual summarization begins | trigger and live context fields | `Compacting` plus `AgentContext` refresh |
@@ -343,7 +344,7 @@ ACP has first-class permission, question, and plan requests, described below. Th
 
 Cursor CLI `2026.07.09-a3815c0` writes per-conversation JSONL at `~/.cursor/projects/<workspace>/agent-transcripts/<conversation_id>/<conversation_id>.jsonl`. Hooks expose the same file through `transcript_path` and `CURSOR_TRANSCRIPT_PATH`; subagent stop separately exposes `agent_transcript_path`.
 
-The captured terminal subset is a top-level `type: "turn_ended"` record with `status: "success" | "aborted" | "error"` and optional error text. RimZ models only those fields, parses complete lines independently, reads a bounded tail, and uses file mtime as the observation timestamp only after a semantic terminal record exists. Path discovery joins the exact conversation directory and filename under each immediate project directory and rejects zero or multiple matches.
+The captured terminal subset is a top-level `type: "turn_ended"` record with `status: "success" | "aborted" | "error"` and optional error text. RimZ models only those fields, reads a bounded tail, and recovers an outcome only when the complete recognized terminal row is the last meaningful record with no torn suffix. A later nonterminal, unknown, malformed, or partial record suppresses the older outcome until a new complete terminal row arrives. File mtime supplies the observation timestamp only after that at-rest proof. Path discovery joins the exact conversation directory and filename under each immediate project directory and rejects zero or multiple matches.
 
 The same JSONL carries user, assistant, thinking, and tool records, but assistant `message.content[type=text]` blocks merge visible commentary and model thinking without a safe discriminator. RimZ never normalizes, pages, streams, persists, or uses those text blocks as final output. `afterAgentResponse.text` is the sole assistant-text authority.
 
