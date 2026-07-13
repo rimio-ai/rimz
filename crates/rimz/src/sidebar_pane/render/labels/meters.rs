@@ -329,17 +329,15 @@ pub(in crate::sidebar_pane::render) fn window_style(theme: &Theme, window: u64) 
     theme.styled(component, Modifier::DIM)
 }
 
-/// The context meter's health bar: the dominant cache-read run paints in the
-/// row's current health tone (`theme.heat_tone(amount)`), while the trailing
-/// accent segments (cache-write, fresh input) stay flat in their own tones. A
-/// half-rule cap carved from the fill separates each segment, so composition
-/// stays legible without moving the bar end. `segments[0]` is the cache-read run
-/// — its color is ignored because the row health tone owns that span; later
-/// segments paint in their own color. `total_pct` sizes the filled run exactly
-/// as the plain gauge would. With no split to draw, the whole filled run is one
-/// flat health run. Under `NO_COLOR` the health run and accents collapse to one
-/// heavy run separated by the same cap notches — the fill level still reads by
-/// shape.
+/// The context meter's health bar: the first nonzero segment paints in the
+/// row's current health tone (`theme.heat_tone(amount)`), while later accent
+/// segments (cache-write, fresh input) stay flat in their own tones. Each
+/// accent starts with a gap-fronted half-rule cap (`╺` by default), giving even
+/// a half-cell of ink a visible floor without moving the bar end. `total_pct`
+/// sizes the filled run exactly as the plain gauge would; segments too numerous
+/// for that run drop smallest-first. With no split to draw, the whole filled run
+/// is one flat health run. Under `NO_COLOR` color collapses while the leading
+/// gap in each accent cap keeps composition boundaries legible by shape.
 pub(in crate::sidebar_pane::render) fn context_gauge_spans(
     theme: &Theme,
     amount: f32,
@@ -349,7 +347,7 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
 ) -> Vec<Span<'static>> {
     let width = width.max(1);
     let filled = filled_cells(total_pct.min(100), width);
-    let weight: u64 = segments.iter().map(|(value, _)| *value).sum();
+    let weight: u128 = segments.iter().map(|(value, _)| u128::from(*value)).sum();
     let bar_track = theme.glyph(GlyphRole::MeterBarTrack).to_owned();
     let bar_cap = theme.glyph(GlyphRole::MeterBarCap).to_owned();
     let track = |drawn: usize| -> Option<Span<'static>> {
@@ -361,49 +359,116 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
         spans.extend(track(filled));
         return spans;
     }
-    // Reserve one cell per separator cap between non-empty segments, so the
-    // notches come out of the fill and the bar still ends at `filled`.
-    let probe = apportion(segments.iter().map(|(value, _)| *value), filled);
-    let separators = probe
+    let mut active: Vec<(usize, u64)> = segments
         .iter()
-        .filter(|&&count| count > 0)
-        .count()
-        .saturating_sub(1);
-    let cells = apportion(
-        segments.iter().map(|(value, _)| *value),
-        filled.saturating_sub(separators),
-    );
-    let mut spans = Vec::with_capacity(filled + 2);
-    let mut drawn = 0usize;
-    let non_empty = cells.iter().filter(|&&count| count > 0).count();
-    let mut rendered = 0usize;
-    for (index, ((_, color), &count)) in segments.iter().zip(&cells).enumerate() {
-        if count == 0 {
-            continue;
-        }
-        let cap = rendered + 1 < non_empty;
-        if index == 0 {
-            spans.extend(filled_run_spans(theme, theme.heat_tone(amount), count));
-            if cap {
-                spans.push(Span::styled(
-                    bar_cap.clone(),
-                    theme.style(theme.heat_tone(amount), Modifier::empty()),
-                ));
-            }
-        } else {
-            spans.extend(filled_run_spans(theme, *color, count));
-            if cap {
-                spans.push(Span::styled(
-                    bar_cap.clone(),
-                    theme.style(*color, Modifier::empty()),
-                ));
-            }
-        }
-        drawn += count + usize::from(cap);
-        rendered += 1;
+        .enumerate()
+        .filter_map(|(index, (value, _))| (*value > 0).then_some((index, *value)))
+        .collect();
+    while active.len() > filled {
+        let smallest = active.iter().map(|(_, value)| *value).min().unwrap_or(0);
+        let drop = active
+            .iter()
+            .rposition(|(_, value)| *value == smallest)
+            .unwrap_or(active.len() - 1);
+        active.remove(drop);
     }
-    spans.extend(track(drawn));
+
+    let budget = filled * 2;
+    let active_weight: u128 = active.iter().map(|(_, value)| u128::from(*value)).sum();
+    let mut accents: Vec<(usize, u64, usize)> = active
+        .iter()
+        .skip(1)
+        .map(|(index, value)| {
+            (
+                *index,
+                *value,
+                nearest_odd_share(*value, budget, active_weight),
+            )
+        })
+        .collect();
+    let mut accent_halves: usize = accents.iter().map(|(_, _, ink)| ink + 1).sum();
+
+    // Each accent can yield whole cells back to the lead while retaining its
+    // half-cell floor. Fit first, then repair representable weight inversions;
+    // minimum-shape inversions remain when the fixed semantic order forces one.
+    while accent_halves + 2 > budget {
+        let Some((_, _, ink)) = accents
+            .iter_mut()
+            .max_by_key(|(_, weight, ink)| (*ink, *weight))
+        else {
+            break;
+        };
+        if *ink == 1 {
+            break;
+        }
+        *ink -= 2;
+        accent_halves -= 2;
+    }
+    let mut lead_ink = budget - accent_halves;
+    loop {
+        let mut inks = Vec::with_capacity(active.len());
+        inks.push(lead_ink);
+        inks.extend(accents.iter().map(|(_, _, ink)| *ink));
+        let offender = accents
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, weight, ink))| {
+                *ink > 1
+                    && active
+                        .iter()
+                        .zip(&inks)
+                        .any(|((_, other_weight), other_ink)| {
+                            other_weight > weight && other_ink < ink
+                        })
+            })
+            .max_by_key(|(_, (_, weight, ink))| (*ink, *weight))
+            .map(|(index, _)| index);
+        let Some(index) = offender else { break };
+        accents[index].2 -= 2;
+        lead_ink += 2;
+    }
+
+    let mut spans = Vec::with_capacity(active.len() * 2 + 1);
+    spans.extend(filled_run_spans(
+        theme,
+        theme.heat_tone(amount),
+        lead_ink / 2,
+    ));
+    for (index, _, ink) in accents {
+        let color = segments[index].1;
+        spans.push(Span::styled(
+            bar_cap.clone(),
+            theme.style(color, Modifier::empty()),
+        ));
+        spans.extend(filled_run_spans(theme, color, (ink - 1) / 2));
+    }
+    spans.extend(track(filled));
     spans
+}
+
+/// Quantize one proportional half-cell share to its nearest positive odd ink
+/// count. An accent's leading blank half makes `ink + 1` an even cell budget.
+fn nearest_odd_share(weight: u64, budget: usize, total_weight: u128) -> usize {
+    let exact = u128::from(weight) * budget as u128;
+    let quotient = exact / total_weight;
+    let remainder = exact % total_weight;
+    let lower = if quotient % 2 == 1 {
+        quotient
+    } else {
+        quotient.saturating_sub(1).max(1)
+    };
+    let upper = if quotient % 2 == 1 {
+        quotient + u128::from(remainder > 0) * 2
+    } else {
+        (quotient + 1).max(1)
+    };
+    let lower_distance = exact.abs_diff(lower * total_weight);
+    let upper_distance = exact.abs_diff(upper * total_weight);
+    if lower_distance <= upper_distance {
+        lower as usize
+    } else {
+        upper as usize
+    }
 }
 
 fn filled_run_spans(theme: &Theme, color: Color, count: usize) -> Vec<Span<'static>> {
@@ -414,38 +479,6 @@ fn filled_run_spans(theme: &Theme, color: Color, count: usize) -> Vec<Span<'stat
         theme.glyph(GlyphRole::MeterBarFilled).repeat(count),
         theme.style(color, Modifier::empty()),
     )]
-}
-
-/// Distribute `total` whole cells across `weights` by the largest-remainder
-/// method: floor each share, then hand the leftover cells to the largest
-/// fractional remainders. The result always sums to `total`, so a segmented bar
-/// fills exactly its run with no rounding drift.
-pub(in crate::sidebar_pane::render) fn apportion(
-    weights: impl IntoIterator<Item = u64>,
-    total: usize,
-) -> Vec<usize> {
-    let weights: Vec<u64> = weights.into_iter().collect();
-    let sum: u128 = weights.iter().map(|w| u128::from(*w)).sum();
-    if sum == 0 {
-        return vec![0; weights.len()];
-    }
-    let mut cells = Vec::with_capacity(weights.len());
-    let mut remainders = Vec::with_capacity(weights.len());
-    let mut assigned = 0usize;
-    for (index, weight) in weights.iter().enumerate() {
-        let exact = u128::from(*weight) * total as u128;
-        let floor = (exact / sum) as usize;
-        cells.push(floor);
-        remainders.push((index, exact % sum));
-        assigned += floor;
-    }
-    // Largest remainder first; the stable sort keeps a tie in index order, so
-    // the leftover cell lands on the earliest (leftmost) segment.
-    remainders.sort_by_key(|&(_, remainder)| std::cmp::Reverse(remainder));
-    for (index, _) in remainders.into_iter().take(total.saturating_sub(assigned)) {
-        cells[index] += 1;
-    }
-    cells
 }
 
 /// The provider dashboard's draining budget ("mana / stamina") bar:

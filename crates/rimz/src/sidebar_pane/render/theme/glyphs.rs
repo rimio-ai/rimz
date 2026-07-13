@@ -116,7 +116,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::MeterContextEmpty => "▢",
         GlyphRole::MeterBarFilled => "━",
         GlyphRole::MeterBarTrack => "─",
-        GlyphRole::MeterBarCap => "╸",
+        GlyphRole::MeterBarCap => "╺",
         GlyphRole::MeterManaFilled => "▰",
         GlyphRole::MeterManaTrack => "▱",
         GlyphRole::MeterReset => "↻",

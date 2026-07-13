@@ -71,12 +71,12 @@ pub(super) fn bar_row(
 /// **percent used** on the right (always — the window *size* moves to the
 /// expanded token line), the bar between. The fill amount and its calm-blue →
 /// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
-/// `[theme.display.context_meter]`) come from the used percentage and the absolute tokens;
-/// when the statusline reports the per-message token breakdown a *calm* fill is
-/// split into colored segments (cache reads / cache writes / fresh input) that
-/// add up to exactly that percentage, and a warmed bar goes one solid severity
-/// run. The `▣` glyph wears the same severity, so glyph, bar, and the `▤` line
-/// below speak one urgency. The value prefers a one-decimal precise fraction
+/// `[theme.display.context_meter]`) come from the used percentage and the
+/// absolute tokens. When the statusline reports the per-message token
+/// breakdown, every severity splits the fill into cache-read / cache-write /
+/// fresh-input segments; each accent starts with a gap-fronted `╺` cap so even
+/// a half-cell fragment stays visible. The `▣` glyph wears the same severity,
+/// so glyph, bar, and the `▤` line below speak one urgency. The value prefers a one-decimal precise fraction
 /// (`78.2%`) over the integer gauge. An empty (0%) window reads the hollow
 /// `▢`; any usage fills it to `▣`.
 pub(super) fn gauge_line(
