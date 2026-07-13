@@ -416,7 +416,7 @@ fn branch_worktree(repo_root: &Path, branch: &str) -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worktree::{git_run, git_stdout, read_marker_for_worktree};
+    use crate::worktree::read_marker_for_worktree;
 
     #[test]
     fn pr_worktree_marker_records_pr_number() {
