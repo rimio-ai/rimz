@@ -81,13 +81,14 @@ pub(super) fn recover_focused_pane_binding(
         return;
     }
 
-    let Some(inputs) = live_binding_inputs(
+    let inputs = live_binding_inputs(
         mux_hint,
         &workspace.session_name,
         store.runtime_paths(),
         kind,
         &agent_id,
-    ) else {
+    );
+    if inputs.panes.is_empty() {
         log_binding_recovery(
             store,
             BindingRecoveryLog::new(
@@ -96,10 +97,11 @@ pub(super) fn recover_focused_pane_binding(
                 observation,
                 &worktree_path,
                 BindingRecoveryOutcome::NoInputs,
-            ),
+            )
+            .with_probes(inputs.probes),
         );
         return;
-    };
+    }
     let selection = select_focused_pane_binding(
         kind,
         &agent_id,
@@ -261,7 +263,7 @@ fn live_binding_inputs(
     runtime: &rimz::RuntimePaths,
     kind: &str,
     agent_id: &str,
-) -> Option<BindingInputs> {
+) -> BindingInputs {
     let muxes: Vec<MuxName> = mux_hint
         .map(|mux| vec![mux])
         .unwrap_or_else(|| vec![MuxName::Zellij, MuxName::Tmux]);
@@ -279,6 +281,38 @@ fn live_binding_inputs(
             client_focus: None,
             focus_error: None,
         };
+        if !rimz::sidebar::produce::pane_fixture_active() {
+            match session_is_live_with(session_name, || {
+                backend.list_sessions_within(FOCUSED_PANE_BIND_TIMEOUT)
+            }) {
+                Ok(true) => {}
+                Ok(false) => {
+                    probe.pane_error = Some("session not live on this mux".to_owned());
+                    debug!(
+                        agent = kind,
+                        agent_id,
+                        mux = mux.as_str(),
+                        session = session_name,
+                        "lifecycle: focused pane recovery skipped a non-live mux session",
+                    );
+                    probes.push(probe);
+                    continue;
+                }
+                Err(err) => {
+                    probe.pane_error = Some(err.to_string());
+                    debug!(
+                        agent = kind,
+                        agent_id,
+                        mux = mux.as_str(),
+                        session = session_name,
+                        error = %err,
+                        "lifecycle: focused pane recovery could not list mux sessions",
+                    );
+                    probes.push(probe);
+                    continue;
+                }
+            }
+        }
         match rimz::sidebar::produce::repaired_pane_frame_for_binding(
             runtime,
             mux,
@@ -329,14 +363,18 @@ fn live_binding_inputs(
         probes.push(probe);
     }
 
-    if panes.is_empty() {
-        return None;
-    }
-    Some(BindingInputs {
+    BindingInputs {
         panes,
         client_focus: focus_probe_succeeded.then_some(focused),
         probes,
-    })
+    }
+}
+
+fn session_is_live_with(
+    session_name: &str,
+    list_sessions: impl FnOnce() -> rimz::mux::Result<Vec<String>>,
+) -> rimz::mux::Result<bool> {
+    list_sessions().map(|sessions| sessions.iter().any(|session| session == session_name))
 }
 
 fn append_unique_panes(target: &mut Vec<PaneId>, panes: Vec<PaneId>) {
@@ -344,5 +382,19 @@ fn append_unique_panes(target: &mut Vec<PaneId>, panes: Vec<PaneId>) {
         if !target.iter().any(|known| known == &pane) {
             target.push(pane);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binding_probe_requires_an_exact_live_mux_session() {
+        assert!(session_is_live_with("rimz-room", || Ok(vec!["rimz-room".to_owned()])).unwrap());
+        assert!(
+            !session_is_live_with("rimz-room", || Ok(vec!["rimz-room-old".to_owned()])).unwrap()
+        );
+        assert!(session_is_live_with("rimz-room", || Ok(Vec::new())).is_ok_and(|live| !live));
     }
 }

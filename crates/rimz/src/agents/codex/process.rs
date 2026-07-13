@@ -109,12 +109,12 @@ pub fn codex_resumed_session_id_from_cmdline(cmdline: &str) -> Option<AgentSessi
 }
 
 /// Whether a command line runs the in-pane Codex CLI — the bare `codex` TUI a
-/// user launches in a pane — rather than the daemon, the remote-control host, or
-/// Rimz's own `rimz codex app-server serve` broker. The inverse of
-/// [`is_codex_daemon_cmdline`] within the `codex` binary: those all spell
-/// `app-server` or `remote-control`, so excluding them leaves the plain CLI.
+/// user launches in a pane — rather than a process whose arguments merely name
+/// Codex, the daemon, or the remote-control host. The effective program decides
+/// the kind; arguments never classify an unrelated process as Codex.
 pub(crate) fn is_codex_cli_cmdline(cmdline: &str) -> bool {
-    cmdline.contains(CODEX_BINARY_MARKER) && !is_codex_daemon_cmdline(cmdline)
+    crate::store::snapshot::command_agent_kind(cmdline) == Some(CODEX_BINARY_MARKER)
+        && !is_codex_daemon_cmdline(cmdline)
 }
 
 #[cfg(test)]
@@ -146,6 +146,7 @@ mod tests {
         assert!(is_codex_cli_cmdline("codex"));
         assert!(is_codex_cli_cmdline("codex --model gpt-5.5"));
         assert!(is_codex_cli_cmdline("node /usr/bin/codex"));
+        assert!(is_codex_cli_cmdline("codex-aarch64-apple-darwin"));
         // The daemon, the remote-control host, and Rimz's broker all spell a
         // daemon surface, so none reads as the in-pane CLI.
         assert!(!is_codex_cli_cmdline("codex app-server"));
@@ -155,6 +156,10 @@ mod tests {
         ));
         // A non-codex process is never the codex CLI.
         assert!(!is_codex_cli_cmdline("zsh"));
+        assert!(!is_codex_cli_cmdline(
+            "rust-code-analysis-cli -m -l rust -O json -o /tmp/out -p crates/rimz/src/agents/codex/mod.rs"
+        ));
+        assert!(!is_codex_cli_cmdline("sudo npm install -g @openai/codex"));
     }
 
     #[test]
