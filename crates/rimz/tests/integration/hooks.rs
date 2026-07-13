@@ -411,7 +411,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n",
         "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
     );
-    std::fs::write(&transcript_path, &first_turn).unwrap();
+    std::fs::write(&transcript_path, first_turn).unwrap();
     let transcript_path_string = transcript_path.to_string_lossy().into_owned();
     let run = |event: &str, extra: Value| {
         let mut payload = json!({
