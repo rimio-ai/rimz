@@ -149,6 +149,11 @@ impl MeterPixels {
     /// Replace the previous-frame protection set with ids referenced by the
     /// final viewport. This pass observes placeholders without rewriting them.
     pub(crate) fn observe_visible(&mut self, lines: &[Line<'static>]) {
+        let interned = self
+            .table
+            .values()
+            .map(|entry| meter_image_id(self.id_base, entry.index))
+            .collect::<BTreeSet<_>>();
         let mut visible = BTreeSet::new();
         for line in lines {
             for span in &line.spans {
@@ -159,11 +164,7 @@ impl MeterPixels {
                     continue;
                 };
                 let image_id = u32::from(red) << 16 | u32::from(green) << 8 | u32::from(blue);
-                if self
-                    .table
-                    .values()
-                    .any(|entry| meter_image_id(self.id_base, entry.index) == image_id)
-                {
+                if interned.contains(&image_id) {
                     visible.insert(image_id);
                 }
             }
