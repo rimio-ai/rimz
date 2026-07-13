@@ -200,9 +200,8 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Partial {
-            via: "extension cumulative-cost push + turn-end session-transcript spend sum",
-            gap: "in-process accumulator is best-effort and resets on resume; the turn-end walk reconciles to the authoritative session total",
+        ConcernCoverage::Wired {
+            via: "extension cumulative-cost push reconciled to the authoritative turn-end session-transcript spend sum",
         },
     ),
     (

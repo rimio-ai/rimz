@@ -167,9 +167,8 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Partial {
-            via: "SQLite message spend sum",
-            gap: "reconstructed on turn-end, not a provider-pushed realtime figure",
+        ConcernCoverage::Wired {
+            via: "authoritative per-session SQLite message spend sum, reconciled at each turn boundary",
         },
     ),
     (

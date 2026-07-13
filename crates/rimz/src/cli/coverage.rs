@@ -436,16 +436,18 @@ mod tests {
         );
 
         let pi = agent_cells(&matrix, "pi");
-        assert_eq!(count(&pi, MatrixCellState::Ok), 7);
-        assert_eq!(count(&pi, MatrixCellState::Partial), 3);
+        assert_eq!(count(&pi, MatrixCellState::Ok), 8);
+        assert_eq!(count(&pi, MatrixCellState::Partial), 2);
         assert_eq!(count(&pi, MatrixCellState::Absent), 6);
         // Pi's `agent_settled` marks final idle, while the stall window
         // reconstructs the missing idle-timeout nudge — partial, like Codex,
-        // not absent. Rich context is reconstructed from the extension envelope,
-        // so it is partial rather than absent: live, but not out-of-band.
+        // not absent. `live$` is wired: the extension pushes a running dollar
+        // reconciled to the authoritative session spend sum every turn, so the
+        // figure is visually full. Rich context stays partial — live on the
+        // extension envelope, but not refreshed out-of-band between turns.
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Partial),
-            ["idle", "live$", "rich"]
+            ["idle", "rich"]
         );
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Absent),

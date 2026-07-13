@@ -228,7 +228,13 @@ integration_concerns! {
 /// unreachable from the current protocol surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConcernCoverage {
-    /// A native signal carries the concern directly; `via` names it.
+    /// The concern reaches a user-complete state; `via` names the path. This is
+    /// a native signal that carries it directly, or a value Rimz reconciles to
+    /// its authoritative figure at each turn boundary so the surface is visually
+    /// full — complete to the user even without a continuous native push (for
+    /// example the realtime-cost dollar, settled to the session spend sum every
+    /// turn). Reserve `Partial` for a surface the user can still see is missing
+    /// something between reconciliations.
     Wired { via: &'static str },
     /// Native coverage is incomplete, but Rimz reconstructs the behaviour from
     /// another signal or state: `via` is the combined path, `gap` what it still
