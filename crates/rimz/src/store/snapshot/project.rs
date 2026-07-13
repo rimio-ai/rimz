@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use jiff::Timestamp;
 use tracing::debug;
 
-use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::{self, Transition};
+use crate::agents::{AgentLifecycleObservation, LaunchParams};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::message::{MessageBody, MessageStatus};
@@ -395,39 +395,22 @@ struct AgentStateInput<'a> {
     card_identity: CardIdentity,
 }
 
-struct CarriedFields {
-    profile: Option<String>,
-    mode: Option<crate::harness::run::PermissionMode>,
-    role: Option<String>,
-    team: Option<String>,
-    launch_group: Option<String>,
-    launch_ordinal: Option<u32>,
-    channel: Option<String>,
-    description: Option<String>,
-    transcript_path: Option<String>,
-    origin: Option<crate::agents::SessionOrigin>,
-    recent_prompts: Vec<String>,
-    model: Option<String>,
-    effort: Option<String>,
-    budget: Option<String>,
-    context_pct: Option<u8>,
-    context_window: Option<u64>,
-    total_tokens: Option<u64>,
-    cache_read_input_tokens: Option<u64>,
-    cache_write_input_tokens: Option<u64>,
-    fresh_input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    compaction_count: u32,
-    last_compact_command_tokens: Option<u64>,
-    registered_at: Option<Timestamp>,
-}
-
 /// The carried baseline: every carry-forward and identity field cloned from
 /// `prior`, activity fields cleared, enrichment sidecars left for projection.
 /// This is the lifetime table's code home; see docs/internals/agents/model.md
 /// § The rollup.
-fn carried_state(prior: Option<&AgentState>) -> CarriedFields {
-    CarriedFields {
+fn carried_base(
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    prior: Option<&AgentState>,
+    event_ts: Timestamp,
+) -> AgentState {
+    AgentState {
+        agent_id: agent_id.clone(),
+        kind: kind.clone(),
+        name: None,
+        name_explicit: false,
+        kind_ordinal: None,
         profile: prior.and_then(|state| state.profile.clone()),
         mode: prior.and_then(|state| state.mode),
         role: prior.and_then(|state| state.role.clone()),
@@ -435,6 +418,15 @@ fn carried_state(prior: Option<&AgentState>) -> CarriedFields {
         launch_group: prior.and_then(|state| state.launch_group.clone()),
         launch_ordinal: prior.and_then(|state| state.launch_ordinal),
         channel: prior.and_then(|state| state.channel.clone()),
+        status: AgentStatus::Idle,
+        phase: lifecycle::TurnPhase::Idle,
+        pane: prior.and_then(|state| state.pane.clone()),
+        runtime_owner: prior.and_then(|state| state.runtime_owner.clone()),
+        parent_agent_id: prior.and_then(|state| state.parent_agent_id.clone()),
+        worktree_path: prior.and_then(|state| state.worktree_path.clone()),
+        worktree_branch: prior.and_then(|state| state.worktree_branch.clone()),
+        task: prior.and_then(|state| state.task.clone()),
+        prompt: prior.and_then(|state| state.prompt.clone()),
         description: prior.and_then(|state| state.description.clone()),
         transcript_path: prior.and_then(|state| state.transcript_path.clone()),
         origin: prior.and_then(|state| state.origin),
@@ -451,14 +443,65 @@ fn carried_state(prior: Option<&AgentState>) -> CarriedFields {
         cache_write_input_tokens: prior.and_then(|state| state.cache_write_input_tokens),
         fresh_input_tokens: prior.and_then(|state| state.fresh_input_tokens),
         output_tokens: prior.and_then(|state| state.output_tokens),
+        context: None,
+        budget_park: None,
+        subagent_description: None,
+        subagent_started_at: None,
+        turn_started_at: None,
+        waiting_since: None,
+        open_ask: None,
+        compacting_since: None,
         compaction_count: prior.map_or(0, |state| state.compaction_count),
         last_compact_command_tokens: prior.and_then(|state| state.last_compact_command_tokens),
-        registered_at: prior.and_then(|state| state.registered_at),
+        last_seen: event_ts,
+        last_activity: event_ts,
+        registered_at: prior
+            .and_then(|state| state.registered_at)
+            .or(Some(event_ts)),
+    }
+}
+
+fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {
+    if let Some(profile) = &launch.profile {
+        state.profile = Some(profile.clone());
+    }
+    if let Some(mode) = launch.mode {
+        state.mode = Some(mode);
+    }
+    if let Some(role) = &launch.role {
+        state.role = Some(role.clone());
+    }
+    if let Some(team) = &launch.team {
+        state.team = Some(team.clone());
+    }
+    if let Some(launch_group) = &launch.launch_group {
+        state.launch_group = Some(launch_group.clone());
+    }
+    if let Some(launch_ordinal) = launch.launch_ordinal {
+        state.launch_ordinal = Some(launch_ordinal);
+    }
+    if let Some(channel) = &launch.channel {
+        state.channel = Some(channel.clone());
+    }
+    if let Some(model) = &launch.model {
+        state.model = Some(canonical_model(model));
+    }
+    if let Some(effort) = &launch.effort {
+        state.effort = Some(effort.clone());
+    }
+    if let Some(budget) = &launch.budget {
+        state.budget = Some(budget.clone());
     }
 }
 
 fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
-    let carried = carried_state(input.prior);
+    let mut state = carried_base(
+        input.kind,
+        input.agent_id,
+        input.prior,
+        input.event.timestamp,
+    );
+    fold_launch_params(&mut state, &input.observation.launch);
     let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
     let enrichment = enrichment_projection(input.observation, input.prior, input.kind);
     let parent_agent_id = input
@@ -477,65 +520,38 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         parent_agent_id.is_some(),
         input.event_task,
     );
-    AgentState {
-        agent_id: input.agent_id.clone(),
-        kind: input.kind.clone(),
-        name: Some(input.card_identity.name),
-        name_explicit: input.card_identity.name_explicit,
-        kind_ordinal: Some(input.card_identity.kind_ordinal),
-        profile: input.observation.launch.profile.clone().or(carried.profile),
-        mode: input.observation.launch.mode.or(carried.mode),
-        role: input.observation.launch.role.clone().or(carried.role),
-        team: input.observation.launch.team.clone().or(carried.team),
-        launch_group: input
-            .observation
-            .launch
-            .launch_group
-            .clone()
-            .or(carried.launch_group),
-        launch_ordinal: input
-            .observation
-            .launch
-            .launch_ordinal
-            .or(carried.launch_ordinal),
-        channel: input.observation.launch.channel.clone().or(carried.channel),
-        status: lifecycle.status,
-        phase: lifecycle.phase,
-        pane: pane_projection(input.observation, input.prior),
-        runtime_owner: runtime.runtime_owner,
-        parent_agent_id,
-        worktree_path: worktree.path,
-        worktree_branch: worktree.branch,
-        task: prompt.task,
-        prompt: prompt.prompt,
-        description: carried.description,
-        transcript_path: transcript_path_projection(input.observation, input.prior),
-        origin: origin_projection(input.observation, input.prior),
-        recent_prompts: prompt.recent_prompts,
-        model: model_projection(input.observation, input.prior),
-        effort: effort_projection(input.observation, input.prior),
-        budget: input.observation.launch.budget.clone().or(carried.budget),
-        context_pct: enrichment.context_pct,
-        context_window: enrichment.context_window,
-        total_tokens: enrichment.total_tokens,
-        cache_read_input_tokens: enrichment.cache_read_input_tokens,
-        cache_write_input_tokens: enrichment.cache_write_input_tokens,
-        fresh_input_tokens: enrichment.fresh_input_tokens,
-        output_tokens: enrichment.output_tokens,
-        context: None,
-        budget_park: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: lifecycle.turn_started_at,
-        waiting_since: lifecycle.waiting_since,
-        open_ask: lifecycle.open_ask,
-        compacting_since: lifecycle.compacting_since,
-        compaction_count: lifecycle.compaction_count,
-        last_compact_command_tokens: carried.last_compact_command_tokens,
-        last_seen: input.event.timestamp,
-        last_activity: input.event.timestamp,
-        registered_at: lifecycle.registered_at,
+    state.name = Some(input.card_identity.name);
+    state.name_explicit = input.card_identity.name_explicit;
+    state.kind_ordinal = Some(input.card_identity.kind_ordinal);
+    state.status = lifecycle.status;
+    state.phase = lifecycle.phase;
+    state.pane = pane_projection(input.observation, input.prior);
+    state.runtime_owner = runtime.runtime_owner;
+    state.parent_agent_id = parent_agent_id;
+    state.worktree_path = worktree.path;
+    state.worktree_branch = worktree.branch;
+    state.task = prompt.task;
+    state.prompt = prompt.prompt;
+    state.recent_prompts = prompt.recent_prompts;
+    if let Some(transcript_path) = &input.observation.transcript_path {
+        state.transcript_path = Some(transcript_path.clone());
     }
+    if let Some(origin) = input.observation.origin {
+        state.origin = Some(origin);
+    }
+    state.context_pct = enrichment.context_pct;
+    state.context_window = enrichment.context_window;
+    state.total_tokens = enrichment.total_tokens;
+    state.cache_read_input_tokens = enrichment.cache_read_input_tokens;
+    state.cache_write_input_tokens = enrichment.cache_write_input_tokens;
+    state.fresh_input_tokens = enrichment.fresh_input_tokens;
+    state.output_tokens = enrichment.output_tokens;
+    state.turn_started_at = lifecycle.turn_started_at;
+    state.waiting_since = lifecycle.waiting_since;
+    state.open_ask = lifecycle.open_ask;
+    state.compacting_since = lifecycle.compacting_since;
+    state.compaction_count = lifecycle.compaction_count;
+    state
 }
 
 fn assemble_launch_state(
@@ -545,28 +561,24 @@ fn assemble_launch_state(
     prior: Option<&AgentState>,
     card_identity: CardIdentity,
 ) -> AgentState {
-    let carried = carried_state(prior);
-    let pane = payload
-        .pane_id
-        .clone()
-        .map(PaneRef::from_id)
-        .or_else(|| prior.and_then(|state| state.pane.clone()));
-    let runtime_owner = payload
-        .runtime_owner
-        .clone()
-        .or_else(|| prior.and_then(|state| state.runtime_owner.clone()));
+    let mut state = carried_base(kind, &payload.agent_id, prior, event.timestamp);
+    fold_launch_params(&mut state, &payload.launch);
+    if let Some(pane_id) = &payload.pane_id {
+        state.pane = Some(PaneRef::from_id(pane_id.clone()));
+    }
+    if let Some(runtime_owner) = &payload.runtime_owner {
+        state.runtime_owner = Some(runtime_owner.clone());
+    }
     let prompt = payload
         .prompt
         .clone()
         .or_else(|| prior.and_then(|state| state.prompt.clone()));
-    let description = payload.description.clone().or(carried.description);
-    let mut recent_prompts = carried.recent_prompts;
     if let Some(prompt) = payload
         .prompt
         .as_deref()
         .filter(|prompt| !prompt.is_empty())
     {
-        append_recent_prompt(&mut recent_prompts, prompt);
+        append_recent_prompt(&mut state.recent_prompts, prompt);
     }
     let (status, phase) = match payload.state {
         AgentLaunchState::Failed => (AgentStatus::Failed, lifecycle::TurnPhase::Idle),
@@ -578,67 +590,25 @@ fn assemble_launch_state(
             }
         }
     };
-    AgentState {
-        agent_id: payload.agent_id.clone(),
-        kind: kind.clone(),
-        name: Some(card_identity.name),
-        name_explicit: card_identity.name_explicit,
-        kind_ordinal: Some(card_identity.kind_ordinal),
-        profile: payload.launch.profile.clone().or(carried.profile),
-        mode: payload.launch.mode.or(carried.mode),
-        role: payload.launch.role.clone().or(carried.role),
-        team: payload.launch.team.clone().or(carried.team),
-        launch_group: payload.launch.launch_group.clone().or(carried.launch_group),
-        launch_ordinal: payload.launch.launch_ordinal.or(carried.launch_ordinal),
-        channel: payload.launch.channel.clone().or(carried.channel),
-        status,
-        phase,
-        pane,
-        runtime_owner,
-        parent_agent_id: None,
-        worktree_path: payload
-            .worktree_path
-            .clone()
-            .or_else(|| prior.and_then(|state| state.worktree_path.clone())),
-        worktree_branch: payload
-            .worktree_branch
-            .clone()
-            .or_else(|| prior.and_then(|state| state.worktree_branch.clone())),
-        task: prompt.clone(),
-        prompt,
-        description,
-        transcript_path: carried.transcript_path,
-        origin: carried.origin,
-        recent_prompts,
-        model: payload
-            .launch
-            .model
-            .as_deref()
-            .map(canonical_model)
-            .or(carried.model),
-        effort: payload.launch.effort.clone().or(carried.effort),
-        budget: payload.launch.budget.clone().or(carried.budget),
-        context_pct: carried.context_pct,
-        context_window: carried.context_window,
-        total_tokens: carried.total_tokens,
-        cache_read_input_tokens: carried.cache_read_input_tokens,
-        cache_write_input_tokens: carried.cache_write_input_tokens,
-        fresh_input_tokens: carried.fresh_input_tokens,
-        output_tokens: carried.output_tokens,
-        context: None,
-        budget_park: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: Some(event.timestamp),
-        waiting_since: None,
-        open_ask: None,
-        compacting_since: None,
-        compaction_count: carried.compaction_count,
-        last_compact_command_tokens: carried.last_compact_command_tokens,
-        last_seen: event.timestamp,
-        last_activity: event.timestamp,
-        registered_at: carried.registered_at.or(Some(event.timestamp)),
+    state.name = Some(card_identity.name);
+    state.name_explicit = card_identity.name_explicit;
+    state.kind_ordinal = Some(card_identity.kind_ordinal);
+    state.parent_agent_id = None;
+    state.task = prompt.clone();
+    state.prompt = prompt;
+    if let Some(description) = &payload.description {
+        state.description = Some(description.clone());
     }
+    if let Some(worktree_path) = &payload.worktree_path {
+        state.worktree_path = Some(worktree_path.clone());
+    }
+    if let Some(worktree_branch) = &payload.worktree_branch {
+        state.worktree_branch = Some(worktree_branch.clone());
+    }
+    state.status = status;
+    state.phase = phase;
+    state.turn_started_at = Some(event.timestamp);
+    state
 }
 
 struct LifecycleProjection {
@@ -649,7 +619,6 @@ struct LifecycleProjection {
     turn_started_at: Option<Timestamp>,
     waiting_since: Option<Timestamp>,
     open_ask: Option<crate::agents::OpenAsk>,
-    registered_at: Option<Timestamp>,
 }
 
 fn lifecycle_projection(
@@ -721,7 +690,6 @@ fn lifecycle_projection(
         turn_started_at,
         waiting_since,
         open_ask,
-        registered_at: prior.and_then(|p| p.registered_at).or(Some(timestamp)),
     }
 }
 
@@ -914,46 +882,6 @@ fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
     if excess > 0 {
         recent_prompts.drain(0..excess);
     }
-}
-
-fn transcript_path_projection(
-    observation: &AgentLifecycleObservation,
-    prior: Option<&AgentState>,
-) -> Option<String> {
-    observation
-        .transcript_path
-        .clone()
-        .or_else(|| prior.and_then(|p| p.transcript_path.clone()))
-}
-
-fn origin_projection(
-    observation: &AgentLifecycleObservation,
-    prior: Option<&AgentState>,
-) -> Option<crate::agents::SessionOrigin> {
-    observation.origin.or_else(|| prior.and_then(|p| p.origin))
-}
-
-fn model_projection(
-    observation: &AgentLifecycleObservation,
-    prior: Option<&AgentState>,
-) -> Option<String> {
-    observation
-        .launch
-        .model
-        .clone()
-        .map(|raw| canonical_model(&raw))
-        .or_else(|| prior.and_then(|p| p.model.clone()))
-}
-
-fn effort_projection(
-    observation: &AgentLifecycleObservation,
-    prior: Option<&AgentState>,
-) -> Option<String> {
-    observation
-        .launch
-        .effort
-        .clone()
-        .or_else(|| prior.and_then(|p| p.effort.clone()))
 }
 
 fn pane_projection(
