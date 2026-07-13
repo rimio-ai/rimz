@@ -57,19 +57,19 @@ Read that as: ready for personal, daily use today; for production workflows that
   <br/><sub>Realtime harness dashboard, with rich information at a glance</sub>
 </p>
 
+- **Extremely Lightweight:** a single binary that hooks the agents you already run, inside your familiar Zellij or tmux: same keybinds, same terminal, zero learning curve; the official CLI, web, desktop, and mobile apps all keep working
 - **Realtime Harness Dashboard:** working state and task, model and effort, context health and compactions, live token stats and dollar cost, and the subagent tree
 - **Attention, Routed:** one glance at the cockpit line (`? 2  ! 1 …`) reads the whole fleet, the column below arrives already triaged, and one keypress drops you into the pane that is waiting
-- **Know Your Pace:** $ and token insight for today, week, and month, with every provider's plan and 5h/7d budget bars draining in real time; one look tells you where the week is going
+- **Know Your Pace:** spending and token insight for today, week, and month, with every provider's plan and 5h/7d budget bars draining in real time; one look tells you where the week is going
 - **Worktrees, for every Agent:** open agents together, side by side in an isolated worktree with dynamic layout: `claude,codex` starts Claude planning beside Codex reviewing, `vim,codex+term` puts your editor, an agent, and a shell in one tab
-- **Teams, cross-Model by Design:** name roles once and launch the set with one word, each role on the model best at its job; different models miss different things, so a mixed team catches what a single one lets through, and a one-line skill makes any agent a subagent of any other
+- **Teams, cross-model by design:** pair a Fable planner with a Sol coder and launch them as one team, each role on the model best at its job (reasoning depth, instruction following, speed, price); a mixed team catches what a single model lets through, and delivers better results faster for less
 - **Messages, agents chat as in Slack:** every agent answers to a handle (`@codex`, `@planner`); steer/queue delivery guarantees the message lands, respecting agent state and the context window, and agents talk to each other and to you inside channels
 - **Scriptable, End to End:** `rimz agents -p` is `claude -p` for every agent, with exit codes, JSON output, streaming, and the full transcript kept, so agents drop into scripts, CI, and workflows
 - **Loops, Yours to Engineer:** `rimz loop` schedules supervised runs on a clock (calendar, interval, cron, or a check-guarded watchdog that runs a command and wakes an agent on the result), and notification handlers run your own command the moment a row needs eyes
 - **Auto Continue, while you're Away:** a rate-limit pause resumes the moment the budget window resets and transient API overload retries on a backoff ramp; agents recover themselves and keep working while you're gone
-- **Answer from your Phone:** when an agent stops to ask, the question reaches the official Claude and ChatGPT mobile apps through each provider's own remote control; answer there and it lands in the same session, the turn moving on in its pane as if you had typed it, with RimZ never between you and the official apps
+- **Steer the Fleet from your Phone:** when an agent stops to ask, the question reaches you in the official Claude and ChatGPT mobile apps, exactly as if you were driving the CLI by hand; answer there and it lands in the same terminal session, the fleet moving on in its panes as if you had typed it, with RimZ never between you and the official apps
 - **Pets, your beloved Companion:** an animated sprite on the provider dashboard that keeps you company, running while the agents run and waving when one waits
 - **Local or Remote, Continuously:** start on your MacBook or a server, close the laptop, and reattach from anywhere; the link heals itself every time you reconnect
-- **Extremely Lightweight:** a single binary that hooks the agents you already run, inside your familiar Zellij or tmux: same keybinds, same terminal, zero learning curve; all the official web, desktop, and mobile apps keep working
 
 ## How it works
 
@@ -271,38 +271,32 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 
 ## Agent compatibility matrix
 
-Twelve agents ship built in. **Status** tracks lived confidence, how much each one is actually driven in daily work: ✅ Supported · 🟢 Beta · 🟡 Alpha · 🧪 Experimental. The **surface** columns grade how complete each integration feels in use (● full · ◐ partial · ○ none), split between what you *see* and what you *do*. See it: *state* is the live working/idle/waiting status the sidebar tracks from the agent's own events, *live* the realtime context health and cost on its card, and *history* the full session read behind `agents history`, transcript, and spend. Do it: *ask* routes the agent's blocking permission and question prompts to your keyboard, *plan* its plan-approval gate, and *subagents* the child-agent tree on the card. A column is ● when it reads complete to you, whether a native transport or an in-process extension fills it; the finer per-mechanism view is `rimz coverage`. On the do-it columns, ○ can mean the agent exposes no such surface — Pi ships no prompts, Codex has no plan gate — not a RimZ gap.
+Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and give the best experience today. Every other agent is **experimental**: wired and tested against its documented surface, but not yet dogfooded enough by the author, so expect the occasional bug and please [report what you hit](https://github.com/rimio-ai/rimz/issues). Any of them still mostly just works: the CLI runs stock in your terminal and the official apps stay untouched.
 
 | Agent       | Status          | State | Live | History | Ask | Plan | Subagents |
 |-------------|-----------------|:-----:|:----:|:-------:|:---:|:----:|:---------:|
 | Claude Code | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
-| Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ○   |     ●     |
-| Pi          | 🟢 Beta         |   ●   |  ●   |    ●    |  ○  |  ○   |     ○     |
-| OpenCode    | 🟡 Alpha        |   ●   |  ●   |    ●    |  ●  |  ○   |     ●     |
-| Gemini CLI  | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ○     |
-| Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |  ○   |     ○     |
-| Droid       | 🧪 Experimental |   ●   |  ○   |    ◐    |  ○  |  ○   |     ○     |
-| Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ○  |  ○   |     ○     |
-| Amp         | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ○   |     ○     |
-| Kiro CLI    | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ○  |  ○   |     ○     |
+| Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ✗   |     ●     |
+| Pi          | 🧪 Experimental |   ●   |  ●   |    ●    |  ✗  |  ✗   |     ✗     |
+| OpenCode    | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ✗   |     ●     |
+| Gemini CLI  | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ✗     |
+| Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |  ✗   |     ✗     |
+| Droid       | 🧪 Experimental |   ●   |  ✗   |    ◐    |  ✗  |  ✗   |     ✗     |
+| Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ✗  |  ✗   |     ✗     |
+| Amp         | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ✗   |     ✗     |
+| Kiro CLI    | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ✗  |  ✗   |     ✗     |
 | Qwen Code   | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ●   |     ●     |
 | Kimi        | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ◐     |
 
-Claude and Codex are the daily drivers, with Pi and OpenCode in regular rotation. An experimental row is wired and tested against the agent's documented surface, just not yet proven by daily use, which is why it can still light up most columns. In practice, launch any of them and it mostly just works: the CLI runs stock in your terminal and the official apps stay untouched. When one misbehaves, please [open an issue](https://github.com/rimio-ai/rimz/issues); reports are how an agent graduates a tier.
+<sub>● full · ◐ partial · ✗ the agent exposes no such surface today (Codex ships no plan gate, Pi no prompts or subagents), so there is nothing for RimZ to wire; an agent-side extension could add it.</sub>
 
-Pi and OpenCode lead the see-it columns — full live context, cost, and history from their in-process extensions — and sit below Supported on lived confidence, not observability. Their do-it gaps are honest: Pi ships no prompts, plan gate, or subagents, and OpenCode exposes no plan-approval surface. Where an agent does draw a blocking prompt natively, RimZ routes it to your keyboard and you answer in the agent's own UI.
-
-Kiro's stock local session store supplies transcript, turn state, native approval waiting, and context percentage. Its provider credits are not token counts or dollars, so RimZ does not convert them into spend.
-
-Droid's partial history reads visible conversation and final output from its version-2 session file; token and cost attribution remain absent.
-
-Per-agent coverage, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
+*See it* — **State** live working/idle/waiting, **Live** realtime context health and cost on the card, **History** full session read (transcript, per-turn tokens, spend). *Do it* — **Ask** blocking prompts routed to your keyboard, **Plan** the plan-approval gate, **Subagents** the child-agent tree. The full per-mechanism detail, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md), and `rimz coverage` prints the live grid on your own machine with a reason on every cell.
 
 ## Contributing
 
 Start with [AGENTS.md](./AGENTS.md), the working contract for humans and coding agents alike; the code shape and quality gates are in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 
-A candid note on agent coverage. Every adapter ships with unit and integration tests, but real confidence comes from dogfooding, and daily work here runs four agents: Claude, Codex, Pi, and OpenCode. The rest are built against each vendor's documented hook and transcript surfaces and maintained best-effort, because supporting a dozen agents well takes more hours and paid subscriptions than one author has. Treat a rough edge on an experimental agent as expected rather than surprising, and know that reporting it, or fixing it, is exactly how that agent earns a higher tier. Both are genuinely welcome.
+The experimental agents above are where help lands fastest: bug reports and adapter fixes are exactly how an agent graduates to Supported, and both are genuinely welcome. The adapter playbook is [agent-adapters.md](./docs/contributing/agent-adapters.md).
 
 ## License
 
