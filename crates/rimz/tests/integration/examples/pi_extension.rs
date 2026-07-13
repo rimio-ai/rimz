@@ -130,11 +130,11 @@ const readPayloads = async () => {{
 let payloads = [];
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
-  if (payloads.length >= 2) break;
+  if (payloads.length >= 3) break;
   await new Promise((resolve) => setTimeout(resolve, 20));
 }}
-if (payloads.length < 2) {{
-  throw new Error(`expected 2 forwarded payloads, got ${{payloads.length}}`);
+if (payloads.length < 3) {{
+  throw new Error(`expected 3 forwarded payloads, got ${{payloads.length}}`);
 }}
 const byEvent = Object.fromEntries(payloads.map((payload) => [payload.hook_event_name, payload]));
 const boundary = byEvent[boundaryEvent];
