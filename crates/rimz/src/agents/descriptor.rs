@@ -585,20 +585,6 @@ mod tests {
                 .windows_defer_to_fresh_realtime
         );
 
-        let gemini = crate::agents::registry::descriptor_by_kind("gemini").unwrap();
-        assert!(!gemini.capabilities.remote_control.pane_sessions);
-        assert!(!gemini.capabilities.remote_control.background_sessions);
-        assert!(!gemini.capabilities.rich_context);
-        assert!(gemini.capabilities.transcript_tail_context);
-        assert!(!gemini.capabilities.daemon_hooked_sessions);
-        assert!(!gemini.capabilities.realtime_usage.covers_account_while_live);
-        assert!(
-            !gemini
-                .capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
-
         let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
         assert!(!pi.capabilities.remote_control.pane_sessions);
         assert!(!pi.capabilities.remote_control.background_sessions);

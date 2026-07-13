@@ -11,7 +11,6 @@ use super::copilot::CopilotAdapter;
 use super::cursor::CursorAdapter;
 use super::descriptor::AgentDescriptor;
 use super::droid::DroidAdapter;
-use super::gemini::GeminiAdapter;
 use super::kimi::KimiAdapter;
 use super::kiro::KiroAdapter;
 use super::opencode::OpencodeAdapter;
@@ -29,7 +28,6 @@ pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &CodexAdapter,
     &AmpAdapter,
     &CopilotAdapter,
-    &GeminiAdapter,
     &KimiAdapter,
     &PiAdapter,
     &OpencodeAdapter,
@@ -134,8 +132,8 @@ mod tests {
     #[test]
     fn every_adapter_exposes_a_manual_compaction_command() {
         // `--smart-compact` types this into the agent's composer; every wired
-        // agent exposes a slash command (`/compact`, Gemini's `/compress`,
-        // Cursor's `/summarize`), so a new adapter that forgets to opt in fails
+        // agent exposes a slash command (`/compact`, Cursor's `/summarize`), so
+        // a new adapter that forgets to opt in fails
         // here rather than silently never compacting.
         for adapter in ADAPTERS {
             // Amp compacts automatically and exposes no manual compact command;

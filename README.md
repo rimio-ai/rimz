@@ -271,7 +271,7 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 
 ## Agent compatibility matrix
 
-Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and give the best experience today. Every other agent is **experimental**: wired and tested against its documented surface, but not yet dogfooded enough by the author, so expect the occasional bug and please [report what you hit](https://github.com/rimio-ai/rimz/issues). Any of them still mostly just works: the CLI runs stock in your terminal and the official apps stay untouched.
+Eleven agents ship built in. **Claude Code and Codex are the daily drivers** and give the best experience today. Every other agent is **experimental**: wired and tested against its documented surface, but not yet dogfooded enough by the author, so expect the occasional bug and please [report what you hit](https://github.com/rimio-ai/rimz/issues). Any of them still mostly just works: the CLI runs stock in your terminal and the official apps stay untouched.
 
 | Agent       | Status          | State | Live | History | Ask | Plan | Subagents |
 |-------------|-----------------|:-----:|:----:|:-------:|:---:|:----:|:---------:|
@@ -279,7 +279,6 @@ Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and
 | Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
 | Pi          | 🧪 Experimental |   ●   |  ●   |    ●    |  ✗  |  ✗   |     ✗     |
 | OpenCode    | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ✗   |     ●     |
-| Gemini CLI  | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ✗     |
 | Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |  ✗   |     ✗     |
 | Droid       | 🧪 Experimental |   ●   |  ✗   |    ◐    |  ✗  |  ✗   |     ✗     |
 | Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ✗  |  ✗   |     ✗     |

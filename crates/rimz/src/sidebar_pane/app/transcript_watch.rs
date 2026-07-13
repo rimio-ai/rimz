@@ -295,12 +295,12 @@ mod tests {
         with_path.transcript_path = Some("/t/a.jsonl".to_owned());
         with_path.context.model_id = Some("gpt-5.5-codex".to_owned());
         let pathless = new_record("codex", "sess-b", context("codex"));
-        let mut gemini = new_record("gemini", "sess-g", context("gemini"));
-        gemini.transcript_path = Some("/t/g.jsonl".to_owned());
+        let mut copilot = new_record("copilot", "sess-g", context("copilot"));
+        copilot.transcript_path = Some("/t/g.jsonl".to_owned());
         let mut claude = new_record("claude", "sess-c", context("claude"));
         claude.transcript_path = Some("/t/c.jsonl".to_owned());
 
-        let targets = transcript_targets(&[with_path, pathless, gemini, claude]);
+        let targets = transcript_targets(&[with_path, pathless, copilot, claude]);
         assert_eq!(
             targets,
             BTreeMap::from([
@@ -315,7 +315,7 @@ mod tests {
                 (
                     PathBuf::from("/t/g.jsonl"),
                     BTreeSet::from([WatchTarget {
-                        kind: "gemini".to_owned(),
+                        kind: "copilot".to_owned(),
                         session_id: "sess-g".to_owned(),
                         model_hint: None,
                     }])

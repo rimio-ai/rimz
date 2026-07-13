@@ -12,7 +12,7 @@ Read the shape first: [DESIGN.md](../../DESIGN.md) states the attention problem,
 | --- | --- |
 | [model.md](./agents/model.md) | The agent model: the rollup, the state machine, the adapter boundary, and the live-context read path. |
 | [plugin.md](./agents/plugin.md) | Third-party plugin loading, the canonical process wire, derived descriptors, and probe execution. |
-| [claude.md](./agents/claude.md), [codex.md](./agents/codex.md), [amp.md](./agents/amp.md), [gemini.md](./agents/gemini.md), [kimi.md](./agents/kimi.md), [pi.md](./agents/pi.md), [opencode.md](./agents/opencode.md), [droid.md](./agents/droid.md), [kiro.md](./agents/kiro.md) | Per-kind adapter mappings: how each native event, transcript, and account surface folds onto RimZ's types. |
+| [claude.md](./agents/claude.md), [codex.md](./agents/codex.md), [amp.md](./agents/amp.md), [copilot.md](./agents/copilot.md), [kimi.md](./agents/kimi.md), [pi.md](./agents/pi.md), [opencode.md](./agents/opencode.md), [cursor.md](./agents/cursor.md), [droid.md](./agents/droid.md), [kiro.md](./agents/kiro.md), [qwen.md](./agents/qwen.md) | Per-kind adapter mappings: how each native event, transcript, and account surface folds onto RimZ's types. |
 | [providers.md](./agents/providers.md) | Accounts, balances, spend, and the token-pricing table behind the provider dashboard. |
 
 ## The harness

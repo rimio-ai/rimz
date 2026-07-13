@@ -348,8 +348,8 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "amp", "copilot", "gemini", "kimi", "pi", "opencode", "cursor",
-                "droid", "kiro", "qwen"
+                "claude", "codex", "amp", "copilot", "kimi", "pi", "opencode", "cursor", "droid",
+                "kiro", "qwen"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -404,19 +404,6 @@ mod tests {
         assert_eq!(
             agent_labels(&matrix, "copilot", MatrixCellState::Absent),
             ["plan", "answer", "sub", "bg", "live$", "spend", "remote"]
-        );
-
-        let gemini = agent_cells(&matrix, "gemini");
-        assert_eq!(count(&gemini, MatrixCellState::Ok), 7);
-        assert_eq!(count(&gemini, MatrixCellState::Partial), 4);
-        assert_eq!(count(&gemini, MatrixCellState::Absent), 5);
-        assert_eq!(
-            agent_labels(&matrix, "gemini", MatrixCellState::Partial),
-            ["compact", "idle", "live$", "spend"]
-        );
-        assert_eq!(
-            agent_labels(&matrix, "gemini", MatrixCellState::Absent),
-            ["answer", "sub", "bg", "rich", "remote"]
         );
 
         let kimi = agent_cells(&matrix, "kimi");
@@ -512,8 +499,8 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "amp", "copilot", "gemini", "kimi", "pi", "opencode", "cursor",
-                "droid", "kiro", "qwen"
+                "claude", "codex", "amp", "copilot", "kimi", "pi", "opencode", "cursor", "droid",
+                "kiro", "qwen"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -526,7 +513,6 @@ mod tests {
                 MatrixCellState::Partial, // codex
                 MatrixCellState::Partial, // amp
                 MatrixCellState::Ok,      // copilot
-                MatrixCellState::Ok,      // gemini
                 MatrixCellState::Ok,      // kimi
                 MatrixCellState::Ok,      // pi
                 MatrixCellState::Ok,      // opencode
@@ -546,7 +532,6 @@ mod tests {
                 MatrixCellState::Ok,      // codex
                 MatrixCellState::Absent,  // amp
                 MatrixCellState::Absent,  // copilot
-                MatrixCellState::Absent,  // gemini
                 MatrixCellState::Partial, // kimi
                 MatrixCellState::Absent,  // pi
                 MatrixCellState::Ok,      // opencode

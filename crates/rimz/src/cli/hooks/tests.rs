@@ -284,66 +284,6 @@ fn stop_failure_records_turn_error_transcript_entry() {
 }
 
 #[test]
-fn gemini_first_hook_path_overrides_a_remembered_collision() {
-    let (dir, store) = hooks_test_store();
-    let workspace = hooks_test_workspace(Some("main"));
-    let globals = hooks_test_globals();
-    let collision = dir.path().join("session-12345678-collision.jsonl");
-    std::fs::write(
-        &collision,
-        r#"{"sessionId":"12345678-other"}
-{"id":"a","type":"gemini","model":"gemma-collision","tokens":{"total":10}}"#,
-    )
-    .unwrap();
-    let hook_path = dir.path().join("outside-gemini-tmp.jsonl");
-    std::fs::write(
-        &hook_path,
-        r#"{"sessionId":"12345678-abcd"}
-{"id":"a","type":"gemini","model":"gemini-3-pro-preview","tokens":{"input":100,"output":20,"total":120}}"#,
-    )
-    .unwrap();
-    let mut prior = rimz::store::agent_context::new_record(
-        "gemini",
-        "12345678-abcd",
-        rimz::store::agent_context::empty_context("gemini", jiff::Timestamp::UNIX_EPOCH),
-    );
-    prior.transcript_path = Some(collision.to_string_lossy().into_owned());
-    prior.transcript_stat = Some(rimz::agents::TranscriptStat {
-        mtime_secs: 1,
-        mtime_nanos: 0,
-        len: 1,
-    });
-    rimz::store::agent_context::write_record(store.runtime_paths(), &prior).unwrap();
-
-    handle_lifecycle_hook(
-        &workspace,
-        &store,
-        &rimz::agents::GeminiAdapter,
-        "SessionStart",
-        &serde_json::json!({
-            "session_id": "12345678-abcd",
-            "transcript_path": hook_path,
-            "source": "startup"
-        }),
-        Some(std::process::id()),
-        &globals,
-    )
-    .unwrap();
-
-    let merged =
-        rimz::store::agent_context::read_one(store.runtime_paths(), "gemini", "12345678-abcd")
-            .unwrap();
-    assert_eq!(
-        merged.transcript_path.as_deref(),
-        Some(hook_path.to_string_lossy().as_ref())
-    );
-    assert_eq!(
-        merged.context.model_id.as_deref(),
-        Some("gemini-3-pro-preview")
-    );
-}
-
-#[test]
 fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
     let (dir, store) = hooks_test_store();
     let workspace = hooks_test_workspace(Some("main"));

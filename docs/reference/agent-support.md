@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ watches the coding agents you already run — Claude Code, Codex, and the experimental set (Pi, OpenCode, Gemini CLI, Copilot, Droid, Cursor, Amp, Kiro, Qwen Code, and Kimi) — through one uniform adapter each. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it, all through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
+RimZ watches the coding agents you already run — Claude Code, Codex, and the experimental set (Pi, OpenCode, Copilot, Droid, Cursor, Amp, Kiro, Qwen Code, and Kimi) — through one uniform adapter each. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it, all through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
 Read the support level honestly. **Claude Code and Codex are the supported daily drivers** — wired end to end and run constantly. **Every other agent is experimental** — wired against its documented hook and transcript surface and covered by tests, but not yet dogfooded by the author, who holds a paid subscription for only a few of them. Treat those as best-effort: run them anyway, since they mostly just work, and please report the bugs you hit. Support tier tracks that lived confidence, not mechanical breadth — an experimental agent can still wire up a wide surface, as the matrix below shows.
 
@@ -23,7 +23,6 @@ One row per agent, ordered by support tier — Claude and Codex, then the experi
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Pi | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
-| Gemini | ✓ | ✓ | ✓ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✗ | ✓ | ◐ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ |
 | Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
@@ -54,7 +53,6 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Codex | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest`; `Stop` + rollout `Plan` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
 | Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | ✗ | ✗ | ✗ | `session_before_compact` | `session_compact` | `session_shutdown` | ◐ derived |
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask` | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | ◐ derived | ◐ derived |
-| Gemini | `SessionStart` | `BeforeAgent` | `AfterAgent` | `AfterTool` | `Notification` | ✗ | ✗ | `PreCompress` | ◐ derived | `SessionEnd` | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
@@ -77,7 +75,6 @@ The detail for each agent — its full coverage rationale, permission-mode mappi
 | Codex | [codex.md](../internals/agents/codex.md) | [codex-reference.md](../externals/agent-adapter/codex-reference.md) |
 | Pi | [pi.md](../internals/agents/pi.md) | [pi-reference.md](../externals/agent-adapter/pi-reference.md) |
 | OpenCode | [opencode.md](../internals/agents/opencode.md) | [opencode-reference.md](../externals/agent-adapter/opencode-reference.md) |
-| Gemini CLI | [gemini.md](../internals/agents/gemini.md) | [gemini-reference.md](../externals/agent-adapter/gemini-reference.md) |
 | Copilot | [copilot.md](../internals/agents/copilot.md) | [copilot-reference.md](../externals/agent-adapter/copilot-reference.md) |
 | Droid | [droid.md](../internals/agents/droid.md) | [droid-reference.md](../externals/agent-adapter/droid-reference.md) |
 | Cursor | [cursor.md](../internals/agents/cursor.md) | [cursor-reference.md](../externals/agent-adapter/cursor-reference.md) |
@@ -98,7 +95,7 @@ RimZ tracks each agent's own release surface, and behaviour can shift with the a
 
 ## Agents not yet supported
 
-An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Two categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
+An agent RimZ doesn't recognize runs fine in a pane; it renders as a plain process row rather than an agent card, with no live state or attention routing. New agents land the same way the built-ins here did — one adapter over their verified hook surface ([adding an agent](../internals/agents/model.md#adding-an-agent)). Antigravity CLI is researched but not implemented; its latest-only launch, hook, statusline, persistence, permission, and verification contract is the [Antigravity upstream reference](../externals/agent-adapter/antigravity-reference.md). Two categories are known gaps: **remote agents** with no local pane (a `claude remote-control --spawn` worktree, or a Codex thread started from the web) are tracked but not yet rendered, and an agent whose hooks you declined at the consent gate reports nothing until you wire it with `rimz hooks install`.
 
 ## Third-party plugins
 

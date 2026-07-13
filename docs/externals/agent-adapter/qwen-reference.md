@@ -54,7 +54,7 @@ Treat **dual output** as an optional structured pane sidecar, not the first life
 | Supervised run | `-p --output-format stream-json` | preserve native exit code |
 | Native resume/fork | `--continue`, `--resume`, `--fork-session` | direct |
 
-Qwen Code was originally based on Gemini CLI v0.8.2 but has developed independently since Qwen Code v0.1. Do not reuse the Gemini adapter's event names, transcript schema, auth assumptions, or model-limit table merely because portions of the codebase retain Gemini naming.
+Qwen Code was originally based on Gemini CLI v0.8.2 but has developed independently since Qwen Code v0.1. Do not reuse the legacy Gemini CLI event names, transcript schema, auth assumptions, or model-limit table merely because portions of the codebase retain Gemini naming.
 
 ## Session identity, resume, fork, and process binding
 

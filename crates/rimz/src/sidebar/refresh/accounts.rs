@@ -563,9 +563,7 @@ mod tests {
 
     #[test]
     fn missing_probeable_versions_refresh_per_provider_on_retry_cadence() {
-        for kind in [
-            "claude", "codex", "amp", "gemini", "pi", "opencode", "kiro", "kimi",
-        ] {
+        for kind in ["claude", "codex", "amp", "pi", "opencode", "kiro", "kimi"] {
             let snapshot = snapshot_with(kind);
             let now_ms = unix_now_ms();
             let mut cache = fresh_cache(now_ms);

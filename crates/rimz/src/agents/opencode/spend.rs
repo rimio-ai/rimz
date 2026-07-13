@@ -176,7 +176,7 @@ struct MessageCache {
 /// when the turn completes. A monotonic rowid/byte resume cursor would advance
 /// past such a row while it was still incomplete — priced as nothing — and never
 /// revisit it once finalized, silently dropping that turn's spend whenever the
-/// database later grew. So, like gemini's rewind-prone transcripts, every
+/// database later grew. Like other rewind-prone transcript stores, every
 /// refresh reparses the full table and returns `replace_entries`, trading the
 /// append-only O(delta) read for correctness against an in-place store. The
 /// `resume` cursor is ignored.
