@@ -302,10 +302,12 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     }
     state.clear_pixel(&mut terminal);
     if state.reload_requested {
-        // Restore the terminal and release this instance's runtime files before
-        // the reload exit — `process::exit` never runs RAII drops and would
-        // otherwise leak a stale socket + heartbeat.
-        drop(_input_mode);
+        // Keep raw mode and mouse capture alive across the supervisor re-exec:
+        // the replacement worker re-enables the same modes, and disabling them
+        // here opens a reporting gap that outer terminals can turn into arrow
+        // keys sent to the active pane. Runtime files still release explicitly
+        // because `process::exit` never runs RAII drops.
+        _input_mode.preserve_for_reexec();
         drop(_socket_cleanup);
         drop(_heartbeat_cleanup);
         std::process::exit(crate::sidebar_pane::supervise::RELOAD_EXIT_CODE);

@@ -176,6 +176,17 @@ impl TerminalModeGuard {
             saved_hook,
         })
     }
+
+    /// Consume the guard leaving every terminal mode in place for a reload
+    /// handoff. The replacement process re-enables the same modes, while
+    /// restoring here opens a mouse-reporting gap that outer terminals can
+    /// observe and turn wheel input into arrow keys.
+    pub fn preserve_for_reexec(self) {
+        // The process exits immediately after this handoff, so keeping the
+        // panic hook installed and skipping the terminal restore are both
+        // intentional.
+        std::mem::forget(self);
+    }
 }
 
 impl Drop for TerminalModeGuard {

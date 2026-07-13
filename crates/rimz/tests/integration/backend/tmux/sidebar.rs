@@ -3,6 +3,147 @@
 use super::support::*;
 
 #[test]
+fn sidebar_reload_keeps_mouse_capture_alive() {
+    require_tmux!();
+    let env = Env::new();
+    let server = TmuxServer::new();
+    let session = "mouse-reload";
+    let binary_dir = TempDir::new().expect("binary tempdir");
+    let binary = binary_dir.path().join("rimz");
+    std::fs::copy(env.rimz_bin(), &binary).expect("copy rimz binary");
+
+    server
+        .backend
+        .ensure_session(&session_opts(
+            session,
+            env.workspace_id.clone(),
+            &env.project_root,
+            &env.project_root,
+            Some((120, 40)),
+        ))
+        .expect("ensure_session");
+    for (name, value) in [
+        ("XDG_STATE_HOME", env.state_root()),
+        ("XDG_RUNTIME_DIR", env.runtime_root.clone()),
+        ("XDG_CONFIG_HOME", env.config_root()),
+        ("HOME", env.home_root.clone()),
+        ("RIMZ_BIN", binary.clone()),
+    ] {
+        server.tmux(&[
+            "set-environment",
+            "-t",
+            session,
+            name,
+            value.to_str().expect("utf8 test path"),
+        ]);
+    }
+    let opts = SidebarPaneOptions {
+        workspace_id: env.workspace_id.clone(),
+        project_root: env.project_root.clone(),
+        cwd: env.project_root.clone(),
+        ..sidebar_opts(session, binary.clone(), Some(120))
+    };
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open sidebar");
+    let pane = wait_for_sidebar_pane(&server, session, None);
+    wait_for_mouse_capture(&server, &pane);
+    let heartbeat = wait_for_sidebar_heartbeat(&env);
+    let startup_seen = rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
+        .expect("read initial sidebar heartbeat")
+        .last_seen;
+    // Let the startup maintenance heartbeat land before taking the baseline.
+    // The old worker then cannot publish another heartbeat during the reload,
+    // so a newer timestamp confirms that the replacement worker is live.
+    let initial_seen = wait_for_heartbeat_after(&heartbeat, startup_seen);
+
+    let replacement = binary.with_extension("new");
+    std::fs::copy(&binary, &replacement).expect("stage replacement binary");
+    let mut staged = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&replacement)
+        .expect("open replacement binary");
+    std::io::Write::write_all(&mut staged, &[0]).expect("change replacement bytes");
+    drop(staged);
+    std::fs::rename(&replacement, &binary).expect("install replacement binary");
+
+    server.tmux(&["send-keys", "-t", pane.raw(), "r"]);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert_eq!(
+            server.display(pane.raw(), "#{mouse_any_flag}"),
+            "1",
+            "mouse capture dropped during the reload handoff",
+        );
+        if rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
+            .is_ok_and(|heartbeat| heartbeat.last_seen > initial_seen)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "reloaded sidebar did not publish a fresh heartbeat",
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        server.display(pane.raw(), "#{pane_dead}"),
+        "0",
+        "sidebar pane died during reload",
+    );
+}
+
+fn wait_for_mouse_capture(server: &TmuxServer, pane: &PaneId) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if server.display(pane.raw(), "#{mouse_any_flag}") == "1" {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sidebar did not enable mouse capture",
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_sidebar_heartbeat(env: &Env) -> PathBuf {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(entries) = std::fs::read_dir(env.heartbeat_dir())
+            && let Some(path) = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .find(|path| rimz::sidebar::heartbeat::SidebarHeartbeat::is_heartbeat_file(path))
+        {
+            return path;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sidebar did not publish its initial heartbeat",
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_heartbeat_after(path: &Path, prior: jiff::Timestamp) -> jiff::Timestamp {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(heartbeat) = rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(path)
+            && heartbeat.last_seen > prior
+        {
+            return heartbeat.last_seen;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sidebar heartbeat did not advance",
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn sidebar_width_steps_move_the_left_dock_border() {
     require_tmux!();
     let session = "width-step";
