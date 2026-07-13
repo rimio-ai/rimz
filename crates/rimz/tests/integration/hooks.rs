@@ -308,7 +308,7 @@ fn cursor_response_tokens_and_interruption_flow_end_to_end() {
     std::fs::write(
         &transcript_path,
         concat!(
-            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"THINKING_SENTINEL_DO_NOT_INGEST\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"THINKING_SENTINEL_DO_NOT_INGEST\"}]}}\n",
             "{\"type\":\"turn_ended\",\"status\":\"success\"}\n"
         ),
     )
@@ -406,7 +406,12 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
     let env = Env::new();
     let transcript_path = env.project_root.join("conv-cursor-recovery.jsonl");
     let terminal = "{\"type\":\"turn_ended\",\"status\":\"success\"}\n";
-    std::fs::write(&transcript_path, terminal).unwrap();
+    let first_turn = concat!(
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"turn one\"}]}}\n",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n",
+        "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+    );
+    std::fs::write(&transcript_path, &first_turn).unwrap();
     let transcript_path_string = transcript_path.to_string_lossy().into_owned();
     let run = |event: &str, extra: Value| {
         let mut payload = json!({
@@ -428,13 +433,13 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
 
     run("sessionStart", json!({}));
     run("beforeSubmitPrompt", json!({"prompt": "turn two"}));
-    std::fs::write(
-        &transcript_path,
-        format!(
-            "{terminal}{{\"type\":\"user\"}}\n{{\"type\":\"tool\"}}\n{{\"type\":\"assistant\"}}\n"
-        ),
-    )
-    .unwrap();
+    let active_rewrite = concat!(
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"turn one\"}]}}\n",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n",
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"turn two\"}]}}\n",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"THINKING_SENTINEL_DO_NOT_INGEST\"}]}}\n",
+    );
+    std::fs::write(&transcript_path, active_rewrite).unwrap();
     std::fs::File::options()
         .write(true)
         .open(&transcript_path)
@@ -472,11 +477,11 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         Timestamp::now(),
     ));
 
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
+    std::fs::write(&transcript_path, format!("{active_rewrite}{terminal}")).unwrap();
+    let file = std::fs::File::options()
+        .write(true)
         .open(&transcript_path)
         .unwrap();
-    std::io::Write::write_all(&mut file, terminal.as_bytes()).unwrap();
     file.set_times(
         std::fs::FileTimes::new()
             .set_modified(std::time::SystemTime::now() + Duration::from_secs(61)),
@@ -510,6 +515,135 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
         false,
         Timestamp::now(),
     ));
+    assert!(
+        serde_json::to_string(&env.agent_contexts())
+            .unwrap()
+            .find("THINKING_SENTINEL_DO_NOT_INGEST")
+            .is_none()
+    );
+}
+
+#[test]
+fn duplicate_cursor_session_end_is_idempotent_beyond_audit_tombstones() {
+    let env = Env::new();
+    let transcript_path = env.project_root.join("conv-cursor-end.jsonl");
+    std::fs::write(
+        &transcript_path,
+        concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"safe\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"THINKING_SENTINEL_DO_NOT_INGEST\"}]}}\n",
+            "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+        ),
+    )
+    .unwrap();
+    let transcript_path = transcript_path.to_string_lossy().into_owned();
+    let session_id = "conv-cursor-end";
+    let session_start = json!({
+        "hook_event_name": "sessionStart",
+        "conversation_id": session_id,
+        "session_id": session_id,
+        "cursor_version": "2026.07.09-a3815c0",
+        "model_id": "cursor/model",
+        "transcript_path": transcript_path,
+    })
+    .to_string();
+    let output = env.run_hook("cursor", &session_start);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
+    assert_eq!(env.snapshot_json()["agents"].as_array().unwrap().len(), 1);
+    assert_eq!(env.agent_contexts().len(), 1);
+
+    let snapshot = env.store().snapshot_cached().unwrap();
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == session_id)
+        .unwrap();
+    let message = rimz::message::MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "queued work".to_owned(),
+        true,
+        rimz::message::DeliveryGate::Done,
+    );
+    let message_id = message.message_id.clone();
+    env.store().queue_message(&message, "rimz-test").unwrap();
+
+    let run = rimz::harness::run::RunRecord::new(
+        env.workspace_id.clone(),
+        rimz::ids::AgentKind::new_unchecked("cursor"),
+        rimz::harness::run::PermissionMode::Auto,
+        "go".to_owned(),
+        env.project_root.clone(),
+    );
+    rimz::harness::run::create(env.store().paths(), &run).unwrap();
+    let payload = json!({
+        "hook_event_name": "sessionEnd",
+        "conversation_id": session_id,
+        "cursor_version": "2026.07.09-a3815c0",
+        "duration_ms": 1,
+        "final_status": "completed",
+        "generation_id": "generation-sanitized",
+        "is_background_agent": false,
+        "model": "cursor/model",
+        "reason": "completed",
+        "session_id": session_id,
+        "transcript_path": transcript_path,
+        "workspace_roots": [env.project_root],
+    })
+    .to_string();
+    let feed_end = || {
+        let mut command = env.hook_command("cursor");
+        command.env(rimz::harness::run::ENV_RUN_ID, run.run_id.as_str());
+        let output = env
+            .spawn_payload(command, &payload)
+            .wait_with_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "sessionEnd stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
+    };
+    let assert_ended_once = || {
+        assert!(env.snapshot_json()["agents"].as_array().unwrap().is_empty());
+        assert!(env.agent_contexts().is_empty());
+        assert!(
+            rimz::transcript::read_all(env.store().paths())
+                .unwrap()
+                .is_empty()
+        );
+        let archived = env.store().list_message_history().unwrap();
+        assert_eq!(archived.len(), 1);
+        assert_eq!(archived[0].message_id, message_id);
+        assert_eq!(archived[0].status, rimz::message::MessageStatus::Archived);
+        assert_eq!(
+            env.read_events()
+                .iter()
+                .filter(|event| event.method == "message.archived")
+                .count(),
+            1,
+        );
+    };
+
+    feed_end();
+    assert_ended_once();
+    let terminal_run = rimz::harness::run::load(env.store().paths(), &run.run_id).unwrap();
+    assert_eq!(terminal_run.status, rimz::harness::run::RunStatus::Failed);
+
+    feed_end();
+    assert_ended_once();
+    assert_eq!(
+        rimz::harness::run::load(env.store().paths(), &run.run_id).unwrap(),
+        terminal_run,
+        "the duplicate terminal hook must not rewrite the run record",
+    );
+    assert_eq!(
+        lifecycle_event_count(&env),
+        3,
+        "sessionStart plus two audit tombstones remain durable",
+    );
 }
 
 #[test]

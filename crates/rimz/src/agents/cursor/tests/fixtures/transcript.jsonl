@@ -1,5 +1,5 @@
-{"type":"user","message":{"content":[{"type":"text","text":"sanitized prompt"}]}}
-{"type":"assistant","message":{"content":[{"type":"text","text":"THINKING_SENTINEL_DO_NOT_INGEST"},{"type":"tool_call","name":"Read"}]},"future":true}
+{"role":"user","message":{"content":[{"type":"text","text":"sanitized prompt"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"THINKING_SENTINEL_DO_NOT_INGEST"},{"type":"tool_call","name":"Read"}]},"future":true}
 {"type":"tool","name":"Read","result":"sanitized"}
 {"type":"turn_ended","status":"success","unknown":{"kept":true}}
 not-json

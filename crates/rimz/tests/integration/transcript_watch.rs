@@ -91,7 +91,11 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
     let path = transcripts.path().join("cursor-session.jsonl");
     std::fs::write(
         &path,
-        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"THINKING_SENTINEL_DO_NOT_INGEST\"}]}}\n",
+        concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n",
+            "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+        ),
     )
     .unwrap();
     let mut record = new_record(
@@ -102,23 +106,43 @@ fn cursor_transcript_event_recovers_terminal_state_without_content() {
     record.transcript_path = Some(path.to_string_lossy().into_owned());
     agent_context::write_record(runtime, &record).expect("seed cursor sidecar");
 
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .unwrap();
-    std::io::Write::write_all(
-        &mut file,
-        b"{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+    refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
+    let first = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("first refresh");
+    let first_stat = first.transcript_stat.expect("first stat");
+    let first_complete = first.context.turn_complete.expect("first terminal marker");
+
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"second\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"THINKING_SENTINEL_DO_NOT_INGEST\"}]}}\n",
+            "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+        ),
     )
     .unwrap();
-    drop(file);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)),
+        )
+        .unwrap();
     refresh_session_transcript_context(runtime, "cursor", SESSION_ID, Some("cursor/model"));
 
     let merged = agent_context::read_one(runtime, "cursor", SESSION_ID).expect("merged sidecar");
-    assert!(merged.context.turn_complete.is_some());
+    assert!(
+        merged
+            .context
+            .turn_complete
+            .is_some_and(|at| at > first_complete)
+    );
     assert_eq!(merged.context.model_id.as_deref(), Some("cursor/model"));
     assert!(merged.context.tokens.is_none());
-    assert!(merged.transcript_stat.is_some());
+    assert_ne!(merged.transcript_stat, Some(first_stat));
     let serialized = serde_json::to_string(&merged).unwrap();
     assert!(!serialized.contains("THINKING_SENTINEL_DO_NOT_INGEST"));
 

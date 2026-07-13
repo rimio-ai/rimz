@@ -255,9 +255,9 @@ fn transcript_tail_reads_only_terminal_rows_and_resolves_exact_paths() {
 fn transcript_recovery_requires_the_terminal_row_to_be_last() {
     let terminal = "{\"type\":\"turn_ended\",\"status\":\"success\"}";
     for later in [
-        "{\"type\":\"user\"}",
-        "{\"type\":\"assistant\"}",
-        "{\"type\":\"tool\"}",
+        "{\"role\":\"user\",\"message\":{\"content\":[]}}",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[]}}",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_call\",\"name\":\"Read\"}]}}",
         "{\"type\":\"future_record\"}",
         "not-json",
     ] {
@@ -274,7 +274,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conv-1.jsonl");
-    std::fs::write(&path, format!("{terminal}\n{{\"type\":\"user\"")).unwrap();
+    std::fs::write(&path, format!("{terminal}\n{{\"role\":\"user\"")).unwrap();
     let path_string = path.to_string_lossy().into_owned();
     let pricing = dir.path().join("pricing-cache.json");
     let refresh = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
@@ -305,7 +305,7 @@ fn transcript_recovery_requires_the_terminal_row_to_be_last() {
 fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conv-1.jsonl");
-    std::fs::write(&path, "{\"type\":\"user\"}\n").unwrap();
+    std::fs::write(&path, "{\"role\":\"user\",\"message\":{\"content\":[]}}\n").unwrap();
     let path_string = path.to_string_lossy().into_owned();
     let pricing = dir.path().join("pricing-cache.json");
     let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
@@ -325,7 +325,7 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
 
     std::fs::write(
         &path,
-        "{\"type\":\"user\"}\n{\"type\":\"turn_ended\",\"status\":\"aborted\"}\n",
+        "{\"role\":\"user\",\"message\":{\"content\":[]}}\n{\"type\":\"turn_ended\",\"status\":\"aborted\"}\n",
     )
     .unwrap();
     let interrupted = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
@@ -340,6 +340,77 @@ fn transcript_refresh_registers_live_file_and_recovers_interruption() {
     assert!(interrupted.turn_interrupted.is_some());
     assert!(interrupted.tokens.is_none());
     assert!(interrupted.cost.is_none());
+}
+
+#[test]
+fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
+    const SENTINEL: &str = "THINKING_SENTINEL_DO_NOT_INGEST";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("conv-1.jsonl");
+    let one_turn = concat!(
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first\"}]}}\n",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n",
+        "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+    );
+    std::fs::write(&path, one_turn).unwrap();
+    let path_string = path.to_string_lossy().into_owned();
+    let pricing = dir.path().join("pricing-cache.json");
+    let first = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        agent_id: "conv-1",
+        model_hint: None,
+        current_transcript_path: Some(&path_string),
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing,
+    })
+    .expect("first completed snapshot");
+    let first_complete = first.turn_complete.expect("first terminal marker");
+    let first_stat = first.transcript_stat.expect("first transcript stat");
+
+    let two_turns = concat!(
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first\"}]}}\n",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"first answer\"}]}}\n",
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"second\"}]}}\n",
+        "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<sentinel>\"}]}}\n",
+        "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+    )
+    .replace("<sentinel>", SENTINEL);
+    std::fs::write(&path, &two_turns).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60)),
+        )
+        .unwrap();
+
+    let rewritten = transcript::refresh(&crate::agents::LocalContextRefreshCtx {
+        agent_id: "conv-1",
+        model_hint: None,
+        current_transcript_path: Some(&path_string),
+        prior_transcript_path: None,
+        prior_transcript_stat: Some(&first_stat),
+        shared_pricing_cache_path: &pricing,
+    })
+    .expect("whole-file rewrite refresh");
+    assert_ne!(rewritten.transcript_stat, Some(first_stat));
+    assert!(
+        rewritten
+            .turn_complete
+            .is_some_and(|at| at > first_complete)
+    );
+    assert!(
+        CursorAdapter
+            .parse_transcript_messages(&two_turns)
+            .is_empty()
+    );
+    assert!(
+        CursorAdapter
+            .stream_assistant_messages(&two_turns)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -414,6 +485,18 @@ fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
         vec!["--force", "--sandbox", "disabled"]
     );
     assert_eq!(CursorAdapter.compact_command(), Some("/summarize"));
+
+    let launch = CursorAdapter
+        .launch_command(&["--auto-review".to_owned()], Some("fix it"))
+        .expect("fresh interactive launch");
+    assert_eq!(
+        &launch[launch.len() - 3..],
+        ["--auto-review", "--", "fix it"]
+    );
+    assert!(
+        launch.iter().all(|arg| arg != "-p" && arg != "--print"),
+        "RimZ supervised Cursor runs stay on the interactive hook transport: {launch:?}",
+    );
 
     let preset = CursorAdapter
         .render_preset(&LaunchPreset {
