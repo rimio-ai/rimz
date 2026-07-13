@@ -33,7 +33,8 @@ use serde::Deserialize;
 
 use crate::agents::pricing::PriceBook;
 use crate::agents::spending::{
-    CachedEntry, SpendParse, is_priceable_model_name, origin_path, record_unknown_model,
+    CachedEntry, SpendCursor, SpendParse, is_priceable_model_name, iso_to_unix_secs, origin_path,
+    record_unknown_model,
 };
 
 use crate::agents::transcript_fs::{
@@ -141,17 +142,7 @@ pub fn claude_config_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
     if let Ok(env_val) = std::env::var("CLAUDE_CONFIG_DIR") {
-        for raw in env_val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            let p = expand_tilde(raw);
-            let p = if p.file_name().is_some_and(|n| n == "projects") && p.is_dir() {
-                p.parent().map(Path::to_path_buf).unwrap_or(p)
-            } else {
-                p
-            };
-            if p.join("projects").is_dir() {
-                dirs.push(p);
-            }
-        }
+        dirs.extend(env_val.split(',').filter_map(env_config_dir));
         if !dirs.is_empty() {
             return dirs;
         }
@@ -167,6 +158,20 @@ pub fn claude_config_dirs() -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+fn env_config_dir(raw: &str) -> Option<PathBuf> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = expand_tilde(raw);
+    let path = if path.file_name().is_some_and(|name| name == "projects") && path.is_dir() {
+        path.parent().map(Path::to_path_buf).unwrap_or(path)
+    } else {
+        path
+    };
+    path.join("projects").is_dir().then_some(path)
 }
 
 /// Every Claude `*.jsonl` across all project dirs — fleet-wide, the same footing
@@ -234,25 +239,15 @@ fn is_valid_claude_entry(entry: &ClaudeEntry) -> bool {
 
 /// Return `true` when `value` begins with a semver major.minor.patch prefix.
 fn is_semver_prefix(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let mut i = 0;
-    if !consume_digits(bytes, &mut i) || bytes.get(i) != Some(&b'.') {
-        return false;
-    }
-    i += 1;
-    if !consume_digits(bytes, &mut i) || bytes.get(i) != Some(&b'.') {
-        return false;
-    }
-    i += 1;
-    bytes.get(i).is_some_and(u8::is_ascii_digit)
-}
-
-fn consume_digits(bytes: &[u8], i: &mut usize) -> bool {
-    let start = *i;
-    while bytes.get(*i).is_some_and(u8::is_ascii_digit) {
-        *i += 1;
-    }
-    *i > start
+    let mut segments = value.splitn(3, '.');
+    let is_digits =
+        |segment: &str| !segment.is_empty() && segment.as_bytes().iter().all(u8::is_ascii_digit);
+    segments.next().is_some_and(is_digits)
+        && segments.next().is_some_and(is_digits)
+        && segments
+            .next()
+            .and_then(|segment| segment.as_bytes().first())
+            .is_some_and(u8::is_ascii_digit)
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────
@@ -278,7 +273,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         return SpendParse {
             entries: Vec::new(),
             origin: None,
-            cursor: crate::agents::spending::SpendCursor {
+            cursor: SpendCursor {
                 offset: from_offset,
                 state: None,
             },
@@ -311,80 +306,29 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         let Some(ts) = entry.timestamp.as_deref() else {
             continue;
         };
-        let Some(ts_secs) = crate::agents::spending::iso_to_unix_secs(ts) else {
+        let Some(ts_secs) = iso_to_unix_secs(ts) else {
             continue;
         };
         let usage = &entry.message.usage;
-        let input = usage.input_tokens.unwrap_or(0);
-        let output = usage.output_tokens.unwrap_or(0);
-        let (cache_5m, cache_1h) = usage
-            .cache_creation
-            .as_ref()
-            .map(|breakdown| {
-                (
-                    breakdown.ephemeral_5m_input_tokens,
-                    breakdown.ephemeral_1h_input_tokens,
-                )
-            })
-            .unwrap_or((usage.cache_creation_input_tokens.unwrap_or(0), 0));
-        let cache_creation = cache_5m + cache_1h;
-        let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
-        if input == 0 && output == 0 && cache_creation == 0 && cache_read == 0 {
+        let Some(main_entry) = usage_entry(
+            usage,
+            entry.message.model.as_deref(),
+            entry.cost_usd,
+            UsageEntryMeta {
+                ts_secs,
+                message_id: entry.message.id.clone(),
+                request_id: entry.request_id.clone(),
+                is_sidechain: entry.is_sidechain == Some(true),
+            },
+            prices,
+            &mut unknown_models,
+        ) else {
             continue;
-        }
-        // Cost source: a positive logged `costUSD` is authoritative (older
-        // transcripts carried it); otherwise reconstruct spend from the token
-        // usage through the model table, since current transcripts omit it. An
-        // entry that has usage but no known model price still contributes tokens
-        // and sessions with zero dollars while the unknown-model chase refreshes
-        // pricing for the next producer pass.
-        let cost = match entry.cost_usd {
-            Some(cost) if cost > 0.0 => cost,
-            _ => {
-                let Some(model) = entry.message.model.as_deref() else {
-                    continue;
-                };
-                match prices.price(model) {
-                    Some(price) => price.cost(
-                        input,
-                        output,
-                        cache_5m,
-                        cache_1h,
-                        cache_read,
-                        usage.speed.as_deref() == Some("fast"),
-                    ),
-                    None => {
-                        if !is_priceable_model_name(model) {
-                            continue;
-                        }
-                        record_unknown_model(&mut unknown_models, model, ts_secs);
-                        0.0
-                    }
-                }
-            }
         };
-        // Claude reports the four token components separately; `input_tokens` is
-        // already the fresh (uncached) slice. Window aggregation folds cache
-        // creation into input/total, while cache reads ride their own field.
         if origin.is_none() {
             origin = origin_path(entry.cwd.as_deref());
         }
-        entries.push(CachedEntry {
-            ts_secs,
-            cost_usd: cost,
-            input,
-            output,
-            cache_write: cache_creation,
-            cache_read,
-            message_id: entry.message.id.clone(),
-            request_id: entry.request_id.clone(),
-            dedup_key: None,
-            thread_id: None,
-            is_sidechain: entry.is_sidechain == Some(true),
-            has_speed: usage.speed.is_some(),
-            model: entry.message.model.clone(),
-            rolled: false,
-        });
+        entries.push(main_entry);
 
         // Advisor calls are additional billable requests nested under the main
         // response's usage. They carry their own model and tokens but no
@@ -404,74 +348,124 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             else {
                 continue;
             };
-            let advisor = &iteration.usage;
-            let input = advisor.input_tokens.unwrap_or(0);
-            let output = advisor.output_tokens.unwrap_or(0);
-            let (cache_5m, cache_1h) = advisor
-                .cache_creation
-                .as_ref()
-                .map(|breakdown| {
-                    (
-                        breakdown.ephemeral_5m_input_tokens,
-                        breakdown.ephemeral_1h_input_tokens,
-                    )
-                })
-                .unwrap_or((advisor.cache_creation_input_tokens.unwrap_or(0), 0));
-            let cache_write = cache_5m + cache_1h;
-            let cache_read = advisor.cache_read_input_tokens.unwrap_or(0);
-            if input == 0 && output == 0 && cache_write == 0 && cache_read == 0 {
-                continue;
+            if let Some(advisor_entry) = usage_entry(
+                &iteration.usage,
+                Some(model),
+                None,
+                UsageEntryMeta {
+                    ts_secs,
+                    message_id: entry
+                        .message
+                        .id
+                        .as_ref()
+                        .map(|message_id| format!("{message_id}:advisor:{index}")),
+                    request_id: entry.request_id.clone(),
+                    is_sidechain: entry.is_sidechain == Some(true),
+                },
+                prices,
+                &mut unknown_models,
+            ) {
+                entries.push(advisor_entry);
             }
-            let cost_usd = match prices.price(model) {
-                Some(price) => price.cost(
-                    input,
-                    output,
-                    cache_5m,
-                    cache_1h,
-                    cache_read,
-                    advisor.speed.as_deref() == Some("fast"),
-                ),
-                None => {
-                    if !is_priceable_model_name(model) {
-                        continue;
-                    }
-                    record_unknown_model(&mut unknown_models, model, ts_secs);
-                    0.0
-                }
-            };
-            entries.push(CachedEntry {
-                ts_secs,
-                cost_usd,
-                input,
-                output,
-                cache_write,
-                cache_read,
-                message_id: entry
-                    .message
-                    .id
-                    .as_ref()
-                    .map(|message_id| format!("{message_id}:advisor:{index}")),
-                request_id: entry.request_id.clone(),
-                dedup_key: None,
-                thread_id: None,
-                is_sidechain: entry.is_sidechain == Some(true),
-                has_speed: advisor.speed.is_some(),
-                model: Some(model.to_owned()),
-                rolled: false,
-            });
         }
     }
 
     SpendParse {
         entries,
         origin,
-        cursor: crate::agents::spending::SpendCursor {
+        cursor: SpendCursor {
             offset: next_offset,
             state: None,
         },
         unknown_models,
         replace_entries: false,
     }
+}
+
+struct UsageEntryMeta {
+    ts_secs: u64,
+    message_id: Option<String>,
+    request_id: Option<String>,
+    is_sidechain: bool,
+}
+
+/// Price one usage object into a raw `CachedEntry`, or `None` when the entry
+/// is skipped (all-zero tokens, or an unpriceable model without a logged cost).
+fn usage_entry(
+    usage: &ClaudeUsage,
+    model: Option<&str>,
+    logged_cost: Option<f64>,
+    meta: UsageEntryMeta,
+    prices: &PriceBook,
+    unknown_models: &mut BTreeMap<String, u64>,
+) -> Option<CachedEntry> {
+    let input = usage.input_tokens.unwrap_or(0);
+    let output = usage.output_tokens.unwrap_or(0);
+    let (cache_5m, cache_1h) = usage
+        .cache_creation
+        .as_ref()
+        .map(|breakdown| {
+            (
+                breakdown.ephemeral_5m_input_tokens,
+                breakdown.ephemeral_1h_input_tokens,
+            )
+        })
+        .unwrap_or((usage.cache_creation_input_tokens.unwrap_or(0), 0));
+    let cache_write = cache_5m + cache_1h;
+    let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
+    if input == 0 && output == 0 && cache_write == 0 && cache_read == 0 {
+        return None;
+    }
+
+    // Cost source: a positive logged `costUSD` is authoritative (older
+    // transcripts carried it); otherwise reconstruct spend from the token
+    // usage through the model table, since current transcripts omit it. An
+    // entry that has usage but no known model price still contributes tokens
+    // and sessions with zero dollars while the unknown-model chase refreshes
+    // pricing for the next producer pass.
+    let cost_usd = match logged_cost {
+        Some(cost) if cost > 0.0 => cost,
+        _ => {
+            let model = model?;
+            match prices.price(model) {
+                Some(price) => price.cost(
+                    input,
+                    output,
+                    cache_5m,
+                    cache_1h,
+                    cache_read,
+                    usage.speed.as_deref() == Some("fast"),
+                ),
+                None => {
+                    if !is_priceable_model_name(model) {
+                        return None;
+                    }
+                    record_unknown_model(unknown_models, model, meta.ts_secs);
+                    0.0
+                }
+            }
+        }
+    };
+
+    // Claude reports the four token components separately; `input_tokens` is
+    // already the fresh (uncached) slice. Window aggregation folds cache
+    // creation into input/total, while cache reads ride their own field.
+    Some(CachedEntry {
+        ts_secs: meta.ts_secs,
+        cost_usd,
+        input,
+        output,
+        cache_write,
+        cache_read,
+        message_id: meta.message_id,
+        request_id: meta.request_id,
+        dedup_key: None,
+        thread_id: None,
+        is_sidechain: meta.is_sidechain,
+        has_speed: usage.speed.is_some(),
+        model: model.map(str::to_owned),
+        rolled: false,
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
