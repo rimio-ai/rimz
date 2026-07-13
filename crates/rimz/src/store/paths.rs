@@ -499,21 +499,22 @@ pub fn state_home() -> PathBuf {
 }
 
 /// Under `cfg(test)`, the lib crate resolves the implicit state root to a
-/// process-unique temp dir. Tests that need a specific root set
-/// `XDG_STATE_HOME`; accidental global-state callers stay off real
-/// `$HOME/.local/state`.
+/// process-unique, uncreated temp path. Read-only callers leave no residue;
+/// mutating tests own a [`tempfile::TempDir`] and use [`StatePaths::under`].
+/// Tests that need a specific root set `XDG_STATE_HOME`.
 #[cfg(test)]
 fn unit_test_state_home() -> PathBuf {
     use std::sync::LazyLock;
 
-    static ROOT: LazyLock<tempfile::TempDir> = LazyLock::new(|| {
-        tempfile::Builder::new()
-            .prefix("rimz-unit-test-state-")
-            .tempdir()
-            .expect("unit-test state home tempdir")
+    static ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
+        env::temp_dir().join(format!(
+            "rimz-unit-test-state-{}-{}",
+            std::process::id(),
+            uuid::Uuid::now_v7().simple()
+        ))
     });
 
-    ROOT.path().to_path_buf()
+    ROOT.clone()
 }
 
 pub fn runtime_home() -> PathBuf {
@@ -619,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn unit_tests_never_resolve_the_real_state_home_fallback() {
+    fn unit_tests_resolve_implicit_state_to_an_uncreated_temp_path() {
         if env_path("XDG_STATE_HOME").is_some() {
             return;
         }
@@ -635,6 +636,10 @@ mod tests {
         assert!(
             resolved.starts_with(env::temp_dir()),
             "unit-test state home must be a temp root"
+        );
+        assert!(
+            !resolved.exists(),
+            "resolving the unit-test state home must not create residue"
         );
     }
 

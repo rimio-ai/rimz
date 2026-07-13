@@ -766,13 +766,21 @@ fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
     let runtime =
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
-    if write_topology_cache(&state, &runtime, command.topology.as_deref())
+    wake_with_paths(&state, &runtime, &command)
+}
+
+fn wake_with_paths(
+    state: &StatePaths,
+    runtime: &RuntimePaths,
+    command: &WakeCommand,
+) -> Result<()> {
+    if write_topology_cache(state, runtime, command.topology.as_deref())
         == TopologyWriteVerdict::RejectedStaleWriter
     {
         return Ok(());
     }
-    write_presence_stamp(&runtime);
-    write_plugin_presence_sample(&workspace_id, &command)?;
+    write_presence_stamp(runtime);
+    write_plugin_presence_sample(state, command)?;
     let Some(event) = wake_event(
         command.reason,
         command.pane_id.as_deref(),
@@ -782,15 +790,14 @@ fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
     ) else {
         return Ok(());
     };
-    broadcast_wake_event(&runtime, command.session_name.as_deref(), event);
+    broadcast_wake_event(runtime, command.session_name.as_deref(), event);
     Ok(())
 }
 
-fn write_plugin_presence_sample(workspace_id: &WorkspaceId, command: &WakeCommand) -> Result<()> {
+fn write_plugin_presence_sample(state: &StatePaths, command: &WakeCommand) -> Result<()> {
     let Some(pages) = command.plugin_mem_pages else {
         return Ok(());
     };
-    let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
     rimz::diag::plugin_presence::log(&state.root).append(
         &rimz::diag::plugin_presence::PluginPresenceSample::new(
             rimz::sidebar::timing::unix_now_ms(),

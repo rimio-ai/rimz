@@ -305,16 +305,6 @@ mod tests {
         .expect("diagnostic log path")
     }
 
-    fn globals() -> crate::cli::GlobalFlags {
-        crate::cli::GlobalFlags {
-            mux: None,
-            zellij: false,
-            tmux: false,
-            root: None,
-            color: crate::cli::ColorWhen::Never,
-        }
-    }
-
     fn wake_command(workspace_id: &rimz::ids::WorkspaceId, topology: String) -> super::WakeCommand {
         super::WakeCommand {
             workspace_id: Some(workspace_id.as_str().to_owned()),
@@ -335,11 +325,7 @@ mod tests {
 
     #[test]
     fn stale_writer_wake_skips_presence_stamp() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace_id = rimz::ids::WorkspaceId::from_project_root(dir.path());
-        let state = StatePaths::for_workspace(workspace_id.clone()).expect("state paths");
-        let runtime = RuntimePaths::for_workspace(workspace_id.clone()).expect("runtime paths");
-        runtime.ensure_dirs().expect("runtime dirs");
+        let (_dir, state, runtime) = state_and_runtime();
         assert_eq!(
             write_topology_cache(
                 &state,
@@ -351,34 +337,25 @@ mod tests {
             ),
             TopologyWriteVerdict::Accepted
         );
+        let command = wake_command(
+            &state.workspace_id,
+            topology_json(rimz::sidebar::timing::unix_now_ms(), Some(writer(1, 100))),
+        );
 
-        super::wake(
-            &globals(),
-            wake_command(
-                &workspace_id,
-                topology_json(rimz::sidebar::timing::unix_now_ms(), Some(writer(1, 100))),
-            ),
-        )
-        .expect("stale wake returns ok");
+        super::wake_with_paths(&state, &runtime, &command).expect("stale wake returns ok");
 
         assert_eq!(rimz::sidebar::cache::presence_stamp_age_ms(&runtime), None);
     }
 
     #[test]
     fn fresh_writer_wake_writes_presence_stamp() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace_id = rimz::ids::WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::for_workspace(workspace_id.clone()).expect("runtime paths");
-        runtime.ensure_dirs().expect("runtime dirs");
+        let (_dir, state, runtime) = state_and_runtime();
+        let command = wake_command(
+            &state.workspace_id,
+            topology_json(rimz::sidebar::timing::unix_now_ms(), Some(writer(2, 200))),
+        );
 
-        super::wake(
-            &globals(),
-            wake_command(
-                &workspace_id,
-                topology_json(rimz::sidebar::timing::unix_now_ms(), Some(writer(2, 200))),
-            ),
-        )
-        .expect("fresh wake returns ok");
+        super::wake_with_paths(&state, &runtime, &command).expect("fresh wake returns ok");
 
         assert!(rimz::sidebar::cache::presence_stamp_age_ms(&runtime).is_some());
     }
