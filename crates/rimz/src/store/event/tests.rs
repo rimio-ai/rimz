@@ -409,6 +409,7 @@ fn message_method_wire_contract() {
         (Method::Queued, "message.queued", None),
         (Method::Edited, "message.edited", None),
         (Method::AfterMet, "message.after_met", None),
+        (Method::WhenMet, "message.when_met", None),
         (Method::Sent, "message.sent", None),
         (
             Method::Delivered,

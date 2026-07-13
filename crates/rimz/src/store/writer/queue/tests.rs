@@ -2,10 +2,10 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::agents::AgentLifecycleObservation;
-use crate::agents::AgentState;
 use crate::agents::lifecycle::LifecycleSignal;
+use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
-use crate::message::{AfterCondition, AutoCompact, DeliveryGate, MessageSender};
+use crate::message::{AfterCondition, AutoCompact, DeliveryGate, MessageSender, WhenCondition};
 use crate::store::event_log;
 use crate::{RuntimePaths, StatePaths};
 
@@ -122,10 +122,10 @@ fn stamp_after_conditions_persists_event_and_skips_non_queued_records() {
         .expect("claimed");
 
     store
-        .stamp_after_conditions(
+        .stamp_delivery_conditions(
             &[
-                (queued.message_id.clone(), vec![0]),
-                (claimed.message_id.clone(), vec![0]),
+                (queued.message_id.clone(), vec![0], Vec::new()),
+                (claimed.message_id.clone(), vec![0], Vec::new()),
             ],
             now,
             "session",
@@ -435,6 +435,51 @@ fn archive_messages_for_card_archives_matching_open_messages() {
             .iter()
             .any(|event| event.method == "message.archived"),
         "archived event missing: {events:?}"
+    );
+}
+
+#[test]
+fn archive_messages_watching_card_expires_only_unmet_conditions() {
+    let (_dir, store, workspace_id) = store();
+    let watched = AgentState::stub("claude", "sess-planner", AgentStatus::Running);
+    let condition = WhenCondition {
+        kind: watched.kind.clone(),
+        agent_id: watched.agent_id.clone(),
+        agent_name: Some("planner".to_owned()),
+        address: "@planner".to_owned(),
+        status: AgentStatus::Running,
+        dwell_secs: 7_200,
+        met_at: None,
+    };
+    let unmet = message(&workspace_id).with_when(vec![condition.clone()]);
+    let mut met_condition = condition;
+    met_condition.met_at = Some(Timestamp::now());
+    let met = message(&workspace_id).with_when(vec![met_condition]);
+    store.queue_message(&unmet, "session").unwrap();
+    store.queue_message(&met, "session").unwrap();
+
+    let archived = store
+        .archive_messages_watching_card(
+            &watched.kind,
+            &watched.agent_id,
+            Some("planner"),
+            "session",
+        )
+        .unwrap();
+
+    assert_eq!(archived, 1);
+    let pending = store.list_messages().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message_id, met.message_id);
+    let archived = store
+        .list_message_history()
+        .unwrap()
+        .into_iter()
+        .find(|message| message.message_id == unmet.message_id)
+        .unwrap();
+    assert_eq!(
+        archived.last_error.as_deref(),
+        Some("watched agent @planner ended before 'running 2h' was met")
     );
 }
 

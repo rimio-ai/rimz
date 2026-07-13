@@ -20,6 +20,8 @@ Three modes place a send on the timing axis. All three resolve the target throug
 
 `--after <ADDR>` adds a cross-agent condition to the default mode. Each address resolves to exactly one durable agent card; repeat flags form an all-of set. Recipient fan-out remains independent, while a fan-out condition or self-reference is rejected.
 
+`--when '@handle <status> <duration>'` adds a raw lifecycle-status dwell condition. Enqueue resolves one existing card and pins its session identity; repeat flags form an all-of set, self-reference is valid, and the condition composes with `--after` and `--schedule`.
+
 ## Addressing and targets
 
 The address grammar (handle classes, channel resolution, arity, fan-out, `--create`) is [harness.md § The address](./harness.md#the-address). This section covers what a target resolves to for delivery: a live pane, or the durable **card** a parked message keys on — the logical agent identity the rollup tracks, a kind plus a session id or launch placeholder ([agent.md § The rollup](../agents/model.md#the-rollup)).
@@ -110,15 +112,17 @@ Queued ──► Claimed ──► Sent ──► Delivered
 A parked message delivers when all six conditions hold:
 
 1. Gate is open. `DeliveryGate::Done` opens on `Idle` or `Success`; `DeliveryGate::Any` also opens on `Failed`; hidden `DeliveryGate::Resume` opens only on `Paused` after the account-budget resume guard passes. A hookless settled turn counts here: rollout completion projects a falsely-`running` row to `Success`, and rollout interruption projects it to `Idle`. `Running`, `Waiting`, and `Paused` keep ordinary delivery closed. A receiver with a `compacting_since` marker inside the 90-second compaction window closes every gate, including `Resume`; the expiry keeps a lost compaction-end signal from wedging delivery forever.
-2. Cross-agent conditions are stamped. Each `after` card reaches the same gate and has no non-terminal schedule-ready message. Future scheduled work does not count; `Queued`, `Claimed`, and `Sent` ready work does. A stamp stays met across later turns.
+2. Delivery conditions are stamped. Each `after` card reaches the same gate and has no non-terminal schedule-ready message. Each `when` card stays in its literal raw status for its dwell: `Running` reads `turn_started_at`, `Waiting` reads `waiting_since`, and `Idle`/`Success`/`Failed` read `last_activity`, with `last_activity` as the missing-stamp fallback. A stamp stays met across later turns.
 3. Not waiting. An agent holding an open blocking prompt ([`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs)) reserves the next input for your answer. `--force` bypasses the reservation, mirroring `message --steer --force`; without it the skip reports `is waiting on your input in its pane; answer it or pass --force`.
-4. FIFO head. The message is the oldest deliverable queued record for its card and lane. `msg_` id string order is FIFO order; future scheduled messages and unmet `after` records are filtered out, so they never block a later deliverable message on the same card. Resume nudges use a control lane so a parked-turn wakeup does not wait behind ordinary user text that cannot deliver until after the wakeup.
+4. FIFO head. The message is the oldest deliverable queued record for its card and lane. `msg_` id string order is FIFO order; future scheduled messages and unmet `after` or `when` records are filtered out, so they never block a later deliverable message on the same card. Resume nudges use a control lane so a parked-turn wakeup does not wait behind ordinary user text that cannot deliver until after the wakeup.
 5. Live pane exists. The target must have a pane that can receive a paste.
 6. Hooks are installed and trusted. Parked delivery needs hooks, because hooks are the delivery signal.
 
 `--on done` (the default) and `--on any` set the gate; `--steer` has no gate because it sends immediately.
 
 Enqueue resolves every `after` address against the same live-plus-durable view as the receiver and evaluates it once. An idle, quiescent reference receives `met_at` immediately, so upstream work must be queued before its trigger. Otherwise the referenced agent's turn-end hook nudges the single-flight `message sweep`; the sweep evaluates all unmet conditions against one context-enriched snapshot, writes each new stamp with `message.after_met`, reloads the pending records, and delivers newly eligible heads in the same run. Still-unmet records receive a delivery-window `retry_after`, so the sidebar elder re-polls after hook loss without a hot loop. Missing cards remain unmet, and `message steer` is the manual escape for disappearance or dependency cycles.
+
+Enqueue likewise evaluates every `when` condition and writes `met_at` immediately for an already-complete dwell. A matching but incomplete dwell sets `retry_after` to the exact projected trip time; another raw status uses the delivery-window retry as a hook-loss backstop, while lifecycle checkpoints for the watched card prompt immediate re-evaluation. The sweep writes `message.when_met` when a dwell trips. An ended watched session archives every still-unmet record with the condition in `last_error`; the lifecycle hook is the realtime path and orphan GC is the durable backstop. A met latch survives session end and receiver delay.
 
 `DeliveryGate::Resume` is internal. Auto-continue stamps it on the configured resume nudge, and delivery re-checks that the target still reads as a resumable `paused` park with a recovered subscription budget, or an overload park whose marker is still active. Ordinary `Done` and `Any` messages stay parked while an agent is paused.
 
@@ -180,7 +184,7 @@ One cannot confirm the other. Batched prompt records carry a shared `batch_id`, 
 | Genuine unresolved receiver after audit fallback | `Errored` |
 | User runs `message remove` | `Removed` |
 | Pre-send retry cap exceeded | `Abandoned` |
-| Receiver session `Ended` or channel teardown | `Archived` |
+| Receiver session `Ended`, unmet `when` session `Ended`, or channel teardown | `Archived` |
 
 Lifecycle `Ended` archives receiver messages in realtime. Channel teardown archives too: recreating, explicitly removing, or sweeping a worktree channel through cleanup or `rimz gc` moves that channel's open records to `Archived`, and `message list` hides them by default while `message list --all` and `message show <id>` keep the audit trail visible. The message sweep is the primary reconciler for unconfirmed `Sent` records, and `rimz gc` is the durable backstop. `Archived` is distinct from retry exhaustion (`Abandoned`) and explicit user removal (`Removed`).
 

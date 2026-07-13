@@ -8,6 +8,7 @@ The same command serves you, your scripts, and the agents themselves — agents 
 rimz message @claude "add coverage for the expiry edge cases"      # parks: lands when @claude's turn ends
 rimz message --steer @claude "stop: the parser test comes first"   # interrupts the live turn now
 rimz message --schedule 60m @codex#feat-b "run the smoke test"     # lands in an hour
+rimz message @codex --when '@codex idle 58m' "ping"               # lands after 58 minutes continuously idle
 rimz message @all "summarize what changed at the next boundary"    # everyone in the current channel
 ```
 
@@ -83,6 +84,19 @@ rimz message @coder --after @planner "planner's done — read plan.md and start"
 Queue the upstream work before its trigger. An agent that is already idle with no schedule-ready queued work satisfies the condition immediately, and that durable result stays satisfied if the agent starts another turn later. A condition waits while the referenced agent is running, waiting, or has undelivered ready work; future scheduled work does not hold it.
 
 The message's `--on` gate also applies to each referenced agent: `--on done` waits after a failure, while `--on any` releases after success, idle, or failure. An unmet `--after` message steps out of the receiver's FIFO like a future scheduled message, so later eligible text still lands. `message show` names the agent holding the trigger, and `message steer` forces the record through a missing agent or an intentional dependency cycle.
+
+### Trigger on an agent's status
+
+`--when '@handle <status> <duration>'` holds a message until one agent stays continuously in the named status for the duration. Repeat the flag to require several conditions; they combine with `--after` and `--schedule`.
+
+```sh
+rimz message @codex --when '@codex idle 58m' "ping"
+rimz message @planner --when '@coder running 2h' "check @coder — 2h on one turn"
+```
+
+The literal statuses are `running`, `waiting`, `idle`, `success`, and `failed`. A completed turn reads `success`, not `idle`; `paused` and displayed stalled projections do not match because conditions follow the raw lifecycle status. The duration accepts `s`, `m`, `h`, and `d`.
+
+The condition latches once met, so a busy receiver still gets the message at its next boundary even if the watched agent changes status first. An unmet condition expires and archives the message when the watched session ends. `rimz message show msg_…` reports the current status, elapsed dwell, projected trip, or archived expiry reason. The watched agent may also be the receiver, which supports keep-warm messages such as the idle example above.
 
 ## Reach several at once
 

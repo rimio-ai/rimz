@@ -142,6 +142,11 @@ impl Store {
         debug_assert!(status.is_terminal());
         message.status = status;
         message.updated_at = now;
+        if status == MessageStatus::Archived
+            && let Some(reason) = reason
+        {
+            message.last_error = Some(reason.to_owned());
+        }
         if status == MessageStatus::Delivered {
             message.delivered_at = Some(now);
         }
@@ -250,9 +255,9 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn stamp_after_conditions(
+    pub fn stamp_delivery_conditions(
         &self,
-        stamps: &[(MessageId, Vec<usize>)],
+        stamps: &[(MessageId, Vec<usize>, Vec<usize>)],
         now: Timestamp,
         session_name: &str,
     ) -> Result<()> {
@@ -261,14 +266,14 @@ impl Store {
                 if message.status != MessageStatus::Queued {
                     return MessageUpdate::Keep;
                 }
-                let Some((_, indices)) = stamps
+                let Some((_, after_indices, when_indices)) = stamps
                     .iter()
-                    .find(|(message_id, _)| *message_id == message.message_id)
+                    .find(|(message_id, _, _)| *message_id == message.message_id)
                 else {
                     return MessageUpdate::Keep;
                 };
                 let mut addresses = Vec::new();
-                for index in indices {
+                for index in after_indices {
                     let Some(condition) = message.after.get_mut(*index) else {
                         continue;
                     };
@@ -278,13 +283,43 @@ impl Store {
                     condition.met_at = Some(now);
                     addresses.push(condition.address.clone());
                 }
-                if addresses.is_empty() {
+                let mut when = Vec::new();
+                for index in when_indices {
+                    let Some(condition) = message.when.get_mut(*index) else {
+                        continue;
+                    };
+                    if condition.met_at.is_some() {
+                        continue;
+                    }
+                    condition.met_at = Some(now);
+                    when.push(format!(
+                        "{} {} {}",
+                        condition.address,
+                        condition.status.as_str(),
+                        crate::message::format_dwell(condition.dwell_secs)
+                    ));
+                }
+                if addresses.is_empty() && when.is_empty() {
                     return MessageUpdate::Keep;
                 }
                 message.updated_at = now;
                 MessageUpdate::Rewrite {
-                    method: MessageEventMethod::AfterMet,
-                    reason: Some(format!("{} finished", addresses.join(", "))),
+                    method: if when.is_empty() {
+                        MessageEventMethod::AfterMet
+                    } else {
+                        MessageEventMethod::WhenMet
+                    },
+                    reason: Some(
+                        [
+                            (!addresses.is_empty())
+                                .then(|| format!("{} finished", addresses.join(", "))),
+                            (!when.is_empty()).then(|| format!("{} reached", when.join(", "))),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                    ),
                 }
             })?;
             Ok(())
@@ -800,19 +835,46 @@ impl Store {
         let snapshot = self.snapshot()?;
         let live_agents = snapshot.agents;
         let archived = self.commit(PublishPolicy::Skip, |txn| {
-            let archived = self.finalize_matching_messages_locked(
-                txn,
-                MessageStatus::Archived,
-                session_name,
-                "receiver ended",
-                |message| {
-                    message.status.is_open()
-                        && !live_agents
+            let archived =
+                self.update_messages_locked(txn, session_name, Timestamp::now(), |message| {
+                    if !message.status.is_open() {
+                        return MessageUpdate::Keep;
+                    }
+                    let reason = if !live_agents
+                        .iter()
+                        .any(|agent| message.same_agent_card(agent))
+                    {
+                        Some("receiver ended".to_owned())
+                    } else if message.status == MessageStatus::Queued {
+                        message
+                            .when
                             .iter()
-                            .any(|agent| message.same_agent_card(agent))
-                },
-                |message| message.last_error = Some("receiver ended".to_owned()),
-            )?;
+                            .filter(|condition| condition.met_at.is_none())
+                            .find(|condition| {
+                                !live_agents.iter().any(|agent| {
+                                    crate::message::card_matches(
+                                        &condition.kind,
+                                        &condition.agent_id,
+                                        condition.agent_name.as_deref(),
+                                        &agent.kind,
+                                        &agent.agent_id,
+                                        agent.name.as_deref(),
+                                    )
+                                })
+                            })
+                            .map(when_expiry_reason)
+                    } else {
+                        None
+                    };
+                    let Some(reason) = reason else {
+                        return MessageUpdate::Keep;
+                    };
+                    message.last_error = Some(reason.clone());
+                    MessageUpdate::Finalize {
+                        status: MessageStatus::Archived,
+                        reason: Some(reason),
+                    }
+                })?;
             if !archived.is_empty() {
                 txn.set_publish(PublishPolicy::Forced);
             }
@@ -844,6 +906,43 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
+    pub fn archive_messages_watching_card(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        agent_name: Option<&str>,
+        session_name: &str,
+    ) -> Result<usize> {
+        let archived = self.commit(PublishPolicy::Skip, |txn| {
+            self.update_messages_locked(txn, session_name, Timestamp::now(), |message| {
+                if message.status != MessageStatus::Queued {
+                    return MessageUpdate::Keep;
+                }
+                let Some(condition) = message.when.iter().find(|condition| {
+                    condition.met_at.is_none()
+                        && crate::message::card_matches(
+                            &condition.kind,
+                            &condition.agent_id,
+                            condition.agent_name.as_deref(),
+                            kind,
+                            agent_id,
+                            agent_name,
+                        )
+                }) else {
+                    return MessageUpdate::Keep;
+                };
+                let reason = when_expiry_reason(condition);
+                message.last_error = Some(reason.clone());
+                MessageUpdate::Finalize {
+                    status: MessageStatus::Archived,
+                    reason: Some(reason),
+                }
+            })
+        })?;
+        Ok(archived.len())
+    }
+
+    #[must_use = "durability barrier; check the result"]
     pub fn archive_channel_messages(
         &self,
         channel: &str,
@@ -862,6 +961,15 @@ impl Store {
         })?;
         Ok(archived.len())
     }
+}
+
+fn when_expiry_reason(condition: &crate::message::WhenCondition) -> String {
+    format!(
+        "watched agent {} ended before '{} {}' was met",
+        condition.address,
+        condition.status.as_str(),
+        crate::message::format_dwell(condition.dwell_secs)
+    )
 }
 
 #[cfg(test)]

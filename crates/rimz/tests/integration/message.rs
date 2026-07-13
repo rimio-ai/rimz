@@ -10,7 +10,9 @@ use rimz::agents::{
     LifecycleSignal, RateLimitWindow, TurnErrorClass,
 };
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, MuxName, PaneId};
-use rimz::message::{DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus};
+use rimz::message::{
+    DeliveryGate, MessageBody, MessageRecord, MessageSender, MessageStatus, WhenCondition,
+};
 use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, MessageEventMethod};
 
 use crate::common::Env;
@@ -345,6 +347,258 @@ fn receiver_end_archives_open_messages() {
     let params = archived.params_value();
     assert_eq!(params["message_id"], message_id);
     assert_eq!(params["reason"], "receiver ended");
+}
+
+#[test]
+fn watched_agent_end_archives_unmet_when_message() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_role_agent(&env, "claude", "sess-coder", "coder", false, None);
+    register_role_agent(&env, "claude", "sess-planner", "planner", true, None);
+
+    let queued = env
+        .rimz()
+        .args([
+            "message",
+            "@coder",
+            "--when",
+            "@planner running 2h",
+            "check planner",
+        ])
+        .output()
+        .expect("queue when message");
+    assert!(
+        queued.status.success(),
+        "queue failed: {}",
+        String::from_utf8_lossy(&queued.stderr)
+    );
+    let message_id = queued_id_from_stdout(&queued.stdout);
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": "sess-planner",
+            "worktree_branch": "feature-planner",
+        }),
+        &[],
+    );
+
+    assert!(env.store().list_messages().expect("messages").is_empty());
+    let archived = env
+        .store()
+        .list_message_history()
+        .expect("history")
+        .into_iter()
+        .find(|message| message.message_id.as_str() == message_id)
+        .expect("archived when message");
+    assert_eq!(archived.status, MessageStatus::Archived);
+    let reason = archived.last_error.as_deref().expect("expiry reason");
+    assert!(reason.starts_with("watched agent @planner"), "{reason}");
+    assert!(
+        reason.ends_with("ended before 'running 2h' was met"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn message_when_accepts_self_reference_and_stamps_met_dwell_at_enqueue() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_old_idle_role_agent(&env, "sess-coder", "coder", 120);
+
+    let queued = env
+        .rimz()
+        .args(["message", "@coder", "--when", "@coder idle 1m", "ping"])
+        .output()
+        .expect("queue self when");
+    assert!(
+        queued.status.success(),
+        "queue failed: {}",
+        String::from_utf8_lossy(&queued.stderr)
+    );
+    let mut messages = env.store().list_messages().expect("messages");
+    messages.extend(env.store().list_message_history().expect("history"));
+    assert_eq!(
+        messages.len(),
+        1,
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&queued.stdout),
+        String::from_utf8_lossy(&queued.stderr)
+    );
+    assert_eq!(messages[0].when.len(), 1);
+    assert!(messages[0].when[0].met_at.is_some());
+}
+
+#[test]
+fn message_when_sweep_stamps_due_dwell_and_defers_to_future_trip() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let base = register_old_idle_role_agent(&env, "sess-coder", "coder", 120);
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-coder")
+        .expect("coder");
+    let condition = |dwell_secs| WhenCondition {
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        agent_name: agent.name.clone(),
+        address: "@coder".to_owned(),
+        status: rimz::agents::AgentStatus::Idle,
+        dwell_secs,
+        met_at: None,
+    };
+    let due = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "due".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_when(vec![condition(60)]);
+    let future = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "future".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_when(vec![condition(3_600)]);
+    env.store().queue_message(&due, "rimz-test").unwrap();
+    env.store().queue_message(&future, "rimz-test").unwrap();
+    let shown = env
+        .rimz()
+        .args(["message", "show", future.message_id.as_str()])
+        .output()
+        .expect("show when blocker");
+    assert!(shown.status.success());
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains("waiting for @coder idle ≥ 1h — idle"),
+        "{shown}"
+    );
+    assert!(shown.contains("so far"), "{shown}");
+    assert!(shown.contains("trips"), "{shown}");
+    let listed = env
+        .rimz()
+        .args(["message", "list", "--all"])
+        .output()
+        .expect("list when blocker");
+    assert!(listed.status.success());
+    assert!(
+        String::from_utf8_lossy(&listed.stdout).contains("when @coder idle 1h"),
+        "{}",
+        String::from_utf8_lossy(&listed.stdout)
+    );
+    let panes = env.write_pane_fixture(&[]);
+
+    let sweep = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", panes)
+        .args(["message", "sweep"])
+        .output()
+        .expect("when sweep");
+    assert!(
+        sweep.status.success(),
+        "sweep failed: {}",
+        String::from_utf8_lossy(&sweep.stderr)
+    );
+
+    let messages = env.store().list_messages().expect("messages");
+    let due = messages
+        .iter()
+        .find(|message| message.message_id == due.message_id)
+        .expect("due message");
+    assert!(due.when[0].met_at.is_some());
+    let future = messages
+        .iter()
+        .find(|message| message.message_id == future.message_id)
+        .expect("future message");
+    assert_eq!(future.when[0].met_at, None);
+    assert_eq!(future.retry_after, Some(base + Duration::from_secs(3_600)));
+    assert!(
+        env.read_events()
+            .iter()
+            .any(|event| event.method == "message.when_met")
+    );
+}
+
+#[test]
+fn message_when_rejects_invalid_grammar_status_duration_and_broadcast() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_role_agent(&env, "claude", "sess-coder", "coder", false, None);
+    register_role_agent(&env, "claude", "sess-reviewer", "reviewer", false, None);
+    for (condition, expected) in [
+        ("@coder idle", "use `@handle <status> <duration>`"),
+        ("@coder paused 1m", "supported statuses"),
+        ("@coder idle soon", "invalid --when duration"),
+        ("@all idle 1m", "broadcasts are not supported"),
+        ("@ghost idle 1m", "no agent matches"),
+        ("@claude idle 1m", "exactly one agent"),
+    ] {
+        let out = env
+            .rimz()
+            .args(["message", "@coder", "--when", condition, "ping"])
+            .output()
+            .expect("invalid when");
+        assert!(
+            !out.status.success(),
+            "condition unexpectedly passed: {condition}"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(expected),
+            "condition={condition}\nstderr={}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn message_when_rejects_wait_and_create() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_role_agent(&env, "claude", "sess-coder", "coder", false, None);
+
+    let wait = env
+        .rimz()
+        .args([
+            "message",
+            "@coder",
+            "--when",
+            "@coder idle 1m",
+            "--wait",
+            "ping",
+        ])
+        .output()
+        .expect("when wait conflict");
+    assert!(!wait.status.success());
+    assert!(
+        String::from_utf8_lossy(&wait.stderr).contains("cannot be used with '--wait"),
+        "{}",
+        String::from_utf8_lossy(&wait.stderr)
+    );
+
+    let create = env
+        .rimz()
+        .args([
+            "message",
+            "@coder",
+            "--when",
+            "@coder idle 1m",
+            "--create",
+            "ping",
+        ])
+        .output()
+        .expect("when create conflict");
+    assert!(!create.status.success());
+    assert!(
+        String::from_utf8_lossy(&create.stderr).contains("--when needs an existing recipient"),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
 }
 
 #[test]
@@ -3085,6 +3339,36 @@ fn register_role_agent(
             },
         );
     }
+}
+
+fn register_old_idle_role_agent(
+    env: &Env,
+    session_id: &str,
+    role: &str,
+    age_secs: i64,
+) -> jiff::Timestamp {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(session_id)),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some(format!("{role}-agent"));
+    observation.launch.role = Some(role.to_owned());
+    observation.worktree_branch = Some(format!("feature-{role}"));
+    observation.worktree_path = Some(env.project_root.display().to_string());
+    let mut event = EventEnvelope::agent_lifecycle(
+        workspace.workspace_id,
+        workspace.session_name,
+        "claude",
+        "SessionStart",
+        &observation,
+    );
+    event.timestamp = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(age_secs);
+    let at = event.timestamp;
+    env.store()
+        .append_event(&event)
+        .expect("append old idle state");
+    at
 }
 
 fn register_idle_agent_with_transcript(

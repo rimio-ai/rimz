@@ -52,6 +52,88 @@ fn delivery_gates_follow_agent_lifecycle() {
 }
 
 #[test]
+fn when_condition_uses_raw_status_and_status_specific_dwell_base() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let cases = [
+        (AgentStatus::Running, Some(9_900), None, 9_950),
+        (AgentStatus::Waiting, None, Some(9_900), 9_950),
+        (AgentStatus::Idle, None, None, 9_900),
+        (AgentStatus::Success, None, None, 9_900),
+        (AgentStatus::Failed, None, None, 9_900),
+    ];
+    for (status, turn_started, waiting_since, last_activity) in cases {
+        let mut watched = agent("watched", Some("coder"));
+        watched.status = status;
+        watched.turn_started_at = turn_started.map(|secs| Timestamp::from_second(secs).unwrap());
+        watched.waiting_since = waiting_since.map(|secs| Timestamp::from_second(secs).unwrap());
+        watched.last_activity = Timestamp::from_second(last_activity).unwrap();
+        let condition = when_condition(&watched, status, 75, None);
+        assert_eq!(
+            when_condition_state(&condition, &[watched], now),
+            WhenState::Met,
+            "{status:?}"
+        );
+    }
+
+    let mut running = agent("running", None);
+    running.status = AgentStatus::Running;
+    running.last_activity = Timestamp::from_second(9_950).unwrap();
+    let condition = when_condition(&running, AgentStatus::Running, 75, None);
+    assert_eq!(
+        when_condition_state(&condition, &[running], now),
+        WhenState::Pending {
+            trip_at: Some(Timestamp::from_second(10_025).unwrap())
+        }
+    );
+}
+
+#[test]
+fn when_condition_reports_mismatch_gone_and_preserves_latch() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let watched = agent("watched", Some("coder"));
+    let pending = when_condition(&watched, AgentStatus::Running, 60, None);
+    assert_eq!(
+        when_condition_state(&pending, std::slice::from_ref(&watched), now),
+        WhenState::Pending { trip_at: None }
+    );
+    assert_eq!(when_condition_state(&pending, &[], now), WhenState::Gone);
+
+    let latched = when_condition(&watched, AgentStatus::Running, 60, Some(now));
+    assert_eq!(when_condition_state(&latched, &[], now), WhenState::Met);
+
+    let receiver = agent("receiver", None);
+    let blocked = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &receiver,
+        "next".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_after(vec![after_condition(&watched, Some(now))])
+    .with_when(vec![pending]);
+    assert!(!blocked.is_deliverable(now));
+    assert!(blocked.with_when(vec![latched]).is_deliverable(now));
+}
+
+#[test]
+fn when_parser_accepts_literal_statuses_and_duration_units() {
+    for status in ["running", "waiting", "idle", "success", "failed"] {
+        assert_eq!(parse_when_status(status).unwrap().as_str(), status);
+    }
+    assert!(
+        parse_when_status("paused")
+            .unwrap_err()
+            .contains("supported statuses")
+    );
+    assert_eq!(parse_when_duration("58m").unwrap(), 3_480);
+    assert!(
+        parse_when_duration("0m")
+            .unwrap_err()
+            .contains("greater than zero")
+    );
+}
+
+#[test]
 fn delivery_checkpoint_requires_unparked_turn_end() {
     assert!(delivery_checkpoint(&LifecycleSignal::TurnEnded {
         errored: false,
@@ -298,6 +380,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
         "delivered_at",
         "not_before",
         "after",
+        "when",
         "retry_after",
         "auto_compact",
         "compacted_context_tokens",
@@ -323,6 +406,7 @@ fn message_record_round_trips_current_schema_and_reads_legacy_defaults() {
     assert_eq!(legacy.delivered_at, None);
     assert_eq!(legacy.not_before, None);
     assert!(legacy.after.is_empty());
+    assert!(legacy.when.is_empty());
     assert_eq!(legacy.retry_after, None);
     assert_eq!(legacy.auto_compact, None);
     assert_eq!(legacy.compacted_context_tokens, None);
@@ -355,6 +439,12 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     .with_pane_id(PaneId::from_parts(MuxName::Zellij, "terminal_3"))
     .with_not_before(Some(now - jiff::SignedDuration::from_secs(60)))
     .with_after(vec![after_condition(&upstream, Some(now))])
+    .with_when(vec![when_condition(
+        &upstream,
+        AgentStatus::Running,
+        60,
+        Some(now),
+    )])
     .with_auto_compact(Some(AutoCompact::Tokens(120_000)));
     original.status = MessageStatus::Errored;
     original.enqueued_at = now - jiff::SignedDuration::from_secs(120);
@@ -402,6 +492,11 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
         condition.met_at = None;
     }
     assert_eq!(requeued.after, expected_after);
+    let mut expected_when = original.when.clone();
+    for condition in &mut expected_when {
+        condition.met_at = None;
+    }
+    assert_eq!(requeued.when, expected_when);
     assert!(!requeued.is_deliverable(now));
     assert_eq!(requeued.status, MessageStatus::Queued);
     assert_eq!(requeued.enqueued_at, requeued.updated_at);
@@ -897,6 +992,23 @@ fn after_condition(agent: &AgentState, met_at: Option<Timestamp>) -> AfterCondit
         agent_id: agent.agent_id.clone(),
         agent_name: agent.name.clone(),
         address: format!("@{}", agent.name.as_deref().unwrap_or(agent.kind.as_str())),
+        met_at,
+    }
+}
+
+fn when_condition(
+    agent: &AgentState,
+    status: AgentStatus,
+    dwell_secs: u64,
+    met_at: Option<Timestamp>,
+) -> WhenCondition {
+    WhenCondition {
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        agent_name: agent.name.clone(),
+        address: format!("@{}", agent.name.as_deref().unwrap_or(agent.kind.as_str())),
+        status,
+        dwell_secs,
         met_at,
     }
 }

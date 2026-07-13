@@ -88,6 +88,19 @@ pub(crate) fn handle_lifecycle_hook(
             && let Some(agent_id) = agent_id
         {
             let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+            if let Err(err) = store.archive_messages_watching_card(
+                &kind,
+                &rimz::ids::AgentSessionId::from(agent_id),
+                recorded.observation.agent_name.as_deref(),
+                &workspace.session_name,
+            ) {
+                warn!(
+                    error = %err,
+                    kind = agent.descriptor().kind,
+                    agent_id,
+                    "lifecycle: failed to archive messages watching ended agent",
+                );
+            }
             if let Err(err) = store.archive_messages_for_card(
                 &kind,
                 &rimz::ids::AgentSessionId::from(agent_id),

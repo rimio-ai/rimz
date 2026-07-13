@@ -11,9 +11,10 @@ use serde::Serialize;
 use crate::agents::AgentStatus;
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
-    AfterCondition, DeliveryGate, MessageRecord, MessageStatus, after_condition_open, card_matches,
-    delivery_window_from_env, gate_open_for_agent, max_delivery_attempts_from_env,
-    message_interval_from_env, queue_batch_tail, queue_head, queue_head_for_message,
+    AfterCondition, DeliveryGate, MessageRecord, MessageStatus, WhenCondition, WhenState,
+    after_condition_open, card_matches, delivery_window_from_env, gate_open_for_agent,
+    max_delivery_attempts_from_env, message_interval_from_env, queue_batch_tail, queue_head,
+    queue_head_for_message, when_condition_state,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, RuntimePaths, SidebarSnapshot, Store};
@@ -56,6 +57,13 @@ pub enum DeliveryVerdict {
     WaitingOnAfter {
         address: String,
         agent_present: bool,
+    },
+    WaitingOnWhen {
+        address: String,
+        expected: AgentStatus,
+        current: Option<AgentStatus>,
+        dwell_secs: u64,
+        dwell_so_far_secs: Option<u64>,
     },
     BehindFifo {
         blocker: Option<MessageId>,
@@ -228,7 +236,7 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     let live = store.list_messages()?;
     let needs_snapshot = live.iter().any(|message| {
         message.status == MessageStatus::Sent
-            || (message.status == MessageStatus::Queued && !message.after_met())
+            || (message.status == MessageStatus::Queued && !message.conditions_met())
     });
     let snapshot = if needs_snapshot {
         let snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
@@ -253,12 +261,12 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     let live = store.list_messages()?;
     if live
         .iter()
-        .any(|message| message.status == MessageStatus::Queued && !message.after_met())
+        .any(|message| message.status == MessageStatus::Queued && !message.conditions_met())
     {
         let snapshot = snapshot
             .as_ref()
-            .expect("unmet after conditions require a resolution snapshot");
-        evaluate_after_conditions(workspace, store, snapshot, &live, now)?;
+            .expect("unmet delivery conditions require a resolution snapshot");
+        evaluate_delivery_conditions(workspace, store, snapshot, &live, now)?;
     }
     let pending = store.list_pending_messages()?;
     let mut heads_seen = std::collections::BTreeSet::new();
@@ -290,7 +298,7 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     Ok(())
 }
 
-fn evaluate_after_conditions(
+fn evaluate_delivery_conditions(
     workspace: &ResolvedWorkspace,
     store: &Store,
     snapshot: &SidebarSnapshot,
@@ -301,9 +309,9 @@ fn evaluate_after_conditions(
     let mut deferred = Vec::new();
     for message in pending
         .iter()
-        .filter(|message| message.status == MessageStatus::Queued && !message.after_met())
+        .filter(|message| message.status == MessageStatus::Queued && !message.conditions_met())
     {
-        let met = message
+        let after_met = message
             .after
             .iter()
             .enumerate()
@@ -313,23 +321,68 @@ fn evaluate_after_conditions(
                     .then_some(index)
             })
             .collect::<Vec<_>>();
-        let unmet_count = message
+        let after_unmet_count = message
             .after
             .iter()
             .filter(|condition| condition.met_at.is_none())
             .count();
-        if met.len() < unmet_count {
-            deferred.push(message.message_id.clone());
+        let mut when_met = Vec::new();
+        let mut next_wake = None;
+        let mut gone = None;
+        for (index, condition) in message
+            .when
+            .iter()
+            .enumerate()
+            .filter(|(_, condition)| condition.met_at.is_none())
+        {
+            match when_condition_state(condition, &snapshot.agents, now) {
+                WhenState::Met => when_met.push(index),
+                WhenState::Pending {
+                    trip_at: Some(trip_at),
+                } => {
+                    next_wake =
+                        Some(next_wake.map_or(trip_at, |wake: Timestamp| wake.min(trip_at)));
+                }
+                WhenState::Pending { trip_at: None } => {
+                    let retry = now + delivery_window_from_env();
+                    next_wake = Some(next_wake.map_or(retry, |wake: Timestamp| wake.min(retry)));
+                }
+                WhenState::Gone => {
+                    gone = Some(condition);
+                    break;
+                }
+            }
         }
-        if !met.is_empty() {
-            stamps.push((message.message_id.clone(), met));
+        if let Some(condition) = gone {
+            let reason = format!(
+                "watched agent {} ended before '{} {}' was met",
+                condition.address,
+                condition.status.as_str(),
+                crate::message::format_dwell(condition.dwell_secs)
+            );
+            store.settle_message(
+                &message.message_id,
+                MessageStatus::Archived,
+                &workspace.session_name,
+                Some(&reason),
+            )?;
+            continue;
+        }
+        if after_met.len() < after_unmet_count {
+            let retry = now + delivery_window_from_env();
+            next_wake = Some(next_wake.map_or(retry, |wake: Timestamp| wake.min(retry)));
+        }
+        if let Some(next_wake) = next_wake {
+            deferred.push((message.message_id.clone(), next_wake));
+        }
+        if !after_met.is_empty() || !when_met.is_empty() {
+            stamps.push((message.message_id.clone(), after_met, when_met));
         }
     }
     if !stamps.is_empty() {
-        store.stamp_after_conditions(&stamps, now, &workspace.session_name)?;
+        store.stamp_delivery_conditions(&stamps, now, &workspace.session_name)?;
     }
-    let retry_at = now + delivery_window_from_env();
-    for message_id in deferred {
+    for (message_id, retry_at) in deferred {
         store.defer_message_wake(&message_id, retry_at)?;
     }
     Ok(())
@@ -375,6 +428,7 @@ struct DeliveryCandidate {
 pub struct DeliveryCheck {
     pub schedule: ScheduleCheck,
     pub after: Vec<AfterConditionCheck>,
+    pub when: Vec<WhenConditionCheck>,
     pub fifo: FifoCheck,
     pub agent: AgentCheck,
     pub gate: GateCheck,
@@ -390,6 +444,7 @@ impl DeliveryCheck {
     pub fn passes(&self) -> bool {
         self.schedule.ready
             && self.after.iter().all(|condition| condition.met)
+            && self.when.iter().all(|condition| condition.met)
             && self.fifo.head
             && self.agent.present
             && self.gate_ready()
@@ -407,6 +462,15 @@ impl DeliveryCheck {
             return DeliveryVerdict::WaitingOnAfter {
                 address: condition.address.clone(),
                 agent_present: condition.agent_present,
+            };
+        }
+        if let Some(condition) = self.when.iter().find(|condition| !condition.met) {
+            return DeliveryVerdict::WaitingOnWhen {
+                address: condition.address.clone(),
+                expected: condition.expected,
+                current: condition.status,
+                dwell_secs: condition.dwell_secs,
+                dwell_so_far_secs: condition.dwell_so_far_secs,
             };
         }
         if !self.fifo.head {
@@ -450,6 +514,23 @@ pub struct AfterConditionCheck {
     pub agent_present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct WhenConditionCheck {
+    pub address: String,
+    pub expected: AgentStatus,
+    pub dwell_secs: u64,
+    pub met: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub met_at: Option<Timestamp>,
+    pub agent_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<AgentStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dwell_so_far_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trip_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -516,36 +597,46 @@ pub fn explain(
         .map(|condition| after_condition_check(condition, message.gate, pending, snapshot, now))
         .collect::<Vec<_>>();
     let after_ready = after.iter().all(|condition| condition.met);
-    let fifo = if message.status == MessageStatus::Queued && schedule.ready && after_ready {
-        let mut candidate = message.clone();
-        for condition in &mut candidate.after {
-            condition.met_at.get_or_insert(now);
-        }
-        let candidates = std::iter::once(&candidate).chain(
-            pending
-                .iter()
-                .filter(|pending| pending.message_id != message.message_id),
-        );
-        match queue_head_for_message(candidates, &candidate, now) {
-            Some(head) if head.message_id == message.message_id => FifoCheck {
+    let when = message
+        .when
+        .iter()
+        .map(|condition| when_condition_check(condition, snapshot, now))
+        .collect::<Vec<_>>();
+    let when_ready = when.iter().all(|condition| condition.met);
+    let fifo =
+        if message.status == MessageStatus::Queued && schedule.ready && after_ready && when_ready {
+            let mut candidate = message.clone();
+            for condition in &mut candidate.after {
+                condition.met_at.get_or_insert(now);
+            }
+            for condition in &mut candidate.when {
+                condition.met_at.get_or_insert(now);
+            }
+            let candidates = std::iter::once(&candidate).chain(
+                pending
+                    .iter()
+                    .filter(|pending| pending.message_id != message.message_id),
+            );
+            match queue_head_for_message(candidates, &candidate, now) {
+                Some(head) if head.message_id == message.message_id => FifoCheck {
+                    head: true,
+                    blocker: None,
+                },
+                Some(head) => FifoCheck {
+                    head: false,
+                    blocker: Some(head.message_id.clone()),
+                },
+                None => FifoCheck {
+                    head: false,
+                    blocker: None,
+                },
+            }
+        } else {
+            FifoCheck {
                 head: true,
                 blocker: None,
-            },
-            Some(head) => FifoCheck {
-                head: false,
-                blocker: Some(head.message_id.clone()),
-            },
-            None => FifoCheck {
-                head: false,
-                blocker: None,
-            },
-        }
-    } else {
-        FifoCheck {
-            head: true,
-            blocker: None,
-        }
-    };
+            }
+        };
     let agent = snapshot
         .agents
         .iter()
@@ -577,6 +668,7 @@ pub fn explain(
     DeliveryCheck {
         schedule,
         after,
+        when,
         fifo,
         agent: AgentCheck {
             present: agent.is_some(),
@@ -597,6 +689,51 @@ pub fn explain(
             pane_id: pane.map(|pane| pane.pane_id.clone()),
             pinned_pane_id: message.pane_id.clone(),
         },
+    }
+}
+
+fn when_condition_check(
+    condition: &WhenCondition,
+    snapshot: &SidebarSnapshot,
+    now: Timestamp,
+) -> WhenConditionCheck {
+    let agent = snapshot.agents.iter().find(|agent| {
+        card_matches(
+            &condition.kind,
+            &condition.agent_id,
+            condition.agent_name.as_deref(),
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+        )
+    });
+    let status = agent.map(|agent| agent.status);
+    let matching = agent.filter(|agent| agent.status == condition.status);
+    let base = matching.map(|agent| {
+        match condition.status {
+            AgentStatus::Running => agent.turn_started_at,
+            AgentStatus::Waiting => agent.waiting_since,
+            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Failed => None,
+            AgentStatus::Paused => None,
+        }
+        .unwrap_or(agent.last_activity)
+    });
+    let dwell_so_far_secs = base.map(|base| now.duration_since(base).as_secs().max(0) as u64);
+    let trip_at = base.and_then(|base| {
+        base.checked_add(Duration::from_secs(condition.dwell_secs))
+            .ok()
+    });
+    WhenConditionCheck {
+        address: condition.address.clone(),
+        expected: condition.status,
+        dwell_secs: condition.dwell_secs,
+        met: condition.met_at.is_some()
+            || when_condition_state(condition, &snapshot.agents, now) == WhenState::Met,
+        met_at: condition.met_at,
+        agent_present: agent.is_some(),
+        status,
+        dwell_so_far_secs,
+        trip_at,
     }
 }
 
@@ -906,6 +1043,7 @@ mod tests {
                 retry_after: None,
             },
             after: Vec::new(),
+            when: Vec::new(),
             fifo: FifoCheck {
                 head: true,
                 blocker: None,

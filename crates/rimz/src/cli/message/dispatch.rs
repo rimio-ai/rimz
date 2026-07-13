@@ -8,6 +8,7 @@ pub(super) enum SendKind {
         gate: DeliveryGate,
         schedule: Option<String>,
         after: Vec<String>,
+        when: Vec<String>,
     },
 }
 
@@ -37,7 +38,10 @@ pub(super) fn send_message(
     } = send;
     let agent_caller = send::agent_caller();
     if let SendKind::Boundary {
-        schedule, after, ..
+        schedule,
+        after,
+        when,
+        ..
     } = &mode
     {
         if schedule.is_some() && create {
@@ -45,6 +49,9 @@ pub(super) fn send_message(
         }
         if !after.is_empty() && create {
             bail!("--after needs an existing recipient; remove --create");
+        }
+        if !when.is_empty() && create {
+            bail!("--when needs an existing recipient; remove --create");
         }
     }
     let wait = send::WaitSpec {
@@ -63,24 +70,26 @@ pub(super) fn send_message(
     let machine_config = crate::cli::machine_config();
     let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
-    let (dispatch_mode, gate, not_before, after) = match mode {
+    let (dispatch_mode, gate, not_before, after, when) = match mode {
         SendKind::Steer => (
             MessageDispatchMode::Steer,
             DeliveryGate::Any,
             None,
+            Vec::new(),
             Vec::new(),
         ),
         SendKind::Boundary {
             gate,
             schedule,
             after,
+            when,
         } => {
             let now = Timestamp::now().to_zoned(machine_config.time_zone());
             let not_before = schedule
                 .as_deref()
                 .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
                 .transpose()?;
-            (MessageDispatchMode::Boundary, gate, not_before, after)
+            (MessageDispatchMode::Boundary, gate, not_before, after, when)
         }
     };
     dispatch_message(
@@ -99,6 +108,7 @@ pub(super) fn send_message(
             wait,
             not_before,
             after,
+            when,
         },
         FanoutFlags { all, create },
         globals,
@@ -196,6 +206,7 @@ pub(super) struct MessageSpec {
     pub(super) wait: WaitSpec,
     pub(super) not_before: Option<Timestamp>,
     pub(super) after: Vec<String>,
+    pub(super) when: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -216,6 +227,7 @@ pub(super) fn dispatch_message(
     let sender = send::sender_from_env(channel.as_deref(), spec.no_from);
     let needs_agent_context = spec.auto_compact.is_some()
         || !spec.after.is_empty()
+        || !spec.when.is_empty()
         || matches!(sender, MessageSender::Agent { .. })
         || send::agent_caller();
     let agent_context = needs_agent_context
@@ -228,7 +240,7 @@ pub(super) fn dispatch_message(
         MessageDispatchMode::Boundary => {
             pending = store.list_messages()?;
             let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-            if (!spec.after.is_empty()
+            if ((!spec.after.is_empty() || !spec.when.is_empty())
                 || matches!(sender, MessageSender::Agent { .. })
                 || send::agent_caller())
                 && let Some(records) = agent_context.as_ref()
@@ -288,10 +300,84 @@ pub(super) fn dispatch_message(
         spec.gate,
         &pending,
     )?;
+    let when = resolve_when_conditions(
+        &snapshot,
+        &durable_agents,
+        &spec.when,
+        worktree.as_deref().or(channel_flag.as_deref()),
+        channel.as_deref(),
+        rollup_only,
+    )?;
     dispatch_resolved_message(
         mode, &workspace, &store, &snapshot, pending, &sender, target, text, spec, flags, targets,
-        channel, after,
+        channel, after, when,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_when_conditions(
+    snapshot: &SidebarSnapshot,
+    durable_agents: &[AgentState],
+    expressions: &[String],
+    scope: Option<&str>,
+    channel: Option<&str>,
+    rollup_only: bool,
+) -> Result<Vec<rimz::message::WhenCondition>> {
+    let now = Timestamp::now();
+    expressions
+        .iter()
+        .map(|expression| {
+            let fields = expression.split_whitespace().collect::<Vec<_>>();
+            let [address, status, duration] = fields.as_slice() else {
+                bail!(
+                    "invalid --when `{expression}`; use `@handle <status> <duration>` (for example `@coder idle 58m`)"
+                );
+            };
+            rimz::harness::target::require_mention(address)?;
+            if rimz::harness::target::is_broadcast(address) {
+                bail!("--when `{expression}` must name one agent; broadcasts are not supported");
+            }
+            let status = rimz::message::parse_when_status(status).map_err(anyhow::Error::msg)?;
+            let dwell_secs =
+                rimz::message::parse_when_duration(duration).map_err(anyhow::Error::msg)?;
+            let targets = message_dispatch::queue_targets(
+                snapshot,
+                Some(durable_agents),
+                address,
+                scope,
+                channel,
+                rollup_only,
+            )
+            .map_err(|err| map_queue_target_err(address, err))?;
+            if targets.len() != 1 {
+                bail!(
+                    "--when `{expression}` must resolve to exactly one agent; matched {}",
+                    targets.len()
+                );
+            }
+            let target = targets[0];
+            let agent = target.agent().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--when `{expression}` must resolve to an agent with lifecycle state"
+                )
+            })?;
+            let mut condition = rimz::message::WhenCondition {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                agent_name: agent.name.clone(),
+                address: message_dispatch::handle_for_target(snapshot, &target),
+                status,
+                dwell_secs,
+                met_at: None,
+            };
+            if rimz::message::when_condition_state(&condition, &snapshot.agents, now)
+                == rimz::message::WhenState::Met
+            {
+                condition.met_at = Some(now);
+            }
+            Ok(condition)
+        })
+        .collect()
 }
 
 fn read_agent_context(
@@ -441,6 +527,7 @@ pub(super) fn dispatch_resolved_message(
     targets: Vec<message_dispatch::QueueTarget<'_>>,
     channel: Option<String>,
     after: Vec<rimz::message::AfterCondition>,
+    when: Vec<rimz::message::WhenCondition>,
 ) -> Result<()> {
     if targets.len() > 1 && !flags.all && !rimz::harness::target::is_broadcast(&target) {
         let labels: Vec<String> = targets
@@ -503,6 +590,7 @@ pub(super) fn dispatch_resolved_message(
                 auto_compact: spec.auto_compact,
                 not_before: spec.not_before,
                 after,
+                when,
             },
         },
     )?;

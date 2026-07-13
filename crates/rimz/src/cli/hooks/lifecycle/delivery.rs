@@ -43,7 +43,18 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     agent: &dyn AgentAdapter,
     recorded: &RecordedLifecycle,
 ) {
-    if !rimz::message::delivery_checkpoint(&recorded.observation.signal) {
+    let delivery_checkpoint = rimz::message::delivery_checkpoint(&recorded.observation.signal);
+    let condition_checkpoint = matches!(
+        recorded.observation.signal,
+        LifecycleSignal::Registered
+            | LifecycleSignal::TurnStarted
+            | LifecycleSignal::TurnEnded { .. }
+            | LifecycleSignal::AwaitingInput { .. }
+            | LifecycleSignal::SubagentStarted
+            | LifecycleSignal::SubagentStopped { .. }
+            | LifecycleSignal::CompactionEnded { .. }
+    );
+    if !delivery_checkpoint && !condition_checkpoint {
         return;
     }
     let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
@@ -76,6 +87,18 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
                         agent_name,
                     )
             })
+            || message.status == rimz::message::MessageStatus::Queued
+                && message.when.iter().any(|condition| {
+                    condition.met_at.is_none()
+                        && rimz::message::card_matches(
+                            &condition.kind,
+                            &condition.agent_id,
+                            condition.agent_name.as_deref(),
+                            &kind,
+                            agent_id,
+                            agent_name,
+                        )
+                })
     }) {
         spawn_refresh_detached(&rimz::agents::RefreshSpawn {
             args: vec![
@@ -85,6 +108,9 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
                 "sweep".to_owned(),
             ],
         });
+    }
+    if !delivery_checkpoint {
+        return;
     }
     // FIFO spans this card's provisional and registered ids, so the stable
     // agent name folds a message queued before registration into the same queue.

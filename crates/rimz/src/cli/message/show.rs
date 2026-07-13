@@ -174,6 +174,32 @@ fn render_message_kv(
             ),
         );
     }
+    if !message.when.is_empty() {
+        kv.push(
+            "when",
+            render::cell(
+                message
+                    .when
+                    .iter()
+                    .map(|condition| {
+                        let met = condition.met_at.is_some();
+                        let label = format!(
+                            "{} {} {}",
+                            condition.address,
+                            condition.status.as_str(),
+                            rimz::message::format_dwell(condition.dwell_secs)
+                        );
+                        if met {
+                            format!("{label} ✓")
+                        } else {
+                            format!("{label} waiting")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            ),
+        );
+    }
     if message.attempts > 0 {
         kv.push("attempts", render::cell(message.attempts.to_string()));
     }
@@ -351,6 +377,10 @@ pub(super) fn render_delivery_check(
         let (ok, detail) = after_detail(check);
         kv.push("after", condition_cell(ok, detail));
     }
+    if !check.when.is_empty() {
+        let (ok, detail) = when_detail(check, now);
+        kv.push("when", condition_cell(ok, detail));
+    }
     let (ok, detail) = fifo_detail(check);
     kv.push("fifo", condition_cell(ok, detail));
     kv.push(
@@ -410,6 +440,39 @@ fn after_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
                 format!("{} waiting", condition.address)
             } else {
                 format!("{} not running", condition.address)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    (ready, detail)
+}
+
+fn when_detail(check: &deliver::DeliveryCheck, now: Timestamp) -> (bool, String) {
+    let ready = check.when.iter().all(|condition| condition.met);
+    let detail = check
+        .when
+        .iter()
+        .map(|condition| {
+            let wanted = format!(
+                "{} {} {}",
+                condition.address,
+                condition.expected.as_str(),
+                rimz::message::format_dwell(condition.dwell_secs)
+            );
+            if condition.met {
+                format!("{wanted} ok")
+            } else if let Some(elapsed) = condition.dwell_so_far_secs {
+                let progress = format!("{wanted}; {} so far", rimz::message::format_dwell(elapsed));
+                condition.trip_at.map_or(progress.clone(), |trip_at| {
+                    format!(
+                        "{progress}; trips {}",
+                        time_until_with_absolute(trip_at, now)
+                    )
+                })
+            } else if let Some(status) = condition.status {
+                format!("{wanted}; currently {}", status.as_str())
+            } else {
+                format!("{wanted}; agent ended")
             }
         })
         .collect::<Vec<_>>()
@@ -514,6 +577,31 @@ pub(super) fn render_verdict(
                 format!("waiting on {address} to finish ({address} not running)")
             }
         }
+        deliver::DeliveryVerdict::WaitingOnWhen {
+            address,
+            expected,
+            current,
+            dwell_secs,
+            dwell_so_far_secs,
+        } => {
+            let dwell = rimz::message::format_dwell(*dwell_secs);
+            if let Some(elapsed) = dwell_so_far_secs {
+                format!(
+                    "waiting for {address} {} ≥ {dwell} — {} {} so far",
+                    expected.as_str(),
+                    expected.as_str(),
+                    rimz::message::format_dwell(*elapsed)
+                )
+            } else {
+                let current = current
+                    .map(|status| status.as_str())
+                    .unwrap_or("not running");
+                format!(
+                    "waiting for {address} to be {} (currently {current})",
+                    expected.as_str()
+                )
+            }
+        }
         deliver::DeliveryVerdict::BehindFifo { blocker } => blocker
             .as_ref()
             .map(|blocker| format!("blocked: behind {blocker}"))
@@ -559,6 +647,7 @@ pub(super) fn delivery_action_hint(
             "force now: rimz message steer {message_id}  ·  or: rimz message edit {message_id} --no-schedule"
         )),
         deliver::DeliveryVerdict::WaitingOnAfter { .. }
+        | deliver::DeliveryVerdict::WaitingOnWhen { .. }
         | deliver::DeliveryVerdict::BehindFifo { .. }
         | deliver::DeliveryVerdict::ReceiverGone
         | deliver::DeliveryVerdict::Compacting
@@ -590,6 +679,7 @@ mod tests {
                 retry_after: None,
             },
             after: Vec::new(),
+            when: Vec::new(),
             fifo: deliver::FifoCheck {
                 head: true,
                 blocker: None,

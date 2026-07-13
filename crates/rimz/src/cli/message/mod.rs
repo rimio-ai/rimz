@@ -20,7 +20,7 @@ use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
 use rimz::message::dispatch::{DispatchContext, DispatchOutcome, SendMode};
 use rimz::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    MessageStatus, parse_schedule_at,
+    MessageStatus, WhenCondition, parse_schedule_at,
 };
 use rimz::message::{deliver, dispatch as message_dispatch};
 use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
@@ -51,6 +51,13 @@ pub struct MessageArgs {
     /// Hold delivery until this agent finishes its queued work (repeatable; all must finish).
     #[arg(long, value_name = "ADDR", conflicts_with_all = ["steer", "wait"])]
     after: Vec<String>,
+    /// Hold delivery until an agent stays in a status for a duration (repeatable; all must match).
+    #[arg(
+        long,
+        value_name = "'ADDR STATUS DUR'",
+        conflicts_with_all = ["steer", "wait"]
+    )]
+    when: Vec<String>,
     #[command(flatten)]
     send: SendFlags,
 }
@@ -257,6 +264,7 @@ pub fn run(args: MessageArgs, globals: &GlobalFlags) -> Result<()> {
                         gate: args.on,
                         schedule: args.schedule,
                         after: args.after,
+                        when: args.when,
                     },
                     args.send,
                     text,
@@ -308,6 +316,7 @@ pub(crate) fn to_session(
             wait: WaitSpec::OFF,
             not_before: None,
             after: Vec::new(),
+            when: Vec::new(),
         },
         FanoutFlags {
             all: false,

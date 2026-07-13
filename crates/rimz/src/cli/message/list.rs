@@ -54,6 +54,8 @@ pub(super) struct MessageListRow {
     pub(super) not_before: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) after: Vec<AfterCondition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) when: Vec<WhenCondition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) retry_after: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,6 +90,7 @@ impl MessageListRow {
             delivered_at: message.delivered_at,
             not_before: message.not_before,
             after: message.after,
+            when: message.when,
             retry_after: message.retry_after,
             auto_compact: message.auto_compact,
             compacted_context_tokens: message.compacted_context_tokens,
@@ -128,6 +131,7 @@ impl MessageListRow {
             delivered_at,
             not_before: None,
             after: Vec::new(),
+            when: Vec::new(),
             retry_after: None,
             auto_compact: None,
             compacted_context_tokens: payload.compacted_context_tokens,
@@ -401,6 +405,25 @@ pub(super) fn message_snippet(message: &MessageListRow, width: usize) -> String 
         .map(|condition| condition.address.as_str())
         .collect::<Vec<_>>();
     let marker = (!after.is_empty()).then(|| format!("after {}", after.join(", ")));
+    let when = message
+        .when
+        .iter()
+        .filter(|condition| condition.met_at.is_none())
+        .map(|condition| {
+            format!(
+                "when {} {} {}",
+                condition.address,
+                condition.status.as_str(),
+                rimz::message::format_dwell(condition.dwell_secs)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let marker = match (marker, when.is_empty()) {
+        (Some(after), false) => Some(format!("{after} · {when}")),
+        (marker, true) => marker,
+        (None, false) => Some(when),
+    };
     if let Some(text) = message.text.as_deref() {
         let text = collapse_home_in_snippet(text);
         return preview(

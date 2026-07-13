@@ -267,6 +267,26 @@ pub struct AfterCondition {
     pub met_at: Option<Timestamp>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WhenCondition {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    pub address: String,
+    pub status: AgentStatus,
+    pub dwell_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub met_at: Option<Timestamp>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WhenState {
+    Met,
+    Pending { trip_at: Option<Timestamp> },
+    Gone,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MessageRecord {
     pub message_id: MessageId,
@@ -330,6 +350,10 @@ pub struct MessageRecord {
     /// enter its receiver's FIFO lane.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<AfterCondition>,
+    /// Agent status episodes that must reach their configured dwell before
+    /// this message can enter its receiver's FIFO lane.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<WhenCondition>,
     /// Wake-only retry floor set by the elder sweep when a ready queued head
     /// cannot deliver. This never gates FIFO readiness or turn-boundary
     /// delivery.
@@ -409,6 +433,7 @@ impl MessageRecord {
             delivered_at: None,
             not_before: None,
             after: Vec::new(),
+            when: Vec::new(),
             retry_after: None,
             auto_compact: None,
             compacted_context_tokens: None,
@@ -440,6 +465,17 @@ impl MessageRecord {
         .with_after(
             record
                 .after
+                .iter()
+                .cloned()
+                .map(|mut condition| {
+                    condition.met_at = None;
+                    condition
+                })
+                .collect(),
+        )
+        .with_when(
+            record
+                .when
                 .iter()
                 .cloned()
                 .map(|mut condition| {
@@ -515,6 +551,12 @@ impl MessageRecord {
     }
 
     #[must_use]
+    pub fn with_when(mut self, when: Vec<WhenCondition>) -> Self {
+        self.when = when;
+        self
+    }
+
+    #[must_use]
     pub fn with_channel(mut self, channel: Option<String>) -> Self {
         self.channel = channel;
         self
@@ -568,8 +610,16 @@ impl MessageRecord {
             .all(|condition| condition.met_at.is_some())
     }
 
+    pub fn when_met(&self) -> bool {
+        self.when.iter().all(|condition| condition.met_at.is_some())
+    }
+
+    pub fn conditions_met(&self) -> bool {
+        self.after_met() && self.when_met()
+    }
+
     pub fn is_deliverable(&self, now: Timestamp) -> bool {
-        self.is_ready(now) && self.after_met()
+        self.is_ready(now) && self.conditions_met()
     }
 
     pub fn sent_reconcile_deadline(&self, window: Duration) -> Option<Timestamp> {
@@ -657,6 +707,81 @@ pub fn after_condition_open(
                     condition.agent_name.as_deref(),
                 )
         })
+}
+
+pub fn when_condition_state(
+    condition: &WhenCondition,
+    agents: &[AgentState],
+    now: Timestamp,
+) -> WhenState {
+    if condition.met_at.is_some() {
+        return WhenState::Met;
+    }
+    let Some(agent) = agents.iter().find(|agent| {
+        card_matches(
+            &condition.kind,
+            &condition.agent_id,
+            condition.agent_name.as_deref(),
+            &agent.kind,
+            &agent.agent_id,
+            agent.name.as_deref(),
+        )
+    }) else {
+        return WhenState::Gone;
+    };
+    if agent.status != condition.status {
+        return WhenState::Pending { trip_at: None };
+    }
+    let base = match condition.status {
+        AgentStatus::Running => agent.turn_started_at,
+        AgentStatus::Waiting => agent.waiting_since,
+        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Failed => None,
+        AgentStatus::Paused => None,
+    }
+    .unwrap_or(agent.last_activity);
+    let elapsed = now.duration_since(base).as_secs();
+    if elapsed >= 0 && elapsed as u64 >= condition.dwell_secs {
+        WhenState::Met
+    } else {
+        WhenState::Pending {
+            trip_at: base
+                .checked_add(Duration::from_secs(condition.dwell_secs))
+                .ok(),
+        }
+    }
+}
+
+pub fn parse_when_status(raw: &str) -> Result<AgentStatus, String> {
+    match raw {
+        "running" => Ok(AgentStatus::Running),
+        "waiting" => Ok(AgentStatus::Waiting),
+        "idle" => Ok(AgentStatus::Idle),
+        "success" => Ok(AgentStatus::Success),
+        "failed" => Ok(AgentStatus::Failed),
+        _ => Err(format!(
+            "invalid --when status `{raw}`; supported statuses: running, waiting, idle, success, failed"
+        )),
+    }
+}
+
+pub fn parse_when_duration(raw: &str) -> Result<u64, String> {
+    const UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
+    let duration = crate::harness::schedule::parse_duration_units(raw, UNITS).map_err(|_| {
+        format!("invalid --when duration `{raw}`; use a duration like `58m` or `2h`")
+    })?;
+    if duration.is_zero() {
+        return Err("--when duration must be greater than zero".to_owned());
+    }
+    Ok(duration.as_secs())
+}
+
+pub fn format_dwell(secs: u64) -> String {
+    for (unit, unit_secs) in [("d", 86_400), ("h", 3_600), ("m", 60)] {
+        if secs >= unit_secs && secs.is_multiple_of(unit_secs) {
+            return format!("{}{unit}", secs / unit_secs);
+        }
+    }
+    format!("{secs}s")
 }
 
 pub fn gate_open_for_agent(

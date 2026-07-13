@@ -8,7 +8,7 @@ use crate::agents::AgentState;
 use crate::ids::MessageId;
 use crate::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
-    gate_open_for_agent, message_interval_from_env, queue_head,
+    WhenCondition, gate_open_for_agent, message_interval_from_env, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, SidebarSnapshot, Store, TargetErr};
@@ -35,6 +35,7 @@ pub enum SendMode {
         auto_compact: Option<AutoCompact>,
         not_before: Option<Timestamp>,
         after: Vec<AfterCondition>,
+        when: Vec<WhenCondition>,
     },
 }
 
@@ -75,6 +76,13 @@ impl SendMode {
         match self {
             Self::Steer { .. } => &[],
             Self::Boundary { after, .. } => after,
+        }
+    }
+
+    fn when(&self) -> &[WhenCondition] {
+        match self {
+            Self::Steer { .. } => &[],
+            Self::Boundary { when, .. } => when,
         }
     }
 
@@ -404,6 +412,7 @@ fn live_prompt_for_target(
         force,
         auto_compact,
         after,
+        when,
     } = draft;
     if let Some(agent) = target.agent {
         return MessageRecord::new(workspace_id, agent, text, enter, gate)
@@ -419,7 +428,8 @@ fn live_prompt_for_target(
             .with_automated(automated)
             .with_pane_id(pane.pane_id.clone())
             .with_auto_compact(auto_compact)
-            .with_after(after);
+            .with_after(after)
+            .with_when(when);
     }
     send::message_for_target(
         workspace_id,
@@ -437,6 +447,7 @@ fn live_prompt_for_target(
             force,
             auto_compact,
             after,
+            when,
         },
     )
 }
@@ -470,6 +481,10 @@ pub fn dispatch_for_targets(
                         .after()
                         .iter()
                         .all(|condition| condition.met_at.is_some())
+                    || !mode
+                        .when()
+                        .iter()
+                        .all(|condition| condition.met_at.is_some())
                     || !target.receivable_now(ctx.snapshot, pending, mode.gate(), mode.force(), now)
             }
         };
@@ -493,6 +508,7 @@ pub fn dispatch_for_targets(
                     force: mode.force(),
                     auto_compact: mode.auto_compact(),
                     after: mode.after().to_vec(),
+                    when: mode.when().to_vec(),
                 },
             )
             .with_reply_wait(ctx.reply_wait)
@@ -599,7 +615,8 @@ pub fn dispatch_for_targets(
         .with_in_reply_to(ctx.in_reply_to.to_vec())
         .with_auto_compact(mode.auto_compact())
         .with_not_before(mode.not_before())
-        .with_after(mode.after().to_vec());
+        .with_after(mode.after().to_vec())
+        .with_when(mode.when().to_vec());
         let message_id = message.message_id.clone();
         ctx.store
             .queue_message(&message, &ctx.workspace.session_name)?;
