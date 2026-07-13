@@ -115,6 +115,7 @@ Two rules keep the palette honest: `alarm` red marks danger, and one warm `cauti
 | key | does |
 | --- | --- |
 | `refresh_ms` | the animation/paint grid in milliseconds (clamped internally); data polling keeps its own cadence |
+| `pixel` | `auto` enables kitty-graphics pets and context meters when the terminal path supports them; `off` keeps both on their cell-rendered tiers |
 | `width_percent` | sidebar share of each view (default 30, clamped to 10-90 at use); applies at the next convergence unless a room-wide `a`/`d` selection is present |
 | `max_cols` | live cap on the configured sidebar share; applies at the next convergence, while room-wide `a`/`d` selections may exceed it |
 | `scrollbar` | `auto` shows the overflow indicator only while the view moves; `always` / `never` pin it |
@@ -126,12 +127,15 @@ Two rules keep the palette honest: `alarm` red marks danger, and one warm `cauti
 ```toml
 [theme.display]
 refresh_ms = 100
+pixel = "auto"
 width_percent = 30
 max_cols = 72
 scrollbar = "auto"
 card_density = "auto"
 provider_tabs = "auto"
 ```
+
+The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client directly or through tmux 3.6+ with `allow-passthrough`; Zellij and every unsupported path use the half-cell bar. `NO_COLOR` always uses the shape-only cell bar. Set `pixel = "off"` to opt out of both the pixel meter and pixel pets.
 
 Two nested tables set the meter color stops. The **context meter** (`[theme.display.context_meter]`) warms a card's context read from green: each stop names a fill percentage *and* an absolute token count, and severity is the worse of the two, so a large-window model calm by percentage still warms by sheer volume. The **budget bar** (`[theme.display.budget_bar]`) names the *remaining* budget percent at which the draining bar reaches each warm stop, and its nested `[theme.display.budget_bar.burn_rate]` colors the reset marker by pace (`100` = on-pace, `200` = twice as fast as the window can sustain); `green = 67` starts the cool under-pace tail and `deep_green = 33` saturates it once enough of the window has elapsed. The shipped numbers are in the template.
 

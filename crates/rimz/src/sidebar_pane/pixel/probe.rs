@@ -1,4 +1,4 @@
-//! Probes terminal and tmux capabilities for kitty graphics support.
+//! Probes terminal and tmux capabilities for shared kitty graphics support.
 
 use std::io;
 use std::time::Duration;
@@ -10,16 +10,16 @@ const MIN_PIXEL_TMUX_VERSION: (u32, u32, u32) = (3, 6, 0);
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PetRenderCaps {
+pub struct PixelRenderCaps {
     pub pixel_transport: bool,
     pub kitty_term: bool,
 }
 
-pub(crate) fn detect(mux: MuxName, session_name: &str, prev: PetRenderCaps) -> PetRenderCaps {
+pub(crate) fn detect(mux: MuxName, session_name: &str, prev: PixelRenderCaps) -> PixelRenderCaps {
     detect_with(mux, session_name, prev, &LiveProbe)
 }
 
-pub fn detect_env() -> (PetRenderCaps, bool) {
+pub fn detect_env() -> (PixelRenderCaps, bool) {
     detect_env_with(&LiveProbe)
 }
 
@@ -34,20 +34,20 @@ trait Probe {
 fn detect_with(
     probed_mux: MuxName,
     session_name: &str,
-    prev: PetRenderCaps,
+    prev: PixelRenderCaps,
     probe: &impl Probe,
-) -> PetRenderCaps {
+) -> PixelRenderCaps {
     match probed_mux {
         MuxName::Tmux => detect_tmux(session_name, probe, prev),
         MuxName::Zellij => detect_zellij(probe),
     }
 }
 
-fn detect_env_with(probe: &impl Probe) -> (PetRenderCaps, bool) {
+fn detect_env_with(probe: &impl Probe) -> (PixelRenderCaps, bool) {
     if env_present(probe, "TMUX") {
         let caps = probe
             .tmux_session_name()
-            .map(|session_name| detect_tmux(&session_name, probe, PetRenderCaps::default()))
+            .map(|session_name| detect_tmux(&session_name, probe, PixelRenderCaps::default()))
             .unwrap_or_default();
         return (caps, true);
     }
@@ -57,7 +57,7 @@ fn detect_env_with(probe: &impl Probe) -> (PetRenderCaps, bool) {
     (detect_standalone(probe), false)
 }
 
-fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PetRenderCaps) -> PetRenderCaps {
+fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PixelRenderCaps) -> PixelRenderCaps {
     let kitty_term = match probe.tmux_client_termnames(session_name) {
         Ok(termnames) if !termnames.is_empty() => termnames_allowed(&termnames),
         _ => prev.kitty_term,
@@ -71,18 +71,18 @@ fn detect_tmux(session_name: &str, probe: &impl Probe, prev: PetRenderCaps) -> P
         }
         _ => prev.pixel_transport,
     };
-    PetRenderCaps {
+    PixelRenderCaps {
         pixel_transport,
         kitty_term,
     }
 }
 
-fn detect_zellij(_probe: &impl Probe) -> PetRenderCaps {
-    PetRenderCaps::default()
+fn detect_zellij(_probe: &impl Probe) -> PixelRenderCaps {
+    PixelRenderCaps::default()
 }
 
-fn detect_standalone(probe: &impl Probe) -> PetRenderCaps {
-    PetRenderCaps {
+fn detect_standalone(probe: &impl Probe) -> PixelRenderCaps {
+    PixelRenderCaps {
         pixel_transport: true,
         kitty_term: standalone_term_allowed(probe),
     }
@@ -230,10 +230,10 @@ mod tests {
             detect_with(
                 MuxName::Tmux,
                 TEST_SESSION,
-                PetRenderCaps::default(),
+                PixelRenderCaps::default(),
                 &FakeProbe::ok()
             ),
-            PetRenderCaps {
+            PixelRenderCaps {
                 pixel_transport: true,
                 kitty_term: true,
             }
@@ -243,10 +243,10 @@ mod tests {
             detect_with(
                 MuxName::Zellij,
                 TEST_SESSION,
-                PetRenderCaps::default(),
+                PixelRenderCaps::default(),
                 &FakeProbe::ok().with_env("TERM", "xterm-ghostty")
             ),
-            PetRenderCaps::default()
+            PixelRenderCaps::default()
         );
 
         let old = FakeProbe {
@@ -254,8 +254,13 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, PetRenderCaps::default(), &old),
-            PetRenderCaps {
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PixelRenderCaps::default(),
+                &old
+            ),
+            PixelRenderCaps {
                 pixel_transport: false,
                 kitty_term: true,
             }
@@ -266,8 +271,13 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, PetRenderCaps::default(), &off),
-            PetRenderCaps {
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PixelRenderCaps::default(),
+                &off
+            ),
+            PixelRenderCaps {
                 pixel_transport: false,
                 kitty_term: true,
             }
@@ -278,8 +288,13 @@ mod tests {
             ..FakeProbe::ok()
         };
         assert_eq!(
-            detect_with(MuxName::Tmux, TEST_SESSION, PetRenderCaps::default(), &all),
-            PetRenderCaps {
+            detect_with(
+                MuxName::Tmux,
+                TEST_SESSION,
+                PixelRenderCaps::default(),
+                &all
+            ),
+            PixelRenderCaps {
                 pixel_transport: true,
                 kitty_term: true,
             }
@@ -293,10 +308,10 @@ mod tests {
             detect_with(
                 MuxName::Tmux,
                 TEST_SESSION,
-                PetRenderCaps::default(),
+                PixelRenderCaps::default(),
                 &unsupported_term
             ),
-            PetRenderCaps {
+            PixelRenderCaps {
                 pixel_transport: true,
                 kitty_term: false,
             }
@@ -310,10 +325,10 @@ mod tests {
             detect_with(
                 MuxName::Tmux,
                 TEST_SESSION,
-                PetRenderCaps::default(),
+                PixelRenderCaps::default(),
                 &unattached
             ),
-            PetRenderCaps {
+            PixelRenderCaps {
                 pixel_transport: true,
                 kitty_term: false,
             }
@@ -322,7 +337,7 @@ mod tests {
 
     #[test]
     fn tmux_probe_failures_keep_previous_fact_values() {
-        let prev = PetRenderCaps {
+        let prev = PixelRenderCaps {
             pixel_transport: true,
             kitty_term: true,
         };
@@ -334,7 +349,7 @@ mod tests {
         };
         assert_eq!(
             detect_with(MuxName::Tmux, TEST_SESSION, prev, &version_error),
-            PetRenderCaps {
+            PixelRenderCaps {
                 pixel_transport: true,
                 kitty_term: false,
             }
@@ -356,7 +371,7 @@ mod tests {
         };
         assert_eq!(
             detect_with(MuxName::Tmux, TEST_SESSION, prev, &term_error),
-            PetRenderCaps {
+            PixelRenderCaps {
                 pixel_transport: false,
                 kitty_term: true,
             }
@@ -365,7 +380,7 @@ mod tests {
 
     #[test]
     fn tmux_empty_rendering_client_list_keeps_previous_kitty_fact() {
-        let prev = PetRenderCaps {
+        let prev = PixelRenderCaps {
             pixel_transport: false,
             kitty_term: true,
         };
@@ -376,7 +391,7 @@ mod tests {
 
         assert_eq!(
             detect_with(MuxName::Tmux, TEST_SESSION, prev, &unattached),
-            PetRenderCaps {
+            PixelRenderCaps {
                 pixel_transport: true,
                 kitty_term: true,
             }
@@ -385,7 +400,7 @@ mod tests {
 
     #[test]
     fn tmux_successful_probe_overrides_previous_facts() {
-        let prev = PetRenderCaps {
+        let prev = PixelRenderCaps {
             pixel_transport: true,
             kitty_term: true,
         };
@@ -398,16 +413,16 @@ mod tests {
 
         assert_eq!(
             detect_with(MuxName::Tmux, TEST_SESSION, prev, &unsupported),
-            PetRenderCaps::default()
+            PixelRenderCaps::default()
         );
         assert_eq!(
             detect_with(
                 MuxName::Tmux,
                 TEST_SESSION,
-                PetRenderCaps::default(),
+                PixelRenderCaps::default(),
                 &FakeProbe::ok()
             ),
-            PetRenderCaps {
+            PixelRenderCaps {
                 pixel_transport: true,
                 kitty_term: true,
             }
@@ -432,7 +447,7 @@ mod tests {
                 detect_with(
                     MuxName::Tmux,
                     TEST_SESSION,
-                    PetRenderCaps::default(),
+                    PixelRenderCaps::default(),
                     &probe
                 )
                 .kitty_term,
@@ -448,7 +463,7 @@ mod tests {
             detect_with(
                 MuxName::Tmux,
                 TEST_SESSION,
-                PetRenderCaps::default(),
+                PixelRenderCaps::default(),
                 &allowed
             )
             .kitty_term
@@ -465,7 +480,7 @@ mod tests {
             !detect_with(
                 MuxName::Tmux,
                 TEST_SESSION,
-                PetRenderCaps::default(),
+                PixelRenderCaps::default(),
                 &mixed
             )
             .kitty_term
@@ -484,7 +499,7 @@ mod tests {
             detect_with(
                 MuxName::Tmux,
                 TEST_SESSION,
-                PetRenderCaps::default(),
+                PixelRenderCaps::default(),
                 &probe
             )
             .kitty_term
@@ -497,7 +512,7 @@ mod tests {
         assert_eq!(
             detect_env_with(&plain),
             (
-                PetRenderCaps {
+                PixelRenderCaps {
                     pixel_transport: true,
                     kitty_term: true,
                 },
@@ -511,7 +526,7 @@ mod tests {
         assert_eq!(
             detect_env_with(&tmux),
             (
-                PetRenderCaps {
+                PixelRenderCaps {
                     pixel_transport: true,
                     kitty_term: true,
                 },
@@ -522,13 +537,16 @@ mod tests {
         let zellij = FakeProbe::ok()
             .with_env("ZELLIJ", "1")
             .with_env("TERM", "xterm-kitty");
-        assert_eq!(detect_env_with(&zellij), (PetRenderCaps::default(), false));
+        assert_eq!(
+            detect_env_with(&zellij),
+            (PixelRenderCaps::default(), false)
+        );
 
         let unsupported = FakeProbe::ok().with_env("TERM", "xterm-256color");
         assert_eq!(
             detect_env_with(&unsupported),
             (
-                PetRenderCaps {
+                PixelRenderCaps {
                     pixel_transport: true,
                     kitty_term: false,
                 },

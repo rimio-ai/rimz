@@ -11,6 +11,7 @@ use jiff::Timestamp;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
+use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::labels::{
@@ -35,6 +36,7 @@ use super::{Gutter, Tier, content_width, with_gutter};
 /// the more/less line is filter-suppressed because a narrowed body is already
 /// uncapped.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     theme: &Theme,
     group: &SidebarWorktreeGroup,
@@ -51,6 +53,51 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     animation_phase: u64,
     cost_rolls: &CostRolls,
     lead_unread: Option<&str>,
+    lines: &mut Vec<Line<'static>>,
+    map: &mut Vec<Option<usize>>,
+    more_hits: &mut Vec<MoreHit>,
+) {
+    worktree_group_lines_with_meter(
+        theme,
+        group,
+        providers,
+        now,
+        width,
+        bands,
+        card_density,
+        filter,
+        expanded,
+        held,
+        row_index,
+        selected_index,
+        animation_phase,
+        cost_rolls,
+        lead_unread,
+        None,
+        lines,
+        map,
+        more_hits,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sidebar_pane::render) fn worktree_group_lines_with_meter(
+    theme: &Theme,
+    group: &SidebarWorktreeGroup,
+    providers: &[SidebarProviderPanel],
+    now: Timestamp,
+    width: usize,
+    bands: &ContextMeterConfig,
+    card_density: CardDensityMode,
+    filter: Option<BodyFilter>,
+    expanded: bool,
+    held: Option<&HashSet<String>>,
+    row_index: &mut usize,
+    selected_index: usize,
+    animation_phase: u64,
+    cost_rolls: &CostRolls,
+    lead_unread: Option<&str>,
+    mut meter_pixels: Option<&mut MeterPixels>,
     lines: &mut Vec<Line<'static>>,
     map: &mut Vec<Option<usize>>,
     more_hits: &mut Vec<MoreHit>,
@@ -103,6 +150,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
             bands,
             gutter,
             lead_unread,
+            meter_pixels.as_deref_mut(),
         );
         map.extend(std::iter::repeat_n(Some(this_row), row_lines.len()));
         lines.extend(row_lines);

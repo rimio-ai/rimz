@@ -9,5 +9,6 @@
 
 pub mod app;
 pub mod pets;
+pub(crate) mod pixel;
 pub mod render;
 pub mod supervise;

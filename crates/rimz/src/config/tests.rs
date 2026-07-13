@@ -1097,6 +1097,7 @@ fn display_numeric_bounds_parse_and_clamp_at_use() {
 fn display_enums_lists_and_nested_bands_parse() {
     let dir = tempdir().expect("tempdir");
     let defaults = MachineConfig::default().theme.display;
+    assert_eq!(defaults.pixel, PixelMode::Auto);
     assert_eq!(defaults.scrollbar, ScrollbarMode::Auto);
     assert_eq!(defaults.max_provider_blocks, 3);
     assert_eq!(defaults.provider_tabs, ProviderTabsMode::Auto);
@@ -1161,6 +1162,7 @@ fn display_enums_lists_and_nested_bands_parse() {
         "theme.toml",
         "[theme.display]\n\
              scrollbar = \"never\"\n\
+             pixel = \"off\"\n\
              provider_tabs = \"always\"\n\
              provider_list = [\"codex\", \"all\"]\n\
              [theme.display.context_meter]\n\
@@ -1176,6 +1178,7 @@ fn display_enums_lists_and_nested_bands_parse() {
     ))
     .expect("load");
     let display = &config.theme.display;
+    assert_eq!(display.pixel, PixelMode::Off);
     assert_eq!(display.scrollbar, ScrollbarMode::Never);
     assert_eq!(display.provider_tabs, ProviderTabsMode::Always);
     assert_eq!(display.provider_list, vec!["codex", "all"]);

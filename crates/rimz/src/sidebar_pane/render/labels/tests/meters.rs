@@ -148,10 +148,19 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (0, 5, "─────"),
         (100, 5, "━━━━━"),
     ] {
-        let spans = context_gauge_spans(&plain, 0.5, &[], percent, width);
+        let spans = context_gauge_spans(&plain, 0.5, &[], f64::from(percent), width);
         assert_eq!(text(&spans), expected, "{percent}% over width {width}");
         assert_no_fg(&spans);
     }
+
+    assert_eq!(filled_half_cells(0.0, 4), (0, false));
+    assert_eq!(filled_half_cells(87.5, 4), (3, true));
+    assert_eq!(filled_half_cells(100.0, 4), (4, false));
+    assert_eq!(
+        text(&context_gauge_spans(&plain, 0.5, &[], 87.5, 4)),
+        "━━━╸",
+        "a fractional tail uses the themable heavy left half"
+    );
 
     // Composition rides the bar at every severity. Each accent owns a leading
     // half-rule cell, and all shapes together still end exactly at the fill.
@@ -160,7 +169,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (5_000, plain.component(Component::CacheWrite)),
         (2_000, plain.component(Component::Input)),
     ];
-    let rendered = text(&context_gauge_spans(&plain, 0.6, &segments, 60, 10));
+    let rendered = text(&context_gauge_spans(&plain, 0.6, &segments, 60.0, 10));
     assert_eq!(rendered, "━━━╺━╺────");
     assert_eq!(
         rendered.chars().count(),
@@ -182,14 +191,14 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         4,
         "the track fills the remainder"
     );
-    assert_no_fg(&context_gauge_spans(&plain, 0.6, &segments, 60, 10));
+    assert_no_fg(&context_gauge_spans(&plain, 0.6, &segments, 60.0, 10));
 
     let lit = Theme::fixed(false);
     let regression = [
-        (6, 10, "━─────────", false),
+        (6, 10, "╸─────────", false),
         (6, 32, "━╺──────────────────────────────", true),
         (30, 10, "━━╺───────", true),
-        (30, 32, "━━━━━━━━╺━──────────────────────", true),
+        (30, 32, "━━━━━━━╺━╸──────────────────────", true),
     ];
     for (percent, width, expected, write_visible) in regression {
         let segments = [
@@ -197,7 +206,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
             (11_000, lit.component(Component::CacheWrite)),
             (0, lit.component(Component::Input)),
         ];
-        let spans = context_gauge_spans(&lit, 0.0, &segments, percent, width);
+        let spans = context_gauge_spans(&lit, 0.0, &segments, f64::from(percent), width);
         assert_eq!(text(&spans), expected, "{percent}% over width {width}");
         assert_eq!(
             spans.iter().any(|span| {
@@ -208,7 +217,18 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         );
     }
 
-    let narrow = text(&context_gauge_spans(&plain, 0.0, &segments, 20, 10));
+    let half_tail = context_gauge_spans(&lit, 0.0, &segments, 55.0, 10);
+    let tail = half_tail
+        .iter()
+        .find(|span| span.content == "╸")
+        .expect("segmented bar has a half-cell tail");
+    assert_eq!(
+        tail.style.fg,
+        Some(lit.component(Component::Input)),
+        "the half-cell tail carries the last nonempty segment color"
+    );
+
+    let narrow = text(&context_gauge_spans(&plain, 0.0, &segments, 20.0, 10));
     assert_eq!(
         narrow, "━╺────────",
         "the smallest of three segments drops when only two cells fill"
@@ -219,7 +239,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (9, lit.component(Component::CacheWrite)),
         (1, lit.component(Component::Input)),
     ];
-    let ordered_spans = context_gauge_spans(&lit, 0.0, &ordered, 50, 20);
+    let ordered_spans = context_gauge_spans(&lit, 0.0, &ordered, 50.0, 20);
     assert_eq!(text(&ordered_spans), "━━━━━╺━━━╺──────────");
     let ink = |color| {
         ordered_spans
@@ -251,7 +271,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (6, plain.component(Component::Input)),
     ];
     assert_eq!(
-        text(&context_gauge_spans(&plain, 0.0, &forced, 30, 10)),
+        text(&context_gauge_spans(&plain, 0.0, &forced, 30.0, 10)),
         "━╺╺───────",
         "minimum shapes win when fixed semantic order makes inversion unavoidable"
     );
@@ -261,10 +281,20 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (&ordered[..], 50, 20),
         (&forced[..], 30, 10),
     ] {
-        let rendered = text(&context_gauge_spans(&plain, 0.0, segments, percent, width));
-        let filled = (percent as usize * width + 50) / 100;
+        let rendered = text(&context_gauge_spans(
+            &plain,
+            0.0,
+            segments,
+            percent as f64,
+            width,
+        ));
+        let (whole, half) = filled_half_cells(percent as f64, width);
+        let filled = whole + usize::from(half);
         assert_eq!(rendered.chars().count(), width);
-        assert!(matches!(rendered.chars().nth(filled - 1), Some('━' | '╺')));
+        assert!(matches!(
+            rendered.chars().nth(filled - 1),
+            Some('━' | '╺' | '╸')
+        ));
     }
 
     // A weightless split falls back to a single flat health run.
@@ -275,7 +305,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
             (0, plain.component(Component::CacheRead)),
             (0, plain.component(Component::Input)),
         ],
-        50,
+        50.0,
         4,
     );
     assert_eq!(text(&spans), "━━──");
@@ -290,7 +320,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
     ];
     let amount = 0.6;
     let mut runs: Vec<Vec<Option<Color>>> = vec![Vec::new()];
-    for span in &context_gauge_spans(&truecolor, amount, &segments, 90, 16) {
+    for span in &context_gauge_spans(&truecolor, amount, &segments, 90.0, 16) {
         let content = span.content.as_ref();
         if content == "╺" {
             runs.push(Vec::new());
@@ -687,7 +717,7 @@ fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
         "\u{ed58} 76k \u{f103} 12k \u{f102} 64k \u{f1978} 68k"
     );
 
-    let spans = context_gauge_spans(&theme, 0.5, &[], 50, 4);
+    let spans = context_gauge_spans(&theme, 0.5, &[], 50.0, 4);
     assert_eq!(text(&spans), "━━──", "drawn meter bars stay Unicode");
 
     let spans = context_breakdown_spans(

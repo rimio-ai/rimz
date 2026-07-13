@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::PetsGlyphMode;
+use crate::config::{PetsGlyphMode, PixelMode};
 
 fn frame(
     action: PetAction,
@@ -24,7 +24,7 @@ fn frame(
 #[test]
 fn render_tier_resolves_mode_caps_and_paintability() {
     use PetsGlyphMode::{Auto, Pixel, Sextant};
-    let caps = |pixel_transport, kitty_term| PetRenderCaps {
+    let caps = |pixel_transport, kitty_term| PixelRenderCaps {
         pixel_transport,
         kitty_term,
     };
@@ -39,8 +39,16 @@ fn render_tier_resolves_mode_caps_and_paintability() {
         (Pixel, caps(false, true), true, PetRenderTier::Cell),
         (Sextant, caps(true, true), false, PetRenderTier::Cell),
     ] {
-        assert_eq!(effective_render_tier(mode, caps, pixel_paintable), tier);
+        assert_eq!(
+            effective_render_tier(mode, PixelMode::Auto, caps, pixel_paintable),
+            tier
+        );
     }
+
+    assert_eq!(
+        effective_render_tier(Pixel, PixelMode::Off, caps(true, true), true,),
+        PetRenderTier::Cell
+    );
 }
 
 #[test]

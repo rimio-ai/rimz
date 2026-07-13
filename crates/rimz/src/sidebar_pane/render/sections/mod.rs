@@ -40,7 +40,9 @@ pub(super) use provider::dashboard_panel_lines_with_footer;
 #[cfg(test)]
 pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
 pub(super) use provider::{fleet_store_lines, fleet_total_lines};
+#[cfg(test)]
 pub(super) use worktree::worktree_group_lines;
+pub(super) use worktree::worktree_group_lines_with_meter;
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the
 /// one-cell right rail. Card and worktree lines build to this width before

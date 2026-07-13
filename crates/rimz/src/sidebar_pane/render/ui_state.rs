@@ -3,6 +3,7 @@ use crate::config::ThemeConfig;
 use crate::diag::record::GateRule;
 use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
+use crate::sidebar_pane::pixel::meter::MeterPixels;
 use jiff::Timestamp;
 use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
@@ -127,6 +128,8 @@ pub struct UiState {
     /// snapshot and the renderer-local asset cache before drawing. Render reads
     /// this data only; it never fetches, decodes, or slices pet assets.
     pub(crate) pet: Option<PetView>,
+    /// Pixel context gauges collected while composing the current frame.
+    pub(crate) meter_pixels: Option<MeterPixels>,
     /// Hit-test map of the dashboard tab rail in the most recently drawn
     /// frame: the absolute screen line and column range of each tab's
     /// cap-to-cap footprint, written as a byproduct of every draw like

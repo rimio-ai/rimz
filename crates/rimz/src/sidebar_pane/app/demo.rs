@@ -6,7 +6,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use crate::SidebarSnapshot;
-use crate::sidebar_pane::pets::{BEGIN_SYNC, END_SYNC, PixelPainter, detect_pet_render_env};
+use crate::sidebar_pane::pets::{BEGIN_SYNC, END_SYNC, PixelPainter, detect_pixel_render_env};
 use crate::sidebar_pane::render::{self, UiState};
 use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
@@ -26,7 +26,7 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
     terminal.clear()?;
 
     let mut ui = UiState::default();
-    let (caps, wrap_pixels) = detect_pet_render_env();
+    let (caps, wrap_pixels) = detect_pixel_render_env();
     let mut paint = FramePainter::new(caps, wrap_pixels);
     let anim_start = Instant::now();
     let cadence = Duration::from_millis(u64::from(refresh_ms));
@@ -55,7 +55,7 @@ pub fn serve_gallery(columns: Vec<(SidebarSnapshot, usize)>, refresh_ms: u16) ->
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let (caps, wrap_pixels) = detect_pet_render_env();
+    let (caps, wrap_pixels) = detect_pixel_render_env();
     let id_base = PixelPainter::runtime_id_base();
     let mut states = columns
         .into_iter()

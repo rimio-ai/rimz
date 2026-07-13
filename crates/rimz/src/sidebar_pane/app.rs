@@ -27,7 +27,7 @@ use crate::sidebar::fuse::{focus_intent_confirmed, fuse};
 use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL, TAB_READ_DWELL};
-use crate::sidebar_pane::pets::{PetRenderCaps, detect_pet_render_caps};
+use crate::sidebar_pane::pets::{PixelRenderCaps, detect_pixel_render_caps};
 use crate::store::paths::PathErr;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
@@ -149,7 +149,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // usable frame waits for the next `tick`, reading as a blank sidebar.
     let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
     let pet_render_caps =
-        detect_pet_render_caps(config.mux, &config.session_name, PetRenderCaps::default());
+        detect_pixel_render_caps(config.mux, &config.session_name, PixelRenderCaps::default());
     spawn_event_waker(socket_path.clone(), config.nav_keys.clone());
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;

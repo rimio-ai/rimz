@@ -11,6 +11,7 @@ use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::fmt::{
     activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label, tokens_int,
@@ -72,6 +73,7 @@ pub(super) fn row_lines(
     bands: &ContextMeterConfig,
     gutter: Gutter,
     lead_unread: Option<&str>,
+    mut meter_pixels: Option<&mut MeterPixels>,
 ) -> Vec<Line<'static>> {
     let cw = content_width(width);
     let status = row.status().unwrap_or(AgentStatus::Idle);
@@ -126,7 +128,9 @@ pub(super) fn row_lines(
                 AgentStatus::Idle => {}
                 AgentStatus::Running | AgentStatus::Waiting => {
                     inner.push(description_line(theme, row, cw, attention));
-                    if let Some(line) = gauge_line(theme, row, bands, cw) {
+                    if let Some(line) =
+                        gauge_line(theme, row, bands, cw, meter_pixels.as_deref_mut())
+                    {
                         inner.push(line);
                     }
                 }
@@ -149,14 +153,14 @@ pub(super) fn row_lines(
             // `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill last-activity age —
             // join the resting card.
             if !idle_unstarted(row) {
-                if let Some(line) = gauge_line(theme, row, bands, cw) {
+                if let Some(line) = gauge_line(theme, row, bands, cw, meter_pixels.as_deref_mut()) {
                     inner.push(line);
                 }
                 if let Some(line) = context_tokens_line(theme, row, bands, now, cw) {
                     inner.push(line);
                 }
             } else if selected && compose_affordance {
-                inner.push(empty_gauge_line(theme, bands, cw));
+                inner.push(empty_gauge_line(theme, bands, cw, meter_pixels));
             }
             // The subagents this agent spawned this turn, appended after the
             // stats. Auto and compact show them on the selected card; expanded

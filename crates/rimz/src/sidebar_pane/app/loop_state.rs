@@ -21,7 +21,7 @@ use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::observe::writer::{RoleCache, crosscheck_enabled};
 use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
-use crate::sidebar_pane::pets::PetRenderCaps;
+use crate::sidebar_pane::pets::PixelRenderCaps;
 
 pub(super) struct MaintenanceContext<'a> {
     pub(super) config: &'a ServeConfig,
@@ -197,7 +197,7 @@ impl LoopState {
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
         read_marks: ReadMarkStore,
-        pet_render_caps: PetRenderCaps,
+        pet_render_caps: PixelRenderCaps,
         pixel_wrap: bool,
     ) -> Self {
         let current = placeholder_snapshot(workspace_id);
@@ -783,7 +783,7 @@ impl LoopState {
         &mut self,
         mux: MuxName,
         session_name: &str,
-        detect: impl FnOnce(MuxName, &str, PetRenderCaps) -> PetRenderCaps,
+        detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) {
         self.paint.refresh_caps_with(mux, session_name, detect);
     }

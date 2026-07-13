@@ -4,7 +4,7 @@ use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, snapshot, snapshot_with_panes, workspace,
 };
 use crate::sidebar_pane::pets::{
-    BEGIN_SYNC, END_SYNC, PetAssets, PetPixelView, PetRenderCaps, placeholder_cluster,
+    BEGIN_SYNC, END_SYNC, PetAssets, PetPixelView, PixelRenderCaps, placeholder_cluster,
 };
 use jiff::Timestamp;
 
@@ -313,7 +313,7 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
     let mut snapshot = snapshot(&ws);
     snapshot.theme.pets.enabled = true;
     let mut ui = UiState::default();
-    let mut painter = paint::FramePainter::new(PetRenderCaps::default(), true);
+    let mut painter = paint::FramePainter::new(PixelRenderCaps::default(), true);
 
     painter.refresh_view(&mut ui, &snapshot, false);
 
@@ -325,6 +325,27 @@ fn refresh_pet_view_uses_fixed_pet_size_when_dashboard_present() {
         assert!(!pet.loading, "NO_COLOR suppresses pet body loading");
     }
     assert_eq!(pet.caption.as_deref(), Some("resting"));
+}
+
+#[test]
+fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
+    let ws = workspace();
+    let mut snapshot = snapshot(&ws);
+    let mut ui = UiState::default();
+    let mut painter = paint::FramePainter::new(
+        PixelRenderCaps {
+            pixel_transport: true,
+            kitty_term: true,
+        },
+        false,
+    );
+
+    painter.refresh_view(&mut ui, &snapshot, false);
+    assert!(ui.meter_pixels.is_some());
+
+    snapshot.theme.display.pixel = crate::config::PixelMode::Off;
+    painter.refresh_view(&mut ui, &snapshot, false);
+    assert!(ui.meter_pixels.is_none());
 }
 
 #[test]
@@ -356,7 +377,7 @@ fn pixel_layout_shift_uses_ratatui_diff_without_full_clear() {
     };
     let mut painter = paint::FramePainter::with_assets(
         PetAssets::test_loaded_pixel_frame("codex"),
-        PetRenderCaps::default(),
+        PixelRenderCaps::default(),
         true,
     );
     #[derive(Clone)]

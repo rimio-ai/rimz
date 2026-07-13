@@ -507,13 +507,13 @@ An opt-in animated companion in the provider dashboard. The first-run and setup 
 | --- | --- |
 | `enabled` | turns the dashboard pet on |
 | `pet` | selects a built-in, HTTPS, local-sheet, or petdex pet |
-| `glyphs` | chooses `auto`, `pixel`, or `sextant` rendering |
+| `glyphs` | chooses `auto`, `pixel`, or `sextant` rendering; `[theme.display] pixel = "off"` overrides pixel choices |
 | `cell_aspect` | overrides terminal cell height/width for sextant correction; set it for tall or short fonts under Zellij, for example with `rimz config set theme.pets.cell_aspect 2.5` |
 | `voice` | toggles canned captions on pet-action changes |
 
 ### Sidebar bands
 
-The agent-card context meter and the provider budget bar interpolate across color stops you can tune. Both are theme settings (`[theme.display.context_meter]`, `[theme.display.budget_bar]`); the model and the shipped numbers are in [theme.md → Display](./theme.md#display).
+The agent-card context meter and the provider budget bar interpolate across color stops you can tune. Both are theme settings (`[theme.display.context_meter]`, `[theme.display.budget_bar]`); `[theme.display] pixel = "auto" | "off"` is the master kitty-graphics switch for the context meter and pets. The model, requirements, fallbacks, and shipped numbers are in [theme.md → Display](./theme.md#display).
 
 ### Provider dashboard
 

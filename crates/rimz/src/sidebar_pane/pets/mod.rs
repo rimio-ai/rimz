@@ -9,7 +9,7 @@ mod catalog;
 mod cellart;
 mod frames;
 mod model;
-mod pixel;
+mod painter;
 mod preview;
 mod voice;
 
@@ -17,29 +17,32 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use crate::config::{CellAspect, PetsConfig, PetsGlyphMode};
+use crate::config::{CellAspect, PetsConfig, PetsGlyphMode, PixelMode};
 
+pub(crate) use crate::sidebar_pane::pixel::probe::detect as detect_pixel_render_caps;
+pub use crate::sidebar_pane::pixel::probe::{
+    PixelRenderCaps, detect_env as detect_pixel_render_env,
+};
+pub(crate) use crate::sidebar_pane::pixel::{BEGIN_SYNC, END_SYNC};
+pub(crate) use crate::sidebar_pane::pixel::{image_id_color, placeholder_cluster};
+pub use crate::sidebar_pane::pixel::{
+    inline_placeholder_row, transmit_png_chunks, virtual_place, wrap_pixel_payload,
+    write_synchronized_pixel_output,
+};
 #[cfg(test)]
 pub(crate) use cellart::PetCell;
 pub(crate) use cellart::PetCellGrid;
 pub use cellart::probe_cell_aspect;
+pub(crate) use frames::RgbaImage;
 pub use frames::encode_png;
 pub(crate) use model::PetAction;
-pub(crate) use pixel::probe::detect as detect_pet_render_caps;
-pub use pixel::probe::{PetRenderCaps, detect_env as detect_pet_render_env};
-pub(crate) use pixel::{BEGIN_SYNC, END_SYNC, PixelPainter};
-pub(crate) use pixel::{image_id_color, placeholder_cluster};
-pub use pixel::{
-    inline_placeholder_row, transmit_png_chunks, virtual_place, wrap_pixel_payload,
-    write_synchronized_pixel_output,
-};
+pub(crate) use painter::PixelPainter;
 pub use preview::{
     PetPixelPreview, PetPreview, PixelPreviewFrame, PreviewCell, listable_ids, load_cell_preview,
     load_cell_previews, load_pixel_preview, load_pixel_previews,
 };
 
 use asset::PetSource;
-use frames::RgbaImage;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PetView {
@@ -94,7 +97,7 @@ pub enum PetRenderTier {
     Cell,
 }
 
-pub fn resolve_render_tier(mode: PetsGlyphMode, caps: PetRenderCaps) -> PetRenderTier {
+pub fn resolve_render_tier(mode: PetsGlyphMode, caps: PixelRenderCaps) -> PetRenderTier {
     match mode {
         PetsGlyphMode::Sextant => PetRenderTier::Cell,
         PetsGlyphMode::Pixel if caps.pixel_transport => PetRenderTier::Pixel,
@@ -108,9 +111,13 @@ pub fn resolve_render_tier(mode: PetsGlyphMode, caps: PetRenderCaps) -> PetRende
 /// ride, or a suppressed body. Cell tiers pass through untouched.
 pub(crate) fn effective_render_tier(
     mode: PetsGlyphMode,
-    caps: PetRenderCaps,
+    pixel_mode: PixelMode,
+    caps: PixelRenderCaps,
     pixel_paintable: bool,
 ) -> PetRenderTier {
+    if pixel_mode == PixelMode::Off {
+        return PetRenderTier::Cell;
+    }
     match resolve_render_tier(mode, caps) {
         PetRenderTier::Pixel if !pixel_paintable => PetRenderTier::Cell,
         tier => tier,
@@ -319,7 +326,10 @@ impl PetAssets {
                     Some(PetBody::Pixel(PetPixelView {
                         pet_id: id.to_owned(),
                         sprite_index,
-                        image_id: pixel::sprite_image_id(pixel_id_base, sprite_index),
+                        image_id: crate::sidebar_pane::pixel::sprite_image_id(
+                            pixel_id_base,
+                            sprite_index,
+                        ),
                         size,
                     }))
                 }

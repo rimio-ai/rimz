@@ -29,6 +29,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "notifications.command",
     "theme.style",
     "theme.display.refresh_ms",
+    "theme.display.pixel",
     "theme.display.max_provider_blocks",
     "theme.display.provider_tabs",
     "theme.display.provider_list",
@@ -133,6 +134,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
 fn validates_config_key_read_and_write_surfaces() {
     for key in [
         "theme.display.max_cols",
+        "theme.display.pixel",
         "theme.display.budget_bar.burn_rate.red",
         "accounts.usage_limit_usd.codex",
         "accounts.budget.claude",

@@ -31,7 +31,9 @@ mod ui_state;
 pub(crate) use self::animation::{AnimationCadence, animation_cadence};
 use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::{hairline_rule, help_lines};
+#[cfg(test)]
 pub(crate) use self::compose::compose_lines;
+use self::compose::compose_lines_with_meter;
 #[cfg(test)]
 use self::compose::lead_unread;
 #[cfg(test)]
@@ -121,7 +123,17 @@ fn draw_into(
     // the geometry of the frame the user is actually looking at.
     prune_expanded_groups(snapshot, ui);
     let theme = ui.theme(&snapshot.theme);
-    let composed = compose_lines(snapshot, alert, ui, theme.as_ref(), area.width, area.height);
+    let mut meter_pixels = ui.meter_pixels.take();
+    let composed = compose_lines_with_meter(
+        snapshot,
+        alert,
+        ui,
+        theme.as_ref(),
+        area.width,
+        area.height,
+        meter_pixels.as_mut(),
+    );
+    ui.meter_pixels = meter_pixels;
     let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
     ui.line_map = composed.line_map;

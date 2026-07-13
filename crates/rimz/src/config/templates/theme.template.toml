@@ -33,6 +33,7 @@
 [theme.display]
 # Sidebar render preferences - cadence, sizing, and dashboard layout. All optional.
 ## refresh_ms = 100                   # render/animation grid; clamped internally
+## pixel = "auto"                    # "auto" or "off"; master kitty-graphics switch
 ## width_percent = 30                 # sidebar share of each view; clamped to 10-90
 ## max_cols = 72                      # live column cap for sidebar pane width
 ## scrollbar = "auto"                 # "auto", "always", or "never"
@@ -168,6 +169,7 @@
 ## bar_filled = "━"
 ## bar_track = "─"
 ## bar_cap = "╺"
+## bar_half = "╸"
 ## mana_filled = "▰"
 ## mana_track = "▱"
 ## reset = "↻"
@@ -266,6 +268,7 @@
 ## bar_filled = "━"
 ## bar_track = "─"
 ## bar_cap = "╺"
+## bar_half = "╸"
 ## mana_filled = "▰"
 ## mana_track = "▱"
 ## reset = "󰑐"

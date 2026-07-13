@@ -1,5 +1,6 @@
 use crate::agents::AgentStatus;
 use crate::config::ScrollbarMode;
+use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::{
     SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind, actionable_unread_count,
     lead_unread_row,
@@ -14,7 +15,7 @@ use super::chrome::{
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
     dashboard_panel_lines_with_footer, fleet_header_lines, fleet_size, fleet_store_lines,
-    fleet_total_lines, trim_spans_to_width, unread_total, worktree_group_lines,
+    fleet_total_lines, trim_spans_to_width, unread_total, worktree_group_lines_with_meter,
 };
 use super::theme::Theme;
 use super::{
@@ -53,6 +54,7 @@ use super::{
 /// are the single authority on hit geometry — built from the same final line
 /// vector that is rendered, so they stay 1:1 with what the user sees through
 /// every clip and every scroll position.
+#[cfg(test)]
 pub(crate) fn compose_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -60,6 +62,18 @@ pub(crate) fn compose_lines(
     theme: &Theme,
     width: u16,
     height: u16,
+) -> ComposedFrame {
+    compose_lines_with_meter(snapshot, alert, ui, theme, width, height, None)
+}
+
+pub(crate) fn compose_lines_with_meter(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    ui: &UiState,
+    theme: &Theme,
+    width: u16,
+    height: u16,
+    mut meter_pixels: Option<&mut MeterPixels>,
 ) -> ComposedFrame {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
     // the cached `NO_COLOR` reading plus the palette the producer resolved from
@@ -71,7 +85,8 @@ pub(crate) fn compose_lines(
     // the same frame the cards carry (see `with_gutter`).
     let inner = content_width(cells);
     let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, theme);
-    let (scroll, scroll_map, scroll_more_hits) = scroll_lines(snapshot, ui, cells, theme);
+    let (scroll, scroll_map, scroll_more_hits) =
+        scroll_lines(snapshot, ui, cells, theme, meter_pixels.as_deref_mut());
 
     // The tab hits arrive from the bottom chrome relative to its own lines;
     // they are translated to absolute screen coordinates once the block's final
@@ -211,6 +226,9 @@ pub(crate) fn compose_lines(
     // targets, carried by `tab_hits` rather than the row map.
     map.extend(std::iter::repeat_n(None, bottom.len()));
     lines.extend(bottom);
+    if let Some(pixels) = meter_pixels {
+        pixels.retain_visible(&mut lines);
+    }
     ComposedFrame {
         lines,
         line_map: map,
@@ -799,6 +817,7 @@ pub(super) fn scroll_lines(
     ui: &UiState,
     width: usize,
     theme: &Theme,
+    mut meter_pixels: Option<&mut MeterPixels>,
 ) -> (Vec<Line<'static>>, Vec<Option<usize>>, Vec<MoreHit>) {
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
@@ -824,7 +843,7 @@ pub(super) fn scroll_lines(
                 map.push(None);
             }
             emitted = true;
-            worktree_group_lines(
+            worktree_group_lines_with_meter(
                 theme,
                 group,
                 &snapshot.providers,
@@ -840,6 +859,7 @@ pub(super) fn scroll_lines(
                 ui.animation_phase,
                 &ui.cost_rolls,
                 lead_unread_id,
+                meter_pixels.as_deref_mut(),
                 &mut lines,
                 &mut map,
                 &mut more_hits,

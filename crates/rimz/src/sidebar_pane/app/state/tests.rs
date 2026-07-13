@@ -7,7 +7,7 @@ use crate::sidebar_pane::app::fetch::FetchOutcome;
 use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
-use crate::sidebar_pane::pets::PetRenderCaps;
+use crate::sidebar_pane::pets::PixelRenderCaps;
 use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::{
     AgentCard, PaneId, RowCard, RuntimePaths, SidebarInstanceId, SidebarStatusCount,
@@ -303,7 +303,7 @@ impl ApplyHarness {
             None,
             observe_tx,
             ReadMarkStore::new(runtime, instance_id),
-            PetRenderCaps::default(),
+            PixelRenderCaps::default(),
             true,
         );
         state.current = snapshot(ws);

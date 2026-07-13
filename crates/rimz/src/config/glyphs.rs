@@ -73,6 +73,7 @@ glyph_roles! {
         MeterBarFilled => "bar_filled",
         MeterBarTrack => "bar_track",
         MeterBarCap => "bar_cap",
+        MeterBarHalf => "bar_half",
         MeterManaFilled => "mana_filled",
         MeterManaTrack => "mana_track",
         MeterReset => "reset",

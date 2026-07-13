@@ -15,8 +15,8 @@ The renderer receives a `PetView`: one optional body, caption text, loading stat
 | `asset.rs` | Selector resolution, HTTPS fetches, per-machine cache installs, local sheet reads, petdex manifest reads, offline mode, and cache eviction. |
 | `frames.rs` | WebP/PNG sheet decode, slicing into `RgbaImage` frames, and RGBA-to-PNG encode for kitty transmit. |
 | `cellart.rs` | Sextant downsampling from RGBA frames into terminal cells. |
-| `pixel.rs` | Kitty graphics payloads, tmux passthrough wrapping, image ids, placeholders, and teardown cleanup. |
-| `pixel/probe.rs` | Runtime capability probe for tmux passthrough and standalone kitty-style preview terminals. |
+| `painter.rs` | Pet-sprite residency and retransmit lifecycle over the shared pixel transport. |
+| `../pixel/` | Shared kitty graphics payloads, tmux passthrough wrapping, image ids, placeholders, meter rasterization, and capability probing. |
 | `model.rs` | Pet actions, animation tracks, composed tracks, and per-track timing. |
 | `voice.rs` | Canned captions keyed by action transitions. |
 | `preview.rs` | `rimz list-pets` preview loading for cell and pixel branches. |
@@ -33,11 +33,11 @@ Rendering consumes only the resulting `PetView`. Cell art is copied into the rat
 
 ## Tier decision
 
-`PetsGlyphMode` and `PetRenderCaps` flow through `resolve_render_tier`, the pure mode-and-capability resolver. It returns one typed value: `PetRenderTier::Pixel` or `PetRenderTier::Cell`.
+`PetsGlyphMode` and `PixelRenderCaps` flow through `resolve_render_tier`, the pure mode-and-capability resolver. It returns one typed value: `PetRenderTier::Pixel` or `PetRenderTier::Cell`.
 
 `effective_render_tier` folds in frame-local paintability for the live dashboard. A resolved pixel tier becomes `Cell` when pixels have no provider block to ride beside or the pet body is suppressed. Cell tiers pass through unchanged, so `glyphs = "sextant"` stays sextant when pixels cannot paint.
 
-Pixel capability in the live sidebar is a tmux enrichment: tmux 3.6 or newer and `allow-passthrough` set to `on` or `all` provide the pixel transport fact; an attached rendering client whose terminfo is `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty` provides the kitty-terminal fact. `glyphs = "auto"` requires both facts, while `glyphs = "pixel"` requires only the transport fact. Zellij resolves to cell art. `rimz list-pets` can use native kitty graphics in standalone Ghostty or kitty, and wraps the same graphics stream through tmux passthrough when run inside tmux.
+Pixel capability in the live sidebar is a tmux enrichment: tmux 3.6 or newer and `allow-passthrough` set to `on` or `all` provide the pixel transport fact; an attached rendering client whose terminfo is `xterm-ghostty`, `ghostty`, `xterm-kitty`, or `kitty` provides the kitty-terminal fact. `glyphs = "auto"` requires both facts, while `glyphs = "pixel"` requires only the transport fact. `[theme.display] pixel = "off"` wins over either pet tier choice and also disables the pixel context meter. Zellij resolves to cell art. `rimz list-pets` can use native kitty graphics in standalone Ghostty or kitty, and wraps the same graphics stream through tmux passthrough when run inside tmux.
 
 The downgrade target is sextant because it is the portable cell-art baseline. Capability misses, Zellij, `NO_COLOR`, bodyless frames, and sessions with no provider block all converge on a cell path; a narrow rendered dashboard can still resolve to the cell path when the provider column has no usable room.
 

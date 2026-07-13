@@ -117,6 +117,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::MeterBarFilled => "━",
         GlyphRole::MeterBarTrack => "─",
         GlyphRole::MeterBarCap => "╺",
+        GlyphRole::MeterBarHalf => "╸",
         GlyphRole::MeterManaFilled => "▰",
         GlyphRole::MeterManaTrack => "▱",
         GlyphRole::MeterReset => "↻",
@@ -218,6 +219,7 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         GlyphRole::MeterBarFilled
         | GlyphRole::MeterBarTrack
         | GlyphRole::MeterBarCap
+        | GlyphRole::MeterBarHalf
         | GlyphRole::MeterManaFilled
         | GlyphRole::MeterManaTrack
         | GlyphRole::MeterScrollThumb
@@ -323,6 +325,7 @@ mod tests {
             GlyphRole::MeterBarFilled,
             GlyphRole::MeterBarTrack,
             GlyphRole::MeterBarCap,
+            GlyphRole::MeterBarHalf,
             GlyphRole::MeterManaFilled,
             GlyphRole::MeterManaTrack,
             GlyphRole::MeterScrollThumb,
@@ -417,6 +420,8 @@ mod tests {
             "set = \"nerd_font\"\n\
              [nerd_font.status]\n\
              working = \"⢿\"\n\
+             [nerd_font.meter]\n\
+             bar_half = \"H\"\n\
              [nerd_font.keys]\n\
              focus = \"F\"\n\
              [nerd_font.chrome]\n\
@@ -426,6 +431,7 @@ mod tests {
         let glyphs = GlyphSet::resolve(config.set.as_deref(), &config);
         assert_eq!(glyphs.kind(), GlyphSetKind::NerdFont);
         assert_eq!(glyphs.glyph(GlyphRole::StatusWorking), "⢿");
+        assert_eq!(glyphs.glyph(GlyphRole::MeterBarHalf), "H");
         assert_eq!(glyphs.glyph(GlyphRole::KeysFocus), "F");
         assert_eq!(glyphs.glyph(GlyphRole::ChromeBoxVertical), "|");
         assert_eq!(

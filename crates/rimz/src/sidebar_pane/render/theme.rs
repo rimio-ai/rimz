@@ -179,6 +179,18 @@ impl Theme {
         component.resolve(&self.palette)
     }
 
+    /// Resolve a tone for kitty pixel payloads only when this frame is allowed
+    /// to carry truecolor. Indexed and `NO_COLOR` frames stay on the cell tier.
+    pub(super) fn pixel_rgb(&self, color: Color) -> Option<[u8; 3]> {
+        if self.no_color || self.depth != ColorDepth::Truecolor {
+            return None;
+        }
+        match color {
+            Color::Rgb(red, green, blue) => Some([red, green, blue]),
+            _ => None,
+        }
+    }
+
     pub(crate) fn glyph(&self, role: GlyphRole) -> &str {
         self.glyphs.glyph(role)
     }

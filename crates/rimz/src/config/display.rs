@@ -20,6 +20,17 @@ pub enum ScrollbarMode {
     Never,
 }
 
+/// `[theme.display] pixel`: whether kitty-graphics pixel surfaces may paint.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PixelMode {
+    /// Use pixel pets and context meters when the terminal path supports them.
+    #[default]
+    Auto,
+    /// Keep every surface on its cell-rendered tier.
+    Off,
+}
+
 /// `[theme.display] provider_tabs`: how the bottom provider dashboard switches
 /// between stacked account blocks and a tab rail. Display-only.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -74,6 +85,8 @@ pub struct DisplayConfig {
     /// Base render cadence in milliseconds. This controls animation and
     /// event-coalesced paint timing; data polling stays on `--tick-seconds`.
     pub refresh_ms: u16,
+    /// Master switch for kitty-graphics rendering. Display-only.
+    pub pixel: PixelMode,
     /// Most provider blocks the *stacked* dashboard shows before the rest are
     /// elided; a tabbed dashboard is height-bounded by its active block, so it
     /// shows every provider regardless of this cap. Providers are few, so the
@@ -130,6 +143,7 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             refresh_ms: DEFAULT_REFRESH_MS,
+            pixel: PixelMode::default(),
             max_provider_blocks: default_max_provider_blocks(),
             provider_tabs: ProviderTabsMode::default(),
             provider_list: Vec::new(),

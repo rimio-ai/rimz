@@ -17,8 +17,9 @@ use std::time::Duration;
 use super::chrome::abbreviate_under;
 use super::sections::{
     dashboard_panel_lines_with_footer, fleet_header_lines, fleet_store_lines,
-    reset_expiry_heat_amount, worktree_group_lines,
+    reset_expiry_heat_amount, worktree_group_lines, worktree_group_lines_with_meter,
 };
+use crate::sidebar_pane::pixel::meter::MeterPixels;
 
 mod agent_card;
 mod alert;

@@ -55,7 +55,7 @@ fn loop_state_with_own_pane(
             None,
             tx,
             store,
-            PetRenderCaps::default(),
+            PixelRenderCaps::default(),
             true,
         ),
     )
@@ -1677,7 +1677,7 @@ fn resize_reprobe_refreshes_pet_render_caps_for_session() {
 
     state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |mux, session, _prev| {
         observed = Some((mux, session.to_owned()));
-        PetRenderCaps {
+        PixelRenderCaps {
             pixel_transport: true,
             kitty_term: true,
         }
@@ -1689,7 +1689,7 @@ fn resize_reprobe_refreshes_pet_render_caps_for_session() {
     );
     assert_eq!(
         state.paint.caps(),
-        PetRenderCaps {
+        PixelRenderCaps {
             pixel_transport: true,
             kitty_term: true,
         }
@@ -1700,19 +1700,19 @@ fn resize_reprobe_refreshes_pet_render_caps_for_session() {
 fn resize_reprobe_can_downgrade_enabled_pet_render_caps() {
     let ws = workspace();
     let (_dir, mut state) = loop_state(&ws);
-    state.paint.set_caps(PetRenderCaps {
+    state.paint.set_caps(PixelRenderCaps {
         pixel_transport: true,
         kitty_term: true,
     });
 
     state.refresh_pet_render_caps_with(crate::MuxName::Tmux, "rimz-test", |_, _, _| {
-        PetRenderCaps {
+        PixelRenderCaps {
             pixel_transport: false,
             kitty_term: false,
         }
     });
 
-    assert_eq!(state.paint.caps(), PetRenderCaps::default());
+    assert_eq!(state.paint.caps(), PixelRenderCaps::default());
 }
 
 #[test]
@@ -1726,7 +1726,7 @@ fn failed_anomaly_send_preserves_carried_drop_count() {
         None,
         tx,
         store,
-        PetRenderCaps::default(),
+        PixelRenderCaps::default(),
         true,
     );
     let mut current = agent_snapshot(&ws);

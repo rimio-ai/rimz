@@ -67,7 +67,7 @@ pub use color::{
 pub use daemon::{DaemonConfig, DaemonPane};
 pub use display::{
     BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
-    DisplayConfig, HighlightStepsConfig, ProviderTabsMode, ScrollbarMode,
+    DisplayConfig, HighlightStepsConfig, PixelMode, ProviderTabsMode, ScrollbarMode,
 };
 pub use glyphs::{
     GlyphOverrides, GlyphRole, ThemeGlyphsConfig, glyph_lookup_hint, is_named_glyph_set,

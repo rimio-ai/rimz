@@ -159,6 +159,12 @@ fn filled_cells(percent: u8, width: usize) -> usize {
     ((percent.min(100) as usize) * width.max(1) + 50) / 100
 }
 
+/// Quantize a percentage to the nearest horizontal half cell.
+pub(super) fn filled_half_cells(fill_pct: f64, width: usize) -> (usize, bool) {
+    let half_cells = (fill_pct.clamp(0.0, 100.0) * width as f64 * 2.0 / 100.0).round() as usize;
+    (half_cells / 2, half_cells % 2 == 1)
+}
+
 /// A two-tone bar: `filled` cells of `filled_glyph` in `filled_style`, then
 /// `track_glyph` in `track_style` out to `width`. The shared shape behind every
 /// meter — the thin `━`/`─` context gauge and the segmented `▰`/`▱` mana bars —
@@ -333,8 +339,8 @@ pub(in crate::sidebar_pane::render) fn window_style(theme: &Theme, window: u64) 
 /// row's current health tone (`theme.heat_tone(amount)`), while later accent
 /// segments (cache-write, fresh input) stay flat in their own tones. Each
 /// accent starts with a gap-fronted half-rule cap (`╺` by default), giving even
-/// a half-cell of ink a visible floor without moving the bar end. `total_pct`
-/// sizes the filled run exactly as the plain gauge would; segments too numerous
+/// a half-cell of ink a visible floor without moving the bar end. `fill_pct`
+/// sizes the filled run to the nearest half cell; segments too numerous
 /// for that run drop smallest-first. With no split to draw, the whole filled run
 /// is one flat health run. Under `NO_COLOR` color collapses while the leading
 /// gap in each accent cap keeps composition boundaries legible by shape.
@@ -342,21 +348,37 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
     theme: &Theme,
     amount: f32,
     segments: &[(u64, Color)],
-    total_pct: u8,
+    fill_pct: f64,
     width: usize,
 ) -> Vec<Span<'static>> {
     let width = width.max(1);
-    let filled = filled_cells(total_pct.min(100), width);
+    let (filled, trailing_half) = filled_half_cells(fill_pct, width);
     let weight: u128 = segments.iter().map(|(value, _)| u128::from(*value)).sum();
     let bar_track = theme.glyph(GlyphRole::MeterBarTrack).to_owned();
     let bar_cap = theme.glyph(GlyphRole::MeterBarCap).to_owned();
+    let bar_half = theme.glyph(GlyphRole::MeterBarHalf).to_owned();
     let track = |drawn: usize| -> Option<Span<'static>> {
         (drawn < width).then(|| Span::styled(bar_track.repeat(width - drawn), theme.faint()))
     };
     if filled == 0 || weight == 0 {
         // No split to draw: the whole filled run uses the current health tone.
+        let color = if weight == 0 {
+            theme.heat_tone(amount)
+        } else {
+            segments
+                .iter()
+                .rev()
+                .find_map(|(value, color)| (*value > 0).then_some(*color))
+                .unwrap_or_else(|| theme.heat_tone(amount))
+        };
         let mut spans = filled_run_spans(theme, theme.heat_tone(amount), filled);
-        spans.extend(track(filled));
+        if trailing_half {
+            spans.push(Span::styled(
+                bar_half.clone(),
+                theme.style(color, Modifier::empty()),
+            ));
+        }
+        spans.extend(track(filled + usize::from(trailing_half)));
         return spans;
     }
     let mut active: Vec<(usize, u64)> = segments
@@ -442,7 +464,18 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
         ));
         spans.extend(filled_run_spans(theme, color, (ink - 1) / 2));
     }
-    spans.extend(track(filled));
+    if trailing_half {
+        let color = segments
+            .iter()
+            .rev()
+            .find_map(|(value, color)| (*value > 0).then_some(*color))
+            .unwrap_or_else(|| theme.heat_tone(amount));
+        spans.push(Span::styled(
+            bar_half,
+            theme.style(color, Modifier::empty()),
+        ));
+    }
+    spans.extend(track(filled + usize::from(trailing_half)));
     spans
 }
 

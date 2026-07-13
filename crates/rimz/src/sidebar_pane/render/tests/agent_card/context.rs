@@ -250,12 +250,81 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
         .unwrap_or_else(|| panic!("the context meter shows the precise fill:\n{rendered}"));
     assert!(
         meter.contains('━'),
-        "the meter has a filled run, not only an empty track:\n{meter}"
+        "the precise 24.6% fill overrides the stale integer 0% scalar:\n{meter}"
     );
     assert!(
         rendered.contains("▤ 63k · ◌ 56k ↘ 6k ↗ 825"),
         "the token line and bar read from the same rich usage:\n{rendered}"
     );
+}
+
+#[test]
+fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("add tests"),
+    );
+    codex.context_pct = Some(50);
+    codex.context_window = Some(258_400);
+    codex.total_tokens = Some(130_000);
+    codex.cache_read_input_tokens = Some(120_000);
+    codex.fresh_input_tokens = Some(9_200);
+    let snapshot = snapshot_with(vec![codex]);
+
+    let render = |theme: &Theme, pixels: &mut MeterPixels| {
+        let mut lines = Vec::new();
+        let mut map = Vec::new();
+        let mut more_hits = Vec::new();
+        let mut row_index = 0;
+        worktree_group_lines_with_meter(
+            theme,
+            &snapshot.worktree_groups[0],
+            &snapshot.providers,
+            snapshot.now,
+            44,
+            &snapshot.theme.display.context_meter,
+            snapshot.theme.display.card_density,
+            None,
+            false,
+            None,
+            &mut row_index,
+            0,
+            0,
+            &CostRolls::default(),
+            lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+            Some(pixels),
+            &mut lines,
+            &mut map,
+            &mut more_hits,
+        );
+        lines
+    };
+
+    let mut pixels = MeterPixels::new(0x120000);
+    let lines = render(&truecolor_sidebar_theme(), &mut pixels);
+    assert_eq!(pixels.specs.len(), 1);
+    assert!((pixels.specs[0].fill - 0.5).abs() < f64::EPSILON);
+    assert!(lines.iter().any(|line| {
+        line.spans
+            .iter()
+            .any(|span| span.content.contains('\u{10eeee}'))
+    }));
+
+    for theme in [Theme::fixed(false), Theme::fixed(true)] {
+        let mut pixels = MeterPixels::new(0x120000);
+        let lines = render(&theme, &mut pixels);
+        assert!(pixels.specs.is_empty());
+        assert!(lines.iter().any(|line| line.to_string().contains('━')));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.to_string().contains('\u{10eeee}'))
+        );
+    }
 }
 
 #[test]

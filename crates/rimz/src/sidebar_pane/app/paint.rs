@@ -7,61 +7,68 @@ use ratatui::backend::CrosstermBackend;
 
 use crate::MuxName;
 use crate::SidebarSnapshot;
-use crate::config::CellAspect;
+use crate::config::{CellAspect, PixelMode};
 use crate::sidebar_pane::pets::{
-    BEGIN_SYNC, END_SYNC, PetAssets, PetBody, PetRenderCaps, PetViewFrame, PixelPainter,
-    detect_pet_render_caps, effective_render_tier, probe_cell_aspect,
+    BEGIN_SYNC, END_SYNC, PetAssets, PetBody, PetViewFrame, PixelPainter, PixelRenderCaps,
+    detect_pixel_render_caps, effective_render_tier, probe_cell_aspect,
 };
+use crate::sidebar_pane::pixel::meter::{MeterPainter, MeterPixels};
 use crate::sidebar_pane::render::{self, UiState};
 
 pub(super) struct FramePainter {
     assets: PetAssets,
     painter: PixelPainter,
-    caps: PetRenderCaps,
+    meter_painter: MeterPainter,
+    caps: PixelRenderCaps,
     probed_aspect: Option<CellAspect>,
 }
 
 impl FramePainter {
-    pub(super) fn new(caps: PetRenderCaps, pixel_wrap: bool) -> Self {
+    pub(super) fn new(caps: PixelRenderCaps, pixel_wrap: bool) -> Self {
+        let painter = PixelPainter::new(pixel_wrap);
+        let meter_painter = MeterPainter::new(painter.id_base(), pixel_wrap);
         Self {
             assets: PetAssets::default(),
-            painter: PixelPainter::new(pixel_wrap),
+            painter,
+            meter_painter,
             caps,
             probed_aspect: probe_cell_aspect(),
         }
     }
 
-    pub(super) fn with_id_base(id_base: u32, pixel_wrap: bool, caps: PetRenderCaps) -> Self {
+    pub(super) fn with_id_base(id_base: u32, pixel_wrap: bool, caps: PixelRenderCaps) -> Self {
         Self {
             assets: PetAssets::default(),
             painter: PixelPainter::with_id_base(id_base, pixel_wrap),
+            meter_painter: MeterPainter::new(id_base, pixel_wrap),
             caps,
             probed_aspect: probe_cell_aspect(),
         }
     }
 
     #[cfg(test)]
-    pub(super) fn with_assets(assets: PetAssets, caps: PetRenderCaps, pixel_wrap: bool) -> Self {
+    pub(super) fn with_assets(assets: PetAssets, caps: PixelRenderCaps, pixel_wrap: bool) -> Self {
         Self {
             assets,
             painter: PixelPainter::with_id_base(0x120000, pixel_wrap),
+            meter_painter: MeterPainter::new(0x120000, pixel_wrap),
             caps,
             probed_aspect: None,
         }
     }
 
     #[cfg(test)]
-    pub(super) fn caps(&self) -> PetRenderCaps {
+    pub(super) fn caps(&self) -> PixelRenderCaps {
         self.caps
     }
 
     #[cfg(test)]
-    pub(super) fn set_caps(&mut self, caps: PetRenderCaps) {
+    pub(super) fn set_caps(&mut self, caps: PixelRenderCaps) {
         self.caps = caps;
     }
 
     pub(super) fn refresh_caps(&mut self, mux: MuxName, session_name: &str) {
-        self.refresh_caps_with(mux, session_name, detect_pet_render_caps);
+        self.refresh_caps_with(mux, session_name, detect_pixel_render_caps);
         self.probed_aspect = probe_cell_aspect();
     }
 
@@ -69,7 +76,7 @@ impl FramePainter {
         &mut self,
         mux: MuxName,
         session_name: &str,
-        detect: impl FnOnce(MuxName, &str, PetRenderCaps) -> PetRenderCaps,
+        detect: impl FnOnce(MuxName, &str, PixelRenderCaps) -> PixelRenderCaps,
     ) {
         self.caps = detect(mux, session_name, self.caps);
     }
@@ -84,6 +91,7 @@ impl FramePainter {
         let theme = ui.theme(&snapshot.theme);
         let tier = effective_render_tier(
             snapshot.theme.pets.glyphs,
+            snapshot.theme.display.pixel,
             self.caps,
             !snapshot.providers.is_empty() && render::pet_body_enabled(snapshot),
         );
@@ -116,6 +124,10 @@ impl FramePainter {
                 unread_triggered,
             },
         );
+        ui.meter_pixels = (self.caps.pixel_transport
+            && self.caps.kitty_term
+            && snapshot.theme.display.pixel == PixelMode::Auto)
+            .then(|| MeterPixels::new(self.painter.id_base()));
     }
 
     pub(super) fn draw_and_paint<W: Write>(
@@ -131,6 +143,16 @@ impl FramePainter {
                 .saturating_mul(ui.animation_phase);
             self.ensure_pixel_transmitted(terminal.backend_mut(), ui, now_ms)?;
             render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
+            if let Some(pixels) = &ui.meter_pixels {
+                for (slot, spec) in pixels.specs.iter().enumerate() {
+                    self.meter_painter.ensure_transmitted(
+                        terminal.backend_mut(),
+                        slot,
+                        spec,
+                        now_ms,
+                    )?;
+                }
+            }
             Ok(())
         })();
         let end_result = terminal.backend_mut().write_all(END_SYNC);
@@ -154,6 +176,7 @@ impl FramePainter {
     }
 
     pub(super) fn clear<W: Write>(&mut self, backend: &mut W) -> io::Result<()> {
-        self.painter.clear(backend)
+        self.painter.clear(backend)?;
+        self.meter_painter.clear(backend)
     }
 }

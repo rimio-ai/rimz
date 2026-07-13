@@ -44,7 +44,7 @@ pub fn run(args: ListPetsArgs, _globals: &GlobalFlags) -> Result<()> {
     let config = machine_config();
     let pets_config = &config.theme.pets;
     let glyphs = pets_config.glyphs;
-    let (caps, wrap_pixels) = pets::detect_pet_render_env();
+    let (caps, wrap_pixels) = pets::detect_pixel_render_env();
     let width = rimz::mux::detect_terminal_size()
         .map(|(cols, _)| cols)
         .unwrap_or(80);

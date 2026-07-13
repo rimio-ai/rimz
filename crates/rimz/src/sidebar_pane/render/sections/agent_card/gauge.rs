@@ -1,4 +1,8 @@
 use super::*;
+use crate::sidebar_pane::pixel::meter::{MeterBarSpec, MeterPixels, meter_image_id};
+use crate::sidebar_pane::pixel::{
+    image_id_color, placeholder_cluster, placeholder_columns_supported,
+};
 
 /// The session's statusline enrichment, when it published any.
 pub(super) fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
@@ -84,9 +88,12 @@ pub(super) fn gauge_line(
     row: &SidebarRow,
     bands: &ContextMeterConfig,
     width: usize,
+    meter_pixels: Option<&mut MeterPixels>,
 ) -> Option<Line<'static>> {
     let percent = gauge_percent(row)?;
-    let value = pct_label(precise_context_pct(row), percent);
+    let precise = precise_context_pct(row);
+    let value = pct_label(precise, percent);
+    let fill = precise.unwrap_or_else(|| f64::from(percent));
     let severity = row_severity(row, bands);
     // One health amount drives the whole row: the bar's filled run, the `▣`
     // glyph, and the `▤` line below all use the same tone. The composition
@@ -106,9 +113,26 @@ pub(super) fn gauge_line(
         glyph,
         theme.style(color, Modifier::empty()),
         &value,
-        |bar_width| match &segments {
-            Some(segments) => context_gauge_spans(theme, amount, segments, percent, bar_width),
-            None => context_gauge_spans(theme, amount, &[], percent, bar_width),
+        |bar_width| {
+            if let Some(pixels) = meter_pixels
+                && let Some(spans) = pixel_gauge_spans(
+                    theme,
+                    fill,
+                    color,
+                    segments
+                        .as_ref()
+                        .map(|segments| &segments[..])
+                        .unwrap_or(&[]),
+                    bar_width,
+                    pixels,
+                )
+            {
+                return spans;
+            }
+            match &segments {
+                Some(segments) => context_gauge_spans(theme, amount, segments, fill, bar_width),
+                None => context_gauge_spans(theme, amount, &[], fill, bar_width),
+            }
         },
         width,
     ))
@@ -119,6 +143,7 @@ pub(super) fn empty_gauge_line(
     theme: &Theme,
     bands: &ContextMeterConfig,
     width: usize,
+    meter_pixels: Option<&mut MeterPixels>,
 ) -> Line<'static> {
     let severity = ContextSeverity::classify(0, None, bands);
     let amount = severity_heat_amount(severity, 0, None, bands);
@@ -128,8 +153,49 @@ pub(super) fn empty_gauge_line(
         theme.glyph(GlyphRole::MeterContextEmpty),
         theme.style(color, Modifier::empty()),
         &pct_label(None, 0),
-        |bar_width| context_gauge_spans(theme, amount, &[], 0, bar_width),
+        |bar_width| {
+            if let Some(pixels) = meter_pixels
+                && let Some(spans) = pixel_gauge_spans(theme, 0.0, color, &[], bar_width, pixels)
+            {
+                return spans;
+            }
+            context_gauge_spans(theme, amount, &[], 0.0, bar_width)
+        },
         width,
+    )
+}
+
+fn pixel_gauge_spans(
+    theme: &Theme,
+    fill_pct: f64,
+    health: Color,
+    segments: &[(u64, Color)],
+    width: usize,
+    pixels: &mut MeterPixels,
+) -> Option<Vec<Span<'static>>> {
+    if !placeholder_columns_supported(width) {
+        return None;
+    }
+    let health = theme.pixel_rgb(health)?;
+    let track = theme.pixel_rgb(theme.faint().fg?)?;
+    let segments = segments
+        .iter()
+        .filter(|(weight, _)| *weight > 0)
+        .map(|(weight, color)| Some((*weight, theme.pixel_rgb(*color)?)))
+        .collect::<Option<Vec<_>>>()?;
+    let width_cells = u16::try_from(width).ok()?;
+    let slot = pixels.push(MeterBarSpec {
+        width_cells,
+        fill: (fill_pct / 100.0).clamp(0.0, 1.0),
+        health,
+        segments,
+        track,
+    });
+    let style = Style::default().fg(image_id_color(meter_image_id(pixels.id_base, slot)));
+    Some(
+        (0..width_cells)
+            .map(|col| Span::styled(placeholder_cluster(0, col), style))
+            .collect(),
     )
 }
 
