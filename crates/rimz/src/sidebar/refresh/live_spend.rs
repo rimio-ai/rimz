@@ -130,7 +130,6 @@ mod tests {
     use crate::sidebar::enrich::{FoldOpts, enrich};
     use crate::sidebar::refresh::AccountsCache;
     use crate::sidebar::test_support::{activity_row, worktree_group};
-    use crate::sidebar::timing::unix_now_ms;
     use crate::store::atomic;
 
     fn cached_opts() -> FoldOpts<'static> {
@@ -220,9 +219,7 @@ mod tests {
         atomic::write_temp_then_rename_cache(
             &runtime.shared_accounts_path(),
             &AccountsCache {
-                refreshed_at_ms: unix_now_ms(),
-                accounts: BTreeMap::new(),
-                ok: true,
+                providers: BTreeMap::new(),
             },
         )
         .unwrap();

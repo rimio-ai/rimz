@@ -4,7 +4,7 @@ use jiff::{SignedDuration, Timestamp};
 use rimz::agents::AgentAccount;
 use rimz::agents::spending::{SpendTally, SpendWindow, Spending};
 use rimz::ids::MuxName;
-use rimz::sidebar::refresh::AccountsCache;
+use rimz::sidebar::refresh::{AccountsCache, ProviderRecord};
 use rimz::sidebar::timing::unix_now_ms;
 use serde_json::json;
 
@@ -92,34 +92,50 @@ fn write_provider_tab_config(env: &Env) {
 }
 
 fn accounts() -> AccountsCache {
-    AccountsCache {
-        refreshed_at_ms: unix_now_ms(),
-        accounts: BTreeMap::from([
+    let now_ms = unix_now_ms();
+    let mut providers: BTreeMap<_, _> = rimz::agents::known_kinds()
+        .map(|kind| {
             (
-                "claude".to_owned(),
-                AgentAccount {
-                    plan: Some("max".to_owned()),
-                    account_id: None,
-                    metered: Some(true),
-                    version: Some("2.1.158".to_owned()),
-                    sub_provider: None,
-                    credentials_updated_at_ms: None,
+                kind.to_owned(),
+                ProviderRecord {
+                    probed_at_ms: now_ms,
+                    ok: true,
+                    account: None,
                 },
-            ),
-            (
-                "codex".to_owned(),
-                AgentAccount {
-                    plan: Some("pro".to_owned()),
-                    account_id: None,
-                    metered: Some(false),
-                    version: Some("0.139.0".to_owned()),
-                    sub_provider: None,
-                    credentials_updated_at_ms: None,
-                },
-            ),
-        ]),
-        ok: true,
-    }
+            )
+        })
+        .collect();
+    providers.insert(
+        "claude".to_owned(),
+        ProviderRecord {
+            probed_at_ms: now_ms,
+            ok: true,
+            account: Some(AgentAccount {
+                plan: Some("max".to_owned()),
+                account_id: None,
+                metered: Some(true),
+                version: Some("2.1.158".to_owned()),
+                sub_provider: None,
+                credentials_updated_at_ms: None,
+            }),
+        },
+    );
+    providers.insert(
+        "codex".to_owned(),
+        ProviderRecord {
+            probed_at_ms: now_ms,
+            ok: true,
+            account: Some(AgentAccount {
+                plan: Some("pro".to_owned()),
+                account_id: None,
+                metered: Some(false),
+                version: Some("0.139.0".to_owned()),
+                sub_provider: None,
+                credentials_updated_at_ms: None,
+            }),
+        },
+    );
+    AccountsCache { providers }
 }
 
 fn spending() -> Spending {

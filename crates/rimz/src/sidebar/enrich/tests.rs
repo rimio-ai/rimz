@@ -1250,9 +1250,7 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
     atomic::write_temp_then_rename_cache(
         &runtime.shared_accounts_path(),
         &AccountsCache {
-            refreshed_at_ms: unix_now_ms(),
-            accounts: BTreeMap::new(),
-            ok: true,
+            providers: BTreeMap::new(),
         },
     )
     .unwrap();

@@ -116,10 +116,20 @@ fn cache_refresher_publishes_diff_stats_project_matches_refresh() {
     let session = fixture.publish_pane_frame();
     let state = fixture.env.state_path_for(&fixture.env.project_root);
     let runtime = fixture.env.runtime_paths();
+    let now_ms = unix_now_ms();
     let accounts = rimz::sidebar::refresh::AccountsCache {
-        refreshed_at_ms: unix_now_ms(),
-        accounts: Default::default(),
-        ok: true,
+        providers: rimz::agents::known_kinds()
+            .map(|kind| {
+                (
+                    kind.to_owned(),
+                    rimz::sidebar::refresh::ProviderRecord {
+                        probed_at_ms: now_ms,
+                        ok: true,
+                        account: None,
+                    },
+                )
+            })
+            .collect(),
     };
     std::fs::write(
         runtime.shared_accounts_path(),

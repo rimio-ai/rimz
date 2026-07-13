@@ -68,9 +68,18 @@ impl Harness {
             &rimz::agents::spending::Spending::default(),
         );
         let accounts = rimz::sidebar::refresh::AccountsCache {
-            refreshed_at_ms: now_ms,
-            accounts: Default::default(),
-            ok: false,
+            providers: rimz::agents::known_kinds()
+                .map(|kind| {
+                    (
+                        kind.to_owned(),
+                        rimz::sidebar::refresh::ProviderRecord {
+                            probed_at_ms: now_ms,
+                            ok: false,
+                            account: None,
+                        },
+                    )
+                })
+                .collect(),
         };
         std::fs::write(
             self.runtime_paths.shared_accounts_path(),

@@ -26,7 +26,7 @@ pub mod sessions;
 pub mod spending;
 pub mod usage;
 
-pub use accounts::AccountsCache;
+pub use accounts::{AccountsCache, ProviderRecord};
 pub use credits::{
     CreditsCache, ProviderCreditsEntry, merge_provider_credits,
     merge_provider_credits_entry_if_due, merge_provider_realtime_credits,

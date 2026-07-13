@@ -130,7 +130,7 @@ The table names staleness-budget semantics; exact values and rationale live as n
 | Worktree root enumeration | `WORKTREE_ROOTS_TTL` | Grouping for checkouts added without a session boundary |
 | process metrics | `METRICS_FOCUSED_SAMPLE_TTL` viewed; `METRICS_BACKGROUND_SAMPLE_TTL` background | Child pids plus per-row CPU, memory, IO, and process-state figures |
 | Spending walk | `SPENDING_TTL` | Provider dashboard, fleet store, and the floor under the live cockpit spend |
-| Accounts | `ACCOUNTS_TTL` success; `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
+| Accounts | Per provider: `ACCOUNTS_TTL` success; `ACCOUNTS_RETRY_TTL` failure with last-known-good data | Provider dashboard login, plan, and account state |
 | Live-session context | `SESSION_REFRESH_INTERVAL` | Provider dashboard budget windows and session sidecars |
 | Account credits | `OAUTH_USAGE_TTL` for provider reads; `CREDITS_DISPLAY_MAX_AGE` for display | Provider dashboard paid/extra usage row and Codex reset marker |
 | Remote link stats | `LINK_STATS_STALE`, expiring at `LINK_STATS_EXPIRE` | Footer link badge for `rimz remote connect` rooms |

@@ -180,9 +180,18 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         &crate::agents::spending::Spending::default(),
     );
     let accounts = crate::sidebar::refresh::AccountsCache {
-        refreshed_at_ms: now_ms,
-        accounts: Default::default(),
-        ok: true,
+        providers: crate::agents::known_kinds()
+            .map(|kind| {
+                (
+                    kind.to_owned(),
+                    crate::sidebar::refresh::ProviderRecord {
+                        probed_at_ms: now_ms,
+                        ok: true,
+                        account: None,
+                    },
+                )
+            })
+            .collect(),
     };
     std::fs::write(
         runtime.shared_accounts_path(),

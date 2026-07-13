@@ -75,15 +75,15 @@ The realtime leg is the per-kind difference: Codex reads its app-server first be
 
 ## The out-of-band probe
 
-[`AgentAdapter::probe_account`](../../../crates/rimz/src/agents/mod.rs) returns an [`AccountProbe`](../../../crates/rimz/src/agents/account.rs) with three arms, and the arm — not just the value — drives the producer's cache TTL:
+[`AgentAdapter::probe_account`](../../../crates/rimz/src/agents/mod.rs) returns an [`AccountProbe`](../../../crates/rimz/src/agents/account.rs) with three arms, and the arm — not just the value — drives that provider's cache TTL:
 
 - **`Found(AgentAccount)`** — a resolved login. Authoritative; rides the long success TTL.
 - **`LoggedOut`** — the probe ran and confidently found no login. Also authoritative (it changes about never), so it caches like a success.
-- **`Unavailable`** — the probe could not complete: a binary that would not run, a non-zero exit, an unreadable file. Transient; retried on the short failure TTL rather than pinning the dashboard empty for the full success window.
+- **`Unavailable`** — the probe could not complete: a binary that would not run, a non-zero exit, an unreadable file. Transient; the provider keeps its last-known-good account facts and retries alone on the short failure TTL while successful providers retain their records and long-TTL clocks.
 
 The probe is a **pure read**; cross-process memoization lives one layer up in the producer ([Producer aggregation](#producer-aggregation)). Each provider's probe mechanics — Claude's `claude auth status` fork, Codex's and Pi's cheap auth-file read — are in the adapter docs. An adapter with no out-of-band login surface defaults to `LoggedOut`.
 
-Every registered adapter also exposes a display-only version probe by default: run `<kind> --version`, capture stdout, and treat any failure as no version. Rich context transports still win when present — Claude's statusline and Codex's app-server context can report fresher versions for live sessions — while the CLI probe fills idle or older account-cache entries. An absent version bypasses the long success TTL only after the short retry TTL, so a binary that cannot report `--version` does not re-fork on every producer frame; a future adapter overrides the probe only when its binary name differs from its kind or when it has a cheaper or richer idle version source.
+Every registered adapter also exposes a display-only version probe by default: run `<kind> --version`, capture stdout, and treat any failure as no version. Rich context transports still win when present — Claude's statusline and Codex's app-server context can report fresher versions for live sessions — while the CLI probe fills idle or older account-cache entries. A provider's absent version bypasses its long success TTL only after its short retry TTL, so a binary that cannot report `--version` does not re-fork on every producer frame or disturb another provider's clock; a future adapter overrides the probe only when its binary name differs from its kind or when it has a cheaper or richer idle version source.
 
 ## Producer aggregation
 

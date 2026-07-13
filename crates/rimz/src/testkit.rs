@@ -68,7 +68,7 @@ pub mod fleet {
     use crate::ids::{AgentSessionId, MuxName, PaneId, ViewKind, WorkspaceId};
     use crate::pane::PaneRef;
     use crate::sidebar::produce::ProduceOptions;
-    use crate::sidebar::refresh::AccountsCache;
+    use crate::sidebar::refresh::{AccountsCache, ProviderRecord};
     use crate::store::event::EventEnvelope;
     use crate::store::{StatePaths, event_log};
     use crate::{RuntimePaths, agents, sidebar};
@@ -154,9 +154,18 @@ pub mod fleet {
         }
 
         let accounts = AccountsCache {
-            refreshed_at_ms: now_ms,
-            accounts: Default::default(),
-            ok: false,
+            providers: agents::known_kinds()
+                .map(|kind| {
+                    (
+                        kind.to_owned(),
+                        ProviderRecord {
+                            probed_at_ms: now_ms,
+                            ok: false,
+                            account: None,
+                        },
+                    )
+                })
+                .collect(),
         };
         let accounts = serde_json::to_vec(&accounts).map_err(io::Error::other)?;
         std::fs::write(runtime.shared_accounts_path(), accounts)?;
