@@ -314,6 +314,8 @@ fn visit_session_entry(
         input_tokens: raw.input_tokens,
         cached_input_tokens: raw.cached_input_tokens.min(raw.input_tokens),
         output_tokens: raw.output_tokens,
+        reasoning_output_tokens: raw.reasoning_output_tokens,
+        total_tokens: raw.total_tokens,
     });
 }
 
@@ -342,6 +344,8 @@ fn visit_headless_entry(
         input_tokens: raw.input_tokens,
         cached_input_tokens: raw.cached_input_tokens.min(raw.input_tokens),
         output_tokens: raw.output_tokens,
+        reasoning_output_tokens: raw.reasoning_output_tokens,
+        total_tokens: raw.total_tokens,
     });
 }
 

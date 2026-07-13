@@ -34,7 +34,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::agents::pricing::PriceBook;
+use crate::agents::pricing::{PriceBook, Pricing};
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, record_unknown_model,
 };
@@ -112,8 +112,9 @@ fn codex_session_files_from_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
 ///
 /// Codex logs token counts, not dollars, so each event is multiplied through
 /// the price book: uncached input at the input rate, the cached slice at the
-/// cache-read rate, and output (which already includes reasoning tokens) at the
-/// output rate. Codex records `cache_write: 0`, so its aggregate `◇` total stays
+/// model's cache-read rate when it is explicit (else at the input rate, per
+/// [`codex_event_cost`]), and output (which already includes reasoning tokens)
+/// at the output rate. Codex records `cache_write: 0`, so its aggregate `◇` total stays
 /// input + output. Events whose model has no known price still contribute
 /// tokens and sessions with zero dollars while recording an unknown-model chase.
 /// Codex entries carry no message/request IDs, so a provider-namespaced event
@@ -143,13 +144,11 @@ pub(crate) fn parse_codex_spend(
             continue;
         };
         let cost = match prices.price(model) {
-            Some(price) => price.cost(
+            Some(price) => codex_event_cost(
+                price,
                 uncached_input,
-                event.output_tokens,
-                0,
-                0,
                 event.cached_input_tokens,
-                false,
+                event.output_tokens,
             ),
             None => {
                 record_unknown_model(&mut unknown_models, model, ts_secs);
@@ -193,13 +192,38 @@ pub(crate) fn parse_codex_spend(
     }
 }
 
+/// Price one Codex token event. Codex bills cached input at the model's
+/// cache-read rate only when that rate is explicit in the pricing entry;
+/// otherwise the cached slice is billed at the full input rate, matching
+/// ccusage's Codex cost path (a Codex model without a discounted cache-read
+/// rate does not discount cached tokens). rimz's shared [`Pricing::cost`] always
+/// applies `cache_read`, so an implicit rate folds the cached slice into the
+/// input argument to price it at the input rate — the long-context threshold
+/// still sees the same total request size either way.
+fn codex_event_cost(price: Pricing, uncached_input: u64, cached_input: u64, output: u64) -> f64 {
+    if price.cache_read_explicit {
+        price.cost(uncached_input, output, 0, 0, cached_input, false)
+    } else {
+        price.cost(
+            uncached_input.saturating_add(cached_input),
+            output,
+            0,
+            0,
+            0,
+            false,
+        )
+    }
+}
+
 fn codex_event_dedup_key(timestamp: &str, model: &str, event: &wire::CodexTokenEvent) -> String {
     format!(
-        "codex:{}:{timestamp}:{}:{model}:{}:{}:{}",
+        "codex:{}:{timestamp}:{}:{model}:{}:{}:{}:{}:{}",
         timestamp.len(),
         model.len(),
         event.input_tokens,
         event.cached_input_tokens,
         event.output_tokens,
+        event.reasoning_output_tokens,
+        event.total_tokens,
     )
 }

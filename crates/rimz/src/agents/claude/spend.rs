@@ -73,9 +73,13 @@ struct ClaudeMessage {
 /// fields), so a usage shape never drops an otherwise-valid cost entry.
 #[derive(Default, Deserialize)]
 struct ClaudeUsage {
+    #[serde(default, deserialize_with = "lenient_opt_u64")]
     input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_opt_u64")]
     output_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_opt_u64")]
     cache_creation_input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "lenient_opt_u64")]
     cache_read_input_tokens: Option<u64>,
     speed: Option<String>,
     #[serde(default)]
@@ -97,10 +101,31 @@ struct ClaudeUsageIteration {
 
 #[derive(Default, Deserialize)]
 struct CacheCreation {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u64")]
     ephemeral_5m_input_tokens: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u64")]
     ephemeral_1h_input_tokens: u64,
+}
+
+/// Deserialize a token count leniently: a mistyped value (float, string, `null`,
+/// or negative) becomes `None` rather than failing the whole record, so one odd
+/// field never drops an otherwise-valid usage entry. Mirrors ccusage's lenient
+/// JSONL deserializers (`Value::as_u64` coercion).
+fn lenient_opt_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.as_ref().and_then(serde_json::Value::as_u64))
+}
+
+/// [`lenient_opt_u64`] for a non-optional count field, defaulting a mistyped or
+/// absent value to `0`.
+fn lenient_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(lenient_opt_u64(deserializer)?.unwrap_or(0))
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────
@@ -784,6 +809,30 @@ mod tests {
         let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lenient_token_fields_keep_entry_when_a_count_is_mistyped() {
+        // A token count logged as a string or float must not drop the whole
+        // entry: the mistyped field coerces to absent (0) and the rest prices.
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"test-model","usage":{"input_tokens":100,"output_tokens":"oops","cache_read_input_tokens":50.5}}}"#,
+            ],
+        );
+        let prices = PriceBook::from_litellm_json(
+            r#"{"test-model": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
+                                "cache_read_input_token_cost": 1e-7}}"#,
+        );
+        let entries = parse_claude_spend(&file, 0, &prices).entries;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].input, 100);
+        assert_eq!(entries[0].output, 0, "mistyped string coerces to absent");
+        assert_eq!(entries[0].cache_read, 0, "mistyped float coerces to absent");
+        assert!((entries[0].cost_usd - 100.0 * 1e-6).abs() < 1e-15);
     }
 
     #[test]

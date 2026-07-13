@@ -220,6 +220,68 @@ fn unpriced_model_is_recorded_as_unknown() {
     );
 }
 
+#[test]
+fn codex_cached_input_bills_at_input_rate_without_explicit_cache_read_cost() {
+    // input_tokens counts the whole prompt; cached_tokens is the hit slice.
+    let line = r#"{"model":"codex-test","timestamp":"2026-01-01T10:00:00.000Z","usage":{"input_tokens":200,"cached_tokens":80,"output_tokens":50}}"#;
+    let (_dir, path) = write_session("cache-rate.jsonl", &[line]);
+
+    // No explicit cache-read rate: the cached slice bills at the full input
+    // rate, matching ccusage's Codex cost path (a model without a discounted
+    // cache-read rate does not discount cached tokens).
+    let implicit = PriceBook::from_litellm_json(
+        r#"{"codex-test": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}"#,
+    );
+    let entries = parse_codex_spend(&path, None, &implicit).entries;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].input, 120, "input is the uncached slice");
+    assert_eq!(entries[0].cache_read, 80);
+    // (120 uncached + 80 cached) * input_rate + 50 * output_rate.
+    let expected = 200.0 * 1e-6 + 50.0 * 2e-6;
+    assert!(
+        (entries[0].cost_usd - expected).abs() < 1e-15,
+        "implicit cache-read cost was {}",
+        entries[0].cost_usd
+    );
+
+    // An explicit cache-read rate discounts the cached slice at that rate.
+    let explicit = PriceBook::from_litellm_json(
+        r#"{"codex-test": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
+                            "cache_read_input_token_cost": 1e-7}}"#,
+    );
+    let entries = parse_codex_spend(&path, None, &explicit).entries;
+    let expected = 120.0 * 1e-6 + 80.0 * 1e-7 + 50.0 * 2e-6;
+    assert!(
+        (entries[0].cost_usd - expected).abs() < 1e-15,
+        "explicit cache-read cost was {}",
+        entries[0].cost_usd
+    );
+}
+
+#[test]
+fn dedup_key_separates_events_differing_only_in_reasoning_or_total() {
+    let base = wire::CodexTokenEvent {
+        timestamp: "2026-01-01T10:00:00.000Z".to_string(),
+        model: Some("gpt-5".to_string()),
+        input_tokens: 100,
+        cached_input_tokens: 10,
+        output_tokens: 50,
+        reasoning_output_tokens: 5,
+        total_tokens: 155,
+    };
+    let key = |event: &wire::CodexTokenEvent| {
+        codex_event_dedup_key(&event.timestamp, event.model.as_deref().unwrap(), event)
+    };
+
+    let mut diff_reasoning = base.clone();
+    diff_reasoning.reasoning_output_tokens = 9;
+    let mut diff_total = base.clone();
+    diff_total.total_tokens = 999;
+
+    assert_ne!(key(&base), key(&diff_reasoning));
+    assert_ne!(key(&base), key(&diff_total));
+}
+
 fn gpt5_book() -> PriceBook {
     PriceBook::from_litellm_json(
         r#"{"gpt-5": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,

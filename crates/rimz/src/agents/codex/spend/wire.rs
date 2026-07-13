@@ -24,6 +24,14 @@ pub struct CodexTokenEvent {
     /// Cached (prompt-cache-hit) input tokens, capped to `input_tokens`.
     pub cached_input_tokens: u64,
     pub output_tokens: u64,
+    /// Reasoning tokens, already folded into `output_tokens` for pricing. Kept
+    /// here only to strengthen the cross-file dedup fingerprint so two distinct
+    /// same-second events with identical input/output but differing reasoning
+    /// stay separate.
+    pub reasoning_output_tokens: u64,
+    /// Total tokens as reported (or summed) for the event. Fingerprint-only, for
+    /// the same reason as `reasoning_output_tokens`.
+    pub total_tokens: u64,
 }
 
 // ── Typed structs — session format ───────────────────────────────────────────
