@@ -54,7 +54,7 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         native_ask_ui: true,
         rich_context: false,
         transcript_tail_context: true,
-        context_usage: false,
+        context_usage: true,
         account_spend: false,
         subagents: false,
         background_tasks: false,

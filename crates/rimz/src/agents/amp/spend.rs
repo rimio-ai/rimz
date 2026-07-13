@@ -115,9 +115,12 @@ fn entry_from_usage(
         output: usage.output,
         cache_write: usage.cache_write,
         cache_read: usage.cache_read,
-        message_id: usage.native_id.clone(),
+        message_id: None,
         request_id: None,
-        dedup_key: None,
+        dedup_key: usage
+            .native_id
+            .as_ref()
+            .map(|id| format!("amp:{thread_id}:{id}")),
         thread_id: Some(thread_id.to_owned()),
         is_sidechain: false,
         has_speed: false,
@@ -222,5 +225,26 @@ mod tests {
         assert_eq!(entries[0].output, 50);
         assert_eq!(entries[0].cost_usd, 0.0);
         assert!(unknown.contains_key("future-model"));
+    }
+
+    #[test]
+    fn per_thread_native_ids_get_distinct_provider_dedup_keys() {
+        let usage = AmpUsage {
+            at: "2026-01-01T00:00:00Z".parse().unwrap(),
+            model: "gpt-5".to_owned(),
+            native_id: Some("1".to_owned()),
+            input: 10,
+            output: 2,
+            cache_write: 0,
+            cache_read: 0,
+        };
+        let mut unknown = BTreeMap::new();
+        let a = entry_from_usage("T-a", &usage, &PriceBook::embedded(), &mut unknown);
+        let b = entry_from_usage("T-b", &usage, &PriceBook::embedded(), &mut unknown);
+
+        assert_eq!(a.message_id, None);
+        assert_eq!(a.dedup_key.as_deref(), Some("amp:T-a:1"));
+        assert_eq!(b.dedup_key.as_deref(), Some("amp:T-b:1"));
+        assert_ne!(a.dedup_key, b.dedup_key);
     }
 }
