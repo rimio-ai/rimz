@@ -128,7 +128,8 @@ pub struct UiState {
     /// snapshot and the renderer-local asset cache before drawing. Render reads
     /// this data only; it never fetches, decodes, or slices pet assets.
     pub(crate) pet: Option<PetView>,
-    /// Pixel context gauges collected while composing the current frame.
+    /// Pane-local context-meter interning state, persisted across frames so a
+    /// quantized raster keeps its image id while ratatui diffs placeholders.
     pub(crate) meter_pixels: Option<MeterPixels>,
     /// Hit-test map of the dashboard tab rail in the most recently drawn
     /// frame: the absolute screen line and column range of each tab's

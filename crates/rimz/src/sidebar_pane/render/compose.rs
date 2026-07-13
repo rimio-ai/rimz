@@ -227,7 +227,7 @@ pub(crate) fn compose_lines_with_meter(
     map.extend(std::iter::repeat_n(None, bottom.len()));
     lines.extend(bottom);
     if let Some(pixels) = meter_pixels {
-        pixels.retain_visible(&mut lines);
+        pixels.observe_visible(&lines);
     }
     ComposedFrame {
         lines,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::sidebar_pane::pixel::meter::{MeterBarSpec, MeterPixels, meter_image_id};
+use crate::sidebar_pane::pixel::meter::{MeterPixels, MeterRaster};
 use crate::sidebar_pane::pixel::{
     image_id_color, placeholder_cluster, placeholder_columns_supported,
 };
@@ -184,14 +184,14 @@ fn pixel_gauge_spans(
         .map(|(weight, color)| Some((*weight, theme.pixel_rgb(*color)?)))
         .collect::<Option<Vec<_>>>()?;
     let width_cells = u16::try_from(width).ok()?;
-    let slot = pixels.push(MeterBarSpec {
+    let image_id = pixels.intern(MeterRaster::new(
         width_cells,
-        fill: (fill_pct / 100.0).clamp(0.0, 1.0),
+        (fill_pct / 100.0).clamp(0.0, 1.0),
         health,
         segments,
         track,
-    });
-    let style = Style::default().fg(image_id_color(meter_image_id(pixels.id_base, slot)));
+    ))?;
+    let style = Style::default().fg(image_id_color(image_id));
     Some(
         (0..width_cells)
             .map(|col| Span::styled(placeholder_cluster(0, col), style))

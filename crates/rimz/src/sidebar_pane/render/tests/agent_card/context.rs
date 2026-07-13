@@ -1,5 +1,7 @@
 use super::*;
+use crate::sidebar_pane::pixel::meter::MeterRaster;
 use crate::sidebar_pane::render::theme::Component;
+use ratatui::text::Span;
 
 #[test]
 fn agent_context_line_renders_compaction_markers() {
@@ -305,19 +307,45 @@ fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
     };
 
     let mut pixels = MeterPixels::new(0x120000);
+    pixels.begin_frame();
     let lines = render(&truecolor_sidebar_theme(), &mut pixels);
-    assert_eq!(pixels.specs.len(), 1);
-    assert!((pixels.specs[0].fill - 0.5).abs() < f64::EPSILON);
+    pixels.observe_visible(&lines);
+    let first_id = pixels
+        .visible_rasters()
+        .map(|(image_id, _)| image_id)
+        .next()
+        .expect("one visible meter raster");
     assert!(lines.iter().any(|line| {
         line.spans
             .iter()
             .any(|span| span.content.contains('\u{10eeee}'))
     }));
 
+    pixels.begin_frame();
+    let earlier_id = pixels
+        .intern(MeterRaster::new(3, 0.25, [9, 8, 7], Vec::new(), [4, 5, 6]))
+        .expect("an earlier visible meter id");
+    let mut repeated = vec![Line::from(Span::styled(
+        crate::sidebar_pane::pixel::placeholder_cluster(0, 0),
+        Style::default().fg(crate::sidebar_pane::pixel::image_id_color(earlier_id)),
+    ))];
+    repeated.extend(render(&truecolor_sidebar_theme(), &mut pixels));
+    pixels.observe_visible(&repeated);
+    assert_eq!(
+        pixels
+            .visible_rasters()
+            .map(|(image_id, _)| image_id)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([first_id, earlier_id]),
+        "the same raster keeps its id when scrolling changes visible draw order"
+    );
+
     for theme in [Theme::fixed(false), Theme::fixed(true)] {
         let mut pixels = MeterPixels::new(0x120000);
+        pixels.begin_frame();
         let lines = render(&theme, &mut pixels);
-        assert!(pixels.specs.is_empty());
+        pixels.observe_visible(&lines);
+        assert!(pixels.visible_rasters().next().is_none());
         assert!(lines.iter().any(|line| line.to_string().contains('━')));
         assert!(
             !lines

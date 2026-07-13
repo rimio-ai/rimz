@@ -26,7 +26,7 @@ pub(super) struct FramePainter {
 impl FramePainter {
     pub(super) fn new(caps: PixelRenderCaps, pixel_wrap: bool) -> Self {
         let painter = PixelPainter::new(pixel_wrap);
-        let meter_painter = MeterPainter::new(painter.id_base(), pixel_wrap);
+        let meter_painter = MeterPainter::new(pixel_wrap);
         Self {
             assets: PetAssets::default(),
             painter,
@@ -40,7 +40,7 @@ impl FramePainter {
         Self {
             assets: PetAssets::default(),
             painter: PixelPainter::with_id_base(id_base, pixel_wrap),
-            meter_painter: MeterPainter::new(id_base, pixel_wrap),
+            meter_painter: MeterPainter::new(pixel_wrap),
             caps,
             probed_aspect: probe_cell_aspect(),
         }
@@ -51,7 +51,7 @@ impl FramePainter {
         Self {
             assets,
             painter: PixelPainter::with_id_base(0x120000, pixel_wrap),
-            meter_painter: MeterPainter::new(0x120000, pixel_wrap),
+            meter_painter: MeterPainter::new(pixel_wrap),
             caps,
             probed_aspect: None,
         }
@@ -124,10 +124,16 @@ impl FramePainter {
                 unread_triggered,
             },
         );
-        ui.meter_pixels = (self.caps.pixel_transport
+        let meter_enabled = self.caps.pixel_transport
             && self.caps.kitty_term
-            && snapshot.theme.display.pixel == PixelMode::Auto)
-            .then(|| MeterPixels::new(self.painter.id_base()));
+            && snapshot.theme.display.pixel == PixelMode::Auto;
+        if meter_enabled {
+            ui.meter_pixels
+                .get_or_insert_with(|| MeterPixels::new(self.painter.id_base()))
+                .begin_frame();
+        } else {
+            ui.meter_pixels = None;
+        }
     }
 
     pub(super) fn draw_and_paint<W: Write>(
@@ -144,11 +150,11 @@ impl FramePainter {
             self.ensure_pixel_transmitted(terminal.backend_mut(), ui, now_ms)?;
             render::draw_to_terminal_with_ui(terminal, snapshot, alert, ui)?;
             if let Some(pixels) = &ui.meter_pixels {
-                for (slot, spec) in pixels.specs.iter().enumerate() {
+                for (image_id, raster) in pixels.visible_rasters() {
                     self.meter_painter.ensure_transmitted(
                         terminal.backend_mut(),
-                        slot,
-                        spec,
+                        image_id,
+                        raster,
                         now_ms,
                     )?;
                 }

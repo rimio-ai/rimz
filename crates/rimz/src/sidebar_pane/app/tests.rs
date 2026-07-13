@@ -341,7 +341,29 @@ fn refresh_view_gates_pixel_meter_frame_with_caps_and_master_switch() {
     );
 
     painter.refresh_view(&mut ui, &snapshot, false);
-    assert!(ui.meter_pixels.is_some());
+    let raster = crate::sidebar_pane::pixel::meter::MeterRaster::new(
+        2,
+        0.5,
+        [1, 2, 3],
+        Vec::new(),
+        [4, 5, 6],
+    );
+    let first_id = ui
+        .meter_pixels
+        .as_mut()
+        .expect("meter pixels")
+        .intern(raster.clone())
+        .expect("first raster");
+
+    painter.refresh_view(&mut ui, &snapshot, false);
+    assert_eq!(
+        ui.meter_pixels
+            .as_mut()
+            .expect("persistent meter pixels")
+            .intern(raster),
+        Some(first_id),
+        "refreshing the view keeps the content interning table"
+    );
 
     snapshot.theme.display.pixel = crate::config::PixelMode::Off;
     painter.refresh_view(&mut ui, &snapshot, false);
