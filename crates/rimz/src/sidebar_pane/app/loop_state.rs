@@ -401,6 +401,8 @@ impl LoopState {
         Ok(())
     }
 
+    // ponytail: flat dispatch inputs stay explicit; bundle loop context if this set grows.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn on_wakeup(
         &mut self,
         config: &ServeConfig,
