@@ -4,7 +4,7 @@ You already cap spend where the provider lets you: a billing alert on the API da
 
 A budget is a dollar cap RimZ enforces at the scale you promise yourself. It can enforce one because it already computes the fleet's live spend from the transcripts your agents write ([Token Insight](./insight.md)); a budget turns that read into a stop. Crossing a cap parks the agent — the same rest state a provider rate limit produces — and a parked agent is one message away from resuming.
 
-One term collision to clear first: the `5h` and `7d` bars on the provider dashboard are also called budgets. Those are your subscription plan's included usage, metered by the provider and read-only to you ([budget is not spend](./insight.md#budget-is-not-spend)); starting those windows on your clock is a [scheduled ping](./loops.md#prime-the-budget-window), and scheduled work can [soak up only their weekly surplus](./loops.md#soak-up-the-weekly-surplus). This page is about the dollar caps you set.
+One term collision to clear first: the `5h` and `7d` bars on the provider dashboard are also called budgets. Those are your subscription plan's included usage, metered by the provider and read-only to you ([budget is not spend](./insight.md#budget-is-not-spend)); starting those windows on your clock is a [scheduled ping](./loops.md#prime-the-budget-window). Most of this page is about the dollar caps you set; the [last section](#spend-the-provider-surplus) reads the provider's budget instead, releasing scheduled work only when the week has surplus to spend.
 
 ## One model, four scopes
 
@@ -86,6 +86,21 @@ Two honest limits. Cost arrives with provider responses, so the last tool call c
 - **The day does.** A `/day` park reopens at the next local midnight, and with [auto-continue](./loops.md#built-in-recovery) on, the continue prompt goes to the agents RimZ interrupted — never to agents that were already at rest.
 - **A raise does.** Raising or clearing a cap (`rimz agents budget @coder +5`, `rimz budget +10`) queues the configured continue prompt to the agents that cap parked in this room; add `--no-continue` to lift the cap and leave them at rest.
 - **Automation never does.** While the room or account scope has no headroom, `-p` launches exit `125` and loop fires record `budget skipped`. Interactive launches stay available, so a crossed cap never locks you out of your own room.
+
+## Spend the provider surplus
+
+Dollar caps guard one direction: spend you never meant to authorize. A subscription plan fails in the other direction too. The weekly window expires whether you use it or not, so whatever is left on the `7d` bar at reset is capacity you paid for and gave back. You already manage this by eye: a glance at the bar on a Thursday shows plenty left, so you let a background refactor run; on a heavy Tuesday everything waits for the real work. A scheduled task firing at 03:00 cannot make that judgment call, unless the schedule can read the bar.
+
+The surplus gate is that glance, computed. Before a gated fire, RimZ reads the provider's longest budget window (the weekly bar, on today's Claude and Codex plans) and computes forward headroom: the share of budget remaining divided by the share of time remaining. `1.0x` means the current pace lands exactly on the reset; anything above it is budget the rest of the window does not need. Three days into a 7-day window with 40% used, 60% of the budget remains against 57% of the time, and headroom reads `1.05x`: sustainable, but no real slack. With only 20% used, the same clock reads `1.4x`, and a task gated at `--surplus 1.4x` or below fires.
+
+Two task flags arm the gate, and they compose:
+
+- `--surplus 1.5x` opens the gate only at that much headroom or more. `1.5x` means half again as much budget remains as the clock requires.
+- `--surplus-after 3d` is an elapsed floor, checked first: the task stays quiet until that much of the window has passed. A fresh window reads ahead of pace before your own heavy days have landed, so the floor keeps Monday's untouched bar from funding work that Friday will need. Used alone, it still requires `1.0x` headroom.
+
+The gate is a read, nothing more. The headroom comes from the provider's own usage reporting, the same account-scoped reading that draws the dashboard bars, cached on disk by the sessions you already run. Checking it runs no command and spends no tokens. A closed gate records `surplus skipped` in the task's run history with the reading it saw (`claude 7d window surplus 1.4x below 1.5x`), adds no [strike](./loops.md#built-in-recovery), and the schedule keeps polling until real surplus appears. It also fails closed: a missing, incomplete, expired, or not-yet-started window reading keeps the gate shut, so an API-key account, which has no subscription window to read, never fires a surplus-gated task.
+
+The gate rides loop tasks only, on `--agent` and `--wake` actions, and it is evaluated before any `--check` guard, so a closed gate does not even run the check. The soak-task recipe is [loops → soak up the weekly surplus](./loops.md#soak-up-the-weekly-surplus); the exact flag grammar is the [loop reference](../reference/cli/loop.md).
 
 ## See also
 

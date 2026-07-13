@@ -19,7 +19,7 @@ Whichever action fires, the turn is a full room citizen: a live card in the side
 
 One rule governs every schedule: a task repeats only when `--every` or `--cron` says so. A bare time (`--at 07:00` or `--in 30m`) fires once and then removes itself. And `rimz loop add` prints back exactly what it armed: the action, the schedule in plain words, and the concrete next fire time. You read the schedule instead of guessing at it.
 
-The next three sections take those actions one at a time: scheduling a fresh turn, waking an agent you already have, and guarding a turn with a check. Each opens with what the action is for, then how far it goes. The rest of the page is the machinery behind them, and how it all stacks.
+The next sections take those actions one at a time — scheduling a fresh turn, waking an agent you already have, guarding a turn with a check — then put the provider's weekly surplus to work. Each opens with what the action is for, then how far it goes. The rest of the page is the machinery behind them, and how it all stacks.
 
 ## Schedule a fresh turn
 
@@ -55,17 +55,6 @@ rimz loop add prime --agent claude-ping --prompt ping --every reset
 ```
 
 `--every reset` fires one minute after the provider's longest budget window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes.
-
-### Soak up the weekly surplus
-
-The weekly subscription window expires whether you use it or not. An opportunistic task can spend only the share that is ahead of pace by gating each fire on forward headroom: the remaining budget share divided by the remaining time share. A reading of `1.0x` is exactly the sustainable pace for the rest of the window; `1.5x` means half again as much budget remains as the clock requires.
-
-```sh
-rimz loop add refactor-soak --agent claude --prompt "Refactor the next rough module and leave the branch green" \
-    --every 4h --surplus 1.5x --surplus-after 3d
-```
-
-`--surplus` sets the minimum headroom in the provider's longest window, while `--surplus-after` keeps the task quiet until that much of the window has elapsed. The elapsed floor prevents an untouched early week from looking like disposable surplus; used alone, it also requires at least `1.0x` headroom. The gate closes when the longest window is not running or its cached reading is absent or incomplete, so accounts without provider window readings keep these tasks parked. A closed gate records `surplus skipped` without adding a strike, and the recurring schedule keeps polling until real surplus appears.
 
 ## Wake a running agent
 
@@ -104,6 +93,19 @@ The check runs first, every time, and costs nothing. Only its result spends a tu
 A `--check` with no agent action is still worth having. It is a scheduled command that logs `completed`, `failed`, or `timed out`, each with the exit code and output tail, into the run history, and it keeps recurring.
 
 `--check` gates firing; `--verify` gates completion. Add `--verify "cargo test"` to a scheduled `--agent` task when the command is the definition of done: a red result returns its evidence to the same live session, up to `--max-attempts` total turns, before the fire records `verify failed`.
+
+## Soak up the weekly surplus
+
+The weekly subscription window expires whether you use it or not: whatever is left on the `7d` bar at the weekly reset is capacity you paid for and gave back. A recurring background task can absorb it — refactoring, filling test gaps, dependency triage are all real work with no deadline — but scheduled blindly it drains the same window your daytime sessions run on. The task should fire only when the week is ahead of pace.
+
+`--surplus` is that condition. Before each fire, RimZ reads the provider's longest budget window and computes forward headroom, how far ahead of the sustainable pace the window is running: `1.0x` is exactly on pace, and `1.5x` means half again as much budget remains as the clock requires. The headroom model, a worked example, and the fail-closed rules live in [budgets → spend the provider surplus](./budget.md#spend-the-provider-surplus).
+
+```sh
+rimz loop add refactor-soak --agent claude --prompt "Refactor the next rough module and leave the branch green" \
+    --every 4h --surplus 1.5x --surplus-after 3d
+```
+
+`--surplus 1.5x` opens the gate only at that headroom or above; `--surplus-after 3d` keeps the task quiet until three days of the window have elapsed, so an untouched early week is not spent before your own heavy days land (used alone, it still requires `1.0x`). The gate guards `--agent` and `--wake` actions alike and runs before any `--check` guard, so a closed gate runs nothing and costs nothing: the fire records `surplus skipped` without adding a strike, and the recurring schedule keeps polling until real surplus appears. An account without a window reading — an API key, or a window that has not started — keeps the gate closed.
 
 ## What a task does on your machine
 
@@ -155,7 +157,7 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 
 Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
 
-The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--surplus` and `--surplus-after` gate fires on the provider's longest budget window, `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. Inspect, test, and manage tasks with the rest of the surface:
+The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--surplus` and `--surplus-after` gate fires on the provider's window headroom ([above](#soak-up-the-weekly-surplus)), `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. Inspect, test, and manage tasks with the rest of the surface:
 
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run
@@ -211,6 +213,7 @@ The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#
 ## See also
 
 - [Scripting agents](./scripting.md) — the supervised-run mechanics every scheduled `--agent` task rides on: exit codes, `--output-format`, `wait --stream`.
+- [Budgets](./budget.md) — the dollar caps that bound hands-off work, and the surplus gate's headroom model.
 - [Notifications](./notifications.md) — the push routes and acting handlers that catch what a loop cannot handle alone.
 - [Messaging](./messaging.md) — the delivery path `--wake` uses, `--schedule` for one-off reminders, and smart compaction in full.
 - [Loop CLI](../reference/cli/loop.md) — every flag on `add`, `fire`, `list`, `show`, `rename`, and `remove`.
