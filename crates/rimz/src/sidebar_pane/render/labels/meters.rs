@@ -451,17 +451,11 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
 fn nearest_odd_share(weight: u64, budget: usize, total_weight: u128) -> usize {
     let exact = u128::from(weight) * budget as u128;
     let quotient = exact / total_weight;
-    let remainder = exact % total_weight;
-    let lower = if quotient % 2 == 1 {
-        quotient
-    } else {
-        quotient.saturating_sub(1).max(1)
-    };
-    let upper = if quotient % 2 == 1 {
-        quotient + u128::from(remainder > 0) * 2
-    } else {
-        (quotient + 1).max(1)
-    };
+    if quotient % 2 == 1 {
+        return quotient as usize;
+    }
+    let lower = quotient.saturating_sub(1).max(1);
+    let upper = (quotient + 1).max(1);
     let lower_distance = exact.abs_diff(lower * total_weight);
     let upper_distance = exact.abs_diff(upper * total_weight);
     if lower_distance <= upper_distance {
