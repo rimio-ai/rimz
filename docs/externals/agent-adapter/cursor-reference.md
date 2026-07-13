@@ -344,7 +344,15 @@ ACP has first-class permission, question, and plan requests, described below. Th
 
 Cursor CLI `2026.07.09-a3815c0` writes per-conversation JSONL at `~/.cursor/projects/<workspace>/agent-transcripts/<conversation_id>/<conversation_id>.jsonl`. Hooks expose the same file through `transcript_path` and `CURSOR_TRANSCRIPT_PATH`; subagent stop separately exposes `agent_transcript_path`.
 
-The captured terminal subset is a top-level `type: "turn_ended"` record with `status: "success" | "aborted" | "error"` and optional error text. RimZ models only those fields, reads a bounded tail, and recovers an outcome only when the complete recognized terminal row is the last meaningful record with no torn suffix. A later nonterminal, unknown, malformed, or partial record suppresses the older outcome until a new complete terminal row arrives. File mtime supplies the observation timestamp only after that at-rest proof. Path discovery joins the exact conversation directory and filename under each immediate project directory and rejects zero or multiple matches.
+The authenticated native `--print --resume` capture rewrote that same path as a whole-conversation snapshot instead of appending a suffix: the original user/assistant/terminal three-row file became two user/assistant pairs followed by one terminal row, and the saved prefix hash changed. The minimized capture-backed row shapes are:
+
+```json
+{"role":"user","message":{"content":[{"type":"text","text":"<redacted>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"<redacted>"}]}}
+{"type":"turn_ended","status":"success"}
+```
+
+The terminal subset also admits installed-writer statuses `aborted` and `error` plus optional error text. RimZ models only the top-level terminal fields, stats and reads the bounded whole-file tail, and recovers an outcome only when the complete recognized terminal row is the last meaningful record with no torn suffix. A later nonterminal, unknown, malformed, or partial record suppresses the older outcome until a new complete terminal row or whole-file snapshot arrives. File mtime supplies the observation timestamp only after that at-rest proof. Path discovery joins the exact conversation directory and filename under each immediate project directory and rejects zero or multiple matches.
 
 The same JSONL carries user, assistant, thinking, and tool records, but assistant `message.content[type=text]` blocks merge visible commentary and model thinking without a safe discriminator. RimZ never normalizes, pages, streams, persists, or uses those text blocks as final output. `afterAgentResponse.text` is the sole assistant-text authority.
 
@@ -355,6 +363,8 @@ Cursor still publishes no transcript enablement, append/rotation/durability, cro
 Use `agent -p` or `agent --print` for one non-interactive run. The current default output format is `text`; select `--output-format json` or `stream-json` explicitly rather than depending on a default that has changed in earlier releases.
 
 Print mode can access write and shell tools. `--force` or `--yolo` allows commands unless explicitly denied; permission allow/deny rules still apply. `--trust` accepts the workspace trust prompt in headless mode. RimZ must map its permission profiles deliberately rather than silently adding `--force` to every supervised run.
+
+One authenticated `2026.07.09-a3815c0` `--mode=ask --print --resume` capture completed with the exact requested text but invoked only two byte-identical `sessionEnd` hook payloads. It emitted no `beforeSubmitPrompt`, `afterAgentResponse`, or `stop` payload, so this native headless transport provided no live response-hook or token-counter evidence. RimZ's Cursor hook coverage is scoped to ordinary interactive sessions; RimZ supervised runs use that interactive transport with a positional prompt and do not pass `-p` or `--print`. The installed hook bundle and deterministic fixtures, rather than this native-headless capture, pin the response and stop field schemas.
 
 ### JSON terminal result
 
@@ -444,33 +454,41 @@ agent --api-key … -p "task"
 
 `NO_OPEN_BROWSER=1 agent login` prints the login URL instead of opening a browser. Current releases also support a QR-code login flow for remote terminals.
 
-`agent status --format json` and `agent about --format json` are the documented machine-readable probes. The docs say status reports authentication, account information, and endpoint configuration, but publish no JSON schema, exit-code table, latency contract, or distinction between browser credentials and API-key auth. The installed `2026.07.09-a3815c0` build produces the following logged-out `status` fixture; capture golden success, expired, API-key, service-account, proxy, and server-error responses before implementing `probe_account`.
+`agent status --format json` and `agent about --format json` are the documented machine-readable probes. The docs say status reports authentication, account information, and endpoint configuration, but publish no JSON schema, exit-code table, latency contract, or distinction between browser credentials and API-key auth. An authenticated browser-login capture on `2026.07.09-a3815c0` produced this sanitized `status` shape:
 
 ```json
 {
-  "status": "unauthenticated",
-  "isAuthenticated": false,
-  "hasAccessToken": false,
-  "hasRefreshToken": false,
-  "message": "Not logged in"
+  "status": "authenticated",
+  "isAuthenticated": true,
+  "hasAccessToken": true,
+  "hasRefreshToken": true,
+  "userInfo": {
+    "email": "<redacted>",
+    "userId": 0,
+    "firstName": "<redacted>",
+    "lastName": "<redacted>",
+    "createdAt": "<redacted>"
+  }
 }
 ```
 
-The same build produces this logged-out `about --format json` shape — the first captured account schema, and a candidate `probe_account` source once the logged-in arm is captured. `subscriptionTier` is the plan-label field (`null` logged out), `userEmail` the account identity (`null` logged out), `cliVersion` the version input, and `model` the configured default (`"Auto"` here). Capture the logged-in success, API-key, and service-account arms before wiring it, because the tier string values, the `userEmail` shape, and whether `subscriptionTier` stays a scalar are all still unverified.
+The same authenticated arm produced this sanitized `about --format json` shape. `subscriptionTier` and `userEmail` are non-empty strings for this browser-login arm, while `lastRequestId` was null:
 
 ```json
 {
   "cliVersion": "2026.07.09-a3815c0",
-  "model": "Auto",
-  "subscriptionTier": null,
-  "osPlatform": "linux",
-  "osArch": "x64",
-  "userEmail": null,
-  "terminalProgram": "unknown",
-  "shell": "zsh",
+  "model": "<redacted>",
+  "subscriptionTier": "<redacted>",
+  "osPlatform": "<redacted>",
+  "osArch": "<redacted>",
+  "userEmail": "<redacted>",
+  "terminalProgram": "<redacted>",
+  "shell": "<redacted>",
   "lastRequestId": null
 }
 ```
+
+The unauthenticated, expired, API-key, service-account, proxy, and server-error arms remain unverified. Keep account probing unsupported until those arms establish stable identity, tier, latency, and failure semantics; this one authenticated shape is format evidence, not a complete probe contract.
 
 Cursor does not document the credential file or secure-store schema. Treat browser credentials as opaque and use the CLI probe; never read or copy secrets directly. The changelog documents `AGENT_CLI_CREDENTIAL_STORE=file` for sandboxed environments, where credentials are stored unencrypted in an owner-only file, but does not publish that file's schema or path.
 
@@ -478,7 +496,7 @@ The common hook field `user_email` can enrich a known logged-in account but is n
 
 ## Usage, tokens, pricing, and quota
 
-The captured `stop` hook carries `input_tokens`, `output_tokens`, `cache_read_tokens`, and `cache_write_tokens`. RimZ treats them as per-turn composition, preserves explicit zeroes, and keeps them out of cumulative totals. The headless terminal result still has durations but no usage, and `preCompact.context_tokens` remains occupancy rather than billable fresh input.
+The installed interactive `stop` hook schema carries `input_tokens`, `output_tokens`, `cache_read_tokens`, and `cache_write_tokens`, and the bundle repeats them on `afterAgentResponse`. RimZ treats the stop values as per-turn composition, preserves explicit zeroes, and keeps them out of cumulative totals. Deterministic hook fixtures pin this mapping; the authenticated native `--print` capture emitted neither event and therefore supplied no live token values. The headless terminal result still has durations but no usage, and `preCompact.context_tokens` remains occupancy rather than billable fresh input.
 
 The CLI changelog mentions a human `/usage` display, while the current slash-command reference does not list a machine-readable usage command or schema. Do not scrape the TUI or undocumented output.
 
@@ -561,8 +579,8 @@ Before declaring Cursor supported:
 - The published `subagentStop` payload omits the unique `subagent_id` provided at start.
 - The captured transcript terminal subset is unpublished upstream, and the enablement/durability contract remains undocumented.
 - Local CLI chat storage and fork lineage have no official schema.
-- Status/about JSON commands exist and their logged-out arms are now captured, but the logged-in `about` schema (tier strings, `userEmail` shape) is still unverified.
-- Stop hooks expose per-turn token composition; spend, balance, quota, rate-limit reset, and headless token usage remain absent.
+- Status/about JSON commands exist and one sanitized authenticated browser-login arm is captured, but unauthenticated, expired, API-key, service-account, proxy, and server-error semantics remain unverified.
+- Interactive stop hooks expose per-turn token composition through installed-bundle and deterministic-fixture evidence; spend, balance, quota, rate-limit reset, and native-headless token usage remain absent.
 - Hook parallel-response merge details, command-shell rules, stdout limits, and timeout defaults are unpublished.
 - Third-party compatibility may execute existing Claude hooks in Cursor, while the official docs do not define input-payload translation or a source discriminator.
 - ACP documents richer asks but changes RimZ from observing the stock CLI into hosting its UI protocol.
