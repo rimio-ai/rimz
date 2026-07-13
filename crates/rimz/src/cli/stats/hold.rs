@@ -10,7 +10,7 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     ensure_shared_runtime(&paths)?;
     // Raw mode makes keypresses typed events instead of echoed cooked input;
     // mouse reports from a sibling sidebar pane are drained below.
-    let _input = TerminalModeGuard::enable(MouseCapture::Off)?;
+    let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Main)?;
     let mut current: Option<Stats> = None;
     let mut active = Window::AllTime;
     let mut walker = Some(SpendingWalker::new());

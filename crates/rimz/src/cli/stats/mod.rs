@@ -41,7 +41,7 @@ use rimz::agents::spending::{
 };
 use rimz::config::{GlyphRole, MachineConfig, Semantic, ThemeConfig};
 use rimz::store::single_flight::{Coalesced, coalesce};
-use rimz::tui::{MouseCapture, TerminalModeGuard};
+use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 const DAY_SECS: i64 = 86_400;
 /// The density ramp: `·` marks no usage; the four shades climb through active days.

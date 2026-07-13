@@ -13,7 +13,7 @@ use rimz::harness::target;
 use rimz::ids::AgentSessionId;
 use rimz::pane::PaneRef;
 use rimz::proc::TreeTotals;
-use rimz::tui::{MouseCapture, TerminalModeGuard};
+use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use rimz::workspace::WorkspaceResolver;
 
 const DEFAULT_INTERVAL: Duration = Duration::from_secs(2);
@@ -65,7 +65,7 @@ pub(super) fn run_top(args: TopArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
 
-    let _mode = TerminalModeGuard::enable(MouseCapture::Off)?;
+    let _mode = TerminalModeGuard::enable(MouseCapture::Off, Screen::Main)?;
     let mut previous = first;
     let mut elapsed_hint = FIRST_SAMPLE_DELAY;
     loop {

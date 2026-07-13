@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal;
+use ratatui::crossterm::{cursor, terminal};
 
 type PanicHook = Box<dyn Fn(&PanicHookInfo<'_>) + Sync + Send + 'static>;
 type SharedPanicHook = Arc<Mutex<Option<PanicHook>>>;
@@ -20,8 +20,15 @@ pub enum MouseCapture {
     Stderr,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen {
+    Main,
+    Alternate,
+}
+
 pub struct TerminalModeGuard {
     mouse: MouseCapture,
+    screen: Screen,
     saved_hook: SharedPanicHook,
 }
 
@@ -66,25 +73,25 @@ pub fn truecolor() -> bool {
     *CACHED.get_or_init(|| TruecolorSignals::detect().truecolor())
 }
 
-/// Write a buffered terminal frame with raw-mode-safe line endings.
+/// Write a buffered terminal frame with raw-mode-safe, self-clearing lines.
 pub fn write_crlf(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
     let mut start = 0;
     for (index, byte) in bytes.iter().enumerate() {
         if *byte != b'\n' {
             continue;
         }
-        if index > start {
-            w.write_all(&bytes[start..index])?;
-        }
-        if index > 0 && bytes[index - 1] == b'\r' {
-            w.write_all(b"\n")?;
+        let line_end = if index > start && bytes[index - 1] == b'\r' {
+            index - 1
         } else {
-            w.write_all(b"\r\n")?;
-        }
+            index
+        };
+        w.write_all(&bytes[start..line_end])?;
+        w.write_all(b"\x1b[K\r\n")?;
         start = index + 1;
     }
     if start < bytes.len() {
         w.write_all(&bytes[start..])?;
+        w.write_all(b"\x1b[K")?;
     }
     Ok(())
 }
@@ -134,16 +141,27 @@ fn tput_capability(
 }
 
 impl TerminalModeGuard {
-    pub fn enable(mouse: MouseCapture) -> io::Result<Self> {
+    pub fn enable(mouse: MouseCapture, screen: Screen) -> io::Result<Self> {
         terminal::enable_raw_mode()?;
+        if screen == Screen::Alternate
+            && let Err(err) = execute!(
+                io::stdout(),
+                terminal::EnterAlternateScreen,
+                cursor::Hide,
+                terminal::DisableLineWrap
+            )
+        {
+            restore_terminal(MouseCapture::Off, screen);
+            return Err(err);
+        }
         if let Err(err) = enable_mouse(mouse) {
-            let _ = terminal::disable_raw_mode();
+            restore_terminal(mouse, screen);
             return Err(err);
         }
         let saved_hook = Arc::new(Mutex::new(Some(panic::take_hook())));
         let hook_for_panic = Arc::clone(&saved_hook);
         panic::set_hook(Box::new(move |info| {
-            restore_terminal(mouse);
+            restore_terminal(mouse, screen);
             if let Some(previous) = hook_for_panic
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -152,13 +170,17 @@ impl TerminalModeGuard {
                 previous(info);
             }
         }));
-        Ok(Self { mouse, saved_hook })
+        Ok(Self {
+            mouse,
+            screen,
+            saved_hook,
+        })
     }
 }
 
 impl Drop for TerminalModeGuard {
     fn drop(&mut self) {
-        restore_terminal(self.mouse);
+        restore_terminal(self.mouse, self.screen);
         if let Some(hook) = self
             .saved_hook
             .lock()
@@ -178,7 +200,7 @@ fn enable_mouse(mouse: MouseCapture) -> io::Result<()> {
     }
 }
 
-pub(crate) fn restore_terminal(mouse: MouseCapture) {
+pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
     match mouse {
         MouseCapture::Off => {}
         MouseCapture::Stdout => {
@@ -187,6 +209,14 @@ pub(crate) fn restore_terminal(mouse: MouseCapture) {
         MouseCapture::Stderr => {
             let _ = execute!(io::stderr(), DisableMouseCapture);
         }
+    }
+    if screen == Screen::Alternate {
+        let _ = execute!(
+            io::stdout(),
+            terminal::EnableLineWrap,
+            cursor::Show,
+            terminal::LeaveAlternateScreen
+        );
     }
     let _ = terminal::disable_raw_mode();
 }
@@ -215,11 +245,11 @@ mod tests {
     }
 
     #[test]
-    fn raw_mode_writer_uses_crlf_line_endings() {
+    fn raw_mode_writer_uses_crlf_line_endings_and_clears_each_line() {
         let mut out = Vec::new();
 
         write_crlf(&mut out, b"head\nrow\r\ntail").expect("write frame");
 
-        assert_eq!(out, b"head\r\nrow\r\ntail");
+        assert_eq!(out, b"head\x1b[K\r\nrow\x1b[K\r\ntail\x1b[K");
     }
 }

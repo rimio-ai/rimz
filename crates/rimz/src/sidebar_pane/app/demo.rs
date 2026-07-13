@@ -8,7 +8,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use crate::SidebarSnapshot;
 use crate::sidebar_pane::pets::{BEGIN_SYNC, END_SYNC, PixelPainter, detect_pet_render_env};
 use crate::sidebar_pane::render::{self, UiState};
-use crate::tui::{MouseCapture, TerminalModeGuard};
+use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 use super::paint::FramePainter;
 
@@ -20,7 +20,7 @@ struct GalleryState {
 
 pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
-    let _input_mode = TerminalModeGuard::enable(MouseCapture::Off)?;
+    let _input_mode = TerminalModeGuard::enable(MouseCapture::Off, Screen::Main)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -50,7 +50,7 @@ pub fn serve_fixture(snapshot: SidebarSnapshot, refresh_ms: u16) -> super::Resul
 
 pub fn serve_gallery(columns: Vec<(SidebarSnapshot, usize)>, refresh_ms: u16) -> super::Result<()> {
     let refresh_ms = refresh_ms.max(1);
-    let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
+    let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;

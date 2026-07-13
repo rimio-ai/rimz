@@ -50,7 +50,7 @@ use rimz::message::DeliveryGate;
 use rimz::sidebar::fresh_sidebar_present;
 use rimz::store::paths::{RuntimePaths, StatePaths, config_home, state_home};
 use rimz::trust::{self, TrustState};
-use rimz::tui::{MouseCapture, TerminalModeGuard};
+use rimz::tui::{MouseCapture, Screen, TerminalModeGuard};
 use rimz::workspace::WorkspaceResolver;
 
 use super::GlobalFlags;

@@ -199,7 +199,7 @@ pub(super) fn room_open(root: &Path) -> bool {
 }
 
 pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
-    let _input = TerminalModeGuard::enable(MouseCapture::Off)?;
+    let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
     loop {
         repaint_watch(globals)?;
         match event::poll(Duration::from_secs(1)) {
@@ -231,6 +231,12 @@ fn repaint_watch(globals: &GlobalFlags) -> Result<()> {
 
     let mut frame = Vec::new();
     render_watch_frame(&mut frame, globals)?;
+    if frame.last() == Some(&b'\n') {
+        frame.pop();
+        if frame.last() == Some(&b'\r') {
+            frame.pop();
+        }
+    }
     let mut stdout = std::io::stdout();
     execute!(stdout, MoveTo(0, 0))?;
     rimz::tui::write_crlf(&mut stdout, &frame)?;
@@ -383,7 +389,7 @@ fn watch_row_model(
         ),
         RowState::Blocked => "blocked · trust".to_owned(),
         RowState::Due => "due".to_owned(),
-        RowState::Upcoming(next) => ui::rel_until(next, context.now),
+        RowState::Upcoming(next) => ui::until_label(next, context.now),
         RowState::NeverRun => "—".to_owned(),
     };
     WatchRow {
@@ -444,25 +450,29 @@ fn render_dashboard(
             write_more(out, remaining_tasks, cols)?;
             break;
         }
-        write_dashboard_heading(out, &group.root, group.room_is_open, cols)?;
-        remaining_rows -= 1;
-
         let mut ranked = group.rows.iter().collect::<Vec<_>>();
         ranked.sort_by_key(|row| watch_rank(row));
         let later_lines = groups[group_index + 1..]
             .iter()
             .filter(|group| !group.rows.is_empty())
-            .map(|group| group.rows.len() + 1)
+            .map(|group| group.rows.len() + 2)
             .sum::<usize>();
-        let all_fit = ranked.len() + later_lines <= remaining_rows;
+        let all_fit = ranked.len() + 2 + later_lines <= remaining_rows;
+        if !all_fit && remaining_rows < 4 {
+            write_more(out, remaining_tasks, cols)?;
+            break;
+        }
+        write_dashboard_heading(out, &group.root, group.room_is_open, cols)?;
+        remaining_rows -= 1;
+
         let visible = if all_fit {
             ranked.len()
         } else {
-            ranked.len().min(remaining_rows.saturating_sub(1))
+            ranked.len().min(remaining_rows.saturating_sub(2))
         };
         if visible > 0 {
             render_watch_rows(out, &ranked[..visible], cols)?;
-            remaining_rows -= visible;
+            remaining_rows -= visible + 1;
             remaining_tasks -= visible;
         }
         if !all_fit && visible < ranked.len() {
@@ -496,16 +506,13 @@ fn watch_rank(row: &WatchRow) -> (u8, Option<Timestamp>, &str) {
 
 fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> std::io::Result<()> {
     let headers = if cols < WATCH_NARROW {
-        vec!["", "", ""]
+        vec!["", "task", "next"]
     } else if cols < WATCH_WIDE {
-        vec!["", "", "", ""]
+        vec!["", "task", "next", "last run"]
     } else {
-        vec!["", "", "", "", ""]
+        vec!["", "task", "next", "last run", "status"]
     };
-    let mut table = ui::Table::new(headers)
-        .headerless()
-        .indent(2)
-        .clip_last(cols);
+    let mut table = ui::Table::new(headers).indent(2).clip_last(cols);
     for row in rows {
         let next_style = match row.state {
             RowState::Running => ui::palette::ACCENT,
@@ -1757,6 +1764,7 @@ mod tests {
     use super::*;
 
     fn dashboard_row(name: &str, state: RowState, failed: bool) -> WatchRow {
+        let now = Timestamp::from_second(100).unwrap();
         WatchRow {
             name: name.to_owned(),
             glyph: if failed { "✗" } else { "✓" },
@@ -1772,7 +1780,14 @@ mod tests {
                 RowState::Upcoming(next) => Some(next),
                 _ => None,
             },
-            next_text: name.repeat(8),
+            next_text: match state {
+                RowState::Running => "running now".to_owned(),
+                RowState::Due => "due".to_owned(),
+                RowState::Paused => "paused".to_owned(),
+                RowState::Blocked => "blocked · trust".to_owned(),
+                RowState::Upcoming(next) => ui::until_label(next, now),
+                RowState::NeverRun => "—".to_owned(),
+            },
             last_text: "LAST-COLUMN".to_owned(),
             status_text: "STATUS-COLUMN".to_owned(),
         }
@@ -1842,18 +1857,36 @@ mod tests {
             wide.starts_with("loop · 7 tasks · ▸ 1 running · ✗ 1 failed"),
             "{wide}"
         );
-        let body = wide.lines().skip(3).collect::<Vec<_>>().join("\n");
+        assert_eq!(wide.lines().count(), 11, "{wide}");
+        assert!(
+            wide.lines().any(|line| line.contains("task")
+                && line.contains("next")
+                && line.contains("last run")
+                && line.contains("status")),
+            "{wide}"
+        );
+        let body = wide.lines().skip(4).collect::<Vec<_>>().join("\n");
         let positions = [
             "running", "failed", "due", "sooner", "later", "paused", "never",
         ]
         .map(|name| body.find(name).unwrap());
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{wide}");
-        assert!(!dashboard(&group, WATCH_NARROW - 1, 20).contains("LAST-COLUMN"));
-        assert!(dashboard(&group, WATCH_NARROW, 20).contains("LAST-COLUMN"));
-        assert!(dashboard(&group, WATCH_WIDE, 20).contains("STATUS-COLUMN"));
+        let narrow = dashboard(&group, WATCH_NARROW - 1, 20);
+        assert!(
+            narrow.contains("task") && narrow.contains("next"),
+            "{narrow}"
+        );
+        assert!(!narrow.contains("last run"), "{narrow}");
+        let middle = dashboard(&group, WATCH_NARROW, 20);
+        assert!(middle.contains("last run"), "{middle}");
+        assert!(!middle.contains("status"), "{middle}");
+        assert!(dashboard(&group, WATCH_WIDE, 20).contains("status"));
+        let sooner = wide.lines().find(|line| line.contains("sooner")).unwrap();
+        assert!(sooner.contains("1m"), "{sooner}");
+        assert!(!sooner.contains("in 1m"), "{sooner}");
         let short = dashboard(&group, 30, 6);
         assert_eq!(short.lines().count(), 6, "{short}");
-        assert!(short.contains("+5 more"), "{short}");
+        assert!(short.contains("+6 more"), "{short}");
         assert!(short.lines().all(|line| line.width() <= 30), "{short}");
         assert_eq!(dashboard(&group, 14, 2).lines().count(), 1);
     }

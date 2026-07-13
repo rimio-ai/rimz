@@ -256,6 +256,14 @@ pub(crate) fn rel_until(ts: Timestamp, now: Timestamp) -> String {
     }
 }
 
+pub(crate) fn until_label(ts: Timestamp, now: Timestamp) -> String {
+    let until = ts.duration_since(now);
+    if until.is_negative() || until.is_zero() {
+        return "due".to_owned();
+    }
+    age_label(until.as_secs().max(0) as u64)
+}
+
 fn home_relative_to(home: Option<&str>, path: &str) -> String {
     let Some(home) = home.filter(|home| !home.is_empty()) else {
         return path.to_owned();
@@ -359,7 +367,6 @@ enum Body {
 /// column-aligned.
 pub(crate) struct Table {
     headers: Vec<String>,
-    header: bool,
     align: Vec<Align>,
     rows: Vec<Body>,
     indent: usize,
@@ -376,18 +383,11 @@ impl Table {
         let align = vec![Align::Left; headers.len()];
         Table {
             headers,
-            header: true,
             align,
             rows: Vec::new(),
             indent: 0,
             clip_last_width: None,
         }
-    }
-
-    /// Render body rows without a header or letting header labels size columns.
-    pub(crate) fn headerless(mut self) -> Self {
-        self.header = false;
-        self
     }
 
     /// Mark these column indexes right-aligned, for numeric columns.
@@ -430,11 +430,7 @@ impl Table {
 
     pub(crate) fn render(&self, w: &mut impl Write) -> std::io::Result<()> {
         let cols = self.headers.len();
-        let mut widths: Vec<usize> = if self.header {
-            self.headers.iter().map(|h| h.width()).collect()
-        } else {
-            vec![0; cols]
-        };
+        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.width()).collect();
         for body in &self.rows {
             if let Body::Row(row) = body {
                 for (col, cell) in row.iter().enumerate().take(cols) {
@@ -458,9 +454,7 @@ impl Table {
             .iter()
             .map(|h| cell(h.clone()).fg(palette::HEADER))
             .collect();
-        if self.header {
-            self.write_row(w, &header_cells, &widths)?;
-        }
+        self.write_row(w, &header_cells, &widths)?;
         for body in &self.rows {
             match body {
                 Body::Row(row) => self.write_row(w, row, &widths)?,
@@ -602,15 +596,6 @@ mod tests {
     #[test]
     fn finish_passes_success_through() {
         assert!(finish(Ok(())).is_ok());
-    }
-
-    #[test]
-    fn headerless_table_sizes_columns_from_body_only() {
-        let mut table = Table::new(["VERY LONG HEADER", "NEXT"]).headerless();
-        table.row([cell("a"), cell("now")]);
-        table.row([cell("bb"), cell("later")]);
-
-        assert_eq!(strip(|out| table.render(out)), "a   now\nbb  later\n");
     }
 
     #[test]
@@ -891,6 +876,32 @@ mod tests {
             rel_until(Timestamp::from_second(199_999).expect("timestamp"), now),
             "due"
         );
+    }
+
+    #[test]
+    fn until_label_uses_bare_durations_and_marks_past_due() {
+        let now = Timestamp::from_second(200_000).expect("timestamp");
+        assert_eq!(
+            until_label(Timestamp::from_second(200_041).expect("timestamp"), now),
+            "41s"
+        );
+        assert_eq!(
+            until_label(Timestamp::from_second(200_120).expect("timestamp"), now),
+            "2m"
+        );
+        assert_eq!(
+            until_label(Timestamp::from_second(207_200).expect("timestamp"), now),
+            "2h"
+        );
+        assert_eq!(
+            until_label(Timestamp::from_second(372_800).expect("timestamp"), now),
+            "2d"
+        );
+        assert_eq!(
+            until_label(Timestamp::from_second(199_999).expect("timestamp"), now),
+            "due"
+        );
+        assert_eq!(until_label(now, now), "due");
     }
 
     #[test]

@@ -17,7 +17,7 @@ use std::time::Duration;
 use crate::diag::record::DiagEvent;
 use crate::ids::SidebarInstanceId;
 use crate::sidebar_pane::app::ServeConfig;
-use crate::tui::{MouseCapture, restore_terminal};
+use crate::tui::{MouseCapture, Screen, restore_terminal};
 use tracing::debug;
 
 const WORKER_ENV: &str = "RIMZ_SIDEBAR_WORKER";
@@ -112,7 +112,7 @@ pub fn run(config: ServeConfig) -> Result<()> {
                     .lock()
                     .map(|tail| tail.excerpt())
                     .unwrap_or_default();
-                restore_terminal(MouseCapture::Stdout);
+                restore_terminal(MouseCapture::Stdout, Screen::Main);
                 record_signal_death(&config, worker.signal, worker.exit_code, stderr_excerpt);
                 return Err(SidebarSuperviseErr::WorkerTerminated {
                     signal: worker.signal,

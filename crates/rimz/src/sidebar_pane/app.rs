@@ -35,7 +35,7 @@ use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use tracing::{debug, warn};
 
 use crate::sidebar_pane::render::{self, UiState};
-use crate::tui::{MouseCapture, TerminalModeGuard};
+use crate::tui::{MouseCapture, Screen, TerminalModeGuard};
 
 mod cache_refresh;
 mod demo;
@@ -147,7 +147,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // time. The watcher nudges this loop through the same wakeup socket the
     // store uses, so a resize is just another wakeup; without it the first
     // usable frame waits for the next `tick`, reading as a blank sidebar.
-    let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout)?;
+    let _input_mode = TerminalModeGuard::enable(MouseCapture::Stdout, Screen::Main)?;
     let pet_render_caps =
         detect_pet_render_caps(config.mux, &config.session_name, PetRenderCaps::default());
     spawn_event_waker(socket_path.clone(), config.nav_keys.clone());
