@@ -434,7 +434,7 @@ export const RimzPlugin: Plugin = async (input) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         Promise.allSettled(pending),
-        new Promise((resolve) => {
+        new Promise<void>((resolve) => {
           timer = setTimeout(resolve, 1500);
         }),
       ]);
