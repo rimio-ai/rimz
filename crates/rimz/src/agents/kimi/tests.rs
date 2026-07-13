@@ -293,6 +293,7 @@ fn compaction_and_effective_model_config_drive_context() {
     let records = wire::records_from_bytes(
         concat!(
             "{\"type\":\"config.update\",\"time\":1,\"modelAlias\":\"large\",\"thinkingEffort\":\"high\"}\n",
+            "{\"type\":\"config.update\",\"time\":1.5,\"thinkingEffort\":\"low\"}\n",
             "{\"type\":\"context.append_loop_event\",\"time\":2,\"event\":{\"type\":\"step.end\",\"uuid\":\"a\",\"usage\":{\"inputOther\":50000,\"inputCacheRead\":30000,\"inputCacheCreation\":5000,\"output\":5000}}}\n",
             "{\"type\":\"context.append_loop_event\",\"time\":3,\"event\":{\"type\":\"step.end\",\"uuid\":\"b\",\"usage\":{}}}\n",
             "{\"type\":\"context.clear\",\"time\":4}\n",
@@ -303,7 +304,7 @@ fn compaction_and_effective_model_config_drive_context() {
     );
     let attribution = wire::effective_attribution(&records);
     assert_eq!(attribution.display_model().as_deref(), Some("large"));
-    assert_eq!(attribution.thinking_effort.as_deref(), Some("high"));
+    assert_eq!(attribution.thinking_effort.as_deref(), Some("low"));
     assert_eq!(wire::latest_context_tokens(&records), Some(12_000));
 }
 
@@ -479,6 +480,7 @@ fn request_attribution_prices_alias_usage_and_history_groups_the_turn() {
             "{\"type\":\"turn.prompt\",\"time\":1770000000000,\"input\":[{\"type\":\"text\",\"text\":\"fix history\"}],\"origin\":{\"kind\":\"user\"}}\n",
             "{\"type\":\"llm.request\",\"time\":1770000000100,\"provider\":\"moonshot\",\"model\":\"kimi-k2.5\",\"modelAlias\":\"kimi-code/kimi-for-coding\"}\n",
             "{\"type\":\"usage.record\",\"time\":1770000000200,\"model\":\"kimi-for-coding\",\"usageScope\":\"turn\",\"usage\":{\"inputOther\":100,\"output\":50,\"inputCacheRead\":10,\"inputCacheCreation\":5}}\n",
+            "{\"type\":\"usage.record\",\"time\":0,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"session\",\"usage\":{\"inputOther\":999}}\n",
             "{\"type\":\"usage.record\",\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"session\",\"usage\":{\"inputOther\":999}}\n",
             "{\"type\":\"context.append_loop_event\",\"time\":1770000000300,\"event\":{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}}\n",
         ),

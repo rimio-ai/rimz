@@ -23,7 +23,7 @@ where
 {
     Ok(Option::<Value>::deserialize(deserializer)?
         .and_then(|value| value.as_f64())
-        .filter(|value| value.is_finite() && *value >= 0.0))
+        .filter(|value| value.is_finite() && *value > 0.0))
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -157,9 +157,12 @@ impl EffectiveAttribution {
         match record.kind.as_str() {
             "config.update" => {
                 if let Some(config) = record.parse::<ConfigUpdate>() {
-                    self.model_alias =
-                        non_empty(config.model_alias).map(|alias| normalize_model_alias(&alias));
-                    self.thinking_effort = non_empty(config.thinking_effort);
+                    if let Some(alias) = non_empty(config.model_alias) {
+                        self.model_alias = Some(normalize_model_alias(&alias));
+                    }
+                    if let Some(effort) = non_empty(config.thinking_effort) {
+                        self.thinking_effort = Some(effort);
+                    }
                 }
             }
             "llm.request" => {
