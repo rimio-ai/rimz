@@ -532,7 +532,7 @@ mod tests {
                 MatrixCellState::Ok,      // gemini
                 MatrixCellState::Ok,      // kimi
                 MatrixCellState::Ok,      // pi
-                MatrixCellState::Partial, // opencode
+                MatrixCellState::Ok,      // opencode
                 MatrixCellState::Ok,      // cursor
                 MatrixCellState::Ok,      // droid
                 MatrixCellState::Partial, // kiro

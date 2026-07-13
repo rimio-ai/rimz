@@ -6,10 +6,10 @@
 //! on stdin. Current permission and question prompts arrive through
 //! `permission.asked` and `question.asked` bus events; the compatibility
 //! `permission.ask` hook reads stdout on older releases and leaves OpenCode's
-//! `output.status` at `ask` on the neutral path. OpenCode's native TUI remains
-//! the human fallback. Session end is reconstructed from pane liveness and the
-//! rollup reaper because OpenCode's `dispose` hook is server-scoped and carries
-//! no session id.
+//! `output.status` at `ask` on the neutral path. Native reply bus events record
+//! answers and clear waiting after the user responds in OpenCode's own TUI.
+//! `session.deleted` and the server-scoped `dispose` sweep normalize to one
+//! per-session `session_ended` event, with pane liveness as the crash backstop.
 
 pub(crate) mod account;
 pub(crate) mod oauth_usage;
@@ -38,6 +38,7 @@ use super::{
     Result, SubagentIdentity, classify_agent_hook, resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
+use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "opencode",
@@ -124,7 +125,7 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::Answer,
         ConcernCoverage::Unsupported {
-            reason: "native prompt choreography is not mapped",
+            reason: "native answers are observed; Rimz-to-OpenCode answer transport is not mapped",
         },
     ),
     (
@@ -147,9 +148,8 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::SessionEnd,
-        ConcernCoverage::Partial {
-            via: "pane liveness + rollup reaper",
-            gap: "dispose is server-scoped and carries no session id",
+        ConcernCoverage::Wired {
+            via: "session_ended (session.deleted + dispose sweep)",
         },
     ),
     (
@@ -257,9 +257,8 @@ const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     ),
     (
         LifecycleSignalKind::Ended,
-        HookCoverage::Derived {
-            via: "pane liveness + rollup reaper",
-            gap: "dispose is server-scoped and carries no session id",
+        HookCoverage::Native {
+            event: "session_ended",
         },
     ),
     (
@@ -273,7 +272,8 @@ const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
 
 // The awaiting-user events (`permission_ask`, `question_ask`) are absent by
 // design: `classify_hook` hands their `AskKind` to `classify_agent_hook`, which
-// short-circuits to `AwaitingUser` before ever consulting this list.
+// short-circuits to `AwaitingUser` before ever consulting this list. Native
+// replies and normalized session end remain lifecycle observations.
 const LIFECYCLE_EVENTS: &[&str] = &[
     "session_created",
     "chat_message",
@@ -284,6 +284,10 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "session_compacted",
     "SubagentStart",
     "SubagentStop",
+    "permission_replied",
+    "question_replied",
+    "question_rejected",
+    "session_ended",
 ];
 
 const WIRED_EVENTS: &[&str] = &[
@@ -298,6 +302,10 @@ const WIRED_EVENTS: &[&str] = &[
     "SubagentStop",
     "permission_ask",
     "question_ask",
+    "permission_replied",
+    "question_replied",
+    "question_rejected",
+    "session_ended",
 ];
 
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
@@ -408,6 +416,30 @@ impl AgentAdapter for OpencodeAdapter {
                 AgentHookClass::Lifecycle,
                 None,
             ),
+            ClassificationSample::new(
+                "permission_replied",
+                json!({ "session_id": "ses_1", "reply": "once" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "question_replied",
+                json!({ "session_id": "ses_1", "answers": [["Postgres"]] }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "question_rejected",
+                json!({ "session_id": "ses_1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "session_ended",
+                json!({ "session_id": "ses_1", "reason": "deleted" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
         ]
     }
 
@@ -453,6 +485,12 @@ impl AgentAdapter for OpencodeAdapter {
                 errored: true,
                 parked_on_background: false,
             },
+            "permission_replied" | "question_replied" | "question_rejected" => {
+                LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                }
+            }
             "tool_after" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: self.descriptor().tool_edits_files(payload),
@@ -463,6 +501,7 @@ impl AgentAdapter for OpencodeAdapter {
             "SubagentStop" => LifecycleSignal::SubagentStopped {
                 errored: payloads::errored(&parsed),
             },
+            "session_ended" => LifecycleSignal::Ended,
             _ => return None,
         };
 
@@ -501,6 +540,88 @@ impl AgentAdapter for OpencodeAdapter {
         observation.fresh_input_tokens = parsed.input_tokens;
         observation.output_tokens = parsed.output_tokens;
         Some(observation)
+    }
+
+    fn ends_session(&self, event_name: &str) -> bool {
+        event_name == "session_ended"
+    }
+
+    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
+        if event_name != "question_ask" {
+            return None;
+        }
+        let questions = payloads::parse_payload(payload).questions?;
+        let questions: Vec<_> = questions
+            .into_iter()
+            .filter_map(|question| {
+                let text = question.question?.trim().to_owned();
+                if text.is_empty() {
+                    return None;
+                }
+                let options = question
+                    .options
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|option| {
+                        let label = option.label?.trim().to_owned();
+                        (!label.is_empty()).then_some(AskOption {
+                            label,
+                            description: option
+                                .description
+                                .filter(|value| !value.trim().is_empty()),
+                            caution: None,
+                        })
+                    })
+                    .collect();
+                Some(AskQuestion {
+                    question: text,
+                    options,
+                    multi_select: question.multiple.unwrap_or(false),
+                    has_option_previews: false,
+                })
+            })
+            .take(4)
+            .collect();
+        (!questions.is_empty()).then_some(questions)
+    }
+
+    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
+        let parsed = payloads::parse_payload(payload);
+        match event_name {
+            "permission_replied" => {
+                let reply = parsed.reply?.trim().to_owned();
+                (!reply.is_empty()).then_some(vec![AskAnswer {
+                    question: None,
+                    chosen: vec![reply],
+                    note: None,
+                }])
+            }
+            "question_replied" => {
+                let answers: Vec<_> = parsed
+                    .answers?
+                    .into_iter()
+                    .filter_map(|choices| {
+                        let chosen: Vec<_> = choices
+                            .into_iter()
+                            .map(|choice| choice.trim().to_owned())
+                            .filter(|choice| !choice.is_empty())
+                            .collect();
+                        (!chosen.is_empty()).then_some(AskAnswer {
+                            question: None,
+                            chosen,
+                            note: None,
+                        })
+                    })
+                    .collect();
+                (!answers.is_empty()).then_some(answers)
+            }
+            "question_rejected" => Some(vec![AskAnswer {
+                question: None,
+                chosen: vec!["(rejected)".to_owned()],
+                note: None,
+            }]),
+            _ => None,
+        }
     }
 
     fn moves_on(&self, event_name: &str) -> bool {

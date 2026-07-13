@@ -26,6 +26,7 @@ const RIMZ_ARGS = ["hooks", "feed", "--source", "opencode"];
 export const RimzPlugin: Plugin = async (input) => {
   const children = new Map<string, string>();
   const gauge = new Map<string, Gauge>();
+  const roots = new Set<string>();
 
   function cwd(sessionDirectory?: unknown): string {
     if (typeof sessionDirectory === "string" && sessionDirectory.length > 0) {
@@ -54,7 +55,7 @@ export const RimzPlugin: Plugin = async (input) => {
     };
   }
 
-  function spawnRimz(payload: Envelope, collectStdout: boolean): Promise<string> | void {
+  function spawnRimz(payload: Envelope, collectStdout: boolean): Promise<string> {
     const child = spawn(RIMZ, RIMZ_ARGS, {
       cwd: payload.cwd,
       env: {
@@ -67,27 +68,31 @@ export const RimzPlugin: Plugin = async (input) => {
     child.stdin.on("error", () => {});
     child.stdin.end(`${JSON.stringify(payload)}\n`);
 
-    if (!collectStdout) {
-      child.on("close", () => {});
-      return;
-    }
-
     return new Promise((resolve) => {
       let stdout = "";
-      child.stdout?.on("data", (chunk) => {
-        stdout += String(chunk);
-      });
+      if (collectStdout) {
+        child.stdout?.on("data", (chunk) => {
+          stdout += String(chunk);
+        });
+      }
       child.on("error", () => resolve(""));
       child.on("close", () => resolve(stdout));
     });
   }
 
   function send(payload: Envelope): void {
-    spawnRimz(payload, false);
+    void spawnRimz(payload, false);
   }
 
   async function ask(payload: Envelope): Promise<string> {
-    return (await spawnRimz(payload, true)) || "";
+    return await spawnRimz(payload, true);
+  }
+
+  function endRoot(sessionID: string, reason: "deleted" | "dispose"): Promise<string> {
+    const payload = base("session_ended", sessionID, { reason });
+    roots.delete(sessionID);
+    gauge.delete(sessionID);
+    return spawnRimz(payload, false);
   }
 
   // The model's context window is the gauge's divisor, and the gauge counts
@@ -220,6 +225,7 @@ export const RimzPlugin: Plugin = async (input) => {
           }));
           return;
         }
+        roots.add(sessionID);
         send(base("session_created", sessionID, { cwd: info.directory }));
         return;
       }
@@ -228,6 +234,7 @@ export const RimzPlugin: Plugin = async (input) => {
         const sessionID = properties.sessionID;
         if (typeof sessionID !== "string") return;
         const parentID = children.get(sessionID);
+        if (!parentID) roots.add(sessionID);
         send(base(parentID ? "SubagentStop" : "session_idle", sessionID, {
           parent_session_id: parentID,
         }));
@@ -239,6 +246,7 @@ export const RimzPlugin: Plugin = async (input) => {
         if (typeof sessionID !== "string") return;
         const error = properties.error || {};
         const parentID = children.get(sessionID);
+        if (!parentID) roots.add(sessionID);
         send(base(parentID ? "SubagentStop" : "session_error", sessionID, {
           parent_session_id: parentID,
           is_error: true,
@@ -268,7 +276,21 @@ export const RimzPlugin: Plugin = async (input) => {
           .filter(Boolean)
           .join("\n");
         send(base("question_ask", sessionID, {
+          request_id: properties.id,
           title: detail || undefined,
+          questions: questions.map((question) => ({
+            question: typeof question?.question === "string" ? question.question : undefined,
+            header: typeof question?.header === "string" ? question.header : undefined,
+            options: Array.isArray(question?.options)
+              ? question.options.map((option) => ({
+                  label: typeof option?.label === "string" ? option.label : undefined,
+                  description:
+                    typeof option?.description === "string" ? option.description : undefined,
+                }))
+              : [],
+            multiple: question?.multiple === true,
+            custom: question?.custom === true,
+          })),
         }));
         return;
       }
@@ -285,10 +307,53 @@ export const RimzPlugin: Plugin = async (input) => {
           : [];
         const title = [permission, patterns.join(", ")].filter(Boolean).join(": ");
         send(base("permission_ask", sessionID, {
+          request_id: properties.id,
           tool_name: permission,
           permission_type: permission,
           title: title || undefined,
         }));
+        return;
+      }
+
+      if (type === "permission.replied") {
+        const sessionID = properties.sessionID;
+        if (typeof sessionID !== "string" || children.has(sessionID)) return;
+        send(base("permission_replied", sessionID, {
+          request_id: properties.requestID,
+          reply: properties.reply,
+        }));
+        return;
+      }
+
+      if (type === "question.replied") {
+        const sessionID = properties.sessionID;
+        if (typeof sessionID !== "string" || children.has(sessionID)) return;
+        send(base("question_replied", sessionID, {
+          request_id: properties.requestID,
+          answers: properties.answers,
+        }));
+        return;
+      }
+
+      if (type === "question.rejected") {
+        const sessionID = properties.sessionID;
+        if (typeof sessionID !== "string" || children.has(sessionID)) return;
+        send(base("question_rejected", sessionID, {
+          request_id: properties.requestID,
+        }));
+        return;
+      }
+
+      if (type === "session.deleted") {
+        const info = properties.info || {};
+        const sessionID = info.id;
+        if (typeof sessionID !== "string") return;
+        if (children.has(sessionID) || (typeof info.parentID === "string" && info.parentID.length > 0)) {
+          children.delete(sessionID);
+          gauge.delete(sessionID);
+          return;
+        }
+        void endRoot(sessionID, "deleted");
         return;
       }
 
@@ -307,6 +372,7 @@ export const RimzPlugin: Plugin = async (input) => {
 
     "chat.message": async (hookInput, output) => {
       const sessionID = hookInput.sessionID;
+      if (!children.has(sessionID)) roots.add(sessionID);
       if (hookInput.model) {
         const prior = gauge.get(sessionID) || {};
         const modelID = hookInput.model.modelID;
@@ -344,6 +410,7 @@ export const RimzPlugin: Plugin = async (input) => {
 
     "permission.ask": async (permission, output) => {
       const stdout = await ask(base("permission_ask", permission.sessionID, {
+        request_id: (permission as any).id,
         tool_name: permission.type,
         permission_type: permission.type,
         title: permission.title,
@@ -361,7 +428,18 @@ export const RimzPlugin: Plugin = async (input) => {
       }
     },
 
-    dispose: async () => {},
+    dispose: async () => {
+      const pending = [...roots].map((sessionID) => endRoot(sessionID, "dispose"));
+      if (pending.length === 0) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.allSettled(pending),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, 1500);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+    },
   };
 };
 

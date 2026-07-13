@@ -197,6 +197,14 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     );
 
     assert!(!OpencodeAdapter.ends_session("session_error"));
+    let ended = OpencodeAdapter
+        .observe_lifecycle(
+            "session_ended",
+            &json!({ "session_id": "ses_1", "reason": "deleted" }),
+        )
+        .expect("end observation");
+    assert_eq!(ended.signal, LifecycleSignal::Ended);
+    assert!(OpencodeAdapter.ends_session("session_ended"));
     assert!(OpencodeAdapter.moves_on("chat_message"));
     assert!(OpencodeAdapter.moves_on("session_idle"));
     assert!(OpencodeAdapter.moves_on("session_error"));
@@ -217,6 +225,109 @@ fn opencode_observes_native_questions() {
             ask_id: None,
             detail: Some("Which database?".to_owned()),
         }
+    );
+}
+
+#[test]
+fn opencode_parses_structured_native_questions() {
+    let questions = OpencodeAdapter
+        .ask_question_detail(
+            "question_ask",
+            &json!({
+                "questions": [
+                    {
+                        "question": " Which database? ",
+                        "header": "Database",
+                        "options": [
+                            { "label": " Postgres ", "description": "Relational" },
+                            { "label": "", "description": "ignored" }
+                        ],
+                        "multiple": true,
+                        "custom": true
+                    },
+                    { "question": "  ", "options": [] }
+                ]
+            }),
+        )
+        .expect("structured questions");
+    assert_eq!(
+        questions,
+        vec![AskQuestion {
+            question: "Which database?".to_owned(),
+            options: vec![AskOption {
+                label: "Postgres".to_owned(),
+                description: Some("Relational".to_owned()),
+                caution: None,
+            }],
+            multi_select: true,
+            has_option_previews: false,
+        }]
+    );
+    assert_eq!(
+        OpencodeAdapter.ask_detail(
+            "question_ask",
+            &json!({ "questions": [{ "question": "Which database?\nPick one" }] }),
+        ),
+        Some("Which database?".to_owned())
+    );
+    assert!(
+        OpencodeAdapter
+            .ask_question_detail("question_ask", &json!({ "questions": "malformed" }))
+            .is_none()
+    );
+    assert!(
+        OpencodeAdapter
+            .ask_question_detail("permission_ask", &json!({ "questions": [] }))
+            .is_none()
+    );
+}
+
+#[test]
+fn opencode_records_native_permission_and_question_answers() {
+    assert_eq!(
+        OpencodeAdapter.native_ask_answer(
+            "permission_replied",
+            &json!({ "session_id": "ses_1", "reply": "always" }),
+        ),
+        Some(vec![AskAnswer {
+            question: None,
+            chosen: vec!["always".to_owned()],
+            note: None,
+        }])
+    );
+    assert_eq!(
+        OpencodeAdapter.native_ask_answer(
+            "question_replied",
+            &json!({
+                "session_id": "ses_1",
+                "answers": [["Postgres"], ["Fast", "Safe"]]
+            }),
+        ),
+        Some(vec![
+            AskAnswer {
+                question: None,
+                chosen: vec!["Postgres".to_owned()],
+                note: None,
+            },
+            AskAnswer {
+                question: None,
+                chosen: vec!["Fast".to_owned(), "Safe".to_owned()],
+                note: None,
+            },
+        ])
+    );
+    assert_eq!(
+        OpencodeAdapter.native_ask_answer("question_rejected", &json!({ "session_id": "ses_1" }),),
+        Some(vec![AskAnswer {
+            question: None,
+            chosen: vec!["(rejected)".to_owned()],
+            note: None,
+        }])
+    );
+    assert!(
+        OpencodeAdapter
+            .native_ask_answer("question_replied", &json!({ "answers": [] }))
+            .is_none()
     );
 }
 
@@ -322,6 +433,24 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             &json!({ "session_id": "ses_1", "tool_name": tool_name }),
         );
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool_name}");
+    }
+
+    for event in [
+        "permission_replied",
+        "question_replied",
+        "question_rejected",
+    ] {
+        let observed = OpencodeAdapter
+            .observe_lifecycle(event, &json!({ "session_id": "ses_1" }))
+            .unwrap_or_else(|| panic!("{event} observation"));
+        assert_eq!(
+            observed.signal,
+            LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+            },
+            "{event}"
+        );
     }
 
     let compacting = OpencodeAdapter
@@ -464,7 +593,13 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("server_url: input.serverUrl"));
     assert!(PLUGIN_SOURCE.contains("permission.ask"));
     assert!(PLUGIN_SOURCE.contains("permission.asked"));
+    assert!(PLUGIN_SOURCE.contains("permission.replied"));
     assert!(PLUGIN_SOURCE.contains("question.asked"));
+    assert!(PLUGIN_SOURCE.contains("question.replied"));
+    assert!(PLUGIN_SOURCE.contains("question.rejected"));
+    assert!(PLUGIN_SOURCE.contains("session.deleted"));
+    assert!(PLUGIN_SOURCE.contains("Promise.allSettled"));
+    assert!(PLUGIN_SOURCE.contains("endRoot(sessionID, \"dispose\")"));
     assert!(PLUGIN_SOURCE.contains("{\"status\":\"deny\"}"));
     assert!(PLUGIN_SOURCE.contains("export const RimzPlugin"));
     assert!(PLUGIN_SOURCE.contains("server: RimzPlugin"));

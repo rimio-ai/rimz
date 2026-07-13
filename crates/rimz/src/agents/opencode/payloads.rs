@@ -8,6 +8,19 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct OpencodeQuestion {
+    pub question: Option<String>,
+    pub options: Option<Vec<OpencodeQuestionOption>>,
+    pub multiple: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct OpencodeQuestionOption {
+    pub label: Option<String>,
+    pub description: Option<String>,
+}
+
 /// The flattened payload the Rimz OpenCode plugin posts for every event.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct OpencodeHookPayload {
@@ -20,6 +33,9 @@ pub(crate) struct OpencodeHookPayload {
     pub server_url: Option<String>,
     pub prompt: Option<String>,
     pub title: Option<String>,
+    pub questions: Option<Vec<OpencodeQuestion>>,
+    pub reply: Option<String>,
+    pub answers: Option<Vec<Vec<String>>>,
     pub is_error: Option<bool>,
     pub error_message: Option<String>,
     pub error_class: Option<String>,
