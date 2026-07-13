@@ -281,7 +281,7 @@ Twelve agents ship built in. **Status** tracks lived confidence, how much each o
 | OpenCode    | 🟡 Alpha        |   ●   |  ●   |    ●    |  ●  |  ○   |     ●     |
 | Gemini CLI  | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ○     |
 | Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |  ○   |     ○     |
-| Droid       | 🧪 Experimental |   ●   |  ○   |    ○    |  ○  |  ○   |     ○     |
+| Droid       | 🧪 Experimental |   ●   |  ○   |    ◐    |  ○  |  ○   |     ○     |
 | Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ○  |  ○   |     ○     |
 | Amp         | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ○   |     ○     |
 | Kiro CLI    | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ○  |  ○   |     ○     |
@@ -293,6 +293,8 @@ Claude and Codex are the daily drivers, with Pi and OpenCode in regular rotation
 Pi and OpenCode lead the see-it columns — full live context, cost, and history from their in-process extensions — and sit below Supported on lived confidence, not observability. Their do-it gaps are honest: Pi ships no prompts, plan gate, or subagents, and OpenCode exposes no plan-approval surface. Where an agent does draw a blocking prompt natively, RimZ routes it to your keyboard and you answer in the agent's own UI.
 
 Kiro's stock local session store supplies transcript, turn state, native approval waiting, and context percentage. Its provider credits are not token counts or dollars, so RimZ does not convert them into spend.
+
+Droid's partial history reads visible conversation and final output from its version-2 session file; token and cost attribution remain absent.
 
 Per-agent coverage, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md); the adapter boundary itself is in the [agents internals](./docs/internals/agents/model.md).
 

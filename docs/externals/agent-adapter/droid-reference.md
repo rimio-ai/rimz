@@ -43,7 +43,7 @@ Re-fetch the live pages and compare the pinned SDK source when refreshing this m
 
 Keep the stock interactive `droid` TUI in the pane. Install **command hooks** for session registration, turn boundaries, completed tool work, compaction, and session termination. Retain the hook-provided `transcript_path` as identity/enrichment metadata, but do not parse the file until Factory publishes its schema or RimZ deliberately adds a version-pinned, reverse-engineered parser with fixtures.
 
-Use a separate **`droid exec` path** for RimZ supervised `-p` runs. Its `--output-format json` result is sufficient for a one-shot run; `stream-jsonrpc` provides typed live state, permission and question requests, token/context data, interruption, compaction, fork, and multi-turn control when the harness needs them. The JSON-RPC process replaces the interactive TUI and therefore does not enrich a concurrently running stock pane session.
+Use the stock TUI and native hooks for RimZ supervised `-p` runs today. Droid 0.170.0 internally starts a stream-JSON-RPC exec worker, so that process does enrich the concurrently running stock pane session through the same global hooks. A future RimZ-authored direct **`droid exec` path** remains a separate transport: its `--output-format json` result is sufficient for a one-shot run, while `stream-jsonrpc` provides typed live state, permission and question requests, token/context data, interruption, compaction, fork, and multi-turn control when the harness needs them.
 
 The latest official surfaces do not support a fully faithful stock-pane adapter. Hooks have no permission-request event, question event, subagent-start event, model field, token/context field, or structured turn-error event. `Notification` reports permission attention only as a human message and also fires after 60 seconds of input idleness. Treat a first interactive adapter as basic lifecycle support, and keep capabilities that need a structured source disabled.
 
@@ -284,15 +284,27 @@ The headless JSON-RPC path supplies authoritative requests, detailed in [Structu
 
 ## Session identity, transcripts, resume, and fork
 
-Every hook carries `session_id` and `transcript_path`. The published examples place transcripts under:
+Every hook carries `session_id` and `transcript_path`. Published examples use a project cache, while the captured 0.170.0 session uses:
 
 ```text
-~/.factory/projects/<project-key>/<session-id>.jsonl
+~/.factory/sessions/<cwd-key>/<session-id>.jsonl
 ```
 
-Factory documents the path as conversation JSON and uses a `.jsonl` example, but publishes no record schema, durability rules, directory-key algorithm, rotation contract, or locking semantics. Use the exact hook-provided path. Store it as carry-forward metadata, expand `~` explicitly, and do not derive it from cwd or session ID.
+Factory publishes no record schema, durability rules, directory-key algorithm, rotation contract, or locking semantics. Use the exact hook-provided path and do not derive it from cwd, discovery caches, or session ID.
 
-The official docs suggest processing the transcript to prevent stop-hook loops, but that statement does not define a parser contract. A transcript parser needs a separate, current-version capture study and golden fixtures before implementation; it remains a best-effort private format even then.
+The official docs suggest processing the transcript to prevent stop-hook loops, but that statement does not define a parser contract. RimZ's private reader is pinned to the captured CLI 0.170.0, transcript version 2 shape below and remains best-effort.
+
+### Captured 0.170.0 private session shape
+
+The first JSONL row is `{"type":"session_start","version":2,…}`. Every conversation or hook-audit row is `type: "message"` with a non-empty `id`, optional `parentId`, RFC3339 `timestamp`, and nested `message`. Visible conversation messages have role `user` or `assistant`, no visibility marker, and `content[]`; `content[type = "text"].text` is the visible text. Assistant messages can also carry raw `modelId` and `reasoningEffort`.
+
+The `parentId` links form a tree because rewind and duplicate hook activity can branch. Complete history selects the physically latest visible conversation record, follows its ancestors with missing-parent, cycle, and depth guards, and reverses that chain into source order. It does not replay abandoned visible branches. An appended suffix lacks its ancestors, so streaming instead emits each new visible assistant text record in physical order; output shown before a later rewind cannot be retracted.
+
+`message.visibility = "llm_only"` marks injected model context, while `"user_only"` marks provider/UI records. Hook audit rows are `user_only` messages with `hookEventName` and timing/result fields. Exclude both visibility classes, hook audit rows, thinking, tool, and document blocks. Unknown records and malformed lines are skipped only after the version-2 header is established; a missing or unknown header version makes history, streaming, final-answer, and identity reads abstain.
+
+The sibling `<session-id>.settings.json` is a snapshot with raw `model`, `reasoningEffort`, `tokenUsage`, and `inclusiveTokenUsage`. Model and effort identify the live session at hook cadence, with newest visible assistant metadata as fallback. Both usage objects are cumulative session counters and Factory credits are not authoritative USD, so they cannot populate current-context composition, context percentage, smart-compaction state, live cost, or spend.
+
+The same live capture shows a stock outer TUI plus an internal `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc` worker. Both inherit the global hook config, the worker supplies the complete observed stream including `Stop`, and the payload carries no event nonce or process-role field. Select emitters structurally from exact argv boundaries: suppress recognized outer-TUI hooks, accept the internal worker, and attribute its liveness to the outer TUI PID found by a bounded parent walk. A directly launched exec has no interactive Droid ancestor and stays accepted as self-owned. Unreadable or unrecognized process metadata fails open.
 
 Interactive resume and fork behavior:
 
@@ -623,7 +635,7 @@ Before enabling the adapter:
 4. Golden-test every hook stdin payload and byte-empty success stdout on the pinned binary.
 5. Verify startup, resume, clear/new, manual compact, automatic compact, normal exit, Ctrl+C interrupt, successful tool, failed tool, and permission wait in a real TUI pane.
 6. Keep structured asks, subagent rows, live model, context, spend, quota, and rate windows capability-disabled on the stock interactive adapter.
-7. Implement supervised runs with `droid exec --output-format json`; preserve native nonzero exit status.
+7. Keep stock-TUI supervised runs on native hooks; if a future direct exec transport replaces them, preserve its native nonzero exit status.
 8. Add `stream-jsonrpc` only behind exact envelope/protocol gates, typed request/notification parsers, request timeouts, serialized stdin writes, and bounded child cleanup.
 9. Test JSON-RPC permission batches, AskUser, plan approval, interrupt, reconnect with pending asks, compact-to-new-session, fork, token usage, context stats, unknown notification types, malformed lines, and unexpected process death.
 10. Re-research the latest release rather than adding old-version branches when any fixture changes.
@@ -637,7 +649,7 @@ The latest official stock-pane surface leaves these implementation gaps:
 - no `PostCompact` hook and compaction may replace the session ID;
 - no subagent start or child identity in hooks;
 - no model, effort, token, context, cost, quota, or rate-limit hook fields;
-- no published transcript record/durability schema;
+- no published transcript record/durability schema beyond the version-pinned private capture;
 - no machine-readable auth/account status command;
 - no documented way to apply a one-launch interactive autonomy override without touching persistent settings.
 
