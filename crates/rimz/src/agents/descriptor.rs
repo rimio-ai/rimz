@@ -339,7 +339,9 @@ pub struct Capabilities {
     /// Rate-limit window durations this provider conceptually enforces but
     /// may omit from authoritative readings on some plans. An omitted
     /// duration stays visible as an unlimited bar while another window is
-    /// reported.
+    /// reported. Codex declares its 5-hour duration because current Pro
+    /// readings can be weekly-only; a real 5-hour reading still takes
+    /// precedence over the declaration.
     pub implicit_unlimited_window_mins: &'static [u32],
     /// How this provider's realtime usage channel interacts with the uniform
     /// OAuth account-usage driver.
