@@ -231,7 +231,9 @@ pub(super) fn wait_for_replies(
             return finish_join(&legs, wait, Some(winner));
         }
         if join_status(&legs).is_some() {
-            spinner.pause();
+            if !first_poll {
+                spinner.pause();
+            }
             return finish_join(&legs, wait, None);
         }
         if !first_poll {
