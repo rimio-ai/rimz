@@ -176,8 +176,9 @@ pub(crate) fn pi_config_dir() -> PathBuf {
 /// Accepts only lines where `"type":"message"` (or `type` is absent) and
 /// `message.role == "assistant"`. A present non-negative
 /// `message.usage.cost.total` is authoritative; otherwise token-bearing rows
-/// are priced through `prices`. `totalTokens` fills a missing output component
-/// so sparse records still contribute their known total.
+/// are priced through `prices`. Any excess of `totalTokens` over the itemized
+/// parts is folded into output so sparse records still contribute their full
+/// reported total.
 /// Lines without both `"usage"` and `"message"` keywords are skipped before
 /// deserialization.
 pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
@@ -236,13 +237,17 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
         let mut output = usage.output.unwrap_or(0);
         let cache_write = usage.cache_write.unwrap_or(0);
         let cache_read = usage.cache_read.unwrap_or(0);
+        // `totalTokens` is a reported grand total. Fold any excess over the
+        // itemized parts into output so it is counted (and, when Pi omits a
+        // direct cost, priced) as output — ccusage's `apply_total_token_fallback`
+        // behavior. rimz has no separate extra-total bucket, so the gap rides
+        // output rather than an unpriced side counter.
         let known_tokens = input
             .saturating_add(output)
             .saturating_add(cache_write)
             .saturating_add(cache_read);
-        if output == 0 {
-            output = usage.total_tokens.unwrap_or(0).saturating_sub(known_tokens);
-        }
+        output =
+            output.saturating_add(usage.total_tokens.unwrap_or(0).saturating_sub(known_tokens));
         let token_total = input
             .saturating_add(output)
             .saturating_add(cache_write)
@@ -451,5 +456,28 @@ mod tests {
         assert_eq!(parsed.entries[2].input, 10);
         assert_eq!(parsed.entries[2].cost_usd, 0.0);
         assert!(parsed.unknown_models.contains_key("unknown-pi-model"));
+    }
+
+    #[test]
+    fn total_token_gap_folds_into_output_when_output_is_nonzero() {
+        // `totalTokens` exceeds the itemized parts while output is already
+        // nonzero: the excess rides output so it is counted, and (absent a direct
+        // cost) priced as output, instead of being dropped.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","model":"pi-priced-model","usage":{{"input":100,"output":20,"cacheRead":30,"totalTokens":200}}}}}}"#
+        )
+        .unwrap();
+
+        let parsed = parse_pi_spend(&path, None, &prices());
+        assert_eq!(parsed.entries.len(), 1);
+        let entry = &parsed.entries[0];
+        // missing = 200 - (100 + 20 + 30) = 50 → output = 20 + 50 = 70.
+        assert_eq!((entry.input, entry.output, entry.cache_read), (100, 70, 30));
+        let expected = 100.0 * 0.000001 + 70.0 * 0.000002 + 30.0 * 0.0000001;
+        assert!((entry.cost_usd - expected).abs() < 1e-12);
     }
 }

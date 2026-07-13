@@ -6,6 +6,11 @@
 //! token rows are priced through Rimz's [`PriceBook`]. Older flat JSON disk_usage
 //! is intentionally skipped; OpenCode 1.15's SQLite store is the current source
 //! of truth.
+//!
+//! Rows are mutable — a streaming assistant message is updated in place when it
+//! completes — so each refresh cold-folds the whole table and replaces this
+//! database's cache set rather than resuming from a cursor. See
+//! [`parse_opencode_spend`].
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -163,59 +168,53 @@ struct MessageCache {
     write: Option<u64>,
 }
 
+/// Cold-fold the whole `message` table each refresh and atomically replace this
+/// database's cache set.
+///
+/// OpenCode rows are mutable: an assistant message is inserted before its
+/// response streams, then updated **in place** (same rowid) with tokens and cost
+/// when the turn completes. A monotonic rowid/byte resume cursor would advance
+/// past such a row while it was still incomplete — priced as nothing — and never
+/// revisit it once finalized, silently dropping that turn's spend whenever the
+/// database later grew. So, like gemini's rewind-prone transcripts, every
+/// refresh reparses the full table and returns `replace_entries`, trading the
+/// append-only O(delta) read for correctness against an in-place store. The
+/// `resume` cursor is ignored.
 pub(crate) fn parse_opencode_spend(
     path: &Path,
-    resume: Option<&SpendCursor>,
+    _resume: Option<&SpendCursor>,
     prices: &PriceBook,
 ) -> SpendParse {
-    let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let Some(conn) = open_readonly(path) else {
-        return empty_parse(from_offset);
+        return empty_parse(0);
     };
-    let (sql, fallback_sql) = if resume.is_some() {
-        (
-            "SELECT rowid, session_id, data FROM message WHERE rowid > ?1 ORDER BY rowid",
-            "SELECT rowid, NULL, data FROM message WHERE rowid > ?1 ORDER BY rowid",
-        )
-    } else {
-        (
-            "SELECT rowid, session_id, data FROM message ORDER BY rowid",
-            "SELECT rowid, NULL, data FROM message ORDER BY rowid",
-        )
-    };
-    let mut stmt = match conn.prepare(sql).or_else(|_| conn.prepare(fallback_sql)) {
+    let mut stmt = match conn
+        .prepare("SELECT session_id, data FROM message ORDER BY rowid")
+        .or_else(|_| conn.prepare("SELECT NULL, data FROM message ORDER BY rowid"))
+    {
         Ok(stmt) => stmt,
-        Err(_) => return empty_parse(from_offset),
+        Err(_) => return empty_parse(0),
     };
-    let rows_result = match resume {
-        Some(_) => stmt.query([from_offset as i64]),
-        None => stmt.query([]),
-    };
-    let Ok(mut rows) = rows_result else {
-        return empty_parse(from_offset);
+    let Ok(mut rows) = stmt.query([]) else {
+        return empty_parse(0);
     };
 
     let mut entries = Vec::new();
     let mut origin = None;
     let mut unknown_models = BTreeMap::new();
-    let mut max_rowid = from_offset;
     loop {
         let row = match rows.next() {
             Ok(Some(row)) => row,
             Ok(None) => break,
             Err(_) => break,
         };
-        let rowid = row.get::<_, i64>(0).unwrap_or(0);
-        if rowid > 0 {
-            max_rowid = max_rowid.max(rowid as u64);
-        }
         let thread_id = row
-            .get::<_, Option<String>>(1)
+            .get::<_, Option<String>>(0)
             .ok()
             .flatten()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
-        let Ok(data) = row.get::<_, String>(2) else {
+        let Ok(data) = row.get::<_, String>(1) else {
             continue;
         };
         if let Some((entry, entry_origin)) =
@@ -231,12 +230,9 @@ pub(crate) fn parse_opencode_spend(
     SpendParse {
         entries,
         origin,
-        cursor: SpendCursor {
-            offset: max_rowid,
-            state: None,
-        },
+        cursor: SpendCursor::default(),
         unknown_models,
-        replace_entries: false,
+        replace_entries: true,
     }
 }
 
@@ -264,7 +260,7 @@ fn parse_message_entry(
     let model = non_empty(message.model_id.as_deref())?;
     let provider = non_empty(message.provider_id.as_deref())?;
 
-    let mut input = tokens.input.unwrap_or(0);
+    let input = tokens.input.unwrap_or(0);
     let mut output = tokens.output.unwrap_or(0);
     let cache_read = tokens
         .cache
@@ -276,12 +272,17 @@ fn parse_message_entry(
         .as_ref()
         .and_then(|cache| cache.write)
         .unwrap_or(0);
+    // `total` is a reported grand total. Fold any excess over the itemized parts
+    // into output so it is both counted and priced as output — ccusage's
+    // `apply_total_token_fallback` behavior (rimz has no separate extra-total
+    // bucket, so the gap rides output rather than an unpriced side counter).
+    let known = input
+        .saturating_add(output)
+        .saturating_add(cache_read)
+        .saturating_add(cache_write);
+    output = output.saturating_add(tokens.total.unwrap_or(0).saturating_sub(known));
     if input == 0 && output == 0 && cache_read == 0 && cache_write == 0 {
-        output = tokens.total.unwrap_or(0);
-        if output == 0 {
-            return None;
-        }
-        input = 0;
+        return None;
     }
 
     let ts_secs = message
@@ -468,6 +469,17 @@ mod tests {
         .unwrap();
     }
 
+    /// Rewrite the newest row's `data` in place, as OpenCode does when a
+    /// streaming assistant message completes.
+    fn update_last_message(path: &Path, data: &str) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute(
+            "UPDATE message SET data = ?1 WHERE rowid = (SELECT MAX(rowid) FROM message)",
+            [data],
+        )
+        .unwrap();
+    }
+
     fn prices() -> PriceBook {
         PriceBook::from_litellm_json(
             r#"{
@@ -542,7 +554,7 @@ mod tests {
         assert_eq!(entry.ts_secs, 1_780_590_149);
         assert_eq!(entry.thread_id.as_deref(), Some("ses"));
         assert_eq!(parsed.origin.as_deref(), Some(cwd.as_path()));
-        assert_eq!(parsed.cursor.offset, 1);
+        assert_eq!(parsed.cursor, SpendCursor::default());
     }
 
     #[test]
@@ -665,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn drop_rules_and_rowid_resume_are_stable() {
+    fn drop_rules_hold_and_each_refresh_replaces_the_cache_set() {
         let dir = TempDir::new().unwrap();
         let path = create_db(dir.path(), "opencode.db");
         for data in [
@@ -678,7 +690,10 @@ mod tests {
         }
         let first = parse_opencode_spend(&path, None, &prices());
         assert!(first.entries.is_empty());
-        assert_eq!(first.cursor.offset, 4);
+        // A mutable store is cold-folded whole: no resume cursor, and the fold is
+        // authoritative for the file so it replaces the cache set.
+        assert!(first.replace_entries);
+        assert_eq!(first.cursor, SpendCursor::default());
 
         insert_message(
             &path,
@@ -686,7 +701,58 @@ mod tests {
         );
         let second = parse_opencode_spend(&path, Some(&first.cursor), &prices());
         assert_eq!(second.entries.len(), 1);
-        assert_eq!(second.cursor.offset, 5);
+        assert!(second.replace_entries);
+    }
+
+    #[test]
+    fn in_place_completion_is_counted_after_the_row_updates() {
+        // Guards the resumed-spend data loss: an assistant row is inserted while
+        // streaming (no tokens yet), then updated in place with tokens and cost
+        // when the turn completes. A rowid resume cursor would have advanced past
+        // the incomplete row and skipped its finalized cost forever; the full
+        // reparse counts it.
+        let dir = TempDir::new().unwrap();
+        let path = create_db(dir.path(), "opencode.db");
+        insert_message(
+            &path,
+            r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai"}"#,
+        );
+        let mid_stream = parse_opencode_spend(&path, None, &prices());
+        assert!(mid_stream.entries.is_empty());
+
+        // The turn completes: the same row is rewritten with tokens+cost, and a
+        // later row lands so the database grows — the condition that used to pick
+        // the lossy resume path.
+        update_last_message(
+            &path,
+            r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai","cost":0.5,"tokens":{"input":10,"output":5}}"#,
+        );
+        insert_message(
+            &path,
+            r#"{"role":"assistant","modelID":"gpt-priced","providerID":"openai","tokens":{"input":1,"output":1}}"#,
+        );
+        let completed = parse_opencode_spend(&path, Some(&mid_stream.cursor), &prices());
+        assert_eq!(completed.entries.len(), 2);
+        assert!((completed.entries[0].cost_usd - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn total_token_gap_folds_into_output_when_parts_are_nonzero() {
+        // `total` exceeds the itemized parts while output is already nonzero: the
+        // excess is counted and priced as output rather than silently dropped.
+        let dir = TempDir::new().unwrap();
+        let path = create_db(dir.path(), "opencode.db");
+        insert_message(
+            &path,
+            r#"{"modelID":"gpt-priced","providerID":"openai","tokens":{"input":100,"output":20,"cache":{"read":30},"total":200}}"#,
+        );
+        let parsed = parse_opencode_spend(&path, None, &prices());
+        assert_eq!(parsed.entries.len(), 1);
+        let entry = &parsed.entries[0];
+        // missing = 200 - (100 + 20 + 30) = 50 → output = 20 + 50 = 70.
+        assert_eq!((entry.input, entry.output, entry.cache_read), (100, 70, 30));
+        let expected = 100.0 * 0.000001 + 70.0 * 0.000002 + 30.0 * 0.0000001;
+        assert!((entry.cost_usd - expected).abs() < 1e-12);
     }
 
     #[test]
