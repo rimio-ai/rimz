@@ -6,8 +6,12 @@
 
 pub(crate) mod account;
 pub(crate) mod payloads;
+mod spend;
+mod thread;
+mod transcript;
 
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use serde_json::Value;
 #[cfg(test)]
@@ -20,9 +24,11 @@ use super::descriptor::{
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::managed_source::ManagedSource;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, AskKind, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, PresetErr, Result, SessionOrigin, classify_agent_hook,
-    non_empty_trimmed, sanitize_user_prompt,
+    AgentAdapter, AgentCost, AgentCurrentUsage, AgentErr, AgentLifecycleObservation,
+    AgentTokenUsage, AskKind, ClassifiedHook, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx, PresetErr, RefreshTrigger,
+    Result, SessionOrigin, TranscriptStat, classify_agent_hook, non_empty_trimmed,
+    sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -46,8 +52,8 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         native_ask_ui: true,
         rich_context: false,
         transcript_tail_context: false,
-        context_usage: false,
-        account_spend: false,
+        context_usage: true,
+        account_spend: true,
         subagents: false,
         background_tasks: false,
         registers_lazily: false,
@@ -140,14 +146,16 @@ const AMP_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::ContextUsage,
-        ConcernCoverage::Unsupported {
-            reason: "plugin transcript omits usage",
+        ConcernCoverage::Partial {
+            via: "private thread cache on turn boundaries + producer tick",
+            gap: "no stable context-window divisor",
         },
     ),
     (
         IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Unsupported {
-            reason: "amp usage is human text",
+        ConcernCoverage::Partial {
+            via: "private thread cache tokens + estimated model pricing",
+            gap: "60s mid-turn cadence and unknown models can omit dollars",
         },
     ),
     (
@@ -164,8 +172,9 @@ const AMP_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::AccountSpend,
-        ConcernCoverage::Unsupported {
-            reason: "no machine-readable spend surface",
+        ConcernCoverage::Partial {
+            via: "private rewritten thread-cache fold",
+            gap: "estimated pricing does not reconcile Amp credits or workspace billing",
         },
     ),
     (
@@ -317,6 +326,17 @@ impl AgentAdapter for AmpAdapter {
         ]
     }
 
+    #[cfg(test)]
+    fn spend_fixture(&self) -> Option<super::SpendFixture> {
+        Some(super::SpendFixture {
+            session_id: "T-conformance",
+            file_name: "T-conformance.json",
+            body: super::SpendFixtureBody::Jsonl(
+                r#"{"id":"T-conformance","messages":[{"role":"assistant","messageId":"m1","content":"done","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":20}}]}"#,
+            ),
+        })
+    }
+
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         Ok(None)
     }
@@ -360,6 +380,7 @@ impl AgentAdapter for AmpAdapter {
         observation.prompt = prompt;
         observation.launch.model = parsed.model;
         observation.launch.effort = parsed.effort;
+        stamp_transcript_path(&mut observation, session_id, &spend::data_root());
         if event_name == "session_start" {
             // Amp's Fresh lineage means fresh pane occupancy, not a fresh
             // conversation: focusing an existing thread must supersede the
@@ -371,6 +392,102 @@ impl AgentAdapter for AmpAdapter {
 
     fn moves_on(&self, event_name: &str) -> bool {
         matches!(event_name, "agent_start" | "agent_end")
+    }
+
+    fn local_context_refresh(
+        &self,
+        trigger: RefreshTrigger<'_>,
+        ctx: &LocalContextRefreshCtx<'_>,
+    ) -> Option<LocalContextRefresh> {
+        if let RefreshTrigger::Hook(event_name) = trigger
+            && !matches!(event_name, "session_start" | "agent_end")
+        {
+            return None;
+        }
+        let path =
+            spend::resolve_session_file(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
+        let stat = transcript_stat(&path)?;
+        if ctx.prior_transcript_stat == Some(&stat) {
+            return None;
+        }
+        let parsed = thread::AmpThread::read(&path).ok()?;
+        if parsed.id != ctx.agent_id {
+            return None;
+        }
+        let latest = parsed.usage.iter().max_by_key(|usage| usage.at);
+        let model_id = latest
+            .map(|usage| usage.model.clone())
+            .or_else(|| ctx.model_hint.map(ToOwned::to_owned));
+        let tokens = latest.map(|usage| AgentTokenUsage {
+            context_window_size: None,
+            used_percentage: None,
+            remaining_percentage: None,
+            current_usage: Some(AgentCurrentUsage {
+                input_tokens: Some(usage.input),
+                output_tokens: Some(usage.output),
+                cache_creation_input_tokens: Some(usage.cache_write),
+                cache_read_input_tokens: Some(usage.cache_read),
+            }),
+        });
+        let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
+        let (entries, _) = spend::entries_from_thread(&parsed, &prices);
+        let cost_usd = entries.iter().map(|entry| entry.cost_usd).sum::<f64>();
+        Some(LocalContextRefresh {
+            model_id,
+            effort: None,
+            tokens,
+            cost: (cost_usd > 0.0).then_some(AgentCost {
+                total_cost_usd: Some(cost_usd),
+                ..AgentCost::default()
+            }),
+            turn_error: None,
+            turn_complete: None,
+            turn_interrupted: None,
+            transcript_path: Some(path.to_string_lossy().into_owned()),
+            transcript_stat: Some(stat),
+        })
+    }
+
+    fn transcript_files(&self) -> Vec<PathBuf> {
+        spend::session_files()
+    }
+
+    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        spend::resolve_session_file(session_id, prior_path)
+    }
+
+    fn read_transcript_messages(
+        &self,
+        path: &Path,
+        session_id: Option<&AgentSessionId>,
+    ) -> std::io::Result<Vec<crate::agents::TranscriptMessage>> {
+        transcript::read_messages(path, session_id)
+    }
+
+    fn transcript_position(
+        &self,
+        path: &Path,
+        session_id: Option<&AgentSessionId>,
+    ) -> Option<crate::agents::TranscriptPosition> {
+        transcript::position(path, session_id)
+    }
+
+    fn read_assistant_transcript_page(
+        &self,
+        path: &Path,
+        session_id: Option<&AgentSessionId>,
+        position: crate::agents::TranscriptPosition,
+    ) -> Option<crate::agents::TranscriptPage> {
+        transcript::read_assistant_page(path, session_id, position)
+    }
+
+    fn parse_spend(
+        &self,
+        path: &Path,
+        _resume: Option<&super::spending::SpendCursor>,
+        prices: &super::PriceBook,
+    ) -> super::spending::SpendParse {
+        spend::parse(path, prices)
     }
 
     fn last_assistant_message(
@@ -497,6 +614,25 @@ fn amp_plugin_path() -> Result<PathBuf> {
             reason: "$HOME is not set; cannot resolve ~/.config/amp/plugins/rimz.ts".to_owned(),
         })?;
     Ok(config_home.join("amp/plugins/rimz.ts"))
+}
+
+fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(TranscriptStat {
+        mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
+        mtime_nanos: modified.subsec_nanos(),
+        len: metadata.len(),
+    })
+}
+
+fn stamp_transcript_path(
+    observation: &mut AgentLifecycleObservation,
+    session_id: &str,
+    data_root: &Path,
+) {
+    observation.transcript_path = spend::resolve_session_file_at(data_root, session_id)
+        .map(|path| path.to_string_lossy().into_owned());
 }
 
 #[cfg(test)]

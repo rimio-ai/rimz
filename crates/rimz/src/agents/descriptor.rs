@@ -620,6 +620,19 @@ mod tests {
                 .windows_defer_to_fresh_realtime
         );
 
+        let amp = crate::agents::registry::descriptor_by_kind("amp").unwrap();
+        assert!(amp.capabilities.context_usage);
+        assert!(amp.capabilities.account_spend);
+        assert!(!amp.capabilities.rich_context);
+        assert!(!amp.capabilities.transcript_tail_context);
+        assert_eq!(amp.default_context_window, None);
+        assert!(!amp.capabilities.realtime_usage.covers_account_while_live);
+        assert!(
+            !amp.capabilities
+                .realtime_usage
+                .windows_defer_to_fresh_realtime
+        );
+
         let cursor = crate::agents::registry::descriptor_by_kind("cursor").unwrap();
         assert!(!cursor.capabilities.remote_control.pane_sessions);
         assert!(!cursor.capabilities.remote_control.background_sessions);

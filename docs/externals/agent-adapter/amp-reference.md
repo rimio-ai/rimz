@@ -4,7 +4,7 @@
 
 This is the single home for the **Amp CLI upstream protocol surface** relevant to RimZ: the Plugin API lifecycle and decision seam, thread identity and state, transcript access, tool classification, execute-mode JSONL, permissions, configuration and trust, authentication and usage, remote control, runners, and launch modes. It is the implementation research and drift-check record; current RimZ support claims live in [amp.md](../../internals/agents/amp.md) and [agent-support.md](../../reference/agent-support.md).
 
-Refresh baseline: Amp CLI [`@ampcode/cli` 0.0.1783785389-g0da70d](https://www.npmjs.com/package/@ampcode/cli/v/0.0.1783785389-g0da70d), released **2026-07-11**, and the rolling official Amp manual and generated `@ampcode/plugin` type reference available on **2026-07-11**. The exact CLI reports `0.0.1783785389-g0da70d (released 2026-07-11T15:56:29.000Z)`, and `amp plugins show-docs` is the binary-pinned companion to the web reference.
+Refresh baseline: Amp CLI [`@ampcode/cli` 0.0.1783946745-g8c4c0a](https://www.npmjs.com/package/@ampcode/cli/v/0.0.1783946745-g8c4c0a), released **2026-07-13**, and the rolling official Amp manual and generated `@ampcode/plugin` type reference available on **2026-07-13**. The exact CLI reports `0.0.1783946745-g8c4c0a (released 2026-07-13T12:45:45.000Z)`, and `amp plugins show-docs` from that binary is the type-reference baseline used here.
 
 This reference supports **the current post-rebuild Amp architecture only**. Amp calls that architecture “Neo” in its May 2026 launch material, then dropped the name when it became the only current architecture. Do not carry forward pre-rebuild hooks, local thread schemas, toolbox behavior, `--take-me-back`, or the old `smart` / `deep` / `rush` / `large` mode contract. The current modes are `low`, `medium`, `high`, and `ultra`; old mode names exist only as deprecated compatibility inputs or separately installable classic plugins.
 
@@ -48,7 +48,7 @@ Use `agent.start`, `tool.result`, and `agent.end` as durable lifecycle truth. Us
 
 Use `PluginThread.state` as synchronous state enrichment for `awaiting-approval` and `error`. A RimZ-owned approval mode can additionally register `tool.call`, await RimZ's per-request answer socket, and return Amp's decision object. Keep that path opt-in: `tool.call` is a request event with no neutral return, multiple plugin handler order is unspecified, and the public contract does not define how competing decisions compose.
 
-Use `PluginThread.messages({ full: true, … })` as the documented transcript read API. Amp publishes no stable local transcript path or file schema for the current architecture. Treat `amp threads export` and `amp threads raw` output as opaque until their schemas are officially documented or captured and version-gated from the exact supported binary.
+Use `PluginThread.messages({ full: true, … })` as the documented transcript read API and lifecycle-safe authority. Amp publishes no stable local transcript path or file schema for the current architecture. The private rewritten cache described below may enrich history and display best-effort, but its failure never synthesizes lifecycle or replaces the plugin's final-answer authority. Treat `amp threads export` and `amp threads raw` output as opaque until their schemas are officially documented or captured and version-gated from the exact supported binary.
 
 Use `amp -x --stream-json --plugin-ready-timeout` for supervised runs. Streaming JSON is the only documented CLI transport that carries thread identity, cwd, mode/effort, tool calls, per-response token usage, terminal result, and subagent correlation. The plugin-ready wait is required because execute mode may otherwise start before `agent.start` / `agent.end` handlers are ready.
 
@@ -295,7 +295,15 @@ interface ThreadInfoMessage {
 
 Do not render `thinking` as ordinary assistant text. Correlate tool blocks by assistant `tool_use.id` ↔ user `tool_result.toolUseID`. The Plugin API also provides `toolCallsInMessages(messages)` to return completed call/result pairs.
 
-These message types carry no timestamp, model, token usage, cost, parent-thread ID, transcript path, or explicit compaction marker. Amp's security reference says the client keeps local thread history and the server syncs/stores threads, but it publishes no current local on-disk schema. Build against `PluginThread.messages()`, not discovered cache files.
+These message types carry no timestamp, model, token usage, cost, parent-thread ID, transcript path, or explicit compaction marker. Amp's security reference says the client keeps local thread history and the server syncs/stores threads, but it publishes no current local on-disk schema. Build correctness against `PluginThread.messages()`; confine any discovered-cache use to tolerant, best-effort enrichment.
+
+## Private local cache (unsupported upstream surface)
+
+Amp currently rewrites one JSON object per thread under `${AMP_DATA_DIR:-~/.local/share/amp}/threads/T-*.json`. This is an implementation detail, not part of the Plugin API or manual. The schema evidence for this section is ccusage's Amp adapter at commit [`ba99c0d09b6db9fd64a6187751e8b88a019f991a`](https://github.com/ryoppippi/ccusage/tree/ba99c0d09b6db9fd64a6187751e8b88a019f991a/rust/crates/ccusage/src/adapter/amp) plus captured current and legacy objects encoded as RimZ fixtures.
+
+The root carries `id`, `messages`, and optionally `usageLedger.events`. Message IDs and ledger references occur as strings or numbers. Visible message `content` occurs as a string in captured caches and as the public block array described above; only user/assistant text is conversation content. Current assistant records carry `usage.model`, `usage.timestamp`, `inputTokens`, `outputTokens`, `cacheCreationInputTokens`, `cacheReadInputTokens`, and sometimes `totalTokens`. Legacy ledger events carry `id`, `timestamp`, `model`, `toMessageId`, and `tokens.{input,output,total}`; correlating `toMessageId` to assistant `messageId` recovers cache creation/read counts from the message usage object.
+
+Treat the file as a rewritten object. Parse it whole, skip malformed child rows, and reject malformed root JSON or a missing/mismatched root ID. Prefer ledger usage only when at least one ledger row is usable, otherwise fall back to current assistant usage. A total-only record preserves the total approximately as output so token history remains visible. A valid empty thread authoritatively replaces prior cached entries; an unreadable, torn, malformed, or mismatched rewrite preserves the previous good fold. `$AMP_DATA_DIR` is Amp's single live data root for session binding even though ccusage additionally accepts comma-separated archive roots for its fleet reports.
 
 ## Tool classification
 
@@ -330,7 +338,7 @@ Current Amp automatically compacts a thread at 90% of its context window, summar
 
 `messages()` exposes the effect after the fact: the default view begins at the latest compaction summary, while `{ full: true }` includes discarded context. The summary is represented as a normal user message in the public plugin schema, so content inspection cannot safely open or close RimZ's compaction bracket.
 
-Declare interactive context usage and compaction lifecycle unsupported. Execute mode carries per-response token composition and `max_tokens`, but that transport applies only to RimZ-supervised runs and should not be projected onto unrelated interactive threads.
+The supported upstream surface leaves interactive context usage and compaction lifecycle unavailable. RimZ can partially enrich interactive tokens from the private cache at turn boundaries and on a producer tick, but the cache has no stable context-window divisor. Execute mode carries per-response token composition and `max_tokens`, but that transport applies only to RimZ-supervised runs and should not be projected onto unrelated interactive threads.
 
 ## Models, modes, and effort
 
@@ -449,7 +457,7 @@ interface User {
 
 `user == null` is the machine-readable live unauthenticated signal. Do not persist email or names in RimZ state when the opaque ID and workspace identity suffice.
 
-`amp usage` prints the signed-in identity and current individual/workspace credit balance. `amp threads usage <T-id>` prints detailed per-thread cost when available. Verified on the refresh binary: neither `amp usage --help` nor `amp threads usage --help` exposes a `--json` flag or any machine-schema option, so a production account probe must either parse explicitly version-gated human output or remain unsupported. (`amp tools list --json` does exist, so the absence on the spend commands is a deliberate gap, not a blanket policy.) `PluginThread.messages` and plugin events carry no costs.
+`amp usage` prints the signed-in identity and current individual/workspace credit balance. `amp threads usage <T-id>` prints detailed per-thread cost when available. Verified on the refresh binary: neither `amp usage --help` nor `amp threads usage --help` exposes a `--json` flag or any machine-schema option, so an authoritative account probe must either parse explicitly version-gated human output or remain unsupported. (`amp tools list --json` does exist, so the absence on the spend commands is a deliberate gap, not a blanket policy.) `PluginThread.messages` and plugin events carry no costs. The private cache carries model/token records that support estimated spend, but those estimates do not reconcile credits or workspace billing.
 
 Amp is pay-as-you-go rather than a subscription plan: individual and non-enterprise workspace usage is passed through at provider cost, credits are pooled for a workspace, and Enterprise has different pricing and optional entitlements. Model providers vary by Amp mode, so count Amp as the provider/account while retaining model IDs only where upstream exposes them.
 
@@ -491,12 +499,12 @@ The first adapter can land a useful honest subset:
 | background parking | partial: multiple thread states exist, but no parent turn parking signal |
 | session end | unsupported: reap from pane/process liveness |
 | idle notification | partial: state transitions and native notifications setting, no notification event |
-| context usage | supervised JSONL only; unsupported interactively |
-| realtime cost | unsupported |
-| rich transcript | wired through paginated `PluginThread.messages` while plugin runtime is available |
+| context usage | partial from the private cache; no stable context-window divisor |
+| realtime cost | partial estimated pricing from private-cache tokens |
+| rich transcript | wired through paginated `PluginThread.messages`; best-effort offline history from the private cache |
 | hook install | wired: one system plugin file |
 | account identity | wired live through `PluginSystem.user` |
-| account balance/spend | partial human CLI only |
+| account balance/spend | balance is human CLI only; spend is a partial private-cache estimate |
 | remote control | native product surface; readiness requires live-process detection |
 
 Before implementation, capture these unresolved contracts against the exact supported binary and convert each into a fixture or explicit unsupported declaration:

@@ -1,6 +1,8 @@
 use super::*;
 
-use crate::agents::{AgentErr, AgentHookClass, AgentStatus, LaunchPreset, TurnPhase, step};
+use crate::agents::{
+    AgentErr, AgentHookClass, AgentStatus, LaunchPreset, PriceBook, TurnPhase, step,
+};
 use serde_json::json;
 
 #[test]
@@ -272,4 +274,155 @@ fn plugin_source_pins_active_thread_observation_wire_and_pid() {
     for event in ["session.start", "agent.start", "tool.result", "agent.end"] {
         assert!(PLUGIN_SOURCE.contains(event), "plugin missing {event}");
     }
+}
+
+#[test]
+fn rewritten_cache_streams_completed_assistant_messages_without_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("T-stream.json");
+    let path_text = path.to_string_lossy().into_owned();
+    std::fs::write(
+        &path,
+        r#"{"id":"T-stream","messages":[{"role":"assistant","messageId":"a","content":"old","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","outputTokens":1}}]}"#,
+    )
+    .unwrap();
+
+    let mut attached = crate::agents::transcript::TranscriptCursor::new(false);
+    let session_id = AgentSessionId::from("T-stream");
+    assert!(
+        attached
+            .messages(Some(&path_text), Some(&session_id), &AmpAdapter)
+            .is_empty()
+    );
+
+    std::fs::write(
+        &path,
+        r#"{"id":"T-stream","messages":[{"role":"assistant","messageId":"a","content":"old","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","outputTokens":1}},{"role":"assistant","messageId":"b","content":"new"}]}"#,
+    )
+    .unwrap();
+    assert!(
+        attached
+            .messages(Some(&path_text), Some(&session_id), &AmpAdapter)
+            .is_empty(),
+        "an in-flight assistant message is not completion-certified"
+    );
+
+    std::fs::write(
+        &path,
+        r#"{"id":"T-stream","messages":[{"role":"assistant","messageId":"a","content":"old","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","outputTokens":1}},{"role":"assistant","messageId":"b","content":"new","usage":{"timestamp":"2026-01-01T00:00:01Z","model":"gpt-5","outputTokens":1}}]}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        attached.messages(Some(&path_text), Some(&session_id), &AmpAdapter),
+        vec!["new"]
+    );
+    assert!(
+        attached
+            .messages(Some(&path_text), Some(&session_id), &AmpAdapter)
+            .is_empty()
+    );
+
+    let mut from_start = crate::agents::transcript::TranscriptCursor::new(true);
+    assert_eq!(
+        from_start.messages(Some(&path_text), Some(&session_id), &AmpAdapter),
+        vec!["old", "new"]
+    );
+}
+
+#[test]
+fn local_refresh_publishes_latest_tokens_estimated_cost_and_stat_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("T-live.json");
+    let path_text = path.to_string_lossy().into_owned();
+    std::fs::write(
+        &path,
+        r#"{"id":"T-live","messages":[{"role":"assistant","messageId":"a","content":"one","usage":{"timestamp":"2026-01-01T00:00:00Z","model":"gpt-5","inputTokens":100,"outputTokens":10}},{"role":"assistant","messageId":"b","content":"two","usage":{"timestamp":"2026-01-01T00:00:01Z","model":"gpt-5","inputTokens":200,"outputTokens":20,"cacheCreationInputTokens":30,"cacheReadInputTokens":40}}]}"#,
+    )
+    .unwrap();
+    let pricing = dir.path().join("pricing-cache.json");
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "T-live",
+        model_hint: None,
+        prior_transcript_path: Some(&path_text),
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing,
+    };
+
+    let refresh = AmpAdapter
+        .local_context_refresh(RefreshTrigger::Hook("agent_end"), &ctx)
+        .unwrap();
+    assert_eq!(refresh.model_id.as_deref(), Some("gpt-5"));
+    assert_eq!(
+        refresh
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.current_usage.as_ref())
+            .unwrap(),
+        &AgentCurrentUsage {
+            input_tokens: Some(200),
+            output_tokens: Some(20),
+            cache_creation_input_tokens: Some(30),
+            cache_read_input_tokens: Some(40),
+        }
+    );
+    assert!(
+        refresh
+            .cost
+            .as_ref()
+            .and_then(|cost| cost.total_cost_usd)
+            .is_some_and(|cost| cost > 0.0)
+    );
+    let stat = refresh.transcript_stat.unwrap();
+    let gated = LocalContextRefreshCtx {
+        prior_transcript_stat: Some(&stat),
+        ..ctx
+    };
+    assert!(
+        AmpAdapter
+            .local_context_refresh(RefreshTrigger::Tick, &gated)
+            .is_none()
+    );
+    assert!(
+        AmpAdapter
+            .local_context_refresh(RefreshTrigger::Hook("tool_result"), &ctx)
+            .is_none()
+    );
+}
+
+#[test]
+fn lifecycle_stamps_the_exact_cache_path_for_run_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let threads = dir.path().join("threads");
+    std::fs::create_dir_all(&threads).unwrap();
+    let path = threads.join("T-run.json");
+    std::fs::write(&path, r#"{"id":"T-run","messages":[]}"#).unwrap();
+    let mut observation = AmpAdapter
+        .observe_lifecycle("agent_end", &json!({"session_id":"T-run","status":"done"}))
+        .unwrap();
+
+    stamp_transcript_path(&mut observation, "T-run", dir.path());
+    assert_eq!(
+        observation.transcript_path.as_deref(),
+        Some(path.to_string_lossy().as_ref())
+    );
+}
+
+#[test]
+fn transcript_and_spend_join_into_timestamped_session_turns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("T-turns.json");
+    std::fs::write(
+        &path,
+        r#"{"id":"T-turns","messages":[{"role":"user","messageId":"u1","timestamp":"2026-01-01T00:00:00Z","content":"fix it"},{"role":"assistant","messageId":"a1","timestamp":"2026-01-01T00:00:01Z","content":"done","usage":{"timestamp":"2026-01-01T00:00:05Z","model":"gpt-5","inputTokens":100,"outputTokens":20}}]}"#,
+    )
+    .unwrap();
+    let messages = AmpAdapter.read_transcript_messages(&path, None).unwrap();
+    let spend = AmpAdapter.parse_spend(&path, None, &PriceBook::embedded());
+
+    let turns = crate::agents::turns::session_turns(&messages, &spend.entries, "T-turns", false);
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].prompt, "fix it");
+    assert_eq!(turns[0].fresh_input, 100);
+    assert_eq!(turns[0].output, 20);
+    assert_eq!(turns[0].ended_at.unwrap().as_second(), 1_767_225_605);
 }
