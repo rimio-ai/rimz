@@ -7,6 +7,8 @@
 
 mod install;
 mod payloads;
+pub mod process;
+mod transcript;
 
 use std::path::Path;
 
@@ -25,7 +27,8 @@ use super::hook_types::SessionSource;
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::{
     AgentAdapter, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, SessionOrigin, classify_agent_hook, optional_payload_string,
+    HookUninstallReport, Result, SessionOrigin, TranscriptMessage, TranscriptPage,
+    TranscriptPosition, classify_agent_hook, optional_payload_string, read_transcript_lines,
     sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
@@ -145,13 +148,13 @@ const DROID_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::ContextUsage,
         ConcernCoverage::Unsupported {
-            reason: "no token/context hook fields; transcript schema unpublished",
+            reason: "v2 settings counters are cumulative and expose no context denominator",
         },
     ),
     (
         IntegrationConcern::RealtimeCost,
         ConcernCoverage::Unsupported {
-            reason: "no cost surface",
+            reason: "v2 settings expose Factory credits without authoritative USD conversion",
         },
     ),
     (
@@ -357,6 +360,11 @@ impl AgentAdapter for DroidAdapter {
             observation.prompt = sanitize_user_prompt(prompt.as_deref());
         }
         observation.transcript_path = optional_payload_string(payload, &["transcript_path"]);
+        if let Some(path) = observation.transcript_path.as_deref() {
+            let (model, effort) = transcript::identity(Path::new(path));
+            observation.launch.model = model;
+            observation.launch.effort = effort;
+        }
         if matches!(observation.signal, LifecycleSignal::Registered)
             && session_start.as_ref().is_some_and(|start| {
                 matches!(start.source, SessionSource::Startup | SessionSource::Clear)
@@ -365,6 +373,53 @@ impl AgentAdapter for DroidAdapter {
             observation.origin = Some(SessionOrigin::Fresh);
         }
         Some(observation)
+    }
+
+    fn last_assistant_message(
+        &self,
+        event_name: &str,
+        _payload: &Value,
+        observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        (event_name == "Stop")
+            .then_some(observation.transcript_path.as_deref())
+            .flatten()
+            .and_then(|path| transcript::last_assistant_message(Path::new(path)))
+    }
+
+    fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
+        transcript::parse_messages(lines)
+    }
+
+    fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
+        transcript::parse_assistant_suffix(new_lines)
+    }
+
+    fn transcript_position(
+        &self,
+        path: &Path,
+        _session_id: Option<&AgentSessionId>,
+    ) -> Option<TranscriptPosition> {
+        transcript::supported_file(path)
+            .then(|| std::fs::metadata(path).ok())
+            .flatten()
+            .map(|meta| TranscriptPosition::new(meta.len()))
+    }
+
+    fn read_assistant_transcript_page(
+        &self,
+        path: &Path,
+        _session_id: Option<&AgentSessionId>,
+        position: TranscriptPosition,
+    ) -> Option<TranscriptPage> {
+        if !transcript::supported_file(path) {
+            return None;
+        }
+        let (bytes, next) = read_transcript_lines(path, position.get())?;
+        Some(TranscriptPage {
+            next: TranscriptPosition::new(next),
+            messages: transcript::parse_assistant_suffix(&String::from_utf8_lossy(&bytes)),
+        })
     }
 
     fn ends_session(&self, event_name: &str) -> bool {

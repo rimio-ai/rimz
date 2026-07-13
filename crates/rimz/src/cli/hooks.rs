@@ -45,7 +45,7 @@ use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
 pub(crate) use lifecycle::handle_lifecycle_hook;
-use owner::{attach_agent_owner, attach_agent_pane};
+use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid};
 use payload_ids::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
 use proctree::sibling_agent_pins;
 pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
@@ -123,6 +123,22 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         );
         return Ok(());
     }
+    let raw_agent_pid = hook_agent_pid(&source);
+    let normalized_owner_pid = if source == "droid" {
+        match raw_agent_pid.map(rimz::agents::droid::process::hook_process_disposition) {
+            Some(rimz::agents::droid::process::HookProcessDisposition::StockTui) => {
+                debug!(source = %source, "hooks feed: suppressed duplicate outer Droid TUI hook");
+                return Ok(());
+            }
+            Some(
+                rimz::agents::droid::process::HookProcessDisposition::InternalWorker { owner_pid }
+                | rimz::agents::droid::process::HookProcessDisposition::Standalone { owner_pid },
+            ) => Some(owner_pid),
+            None => None,
+        }
+    } else {
+        raw_agent_pid
+    };
     // A daemon-routed hook (Codex's app-server spawns hook children with the
     // daemon's env, not the pane's) misses the session pin in its own
     // environment, so resolution may recover it from the sibling agent
@@ -167,12 +183,28 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     let classified = agent.classify_hook(&event_name, &payload);
 
     if classified.class != AgentHookClass::AwaitingUser {
-        handle_lifecycle_hook(&workspace, &store, agent, &event_name, &payload, globals)?;
+        handle_lifecycle_hook(
+            &workspace,
+            &store,
+            agent,
+            &event_name,
+            &payload,
+            normalized_owner_pid,
+            globals,
+        )?;
         return emit_neutral(agent, &event_name);
     }
 
     if agent.descriptor().capabilities.native_ask_ui {
-        handle_lifecycle_hook(&workspace, &store, agent, &event_name, &payload, globals)?;
+        handle_lifecycle_hook(
+            &workspace,
+            &store,
+            agent,
+            &event_name,
+            &payload,
+            normalized_owner_pid,
+            globals,
+        )?;
     }
     emit_neutral(agent, &event_name)
 }

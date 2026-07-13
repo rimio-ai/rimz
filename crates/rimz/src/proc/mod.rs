@@ -25,7 +25,7 @@ pub use pane_probe::{
 
 #[cfg(target_os = "macos")]
 pub use macos::{
-    children, clk_tck, cmdline, comm, comm_and_ppid, cwd, env_var, exe_path, io_bytes,
+    argv, children, clk_tck, cmdline, comm, comm_and_ppid, cwd, env_var, exe_path, io_bytes,
     list_processes, process_start, process_start_token, real_uid, stat_metrics, write_bytes,
 };
 
@@ -215,6 +215,31 @@ pub fn comm(_pid: u32) -> Option<String> {
 #[cfg(target_os = "linux")]
 pub fn comm_and_ppid(pid: u32) -> Option<(String, u32)> {
     parse_status_name_ppid(&std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?)
+}
+
+/// The exact argument vector of `pid`. Hook ownership classifiers use this
+/// instead of flattened command lines so argument text cannot impersonate a
+/// process role. Unreadable and unsupported process tables abstain.
+#[cfg(target_os = "linux")]
+pub fn argv(pid: u32) -> Option<Vec<std::ffi::OsString>> {
+    parse_argv(&std::fs::read(format!("/proc/{pid}/cmdline")).ok()?)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn argv(_pid: u32) -> Option<Vec<std::ffi::OsString>> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn parse_argv(raw: &[u8]) -> Option<Vec<std::ffi::OsString>> {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let args = raw
+        .split(|byte| *byte == 0)
+        .filter(|arg| !arg.is_empty())
+        .map(|arg| std::ffi::OsString::from_vec(arg.to_vec()))
+        .collect::<Vec<_>>();
+    (!args.is_empty()).then_some(args)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -841,6 +866,25 @@ PPid:\t42
 Uid:\t0\t0\t0\t0
 ";
         assert_eq!(parse_status_identity(status), Some((42, 0)));
+    }
+
+    #[test]
+    fn parse_argv_preserves_argument_boundaries() {
+        use std::ffi::OsStr;
+
+        let args = parse_argv(b"droid\0exec\0--input-format\0stream-jsonrpc\0").unwrap();
+        assert_eq!(
+            args.iter()
+                .map(std::ffi::OsString::as_os_str)
+                .collect::<Vec<_>>(),
+            [
+                OsStr::new("droid"),
+                OsStr::new("exec"),
+                OsStr::new("--input-format"),
+                OsStr::new("stream-jsonrpc"),
+            ]
+        );
+        assert_eq!(parse_argv(b""), None);
     }
 
     #[test]

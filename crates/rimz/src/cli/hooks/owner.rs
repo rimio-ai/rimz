@@ -39,17 +39,21 @@ fn attach_agent_pane_with(
     observation.pane_id = ambient_pane_id();
 }
 
-pub(super) fn attach_agent_owner(source: &str, observation: &mut AgentLifecycleObservation) {
+pub(super) fn attach_agent_owner(
+    source: &str,
+    owner_pid: Option<u32>,
+    observation: &mut AgentLifecycleObservation,
+) {
     if observation.runtime_owner.is_some() {
         return;
     }
     let Some(agent_id) = observation.agent_id.as_deref().filter(|id| !id.is_empty()) else {
         return;
     };
-    let Some(pid) = observation.agent_pid.or_else(|| hook_agent_pid(source)) else {
+    let Some(pid) = observation.agent_pid.or(owner_pid) else {
         return;
     };
-    let kind = if rimz::agents::codex::pid_is_codex_daemon(pid) {
+    let kind = if source == "codex" && rimz::agents::codex::pid_is_codex_daemon(pid) {
         RuntimeOwnerKind::Daemon
     } else {
         RuntimeOwnerKind::Agent
@@ -89,5 +93,22 @@ mod tests {
         daemon.pane_id = Some(preset.clone());
         attach_agent_pane_with(&mut daemon, || Some(ambient));
         assert_eq!(daemon.pane_id, Some(preset));
+    }
+
+    #[test]
+    fn explicit_normalized_owner_pid_is_stamped_without_reprobing() {
+        let pid = std::process::id();
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::Registered,
+        );
+
+        attach_agent_owner("droid", Some(pid), &mut observation);
+
+        assert_eq!(observation.agent_pid, Some(pid));
+        assert_eq!(
+            observation.runtime_owner.as_ref().map(|owner| owner.pid),
+            Some(pid)
+        );
     }
 }

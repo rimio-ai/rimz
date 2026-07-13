@@ -8,6 +8,7 @@ pub(super) fn record_lifecycle_observation(
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
+    owner_pid: Option<u32>,
     globals: &GlobalFlags,
 ) -> Option<RecordedLifecycle> {
     if let Some(mut observation) = agent.observe_lifecycle(event_name, payload) {
@@ -17,7 +18,7 @@ pub(super) fn record_lifecycle_observation(
                 *detail = agent.ask_detail(event_name, payload);
             }
         }
-        attach_agent_owner(agent.descriptor().kind, &mut observation);
+        attach_agent_owner(agent.descriptor().kind, owner_pid, &mut observation);
         attach_agent_pane(&mut observation);
         if observation.agent_name.is_none() {
             observation.agent_name = agent_identity_env(

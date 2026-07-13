@@ -33,6 +33,14 @@ pub fn comm_and_ppid(pid: u32) -> Option<(String, u32)> {
     })
 }
 
+pub fn argv(pid: u32) -> Option<Vec<OsString>> {
+    process_with(
+        pid,
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+        |process| (!process.cmd().is_empty()).then(|| process.cmd().to_vec()),
+    )
+}
+
 pub fn env_var(pid: u32, key: &str) -> Option<String> {
     process_with(
         pid,

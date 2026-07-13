@@ -1,0 +1,14 @@
+{"type":"session_start","id":"session-fixture","version":2,"cwd":"/workspace"}
+{"type":"message","id":"hook-start-outer","parentId":null,"timestamp":"2026-07-13T20:19:38.550Z","message":{"role":"user","visibility":"user_only","hookEventName":"SessionStart","content":[]}}
+{"type":"message","id":"hook-start-worker","parentId":"hook-start-outer","timestamp":"2026-07-13T20:19:39.683Z","message":{"role":"user","visibility":"user_only","hookEventName":"SessionStart","content":[]}}
+{"type":"message","id":"abandoned-user","parentId":"hook-start-worker","timestamp":"2026-07-13T20:19:45.000Z","message":{"role":"user","content":[{"type":"text","text":"abandoned prompt"}]}}
+{"type":"message","id":"abandoned-assistant","parentId":"abandoned-user","timestamp":"2026-07-13T20:19:46.000Z","message":{"role":"assistant","modelId":"abandoned-model","reasoningEffort":"low","content":[{"type":"text","text":"abandoned answer"}]}}
+not-json
+{"type":"future_record","future":{"nested":true}}
+{"type":"message","id":"hook-prompt","parentId":"hook-start-worker","timestamp":"2026-07-13T20:19:51.259Z","message":{"role":"user","visibility":"user_only","hookEventName":"UserPromptSubmit","content":[]}}
+{"type":"message","id":"context-visible-id","parentId":"hook-prompt","timestamp":"2026-07-13T20:19:51.314Z","message":{"role":"user","visibility":"llm_only","content":[{"type":"text","text":"hidden system context"}]}}
+{"type":"message","id":"user-active","parentId":"context-visible-id","timestamp":"2026-07-13T20:19:51.315Z","message":{"role":"user","content":[{"type":"text","text":"  ping  "},{"type":"document","text":"hidden document"}]}}
+{"type":"message","id":"assistant-active","parentId":"user-active","timestamp":"2026-07-13T20:19:54.616Z","message":{"role":"assistant","modelId":"custom:fixture-model","reasoningEffort":"high","content":[{"type":"thinking","thinking":"hidden reasoning"},{"type":"text","text":" pong "},{"type":"tool_use","name":"Read"},{"type":"text","text":"second block"}]}}
+{"type":"message","id":"hook-stop","parentId":"assistant-active","timestamp":"2026-07-13T20:19:54.629Z","message":{"role":"user","visibility":"user_only","hookEventName":"Stop","content":[]}}
+{"type":"message","id":"hook-end-duplicate","parentId":"hook-prompt","timestamp":"2026-07-13T20:20:09.436Z","message":{"role":"user","visibility":"user_only","hookEventName":"SessionEnd","content":[]}}
+{"type":"message","id":"hook-end-active","parentId":"hook-stop","timestamp":"2026-07-13T20:20:09.452Z","message":{"role":"user","visibility":"user_only","hookEventName":"SessionEnd","content":[]}}

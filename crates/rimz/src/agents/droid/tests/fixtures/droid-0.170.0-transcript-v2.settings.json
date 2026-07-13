@@ -1,0 +1,6 @@
+{
+  "model": "custom:settings-model",
+  "reasoningEffort": "medium",
+  "tokenUsage": { "inputTokens": 18007, "outputTokens": 31, "factoryCredits": 0 },
+  "inclusiveTokenUsage": { "inputTokens": 18007, "outputTokens": 31, "factoryCredits": 0 }
+}

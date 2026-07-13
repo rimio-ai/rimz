@@ -264,6 +264,7 @@ fn stop_failure_records_turn_error_transcript_entry() {
             "error": "overloaded",
             "last_assistant_message": "API Error: Response stalled mid-stream. The response above may be incomplete."
         }),
+        Some(std::process::id()),
         &globals,
     )
     .unwrap();
@@ -324,6 +325,7 @@ fn gemini_first_hook_path_overrides_a_remembered_collision() {
             "transcript_path": hook_path,
             "source": "startup"
         }),
+        Some(std::process::id()),
         &globals,
     )
     .unwrap();
@@ -339,6 +341,63 @@ fn gemini_first_hook_path_overrides_a_remembered_collision() {
         merged.context.model_id.as_deref(),
         Some("gemini-3-pro-preview")
     );
+}
+
+#[test]
+fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
+    let (dir, store) = hooks_test_store();
+    let workspace = hooks_test_workspace(Some("main"));
+    let globals = hooks_test_globals();
+    let transcript_path = dir.path().join("droid-session.jsonl");
+    std::fs::write(
+        &transcript_path,
+        concat!(
+            "{\"type\":\"session_start\",\"version\":2}\n",
+            "{\"type\":\"message\",\"id\":\"user\",\"timestamp\":\"2026-07-13T20:19:51.315Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"ping\"}]}}\n",
+            "{\"type\":\"message\",\"id\":\"assistant\",\"parentId\":\"user\",\"timestamp\":\"2026-07-13T20:19:54.616Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"pong\"}]}}\n",
+        ),
+    )
+    .unwrap();
+    let path = transcript_path.to_string_lossy();
+    let owner_pid = std::process::id();
+
+    handle_lifecycle_hook(
+        &workspace,
+        &store,
+        &rimz::agents::DroidAdapter,
+        "UserPromptSubmit",
+        &serde_json::json!({
+            "session_id": "droid-session",
+            "transcript_path": path,
+            "prompt": "ping"
+        }),
+        Some(owner_pid),
+        &globals,
+    )
+    .unwrap();
+    handle_lifecycle_hook(
+        &workspace,
+        &store,
+        &rimz::agents::DroidAdapter,
+        "Stop",
+        &serde_json::json!({
+            "session_id": "droid-session",
+            "transcript_path": path
+        }),
+        Some(owner_pid),
+        &globals,
+    )
+    .unwrap();
+
+    let entries = rimz::transcript::read_all(store.paths()).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].entry, rimz::transcript::TranscriptKind::Prompt);
+    assert_eq!(entries[0].text, "ping");
+    assert_eq!(
+        entries[1].entry,
+        rimz::transcript::TranscriptKind::Assistant
+    );
+    assert_eq!(entries[1].text, "pong");
 }
 
 #[test]

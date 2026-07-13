@@ -30,11 +30,13 @@ pub(crate) fn handle_lifecycle_hook(
     agent: &dyn AgentAdapter,
     event_name: &str,
     payload: &Value,
+    owner_pid: Option<u32>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let agent_id = payload_agent_id(payload);
-    let recorded =
-        record_lifecycle_observation(workspace, store, agent, event_name, payload, globals);
+    let recorded = record_lifecycle_observation(
+        workspace, store, agent, event_name, payload, owner_pid, globals,
+    );
     let assistant_message = record_assistant_response(
         workspace,
         store,
