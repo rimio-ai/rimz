@@ -4,6 +4,8 @@ pub(super) struct PriorAgentPane<'a> {
     pub(super) kind: &'a str,
     pub(super) agent_id: &'a str,
     pub(super) pane_id: Option<&'a PaneId>,
+    pub(super) status: rimz::agents::AgentStatus,
+    pub(super) origin: Option<rimz::agents::SessionOrigin>,
     /// The session's last recorded activity — what decides whether its stamp
     /// still plausibly owns a live pane ([`pane_start_allows_bind`]).
     pub(super) last_activity: jiff::Timestamp,
@@ -16,14 +18,23 @@ pub(super) fn prior_agent_panes(agents: &[AgentState]) -> Vec<PriorAgentPane<'_>
             kind: agent.kind.as_str(),
             agent_id: agent.agent_id.as_str(),
             pane_id: agent.pane.as_ref().map(|pane| &pane.pane_id),
+            status: agent.status,
+            origin: agent.origin,
             last_activity: agent.last_activity,
         })
         .collect()
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct BindingSession<'a> {
+    pub(super) kind: &'a str,
+    pub(super) agent_id: &'a str,
+    pub(super) origin: Option<rimz::agents::SessionOrigin>,
+    pub(super) registered_at: Option<jiff::Timestamp>,
+}
+
 pub(super) fn select_focused_pane_binding(
-    kind: &str,
-    agent_id: &str,
+    incoming: BindingSession<'_>,
     worktree_path: &str,
     prior_agents: &[PriorAgentPane<'_>],
     panes: &[PaneRef],
@@ -32,14 +43,36 @@ pub(super) fn select_focused_pane_binding(
 ) -> FocusedPaneBindingSelection {
     let mut candidate_records = panes
         .iter()
-        .map(|pane| binding_candidate_record(kind, agent_id, worktree_path, prior_agents, pane))
+        .map(|pane| {
+            binding_candidate_record(
+                incoming.kind,
+                incoming.agent_id,
+                worktree_path,
+                incoming.registered_at,
+                prior_agents,
+                pane,
+            )
+        })
         .collect::<Vec<_>>();
     let mut candidates = selectable_binding_candidates(panes, &candidate_records, false);
+    let mut occupied_sole_candidate = false;
     if candidates.is_empty()
         && allow_occupied_daemon_pane
-        && daemon_session_can_share_occupied_pane(kind, agent_id, prior_agents)
+        && daemon_session_can_share_occupied_pane(incoming.kind, incoming.agent_id, prior_agents)
     {
         candidates = selectable_occupied_daemon_candidates(panes, &candidate_records, client_focus);
+        if candidates.is_empty() && incoming.origin == Some(rimz::agents::SessionOrigin::Fresh) {
+            candidates = selectable_resting_fresh_occupied_candidates(
+                panes,
+                &candidate_records,
+                incoming.kind,
+                prior_agents,
+            );
+            occupied_sole_candidate = candidates.len() == 1;
+            if !occupied_sole_candidate {
+                candidates.clear();
+            }
+        }
         allow_occupied_daemon_candidates(&mut candidate_records, &candidates);
     }
     let candidate_count = candidates.len();
@@ -58,7 +91,11 @@ pub(super) fn select_focused_pane_binding(
             pane: Some(candidates[0].clone()),
             pane_id: Some(candidates[0].pane_id.clone()),
             candidate_count,
-            method: BindingSelectionMethod::SingleCandidate,
+            method: if occupied_sole_candidate {
+                BindingSelectionMethod::OccupiedSoleCandidate
+            } else {
+                BindingSelectionMethod::SingleCandidate
+            },
             candidates: candidate_records,
         };
     }
@@ -106,6 +143,31 @@ pub(super) fn select_focused_pane_binding(
         method,
         candidates: candidate_records,
     }
+}
+
+fn selectable_resting_fresh_occupied_candidates<'a>(
+    panes: &'a [PaneRef],
+    records: &[BindingCandidateRecord],
+    kind: &str,
+    prior_agents: &[PriorAgentPane<'_>],
+) -> Vec<&'a PaneRef> {
+    panes
+        .iter()
+        .zip(records.iter())
+        .filter_map(|(pane, record)| {
+            let owner_id = record.occupied_by_agent_id.as_deref()?;
+            let owner = prior_agents
+                .iter()
+                .find(|agent| agent.kind == kind && agent.agent_id == owner_id)?;
+            (binding_candidate_selectable(record, true)
+                && !matches!(
+                    owner.status,
+                    rimz::agents::AgentStatus::Running | rimz::agents::AgentStatus::Waiting
+                )
+                && owner.origin == Some(rimz::agents::SessionOrigin::Fresh))
+            .then_some(pane)
+        })
+        .collect()
 }
 
 fn selectable_occupied_daemon_candidates<'a>(
@@ -199,6 +261,7 @@ pub(super) struct FocusedPaneBindingSelection {
 pub(super) enum BindingSelectionMethod {
     None,
     SingleCandidate,
+    OccupiedSoleCandidate,
     ClientFocus,
     TabFocus,
 }
@@ -221,6 +284,7 @@ pub(super) enum BindingRejectReason {
     CwdMismatch { got: Option<String> },
     CommandMismatch { got: Option<String> },
     StampedToOther { agent_id: String },
+    StartedAfterSession,
     NotInClientFocus,
     NotTabFocused,
     Ambiguous { n: usize },
@@ -230,6 +294,7 @@ fn binding_candidate_record(
     kind: &str,
     agent_id: &str,
     worktree_path: &str,
+    incoming_registered_at: Option<jiff::Timestamp>,
     prior_agents: &[PriorAgentPane<'_>],
     pane: &PaneRef,
 ) -> BindingCandidateRecord {
@@ -250,6 +315,16 @@ fn binding_candidate_record(
         reject_reasons.push(BindingRejectReason::StampedToOther {
             agent_id: stamped.clone(),
         });
+    }
+    if incoming_registered_at.is_some_and(|registered_at| {
+        pane.pane_process_start
+            .is_some_and(|started_at| started_at > registered_at)
+            && !pane
+                .resumed_session_id
+                .as_ref()
+                .is_some_and(|resumed| resumed.as_str() == agent_id)
+    }) {
+        reject_reasons.push(BindingRejectReason::StartedAfterSession);
     }
     BindingCandidateRecord {
         pane_id: pane.pane_id.clone(),

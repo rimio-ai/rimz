@@ -1,6 +1,6 @@
 use super::binding_select::{
-    BindingCandidateRecord, BindingSelectionMethod, prior_agent_panes, select_focused_pane_binding,
-    session_already_stamped,
+    BindingCandidateRecord, BindingSelectionMethod, BindingSession, prior_agent_panes,
+    select_focused_pane_binding, session_already_stamped,
 };
 use super::*;
 
@@ -80,6 +80,11 @@ pub(super) fn recover_focused_pane_binding(
     if session_already_stamped(kind, &agent_id, &prior) {
         return;
     }
+    let incoming_registered_at = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.kind.as_str() == kind && agent.agent_id.as_str() == agent_id)
+        .and_then(|agent| agent.registered_at);
 
     let inputs = live_binding_inputs(
         mux_hint,
@@ -103,8 +108,12 @@ pub(super) fn recover_focused_pane_binding(
         return;
     }
     let selection = select_focused_pane_binding(
-        kind,
-        &agent_id,
+        BindingSession {
+            kind,
+            agent_id: &agent_id,
+            origin: observation.origin,
+            registered_at: incoming_registered_at,
+        },
         &worktree_path,
         &prior,
         &inputs.panes,
