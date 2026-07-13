@@ -49,6 +49,18 @@ fn ensure_session_applies_room_contract() {
             .any(|line| line.contains("M-Enter") && line.contains("[13;3u")),
         "M-Enter must inject CSI-u soft newline: {root_keys}"
     );
+    assert!(
+        server
+            .show_option(&["-s"], "user-keys[240]")
+            .contains("27u"),
+        "User240 must name modifier-less CSI-u Escape",
+    );
+    assert!(
+        root_keys
+            .lines()
+            .any(|line| line.contains("User240") && line.contains("send-keys Escape")),
+        "User240 must normalize modifier-less CSI-u to Escape: {root_keys}",
+    );
     assert_eq!(server.show_option(&["-t", "rimz-options"], "mouse"), "on");
     assert_eq!(
         server.show_option(&["-w", "-t", "rimz-options"], "allow-passthrough"),

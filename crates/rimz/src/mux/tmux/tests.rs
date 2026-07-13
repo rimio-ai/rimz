@@ -40,13 +40,13 @@ fn log_classifier_matches_error_and_fatal_mentions() {
 }
 
 #[test]
-fn tmux_soft_newline_bindings_follow_extended_key_format() {
+fn tmux_extended_key_bindings_follow_extended_key_format() {
     let csi_u = crate::config::TmuxConfig {
         extended_keys_format: crate::config::TmuxExtendedKeysFormat::CsiU,
         ..Default::default()
     };
     assert_eq!(
-        options::tmux_soft_newline_bindings(&csi_u),
+        options::tmux_extended_key_bindings(&csi_u),
         vec![
             vec![
                 "bind-key".to_owned(),
@@ -64,6 +64,13 @@ fn tmux_soft_newline_bindings_follow_extended_key_format() {
                 "Escape".to_owned(),
                 "[13;3u".to_owned(),
             ],
+            vec![
+                "bind-key".to_owned(),
+                "-n".to_owned(),
+                "User240".to_owned(),
+                "send-keys".to_owned(),
+                "Escape".to_owned(),
+            ],
         ],
     );
 
@@ -72,7 +79,7 @@ fn tmux_soft_newline_bindings_follow_extended_key_format() {
         ..Default::default()
     };
     assert_eq!(
-        options::tmux_soft_newline_bindings(&xterm),
+        options::tmux_extended_key_bindings(&xterm),
         vec![
             vec![
                 "bind-key".to_owned(),
@@ -90,6 +97,13 @@ fn tmux_soft_newline_bindings_follow_extended_key_format() {
                 "Escape".to_owned(),
                 "[27;3;13~".to_owned(),
             ],
+            vec![
+                "bind-key".to_owned(),
+                "-n".to_owned(),
+                "User240".to_owned(),
+                "send-keys".to_owned(),
+                "Escape".to_owned(),
+            ],
         ],
     );
 
@@ -97,7 +111,7 @@ fn tmux_soft_newline_bindings_follow_extended_key_format() {
         extended_keys: false,
         ..Default::default()
     };
-    assert!(options::tmux_soft_newline_bindings(&disabled).is_empty());
+    assert!(options::tmux_extended_key_bindings(&disabled).is_empty());
 }
 
 #[test]

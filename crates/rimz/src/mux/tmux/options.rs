@@ -159,7 +159,7 @@ pub(super) fn tmux_bool(value: bool) -> String {
 }
 
 pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
-    vec![
+    let mut opts = vec![
         ("focus-events", tmux_bool(config.focus_events)),
         ("set-clipboard", config.set_clipboard.as_str().to_owned()),
         ("extended-keys", tmux_bool(config.extended_keys)),
@@ -168,7 +168,13 @@ pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, Str
             config.extended_keys_format.as_str().to_owned(),
         ),
         ("escape-time", config.escape_time_ms.to_string()),
-    ]
+    ];
+    if config.extended_keys {
+        // tmux accepts `ESC[27;1u` as Escape but leaks Ghostty's bare
+        // `ESC[27u`; name that sequence so the root binding can normalize it.
+        opts.push(("user-keys[240]", "\u{1b}[27u".to_owned()));
+    }
+    opts
 }
 
 /// Server options Rimz appends so the user's existing array entries survive.
@@ -183,7 +189,7 @@ pub(super) fn tmux_server_append_options(config: &TmuxConfig) -> Vec<(&'static s
     opts
 }
 
-pub(super) fn tmux_soft_newline_bindings(config: &TmuxConfig) -> Vec<Vec<String>> {
+pub(super) fn tmux_extended_key_bindings(config: &TmuxConfig) -> Vec<Vec<String>> {
     if !config.extended_keys {
         return Vec::new();
     }
@@ -193,7 +199,7 @@ pub(super) fn tmux_soft_newline_bindings(config: &TmuxConfig) -> Vec<Vec<String>
         TmuxExtendedKeysFormat::Xterm => ("[27;2;13~", "[27;3;13~"),
     };
 
-    [("S-Enter", shift_enter), ("M-Enter", alt_enter)]
+    let mut bindings: Vec<Vec<String>> = [("S-Enter", shift_enter), ("M-Enter", alt_enter)]
         .into_iter()
         .map(|(key, sequence)| {
             vec![
@@ -205,7 +211,15 @@ pub(super) fn tmux_soft_newline_bindings(config: &TmuxConfig) -> Vec<Vec<String>
                 sequence.to_owned(),
             ]
         })
-        .collect()
+        .collect();
+    bindings.push(vec![
+        "bind-key".to_owned(),
+        "-n".to_owned(),
+        "User240".to_owned(),
+        "send-keys".to_owned(),
+        "Escape".to_owned(),
+    ]);
+    bindings
 }
 
 pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
@@ -505,6 +519,7 @@ mod tests {
                 ("extended-keys", "on".to_owned()),
                 ("extended-keys-format", "csi-u".to_owned()),
                 ("escape-time", "0".to_owned()),
+                ("user-keys[240]", "\u{1b}[27u".to_owned()),
             ],
         );
         assert_eq!(
@@ -562,6 +577,11 @@ mod tests {
             extended_keys: false,
             ..TmuxConfig::default()
         };
+        assert!(
+            tmux_server_options(&config)
+                .iter()
+                .all(|(key, _)| *key != "user-keys[240]"),
+        );
         assert_eq!(
             tmux_server_append_options(&config),
             vec![("terminal-features", "*:sync".to_owned())],

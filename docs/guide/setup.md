@@ -213,11 +213,13 @@ set -g  allow-passthrough on     # let desktop notifications pass through tmux
 set -s  extended-keys on             # distinguish modified Enter from Enter
 set -s  extended-keys-format csi-u   # forward Shift+Enter / Alt+Enter as CSI-u
 set -ga terminal-features "*:extkeys" # ask the outer terminal to send them
+set -s  user-keys[240] "\e[27u"        # name Ghostty's modifier-less CSI-u Esc
+bind-key -n User240 send-keys Escape   # normalize it back to plain Esc
 bind-key -n S-Enter send-keys Escape "[13;2u"
 bind-key -n M-Enter send-keys Escape "[13;3u"
 set -g  set-clipboard on         # yank into the host clipboard over OSC52
 ```
 
-Three of these earn a note; the block's comments carry the rest. `escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. The extended-keys trio plus the two `bind-key` lines let an agent's composer receive Shift+Enter and Alt+Enter as soft newlines while plain Enter still submits — on tmux 3.5.x this trades clean multiline paste while extended keys are active (use Ctrl+J or tmux 3.6+ for both). `allow-passthrough on` lets the desktop-notification bytes RimZ emits reach your terminal.
+Three of these earn a note; the block's comments carry the rest. `escape-time 0` removes the lag that otherwise makes `Esc` feel sticky in any full-screen TUI. The extended-keys trio plus the modified-Enter bindings let an agent's composer receive Shift+Enter and Alt+Enter as soft newlines while plain Enter still submits — on tmux 3.5.x this trades clean multiline paste while extended keys are active (use Ctrl+J or tmux 3.6+ for both); the `user-keys` pair keeps plain Esc clean on terminals such as Ghostty that answer the extended-keys request with modifier-less CSI-u. `allow-passthrough on` lets the desktop-notification bytes RimZ emits reach your terminal.
 
 Copy-mode, stable window names, titled pane borders, smart splits, Zellij-parity keys, and the themed status bar continue in [Zellij and tmux baselines](./multiplexer.md#tmux).

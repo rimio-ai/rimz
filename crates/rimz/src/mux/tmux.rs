@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use options::{
-    tmux_server_append_options, tmux_server_options, tmux_session_options,
-    tmux_soft_newline_bindings, tmux_window_options,
+    tmux_extended_key_bindings, tmux_server_append_options, tmux_server_options,
+    tmux_session_options, tmux_window_options,
 };
 
 use super::{CommandSpec, MuxBackend, Result};
@@ -203,7 +203,7 @@ impl TmuxBackend {
                 value,
             ]);
         }
-        commands.extend(tmux_soft_newline_bindings(config));
+        commands.extend(tmux_extended_key_bindings(config));
         self.batch(&commands)
     }
 }
