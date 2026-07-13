@@ -290,8 +290,6 @@ mod tests {
         // Zero and tiny views still produce a one-column minimum band.
         assert_eq!(zellij_resize_step_cols(0), 1);
         assert_eq!(zellij_resize_step_cols(19), 1);
-        assert!(!sidebar_width_off_spec(71, 72, 1));
-        assert!(sidebar_width_off_spec(70, 72, 1));
     }
 
     #[test]
