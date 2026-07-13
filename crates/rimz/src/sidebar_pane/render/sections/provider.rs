@@ -1279,7 +1279,8 @@ fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -
 /// paints the row as fully spent — red, no countdown — regardless of the window's
 /// own reading (a longer spent window gates it). A window with no usage
 /// percentage paints as an unknown dim track, preserving the label but claiming
-/// no remaining budget.
+/// no remaining budget. A lifted window paints as an unlimited full bar with
+/// `∞` in the reset-marker cell until the provider reports that duration again.
 ///
 /// A window that has **not started** drops its countdown — a full bar with no
 /// `↻` reads "send a message to start it" rather than a misleading ticking reset.
@@ -1298,6 +1299,26 @@ fn metered_bar_row(
     now: Timestamp,
 ) -> Vec<Span<'static>> {
     let label = window_label(window.duration_mins);
+    if !force_exhausted && window.lifted {
+        let bar_width = provider_bar_width(region);
+        let mut spans = vec![
+            Span::styled(
+                format!("{label:<PROVIDER_LABEL_WIDTH$}"),
+                mana_style(theme, 100, zones),
+            ),
+            Span::raw(" "),
+        ];
+        spans.extend(mana_bar_spans(theme, 100, bar_width, zones));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            theme.glyph(GlyphRole::ChromeInfinity).to_owned(),
+            theme.money_style(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(
+            " ".repeat(PROVIDER_VALUE_WIDTH.saturating_sub(1)),
+        ));
+        return spans;
+    }
     if !force_exhausted && window.used_percentage.is_none() {
         return unknown_bar_row(theme, &label, region);
     }

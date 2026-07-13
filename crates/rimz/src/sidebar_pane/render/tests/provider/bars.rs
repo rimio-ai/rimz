@@ -198,6 +198,75 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
 }
 
 #[test]
+fn lifted_window_is_a_full_unlimited_row_aligned_with_live_windows() {
+    let theme = Theme::fixed(false);
+    let now = fixed_now();
+    let mut panel = provider_panel("codex", "Codex", 33, true, false, None);
+    panel.windows = vec![
+        RateLimitWindow {
+            duration_mins: Some(5 * 60),
+            lifted: true,
+            ..Default::default()
+        },
+        RateLimitWindow {
+            used_percentage: Some(40),
+            resets_at: Some(now + Duration::from_secs(6 * 86_400)),
+            duration_mins: Some(7 * 24 * 60),
+            ..Default::default()
+        },
+    ];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2);
+    let texts: Vec<String> = rows
+        .iter()
+        .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert!(texts[0].starts_with("5h "), "{texts:?}");
+    assert_eq!(texts[0].chars().filter(|ch| *ch == '▰').count(), 17);
+    assert_eq!(texts[0].chars().position(|ch| ch == '∞'), Some(22));
+    assert_eq!(texts[1].chars().position(|ch| ch == '↻'), Some(22));
+    assert_eq!(
+        bar_row_facts(&rows[0]).0,
+        mana_style(&theme, 100, &Default::default()).fg,
+        "the lifted label uses the full-mana tone"
+    );
+}
+
+#[test]
+fn spent_longer_window_gates_a_lifted_row_as_exhausted() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("codex", "Codex", 33, true, false, None);
+    panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
+    panel.windows = vec![
+        RateLimitWindow {
+            duration_mins: Some(5 * 60),
+            lifted: true,
+            ..Default::default()
+        },
+        RateLimitWindow {
+            used_percentage: Some(100),
+            duration_mins: Some(7 * 24 * 60),
+            ..Default::default()
+        },
+    ];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2);
+    let text = rows[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(!text.contains('∞'), "a binding longer cap wins: {text:?}");
+    assert!(!text.contains('▰'), "the gated bar has no remaining fill");
+    let (label, track, has_reset) = bar_row_facts(&rows[0]);
+    assert_eq!(label, theme.alarm(Modifier::empty()).fg);
+    assert_eq!(track, label);
+    assert!(!has_reset);
+}
+
+#[test]
 fn provider_reset_marker_greens_only_mature_underspend() {
     let theme = Theme::fixed(false);
     let now = fixed_now();

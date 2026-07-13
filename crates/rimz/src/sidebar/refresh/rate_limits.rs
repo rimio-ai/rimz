@@ -70,7 +70,31 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
     // Authoritative fetch: stamp the capture instant so the fusion ranks it as
     // truth, and clear any in-flight best-effort refill for this kind — the
     // official reading settles the question the debounce was waiting on.
-    let windows = windows.stamped_at(Timestamp::now());
+    let observed_at = Timestamp::now();
+    let mut windows = windows.stamped_at(observed_at);
+    if !windows.windows.is_empty() {
+        let reported: BTreeSet<u32> = windows
+            .windows
+            .iter()
+            .filter_map(|window| window.duration_mins)
+            .collect();
+        if let Some(previous) = cache.windows.get(kind) {
+            windows.windows.extend(
+                previous
+                    .windows
+                    .iter()
+                    .filter_map(|window| window.duration_mins)
+                    .filter(|duration| !reported.contains(duration))
+                    .map(|duration_mins| RateLimitWindow {
+                        duration_mins: Some(duration_mins),
+                        observed_at: Some(observed_at),
+                        source: crate::agents::context::WindowSource::Authoritative,
+                        lifted: true,
+                        ..Default::default()
+                    }),
+            );
+        }
+    }
     cache.windows.insert(kind.to_owned(), windows);
     cache.pending.remove(kind);
     write_rate_limits_cache(&path, &cache);
@@ -130,6 +154,7 @@ fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
         duration_mins: cached.duration_mins,
         observed_at: cached.observed_at,
         source: cached.source,
+        lifted: cached.lifted,
     }
 }
 

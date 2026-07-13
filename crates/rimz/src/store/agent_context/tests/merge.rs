@@ -660,6 +660,7 @@ fn observed_context() -> AgentContext {
                 duration_mins: Some(300),
                 observed_at: Some(observed_at()),
                 source: WindowSource::BestEffort,
+                ..Default::default()
             }],
         }),
         pr: None,

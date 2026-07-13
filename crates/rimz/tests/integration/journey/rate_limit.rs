@@ -171,6 +171,7 @@ fn windows(used: u8, resets_at: Timestamp) -> AgentRateLimits {
             duration_mins: Some(300),
             observed_at: Some(Timestamp::now()),
             source: WindowSource::Authoritative,
+            ..Default::default()
         }],
     }
 }

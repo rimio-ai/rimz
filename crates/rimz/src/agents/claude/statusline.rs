@@ -171,6 +171,7 @@ fn rate_window(field: Option<RateWindowField>, duration_mins: u32) -> Option<Rat
         // `observed_at` is stamped in `into_context`, where the capture time is known.
         observed_at: None,
         source: WindowSource::BestEffort,
+        ..Default::default()
     })
 }
 

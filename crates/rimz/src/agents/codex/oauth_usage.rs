@@ -345,6 +345,7 @@ fn collect_windows(
             // `observed_at` stamped to the fetch instant at merge.
             observed_at: None,
             source: WindowSource::Authoritative,
+            ..Default::default()
         })
         .filter(|window| {
             window.used_percentage.is_some()

@@ -292,6 +292,7 @@ pub(super) fn collect_windows(
             // stamped in `into_context`.
             observed_at: None,
             source: WindowSource::Authoritative,
+            ..Default::default()
         })
         .collect();
     (!windows.is_empty()).then_some(AgentRateLimits { windows })

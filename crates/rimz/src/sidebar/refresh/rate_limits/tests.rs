@@ -476,6 +476,87 @@ fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
 }
 
 #[test]
+fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.shared_rate_limits_path();
+    let five_hours = 5 * 60;
+    let seven_days = 7 * 24 * 60;
+
+    write_rate_limits_cache(
+        &path,
+        &RateLimitsCache {
+            refreshed_at_ms: 1,
+            windows: BTreeMap::from([(
+                "codex".to_owned(),
+                AgentRateLimits {
+                    windows: vec![
+                        rl_window_mins(20, None, five_hours),
+                        rl_window_mins(40, None, seven_days),
+                    ],
+                },
+            )]),
+            pending: BTreeMap::new(),
+        },
+    );
+
+    let only_week = AgentRateLimits {
+        windows: vec![rl_window_mins(41, None, seven_days)],
+    };
+    merge_account_rate_limits(&runtime, "codex", only_week.clone());
+    merge_account_rate_limits(&runtime, "codex", only_week);
+
+    let cache = read_rate_limits_cache(&path);
+    let windows = &cache.windows["codex"].windows;
+    assert_eq!(windows.len(), 2, "re-merging the omission is idempotent");
+    let lifted = windows
+        .iter()
+        .find(|window| window.duration_mins == Some(five_hours))
+        .expect("the omitted 5h window remains visible");
+    assert!(lifted.lifted);
+    assert_eq!(lifted.used_percentage, None);
+    assert_eq!(lifted.resets_at, None);
+    assert_eq!(lifted.source, WindowSource::Authoritative);
+    assert!(lifted.observed_at.is_some());
+    assert!(
+        windows
+            .iter()
+            .find(|window| window.duration_mins == Some(seven_days))
+            .is_some_and(|window| !window.lifted && window.used_percentage == Some(41)),
+        "the reported 7d window stays a real reading"
+    );
+
+    merge_account_rate_limits(
+        &runtime,
+        "codex",
+        AgentRateLimits {
+            windows: vec![
+                rl_window_mins(2, None, five_hours),
+                rl_window_mins(42, None, seven_days),
+            ],
+        },
+    );
+    let cache = read_rate_limits_cache(&path);
+    assert!(
+        cache.windows["codex"]
+            .windows
+            .iter()
+            .all(|window| !window.lifted),
+        "reporting the duration again clears the lift"
+    );
+
+    merge_account_rate_limits(&runtime, "codex", AgentRateLimits::default());
+    assert!(
+        read_rate_limits_cache(&path).windows["codex"]
+            .windows
+            .is_empty(),
+        "an empty reading does not infer lifted windows"
+    );
+}
+
+#[test]
 fn drop_kind_rate_limits_removes_only_that_kinds_windows_and_pending() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -607,6 +688,7 @@ fn be(used: u8, resets_at: Timestamp, observed_at: Timestamp) -> RateLimitWindow
         duration_mins: Some(300),
         observed_at: Some(observed_at),
         source: WindowSource::BestEffort,
+        ..Default::default()
     }
 }
 
@@ -655,6 +737,29 @@ fn fuse_authoritative_drop_is_immediate() {
         Some(2),
         "an official reading lowers the bar now"
     );
+    assert!(pending.is_none());
+}
+
+#[test]
+fn fuse_carries_a_lifted_window_until_a_real_reading_replaces_it() {
+    let now = fuse_now();
+    let lifted = RateLimitWindow {
+        duration_mins: Some(300),
+        observed_at: Some(now),
+        source: WindowSource::Authoritative,
+        lifted: true,
+        ..Default::default()
+    };
+
+    let (carried, pending) = fuse_window(Some(&lifted), None, None, now, true);
+    assert_eq!(carried.as_ref(), Some(&lifted));
+    assert!(pending.is_none());
+
+    let reset = now + SignedDuration::from_secs(3_600);
+    let live = auth(1, reset, now);
+    let (replaced, pending) = fuse_window(Some(&lifted), Some(&live), None, now, true);
+    assert_eq!(replaced.as_ref(), Some(&live));
+    assert!(!replaced.expect("a real reading").lifted);
     assert!(pending.is_none());
 }
 

@@ -266,6 +266,7 @@ fn window(field: Option<WindowWire>, duration_mins: u32) -> Option<RateLimitWind
         // authoritative; `observed_at` is stamped to the fetch instant at merge.
         observed_at: None,
         source: WindowSource::Authoritative,
+        ..Default::default()
     })
 }
 

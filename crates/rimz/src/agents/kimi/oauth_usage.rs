@@ -159,6 +159,7 @@ fn parse_window(row: &Value, now: Timestamp) -> Option<RateLimitWindow> {
         duration_mins,
         observed_at: Some(now),
         source: WindowSource::Authoritative,
+        ..Default::default()
     })
 }
 

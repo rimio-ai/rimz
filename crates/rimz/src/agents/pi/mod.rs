@@ -776,6 +776,7 @@ fn parse_rate_limit_window(value: &Value) -> Option<RateLimitWindow> {
             duration_mins,
             observed_at,
             source: WindowSource::BestEffort,
+            ..Default::default()
         },
     )
 }

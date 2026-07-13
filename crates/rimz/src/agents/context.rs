@@ -344,6 +344,15 @@ pub struct RateLimitWindow {
     /// Where the reading came from, deciding how far the fusion trusts a drop.
     #[serde(default, skip_serializing_if = "WindowSource::is_best_effort")]
     pub source: WindowSource,
+    /// An authoritative full reading omitted this previously reported duration,
+    /// so the provider is not currently enforcing the limit. The next reading
+    /// that reports the duration replaces this marker.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lifted: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Where a [`RateLimitWindow`] reading came from, deciding how far the fusion
@@ -397,6 +406,7 @@ impl RateLimitWindow {
                 duration_mins: Some(mins),
                 observed_at: self.observed_at,
                 source: self.source,
+                lifted: self.lifted,
             },
             _ => self,
         }
