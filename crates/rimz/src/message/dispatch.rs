@@ -21,14 +21,33 @@ pub struct QueueTarget<'a> {
     agent: Option<&'a AgentState>,
 }
 
-#[derive(Clone)]
-pub enum SendMode {
-    Steer {
-        enter: bool,
-        force: bool,
-        auto_compact: Option<AutoCompact>,
-    },
-    Boundary {
+pub struct SendMode {
+    steer: bool,
+    enter: bool,
+    force: bool,
+    auto_compact: Option<AutoCompact>,
+    gate: DeliveryGate,
+    not_before: Option<Timestamp>,
+    after: Vec<AfterCondition>,
+    when: Vec<WhenCondition>,
+}
+
+impl SendMode {
+    pub fn steer(enter: bool, force: bool, auto_compact: Option<AutoCompact>) -> Self {
+        Self {
+            steer: true,
+            enter,
+            force,
+            auto_compact,
+            gate: DeliveryGate::Any,
+            not_before: None,
+            after: Vec::new(),
+            when: Vec::new(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn boundary(
         enter: bool,
         gate: DeliveryGate,
         force: bool,
@@ -36,58 +55,17 @@ pub enum SendMode {
         not_before: Option<Timestamp>,
         after: Vec<AfterCondition>,
         when: Vec<WhenCondition>,
-    },
-}
-
-impl SendMode {
-    fn enter(&self) -> bool {
-        match self {
-            Self::Steer { enter, .. } | Self::Boundary { enter, .. } => *enter,
+    ) -> Self {
+        Self {
+            steer: false,
+            enter,
+            force,
+            auto_compact,
+            gate,
+            not_before,
+            after,
+            when,
         }
-    }
-
-    fn gate(&self) -> DeliveryGate {
-        match self {
-            Self::Steer { .. } => DeliveryGate::Any,
-            Self::Boundary { gate, .. } => *gate,
-        }
-    }
-
-    fn force(&self) -> bool {
-        match self {
-            Self::Steer { force, .. } | Self::Boundary { force, .. } => *force,
-        }
-    }
-
-    fn auto_compact(&self) -> Option<AutoCompact> {
-        match self {
-            Self::Steer { auto_compact, .. } | Self::Boundary { auto_compact, .. } => *auto_compact,
-        }
-    }
-
-    fn not_before(&self) -> Option<Timestamp> {
-        match self {
-            Self::Steer { .. } => None,
-            Self::Boundary { not_before, .. } => *not_before,
-        }
-    }
-
-    fn after(&self) -> &[AfterCondition] {
-        match self {
-            Self::Steer { .. } => &[],
-            Self::Boundary { after, .. } => after,
-        }
-    }
-
-    fn when(&self) -> &[WhenCondition] {
-        match self {
-            Self::Steer { .. } => &[],
-            Self::Boundary { when, .. } => when,
-        }
-    }
-
-    fn is_steer(&self) -> bool {
-        matches!(self, Self::Steer { .. })
     }
 }
 
@@ -167,14 +145,6 @@ enum LiveAttempt {
     ParkInstead,
 }
 
-struct LiveRecovery<'a> {
-    workspace: &'a ResolvedWorkspace,
-    store: &'a Store,
-    snapshot: &'a SidebarSnapshot,
-    live_send: &'a mut send::LiveSend,
-    park_on_failure: bool,
-}
-
 impl QueueTarget<'_> {
     pub fn label(&self, snapshot: &SidebarSnapshot) -> String {
         handle_for_target(snapshot, self)
@@ -234,9 +204,7 @@ pub fn queue_targets<'a>(
 ) -> std::result::Result<Vec<QueueTarget<'a>>, TargetErr> {
     if rollup_only {
         let agents = crate::harness::target::resolve_many(snapshot, raw, worktree, channel)
-            .or_else(|err| {
-                durable_targets(snapshot, durable_agents, raw, worktree, channel, err)
-            })?;
+            .or_else(|err| durable_targets(durable_agents, raw, worktree, channel, err))?;
         return Ok(combine_queue_targets(snapshot, agents, Vec::new()));
     }
     let agent_result = crate::harness::target::resolve_many(snapshot, raw, worktree, channel);
@@ -245,10 +213,8 @@ pub fn queue_targets<'a>(
         (Ok(agents), Ok(panes)) => Ok(combine_queue_targets(snapshot, agents, panes)),
         (Ok(agents), Err(_)) => Ok(combine_queue_targets(snapshot, agents, Vec::new())),
         (Err(_), Ok(panes)) => Ok(combine_queue_targets(snapshot, Vec::new(), panes)),
-        (Err(err), Err(_)) => {
-            durable_targets(snapshot, durable_agents, raw, worktree, channel, err)
-                .map(|agents| combine_queue_targets(snapshot, agents, Vec::new()))
-        }
+        (Err(err), Err(_)) => durable_targets(durable_agents, raw, worktree, channel, err)
+            .map(|agents| combine_queue_targets(snapshot, agents, Vec::new())),
     }
 }
 
@@ -262,7 +228,6 @@ pub fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
 }
 
 fn durable_targets<'a>(
-    _snapshot: &'a SidebarSnapshot,
     durable_agents: Option<&'a [AgentState]>,
     raw: &str,
     worktree: Option<&str>,
@@ -393,65 +358,6 @@ fn agent_kind_registers_lazily(agent: &AgentState) -> bool {
         .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
 }
 
-fn live_prompt_for_target(
-    workspace_id: crate::ids::WorkspaceId,
-    target: &QueueTarget<'_>,
-    pane: &PaneAgent,
-    bound: Option<&AgentState>,
-    scope_channel: Option<&str>,
-    draft: send::MessageDraft,
-) -> MessageRecord {
-    let send::MessageDraft {
-        text,
-        body,
-        address,
-        enter,
-        gate,
-        sender,
-        automated,
-        force,
-        auto_compact,
-        after,
-        when,
-    } = draft;
-    if let Some(agent) = target.agent {
-        return MessageRecord::new(workspace_id, agent, text, enter, gate)
-            .with_body(body)
-            .with_force(force)
-            .with_address(address)
-            .with_channel(
-                crate::harness::target::agent_channel(agent).or_else(|| {
-                    crate::harness::target::recipient_channel(pane, bound, scope_channel)
-                }),
-            )
-            .with_sender(sender)
-            .with_automated(automated)
-            .with_pane_id(pane.pane_id.clone())
-            .with_auto_compact(auto_compact)
-            .with_after(after)
-            .with_when(when);
-    }
-    send::message_for_target(
-        workspace_id,
-        pane,
-        bound,
-        scope_channel,
-        send::MessageDraft {
-            text,
-            body,
-            address,
-            enter,
-            gate,
-            sender,
-            automated,
-            force,
-            auto_compact,
-            after,
-            when,
-        },
-    )
-}
-
 pub fn dispatch_for_targets(
     mut ctx: DispatchContext<'_>,
     targets: &[QueueTarget<'_>],
@@ -459,8 +365,8 @@ pub fn dispatch_for_targets(
     mode: SendMode,
 ) -> Result<DispatchResult> {
     let mut live_send = send::LiveSend {
-        force: mode.force(),
-        steer: mode.is_steer(),
+        force: mode.force,
+        steer: mode.steer,
         pacer: send::Pacer::new(message_interval_from_env()),
     };
     let mut outcomes = Vec::with_capacity(targets.len());
@@ -469,167 +375,213 @@ pub fn dispatch_for_targets(
     let now = Timestamp::now();
     for target in targets {
         let handle = handle_for_target(ctx.snapshot, target);
-        let park = match &mode {
-            SendMode::Steer { .. } => target.pane.is_none(),
-            SendMode::Boundary { .. } => {
-                let pending = ctx
-                    .pending
-                    .as_ref()
-                    .map_or(&[][..], |pending| pending.as_slice());
-                mode.not_before().is_some()
-                    || !mode
-                        .after()
-                        .iter()
-                        .all(|condition| condition.met_at.is_some())
-                    || !mode
-                        .when()
-                        .iter()
-                        .all(|condition| condition.met_at.is_some())
-                    || !target.receivable_now(ctx.snapshot, pending, mode.gate(), mode.force(), now)
-            }
-        };
-
-        if !park && let Some(pane) = target.pane {
-            let bound = target.bound(ctx.snapshot);
-            let message = live_prompt_for_target(
-                ctx.workspace.workspace_id.clone(),
-                target,
-                pane,
-                bound,
-                ctx.scope_channel,
-                send::MessageDraft {
-                    text: text.to_owned(),
-                    body: MessageBody::Prompt,
-                    address: Some(handle.clone()),
-                    enter: mode.enter(),
-                    gate: mode.gate(),
-                    sender: ctx.sender.clone(),
-                    automated: ctx.automated,
-                    force: mode.force(),
-                    auto_compact: mode.auto_compact(),
-                    after: mode.after().to_vec(),
-                    when: mode.when().to_vec(),
-                },
-            )
-            .with_reply_wait(ctx.reply_wait)
-            .with_in_reply_to(ctx.in_reply_to.to_vec());
-            let message_id = message.message_id.clone();
-            ctx.store
-                .queue_message(&message, &ctx.workspace.session_name)?;
-            let mut recovery = LiveRecovery {
-                workspace: ctx.workspace,
-                store: ctx.store,
-                snapshot: ctx.snapshot,
-                live_send: &mut live_send,
-                park_on_failure: target.agent.is_some(),
-            };
-            match send_live_with_recovery(&mut recovery, pane, bound, &message)? {
-                LiveAttempt::Sent {
-                    message_id,
-                    compacted: was_compacted,
-                } => {
-                    if was_compacted {
-                        compacted.push(handle.clone());
-                    }
-                    outcomes.push(DispatchOutcome::Sent {
-                        label: handle,
-                        message_id,
-                    });
-                    continue;
-                }
-                LiveAttempt::SkippedWaiting { message_id } => {
-                    if mode.is_steer() {
-                        ctx.store.record_send_error(
-                            &message,
-                            "agent is waiting on input in its pane",
-                            &ctx.workspace.session_name,
-                        )?;
-                        outcomes.push(DispatchOutcome::SkippedWaiting {
-                            label: handle,
-                            message_id,
-                        });
-                    } else {
-                        ctx.store.record_message_delivery_failure(
-                            &message_id,
-                            "agent is waiting on input in its pane",
-                            &ctx.workspace.session_name,
-                        )?;
-                        push_pending(&mut ctx.pending, message);
-                        outcomes.push(DispatchOutcome::Queued {
-                            label: handle,
-                            message_id,
-                        });
-                    }
-                    continue;
-                }
-                LiveAttempt::ParkInstead => {
-                    if !mode.is_steer() {
-                        push_pending(&mut ctx.pending, message);
-                    }
-                    outcomes.push(DispatchOutcome::Queued {
-                        label: handle,
-                        message_id,
-                    });
-                    continue;
-                }
-                LiveAttempt::CompactionPending { message_id } => {
-                    let released = ctx
-                        .store
-                        .release_message_claim(
-                            &message_id,
-                            "parked: waiting for compaction to finish",
-                            &ctx.workspace.session_name,
-                        )?
-                        .unwrap_or(message);
-                    push_pending(&mut ctx.pending, released);
-                    outcomes.push(DispatchOutcome::CompactionPending {
-                        label: handle,
-                        message_id,
-                    });
-                    continue;
-                }
-            }
-        }
-        if !park {
-            continue;
-        }
-        let Some(agent) = target.agent else {
-            return Err(DispatchErr::NoDurableSession { label: handle });
-        };
-        if kinds_seen.insert(agent.kind.as_str().to_owned()) {
-            preflight_queue_hooks(agent)?;
-        }
-        let message = MessageRecord::new(
-            ctx.workspace.workspace_id.clone(),
-            agent,
-            text.to_owned(),
-            mode.enter(),
-            mode.gate(),
-        )
-        .with_force(mode.force())
-        .with_address(Some(handle.clone()))
-        .with_channel(crate::harness::target::agent_channel(agent))
-        .with_sender(ctx.sender.clone())
-        .with_automated(ctx.automated)
-        .with_reply_wait(ctx.reply_wait)
-        .with_in_reply_to(ctx.in_reply_to.to_vec())
-        .with_auto_compact(mode.auto_compact())
-        .with_not_before(mode.not_before())
-        .with_after(mode.after().to_vec())
-        .with_when(mode.when().to_vec());
-        let message_id = message.message_id.clone();
-        ctx.store
-            .queue_message(&message, &ctx.workspace.session_name)?;
-        push_pending(&mut ctx.pending, message);
-        outcomes.push(DispatchOutcome::Queued {
-            label: handle,
-            message_id,
-        });
+        let park = should_park(&ctx, target, &mode, now);
+        outcomes.push(dispatch_one(
+            &mut ctx,
+            &mut live_send,
+            &mut kinds_seen,
+            &mut compacted,
+            target,
+            text,
+            &mode,
+            handle,
+            park,
+        )?);
     }
     deliver::register_message_wake(ctx.workspace, ctx.store)?;
     Ok(DispatchResult {
         outcomes,
         compacted,
+    })
+}
+
+fn should_park(
+    ctx: &DispatchContext<'_>,
+    target: &QueueTarget<'_>,
+    mode: &SendMode,
+    now: Timestamp,
+) -> bool {
+    if mode.steer {
+        return target.pane.is_none();
+    }
+    let pending = ctx
+        .pending
+        .as_ref()
+        .map_or(&[][..], |pending| pending.as_slice());
+    mode.not_before.is_some()
+        || !mode
+            .after
+            .iter()
+            .all(|condition| condition.met_at.is_some())
+        || !mode.when.iter().all(|condition| condition.met_at.is_some())
+        || !target.receivable_now(ctx.snapshot, pending, mode.gate, mode.force, now)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_one(
+    ctx: &mut DispatchContext<'_>,
+    live_send: &mut send::LiveSend,
+    kinds_seen: &mut BTreeSet<String>,
+    compacted: &mut Vec<String>,
+    target: &QueueTarget<'_>,
+    text: &str,
+    mode: &SendMode,
+    handle: String,
+    park: bool,
+) -> Result<DispatchOutcome> {
+    if park {
+        return dispatch_parked(ctx, kinds_seen, target, text, mode, handle);
+    }
+    let Some(pane) = target.pane else {
+        return Err(DispatchErr::NoDurableSession { label: handle });
+    };
+    let bound = target.bound(ctx.snapshot);
+    let recipient = target
+        .agent
+        .map_or(send::Recipient::Pane { pane, bound }, |agent| {
+            send::Recipient::Agent {
+                agent,
+                pane: Some(pane),
+            }
+        });
+    let message = send::MessageDraft {
+        text: text.to_owned(),
+        body: MessageBody::Prompt,
+        address: Some(handle.clone()),
+        enter: mode.enter,
+        gate: mode.gate,
+        sender: ctx.sender.clone(),
+        automated: ctx.automated,
+        force: mode.force,
+        auto_compact: mode.auto_compact,
+        not_before: mode.not_before,
+        after: mode.after.clone(),
+        when: mode.when.clone(),
+    }
+    .into_record(
+        ctx.workspace.workspace_id.clone(),
+        recipient,
+        ctx.scope_channel,
+    )
+    .with_reply_wait(ctx.reply_wait)
+    .with_in_reply_to(ctx.in_reply_to.to_vec());
+    let message_id = message.message_id.clone();
+    ctx.store
+        .queue_message(&message, &ctx.workspace.session_name)?;
+    match send_live_with_recovery(
+        ctx.workspace,
+        ctx.store,
+        ctx.snapshot,
+        live_send,
+        target.agent.is_some(),
+        pane,
+        bound,
+        &message,
+    )? {
+        LiveAttempt::Sent {
+            message_id,
+            compacted: was_compacted,
+        } => {
+            if was_compacted {
+                compacted.push(handle.clone());
+            }
+            Ok(DispatchOutcome::Sent {
+                label: handle,
+                message_id,
+            })
+        }
+        LiveAttempt::SkippedWaiting { message_id } if mode.steer => {
+            ctx.store.record_send_error(
+                &message,
+                "agent is waiting on input in its pane",
+                &ctx.workspace.session_name,
+            )?;
+            Ok(DispatchOutcome::SkippedWaiting {
+                label: handle,
+                message_id,
+            })
+        }
+        LiveAttempt::SkippedWaiting { message_id } => {
+            ctx.store.record_message_delivery_failure(
+                &message_id,
+                "agent is waiting on input in its pane",
+                &ctx.workspace.session_name,
+            )?;
+            push_pending(&mut ctx.pending, message);
+            Ok(DispatchOutcome::Queued {
+                label: handle,
+                message_id,
+            })
+        }
+        LiveAttempt::ParkInstead => {
+            if !mode.steer {
+                push_pending(&mut ctx.pending, message);
+            }
+            Ok(DispatchOutcome::Queued {
+                label: handle,
+                message_id,
+            })
+        }
+        LiveAttempt::CompactionPending { message_id } => {
+            let released = ctx
+                .store
+                .release_message_claim(
+                    &message_id,
+                    "parked: waiting for compaction to finish",
+                    &ctx.workspace.session_name,
+                )?
+                .unwrap_or(message);
+            push_pending(&mut ctx.pending, released);
+            Ok(DispatchOutcome::CompactionPending {
+                label: handle,
+                message_id,
+            })
+        }
+    }
+}
+
+fn dispatch_parked(
+    ctx: &mut DispatchContext<'_>,
+    kinds_seen: &mut BTreeSet<String>,
+    target: &QueueTarget<'_>,
+    text: &str,
+    mode: &SendMode,
+    handle: String,
+) -> Result<DispatchOutcome> {
+    let Some(agent) = target.agent else {
+        return Err(DispatchErr::NoDurableSession { label: handle });
+    };
+    if kinds_seen.insert(agent.kind.as_str().to_owned()) {
+        preflight_queue_hooks(agent)?;
+    }
+    let message = send::MessageDraft {
+        text: text.to_owned(),
+        body: MessageBody::Prompt,
+        address: Some(handle.clone()),
+        enter: mode.enter,
+        gate: mode.gate,
+        sender: ctx.sender.clone(),
+        automated: ctx.automated,
+        force: mode.force,
+        auto_compact: mode.auto_compact,
+        not_before: mode.not_before,
+        after: mode.after.clone(),
+        when: mode.when.clone(),
+    }
+    .into_record(
+        ctx.workspace.workspace_id.clone(),
+        send::Recipient::Agent { agent, pane: None },
+        ctx.scope_channel,
+    )
+    .with_reply_wait(ctx.reply_wait)
+    .with_in_reply_to(ctx.in_reply_to.to_vec());
+    let message_id = message.message_id.clone();
+    ctx.store
+        .queue_message(&message, &ctx.workspace.session_name)?;
+    push_pending(&mut ctx.pending, message);
+    Ok(DispatchOutcome::Queued {
+        label: handle,
+        message_id,
     })
 }
 
@@ -640,43 +592,43 @@ fn push_pending(pending: &mut Option<&mut Vec<MessageRecord>>, message: MessageR
 }
 
 fn send_live_with_recovery(
-    recovery: &mut LiveRecovery<'_>,
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    snapshot: &SidebarSnapshot,
+    live_send: &mut send::LiveSend,
+    park_on_failure: bool,
     pane: &PaneAgent,
     bound: Option<&AgentState>,
     message: &MessageRecord,
 ) -> Result<LiveAttempt> {
     let sent = match send::send_batch_to_live_pane(
-        recovery.workspace,
-        recovery.store,
-        recovery.snapshot,
+        workspace,
+        store,
+        snapshot,
         pane,
         bound,
         std::slice::from_ref(message),
-        recovery.live_send,
+        live_send,
     ) {
         Ok(sent) => sent,
         Err(err) => {
-            if deliver::message_recorded_as_sent(recovery.store, &message.message_id)? {
+            if deliver::message_recorded_as_sent(store, &message.message_id)? {
                 return Ok(LiveAttempt::Sent {
                     message_id: message.message_id.clone(),
                     compacted: false,
                 });
             }
-            if recovery.park_on_failure {
-                recovery.store.record_message_delivery_failure(
+            if park_on_failure {
+                store.record_message_delivery_failure(
                     &message.message_id,
                     &err.to_string(),
-                    &recovery.workspace.session_name,
+                    &workspace.session_name,
                 )?;
-                deliver::register_message_wake(recovery.workspace, recovery.store)?;
+                deliver::register_message_wake(workspace, store)?;
                 return Ok(LiveAttempt::ParkInstead);
             }
-            recovery.store.record_send_error(
-                message,
-                &err.to_string(),
-                &recovery.workspace.session_name,
-            )?;
-            deliver::register_message_wake(recovery.workspace, recovery.store)?;
+            store.record_send_error(message, &err.to_string(), &workspace.session_name)?;
+            deliver::register_message_wake(workspace, store)?;
             return Err(err.into());
         }
     };

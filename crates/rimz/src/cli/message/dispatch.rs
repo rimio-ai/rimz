@@ -70,14 +70,20 @@ pub(super) fn send_message(
     let machine_config = crate::cli::machine_config();
     let auto_compact = smart_compact.or(machine_config.harness.smart_compact);
     let text = resolve_message(&text, file.as_deref(), piped.as_deref())?;
-    let (dispatch_mode, gate, not_before, after, when) = match mode {
-        SendKind::Steer => (
-            MessageDispatchMode::Steer,
-            DeliveryGate::Any,
-            None,
-            Vec::new(),
-            Vec::new(),
-        ),
+    let mut spec = MessageSpec {
+        enter: !no_enter,
+        gate: DeliveryGate::Any,
+        force,
+        auto_compact,
+        no_from,
+        automated: false,
+        wait,
+        not_before: None,
+        after: Vec::new(),
+        when: Vec::new(),
+    };
+    let dispatch_mode = match mode {
+        SendKind::Steer => MessageDispatchMode::Steer,
         SendKind::Boundary {
             gate,
             schedule,
@@ -85,11 +91,14 @@ pub(super) fn send_message(
             when,
         } => {
             let now = Timestamp::now().to_zoned(machine_config.time_zone());
-            let not_before = schedule
+            spec.gate = gate;
+            spec.not_before = schedule
                 .as_deref()
                 .map(|raw| parse_schedule_at(raw, &now).map_err(anyhow::Error::msg))
                 .transpose()?;
-            (MessageDispatchMode::Boundary, gate, not_before, after, when)
+            spec.after = after;
+            spec.when = when;
+            MessageDispatchMode::Boundary
         }
     };
     dispatch_message(
@@ -98,18 +107,7 @@ pub(super) fn send_message(
         channel,
         text,
         dispatch_mode,
-        MessageSpec {
-            enter: !no_enter,
-            gate,
-            force,
-            auto_compact,
-            no_from,
-            automated: false,
-            wait,
-            not_before,
-            after,
-            when,
-        },
+        spec,
         FanoutFlags { all, create },
         globals,
     )
@@ -563,6 +561,18 @@ pub(super) fn dispatch_resolved_message(
         None
     };
     let in_reply_to = sender_turn_opened_by(snapshot, sender);
+    let send_mode = match mode {
+        MessageDispatchMode::Steer => SendMode::steer(spec.enter, spec.force, spec.auto_compact),
+        MessageDispatchMode::Boundary => SendMode::boundary(
+            spec.enter,
+            spec.gate,
+            spec.force,
+            spec.auto_compact,
+            spec.not_before,
+            after,
+            when,
+        ),
+    };
     let result = message_dispatch::dispatch_for_targets(
         DispatchContext {
             workspace,
@@ -577,22 +587,7 @@ pub(super) fn dispatch_resolved_message(
         },
         &targets,
         &text,
-        match mode {
-            MessageDispatchMode::Steer => SendMode::Steer {
-                enter: spec.enter,
-                force: spec.force,
-                auto_compact: spec.auto_compact,
-            },
-            MessageDispatchMode::Boundary => SendMode::Boundary {
-                enter: spec.enter,
-                gate: spec.gate,
-                force: spec.force,
-                auto_compact: spec.auto_compact,
-                not_before: spec.not_before,
-                after,
-                when,
-            },
-        },
+        send_mode,
     )?;
     if let Some(reply_targets) = reply_targets {
         if reply_targets.len() != result.outcomes.len() {
