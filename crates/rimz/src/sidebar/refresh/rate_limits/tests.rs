@@ -557,6 +557,91 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
 }
 
 #[test]
+fn codex_cold_cache_synthesizes_declared_omitted_window_as_lifted() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let seven_days = 7 * 24 * 60;
+
+    merge_account_rate_limits(
+        &runtime,
+        "codex",
+        AgentRateLimits {
+            windows: vec![rl_window_mins(41, None, seven_days)],
+        },
+    );
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let windows = &cache.windows["codex"].windows;
+    assert_eq!(windows.len(), 2);
+    let five_hours = windows
+        .iter()
+        .find(|window| window.duration_mins == Some(5 * 60))
+        .expect("the declared 5h window is synthesized from a cold cache");
+    assert!(five_hours.lifted);
+    assert_eq!(five_hours.used_percentage, None);
+    assert_eq!(five_hours.source, WindowSource::Authoritative);
+    assert!(
+        windows
+            .iter()
+            .find(|window| window.duration_mins == Some(seven_days))
+            .is_some_and(|window| !window.lifted && window.used_percentage == Some(41))
+    );
+}
+
+#[test]
+fn codex_reported_declared_window_stays_real() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    merge_account_rate_limits(
+        &runtime,
+        "codex",
+        AgentRateLimits {
+            windows: vec![
+                rl_window_mins(12, None, 5 * 60),
+                rl_window_mins(41, None, 7 * 24 * 60),
+            ],
+        },
+    );
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let windows = &cache.windows["codex"].windows;
+    assert_eq!(windows.len(), 2);
+    assert!(windows.iter().all(|window| !window.lifted));
+    assert!(
+        windows
+            .iter()
+            .find(|window| window.duration_mins == Some(5 * 60))
+            .is_some_and(|window| window.used_percentage == Some(12))
+    );
+}
+
+#[test]
+fn undeclared_provider_cold_cache_does_not_synthesize_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    merge_account_rate_limits(
+        &runtime,
+        "claude",
+        AgentRateLimits {
+            windows: vec![rl_window_mins(41, None, 7 * 24 * 60)],
+        },
+    );
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let windows = &cache.windows["claude"].windows;
+    assert_eq!(windows.len(), 1);
+    assert!(!windows[0].lifted);
+}
+
+#[test]
 fn drop_kind_rate_limits_removes_only_that_kinds_windows_and_pending() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());

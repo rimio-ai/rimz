@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 
 use crate::agents::{
-    AgentRateLimits, PendingRefill, RateLimitWindow, RateLimitsCache, read_rate_limits_cache,
+    AgentRateLimits, PendingRefill, RateLimitWindow, RateLimitsCache, descriptor_by_kind,
+    read_rate_limits_cache,
 };
 use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot};
@@ -78,22 +79,33 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
             .iter()
             .filter_map(|window| window.duration_mins)
             .collect();
-        if let Some(previous) = cache.windows.get(kind) {
-            windows.windows.extend(
-                previous
+        let declared = descriptor_by_kind(kind)
+            .map(|descriptor| descriptor.capabilities.implicit_unlimited_window_mins)
+            .unwrap_or(&[]);
+        let expected: BTreeSet<u32> = cache
+            .windows
+            .get(kind)
+            .into_iter()
+            .flat_map(|limits| {
+                limits
                     .windows
                     .iter()
                     .filter_map(|window| window.duration_mins)
-                    .filter(|duration| !reported.contains(duration))
-                    .map(|duration_mins| RateLimitWindow {
-                        duration_mins: Some(duration_mins),
-                        observed_at: Some(observed_at),
-                        source: crate::agents::context::WindowSource::Authoritative,
-                        lifted: true,
-                        ..Default::default()
-                    }),
-            );
-        }
+            })
+            .chain(declared.iter().copied())
+            .collect();
+        windows.windows.extend(
+            expected
+                .into_iter()
+                .filter(|duration| !reported.contains(duration))
+                .map(|duration_mins| RateLimitWindow {
+                    duration_mins: Some(duration_mins),
+                    observed_at: Some(observed_at),
+                    source: crate::agents::context::WindowSource::Authoritative,
+                    lifted: true,
+                    ..Default::default()
+                }),
+        );
     }
     cache.windows.insert(kind.to_owned(), windows);
     cache.pending.remove(kind);

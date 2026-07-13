@@ -336,6 +336,11 @@ pub struct Capabilities {
     pub daemon_hooked_sessions: bool,
     /// Rimz can install a hook configuration the agent actually executes.
     pub hook_install: bool,
+    /// Rate-limit window durations this provider conceptually enforces but
+    /// may omit from authoritative readings on some plans. An omitted
+    /// duration stays visible as an unlimited bar while another window is
+    /// reported.
+    pub implicit_unlimited_window_mins: &'static [u32],
     /// How this provider's realtime usage channel interacts with the uniform
     /// OAuth account-usage driver.
     pub realtime_usage: RealtimeUsageChannel,
@@ -513,6 +518,12 @@ mod tests {
         assert!(claude.capabilities.rich_context);
         assert!(!claude.capabilities.transcript_tail_context);
         assert!(!claude.capabilities.daemon_hooked_sessions);
+        assert!(
+            claude
+                .capabilities
+                .implicit_unlimited_window_mins
+                .is_empty()
+        );
         assert!(!claude.capabilities.realtime_usage.covers_account_while_live);
         assert!(
             claude
@@ -527,6 +538,7 @@ mod tests {
         assert!(codex.capabilities.rich_context);
         assert!(codex.capabilities.transcript_tail_context);
         assert!(codex.capabilities.daemon_hooked_sessions);
+        assert_eq!(codex.capabilities.implicit_unlimited_window_mins, &[300]);
         assert!(codex.capabilities.realtime_usage.covers_account_while_live);
         assert!(
             !codex

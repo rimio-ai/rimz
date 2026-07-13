@@ -225,6 +225,11 @@ fn lifted_window_is_a_full_unlimited_row_aligned_with_live_windows() {
     assert!(texts[0].starts_with("5h "), "{texts:?}");
     assert_eq!(texts[0].chars().filter(|ch| *ch == '▰').count(), 17);
     assert_eq!(texts[0].chars().position(|ch| ch == '∞'), Some(22));
+    assert!(texts[1].starts_with("7d "), "{texts:?}");
+    assert!(
+        !texts[1].contains('∞'),
+        "the reported weekly window stays metered"
+    );
     assert_eq!(texts[1].chars().position(|ch| ch == '↻'), Some(22));
     assert_eq!(
         bar_row_facts(&rows[0]).0,

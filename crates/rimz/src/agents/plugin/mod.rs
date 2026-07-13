@@ -511,6 +511,7 @@ fn build_descriptor(
             registers_lazily: manifest.capabilities.registers_lazily,
             daemon_hooked_sessions: false,
             hook_install: false,
+            implicit_unlimited_window_mins: &[],
             realtime_usage: RealtimeUsageChannel {
                 covers_account_while_live: false,
                 windows_defer_to_fresh_realtime: false,

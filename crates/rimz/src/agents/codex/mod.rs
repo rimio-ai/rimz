@@ -216,6 +216,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         daemon_hooked_sessions: true,
         hook_install: true,
+        implicit_unlimited_window_mins: &[5 * 60],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: true,
             windows_defer_to_fresh_realtime: false,
