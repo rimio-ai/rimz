@@ -100,6 +100,11 @@ fn sidebar_pane_kdl(
 /// focused-pane native split path instead of a root swap layout. All panes
 /// inherit the session's `--default-cwd` except the daemon hosts and resumed
 /// agents, which carry their own worktree cwd.
+///
+/// Zellij 0.44 drops `attach --create-background … options` flags while
+/// starting the detached server, and fixes serialization and metadata behavior
+/// at first-client initialization. The layout therefore carries those options
+/// through the only configuration channel the detached server preserves.
 pub(super) fn render_session_layout(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
@@ -192,7 +197,11 @@ pub(super) fn render_session_layout(
         {COMPACT_BAR_KDL}
     }}
 }}
+session_serialization {session_serialization}
+disable_session_metadata {disable_session_metadata}
 "#,
+        session_serialization = opts.config.zellij.session_serialization,
+        disable_session_metadata = opts.config.zellij.disable_session_metadata,
     ))
 }
 

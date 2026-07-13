@@ -67,13 +67,16 @@ pub struct ZellijConfig {
     /// keeps it off: a resurrected room comes back with every command pane
     /// `start_suspended` ("Waiting to run") and a dead mouse. Rimz owns rebirth,
     /// so a dead server leaves nothing to resurrect and the next start comes up
-    /// clean and running. Passed as `--session-serialization false` on birth and
-    /// attach.
+    /// clean and running. Embedded in the birth layout because Zellij drops
+    /// detached-birth CLI options, and still passed as an option flag on birth
+    /// and attach.
     pub session_serialization: bool,
     /// Whether Zellij skips the per-second session metadata writer and command
     /// discovery loop. Rimz keeps it on because the loop rewrites
     /// `session-metadata.kdl` and forks `ps` even when session serialization is
-    /// disabled.
+    /// disabled. Embedded in the birth layout because Zellij drops
+    /// detached-birth CLI options, and still passed as an option flag on birth
+    /// and attach.
     pub disable_session_metadata: bool,
 }
 

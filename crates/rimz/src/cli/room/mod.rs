@@ -1279,6 +1279,17 @@ fn finish_attach(
     mode: AttachMode,
     mux: MuxName,
 ) -> Result<()> {
+    // A corrupt serialized layout makes Zellij reject attach even while the
+    // target session is live. Rimz owns room rebirth and never resurrects, so
+    // clear stale resurrection state before both printed and executed attaches.
+    let cache_removed = backend.purge_resurrection_cache(session_name);
+    if !cache_removed.is_empty() {
+        tracing::debug!(
+            session = %session_name,
+            paths = ?cache_removed,
+            "purged stale resurrection cache before attach",
+        );
+    }
     let spec = backend.attach_command(session_name, mux_config);
     if let Some(workspace_id) = workspace_id {
         tracing::info!(

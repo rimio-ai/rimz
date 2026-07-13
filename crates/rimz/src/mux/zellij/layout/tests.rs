@@ -173,6 +173,23 @@ fn session_layout_renders_terminal_template_bar_and_runtime_args() {
     assert!(layout.contains("start_suspended false"), "{layout}");
     assert!(!layout.contains("start_suspended true"), "{layout}");
     assert!(layout.contains(r#""--refresh-ms" "50""#), "{layout}");
+    assert!(layout.contains("session_serialization false"), "{layout}");
+    assert!(layout.contains("disable_session_metadata true"), "{layout}");
+}
+
+#[test]
+fn session_layout_uses_configured_birth_fixed_options() {
+    let mut opts = sidebar_opts("rimz-options", None, None);
+    opts.config.zellij.session_serialization = true;
+    opts.config.zellij.disable_session_metadata = false;
+
+    let layout = render_session_layout(&opts, None, &[]).expect("render layout");
+
+    assert!(layout.contains("session_serialization true"), "{layout}");
+    assert!(
+        layout.contains("disable_session_metadata false"),
+        "{layout}"
+    );
 }
 
 #[test]

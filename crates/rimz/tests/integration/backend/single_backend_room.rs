@@ -106,6 +106,46 @@ fn start_auto_attaches_to_live_zellij_room() {
 }
 
 #[test]
+fn attach_purges_corrupt_zellij_resurrection_cache() {
+    let Some(room) = ZellijRoom::start() else {
+        return;
+    };
+    let cache_dir = room
+        .env
+        .home_root
+        .join("zellij/contract_version_1/session_info")
+        .join(&room.session_name);
+    std::fs::create_dir_all(&cache_dir).expect("mkdir resurrection cache");
+    std::fs::write(
+        cache_dir.join("session-layout.kdl"),
+        "layout { this is not kdl",
+    )
+    .expect("write corrupt resurrection layout");
+
+    let output = room
+        .rimz()
+        .args(["attach", "--print"])
+        .bounded_output_within(START_TIMEOUT)
+        .expect("run printed attach");
+
+    assert!(
+        output.status.success(),
+        "printed attach should succeed: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !cache_dir.exists(),
+        "attach must remove the corrupt resurrection cache before handing off to zellij",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("zellij attach") && stdout.contains(&room.session_name),
+        "attach should still print a usable zellij command, got: {stdout}",
+    );
+}
+
+#[test]
 fn reset_targets_live_backend_and_rebirths_on_default() {
     let Some(room) = ZellijRoom::start() else {
         return;
