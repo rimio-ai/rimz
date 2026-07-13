@@ -472,6 +472,7 @@ fn watcher_refresh_maps_tokens_without_cold_folding_cost() {
         &LocalContextRefreshCtx {
             agent_id: "12345678-abcd",
             model_hint: None,
+            current_transcript_path: None,
             prior_transcript_path: Some(&path),
             prior_transcript_stat: None,
             shared_pricing_cache_path: &pricing,
