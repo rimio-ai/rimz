@@ -74,30 +74,29 @@ pub(super) struct Leg {
 
 impl Leg {
     pub(super) fn new(mut target: ReplyTarget, outcome: &DispatchOutcome, wait_base: u64) -> Self {
+        let label = match outcome {
+            DispatchOutcome::Sent { label, .. }
+            | DispatchOutcome::Queued { label, .. }
+            | DispatchOutcome::CompactionPending { label, .. }
+            | DispatchOutcome::SkippedWaiting { label, .. } => label,
+        };
+        debug_assert_eq!(label, &target.label);
         let (message_id, message_status, done, error) = match outcome {
-            DispatchOutcome::Sent { label, message_id } => {
-                debug_assert_eq!(label, &target.label);
+            DispatchOutcome::Sent { message_id, .. } => {
                 (message_id.clone(), MessageStatus::Sent, None, None)
             }
-            DispatchOutcome::Queued { label, message_id } => {
-                debug_assert_eq!(label, &target.label);
+            DispatchOutcome::Queued { message_id, .. }
+            | DispatchOutcome::CompactionPending { message_id, .. } => {
                 (message_id.clone(), MessageStatus::Queued, None, None)
             }
-            DispatchOutcome::CompactionPending { label, message_id } => {
-                debug_assert_eq!(label, &target.label);
-                (message_id.clone(), MessageStatus::Queued, None, None)
-            }
-            DispatchOutcome::SkippedWaiting { label, message_id } => {
-                debug_assert_eq!(label, &target.label);
-                (
-                    message_id.clone(),
-                    MessageStatus::Errored,
-                    Some(RunStatus::Failed),
-                    Some(format!(
-                        "{label} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
-                    )),
-                )
-            }
+            DispatchOutcome::SkippedWaiting { label, message_id } => (
+                message_id.clone(),
+                MessageStatus::Errored,
+                Some(RunStatus::Failed),
+                Some(format!(
+                    "{label} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
+                )),
+            ),
         };
         let cursor = (message_status == MessageStatus::Sent)
             .then(|| target.cursor.take())
@@ -217,25 +216,36 @@ pub(super) fn wait_for_replies(
     }
     let spinner = Spinner::delayed(wait_label(&legs), Duration::from_millis(500));
     let mut printed_block = false;
-    let settled = legs
+    let mut settled = legs
         .iter()
         .enumerate()
         .filter_map(|(index, leg)| leg.done.is_some().then_some(index))
         .collect::<Vec<_>>();
-    if let Some(winner) = drain_settled(&legs, &settled, wait, total, &spinner, &mut printed_block)?
-    {
-        return finish_join(&legs, wait, Some(winner));
-    }
-    if settled_status(&legs.iter().map(|leg| leg.done).collect::<Vec<_>>(), None).is_some() {
-        return finish_join(&legs, wait, None);
-    }
-
     let mut tick = 0_u8;
+    let mut first_poll = true;
     loop {
         spinner.set(wait_label(&legs));
+        if let Some(winner) =
+            drain_settled(&legs, &settled, wait, total, &spinner, &mut printed_block)?
+        {
+            return finish_join(&legs, wait, Some(winner));
+        }
+        if join_status(&legs).is_some() {
+            spinner.pause();
+            return finish_join(&legs, wait, None);
+        }
+        if !first_poll {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                spinner.pause();
+                finish_timeout(store, session_name, &mut legs, wait)?;
+            }
+            std::thread::sleep(next_sleep(deadline));
+        }
+
+        first_poll = false;
         let messages = store.list_messages()?;
         let mut snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-        let mut settled = Vec::new();
+        settled.clear();
         if tick == 0
             && let Some((self_kind, self_name)) = caller_identity.as_ref()
         {
@@ -259,46 +269,35 @@ pub(super) fn wait_for_replies(
                 settled.push(index);
             }
         }
-
-        if let Some(winner) =
-            drain_settled(&legs, &settled, wait, total, &spinner, &mut printed_block)?
-        {
-            return finish_join(&legs, wait, Some(winner));
-        }
-        if settled_status(&legs.iter().map(|leg| leg.done).collect::<Vec<_>>(), None).is_some() {
-            spinner.pause();
-            return finish_join(&legs, wait, None);
-        }
-
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            let unfinished = legs
-                .iter()
-                .enumerate()
-                .filter(|(_, leg)| leg.done.is_none())
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            for index in &unfinished {
-                let leg = &mut legs[*index];
-                if leg.message_status == MessageStatus::Sent {
-                    let _ = store.mark_message_timed_out(
-                        &leg.message_id,
-                        session_name,
-                        Some("wait"),
-                    )?;
-                }
-                leg.done = Some(timeout_status(leg.done));
-            }
-            spinner.pause();
-            if wait.json {
-                print_json_replies(&legs, None)?;
-            } else {
-                print_timeout(&legs, &unfinished, wait)?;
-            }
-            std::process::exit(RunStatus::TimedOut.exit_code());
-        }
         tick = (tick + 1) % WAIT_GUARD_TICKS;
-        std::thread::sleep(next_sleep(deadline));
     }
+}
+
+fn finish_timeout(
+    store: &rimz::Store,
+    session_name: &str,
+    legs: &mut [Leg],
+    wait: WaitSpec,
+) -> Result<()> {
+    let unfinished = legs
+        .iter()
+        .enumerate()
+        .filter(|(_, leg)| leg.done.is_none())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    for index in &unfinished {
+        let leg = &mut legs[*index];
+        if leg.message_status == MessageStatus::Sent {
+            let _ = store.mark_message_timed_out(&leg.message_id, session_name, Some("wait"))?;
+        }
+        leg.done = Some(timeout_status(leg.done));
+    }
+    if wait.json {
+        print_json_replies(legs, None)?;
+    } else {
+        print_timeout(legs, &unfinished, wait)?;
+    }
+    std::process::exit(RunStatus::TimedOut.exit_code());
 }
 
 /// Report each newly settled leg; returns the `--any` winner index when the join short-circuits.
@@ -380,14 +379,8 @@ fn deadlock_error(leg: &Leg, cycle: &[rimz::message::wait_guard::WaitCycleHop]) 
     let Some(first) = cycle.first() else {
         return format!("deadlock: {} is your own agent; {action}", leg.target.label);
     };
-    let chain = (cycle.len() > 1).then(|| {
-        let mut handles = cycle
-            .iter()
-            .map(|hop| hop.handle.as_str())
-            .collect::<Vec<_>>();
-        handles.push("you");
-        format!(" ({} reply-wait chain)", handles.join(" → "))
-    });
+    let chain = rimz::message::wait_guard::render_chain(cycle)
+        .map(|chain| format!(" ({chain} reply-wait chain)"));
     format!(
         "deadlock: {} ({}) is waiting on your reply{}; {action}",
         first.handle,
@@ -504,10 +497,15 @@ fn finish_join(legs: &[Leg], wait: WaitSpec, winner: Option<usize>) -> Result<()
     if wait.json {
         print_json_replies(legs, winner)?;
     }
-    let statuses = legs.iter().map(|leg| leg.done).collect::<Vec<_>>();
-    let status = settled_status(&statuses, winner)
+    let status = winner
+        .map(|winner| legs.get(winner).and_then(|leg| leg.done))
+        .unwrap_or_else(|| join_status(legs))
         .context("reply join finished without a terminal status")?;
     return_or_exit(status)
+}
+
+fn join_status(legs: &[Leg]) -> Option<RunStatus> {
+    settled_status(&legs.iter().map(|leg| leg.done).collect::<Vec<_>>(), None)
 }
 
 fn settled_status(statuses: &[Option<RunStatus>], winner: Option<usize>) -> Option<RunStatus> {
@@ -551,12 +549,23 @@ fn print_reply_result_for_leg(leg: &Leg, total: usize, printed_block: &mut bool)
         .as_deref()
         .map(str::trim)
         .filter(|message| !message.is_empty());
-    if total == 1 {
-        if let Some(message) = message {
+    let label = (total > 1).then_some(leg.target.label.as_str());
+    match (label, message, status) {
+        (None, Some(message), _) => {
             let mut out = render::out();
             writeln!(out, "{message}")?;
             out.flush()?;
-        } else if status == RunStatus::Completed {
+        }
+        (Some(label), Some(message), RunStatus::Completed) => {
+            let mut out = render::out();
+            if *printed_block {
+                writeln!(out)?;
+            }
+            writeln!(out, "{label}:\n{message}")?;
+            out.flush()?;
+            *printed_block = true;
+        }
+        (None, None, RunStatus::Completed) => {
             let mut err = render::err();
             writeln!(
                 err,
@@ -564,37 +573,21 @@ fn print_reply_result_for_leg(leg: &Leg, total: usize, printed_block: &mut bool)
             )?;
             err.flush()?;
         }
-        if status != RunStatus::Completed {
-            print_turn_failure(None, status, leg.transcript_path.as_deref())?;
-        }
-        return Ok(());
-    }
-    if status == RunStatus::Completed {
-        if let Some(message) = message {
-            let mut out = render::out();
-            if *printed_block {
-                writeln!(out)?;
-            }
-            writeln!(out, "{}:\n{message}", leg.target.label)?;
-            out.flush()?;
-            *printed_block = true;
-        } else {
+        (Some(label), None, RunStatus::Completed) => {
             let mut err = render::err();
             writeln!(
                 err,
                 "rimz: {} turn completed but no final assistant message was extracted",
-                leg.target.label
+                label
             )?;
             err.flush()?;
         }
-        return Ok(());
+        (Some(_), Some(_), _) | (_, None, _) => {}
     }
-
-    print_turn_failure(
-        Some(&leg.target.label),
-        status,
-        leg.transcript_path.as_deref(),
-    )
+    if status != RunStatus::Completed {
+        print_turn_failure(label, status, leg.transcript_path.as_deref())?;
+    }
+    Ok(())
 }
 
 fn print_turn_failure(

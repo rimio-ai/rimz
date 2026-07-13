@@ -13,6 +13,18 @@ pub struct WaitCycleHop {
     pub message_id: MessageId,
 }
 
+/// Render a multi-hop wait path back to the caller for cycle diagnostics.
+pub fn render_chain(cycle: &[WaitCycleHop]) -> Option<String> {
+    (cycle.len() > 1).then(|| {
+        cycle
+            .iter()
+            .map(|hop| hop.handle.as_str())
+            .chain(std::iter::once("you"))
+            .collect::<Vec<_>>()
+            .join(" → ")
+    })
+}
+
 #[derive(Clone, Debug)]
 struct WaitEdge {
     sender: usize,
@@ -217,6 +229,12 @@ mod tests {
             .expect("chain reaches caller");
 
         assert_eq!(cycle, [hop("@b", 2), hop("@c", 3)]);
+        assert_eq!(render_chain(&cycle).as_deref(), Some("@b → @c → you"));
+    }
+
+    #[test]
+    fn single_hop_needs_no_chain_rendering() {
+        assert_eq!(render_chain(&[hop("@b", 2)]), None);
     }
 
     #[test]

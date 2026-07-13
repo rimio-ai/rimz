@@ -721,21 +721,16 @@ fn wait_cycle_error(
     let Some(first) = cycle.first() else {
         return anyhow::anyhow!("--wait would deadlock: {target} is your own agent; {fix}");
     };
-    if cycle.len() == 1 {
+    let Some(chain) = rimz::message::wait_guard::render_chain(cycle) else {
         return anyhow::anyhow!(
             "--wait would deadlock: {} is waiting on your reply ({}); {fix}",
             first.handle,
             first.message_id
         );
-    }
-    let mut chain = cycle
-        .iter()
-        .map(|hop| hop.handle.as_str())
-        .collect::<Vec<_>>();
-    chain.push("you");
+    };
     anyhow::anyhow!(
         "--wait would deadlock: {} is an active reply-wait chain ({}); {fix}",
-        chain.join(" → "),
+        chain,
         first.message_id
     )
 }
