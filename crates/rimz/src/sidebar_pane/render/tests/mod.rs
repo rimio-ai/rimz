@@ -280,6 +280,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at: now,
     }
@@ -325,6 +326,7 @@ fn codex_context(now: Timestamp) -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at: now,
     }

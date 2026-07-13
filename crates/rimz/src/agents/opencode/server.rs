@@ -170,6 +170,7 @@ fn into_context(
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at,
     }

@@ -94,6 +94,13 @@ pub struct AgentContext {
     /// lifecycle status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_complete: Option<Timestamp>,
+    /// A completed Codex planning turn resting on its native plan selector,
+    /// detected from the rollout tail when the `Stop` hook was missed.
+    /// Status-projection marker like [`turn_complete`](Self::turn_complete):
+    /// the projection settles a falsely-`running` row to `waiting` while the
+    /// marker postdates `last_activity`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_proposed: Option<Timestamp>,
     /// A turn that was interrupted with no `Stop` hook, detected from the
     /// rollout tail — Codex writes `turn_aborted` for `/clear` mid-turn and
     /// Esc. Status-projection marker like

@@ -363,9 +363,9 @@ mod tests {
         assert_eq!(count(&claude, MatrixCellState::Absent), 0);
 
         let codex = agent_cells(&matrix, "codex");
-        assert_eq!(count(&codex, MatrixCellState::Ok), 11);
+        assert_eq!(count(&codex, MatrixCellState::Ok), 13);
         assert_eq!(count(&codex, MatrixCellState::Partial), 2);
-        assert_eq!(count(&codex, MatrixCellState::Absent), 3);
+        assert_eq!(count(&codex, MatrixCellState::Absent), 1);
         // `end` and `idle` have no native hook, but pane liveness/the reaper and
         // the turn-boundary/stall path reconstruct them — partial, not absent.
         assert_eq!(
@@ -374,7 +374,7 @@ mod tests {
         );
         assert_eq!(
             agent_labels(&matrix, "codex", MatrixCellState::Absent),
-            ["plan", "answer", "bg"]
+            ["bg"]
         );
         assert!(cell_detail(&matrix, row(&matrix, "end"), "codex").contains("SessionEnd"));
 

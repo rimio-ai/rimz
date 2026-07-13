@@ -1133,6 +1133,7 @@ fn cost_row_at(
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at: Timestamp::from_second(1_750_000_000).unwrap(),
     });

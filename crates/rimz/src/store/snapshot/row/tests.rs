@@ -211,6 +211,7 @@ fn context_with_cost(total_cost_usd: f64) -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at: row_time(),
     }

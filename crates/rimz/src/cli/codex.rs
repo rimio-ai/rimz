@@ -365,6 +365,7 @@ mod tests {
                 }),
                 turn_error: None,
                 turn_complete: None,
+                plan_proposed: None,
                 turn_interrupted: None,
                 transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
                 transcript_stat: Some(TranscriptStat {
@@ -427,6 +428,7 @@ mod tests {
             turn_opened_by: Vec::new(),
             turn_error: None,
             turn_complete: None,
+            plan_proposed: None,
             turn_interrupted: None,
             observed_at: app_at,
         }

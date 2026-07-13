@@ -887,6 +887,7 @@ fn refresh_wire_path(
         cost,
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),

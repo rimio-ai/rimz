@@ -5,6 +5,7 @@ use crate::harness::run::PermissionMode;
 use std::io::Write;
 use std::path::Path;
 
+mod ask;
 mod install;
 mod lifecycle;
 mod transcript;

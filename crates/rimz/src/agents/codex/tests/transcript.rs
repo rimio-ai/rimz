@@ -413,6 +413,117 @@ fn turn_complete_detector_marks_clean_completion_but_skips_errored_and_supersede
 }
 
 #[test]
+fn plan_detector_requires_a_resting_same_turn_plan_item() {
+    let plan = json!({
+        "timestamp": "2026-07-13T10:00:01Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "item_completed",
+            "turn_id": "turn-plan",
+            "item": { "type": "Plan", "id": "turn-plan-plan", "text": "# Plan\n\nShip it." }
+        }
+    });
+    let streamed_fallback = json!({
+        "timestamp": "2026-07-13T10:00:02Z",
+        "type": "event_msg",
+        "payload": { "type": "agent_message", "message": "Codex says:" }
+    });
+    let complete = json!({
+        "timestamp": "2026-07-13T10:00:03Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "turn_id": "turn-plan",
+            "last_agent_message": "Codex says:"
+        }
+    });
+    let tail = format!("{plan}\n{streamed_fallback}\n{complete}\n");
+    let detected = detect_plan_proposed(&tail).expect("resting plan proposal");
+    assert_eq!(detected.text, "# Plan\n\nShip it.");
+    assert_eq!(
+        detected.at,
+        "2026-07-13T10:00:03Z".parse::<jiff::Timestamp>().unwrap()
+    );
+    assert_eq!(detect_turn_complete(&tail), None);
+
+    let next_prompt = json!({
+        "timestamp": "2026-07-13T10:01:00Z",
+        "type": "event_msg",
+        "payload": { "type": "user_message", "message": "keep planning" }
+    });
+    assert!(
+        detect_plan_proposed(&format!("{tail}{next_prompt}\n")).is_none(),
+        "a newer prompt self-clears the proposal marker"
+    );
+
+    let mismatched = tail.replace("\"turn-plan-plan\"", "\"other-plan\"");
+    assert!(
+        detect_plan_proposed(&mismatched).is_some(),
+        "item id is opaque"
+    );
+    let mismatched = tail.replacen("\"turn-plan\"", "\"other-turn\"", 1);
+    assert!(
+        detect_plan_proposed(&mismatched).is_none(),
+        "the Plan item must belong to the completed turn"
+    );
+}
+
+#[test]
+fn plan_detector_rejects_aborts_errors_and_update_plan_tools() {
+    let aborted = concat!(
+        r#"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","text":"ship"}}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-plan"}}"#,
+    );
+    assert!(detect_plan_proposed(aborted).is_none());
+
+    let errored = concat!(
+        r#"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","text":"ship"}}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","error":{"message":"failed"}}}"#,
+    );
+    assert!(detect_plan_proposed(errored).is_none());
+
+    let update_plan = concat!(
+        r#"{"timestamp":"2026-07-13T10:00:01Z","type":"response_item","payload":{"type":"custom_tool_call","name":"update_plan","call_id":"1","input":"{}"}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-default","last_agent_message":"done"}}"#,
+    );
+    assert!(detect_plan_proposed(update_plan).is_none());
+}
+
+#[test]
+fn transcript_refresh_stamps_plan_marker_instead_of_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-plan.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","text":"ship"}}}"#,
+            "\n",
+            r#"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let refresh = refresh_transcript_context(
+        "sess-plan",
+        None,
+        path.to_str(),
+        None,
+        &dir.path().join("prices.json"),
+    )
+    .expect("transcript refresh");
+    assert_eq!(
+        refresh.plan_proposed,
+        Some("2026-07-13T10:00:02Z".parse().unwrap())
+    );
+    assert_eq!(refresh.turn_complete, None);
+    assert_eq!(refresh.turn_error, None);
+}
+
+#[test]
 fn turn_interrupted_detector_marks_resting_abort_and_self_clears() {
     // Esc and `/clear` of a running Codex turn leave a resting
     // `turn_aborted` tail without a Stop hook. Any abort reason counts; the

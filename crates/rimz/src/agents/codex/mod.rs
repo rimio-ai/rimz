@@ -3,9 +3,9 @@
 //! Classifies `PermissionRequest` and blocking `PreToolUse` questions
 //! (`request_user_input`) onto Waiting, plus the lifecycle events
 //! (`SessionStart` registers idle, `SubagentStart` / `UserPromptSubmit` move
-//! to running, `SubagentStop` returns the child to idle, `Stop` completes the
-//! root turn — success, or failed on an error signal); neutral hook output is
-//! empty stdout.
+//! to running, `SubagentStop` returns the child to idle, and `Stop` either
+//! raises a rollout-derived plan ask or completes the root turn); neutral hook
+//! output is empty stdout.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
@@ -26,6 +26,7 @@
 
 pub(crate) mod account;
 pub(crate) mod app_server;
+mod ask;
 pub mod broker;
 mod install;
 pub(crate) mod oauth_usage;
@@ -36,7 +37,6 @@ mod transcript;
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
 use serde_json::Value;
 
 use jiff::Timestamp;
@@ -51,8 +51,8 @@ use self::install::{has_rimz_hook_command, snake_event_token};
 use self::payloads::{
     CodexPermissionRequest, CodexPostCompact, CodexPreToolUse, CodexSessionStart,
     CodexSubagentStart, CodexSubagentStop, CodexUserPromptSubmit, parse_permission_request,
-    parse_post_compact, parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start,
-    parse_subagent_stop, parse_user_prompt_submit,
+    parse_post_compact, parse_post_tool_use, parse_pre_tool_use, parse_session_start, parse_stop,
+    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
 pub(crate) use self::process::is_codex_cli_cmdline;
 pub use self::process::{
@@ -61,8 +61,9 @@ pub use self::process::{
 };
 pub(crate) use self::transcript::infer_turn_death_from_spent_window;
 use self::transcript::{
-    TranscriptUsage, configured_model, configured_reasoning_effort, detect_turn_error,
-    find_session_transcript, payload_reasoning_effort, usage_from_transcript_tail,
+    TranscriptUsage, configured_model, configured_reasoning_effort, detect_plan_proposed,
+    detect_turn_error, find_session_transcript, payload_reasoning_effort,
+    usage_from_transcript_tail,
 };
 #[cfg(test)]
 use self::transcript::{
@@ -86,16 +87,16 @@ use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTurnError, ClassifiedHook, ExtraCredits,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
-    LocalContextRefresh, LocalContextRefreshCtx, RealtimeAccountUsage, RefreshSpawn,
-    RefreshTrigger, ResetCredits, Result, RootIdentity, SubagentIdentity, TranscriptMessage,
-    TranscriptRole, classify_agent_hook, non_empty_trimmed, optional_payload_string,
-    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored,
+    AgentAdapter, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr, AnswerStep, AskReply,
+    ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport,
+    LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RealtimeAccountUsage,
+    RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity, SubagentIdentity,
+    TranscriptMessage, TranscriptRole, classify_agent_hook, non_empty_trimmed,
+    optional_payload_string, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::harness::run::PermissionMode;
-use crate::transcript::AskQuestion;
+use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 /// Per-hook timeout written into the Codex config (seconds). Hooks write a
 /// Waiting state and return neutral immediately, so the value is a short guard
@@ -129,42 +130,6 @@ pub const ENV_INTERNAL_APP_SERVER: &str = "RIMZ_CODEX_INTERNAL_APP_SERVER";
 /// non-empty). The hook entrypoint reads this to suppress re-entrant feeds.
 pub fn spawned_as_internal_app_server() -> bool {
     std::env::var_os(ENV_INTERNAL_APP_SERVER).is_some_and(|value| !value.is_empty())
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct CodexQuestionInput {
-    questions: Vec<CodexQuestion>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct CodexQuestion {
-    question: Option<String>,
-}
-
-fn codex_question_detail(tool_name: &str, tool_input: &Value) -> Option<Vec<AskQuestion>> {
-    if tool_name != "request_user_input" {
-        return None;
-    }
-    let parsed: CodexQuestionInput = serde_json::from_value(tool_input.clone()).ok()?;
-    let questions = parsed
-        .questions
-        .into_iter()
-        .filter_map(|question| {
-            question
-                .question
-                .as_deref()
-                .and_then(non_empty_trimmed)
-                .map(|question| AskQuestion {
-                    question,
-                    options: Vec::new(),
-                    multi_select: false,
-                    has_option_previews: false,
-                })
-        })
-        .collect::<Vec<_>>();
-    (!questions.is_empty()).then_some(questions)
 }
 
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
@@ -266,8 +231,8 @@ const CODEX_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "no plan-approval gate; update_plan is non-blocking",
+        ConcernCoverage::Wired {
+            via: "Stop + resting rollout Plan item",
         },
     ),
     (
@@ -278,8 +243,8 @@ const CODEX_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "native prompt choreography is not mapped",
+        ConcernCoverage::Wired {
+            via: "pane keystroke choreography",
         },
     ),
     (
@@ -691,6 +656,29 @@ impl AgentAdapter for CodexAdapter {
         })
     }
 
+    #[cfg(test)]
+    fn derived_ask_fixture(&self) -> Option<super::DerivedAskFixture> {
+        Some(super::DerivedAskFixture {
+            event_name: "Stop",
+            payload: serde_json::json!({
+                "session_id": "sess-plan",
+                "turn_id": "turn-plan",
+                "last_assistant_message": "Codex says:"
+            }),
+            transcript_file_name: "rollout-plan.jsonl",
+            transcript_body: concat!(
+                r##"{"timestamp":"2026-07-13T10:00:00Z","type":"turn_context","payload":{"turn_id":"turn-plan","collaboration_mode":{"mode":"plan"}}}"##,
+                "\n",
+                r##"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","id":"turn-plan-plan","text":"# Plan\n\nShip it."}}}"##,
+                "\n",
+                r##"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"Codex says:"}}"##,
+                "\n",
+                r##"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"##,
+            ),
+            expected_kind: AskKind::PlanApproval,
+        })
+    }
+
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         // Codex permission hooks expect empty stdout on the neutral path —
         // the agent's own UI then asks the human. Per docs/internals/agents/model.md:
@@ -699,11 +687,53 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        if event_name != "PreToolUse" {
-            return None;
+        match event_name {
+            "PreToolUse" => {
+                let parsed = parse_pre_tool_use(payload);
+                ask::question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
+            }
+            "Stop" => {
+                let tail = codex_transcript_path(payload)
+                    .as_deref()
+                    .and_then(read_transcript_tail)?;
+                ask::plan_question(&detect_plan_proposed(&tail)?.text)
+            }
+            _ => None,
         }
-        let parsed = parse_pre_tool_use(payload);
-        codex_question_detail(parsed.tool_name.as_deref()?, parsed.tool_input.as_ref()?)
+    }
+
+    fn ask_options(&self, kind: AskKind) -> Option<Vec<AskOption>> {
+        match kind {
+            AskKind::PlanApproval => Some(ask::plan_options()),
+            AskKind::Permission | AskKind::Question => None,
+        }
+    }
+
+    fn answer_plan(
+        &self,
+        kind: AskKind,
+        questions: &[AskQuestion],
+        answers: &[AskReply],
+    ) -> std::result::Result<Vec<AnswerStep>, AnswerPlanErr> {
+        ask::answer_plan(kind, questions, answers)
+    }
+
+    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
+        match event_name {
+            "PostToolUse" => {
+                let parsed = parse_post_tool_use(payload);
+                ask::answer_detail(
+                    parsed.tool_name.as_deref()?,
+                    parsed.tool_input.as_ref()?,
+                    parsed.tool_response.as_ref()?,
+                )
+            }
+            "UserPromptSubmit" => {
+                let parsed = parse_user_prompt_submit(payload);
+                ask::submitted_prompt_answer(parsed.prompt.as_deref()?)
+            }
+            _ => None,
+        }
     }
 
     fn moves_on(&self, event_name: &str) -> bool {
@@ -727,6 +757,7 @@ impl AgentAdapter for CodexAdapter {
             payload,
             &parts,
             transcript.turn_error.as_ref(),
+            transcript.plan_proposed.is_some(),
         )?;
         let (agent_id, parent_agent_id) = resolve_codex_observation_identity(
             self.descriptor().kind,
@@ -983,6 +1014,7 @@ fn map_codex_lifecycle_signal(
     payload: &Value,
     parts: &CodexLifecycleParts,
     turn_error: Option<&AgentTurnError>,
+    plan_proposed: bool,
 ) -> Option<LifecycleSignal> {
     match event_name {
         "SessionStart" => {
@@ -995,6 +1027,11 @@ fn map_codex_lifecycle_signal(
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
         "SubagentStop" => Some(LifecycleSignal::SubagentStopped { errored: false }),
+        "Stop" if plan_proposed => Some(LifecycleSignal::AwaitingInput {
+            kind: AskKind::PlanApproval,
+            ask_id: None,
+            detail: None,
+        }),
         "Stop" => Some(LifecycleSignal::TurnEnded {
             errored: stop_payload_errored(payload) || turn_error.is_some(),
             parked_on_background: false,
@@ -1038,24 +1075,33 @@ fn map_codex_lifecycle_signal(
 }
 
 fn codex_payload_turn_error(payload: &Value) -> Option<AgentTurnError> {
-    let session_id = optional_payload_string(payload, &["session_id"])?;
-    let transcript_path = find_session_transcript(&session_id)?;
+    let transcript_path = codex_transcript_path(payload)?;
     let tail = read_transcript_tail(&transcript_path)?;
     detect_turn_error(&tail)
+}
+
+fn codex_transcript_path(payload: &Value) -> Option<PathBuf> {
+    optional_payload_string(payload, &["transcript_path"])
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            optional_payload_string(payload, &["session_id"])
+                .and_then(|id| find_session_transcript(&id))
+        })
 }
 
 struct CodexTranscriptObservation {
     path: Option<PathBuf>,
     usage: TranscriptUsage,
     turn_error: Option<AgentTurnError>,
+    plan_proposed: Option<self::transcript::PlanProposal>,
 }
 
 fn codex_transcript_observation(
     payload: &Value,
     detect_turn_death: bool,
 ) -> CodexTranscriptObservation {
-    let path = optional_payload_string(payload, &["session_id"])
-        .and_then(|id| find_session_transcript(&id));
+    let path = codex_transcript_path(payload);
     let tail = path.as_deref().and_then(read_transcript_tail);
     let usage = tail
         .as_deref()
@@ -1064,10 +1110,14 @@ fn codex_transcript_observation(
     let turn_error = detect_turn_death
         .then(|| tail.as_deref().and_then(detect_turn_error))
         .flatten();
+    let plan_proposed = detect_turn_death
+        .then(|| tail.as_deref().and_then(detect_plan_proposed))
+        .flatten();
     CodexTranscriptObservation {
         path,
         usage,
         turn_error,
+        plan_proposed,
     }
 }
 

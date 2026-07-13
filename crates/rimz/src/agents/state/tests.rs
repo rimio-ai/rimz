@@ -150,6 +150,7 @@ fn activity_description_prefers_rich_context_then_fallbacks() {
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at: Timestamp::from_second(1_000).unwrap(),
     });
@@ -266,6 +267,7 @@ fn context_error(class: TurnErrorClass, at: i64) -> AgentContext {
             label: Some("provider parked".to_owned()),
         }),
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at: Timestamp::from_second(at).unwrap(),
     }
@@ -292,6 +294,7 @@ fn context_settle(complete: Option<i64>, interrupted: Option<i64>) -> AgentConte
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: complete.map(|at| Timestamp::from_second(at).unwrap()),
+        plan_proposed: None,
         turn_interrupted: interrupted.map(|at| Timestamp::from_second(at).unwrap()),
         observed_at: Timestamp::from_second(1_000).unwrap(),
     }
@@ -346,6 +349,20 @@ fn waiting_and_interruption_outrank_a_budget_park() {
 
 #[test]
 fn effective_status_projects_hookless_turn_settle_markers() {
+    let mut plan = test_agent(AgentStatus::Running, 1_000);
+    let mut plan_context = context_settle(None, None);
+    plan_context.plan_proposed = Some(Timestamp::from_second(1_010).unwrap());
+    plan.context = Some(plan_context);
+    assert_eq!(plan.effective_status(), AgentStatus::Waiting);
+    assert!(plan.is_awaiting_input());
+
+    let mut stale_plan = test_agent(AgentStatus::Running, 1_000);
+    let mut stale_plan_context = context_settle(None, None);
+    stale_plan_context.plan_proposed = Some(Timestamp::from_second(990).unwrap());
+    stale_plan.context = Some(stale_plan_context);
+    assert_eq!(stale_plan.effective_status(), AgentStatus::Running);
+    assert!(!stale_plan.is_awaiting_input());
+
     let mut complete = test_agent(AgentStatus::Running, 1_000);
     complete.context = Some(context_settle(Some(1_010), None));
     assert_eq!(complete.effective_status(), AgentStatus::Success);

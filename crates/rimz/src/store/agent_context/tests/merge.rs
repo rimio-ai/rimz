@@ -120,16 +120,18 @@ fn codex_local_refresh_overwrites_turn_error_marker() {
 }
 
 #[test]
-fn local_refresh_overwrites_interrupted_turn_marker() {
+fn local_refresh_overwrites_turn_settle_markers() {
     let (_dir, runtime) = runtime();
     let observed_at = Timestamp::from_second(1_700_000_000).unwrap();
     let old = Timestamp::from_second(1_700_000_000).unwrap();
     let new = Timestamp::from_second(1_700_000_030).unwrap();
     let mut prior = codex_record(observed_at);
+    prior.context.plan_proposed = Some(old);
     prior.context.turn_interrupted = Some(old);
     write_record(&runtime, &prior).unwrap();
 
     let mut refresh = unpriced_refresh();
+    refresh.plan_proposed = Some(new);
     refresh.turn_interrupted = Some(new);
     merge_local_context(
         &runtime,
@@ -141,6 +143,7 @@ fn local_refresh_overwrites_interrupted_turn_marker() {
     )
     .unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(merged.context.plan_proposed, Some(new));
     assert_eq!(merged.context.turn_interrupted, Some(new));
 
     merge_local_context(
@@ -153,6 +156,7 @@ fn local_refresh_overwrites_interrupted_turn_marker() {
     )
     .unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(merged.context.plan_proposed, None);
     assert_eq!(
         merged.context.turn_interrupted, None,
         "local detector clears stale interrupted markers when the tail advances"
@@ -387,6 +391,7 @@ fn full_local_refresh() -> LocalContextRefresh {
         cost: Some(cost(0.12)),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -401,6 +406,7 @@ fn unpriced_refresh() -> LocalContextRefresh {
         cost: None,
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -432,6 +438,7 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
         cost: None,
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -446,6 +453,7 @@ fn fallback_window_refresh() -> LocalContextRefresh {
         cost: None,
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -668,6 +676,7 @@ fn observed_context() -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at: observed_at(),
     }

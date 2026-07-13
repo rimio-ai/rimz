@@ -827,6 +827,7 @@ fn refresh_transcript_context(
             }),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),

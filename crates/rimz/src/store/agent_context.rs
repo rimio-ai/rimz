@@ -184,6 +184,9 @@ pub fn merge_local_context(
     // marker, and a fresh turn already underway clears it (the detector returns
     // `None`), so a stale completion never outlives its turn.
     record.context.turn_complete = refresh.turn_complete;
+    // Plan proposals use the same overwrite/self-clear rule, but settle the
+    // row to waiting while Codex displays its client-side selector.
+    record.context.plan_proposed = refresh.plan_proposed;
     // Same latest-refresh semantics as `turn_complete`: an at-rest
     // `turn_aborted` stamps the interrupted marker, and newer live rollout
     // records clear it by returning `None`.
@@ -449,6 +452,7 @@ pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: None,
+        plan_proposed: None,
         turn_interrupted: None,
         observed_at,
     }

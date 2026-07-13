@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::{
     ADAPTERS, AgentAdapter, AgentHookClass, AskReply, ClassificationSample, ConcernCoverage,
-    HookCoverage, IntegrationConcern, LaunchPreset, PresetArgMatcher, PresetField, PriceBook,
-    SpendFixture, SpendFixtureBody,
+    DerivedAskFixture, HookCoverage, IntegrationConcern, LaunchPreset, PresetArgMatcher,
+    PresetField, PriceBook, SpendFixture, SpendFixtureBody,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
@@ -449,7 +449,8 @@ fn assert_coverage_honest(
         IntegrationConcern::PlanApproval => assert_eq!(
             wired,
             has_ask_kind(samples, AskKind::PlanApproval)
-                || has_blocking_tool_kind(descriptor, AskKind::PlanApproval),
+                || has_blocking_tool_kind(descriptor, AskKind::PlanApproval)
+                || derived_ask_kind(adapter) == Some(AskKind::PlanApproval),
             "{kind} PlanApproval coverage must match blocking plan ask/tool classification"
         ),
         IntegrationConcern::UserQuestion => assert_eq!(
@@ -741,6 +742,37 @@ fn materialize_spend_fixture(dir: &Path, fixture: &SpendFixture) -> PathBuf {
             .expect("insert message fixture");
         }
     }
+    path
+}
+
+fn derived_ask_kind(adapter: &dyn AgentAdapter) -> Option<AskKind> {
+    let fixture = adapter.derived_ask_fixture()?;
+    let dir = tempfile::TempDir::new().expect("derived ask fixture tempdir");
+    let path = materialize_derived_ask_fixture(dir.path(), &fixture);
+    let mut payload = fixture.payload;
+    payload.as_object_mut()?.insert(
+        "transcript_path".to_owned(),
+        serde_json::json!(path.to_string_lossy()),
+    );
+    let observed = adapter
+        .observe_lifecycle(fixture.event_name, &payload)
+        .and_then(|observation| match observation.signal {
+            LifecycleSignal::AwaitingInput { kind, .. } => Some(kind),
+            _ => None,
+        });
+    assert_eq!(
+        observed,
+        Some(fixture.expected_kind),
+        "{} derived ask fixture must produce its declared kind",
+        adapter.descriptor().kind
+    );
+    observed
+}
+
+fn materialize_derived_ask_fixture(dir: &Path, fixture: &DerivedAskFixture) -> PathBuf {
+    let path = dir.join(fixture.transcript_file_name);
+    fs::write(&path, format!("{}\n", fixture.transcript_body))
+        .expect("write derived ask JSONL fixture");
     path
 }
 

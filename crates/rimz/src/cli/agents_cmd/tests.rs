@@ -1443,6 +1443,7 @@ impl AgentTurnErrorFixture for rimz::agents::AgentState {
                 label: Some(label.to_owned()),
             }),
             turn_complete: None,
+            plan_proposed: None,
             turn_interrupted: None,
             observed_at: jiff::Timestamp::from_second(at).unwrap(),
         });

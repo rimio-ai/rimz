@@ -67,6 +67,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         cost: None,
         turn_error,
         turn_complete,
+        plan_proposed: None,
         turn_interrupted,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),

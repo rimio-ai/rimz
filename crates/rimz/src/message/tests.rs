@@ -39,6 +39,15 @@ fn delivery_gates_follow_agent_lifecycle() {
     ));
     assert!(gate_open_for_agent(DeliveryGate::Any, &running, false, now));
 
+    let mut plan = agent("sess-plan", None);
+    plan.status = AgentStatus::Running;
+    plan.phase = crate::agents::TurnPhase::Reasoning;
+    let mut plan_context = settle_context(None, None);
+    plan_context.plan_proposed = Some(plan.last_activity + jiff::SignedDuration::from_secs(1));
+    plan.context = Some(plan_context);
+    assert!(plan.is_awaiting_input());
+    assert!(!gate_open_for_agent(DeliveryGate::Any, &plan, false, now));
+
     let mut stale = running.clone();
     stale.last_activity += jiff::SignedDuration::from_secs(2);
     assert!(!gate_open_for_agent(DeliveryGate::Done, &stale, false, now));
@@ -1035,6 +1044,7 @@ fn settle_context(complete: Option<Timestamp>, interrupted: Option<Timestamp>) -
         turn_opened_by: Vec::new(),
         turn_error: None,
         turn_complete: complete.map(|at| at + jiff::SignedDuration::from_secs(1)),
+        plan_proposed: None,
         turn_interrupted: interrupted.map(|at| at + jiff::SignedDuration::from_secs(1)),
         observed_at: Timestamp::now(),
     }

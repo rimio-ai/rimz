@@ -244,6 +244,16 @@ pub struct SpendFixture {
 
 #[cfg(test)]
 #[derive(Clone, Debug)]
+pub struct DerivedAskFixture {
+    pub event_name: &'static str,
+    pub payload: Value,
+    pub transcript_file_name: &'static str,
+    pub transcript_body: &'static str,
+    pub expected_kind: AskKind,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
 pub enum SpendFixtureBody {
     Jsonl(&'static str),
     OpencodeSqlite { data: &'static str },
@@ -398,6 +408,9 @@ pub struct LocalContextRefresh {
     /// `task_complete` that fired no `Stop` hook (a `/review` turn). The
     /// projection reads it to settle a falsely-`running` row to `success`.
     pub turn_complete: Option<Timestamp>,
+    /// Timestamp of a cleanly-completed planning turn whose rollout carries a
+    /// `Plan` item. The projection settles a falsely-`running` row to `waiting`.
+    pub plan_proposed: Option<Timestamp>,
     /// Timestamp of an interrupted turn read from the rollout tail
     /// (`turn_aborted`), set when the session is at rest after an abort that
     /// fired no `Stop` hook (Codex `/clear` mid-turn or Esc). The projection
@@ -539,6 +552,14 @@ pub trait AgentAdapter: Send + Sync {
     /// registry-wide conformance suite can prove the claim is backed by behavior.
     #[cfg(test)]
     fn spend_fixture(&self) -> Option<SpendFixture> {
+        None
+    }
+
+    /// Test-only transcript-backed ask fixture for native prompts whose hook
+    /// payload remains lifecycle-only. Conformance materializes the transcript
+    /// and feeds the event through [`Self::observe_lifecycle`].
+    #[cfg(test)]
+    fn derived_ask_fixture(&self) -> Option<DerivedAskFixture> {
         None
     }
 

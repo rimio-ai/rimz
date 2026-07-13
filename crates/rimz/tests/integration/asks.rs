@@ -23,6 +23,56 @@ fn question_payload() -> String {
     .expect("payload")
 }
 
+fn codex_plan_payload(transcript_path: &std::path::Path) -> String {
+    serde_json::to_string(&json!({
+        "hook_event_name": "Stop",
+        "session_id": "sess-codex-plan",
+        "turn_id": "turn-plan",
+        "transcript_path": transcript_path,
+        "permission_mode": "plan",
+        "last_assistant_message": "Codex says:"
+    }))
+    .expect("Codex plan payload")
+}
+
+fn codex_question_payload() -> String {
+    serde_json::to_string(&json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "sess-codex-question",
+        "tool_name": "request_user_input",
+        "tool_input": {
+            "questions": [
+                {
+                    "id": "first",
+                    "question": "First?",
+                    "options": [{ "label": "A" }, { "label": "B" }]
+                },
+                {
+                    "id": "second",
+                    "question": "Second?",
+                    "options": [{ "label": "X" }, { "label": "Y" }, { "label": "Z" }]
+                }
+            ]
+        }
+    }))
+    .expect("Codex question payload")
+}
+
+fn write_codex_plan_rollout(env: &Env) -> std::path::PathBuf {
+    let path = env.home_root.join("rollout-plan.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            r##"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","text":"# Plan\n\nShip safely."}}}"##,
+            "\n",
+            r#"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"#,
+            "\n",
+        ),
+    )
+    .expect("write Codex plan rollout");
+    path
+}
+
 #[test]
 fn asks_lists_and_shows_structured_question_json() {
     let env = Env::new();
@@ -175,6 +225,39 @@ fn asks_marks_plan_approval_mode_changes() {
 }
 
 #[test]
+fn codex_plan_stop_lists_rollout_plan_as_waiting_ask() {
+    let env = Env::new();
+    let transcript_path = write_codex_plan_rollout(&env);
+    let hook = env.run_hook("codex", &codex_plan_payload(&transcript_path));
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    assert!(hook.stdout.is_empty());
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "waiting");
+
+    let output = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("list Codex plan ask");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
+    assert_eq!(asks[0]["kind"], "plan_approval");
+    assert_eq!(
+        asks[0]["questions"][0]["question"],
+        "Requesting plan approval:\n\n# Plan\n\nShip safely."
+    );
+    assert_eq!(asks[0]["questions"][0]["options"][0]["label"], "implement");
+    assert_eq!(asks[0]["questions"][0]["options"][0]["mutates_trust"], true);
+}
+
+#[test]
 fn asks_empty_and_stale_answer_are_machine_readable() {
     let env = Env::new();
     let output = env
@@ -198,7 +281,7 @@ fn asks_empty_and_stale_answer_are_machine_readable() {
 }
 
 #[test]
-fn answer_refuses_an_unwired_agent_before_pane_delivery() {
+fn answer_keeps_unverified_codex_permissions_in_the_pane() {
     let env = Env::new();
     let hook = env.run_hook("codex", &permission_payload("shell"));
     assert!(
@@ -211,12 +294,10 @@ fn answer_refuses_an_unwired_agent_before_pane_delivery() {
         .rimz()
         .args(["answer", "@codex", "allow"])
         .bounded_output()
-        .expect("answer unsupported ask");
+        .expect("answer pane-only permission ask");
     assert_eq!(output.status.code(), Some(3));
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("codex does not support structured answers")
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("use the agent pane"), "{stderr}");
 }
 
 #[test]
@@ -358,4 +439,78 @@ fn answer_confirmable_claude_menu_actions_reach_bound_pane() {
         assert!(sent.contains("%7"), "{sent}");
         assert!(sent.contains(expected_command), "{sent}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn answer_codex_plan_implement_reaches_bound_pane() {
+    let env = Env::new();
+    let transcript_path = write_codex_plan_rollout(&env);
+    let hook = env.run_installed_hook_in_pane(
+        "codex",
+        &codex_plan_payload(&transcript_path),
+        &[("TMUX_PANE", "%7")],
+    );
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    let pane_fixture = env.write_pane_fixture(&[tmux_pane("%7", "codex", &env.project_root)]);
+    let (bin, log) = fake_tmux(&env);
+
+    let output = env
+        .rimz()
+        .args([
+            "answer",
+            "@codex",
+            "implement",
+            "--no-wait",
+            "--mux",
+            "tmux",
+        ])
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_MUX_LOG", &log)
+        .env("PATH", path_with_front(&bin))
+        .bounded_output()
+        .expect("answer Codex plan");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sent = std::fs::read_to_string(&log).unwrap();
+    assert!(sent.contains("send-keys -t %7 Enter"), "{sent}");
+}
+
+#[cfg(unix)]
+#[test]
+fn answer_codex_questions_sends_verified_option_choreography() {
+    let env = Env::new();
+    let hook =
+        env.run_installed_hook_in_pane("codex", &codex_question_payload(), &[("TMUX_PANE", "%7")]);
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    let pane_fixture = env.write_pane_fixture(&[tmux_pane("%7", "codex", &env.project_root)]);
+    let (bin, log) = fake_tmux(&env);
+
+    let output = env
+        .rimz()
+        .args(["answer", "@codex", "B", "Z", "--no-wait", "--mux", "tmux"])
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_MUX_LOG", &log)
+        .env("PATH", path_with_front(&bin))
+        .bounded_output()
+        .expect("answer Codex questions");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sent = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(sent.matches("send-keys -t %7 Down").count(), 3, "{sent}");
+    assert_eq!(sent.matches("send-keys -t %7 Enter").count(), 2, "{sent}");
 }

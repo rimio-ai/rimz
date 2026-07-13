@@ -661,6 +661,21 @@ pub fn is_turn_complete(
             .is_some_and(|at| at > last_activity)
 }
 
+/// Whether a `running` agent's completed planning turn is resting on Codex's
+/// native plan selector with no `Stop` hook to record the ask. The rollout-tail
+/// marker postdates `last_activity` and settles the row to `waiting`; a newer
+/// hook event self-clears it by advancing `last_activity`.
+pub fn is_plan_proposed(
+    status: AgentStatus,
+    context: Option<&AgentContext>,
+    last_activity: Timestamp,
+) -> bool {
+    status == AgentStatus::Running
+        && context
+            .and_then(|context| context.plan_proposed)
+            .is_some_and(|at| at > last_activity)
+}
+
 /// Whether a `running` or `waiting` agent's latest turn was interrupted with no
 /// `Stop` hook to record it — the provider marker
 /// (`AgentContext::turn_interrupted`, folded in via the context sidecar)
@@ -1159,6 +1174,9 @@ impl AgentState {
                 self.status
             };
         }
+        if is_plan_proposed(self.status, self.context.as_ref(), self.last_activity) {
+            return AgentStatus::Waiting;
+        }
         if is_turn_complete(self.status, self.context.as_ref(), self.last_activity) {
             return AgentStatus::Success;
         }
@@ -1168,14 +1186,16 @@ impl AgentState {
         self.status
     }
 
-    /// True when the current `Waiting` state still predates all observed agent
-    /// activity. A later activity heartbeat means the user answered in the
-    /// native UI and the row should stop reserving input.
+    /// True when the row must reserve pane input for a native prompt. Durable
+    /// `Waiting` uses its ask timestamp; a rollout-derived plan marker covers a
+    /// missed `Stop` hook without inventing a durable ask record. Newer agent
+    /// activity self-clears either form.
     pub fn is_awaiting_input(&self) -> bool {
-        self.status == AgentStatus::Waiting
-            && self
-                .waiting_since
-                .is_some_and(|waiting_since| self.last_activity <= waiting_since)
+        is_plan_proposed(self.status, self.context.as_ref(), self.last_activity)
+            || (self.status == AgentStatus::Waiting
+                && self
+                    .waiting_since
+                    .is_some_and(|waiting_since| self.last_activity <= waiting_since))
     }
 
     /// Provider API error currently explaining this row's displayed state. The

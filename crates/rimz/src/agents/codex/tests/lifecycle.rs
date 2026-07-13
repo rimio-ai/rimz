@@ -133,6 +133,48 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
 }
 
 #[test]
+fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-plan.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            r##"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","text":"# Ship\n\nImplement it."}}}"##,
+            "\n",
+            r#"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let payload = json!({
+        "session_id": "sess-plan",
+        "turn_id": "turn-plan",
+        "transcript_path": path,
+        "last_assistant_message": "Codex says:"
+    });
+
+    let observation = CodexAdapter
+        .observe_lifecycle("Stop", &payload)
+        .expect("plan Stop observation");
+    assert_eq!(
+        observation.signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::PlanApproval,
+            ask_id: None,
+            detail: None,
+        }
+    );
+    let questions = CodexAdapter
+        .ask_question_detail("Stop", &payload)
+        .expect("plan ask detail");
+    assert_eq!(
+        questions[0].question,
+        "Requesting plan approval:\n\n# Ship\n\nImplement it."
+    );
+    assert_eq!(questions[0].options[0].label, "implement");
+}
+
+#[test]
 fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     let prompt = CodexAdapter
         .observe_lifecycle(
