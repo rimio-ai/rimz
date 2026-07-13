@@ -36,7 +36,7 @@ use rimz::harness::schedule::run_log::{
 use rimz::harness::schedule::runner::{
     CHECK_DEFAULT_TIMEOUT, CheckEcho, acquire_run_lock, augment_prompt, check_only_result,
     check_record, check_timeout, deadline_expired, polarity_fires, reset_window_already_running,
-    run_check, tail_output, window_already_running, window_reset_at,
+    run_check, surplus_gate, tail_output, window_already_running, window_reset_at,
 };
 use rimz::harness::schedule::{
     self,
@@ -170,6 +170,12 @@ struct AddArgs {
     /// Skip a fire once this task's local-day run spend reaches the amount.
     #[arg(long = "budget-per-day", value_name = "AMOUNT", requires = "budget")]
     budget_per_day: Option<String>,
+    /// Fire only while the provider's longest budget window holds this forward headroom, e.g. 1.5x.
+    #[arg(long, value_name = "RATIO")]
+    surplus: Option<String>,
+    /// Fire only once this much of the provider's longest budget window has elapsed, e.g. 3d.
+    #[arg(long = "surplus-after", value_name = "DUR")]
+    surplus_after: Option<String>,
     /// Replace the agent's base system prompt with a file's contents.
     #[arg(long = "system-prompt-file", value_name = "PATH")]
     system_prompt_file: Option<PathBuf>,

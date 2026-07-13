@@ -65,6 +65,10 @@ pub struct TaskEntry {
     pub budget: Option<String>,
     #[serde(rename = "budget-per-day", skip_serializing_if = "Option::is_none")]
     pub budget_per_day: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surplus: Option<String>,
+    #[serde(rename = "surplus-after", skip_serializing_if = "Option::is_none")]
+    pub surplus_after: Option<String>,
     #[serde(rename = "system-prompt-file", skip_serializing_if = "Option::is_none")]
     pub system_prompt_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,6 +113,32 @@ impl TaskEntry {
                 });
             }
         }
+        if let Some(raw) = self.surplus.as_deref() {
+            crate::harness::schedule::parse_surplus(raw).map_err(|detail| {
+                TaskBudgetError::InvalidSurplus {
+                    task: task.to_owned(),
+                    field: "surplus",
+                    detail,
+                }
+            })?;
+        }
+        if let Some(raw) = self.surplus_after.as_deref() {
+            crate::harness::schedule::parse_surplus_after(raw).map_err(|detail| {
+                TaskBudgetError::InvalidSurplus {
+                    task: task.to_owned(),
+                    field: "surplus-after",
+                    detail,
+                }
+            })?;
+        }
+        if (self.surplus.is_some() || self.surplus_after.is_some())
+            && self.agent.is_none()
+            && self.wake.is_none()
+        {
+            return Err(TaskBudgetError::SurplusNeedsAgent {
+                task: task.to_owned(),
+            });
+        }
         Ok(())
     }
 }
@@ -124,6 +154,14 @@ pub enum TaskBudgetError {
     },
     #[error("task `{task}` sets `budget-per-day` without `budget`; set a per-run budget")]
     MissingRunBudget { task: String },
+    #[error("task `{task}` has invalid `{field}`: {detail}")]
+    InvalidSurplus {
+        task: String,
+        field: &'static str,
+        detail: String,
+    },
+    #[error("task `{task}` sets a surplus gate without `agent` or `wake`")]
+    SurplusNeedsAgent { task: String },
 }
 
 /// A loop delivery target pinned to the exact live agent session that scheduled
@@ -212,6 +250,8 @@ mod tests {
             every: Some("reset".to_owned()),
             budget: Some("$5.00".to_owned()),
             budget_per_day: Some("$20.00".to_owned()),
+            surplus: Some("1.5x".to_owned()),
+            surplus_after: Some("3d".to_owned()),
             deadline: Some(deadline),
             ..TaskEntry::default()
         };
@@ -270,6 +310,8 @@ mod tests {
         );
         assert!(toml.contains("budget = \"$5.00\""), "{toml}");
         assert!(toml.contains("budget-per-day = \"$20.00\""), "{toml}");
+        assert!(toml.contains("surplus = \"1.5x\""), "{toml}");
+        assert!(toml.contains("surplus-after = \"3d\""), "{toml}");
         assert!(toml.contains("max-attempts = 4"), "{toml}");
 
         let json = serde_json::to_string(&loop_config.tasks).expect("json");
@@ -308,6 +350,37 @@ mod tests {
                 field: "budget",
                 ..
             })
+        ));
+
+        for (field, entry) in [
+            (
+                "surplus",
+                TaskEntry {
+                    surplus: Some("many".to_owned()),
+                    ..TaskEntry::default()
+                },
+            ),
+            (
+                "surplus-after",
+                TaskEntry {
+                    surplus_after: Some("soon".to_owned()),
+                    ..TaskEntry::default()
+                },
+            ),
+        ] {
+            assert!(matches!(
+                entry.validate_budget("nightly"),
+                Err(TaskBudgetError::InvalidSurplus { field: actual, .. }) if actual == field
+            ));
+        }
+
+        assert!(matches!(
+            TaskEntry {
+                surplus: Some("1.5x".to_owned()),
+                ..TaskEntry::default()
+            }
+            .validate_budget("nightly"),
+            Err(TaskBudgetError::SurplusNeedsAgent { task }) if task == "nightly"
         ));
     }
 }

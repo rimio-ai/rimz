@@ -25,6 +25,8 @@
 ## mode = "auto"                       # auto, ask, or yolo
 ## budget = "5"                        # cap each spawned run
 ## budget-per-day = "20"               # skip fires that cannot fit today's task budget
+## surplus = "1.5x"                    # require forward headroom in the longest provider window
+## surplus-after = "3d"                # wait for this much of that window to elapse
 ##
 ## [tasks.watchdog]
 ## agent = "codex"

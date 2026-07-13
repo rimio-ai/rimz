@@ -20,6 +20,16 @@ enum AddTaskAction {
     CheckOnly,
 }
 
+impl AddTaskAction {
+    fn kind(&self) -> Option<&str> {
+        match self {
+            Self::Spawn { resolved, .. } => Some(&resolved.kind),
+            Self::Deliver { target, .. } => Some(&target.kind),
+            Self::CheckOnly => None,
+        }
+    }
+}
+
 // ---- add / remove -----------------------------------------------------------
 
 pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
@@ -27,6 +37,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     let workspace = resolve_add_workspace(&args)?;
     let project_root = workspace.project_root.clone();
     let action = resolve_add_action(&args, &workspace)?;
+    let action_kind = action.kind().map(ToOwned::to_owned);
     let (entry, resolved_for_preflight) = build_task_entry(&args, action, &project_root)?;
     // Validate the firing time before writing, so a bad `--at`/`--every` fails here.
     let parsed = schedule::parse_schedule(&args.name, &entry)?;
@@ -45,7 +56,13 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     if args.project {
         finish_project_mutation(&mut out, &project_root, true)?;
     }
-    write_add_feedback(&mut out, &args.name, &entry, &parsed)?;
+    write_add_feedback(
+        &mut out,
+        &args.name,
+        &entry,
+        &parsed,
+        action_kind.as_deref(),
+    )?;
     writeln!(
         out,
         "live while a room for {} is open",
@@ -79,6 +96,9 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
     }
     if args.on.is_some() && args.check.is_none() {
         bail!("--on requires --check");
+    }
+    if !agent_action_requested && (args.surplus.is_some() || args.surplus_after.is_some()) {
+        bail!("--surplus and --surplus-after require --agent or --wake");
     }
     if args.max_attempts == Some(0) {
         bail!("--max-attempts must be at least 1");
@@ -182,6 +202,26 @@ fn build_task_entry(
         .map(str::parse::<rimz::harness::budget::BudgetSpec>)
         .transpose()?
         .map(|spec| format!("${:.2}", spec.cap_usd));
+    let surplus = args
+        .surplus
+        .as_deref()
+        .map(schedule::parse_surplus)
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .map(|ratio| format!("{ratio}x"));
+    let surplus_after = args
+        .surplus_after
+        .as_deref()
+        .map(schedule::parse_surplus_after)
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .map(|_| {
+            args.surplus_after
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        });
     let on = args.on.as_deref().map(parse_check_on).transpose()?;
     let timing = resolve_add_timing(args)?;
     if !matches!(action, AddTaskAction::CheckOnly)
@@ -205,6 +245,8 @@ fn build_task_entry(
         every: args.every.clone(),
         cron: args.cron.clone(),
         deadline: timing.deadline,
+        surplus,
+        surplus_after,
         ..TaskEntry::default()
     };
     let mut resolved_for_preflight = None;
@@ -537,6 +579,7 @@ fn write_add_feedback(
     name: &str,
     entry: &TaskEntry,
     parsed: &schedule::ParsedSchedule,
+    action_kind: Option<&str>,
 ) -> Result<()> {
     match task_action(name, entry)? {
         TaskAction::Spawn(agent) => {
@@ -559,6 +602,20 @@ fn write_add_feedback(
     }
     let suffix = if parsed.once { "; then removed" } else { "" };
     writeln!(out, "schedule: {}{suffix}", parsed.describe())?;
+    if entry.surplus.is_some() || entry.surplus_after.is_some() {
+        let kind = action_kind.unwrap_or("provider");
+        let threshold = entry
+            .surplus
+            .as_deref()
+            .and_then(|raw| schedule::parse_surplus(raw).ok())
+            .unwrap_or(1.0);
+        let mut segments = Vec::new();
+        if let Some(after) = entry.surplus_after.as_deref() {
+            segments.push(format!("after {after} into the {kind} 7d window"));
+        }
+        segments.push(format!("surplus ≥ {threshold:.1}x"));
+        writeln!(out, "gate: {}", segments.join(" · "))?;
+    }
     if let Some(next) = first_next_fire(entry, parsed) {
         let zone = MachineConfig::load_lenient().time_zone();
         let local = next.to_zoned(zone);

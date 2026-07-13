@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 
-use crate::agents::{longest_window_reset_at, longest_window_running, shortest_window_running};
+use crate::agents::{
+    WindowSurplus, longest_window_reset_at, longest_window_running, longest_window_surplus,
+    shortest_window_running,
+};
 use crate::config::{CheckOn, TaskEntry};
 use crate::harness::schedule::run_log::{CheckRecord, LoopRunResult};
 use crate::ids::WorkspaceId;
@@ -296,6 +299,99 @@ pub fn reset_window_already_running(entry: &TaskEntry, kind: &str) -> Result<boo
     Ok(longest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
 }
 
+/// Decide whether a task's provider-window surplus gate keeps this fire closed.
+pub fn surplus_gate(entry: &TaskEntry, kind: &str, now: Timestamp) -> Result<Option<String>> {
+    if entry.surplus.is_none() && entry.surplus_after.is_none() {
+        return Ok(None);
+    }
+    let runtime = entry_runtime(entry)?;
+    Ok(surplus_gate_in(
+        entry,
+        kind,
+        longest_window_surplus(&runtime, kind, now),
+    ))
+}
+
+fn surplus_gate_in(
+    entry: &TaskEntry,
+    kind: &str,
+    reading: Option<WindowSurplus>,
+) -> Option<String> {
+    if entry.surplus.is_none() && entry.surplus_after.is_none() {
+        return None;
+    }
+    let Some(reading) = reading else {
+        return Some(format!(
+            "no {kind} budget-window reading; surplus gate stays closed"
+        ));
+    };
+    let after = match entry
+        .surplus_after
+        .as_deref()
+        .map(super::parse_surplus_after)
+    {
+        Some(Ok(after)) => Some(after),
+        Some(Err(_)) => {
+            return Some("invalid surplus-after gate; surplus gate stays closed".to_owned());
+        }
+        None => None,
+    };
+    if let Some(after) = after
+        && (reading.elapsed.as_secs().max(0) as u64) < after.as_secs()
+    {
+        return Some(format!(
+            "{kind} {} window {} elapsed; fires after {}",
+            window_label(reading.duration_mins),
+            elapsed_label(reading.elapsed),
+            entry.surplus_after.as_deref().unwrap_or_default().trim(),
+        ));
+    }
+    let threshold = match entry.surplus.as_deref().map(super::parse_surplus) {
+        Some(Ok(threshold)) => threshold,
+        Some(Err(_)) => return Some("invalid surplus gate; surplus gate stays closed".to_owned()),
+        None => 1.0,
+    };
+    (reading.headroom < threshold).then(|| {
+        format!(
+            "{kind} {} window surplus {:.1}x below {threshold:.1}x",
+            window_label(reading.duration_mins),
+            reading.headroom,
+        )
+    })
+}
+
+fn window_label(duration_mins: u32) -> String {
+    if duration_mins.is_multiple_of(24 * 60) {
+        format!("{}d", duration_mins / (24 * 60))
+    } else if duration_mins.is_multiple_of(60) {
+        format!("{}h", duration_mins / 60)
+    } else {
+        format!("{duration_mins}m")
+    }
+}
+
+fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
+    let total_mins = elapsed.as_secs().max(0) / 60;
+    let days = total_mins / (24 * 60);
+    let hours = total_mins % (24 * 60) / 60;
+    let mins = total_mins % 60;
+    if days > 0 {
+        if hours > 0 {
+            format!("{days}d{hours}h")
+        } else {
+            format!("{days}d")
+        }
+    } else if hours > 0 {
+        if mins > 0 {
+            format!("{hours}h{mins}m")
+        } else {
+            format!("{hours}h")
+        }
+    } else {
+        format!("{mins}m")
+    }
+}
+
 /// Raw reset stamp for `entry`'s provider longest budget window.
 pub fn window_reset_at(entry: &TaskEntry, kind: &str) -> Result<Option<Timestamp>> {
     let runtime = entry_runtime(entry)?;
@@ -312,6 +408,70 @@ fn entry_runtime(entry: &TaskEntry) -> Result<RuntimePaths> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn surplus_entry(surplus: Option<&str>, surplus_after: Option<&str>) -> TaskEntry {
+        TaskEntry {
+            surplus: surplus.map(ToOwned::to_owned),
+            surplus_after: surplus_after.map(ToOwned::to_owned),
+            ..TaskEntry::default()
+        }
+    }
+
+    fn reading(elapsed_days: i64, headroom: f64) -> WindowSurplus {
+        WindowSurplus {
+            duration_mins: 7 * 24 * 60,
+            elapsed: jiff::SignedDuration::from_secs(elapsed_days * 86_400),
+            headroom,
+        }
+    }
+
+    #[test]
+    fn surplus_gate_covers_closed_elapsed_headroom_and_open_branches() {
+        assert_eq!(surplus_gate_in(&TaskEntry::default(), "claude", None), None);
+        assert_eq!(
+            surplus_gate_in(&surplus_entry(Some("1.5x"), None), "claude", None).as_deref(),
+            Some("no claude budget-window reading; surplus gate stays closed")
+        );
+        assert_eq!(
+            surplus_gate_in(
+                &surplus_entry(Some("1.5x"), Some("3d")),
+                "claude",
+                Some(reading(2, 2.0)),
+            )
+            .as_deref(),
+            Some("claude 7d window 2d elapsed; fires after 3d")
+        );
+        assert_eq!(
+            surplus_gate_in(
+                &surplus_entry(Some("1.5x"), Some("3d")),
+                "claude",
+                Some(reading(4, 1.4)),
+            )
+            .as_deref(),
+            Some("claude 7d window surplus 1.4x below 1.5x")
+        );
+        assert_eq!(
+            surplus_gate_in(
+                &surplus_entry(Some("1.5x"), Some("3d")),
+                "claude",
+                Some(reading(4, 1.5)),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn surplus_after_alone_implies_sustainable_headroom() {
+        assert_eq!(
+            surplus_gate_in(
+                &surplus_entry(None, Some("3d")),
+                "codex",
+                Some(reading(4, 0.9)),
+            )
+            .as_deref(),
+            Some("codex 7d window surplus 0.9x below 1.0x")
+        );
+    }
 
     #[test]
     fn check_polarity_truth_table() {

@@ -93,6 +93,7 @@ pub use registry::{
     ADAPTERS, adapter_by_kind, all_adapters, descriptor_by_kind, find_adapter, known_kinds,
 };
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
+pub(crate) use state::WindowSurplus;
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
     ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS,
@@ -102,8 +103,8 @@ pub use state::{
 pub(crate) use state::{
     AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,
     effective_turn_error_class, longest_window_reset_at, longest_window_running,
-    rate_limit_window_kinds, read_rate_limits_cache, resume_gate_recovered, resume_park,
-    shortest_window_running,
+    longest_window_surplus, rate_limit_window_kinds, read_rate_limits_cache, resume_gate_recovered,
+    resume_park, shortest_window_running,
 };
 pub use state::{PendingRefill, RateLimitsCache};
 pub use transcript::{TranscriptMessage, TranscriptRole};

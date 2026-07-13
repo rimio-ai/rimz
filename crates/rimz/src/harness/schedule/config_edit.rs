@@ -179,6 +179,12 @@ fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
     if let Some(budget) = &entry.budget_per_day {
         table["budget-per-day"] = value(budget);
     }
+    if let Some(surplus) = &entry.surplus {
+        table["surplus"] = value(surplus);
+    }
+    if let Some(after) = &entry.surplus_after {
+        table["surplus-after"] = value(after);
+    }
     if let Some(path) = &entry.system_prompt_file {
         table["system-prompt-file"] = value(path.to_string_lossy().into_owned());
     }
@@ -217,4 +223,24 @@ fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
         .context("`tasks` is not a table")?;
     tasks.set_implicit(true);
     Ok(tasks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_entry_table_persists_surplus_gate_fields() {
+        let table = task_entry_table(
+            &TaskEntry {
+                surplus: Some("1.5x".to_owned()),
+                surplus_after: Some("3d".to_owned()),
+                ..TaskEntry::default()
+            },
+            true,
+        );
+
+        assert_eq!(table["surplus"].as_str(), Some("1.5x"));
+        assert_eq!(table["surplus-after"].as_str(), Some("3d"));
+    }
 }

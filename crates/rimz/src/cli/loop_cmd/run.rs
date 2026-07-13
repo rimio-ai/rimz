@@ -102,18 +102,48 @@ pub(super) fn run_one(
     if let Some(gate) =
         run_log::daily_budget_gate(&state_home(), name, &entry, &now).map_err(anyhow::Error::msg)?
     {
-        return finish_budget_skip(name, &entry, mode, started, now.timestamp(), gate.reason());
+        return finish_gate_skip(
+            name,
+            &entry,
+            mode,
+            started,
+            now.timestamp(),
+            LoopRunResult::BudgetSkipped,
+            gate.reason(),
+        );
     }
     let config = MachineConfig::load_lenient();
-    if let Some((kind, workspace_id)) = task_scope_target(&entry)?
+    let scope = task_scope_target(&entry)?;
+    if let Some((kind, workspace_id)) = &scope
         && let Some(reason) = rimz::harness::budget::scope_gate(
-            &RuntimePaths::for_workspace(workspace_id)?,
-            &kind,
+            &RuntimePaths::for_workspace(workspace_id.clone())?,
+            kind,
             &config,
             now.timestamp(),
         )
     {
-        return finish_budget_skip(name, &entry, mode, started, now.timestamp(), reason);
+        return finish_gate_skip(
+            name,
+            &entry,
+            mode,
+            started,
+            now.timestamp(),
+            LoopRunResult::BudgetSkipped,
+            reason,
+        );
+    }
+    if let Some((kind, _)) = &scope
+        && let Some(reason) = surplus_gate(&entry, kind.as_str(), now.timestamp())?
+    {
+        return finish_gate_skip(
+            name,
+            &entry,
+            mode,
+            started,
+            now.timestamp(),
+            LoopRunResult::SurplusSkipped,
+            reason,
+        );
     }
     let _run_lock = match acquire_run_lock(name, &entry) {
         Ok(Some(guard)) => guard,
@@ -205,28 +235,24 @@ fn task_scope_target(
     }
 }
 
-fn finish_budget_skip(
+fn finish_gate_skip(
     name: &str,
     entry: &TaskEntry,
     mode: LoopRunMode,
     started: Instant,
     at: Timestamp,
+    result: LoopRunResult,
     reason: String,
 ) -> Result<()> {
-    let mut record = LoopRunRecord::new(
-        name,
-        LoopRunResult::BudgetSkipped,
-        mode,
-        elapsed_ms(started),
-    );
+    let mut record = LoopRunRecord::new(name, result, mode, elapsed_ms(started));
     record.at = at;
     record.error = Some(reason.clone());
     record_run(name, entry, record);
     if mode == LoopRunMode::Manual {
         write_manual_verdict(
             &mut ui::out(),
-            LoopRunResult::BudgetSkipped,
-            &format!("budget skipped — {reason}"),
+            result,
+            &format!("{} — {reason}", result.label()),
         )?;
     } else {
         writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;

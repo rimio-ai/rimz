@@ -263,6 +263,26 @@ pub fn parse_duration_units(raw: &str, allowed: &[(&str, u64)]) -> Result<Durati
     Ok(Duration::from_secs(n.saturating_mul(factor)))
 }
 
+/// Parse a positive forward-headroom ratio such as `1.5x`.
+pub fn parse_surplus(raw: &str) -> Result<f64, String> {
+    let trimmed = raw.trim();
+    let number = trimmed.strip_suffix(['x', 'X']).unwrap_or(trimmed).trim();
+    let ratio = number
+        .parse::<f64>()
+        .map_err(|err| format!("surplus ratio `{raw}` is not a number: {err}"))?;
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return Err(format!(
+            "surplus ratio `{raw}` must be finite and greater than zero"
+        ));
+    }
+    Ok(ratio)
+}
+
+/// Parse the elapsed floor for a provider budget-window surplus gate.
+pub fn parse_surplus_after(raw: &str) -> Result<Duration, String> {
+    parse_duration_units(raw, &[("m", 60), ("h", 3_600), ("d", 86_400)])
+}
+
 /// Parse and validate an entry's firing time into a [`ParsedSchedule`]. Full
 /// agent preflight is validated separately by the CLI.
 pub fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, ScheduleErr> {
@@ -660,11 +680,29 @@ mod tests {
             system_prompt_file: None,
             budget: None,
             budget_per_day: None,
+            surplus: None,
+            surplus_after: None,
             timeout: None,
             at: at.map(ToOwned::to_owned),
             every: every.map(ToOwned::to_owned),
             cron: cron.map(ToOwned::to_owned),
             deadline: None,
+        }
+    }
+
+    #[test]
+    fn surplus_gate_values_parse_and_reject_unsafe_inputs() {
+        assert_eq!(parse_surplus("1.5x"), Ok(1.5));
+        assert_eq!(parse_surplus(" 2X "), Ok(2.0));
+        assert_eq!(
+            parse_surplus_after("3d"),
+            Ok(Duration::from_secs(3 * 86_400))
+        );
+        for raw in ["", "0", "-1x", "NaN", "inf", "many"] {
+            assert!(parse_surplus(raw).is_err(), "{raw}");
+        }
+        for raw in ["3", "2w", "1.5d"] {
+            assert!(parse_surplus_after(raw).is_err(), "{raw}");
         }
     }
 

@@ -56,6 +56,17 @@ rimz loop add prime --agent claude-ping --prompt ping --every reset
 
 `--every reset` fires one minute after the provider's longest budget window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes.
 
+### Soak up the weekly surplus
+
+The weekly subscription window expires whether you use it or not. An opportunistic task can spend only the share that is ahead of pace by gating each fire on forward headroom: the remaining budget share divided by the remaining time share. A reading of `1.0x` is exactly the sustainable pace for the rest of the window; `1.5x` means half again as much budget remains as the clock requires.
+
+```sh
+rimz loop add refactor-soak --agent claude --prompt "Refactor the next rough module and leave the branch green" \
+    --every 4h --surplus 1.5x --surplus-after 3d
+```
+
+`--surplus` sets the minimum headroom in the provider's longest window, while `--surplus-after` keeps the task quiet until that much of the window has elapsed. The elapsed floor prevents an untouched early week from looking like disposable surplus; used alone, it also requires at least `1.0x` headroom. The gate closes when the longest window is not running or its cached reading is absent or incomplete, so accounts without provider window readings keep these tasks parked. A closed gate records `surplus skipped` without adding a strike, and the recurring schedule keeps polling until real surplus appears.
+
 ## Wake a running agent
 
 An agent's work often ends in a wait. CI has twenty minutes left, a reviewer owes comments, a deploy is baking. The agent has nothing to do until then, and the follow-up falls to you: remember to check CI, then tell the agent to merge. You become the reminder service for your own fleet.
@@ -144,7 +155,7 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 
 Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
 
-The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. Inspect, test, and manage tasks with the rest of the surface:
+The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--surplus` and `--surplus-after` gate fires on the provider's longest budget window, `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. Inspect, test, and manage tasks with the rest of the surface:
 
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run

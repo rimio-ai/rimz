@@ -851,6 +851,22 @@ fn budget_label(entry: &TaskEntry) -> Option<String> {
     (!segments.is_empty()).then(|| segments.join(" · "))
 }
 
+fn surplus_label(entry: &TaskEntry) -> Option<String> {
+    let mut segments = Vec::new();
+    if entry.surplus.is_some() || entry.surplus_after.is_some() {
+        let threshold = entry
+            .surplus
+            .as_deref()
+            .and_then(|raw| schedule::parse_surplus(raw).ok())
+            .unwrap_or(1.0);
+        segments.push(format!("surplus ≥ {threshold:.1}x"));
+    }
+    if let Some(after) = entry.surplus_after.as_deref() {
+        segments.push(format!("after {after} of window"));
+    }
+    (!segments.is_empty()).then(|| segments.join(" · "))
+}
+
 fn list_cost_label(entry: &TaskEntry, spend_today_usd: f64) -> Option<String> {
     if let Some(cap) = entry
         .budget_per_day
@@ -1130,6 +1146,9 @@ fn write_show_facts(
     if let Some(budget) = budget_label(entry) {
         kv.push("budget", ui::cell(budget));
     }
+    if let Some(surplus) = surplus_label(entry) {
+        kv.push("surplus", ui::cell(surplus));
+    }
     if let Some(spend) = spend_label(entry, records, now_zoned) {
         kv.push("spend", ui::cell(spend));
     }
@@ -1317,6 +1336,7 @@ fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
         LoopRunResult::TimedOut => "timed out".to_owned(),
         LoopRunResult::BudgetExceeded => "budget exceeded".to_owned(),
         LoopRunResult::BudgetSkipped => "budget skipped".to_owned(),
+        LoopRunResult::SurplusSkipped => "surplus skipped".to_owned(),
         LoopRunResult::Errored => "error".to_owned(),
         LoopRunResult::SkippedWindow => "skipped".to_owned(),
         LoopRunResult::Expired => "expired".to_owned(),
@@ -1368,6 +1388,7 @@ fn failure_note_visible(result: LoopRunResult) -> bool {
             | LoopRunResult::TimedOut
             | LoopRunResult::BudgetExceeded
             | LoopRunResult::BudgetSkipped
+            | LoopRunResult::SurplusSkipped
             | LoopRunResult::Errored
     )
 }
@@ -1385,7 +1406,9 @@ pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
         | LoopRunResult::TargetGone
         | LoopRunResult::Overlapped
         | LoopRunResult::BudgetSkipped => ui::palette::WARN,
-        LoopRunResult::SkippedWindow | LoopRunResult::CheckSkipped => ui::palette::MUTED,
+        LoopRunResult::SkippedWindow
+        | LoopRunResult::CheckSkipped
+        | LoopRunResult::SurplusSkipped => ui::palette::MUTED,
     }
 }
 
@@ -1403,6 +1426,7 @@ pub(super) fn loop_result_glyph(result: LoopRunResult) -> &'static str {
         | LoopRunResult::Overlapped
         | LoopRunResult::SkippedWindow
         | LoopRunResult::BudgetSkipped
+        | LoopRunResult::SurplusSkipped
         | LoopRunResult::CheckSkipped => "○",
     }
 }
@@ -1962,6 +1986,27 @@ mod tests {
     }
 
     #[test]
+    fn surplus_label_shows_explicit_and_implied_thresholds() {
+        let explicit = TaskEntry {
+            surplus: Some("1.5x".to_owned()),
+            surplus_after: Some("3d".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert_eq!(
+            surplus_label(&explicit).as_deref(),
+            Some("surplus ≥ 1.5x · after 3d of window")
+        );
+        let implied = TaskEntry {
+            surplus_after: Some("2d".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert_eq!(
+            surplus_label(&implied).as_deref(),
+            Some("surplus ≥ 1.0x · after 2d of window")
+        );
+    }
+
+    #[test]
     fn spend_label_renders_today_last_and_cost_window() {
         let now = "2026-06-02T12:00:00Z[UTC]".parse::<jiff::Zoned>().unwrap();
         let entry = TaskEntry {
@@ -2052,6 +2097,10 @@ mod tests {
 
         assert_eq!(
             loop_result_style(LoopRunResult::SkippedWindow),
+            ui::palette::MUTED
+        );
+        assert_eq!(
+            loop_result_style(LoopRunResult::SurplusSkipped),
             ui::palette::MUTED
         );
     }
