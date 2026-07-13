@@ -145,13 +145,18 @@ pub struct BirthSize {
     pub percent: u16,
 }
 
-/// Whether a live sidebar's width warrants repair toward the canonical
-/// verdict. Width above canonical has only a two-column allowance because it
-/// violates the configured cap. Below canonical, one Zellij resize step (5%
-/// of the view) lets a repair stop on the near side without re-triggering and
-/// lets a small manual narrowing stick.
-pub fn sidebar_width_off_spec(cols: u64, canonical_cols: u64, view_cols: u64) -> bool {
-    cols > canonical_cols + 2 || canonical_cols.saturating_sub(cols) > 2.max(view_cols / 20)
+/// Whether a live sidebar's drift warrants repair toward the canonical width.
+/// Drift beyond half the backend's resize resolution (with a one-column
+/// minimum) can be moved closer. The band is symmetric because the canonical
+/// target already carries either the user's recorded width or the configured
+/// cap.
+pub(crate) fn sidebar_width_off_spec(cols: u64, canonical_cols: u64, step_cols: u64) -> bool {
+    cols.abs_diff(canonical_cols) > (step_cols / 2).max(1)
+}
+
+/// Zellij's built-in resize increment is approximately 5% of the view width.
+pub(crate) fn zellij_resize_step_cols(view_cols: u64) -> u64 {
+    (view_cols / 20).max(1)
 }
 
 /// The invoking terminal's `(cols, rows)`, when stdout is attached to one.
@@ -250,24 +255,31 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_width_repair_uses_one_resize_step_as_slack() {
-        // A 200-column view gets ten columns of slack below canonical, while
-        // a pane more than two columns wider always violates the cap.
-        assert!(!sidebar_width_off_spec(62, 72, 200));
-        assert!(sidebar_width_off_spec(82, 72, 200));
-        assert!(sidebar_width_off_spec(61, 72, 200));
-        assert!(sidebar_width_off_spec(83, 72, 200));
+    fn sidebar_width_repair_uses_half_a_resize_step_as_slack() {
+        // Exact backends retain only the one-column minimum band.
+        assert!(!sidebar_width_off_spec(71, 72, 1));
+        assert!(!sidebar_width_off_spec(73, 72, 1));
+        assert!(sidebar_width_off_spec(70, 72, 1));
+        assert!(sidebar_width_off_spec(74, 72, 1));
 
-        // A raw 30% detached birth against the live browser width exceeds the
-        // configured cap, while the first post-shrink crossing stays stable.
-        assert!(sidebar_width_off_spec(85, 72, 283));
-        assert!(!sidebar_width_off_spec(71, 72, 283));
+        // A 213-column Zellij view has a ten-column step and a symmetric
+        // five-column band around the canonical width.
+        let step = zellij_resize_step_cols(213);
+        assert_eq!(step, 10);
+        assert!(!sidebar_width_off_spec(58, 63, step));
+        assert!(!sidebar_width_off_spec(68, 63, step));
+        assert!(sidebar_width_off_spec(57, 63, step));
+        assert!(sidebar_width_off_spec(69, 63, step));
 
-        // Tiny or unknown-looking views retain a two-column minimum band.
-        assert!(!sidebar_width_off_spec(70, 72, 0));
-        assert!(!sidebar_width_off_spec(74, 72, 20));
-        assert!(sidebar_width_off_spec(69, 72, 20));
-        assert!(sidebar_width_off_spec(75, 72, 20));
+        // Regression: a full Zellij step and one tmux keypress both propagate.
+        assert!(sidebar_width_off_spec(53, 63, zellij_resize_step_cols(213)));
+        assert!(sidebar_width_off_spec(61, 63, 1));
+
+        // Zero and tiny views still produce a one-column minimum band.
+        assert_eq!(zellij_resize_step_cols(0), 1);
+        assert_eq!(zellij_resize_step_cols(19), 1);
+        assert!(!sidebar_width_off_spec(71, 72, 1));
+        assert!(sidebar_width_off_spec(70, 72, 1));
     }
 
     #[test]

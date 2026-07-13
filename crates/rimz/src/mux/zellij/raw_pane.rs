@@ -8,7 +8,7 @@ use std::{
 use serde::Deserialize;
 
 use crate::ids::{MuxName, PaneId};
-use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
+use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
 use crate::mux::{ClientPresence, ClientView, PaneListing, SidebarWidth, ViewSidebars};
 use crate::pane::SIDEBAR_CHROME_TITLE;
@@ -297,7 +297,7 @@ pub(super) fn sidebar_geometry_off_spec(
                 sidebar_width_off_spec(
                     cols,
                     live_target_cols(width, width_override, view_cols),
-                    view_cols,
+                    zellij_resize_step_cols(view_cols),
                 )
             })
         })

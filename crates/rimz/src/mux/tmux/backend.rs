@@ -73,7 +73,8 @@ impl TmuxBackend {
                 continue;
             }
             let target = live_target_cols(opts.width, opts.width_override, geometry.window_width);
-            if !sidebar_width_off_spec(geometry.pane_width, target, geometry.window_width) {
+            // tmux's absolute resize converges to the exact requested width.
+            if !sidebar_width_off_spec(geometry.pane_width, target, 1) {
                 continue;
             }
             match self

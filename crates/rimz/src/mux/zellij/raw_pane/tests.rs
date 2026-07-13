@@ -464,8 +464,8 @@ fn sidebar_geometry_classifies_dock_shapes() {
         Some(SidebarDock::SwapReachable),
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(3), &panes, &excluded, width, None),
-        "a healthy ~21% layout-born sidebar is never churned",
+        sidebar_geometry_off_spec(by_id(3), &panes, &excluded, width, None),
+        "a layout-born sidebar beyond half a resize step is repaired",
     );
     assert_eq!(
         sidebar_dock_verdict(by_id(3), &panes, &excluded),
@@ -499,8 +499,8 @@ fn sidebar_geometry_classifies_dock_shapes() {
         "the narrow one-right-column nested shape can be repaired by stacking",
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(12), &panes, &excluded, width, None),
-        "a sidebar beside stacked right-hand work panes is docked",
+        sidebar_geometry_off_spec(by_id(12), &panes, &excluded, width, None),
+        "a docked sidebar beyond half a resize step still needs resizing",
     );
     assert_eq!(
         sidebar_dock_verdict(by_id(12), &panes, &excluded),
@@ -545,7 +545,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
     );
     assert!(
         sidebar_geometry_off_spec(by_id(32), &panes, &excluded, width, None),
-        "a sidebar wider than the two-column allowance shrinks",
+        "a sidebar wider than half a resize step shrinks",
     );
     assert_eq!(
         tab_view_cols(&panes, 7),
@@ -559,19 +559,19 @@ fn sidebar_geometry_classifies_dock_shapes() {
     );
 
     assert!(
-        !sidebar_width_off_spec(72, 72, 298),
+        !sidebar_width_off_spec(72, 72, zellij_resize_step_cols(298)),
         "canonical width is not a mis-mount",
     );
     assert!(
-        sidebar_width_off_spec(149, 72, 298),
+        sidebar_width_off_spec(149, 72, zellij_resize_step_cols(298)),
         "the 50% mis-mount is wider than the canonical width",
     );
     assert!(
-        !sidebar_width_off_spec(60, 72, 298),
-        "a sub-canonical pane within one resize step is left alone",
+        sidebar_width_off_spec(60, 72, zellij_resize_step_cols(298)),
+        "a pane beyond half a resize step is repaired",
     );
     assert!(
-        sidebar_width_off_spec(90, 72, 298),
+        sidebar_width_off_spec(90, 72, zellij_resize_step_cols(298)),
         "a pane wider than the repair band shrinks",
     );
 }

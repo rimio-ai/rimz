@@ -35,12 +35,12 @@ fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
     let report = server
         .backend
         .reconcile_sidebars(&opts, &liveness)
-        .expect("reconcile in-band sidebar");
-    assert_eq!(report.redocked, 0);
+        .expect("reconcile manually resized sidebar");
+    assert_eq!(report.redocked, 1);
     assert_eq!(
         server.display(sidebar.raw(), "#{pane_width}"),
-        "74",
-        "a manual resize inside the tolerance band sticks",
+        "72",
+        "a native manual resize beyond the exact backend's band snaps back",
     );
 }
 

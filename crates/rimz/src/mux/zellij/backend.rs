@@ -19,7 +19,7 @@ use super::raw_pane::{
 };
 use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
+use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
@@ -688,7 +688,7 @@ impl MuxBackend for ZellijBackend {
                 continue;
             };
             let target = live_target_cols(opts.width, opts.width_override, view_cols);
-            if !sidebar_width_off_spec(cols, target, view_cols) {
+            if !sidebar_width_off_spec(cols, target, zellij_resize_step_cols(view_cols)) {
                 continue;
             }
             let (_, changed) = self.converge_sidebar_width(opts, tab_position, *raw_id, floor);

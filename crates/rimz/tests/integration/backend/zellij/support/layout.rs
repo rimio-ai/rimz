@@ -383,9 +383,11 @@ pub(in crate::backend::zellij) fn assert_work_panes_reopen_in_survivor_after_clo
     let sidebar = wait_for_named_sidebar_pane(xdg, session, tab_name).expect("work tab sidebar");
     assert_eq!(sidebar.x, 0);
     let target = 72_u64;
-    let lower = target.saturating_sub(u64::from(client_columns) / 20);
+    let step = (u64::from(client_columns) / 20).max(1);
+    let tolerance = (step / 2).max(1);
+    let lower = target.saturating_sub(tolerance);
     assert!(
-        (lower..=target + 2).contains(&sidebar.columns),
+        (lower..=target + tolerance).contains(&sidebar.columns),
         "sidebar width left the live convergence band: {sidebar:?}"
     );
     let bar = wait_for_named_compact_bar_pane(xdg, session, tab_name).expect("compact bar");

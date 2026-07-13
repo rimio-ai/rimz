@@ -600,8 +600,13 @@ exit 0
     let final_cols = backend
         .sidebar_cols("rimz-test", &workspace_id, 1, 8, floor)
         .expect("final sidebar columns");
+    let target_cols = crate::mux::width::live_target_cols(width_sync.width, None, view_cols);
     assert!(
-        !crate::mux::width::sidebar_width_off_spec(final_cols, 72, view_cols),
+        !crate::mux::width::sidebar_width_off_spec(
+            final_cols,
+            target_cols,
+            crate::mux::width::zellij_resize_step_cols(view_cols),
+        ),
         "final post-action topology should see an in-band width, got {final_cols}",
     );
 }
@@ -609,13 +614,19 @@ exit 0
 #[cfg(unix)]
 #[test]
 fn resize_sidebar_toward_retries_shrink_and_stops_in_band() {
-    assert_resize_sidebar_toward_scenario(90, -1, 360, "decrease", 17);
+    assert_resize_sidebar_toward_scenario(90, -1, 360, "decrease", 10);
 }
 
 #[cfg(unix)]
 #[test]
 fn resize_sidebar_toward_retries_grow_and_stops_in_band() {
-    assert_resize_sidebar_toward_scenario(40, 19, 380, "increase", 2);
+    assert_resize_sidebar_toward_scenario(40, 19, 380, "increase", 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn resize_sidebar_toward_repairs_a_full_step_below_target() {
+    assert_resize_sidebar_toward_scenario(53, 10, 213, "increase", 2);
 }
 
 #[cfg(unix)]
@@ -736,7 +747,11 @@ exit 0
         .sidebar_cols("rimz-test", &workspace_id, 1, 8, floor)
         .expect("final sidebar columns");
     assert!(
-        !crate::mux::width::sidebar_width_off_spec(final_cols, 72, 380),
+        !crate::mux::width::sidebar_width_off_spec(
+            final_cols,
+            72,
+            crate::mux::width::zellij_resize_step_cols(380),
+        ),
         "final live geometry should be in-band, got {final_cols}",
     );
 }

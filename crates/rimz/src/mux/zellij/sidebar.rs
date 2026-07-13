@@ -18,7 +18,7 @@ use super::{
     TAB_NAMES_RETRY_DELAY, TOPOLOGY_CACHE_POLL_STEP, ZellijBackend,
 };
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::{live_target_cols, sidebar_width_off_spec};
+use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::{
     DaemonView, MuxErr, PresencePluginOptions, Result, SidebarPaneOptions, WidthSyncOptions,
     sidebar_serve_args,
@@ -494,7 +494,7 @@ impl ZellijBackend {
             });
             if let Some((cols, view_cols)) = cols.zip(tab_view_cols(&panes, tab_position)) {
                 let target_cols = live_target_cols(opts.width, opts.width_override, view_cols);
-                if !sidebar_width_off_spec(cols, target_cols, view_cols) {
+                if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
                     return (floor, false);
                 }
                 let before = floor;
@@ -730,6 +730,7 @@ impl ZellijBackend {
         const RESIZE_MAX_STEPS: u32 = 64;
         const TRANSIENT_MAX_RETRIES: u8 = 2;
         let target_cols = live_target_cols(opts.width, opts.width_override, view_cols);
+        let step_cols = zellij_resize_step_cols(view_cols);
         let Some(target_raw) = parse_terminal_id(pane_id) else {
             return min_topology_produced_at_ms;
         };
@@ -755,7 +756,7 @@ impl ZellijBackend {
                 }
                 return floor;
             };
-            if !sidebar_width_off_spec(cols, target_cols, view_cols) {
+            if !sidebar_width_off_spec(cols, target_cols, step_cols) {
                 return floor;
             }
             let grow = cols < target_cols;

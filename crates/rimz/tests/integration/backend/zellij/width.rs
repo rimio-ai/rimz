@@ -185,7 +185,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     assert!(wait_for_sidebar_columns(
         xdg.path(),
         &name,
-        &[30..=42, 30..=42, 30..=42]
+        &[35..=45, 35..=45, 35..=45]
     ));
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 4);
@@ -196,7 +196,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         1,
     );
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[30..=42, 30..=42, 30..=42, 30..=42]),
+        wait_for_sidebar_columns(xdg.path(), &name, &[35..=45, 35..=45, 35..=45, 35..=45]),
         "the override propagates to every tab, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
