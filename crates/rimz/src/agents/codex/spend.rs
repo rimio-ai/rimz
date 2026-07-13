@@ -5,7 +5,8 @@
 //! through the [`pricing`](crate::agents::pricing) table to a USD cost.
 //! Discovery and parsing stay pure and network-free.
 //!
-//! Codex session files live at `~/.codex/sessions/` (or `CODEX_HOME` env).
+//! Codex session files live under `~/.codex/{sessions,archived_sessions}/`
+//! (or `CODEX_HOME` env).
 //!
 //! Two log formats are handled:
 //!
@@ -30,7 +31,7 @@
 //! (OpenAI), `input`/`output` (compact),
 //! `cached_tokens`/`cached_input_tokens` (cache).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::pricing::PriceBook;
@@ -52,36 +53,53 @@ use wire::{CodexLogEntry, CodexRawUsage};
 
 // ── Path discovery ────────────────────────────────────────────────────────────
 
-/// Collect all Codex session `*.jsonl` files from `~/.codex/sessions/`.
+/// Collect all active and archived Codex session `*.jsonl` files.
 ///
-/// Respects `CODEX_HOME` (comma-separated) when set; appends `sessions/` when
-/// the resolved path contains that subdirectory.
+/// Respects `CODEX_HOME` (comma-separated) when set. A Codex home may contain
+/// both `sessions/` and `archived_sessions/`; an active file wins when both
+/// trees contain the same relative rollout path.
 ///
 /// **Note:** Codex files are not scoped to a project directory — all sessions
 /// are returned.  Computing USD cost from these files requires a pricing table.
 pub fn codex_session_files() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-
-    if let Ok(env_val) = std::env::var("CODEX_HOME") {
-        for raw in env_val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            let p = PathBuf::from(raw);
-            let sessions = p.join("sessions");
-            if sessions.is_dir() {
-                roots.push(sessions);
-            } else if p.is_dir() {
-                roots.push(p);
-            }
-        }
+    let homes = if let Ok(env_val) = std::env::var("CODEX_HOME") {
+        env_val
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .collect()
     } else {
-        let candidate = home_dir().join(".codex/sessions");
-        if candidate.is_dir() {
-            roots.push(candidate);
-        }
-    }
+        vec![home_dir().join(".codex")]
+    };
+    codex_session_files_from_homes(&homes)
+}
 
+fn codex_session_files_from_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    for dir in &roots {
-        collect_jsonl(dir, &mut files);
+    for home in homes {
+        let active = home.join("sessions");
+        let archived = home.join("archived_sessions");
+        let roots = if active.is_dir() || archived.is_dir() {
+            [active, archived]
+                .into_iter()
+                .filter(|root| root.is_dir())
+                .collect::<Vec<_>>()
+        } else if home.is_dir() {
+            vec![home.clone()]
+        } else {
+            Vec::new()
+        };
+        let mut relative_seen = HashSet::new();
+        for root in roots {
+            let mut discovered = Vec::new();
+            collect_jsonl(&root, &mut discovered);
+            discovered.sort();
+            files.extend(discovered.into_iter().filter(|file| {
+                let relative = file.strip_prefix(&root).unwrap_or(file);
+                relative_seen.insert(relative.to_path_buf())
+            }));
+        }
     }
     files.sort();
     files.dedup();

@@ -80,6 +80,19 @@ struct ClaudeUsage {
     speed: Option<String>,
     #[serde(default)]
     cache_creation: Option<CacheCreation>,
+    /// Separately billed nested calls such as Claude's advisor model. The
+    /// top-level usage remains attributable to the main model.
+    #[serde(default)]
+    iterations: Vec<ClaudeUsageIteration>,
+}
+
+#[derive(Default, Deserialize)]
+struct ClaudeUsageIteration {
+    #[serde(rename = "type")]
+    kind: String,
+    model: Option<String>,
+    #[serde(flatten)]
+    usage: ClaudeUsage,
 }
 
 #[derive(Default, Deserialize)]
@@ -345,6 +358,79 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             model: entry.message.model.clone(),
             rolled: false,
         });
+
+        // Advisor calls are additional billable requests nested under the main
+        // response's usage. They carry their own model and tokens but no
+        // `costUSD`, so price them independently and give each a stable child
+        // key under the parent response for cross-file replay deduplication.
+        for (index, iteration) in usage
+            .iterations
+            .iter()
+            .enumerate()
+            .filter(|(_, iteration)| iteration.kind == "advisor_message")
+        {
+            let Some(model) = iteration
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+            else {
+                continue;
+            };
+            let advisor = &iteration.usage;
+            let input = advisor.input_tokens.unwrap_or(0);
+            let output = advisor.output_tokens.unwrap_or(0);
+            let (cache_5m, cache_1h) = advisor
+                .cache_creation
+                .as_ref()
+                .map(|breakdown| {
+                    (
+                        breakdown.ephemeral_5m_input_tokens,
+                        breakdown.ephemeral_1h_input_tokens,
+                    )
+                })
+                .unwrap_or((advisor.cache_creation_input_tokens.unwrap_or(0), 0));
+            let cache_write = cache_5m + cache_1h;
+            let cache_read = advisor.cache_read_input_tokens.unwrap_or(0);
+            if input == 0 && output == 0 && cache_write == 0 && cache_read == 0 {
+                continue;
+            }
+            let cost_usd = match prices.price(model) {
+                Some(price) => price.cost(
+                    input,
+                    output,
+                    cache_5m,
+                    cache_1h,
+                    cache_read,
+                    advisor.speed.as_deref() == Some("fast"),
+                ),
+                None => {
+                    if !is_priceable_model_name(model) {
+                        continue;
+                    }
+                    record_unknown_model(&mut unknown_models, model, ts_secs);
+                    0.0
+                }
+            };
+            entries.push(CachedEntry {
+                ts_secs,
+                cost_usd,
+                input,
+                output,
+                cache_write,
+                cache_read,
+                message_id: entry
+                    .message
+                    .id
+                    .as_ref()
+                    .map(|message_id| format!("{message_id}:advisor:{index}")),
+                request_id: entry.request_id.clone(),
+                thread_id: None,
+                is_sidechain: entry.is_sidechain == Some(true),
+                model: Some(model.to_owned()),
+                rolled: false,
+            });
+        }
     }
 
     SpendParse {
@@ -471,6 +557,41 @@ mod tests {
         assert_eq!(entries[0].output, 50);
         assert_eq!(entries[0].cache_write, 200);
         assert_eq!(entries[0].cache_read, 800);
+    }
+
+    #[test]
+    fn counts_advisor_iterations_as_separate_model_usage() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-05-22T02:34:40.000Z","version":"1.2.3","sessionId":"session-1","requestId":"req-1","message":{"id":"msg-1","model":"main-model","usage":{"input_tokens":2,"output_tokens":491,"cache_creation_input_tokens":7853,"cache_read_input_tokens":226584,"iterations":[{"type":"message","input_tokens":1,"output_tokens":45},{"type":"advisor_message","model":"advisor-model","input_tokens":159419,"output_tokens":7805,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}]}}}"#,
+            ],
+        );
+        let prices = PriceBook::from_litellm_json(
+            r#"{
+                "main-model": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+                "advisor-model": {"input_cost_per_token": 3e-6, "output_cost_per_token": 4e-6,
+                                  "cache_creation_input_token_cost": 5e-6,
+                                  "cache_read_input_token_cost": 6e-6}
+            }"#,
+        );
+
+        let entries = parse_claude_spend(&file, 0, &prices).entries;
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].model.as_deref(), Some("main-model"));
+        assert_eq!(entries[0].input, 2);
+        assert_eq!(entries[1].model.as_deref(), Some("advisor-model"));
+        assert_eq!(entries[1].input, 159_419);
+        assert_eq!(entries[1].output, 7_805);
+        assert_eq!(entries[1].cache_write, 3);
+        assert_eq!(entries[1].cache_read, 4);
+        assert_eq!(entries[1].message_id.as_deref(), Some("msg-1:advisor:1"));
+        assert_eq!(entries[1].request_id.as_deref(), Some("req-1"));
+        let expected = 159_419.0 * 3e-6 + 7_805.0 * 4e-6 + 3.0 * 5e-6 + 4.0 * 6e-6;
+        assert!((entries[1].cost_usd - expected).abs() < 1e-12);
     }
 
     #[test]

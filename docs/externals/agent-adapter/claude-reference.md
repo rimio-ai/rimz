@@ -369,7 +369,7 @@ The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authoriza
 
 ## Transcript JSONL
 
-Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. RimZ reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. The field → internal mapping and the window-divisor rule are in [claude.md → Context and transcript](../../internals/agents/claude.md#context-and-transcript); there is no source URL to pin.
+Anthropic publishes **no official schema** for the conversation transcript at `transcript_path`. RimZ reads it best-effort and reverse-engineered: each assistant line carries a `message` object, and the newest `message.usage` (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`) plus `message.model` feed the context gauge. Newer usage objects may also carry `iterations`; an iteration whose `type` is `advisor_message` names its own `model` and usage buckets and represents a separately billed nested request. The field → internal mapping and the window-divisor rule are in [claude.md → Context and transcript](../../internals/agents/claude.md#context-and-transcript); there is no source URL to pin.
 
 ### Transcript death certificate
 

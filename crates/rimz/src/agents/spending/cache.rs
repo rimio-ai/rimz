@@ -46,8 +46,10 @@ use super::aggregate::{
 /// field keys and skips default values; a v11 cache would otherwise read under
 /// the new keys as zeroed entries, so it cold-rebuilds. v13 aligns token-priced
 /// costs with ccusage: Claude 1h cache creation prices at 2x input, 200k tiers
-/// apply per token class, and fast-mode turns apply the model multiplier.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 13;
+/// apply per token class, and fast-mode turns apply the model multiplier. v14
+/// adds Claude advisor calls, Codex replay suppression, and request-selected
+/// OpenAI long-context pricing; finalized files need one cold reprice.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 14;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///

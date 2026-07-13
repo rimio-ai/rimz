@@ -3,6 +3,7 @@
 //! This module classifies JSONL lines, tracks cumulative totals and current model across resume cursors, and emits raw token events for pricing.
 
 use std::borrow::Cow;
+use std::io::{BufRead as _, Read as _};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -78,6 +79,15 @@ pub(super) struct CodexSpendState {
     /// keeps its workspace origin without re-reading the header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) cwd: Option<PathBuf>,
+    /// Forked and subagent rollouts can begin with a copied parent history.
+    /// Codex rewrites that replay into one timestamp second; suppress it while
+    /// preserving the cumulative baseline for the first new delta.
+    #[serde(default)]
+    replay_checked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    replay_second: Option<String>,
+    #[serde(default)]
+    skipping_replay: bool,
 }
 
 /// Parse a Codex session JSONL file into `CodexTokenEvent` values from
@@ -107,6 +117,16 @@ pub(super) fn parse_codex_session(
     };
     let fallback_timestamp = file_mtime_rfc3339(path);
     let mut out = Vec::new();
+    if !state.replay_checked {
+        match probe_replay(path) {
+            ReplayProbe::None => state.replay_checked = true,
+            ReplayProbe::Replay(second) => {
+                state.replay_second = Some(second);
+                state.skipping_replay = true;
+                state.replay_checked = true;
+            }
+        }
+    }
 
     for line in content.split(|&b| b == b'\n') {
         if line.is_empty() {
@@ -125,6 +145,9 @@ pub(super) fn parse_codex_session(
                 let Ok(entry) = serde_json::from_slice::<CodexSessionEntry<'_>>(line) else {
                     continue;
                 };
+                if suppress_replayed_entry(&entry, state) {
+                    continue;
+                }
                 visit_session_entry(
                     entry,
                     &mut state.previous_totals,
@@ -146,6 +169,98 @@ pub(super) fn parse_codex_session(
         }
     }
     (out, next_offset)
+}
+
+enum ReplayProbe {
+    None,
+    Replay(String),
+}
+
+fn probe_replay(path: &Path) -> ReplayProbe {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return ReplayProbe::None;
+    };
+    let mut prefix = [0_u8; 16 * 1024];
+    let Ok(read) = file.read(&mut prefix) else {
+        return ReplayProbe::None;
+    };
+    let replay = crate::agents::transcript_fs::bytes_contains(&prefix[..read], b"thread_spawn")
+        || crate::agents::transcript_fs::bytes_contains(&prefix[..read], b"forked_from_id");
+    if !replay {
+        return ReplayProbe::None;
+    }
+
+    let Ok(file) = std::fs::File::open(path) else {
+        return ReplayProbe::None;
+    };
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = Vec::new();
+    let mut first = None;
+    loop {
+        line.clear();
+        let Ok(read) = reader.read_until(b'\n', &mut line) else {
+            return ReplayProbe::None;
+        };
+        if read == 0 {
+            return ReplayProbe::None;
+        }
+        if !matches!(codex_line_kind(&line), Some(CodexLineKind::Session)) {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_slice::<CodexSessionEntry<'_>>(&line) else {
+            continue;
+        };
+        if !is_usage_entry(&entry) {
+            continue;
+        }
+        let Some(second) = timestamp_second(entry.timestamp.as_ref()) else {
+            continue;
+        };
+        match first {
+            None => first = Some(second),
+            Some(first) if first == second => return ReplayProbe::Replay(first),
+            Some(_) => return ReplayProbe::None,
+        }
+    }
+}
+
+fn suppress_replayed_entry(entry: &CodexSessionEntry<'_>, state: &mut CodexSpendState) -> bool {
+    if !state.skipping_replay || !is_usage_entry(entry) {
+        return false;
+    }
+    let Some(second) = timestamp_second(entry.timestamp.as_ref()) else {
+        return true;
+    };
+    if state.replay_second.as_deref() != Some(second.as_str()) {
+        state.skipping_replay = false;
+        return false;
+    }
+    if let Some(total) = entry
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.info.as_ref())
+        .and_then(|info| info.total_token_usage)
+    {
+        state.previous_totals = Some(total);
+    }
+    true
+}
+
+fn is_usage_entry(entry: &CodexSessionEntry<'_>) -> bool {
+    entry.entry_type.as_deref() == Some("event_msg")
+        && entry
+            .payload
+            .as_ref()
+            .is_some_and(|payload| payload.payload_type.as_deref() == Some("token_count"))
+        && entry.payload.as_ref().is_some_and(|payload| {
+            payload.info.as_ref().is_some_and(|info| {
+                info.last_token_usage.is_some() || info.total_token_usage.is_some()
+            })
+        })
+}
+
+fn timestamp_second(timestamp: Option<&CodexTimestamp<'_>>) -> Option<String> {
+    normalize_timestamp(timestamp).and_then(|timestamp| timestamp.get(..19).map(ToOwned::to_owned))
 }
 
 fn visit_session_entry(

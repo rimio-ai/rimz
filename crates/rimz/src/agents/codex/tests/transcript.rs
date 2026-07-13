@@ -1023,6 +1023,21 @@ fn find_session_transcript_walks_codex_date_hierarchy() {
 }
 
 #[test]
+fn find_session_transcript_falls_back_to_flat_archive() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = dir.path().join("sessions");
+    let archived = dir.path().join("archived_sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::create_dir_all(&archived).unwrap();
+    let expected = archived.join("rollout-2026-05-26T21-57-38-sess-archived.jsonl");
+    std::fs::write(&expected, "{}\n").unwrap();
+
+    let found = with_codex_sessions_root(&sessions, || find_session_transcript("sess-archived"));
+
+    assert_eq!(found.as_deref(), Some(expected.as_path()));
+}
+
+#[test]
 fn session_origin_reads_only_rollout_head_lineage() {
     let dir = tempfile::tempdir().unwrap();
     let day_dir = dir.path().join("2026").join("06").join("26");

@@ -21,6 +21,28 @@ fn write_session(filename: &str, lines: &[&str]) -> (TempDir, std::path::PathBuf
 }
 
 #[test]
+fn discovery_includes_archives_and_prefers_the_active_copy() {
+    let dir = TempDir::new().unwrap();
+    let active = dir.path().join("sessions/2026/01/01");
+    let archived = dir.path().join("archived_sessions/2026/01/01");
+    std::fs::create_dir_all(&active).unwrap();
+    std::fs::create_dir_all(&archived).unwrap();
+    std::fs::write(active.join("duplicate.jsonl"), "active\n").unwrap();
+    std::fs::write(archived.join("duplicate.jsonl"), "archived\n").unwrap();
+    std::fs::write(archived.join("archived-only.jsonl"), "archived-only\n").unwrap();
+
+    let files = codex_session_files_from_homes(&[dir.path().to_path_buf()]);
+
+    assert_eq!(
+        files,
+        vec![
+            archived.join("archived-only.jsonl"),
+            active.join("duplicate.jsonl"),
+        ]
+    );
+}
+
+#[test]
 fn token_line_classifies_known_usage_shapes_only() {
     for line in [
         br#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#.as_slice(),
@@ -130,6 +152,45 @@ fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
     assert_eq!(events[0].input_tokens, 200);
     assert_eq!(events[0].output_tokens, 80);
     assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
+}
+
+#[test]
+fn forked_rollout_skips_copied_history_and_keeps_its_cumulative_baseline() {
+    let (_dir, path) = write_session(
+        "fork.jsonl",
+        &[
+            r#"{"type":"session_meta","payload":{"id":"fork","forked_from_id":"parent"}}"#,
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.100Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.200Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"output_tokens":120}}}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:01:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":450,"output_tokens":170}}}}"#,
+        ],
+    );
+
+    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].input_tokens, 150);
+    assert_eq!(events[0].output_tokens, 50);
+    assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
+    assert_eq!(events[0].timestamp, "2026-01-01T10:01:00.000Z");
+}
+
+#[test]
+fn fork_with_one_usage_record_keeps_that_usage() {
+    let (_dir, path) = write_session(
+        "fork-short.jsonl",
+        &[
+            r#"{"type":"session_meta","payload":{"id":"fork","forked_from_id":"parent"}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.100Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#,
+        ],
+    );
+
+    let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].input_tokens, 100);
+    assert_eq!(events[0].output_tokens, 50);
 }
 
 #[test]

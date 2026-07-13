@@ -99,7 +99,7 @@ Every figure on every surface comes from one place: the transcript and session f
 Turning tokens into dollars is where the care goes:
 
 - Providers that log a dollar cost per turn (Pi, and older Claude transcripts) are taken at their word.
-- Providers that log token counts (Claude, Codex) are priced with a per-model table. RimZ ships a built-in table and refreshes it weekly from the public LiteLLM price list, so a new model's rate lands without waiting on a RimZ release. Input, output, cache writes, and cache reads each price at their own rate, including the higher tier some models charge above 200k tokens.
+- Providers that log token counts (Claude, Codex) are priced with a per-model table. RimZ ships a built-in table and refreshes it weekly from the public LiteLLM price list, so a new model's rate lands without waiting on a RimZ release. Input, output, cache writes, and cache reads each price at their own rate. Marginal 200k tiers price each token class independently; request-selected tiers such as OpenAI's covered GPT flagship models switch the whole request to long-context rates once its input crosses the model's threshold.
 - A model RimZ has no price for still contributes its tokens and its session to every total. Only its dollar column reads zero, until a price is found. Token attribution never waits on pricing.
 
 Two scopes and a set of windows keep the surfaces honest:

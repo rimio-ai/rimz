@@ -112,12 +112,17 @@ pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
         "gpt-5.4-nano".to_owned(),
         p(0.2e-6, 1.25e-6, 0.2e-6, 0.02e-6),
     );
-    entries.insert("gpt-5.6-sol".to_owned(), p(5e-6, 30e-6, 5e-6, 0.5e-6));
+    // Standard short-context rates from the OpenAI model pages. GPT-5.6 cache
+    // writes are 1.25x uncached input; the request-selected long-context rates
+    // are overlaid after every price-table load.
+    let gpt_5_6_sol = p(5e-6, 30e-6, 6.25e-6, 0.5e-6);
+    entries.insert("gpt-5.6".to_owned(), gpt_5_6_sol);
+    entries.insert("gpt-5.6-sol".to_owned(), gpt_5_6_sol);
     entries.insert(
         "gpt-5.6-terra".to_owned(),
-        p(2.5e-6, 15e-6, 2.5e-6, 0.25e-6),
+        p(2.5e-6, 15e-6, 3.125e-6, 0.25e-6),
     );
-    entries.insert("gpt-5.6-luna".to_owned(), p(1e-6, 6e-6, 1e-6, 0.1e-6));
+    entries.insert("gpt-5.6-luna".to_owned(), p(1e-6, 6e-6, 1.25e-6, 0.1e-6));
     entries.insert("qwen3-coder-plus".to_owned(), p(1e-6, 5e-6, 0.0, 0.2e-6));
     entries.insert(
         "qwen3-coder-flash".to_owned(),
@@ -226,8 +231,9 @@ mod tests {
         assert_eq!(entries["gpt-5.5"].fast_multiplier, 2.5);
         assert_eq!(entries["gpt-5.6-sol"].input, 5e-6);
         assert_eq!(entries["gpt-5.6-sol"].output, 30e-6);
-        assert_eq!(entries["gpt-5.6-sol"].cache_create, 5e-6);
+        assert_eq!(entries["gpt-5.6-sol"].cache_create, 6.25e-6);
         assert_eq!(entries["gpt-5.6-sol"].cache_read, 0.5e-6);
+        assert_eq!(entries["gpt-5.6"], entries["gpt-5.6-sol"]);
         assert_eq!(entries["gemini-3-pro-preview"].output, 12e-6);
         assert_eq!(entries["gemini-3-flash-preview"].input, 0.5e-6);
         assert_eq!(entries["qwen3-coder-plus"].cache_read, 0.2e-6);

@@ -41,6 +41,8 @@ use serde::{Deserialize, Serialize};
 use super::spending::is_priceable_model_name;
 
 pub(crate) const CACHE_CREATE_1H_INPUT_MULTIPLIER: f64 = 2.0;
+const DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 200_000;
+const OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS: u64 = 272_000;
 
 /// Per-token costs in USD for one model.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -71,6 +73,10 @@ pub struct Pricing {
     /// Cost per cache-read token above the 200k tier threshold.
     #[serde(default)]
     pub cache_read_above_200k: Option<f64>,
+    /// Request input boundary for an all-or-nothing long-context tier.
+    /// `None` keeps LiteLLM's marginal 200k semantics.
+    #[serde(default)]
+    pub long_context_threshold: Option<u64>,
     /// Multiplier applied when the provider records a fast/priority turn.
     #[serde(default = "one")]
     pub fast_multiplier: f64,
@@ -88,6 +94,7 @@ impl Pricing {
             output_above_200k: None,
             cache_create_above_200k: None,
             cache_read_above_200k: None,
+            long_context_threshold: None,
             fast_multiplier: 1.0,
         }
     }
@@ -106,12 +113,28 @@ impl Pricing {
             .input_above_200k
             .map(|cost| cost * CACHE_CREATE_1H_INPUT_MULTIPLIER);
         let multiplier = if fast { self.fast_multiplier } else { 1.0 };
-        (tiered_cost(input, self.input, self.input_above_200k)
-            + tiered_cost(output, self.output, self.output_above_200k)
-            + tiered_cost(cache_5m, self.cache_create, self.cache_create_above_200k)
-            + tiered_cost(cache_1h, cache_1h_cost, cache_1h_above)
-            + tiered_cost(cache_read, self.cache_read, self.cache_read_above_200k))
-            * multiplier
+        let cost = if let Some(threshold) = self.long_context_threshold {
+            let request_input = input
+                .saturating_add(cache_5m)
+                .saturating_add(cache_1h)
+                .saturating_add(cache_read);
+            let long = request_input > threshold;
+            let rate = |base: f64, above: Option<f64>| {
+                if long { above.unwrap_or(base) } else { base }
+            };
+            input as f64 * rate(self.input, self.input_above_200k)
+                + output as f64 * rate(self.output, self.output_above_200k)
+                + cache_5m as f64 * rate(self.cache_create, self.cache_create_above_200k)
+                + cache_1h as f64 * rate(cache_1h_cost, cache_1h_above)
+                + cache_read as f64 * rate(self.cache_read, self.cache_read_above_200k)
+        } else {
+            tiered_cost(input, self.input, self.input_above_200k)
+                + tiered_cost(output, self.output, self.output_above_200k)
+                + tiered_cost(cache_5m, self.cache_create, self.cache_create_above_200k)
+                + tiered_cost(cache_1h, cache_1h_cost, cache_1h_above)
+                + tiered_cost(cache_read, self.cache_read, self.cache_read_above_200k)
+        };
+        cost * multiplier
     }
 }
 
@@ -132,6 +155,7 @@ impl PriceBook {
     pub fn embedded() -> Self {
         let mut entries = embedded::load();
         builtins::put_builtins(&mut entries);
+        apply_builtin_long_context_rates(&mut entries);
         Self { entries }
     }
 
@@ -140,6 +164,7 @@ impl PriceBook {
     pub fn from_litellm_json(json: &str) -> Self {
         let mut entries = embedded::parse(json);
         builtins::put_builtins(&mut entries);
+        apply_builtin_long_context_rates(&mut entries);
         Self { entries }
     }
 
@@ -155,6 +180,7 @@ impl PriceBook {
         for (model, price) in &cache.models_dev {
             entries.entry(model.clone()).or_insert(*price);
         }
+        apply_builtin_long_context_rates(&mut entries);
         Self { entries }
     }
 
@@ -345,16 +371,86 @@ impl Default for PricingCache {
 }
 
 pub(crate) fn tiered_cost(tokens: u64, base: f64, above: Option<f64>) -> f64 {
-    const THRESHOLD: u64 = 200_000;
     if tokens == 0 {
         return 0.0;
     }
     if let Some(above) = above
-        && tokens > THRESHOLD
+        && tokens > DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS
     {
-        return THRESHOLD as f64 * base + (tokens - THRESHOLD) as f64 * above;
+        return DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS as f64 * base
+            + (tokens - DEFAULT_LONG_CONTEXT_THRESHOLD_TOKENS) as f64 * above;
     }
     tokens as f64 * base
+}
+
+#[derive(Clone, Copy)]
+struct LongContextRates {
+    input: f64,
+    output: f64,
+    cache_create: Option<f64>,
+    cache_read: Option<f64>,
+}
+
+fn apply_builtin_long_context_rates(entries: &mut HashMap<String, Pricing>) {
+    for (model, pricing) in entries {
+        if pricing.input_above_200k.is_some()
+            || pricing.output_above_200k.is_some()
+            || pricing.cache_create_above_200k.is_some()
+            || pricing.cache_read_above_200k.is_some()
+        {
+            continue;
+        }
+        let Some(rates) = builtin_long_context_rates(model_without_date_suffix(model)) else {
+            continue;
+        };
+        pricing.input_above_200k = Some(rates.input);
+        pricing.output_above_200k = Some(rates.output);
+        pricing.cache_create_above_200k = rates.cache_create;
+        pricing.cache_read_above_200k = rates.cache_read;
+        pricing.long_context_threshold = Some(OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS);
+    }
+}
+
+fn builtin_long_context_rates(model: &str) -> Option<LongContextRates> {
+    let rates = |input, output, cache_create, cache_read| LongContextRates {
+        input,
+        output,
+        cache_create,
+        cache_read,
+    };
+    match model {
+        "gpt-5.6" | "gpt-5.6-sol" => Some(rates(10e-6, 45e-6, Some(12.5e-6), Some(1e-6))),
+        "gpt-5.6-terra" => Some(rates(5e-6, 22.5e-6, Some(6.25e-6), Some(0.5e-6))),
+        "gpt-5.6-luna" => Some(rates(2e-6, 9e-6, Some(2.5e-6), Some(0.2e-6))),
+        "gpt-5.5" => Some(rates(10e-6, 45e-6, Some(10e-6), Some(1e-6))),
+        "gpt-5.4" => Some(rates(5e-6, 22.5e-6, Some(5e-6), Some(0.5e-6))),
+        "gpt-5.5-pro" | "gpt-5.4-pro" => Some(rates(60e-6, 270e-6, None, None)),
+        _ => None,
+    }
+}
+
+fn model_without_date_suffix(model: &str) -> &str {
+    let bytes = model.as_bytes();
+    if bytes.len() >= 11 {
+        let start = bytes.len() - 11;
+        let suffix = &bytes[start..];
+        if suffix[0] == b'-'
+            && suffix[1..5].iter().all(u8::is_ascii_digit)
+            && suffix[5] == b'-'
+            && suffix[6..8].iter().all(u8::is_ascii_digit)
+            && suffix[8] == b'-'
+            && suffix[9..11].iter().all(u8::is_ascii_digit)
+        {
+            return &model[..start];
+        }
+    }
+    if bytes.len() >= 9 {
+        let start = bytes.len() - 9;
+        if bytes[start] == b'-' && bytes[start + 1..].iter().all(u8::is_ascii_digit) {
+            return &model[..start];
+        }
+    }
+    model
 }
 
 fn one() -> f64 {
@@ -531,7 +627,55 @@ mod tests {
         assert!(book().price("totally-unknown-model").is_none());
         assert!(PriceBook::embedded().price("gpt-5").is_some());
         assert!(PriceBook::embedded().price("gpt-5.5-codex").is_some());
+        assert!(PriceBook::embedded().price("gpt-5.6").is_some());
         assert!(PriceBook::embedded().price("gpt-5.6-sol").is_some());
+    }
+
+    #[test]
+    fn openai_long_context_pricing_switches_the_whole_request_above_272k() {
+        let price = PriceBook::embedded().price("gpt-5.6-sol").unwrap();
+        assert_eq!(
+            price.long_context_threshold,
+            Some(OPENAI_LONG_CONTEXT_THRESHOLD_TOKENS)
+        );
+
+        let short = price.cost(100_000, 1_000, 0, 0, 100, false);
+        assert!((short - 0.53005).abs() < 1e-9, "short cost was {short}");
+
+        let long = price.cost(300_000, 1_000, 0, 0, 100, false);
+        assert!((long - 3.0451).abs() < 1e-9, "long cost was {long}");
+    }
+
+    #[test]
+    fn openai_long_context_overlay_covers_date_pins_and_defers_to_upstream_tiers() {
+        let mut entries = HashMap::from([
+            (
+                "gpt-5.5-2026-04-23".to_owned(),
+                Pricing {
+                    input: 6e-6,
+                    output: 31e-6,
+                    ..Pricing::empty()
+                },
+            ),
+            (
+                "gpt-5.4".to_owned(),
+                Pricing {
+                    input: 3e-6,
+                    output: 18e-6,
+                    input_above_200k: Some(12e-6),
+                    ..Pricing::empty()
+                },
+            ),
+        ]);
+
+        apply_builtin_long_context_rates(&mut entries);
+
+        let dated = entries["gpt-5.5-2026-04-23"];
+        assert_eq!(dated.input_above_200k, Some(10e-6));
+        assert_eq!(dated.long_context_threshold, Some(272_000));
+        let upstream = entries["gpt-5.4"];
+        assert_eq!(upstream.input_above_200k, Some(12e-6));
+        assert_eq!(upstream.long_context_threshold, None);
     }
 
     #[test]

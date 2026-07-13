@@ -71,6 +71,7 @@ pub(super) fn parse(json: &str) -> HashMap<String, Pricing> {
                 output_above_200k: num("output_cost_per_token_above_200k_tokens"),
                 cache_create_above_200k: num("cache_creation_input_token_cost_above_200k_tokens"),
                 cache_read_above_200k: num("cache_read_input_token_cost_above_200k_tokens"),
+                long_context_threshold: None,
                 fast_multiplier: fast,
             },
         );

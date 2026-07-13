@@ -360,18 +360,35 @@ fn codex_sessions_root() -> Option<PathBuf> {
 /// Locate the rollout JSONL for a Codex session by its `session_id`. Codex
 /// writes one file per session at
 /// `~/.codex/sessions/YYYY/MM/DD/rollout-*-{session_id}.jsonl`, so the walk
-/// descends the date hierarchy newest-first and stops at the first match.
+/// descends the date hierarchy newest-first, then checks the flat sibling
+/// `archived_sessions/` directory.
 pub(super) fn find_session_transcript(session_id: &str) -> Option<PathBuf> {
-    find_session_transcript_under(&codex_sessions_root()?, session_id)
+    let sessions = codex_sessions_root()?;
+    find_session_transcript_under(&sessions, session_id).or_else(|| {
+        if sessions.file_name().and_then(|name| name.to_str()) != Some("sessions") {
+            return None;
+        }
+        let archived = sessions.parent()?.join("archived_sessions");
+        find_session_transcript_under(&archived, session_id)
+    })
 }
 
-/// Same walk as [`find_session_transcript`] but rooted at an explicit
-/// directory — kept separate so tests can pass a tempdir without setting
-/// `HOME` or `RIMZ_CODEX_SESSIONS` in-process. Bounded by a day-directory
-/// budget so a hook never stalls on a large archive.
+/// Same active-tree or flat-directory walk as [`find_session_transcript`] but
+/// rooted at an explicit directory — kept separate so tests can pass a tempdir
+/// without setting `HOME` or `RIMZ_CODEX_SESSIONS` in-process. Bounded by a
+/// day-directory budget so a hook never stalls on a large active history.
 pub(super) fn find_session_transcript_under(root: &Path, session_id: &str) -> Option<PathBuf> {
     const DAY_BUDGET: usize = 16;
     let needle = format!("{session_id}.jsonl");
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|file_type| file_type.is_file())
+                && entry.file_name().to_string_lossy().ends_with(&needle)
+            {
+                return Some(entry.path());
+            }
+        }
+    }
     let mut budget = DAY_BUDGET;
     for year in sorted_subdirs_desc(root) {
         for month in sorted_subdirs_desc(&year) {
