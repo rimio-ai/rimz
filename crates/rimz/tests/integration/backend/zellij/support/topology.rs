@@ -136,6 +136,7 @@ pub(in crate::backend::zellij) fn record_known_workspace_session(
     let record = rimz::WorkspaceRecord {
         workspace_id: workspace_id.clone(),
         project_root: project_root.to_path_buf(),
+        worktree_root: None,
         session_name: session.to_owned(),
         root_class: rimz::workspace::RootClass::Directory,
         rimz_bin: None,

@@ -41,6 +41,10 @@ pub type Result<T> = std::result::Result<T, WorkspaceRecordErr>;
 pub struct WorkspaceRecord {
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
+    /// Active worktree cwd for room-local helper panes. Older records fall
+    /// back to [`Self::project_root`] and self-heal on the next owner re-record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_root: Option<PathBuf>,
     pub session_name: String,
     /// Which ladder tier the root is. Records predating the field decode as
     /// [`RootClass::Repo`] — today's behavior — and self-heal on the next
@@ -64,6 +68,7 @@ impl WorkspaceRecord {
         Self {
             workspace_id: workspace.workspace_id.clone(),
             project_root: workspace.project_root.clone(),
+            worktree_root: Some(workspace.worktree_root.clone()),
             session_name: workspace.session_name.clone(),
             root_class: workspace.root_class,
             rimz_bin: None,
@@ -115,6 +120,10 @@ mod tests {
 
         assert_eq!(loaded.workspace_id, workspace.workspace_id);
         assert_eq!(loaded.project_root, workspace.project_root);
+        assert_eq!(
+            loaded.worktree_root.as_ref(),
+            Some(&workspace.worktree_root)
+        );
         assert_eq!(loaded.session_name, workspace.session_name);
     }
 
@@ -132,5 +141,6 @@ mod tests {
         .expect("legacy record parses");
 
         assert_eq!(record.rimz_bin, None);
+        assert_eq!(record.worktree_root, None);
     }
 }

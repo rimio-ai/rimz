@@ -2,6 +2,18 @@
 
 use super::support::*;
 
+fn held_loop_host() -> rimz::mux::HostPane {
+    rimz::mux::HostPane {
+        argv: vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "exec sleep 120".to_owned(),
+            "rimz loop watch --hold".to_owned(),
+        ],
+        cwd: std::env::temp_dir(),
+    }
+}
+
 #[test]
 fn open_background_view_births_columns_and_is_idempotent() {
     require_tmux!();
@@ -203,6 +215,68 @@ fn open_background_view_births_columns_and_is_idempotent() {
             - content_heights.iter().min().expect("content height")
             <= 1,
         "content pane heights should be equal within rounding, got {panes:?}",
+    );
+}
+
+#[test]
+fn repair_daemon_view_recreates_a_closed_loop_panel() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-bg-repair");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = sidebar_opts("rimz-bg-repair", stub, Some(80));
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+    let view = rimz::mux::DaemonView {
+        name: rimz::remote_control::VIEW_NAME.to_owned(),
+        content: vec![sleep_host()],
+        hosts: Vec::new(),
+        loop_panel: held_loop_host(),
+    };
+    server
+        .backend
+        .open_background_view(&rimz::mux::BackgroundViewOptions {
+            view: view.clone(),
+            sidebar: sidebar.clone(),
+        })
+        .expect("open daemon view");
+    let listing = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-bg-repair".to_owned()),
+            authoritative: true,
+            ..Default::default()
+        })
+        .expect("list panes");
+    let panel = rimz::remote_control::find_loop_panel(&listing.panes)
+        .expect("loop panel")
+        .pane_id
+        .clone();
+    server.tmux(&["kill-pane", "-t", panel.raw()]);
+
+    rimz::remote_control::repair_daemon_view(
+        &server.backend,
+        "rimz-bg-repair",
+        &sidebar.workspace_id,
+        &view,
+    );
+
+    let panes = server.wait_for_panes("rimz-bg-repair:rimzd", 3);
+    assert_eq!(panes.len(), 3, "repair should restore the panel: {panes:?}");
+    let listing = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-bg-repair".to_owned()),
+            authoritative: true,
+            ..Default::default()
+        })
+        .expect("list repaired panes");
+    assert!(
+        rimz::remote_control::find_loop_panel(&listing.panes).is_some(),
+        "repaired pane should carry the loop-watch marker: {:?}",
+        listing.panes,
     );
 }
 

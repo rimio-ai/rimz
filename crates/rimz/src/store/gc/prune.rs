@@ -256,6 +256,7 @@ mod tests {
         let record = WorkspaceRecord {
             workspace_id: id.clone(),
             project_root: project_root.to_path_buf(),
+            worktree_root: None,
             session_name: "rimz-test".to_owned(),
             root_class: crate::workspace::RootClass::Repo,
             rimz_bin: None,

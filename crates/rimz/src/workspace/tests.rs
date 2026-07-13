@@ -59,6 +59,7 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
             &WorkspaceRecord {
                 workspace_id,
                 project_root: project_root.clone(),
+                worktree_root: None,
                 session_name: session_name_for(&project_root),
                 root_class: RootClass::Repo,
                 rimz_bin: None,
@@ -106,6 +107,7 @@ fn known_workspaces_repairs_record_fields_for_the_canonical_workspace_dir() {
         &WorkspaceRecord {
             workspace_id: workspace_id.clone(),
             project_root: noncanonical_root,
+            worktree_root: None,
             session_name: "rimz-stale".to_owned(),
             root_class: RootClass::Repo,
             rimz_bin: None,
@@ -146,6 +148,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
         &WorkspaceRecord {
             workspace_id: canonical_id.clone(),
             project_root: canonical_root.clone(),
+            worktree_root: None,
             session_name: session_name_for(&canonical_root),
             root_class: RootClass::Repo,
             rimz_bin: None,
@@ -164,6 +167,7 @@ fn known_workspaces_skips_obsolete_noncanonical_duplicate_records() {
         &WorkspaceRecord {
             workspace_id: stale_id,
             project_root: noncanonical_root,
+            worktree_root: None,
             session_name: session_name_for(&canonical_root),
             root_class: RootClass::Repo,
             rimz_bin: None,

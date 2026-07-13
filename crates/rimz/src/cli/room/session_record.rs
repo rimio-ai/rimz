@@ -439,6 +439,7 @@ mod tests {
         let record = WorkspaceRecord {
             workspace_id,
             project_root: project_root.into(),
+            worktree_root: None,
             session_name: session_name.to_owned(),
             root_class: rimz::workspace::RootClass::Repo,
             rimz_bin: None,

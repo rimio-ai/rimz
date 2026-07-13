@@ -6,6 +6,7 @@
 //! behind them.
 
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use tracing::{debug, error};
 
@@ -16,6 +17,8 @@ use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
 
 use super::{ServeConfig, tick_for};
+
+const DAEMON_VIEW_REPAIR_TTL: Duration = Duration::from_secs(30);
 
 pub(super) fn spawn(
     config: ServeConfig,
@@ -30,6 +33,8 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::D
     let mut cursor = RollupCursor::new();
     let mut spending_walker = SpendingWalker::new();
     let mut meter = TickMeter::new(TickLoop::CacheRefresh, tick_for(config.tick_seconds));
+    let daemon_backend = crate::mux::backend_for(config.mux);
+    let mut daemon_view_repaired_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
     loop {
         std::thread::sleep(tick_for(config.tick_seconds));
         if crate::sidebar::elder_sidebar_instance(&runtime, &config.instance_id).is_some() {
@@ -65,6 +70,14 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::D
         let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
         crate::harness::schedule::fire::fire_due_tasks(&runtime, &now);
         crate::message::fire::wake_due_messages(&runtime, &now);
+        if daemon_view_repaired_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
+            daemon_view_repaired_at = Instant::now();
+            crate::remote_control::ensure_daemon_view(
+                daemon_backend.as_ref(),
+                &config.workspace_id,
+                &config.session_name,
+            );
+        }
     }
 }
 
