@@ -650,20 +650,22 @@ fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
     let Some(adapter) = crate::agents::find_adapter(agent.kind.as_str()) else {
         return Err(DispatchErr::UnknownAgentKind(agent.kind.clone()));
     };
-    if !adapter.hooks_installed() {
-        return Err(DispatchErr::HooksMissing {
+    match crate::agents::preflight_hooks(adapter, crate::agents::TurnLifecycleNeed::None) {
+        Ok(()) => Ok(()),
+        Err(crate::agents::HookPreflightErr::HooksMissing) => Err(DispatchErr::HooksMissing {
             kind: agent.kind.clone(),
-        });
+        }),
+        Err(crate::agents::HookPreflightErr::HooksUntrusted { hooks, fix }) => {
+            Err(DispatchErr::HooksUntrusted {
+                kind: agent.kind.clone(),
+                hooks,
+                fix,
+            })
+        }
+        Err(crate::agents::HookPreflightErr::TurnLifecycleUnsupported { .. }) => {
+            unreachable!("queue hook preflight requests no lifecycle coverage")
+        }
     }
-    let untrusted = adapter.untrusted_installed_hooks();
-    if !untrusted.is_empty() {
-        return Err(DispatchErr::HooksUntrusted {
-            kind: agent.kind.clone(),
-            hooks: untrusted.join(", "),
-            fix: crate::agents::hook_trust_fix(agent.kind.as_str()),
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]

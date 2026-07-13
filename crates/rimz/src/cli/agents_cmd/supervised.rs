@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use crate::cli::GlobalFlags;
-use rimz::agents::{AgentAdapter, hook_trust_fix};
+use rimz::agents::{AgentAdapter, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
 use rimz::harness::run::RunRecord;
 use rimz::harness::run_wake::{self, ExpectedRunFrame, RunWakeOutcome};
 use rimz::mux::PaneCmd;
@@ -40,29 +40,21 @@ pub(super) fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::Resol
 pub(super) fn preflight_agent(adapter: &dyn AgentAdapter) -> Result<()> {
     let descriptor = adapter.descriptor();
     let kind = descriptor.kind;
-    if let Some(coverage) =
-        descriptor.concern_coverage(rimz::agents::IntegrationConcern::TurnLifecycle)
-        && !matches!(coverage, rimz::agents::ConcernCoverage::Wired { .. })
-    {
-        bail!(
+    match preflight_hooks(adapter, TurnLifecycleNeed::Wired) {
+        Ok(()) => Ok(()),
+        Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
             "`rimz agents -p` cannot supervise {kind}: a verified executable turn-lifecycle signal is required; {}",
-            coverage.detail()
-        );
-    }
-    if !adapter.hooks_installed() {
-        bail!(
+            reason
+        ),
+        Err(HookPreflightErr::HooksMissing) => bail!(
             "`rimz agents -p` requires {kind} hooks so the supervised turn can report completion; run `rimz hooks install {kind}`"
-        );
-    }
-    let untrusted = adapter.untrusted_installed_hooks();
-    if !untrusted.is_empty() {
-        bail!(
+        ),
+        Err(HookPreflightErr::HooksUntrusted { hooks, fix }) => bail!(
             "{kind} hooks are installed but not trusted ({}); {}",
-            untrusted.join(", "),
-            hook_trust_fix(kind)
-        );
+            hooks,
+            fix
+        ),
     }
-    Ok(())
 }
 
 pub(super) fn preflight_program(

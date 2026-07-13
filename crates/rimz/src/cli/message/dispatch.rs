@@ -685,32 +685,24 @@ fn preflight_reply_hooks(
     agent: &AgentState,
     adapter: &dyn rimz::agents::AgentAdapter,
 ) -> Result<()> {
-    if let Some(rimz::agents::ConcernCoverage::Unsupported { reason }) = adapter
-        .descriptor()
-        .concern_coverage(rimz::agents::IntegrationConcern::TurnLifecycle)
-    {
-        bail!(
+    match rimz::agents::preflight_hooks(adapter, rimz::agents::TurnLifecycleNeed::NotUnsupported) {
+        Ok(()) => Ok(()),
+        Err(rimz::agents::HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
             "--wait cannot use {}: a verified executable turn-lifecycle signal is required; {reason}",
             agent.kind
-        );
-    }
-    if !adapter.hooks_installed() {
-        bail!(
+        ),
+        Err(rimz::agents::HookPreflightErr::HooksMissing) => bail!(
             "--wait requires {} hooks so the reply turn can report its boundaries; run `rimz hooks install {}`",
             agent.kind,
             agent.kind
-        );
-    }
-    let untrusted = adapter.untrusted_installed_hooks();
-    if !untrusted.is_empty() {
-        bail!(
+        ),
+        Err(rimz::agents::HookPreflightErr::HooksUntrusted { hooks, fix }) => bail!(
             "{} hooks are installed but not trusted ({}); {}",
             agent.kind,
-            untrusted.join(", "),
-            rimz::agents::hook_trust_fix(agent.kind.as_str())
-        );
+            hooks,
+            fix
+        ),
     }
-    Ok(())
 }
 
 fn wait_cycle_error(

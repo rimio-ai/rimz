@@ -1130,8 +1130,101 @@ pub trait AgentAdapter: Send + Sync {
     }
 }
 
-/// One-line fix for an installed-but-untrusted hook set, shared by the
-/// `rimz start` notice and `rimz doctor`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnLifecycleNeed {
+    None,
+    NotUnsupported,
+    Wired,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum HookPreflightErr {
+    #[error("turn lifecycle unsupported: {reason}")]
+    TurnLifecycleUnsupported { reason: String },
+    #[error("hooks missing")]
+    HooksMissing,
+    #[error("hooks untrusted: {hooks}")]
+    HooksUntrusted { hooks: String, fix: String },
+}
+
+/// Check the hook installation, trust, and requested turn-lifecycle coverage
+/// needed before a hook-driven operation starts.
+pub fn preflight_hooks(
+    adapter: &dyn AgentAdapter,
+    lifecycle: TurnLifecycleNeed,
+) -> std::result::Result<(), HookPreflightErr> {
+    let coverage = adapter
+        .descriptor()
+        .concern_coverage(IntegrationConcern::TurnLifecycle);
+    if let Some(reason) = turn_lifecycle_gap(coverage, lifecycle) {
+        return Err(HookPreflightErr::TurnLifecycleUnsupported {
+            reason: reason.to_owned(),
+        });
+    }
+    if !adapter.hooks_installed() {
+        return Err(HookPreflightErr::HooksMissing);
+    }
+    let untrusted = adapter.untrusted_installed_hooks();
+    if !untrusted.is_empty() {
+        return Err(HookPreflightErr::HooksUntrusted {
+            hooks: untrusted.join(", "),
+            fix: hook_trust_fix(adapter.descriptor().kind),
+        });
+    }
+    Ok(())
+}
+
+fn turn_lifecycle_gap(
+    coverage: Option<ConcernCoverage>,
+    need: TurnLifecycleNeed,
+) -> Option<&'static str> {
+    match need {
+        TurnLifecycleNeed::None => None,
+        TurnLifecycleNeed::NotUnsupported => match coverage {
+            Some(ConcernCoverage::Unsupported { reason }) => Some(reason),
+            None | Some(ConcernCoverage::Wired { .. } | ConcernCoverage::Partial { .. }) => None,
+        },
+        TurnLifecycleNeed::Wired => coverage
+            .filter(|coverage| !coverage.is_wired())
+            .map(ConcernCoverage::detail),
+    }
+}
+
+/// One-line fix for an installed-but-untrusted hook set, shared by hook
+/// preflights, the `rimz start` notice, and `rimz doctor`.
 pub fn hook_trust_fix(kind: &str) -> String {
     format!("run /hooks inside {kind} and trust the Rimz hooks")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_preflight_preserves_partial_coverage_strictness() {
+        let partial = Some(ConcernCoverage::Partial {
+            via: "derived",
+            gap: "not executable",
+        });
+        let unsupported = Some(ConcernCoverage::Unsupported {
+            reason: "no lifecycle signal",
+        });
+
+        assert_eq!(
+            turn_lifecycle_gap(partial, TurnLifecycleNeed::NotUnsupported),
+            None
+        );
+        assert_eq!(
+            turn_lifecycle_gap(partial, TurnLifecycleNeed::Wired),
+            Some("not executable")
+        );
+        assert_eq!(
+            turn_lifecycle_gap(unsupported, TurnLifecycleNeed::NotUnsupported),
+            Some("no lifecycle signal")
+        );
+        assert_eq!(
+            turn_lifecycle_gap(unsupported, TurnLifecycleNeed::None),
+            None
+        );
+    }
 }

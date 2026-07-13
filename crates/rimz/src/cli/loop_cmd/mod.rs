@@ -27,7 +27,7 @@ use clap::{Args, Subcommand};
 use jiff::Timestamp;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-use rimz::agents::{find_adapter, hook_trust_fix};
+use rimz::agents::{HookPreflightErr, TurnLifecycleNeed, find_adapter, preflight_hooks};
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use rimz::harness::run::PermissionMode;
 use rimz::harness::schedule::run_log::{
@@ -394,28 +394,20 @@ fn preflight_resolved_task(spec: &str, resolved: &ResolvedTaskSpec) -> Result<()
 fn preflight_kind(kind: &str) -> Result<()> {
     let adapter =
         find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-    if let Some(rimz::agents::ConcernCoverage::Unsupported { reason }) = adapter
-        .descriptor()
-        .concern_coverage(rimz::agents::IntegrationConcern::TurnLifecycle)
-    {
-        bail!(
+    match preflight_hooks(adapter, TurnLifecycleNeed::NotUnsupported) {
+        Ok(()) => Ok(()),
+        Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => bail!(
             "{kind} cannot run as a scheduled turn: a verified executable turn-lifecycle signal is required; {reason}"
-        );
-    }
-    if !adapter.hooks_installed() {
-        bail!(
+        ),
+        Err(HookPreflightErr::HooksMissing) => bail!(
             "{kind} hooks are not installed, so a scheduled turn cannot report completion\ninstall them with `rimz hooks install {kind}`"
-        );
-    }
-    let untrusted = adapter.untrusted_installed_hooks();
-    if !untrusted.is_empty() {
-        bail!(
+        ),
+        Err(HookPreflightErr::HooksUntrusted { hooks, fix }) => bail!(
             "{kind} hooks are installed but not trusted ({}), so a scheduled turn cannot report completion\n{}",
-            untrusted.join(", "),
-            hook_trust_fix(kind)
-        );
+            hooks,
+            fix
+        ),
     }
-    Ok(())
 }
 
 fn remove_loaded_task(name: &str, entry: &TaskEntry, source: TaskSource) -> Result<bool> {
