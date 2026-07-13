@@ -43,6 +43,9 @@ pub(crate) struct PiHookPayload {
     /// `agent_end`: present when the turn died — the in-band death
     /// certificate (no transcript forensics needed, unlike Claude).
     pub error_message: Option<String>,
+    /// `agent_end`, retained through `agent_settled`: visible text from the
+    /// last assistant message, for durable logs and supervised output.
+    pub last_assistant_message: Option<String>,
     /// Every event: the session's model id (`ctx.model.id`); `agent_end`
     /// overrides it with the last assistant message's model when present.
     pub model: Option<String>,

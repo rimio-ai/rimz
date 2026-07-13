@@ -72,6 +72,18 @@ const usageFields = (id) => {
   };
 };
 
+const visibleAssistantText = (message) => {
+  const content = message?.content;
+  if (typeof content === "string") return content.trim() || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((block) => block?.type === "text" && typeof block?.text === "string")
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join("\n");
+  return text || undefined;
+};
+
 const headerPairs = (headers) => {
   if (!headers) return [];
   const pairs = [];
@@ -186,7 +198,11 @@ export default function rimz(pi) {
     const messages = Array.isArray(ev?.messages) ? ev.messages : [];
     const last = messages.filter((m) => m?.role === "assistant").at(-1);
     recordUsage(sessionId(ctx), last?.usage);
-    const fields = { stop_reason: last?.stopReason, error_message: last?.errorMessage };
+    const fields = {
+      stop_reason: last?.stopReason,
+      error_message: last?.errorMessage,
+      last_assistant_message: visibleAssistantText(last),
+    };
     // Only override the envelope's model/tokens when the message carries
     // them — an explicit undefined would drop the envelope value from the
     // JSON.

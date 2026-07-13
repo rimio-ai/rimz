@@ -30,6 +30,7 @@ pub(crate) mod account;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod spend;
+pub(crate) mod transcript;
 
 use std::path::{Path, PathBuf};
 
@@ -53,8 +54,8 @@ use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, agent_config_path, classify_agent_hook, optional_payload_string,
-    sanitize_user_prompt,
+    HookUninstallReport, Result, TranscriptMessage, agent_config_path, classify_agent_hook,
+    non_empty_trimmed, optional_payload_string, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -532,6 +533,23 @@ impl AgentAdapter for PiAdapter {
         pi_observed_context(source, payload)
     }
 
+    fn last_assistant_message(
+        &self,
+        event_name: &str,
+        payload: &Value,
+        _observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        (event_name == "agent_settled")
+            .then(|| payloads::parse_payload(payload).last_assistant_message)
+            .flatten()
+            .as_deref()
+            .and_then(non_empty_trimmed)
+    }
+
+    fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
+        transcript::parse_messages(lines)
+    }
+
     fn ends_session(&self, event_name: &str) -> bool {
         // The extension skips the `/reload` shutdown (the same session id
         // re-registers in place, and a fire-and-forget tombstone would race
@@ -566,16 +584,17 @@ impl AgentAdapter for PiAdapter {
         })
     }
 
-    /// Pi logs `costUSD` directly, so the price book is unused. The resume
-    /// cursor carries the session header cwd so appended usage entries retain
-    /// their workspace origin.
+    /// Pi's present non-negative `costUSD` is authoritative. Token-bearing
+    /// records without a usable direct cost fall back to the shared price book.
+    /// The resume cursor carries the session header cwd so appended usage
+    /// entries retain their workspace origin.
     fn parse_spend(
         &self,
         path: &Path,
         resume: Option<&crate::agents::spending::SpendCursor>,
-        _prices: &PriceBook,
+        prices: &PriceBook,
     ) -> crate::agents::spending::SpendParse {
-        spend::parse_pi_spend(path, resume)
+        spend::parse_pi_spend(path, resume, prices)
     }
 
     /// `pi --session <id>` resolves the session (a partial UUID suffices) and

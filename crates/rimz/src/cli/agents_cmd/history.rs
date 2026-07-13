@@ -35,12 +35,12 @@ pub(super) fn history_agent(
         .filter(|path| !path.is_empty())
         .ok_or_else(|| anyhow::anyhow!("agent has no recorded transcript"))?;
     let path = Path::new(transcript);
-    let contents = std::fs::read_to_string(path)
-        .with_context(|| format!("reading agent transcript `{}`", path.display()))?;
     let adapter = rimz::agents::find_adapter(agent.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let prices = rimz::agents::pricing::cached_book(&runtime.shared_pricing_cache_path());
-    let messages = adapter.parse_transcript_messages(&contents);
+    let messages = adapter
+        .read_transcript_messages(path)
+        .with_context(|| format!("reading agent transcript `{}`", path.display()))?;
     let spend = adapter.parse_spend(path, None, &prices);
     let session_open = resolved_live
         && matches!(

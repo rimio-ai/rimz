@@ -48,8 +48,15 @@ use super::aggregate::{
 /// costs with ccusage: Claude 1h cache creation prices at 2x input, 200k tiers
 /// apply per token class, and fast-mode turns apply the model multiplier. v14
 /// adds Claude advisor calls, Codex replay suppression, and request-selected
-/// OpenAI long-context pricing; finalized files need one cold reprice.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 15;
+/// OpenAI long-context pricing; finalized files need one cold reprice. v16
+/// bills Codex cached input at the full input rate when a model carries no
+/// explicit cache-read rate (ccusage parity), widens the Codex dedup
+/// fingerprint with reasoning and total tokens, and applies explicit `±HH:MM`
+/// timezone offsets when reading entry timestamps; each reshapes a stored cost,
+/// dedup key, or timestamp, so finalized files need one cold reprice. v17 keeps
+/// Pi token-only records, applies `totalTokens` fallback, and prices an absent
+/// direct cost, which also requires a cold parse of finalized Pi sessions.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 17;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///

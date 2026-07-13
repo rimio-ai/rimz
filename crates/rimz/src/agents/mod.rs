@@ -107,7 +107,7 @@ pub(crate) use state::{
     resume_park, shortest_window_running,
 };
 pub use state::{PendingRefill, RateLimitsCache};
-pub use transcript::{TranscriptMessage, TranscriptRole};
+pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;
 
@@ -600,6 +600,18 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
+    /// Read and normalize one complete provider-native transcript source.
+    ///
+    /// JSONL adapters inherit the text-file implementation. Adapters backed by
+    /// a row store override this method, so history callers never need to know
+    /// whether a recorded transcript path names text or a database.
+    fn read_transcript_messages(
+        &self,
+        path: &Path,
+    ) -> std::io::Result<Vec<transcript::TranscriptMessage>> {
+        std::fs::read_to_string(path).map(|lines| self.parse_transcript_messages(&lines))
+    }
+
     /// Extract newly appended main-thread assistant messages from transcript
     /// JSONL text. The CLI owns the cursor and output transport; adapters own
     /// their native transcript event shapes. Defaults to filtering the
@@ -610,6 +622,29 @@ pub trait AgentAdapter: Send + Sync {
             .filter(|message| message.role == transcript::TranscriptRole::Assistant)
             .map(|message| message.text)
             .collect()
+    }
+
+    /// Return the current monotonic end position for a transcript source.
+    /// JSONL uses bytes; row-backed adapters can use their highest row id.
+    fn transcript_position(&self, path: &Path) -> Option<transcript::TranscriptPosition> {
+        std::fs::metadata(path)
+            .ok()
+            .map(|meta| transcript::TranscriptPosition::new(meta.len()))
+    }
+
+    /// Read assistant output after `position`, returning the next source-owned
+    /// cursor. The default implements torn-write-safe JSONL byte reads.
+    fn read_assistant_transcript_page(
+        &self,
+        path: &Path,
+        position: transcript::TranscriptPosition,
+    ) -> Option<transcript::TranscriptPage> {
+        let (bytes, next) = read_transcript_lines(path, position.get())?;
+        let lines = String::from_utf8_lossy(&bytes);
+        Some(transcript::TranscriptPage {
+            next: transcript::TranscriptPosition::new(next),
+            messages: self.stream_assistant_messages(&lines),
+        })
     }
 
     /// Harvest per-subagent enrichment from an out-of-band render payload —

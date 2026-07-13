@@ -2,8 +2,9 @@
 //!
 //! [`spending`](crate::agents::spending) consumes this parser through the
 //! adapter's `parse_spend`, fed every Pi session fleet-wide by the producer.
-//! Pi logs dollars directly (`usage.cost.total`), so each entry carries a
-//! cost as parsed — no pricing table needed.
+//! Pi normally logs dollars directly (`usage.cost.total`), which stays
+//! authoritative even when it is zero. Token-bearing entries whose cost is
+//! absent fall back to the shared model price book.
 //!
 //! Pi session files live under `~/.pi/agent/sessions/--<cwd-with-dashes>--/`
 //! as one `<ISO-timestamp>_<uuid>.jsonl` per session (e.g.
@@ -32,7 +33,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path};
+use crate::agents::pricing::PriceBook;
+use crate::agents::spending::{
+    CachedEntry, SpendCursor, SpendParse, origin_path, record_unknown_model,
+};
 
 use crate::agents::transcript_fs::{
     collect_jsonl, deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
@@ -101,6 +105,12 @@ struct PiUsage {
         deserialize_with = "deserialize_optional_u64_lossy"
     )]
     cache_read: Option<u64>,
+    #[serde(
+        rename = "totalTokens",
+        default,
+        deserialize_with = "deserialize_optional_u64_lossy"
+    )]
+    total_tokens: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     cost: Option<PiCost>,
 }
@@ -164,10 +174,13 @@ pub(crate) fn pi_config_dir() -> PathBuf {
 /// re-reading the header.
 ///
 /// Accepts only lines where `"type":"message"` (or `type` is absent) and
-/// `message.role == "assistant"`.  Cost is read from `message.usage.cost.total`.
+/// `message.role == "assistant"`. A present non-negative
+/// `message.usage.cost.total` is authoritative; otherwise token-bearing rows
+/// are priced through `prices`. `totalTokens` fills a missing output component
+/// so sparse records still contribute their known total.
 /// Lines without both `"usage"` and `"message"` keywords are skipped before
 /// deserialization.
-pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
+pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> SpendParse {
     let from_offset = resume.map_or(0, |cursor| cursor.offset);
     let mut state: PiSpendState = resume
         .and_then(|cursor| cursor.state.clone())
@@ -187,6 +200,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
     };
     let content = String::from_utf8_lossy(&content);
     let mut out = Vec::new();
+    let mut unknown_models = BTreeMap::new();
 
     for line in content.lines() {
         if state.cwd.is_none()
@@ -209,29 +223,59 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
         if msg.role.as_deref() != Some("assistant") {
             continue;
         }
-        let cost = msg
-            .usage
-            .as_ref()
-            .and_then(|u| u.cost.as_ref())
-            .and_then(|c| c.total)
-            .unwrap_or(0.0);
-        if cost <= 0.0 {
+        let Some(usage) = msg.usage.as_ref() else {
             continue;
-        }
-        let usage = msg.usage.as_ref();
+        };
         let Some(ts) = entry.timestamp.as_deref() else {
             continue;
         };
         let Some(ts_secs) = crate::agents::spending::iso_to_unix_secs(ts) else {
             continue;
         };
+        let input = usage.input.unwrap_or(0);
+        let mut output = usage.output.unwrap_or(0);
+        let cache_write = usage.cache_write.unwrap_or(0);
+        let cache_read = usage.cache_read.unwrap_or(0);
+        let known_tokens = input
+            .saturating_add(output)
+            .saturating_add(cache_write)
+            .saturating_add(cache_read);
+        if output == 0 {
+            output = usage.total_tokens.unwrap_or(0).saturating_sub(known_tokens);
+        }
+        let token_total = input
+            .saturating_add(output)
+            .saturating_add(cache_write)
+            .saturating_add(cache_read);
+        let direct_cost = usage
+            .cost
+            .as_ref()
+            .and_then(|cost| cost.total)
+            .filter(|cost| *cost >= 0.0);
+        let cost = match direct_cost {
+            Some(cost) => cost,
+            None => match msg.model.as_deref().and_then(|model| prices.price(model)) {
+                Some(price) => price.cost(input, output, cache_write, 0, cache_read, false),
+                None => {
+                    if let Some(model) = msg.model.as_deref()
+                        && token_total > 0
+                    {
+                        record_unknown_model(&mut unknown_models, model, ts_secs);
+                    }
+                    0.0
+                }
+            },
+        };
+        if token_total == 0 && cost <= 0.0 {
+            continue;
+        }
         out.push(CachedEntry {
             ts_secs,
             cost_usd: cost,
-            input: usage.and_then(|u| u.input).unwrap_or(0),
-            output: usage.and_then(|u| u.output).unwrap_or(0),
-            cache_write: usage.and_then(|u| u.cache_write).unwrap_or(0),
-            cache_read: usage.and_then(|u| u.cache_read).unwrap_or(0),
+            input,
+            output,
+            cache_write,
+            cache_read,
             message_id: None,
             request_id: None,
             dedup_key: None,
@@ -249,7 +293,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
             offset: next_offset,
             state: serde_json::to_value(&state).ok(),
         },
-        unknown_models: BTreeMap::new(),
+        unknown_models,
         replace_entries: false,
     }
 }
@@ -262,6 +306,12 @@ mod tests {
     use std::io::Write as _;
     use tempfile::TempDir;
 
+    fn prices() -> PriceBook {
+        PriceBook::from_litellm_json(
+            r#"{"pi-priced-model":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"cache_read_input_token_cost":0.0000001,"cache_creation_input_token_cost":0.00000125}}"#,
+        )
+    }
+
     #[test]
     fn parses_cost_from_usage_cost_total() {
         let dir = TempDir::new().unwrap();
@@ -273,7 +323,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = parse_pi_spend(&path, None).entries;
+        let entries = parse_pi_spend(&path, None, &prices()).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
         assert_eq!(entries[0].input, 100);
@@ -304,7 +354,7 @@ mod tests {
         )
         .unwrap();
 
-        let first = parse_pi_spend(&path, None);
+        let first = parse_pi_spend(&path, None, &prices());
         assert_eq!(first.entries.len(), 1);
         assert_eq!(first.origin.as_deref(), Some(cwd.as_path()));
 
@@ -318,14 +368,14 @@ mod tests {
         )
         .unwrap();
 
-        let second = parse_pi_spend(&path, Some(&first.cursor));
+        let second = parse_pi_spend(&path, Some(&first.cursor), &prices());
         assert_eq!(second.entries.len(), 1);
         assert!((second.entries[0].cost_usd - 0.84).abs() < 1e-9);
         assert_eq!(second.origin.as_deref(), Some(cwd.as_path()));
     }
 
     #[test]
-    fn skips_non_assistant_non_message_and_nonpositive_cost_lines() {
+    fn skips_non_assistant_non_message_and_empty_nonpositive_cost_lines() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("session.jsonl");
         let mut f = std::fs::File::create(&path).unwrap();
@@ -340,7 +390,7 @@ mod tests {
             writeln!(f, "{line}").unwrap();
         }
 
-        assert!(parse_pi_spend(&path, None).entries.is_empty());
+        assert!(parse_pi_spend(&path, None, &prices()).entries.is_empty());
     }
 
     #[test]
@@ -356,8 +406,8 @@ mod tests {
             writeln!(f, "{line}").unwrap();
         }
 
-        let entries = parse_pi_spend(&path, None).entries;
-        assert_eq!(entries.len(), 2);
+        let entries = parse_pi_spend(&path, None, &prices()).entries;
+        assert_eq!(entries.len(), 3);
         assert_eq!(
             (
                 entries[0].input,
@@ -370,5 +420,36 @@ mod tests {
         assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
         assert_eq!((entries[1].input, entries[1].output), (0, 25));
         assert!((entries[1].cost_usd - 0.21).abs() < 1e-9);
+        assert_eq!(entries[2].input, 10);
+        assert_eq!(entries[2].cost_usd, 0.0);
+    }
+
+    #[test]
+    fn keeps_zero_cost_tokens_and_prices_missing_cost_with_total_fallback() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        for line in [
+            r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","model":"pi-priced-model","usage":{"totalTokens":333}}}"#,
+            r#"{"type":"message","timestamp":"2026-06-02T11:00:00.000Z","message":{"role":"assistant","model":"pi-priced-model","usage":{"input":100,"output":50,"cost":{"total":0}}}}"#,
+            r#"{"type":"message","timestamp":"2026-06-02T12:00:00.000Z","message":{"role":"assistant","model":"unknown-pi-model","usage":{"input":10}}}"#,
+        ] {
+            writeln!(f, "{line}").unwrap();
+        }
+
+        let parsed = parse_pi_spend(&path, None, &prices());
+
+        assert_eq!(parsed.entries.len(), 3);
+        assert_eq!(
+            (parsed.entries[0].input, parsed.entries[0].output),
+            (0, 333)
+        );
+        assert!((parsed.entries[0].cost_usd - 333.0 * 0.000002).abs() < 1e-12);
+        assert_eq!(parsed.entries[1].cost_usd, 0.0);
+        assert_eq!(parsed.entries[1].input, 100);
+        assert_eq!(parsed.entries[1].output, 50);
+        assert_eq!(parsed.entries[2].input, 10);
+        assert_eq!(parsed.entries[2].cost_usd, 0.0);
+        assert!(parsed.unknown_models.contains_key("unknown-pi-model"));
     }
 }

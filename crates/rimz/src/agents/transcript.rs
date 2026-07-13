@@ -25,11 +25,38 @@ pub struct TranscriptMessage {
     pub text: String,
 }
 
+/// Adapter-owned position in a provider-native transcript source.
+///
+/// JSONL adapters interpret this as a byte offset. Row-oriented stores can
+/// interpret the same monotonic value as a row id while keeping callers
+/// independent of the provider's storage format.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TranscriptPosition(u64);
+
+impl TranscriptPosition {
+    pub const START: Self = Self(0);
+
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// One incremental page of normalized assistant output.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TranscriptPage {
+    pub next: TranscriptPosition,
+    pub messages: Vec<String>,
+}
+
 /// Incremental reader for adapter-normalized assistant messages in one transcript.
 #[derive(Debug)]
 pub struct TranscriptCursor {
     path: Option<String>,
-    offset: u64,
+    position: TranscriptPosition,
     skip_existing_on_first_path: bool,
 }
 
@@ -37,7 +64,7 @@ impl TranscriptCursor {
     pub fn new(from_start: bool) -> Self {
         Self {
             path: None,
-            offset: 0,
+            position: TranscriptPosition::START,
             skip_existing_on_first_path: !from_start,
         }
     }
@@ -50,27 +77,29 @@ impl TranscriptCursor {
         let Some(path) = transcript_path else {
             return Vec::new();
         };
+        let path_ref = Path::new(path);
         if self.path.as_deref() != Some(path) {
-            self.offset = if self.skip_existing_on_first_path {
-                std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+            self.position = if self.skip_existing_on_first_path {
+                adapter
+                    .transcript_position(path_ref)
+                    .unwrap_or(TranscriptPosition::START)
             } else {
-                0
+                TranscriptPosition::START
             };
             self.path = Some(path.to_owned());
             self.skip_existing_on_first_path = false;
         }
-        if std::fs::metadata(path)
-            .map(|meta| meta.len() < self.offset)
-            .unwrap_or(false)
+        if adapter
+            .transcript_position(path_ref)
+            .is_some_and(|current| current < self.position)
         {
-            self.offset = 0;
+            self.position = TranscriptPosition::START;
         }
-        let Some((bytes, next)) = super::read_transcript_lines(Path::new(path), self.offset) else {
+        let Some(page) = adapter.read_assistant_transcript_page(path_ref, self.position) else {
             return Vec::new();
         };
-        self.offset = next;
-        let text = String::from_utf8_lossy(&bytes);
-        adapter.stream_assistant_messages(&text)
+        self.position = page.next;
+        page.messages
     }
 }
 

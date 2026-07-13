@@ -3,8 +3,8 @@
 //! Token-only providers — Claude and Codex — need this: their spend
 //! ([`super::spending`]) can only be totalled by multiplying each turn's tokens
 //! by a price, since current Claude transcripts and every Codex rollout log token
-//! counts rather than a `costUSD`. Pi reports `costUSD` directly and never
-//! consults the table.
+//! counts rather than a `costUSD`. Pi normally reports `costUSD` directly and
+//! consults the table only for token-bearing records where that value is absent.
 //!
 //! Ordered pricing passes feed one [`PriceBook`], with builtins acting as a
 //! fallback below the live LiteLLM refresh:

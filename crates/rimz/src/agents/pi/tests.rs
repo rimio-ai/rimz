@@ -207,6 +207,29 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
 }
 
 #[test]
+fn pi_carries_final_assistant_text_through_the_settled_boundary() {
+    let payload = json!({
+        "session_id": "sess-1",
+        "last_assistant_message": "  Fixed the parser.  "
+    });
+    let observation = PiAdapter
+        .observe_lifecycle("agent_settled", &payload)
+        .expect("settled observation");
+
+    assert_eq!(
+        PiAdapter
+            .last_assistant_message("agent_settled", &payload, &observation)
+            .as_deref(),
+        Some("Fixed the parser.")
+    );
+    assert_eq!(
+        PiAdapter.last_assistant_message("agent_end", &payload, &observation),
+        None,
+        "agent_end is enrichment-only and must not complete output early"
+    );
+}
+
+#[test]
 fn pi_observes_rich_context_from_the_extension_envelope() {
     let context = normalized_context(json!({
         "model": "gpt-5.5",
@@ -532,6 +555,8 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains("Math.round"));
     assert!(EXTENSION_SOURCE.contains("costBySession"));
     assert!(EXTENSION_SOURCE.contains("verdictBySession"));
+    assert!(EXTENSION_SOURCE.contains("visibleAssistantText"));
+    assert!(EXTENSION_SOURCE.contains("last_assistant_message"));
     assert!(EXTENSION_SOURCE.contains("total_cost_usd"));
     assert!(EXTENSION_SOURCE.contains(r#"pi.on("turn_end""#));
     assert!(EXTENSION_SOURCE.contains(r#"pi.on("after_provider_response""#));
