@@ -177,20 +177,20 @@ impl Default for ContextMeterConfig {
     fn default() -> Self {
         Self {
             green: ContextBand {
-                percent: 40,
-                tokens: 100_000,
+                percent: 50,
+                tokens: 128_000,
             },
             yellow: ContextBand {
-                percent: 60,
-                tokens: 160_000,
+                percent: 70,
+                tokens: 192_000,
             },
             amber: ContextBand {
-                percent: 75,
-                tokens: 258_000,
+                percent: 80,
+                tokens: 256_000,
             },
             red: ContextBand {
                 percent: 90,
-                tokens: 420_000,
+                tokens: 384_000,
             },
         }
     }

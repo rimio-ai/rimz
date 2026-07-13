@@ -86,15 +86,15 @@ fn gauge_bars_map_severity_and_apportion_segments() {
         "calm rests at the healthy green start of the ramp"
     );
     assert_eq!(
-        severity_heat_color(&theme, ContextSeverity::Yellow, 40, None, &bands),
+        severity_heat_color(&theme, ContextSeverity::Yellow, 50, None, &bands),
         theme.heat_tone(0.0)
     );
     assert_eq!(
-        severity_heat_color(&theme, ContextSeverity::Yellow, 60, None, &bands),
+        severity_heat_color(&theme, ContextSeverity::Yellow, 70, None, &bands),
         theme.heat_tone(1.0 / 3.0)
     );
     assert_eq!(
-        severity_heat_color(&theme, ContextSeverity::Amber, 75, None, &bands),
+        severity_heat_color(&theme, ContextSeverity::Amber, 80, None, &bands),
         theme.heat_tone(2.0 / 3.0)
     );
     assert_eq!(
@@ -110,8 +110,8 @@ fn gauge_bars_map_severity_and_apportion_segments() {
         },
     );
     for (severity, percent) in [
-        (ContextSeverity::Yellow, 40),
-        (ContextSeverity::Amber, 75),
+        (ContextSeverity::Yellow, 50),
+        (ContextSeverity::Amber, 80),
         (ContextSeverity::Red, 90),
     ] {
         assert!(
@@ -122,7 +122,7 @@ fn gauge_bars_map_severity_and_apportion_segments() {
             "{severity:?} should emit an RGB heat-ramp tone in truecolor"
         );
     }
-    let warming = severity_heat_color(&truecolor, ContextSeverity::Yellow, 50, None, &bands);
+    let warming = severity_heat_color(&truecolor, ContextSeverity::Yellow, 60, None, &bands);
     assert_eq!(warming, truecolor.heat_tone(1.0 / 6.0));
     assert_ne!(warming, truecolor.heat_tone(0.0));
     assert_ne!(warming, truecolor.heat_tone(1.0 / 3.0));
@@ -130,12 +130,12 @@ fn gauge_bars_map_severity_and_apportion_segments() {
         &truecolor,
         ContextSeverity::Yellow,
         10,
-        Some(130_000),
+        Some(160_000),
         &bands,
     );
     assert_eq!(token_warming, truecolor.heat_tone(1.0 / 6.0));
     let token_red =
-        severity_heat_color(&truecolor, ContextSeverity::Red, 10, Some(420_000), &bands);
+        severity_heat_color(&truecolor, ContextSeverity::Red, 10, Some(384_000), &bands);
     assert_eq!(
         token_red,
         truecolor.heat_tone(1.0),

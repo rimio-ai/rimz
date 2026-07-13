@@ -1106,28 +1106,28 @@ fn display_enums_lists_and_nested_bands_parse() {
             defaults.context_meter.green.percent,
             defaults.context_meter.green.tokens
         ),
-        (40, 100_000)
+        (50, 128_000)
     );
     assert_eq!(
         (
             defaults.context_meter.yellow.percent,
             defaults.context_meter.yellow.tokens
         ),
-        (60, 160_000)
+        (70, 192_000)
     );
     assert_eq!(
         (
             defaults.context_meter.amber.percent,
             defaults.context_meter.amber.tokens
         ),
-        (75, 258_000)
+        (80, 256_000)
     );
     assert_eq!(
         (
             defaults.context_meter.red.percent,
             defaults.context_meter.red.tokens
         ),
-        (90, 420_000)
+        (90, 384_000)
     );
     assert_eq!(
         (

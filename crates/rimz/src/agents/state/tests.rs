@@ -180,8 +180,8 @@ fn activity_description_rejects_blank_and_control_text() {
 
 /// The context tier climbs calm → yellow → amber → red, taking the worse
 /// of two axes — fill percentage and absolute tokens. Defaults: the Yellow
-/// tier starts warming at 40% / 100k, amber starts at 75% / 258k, and red
-/// starts at 90% / 420k.
+/// tier starts warming at 50% / 128k, amber starts at 80% / 256k, and red
+/// starts at 90% / 384k.
 #[test]
 fn context_severity_takes_the_worse_of_percent_and_tokens() {
     let bands = crate::config::ContextMeterConfig::default();
@@ -189,19 +189,19 @@ fn context_severity_takes_the_worse_of_percent_and_tokens() {
     // Low fill, low tokens: calm.
     assert_eq!(tier(20, Some(50_000)), ContextSeverity::Calm);
     // Just under both green-start bounds stays calm; the bound itself enters.
-    assert_eq!(tier(39, Some(99_999)), ContextSeverity::Calm);
-    assert_eq!(tier(40, Some(10_000)), ContextSeverity::Yellow);
-    assert_eq!(tier(10, Some(100_000)), ContextSeverity::Yellow);
+    assert_eq!(tier(49, Some(127_999)), ContextSeverity::Calm);
+    assert_eq!(tier(50, Some(10_000)), ContextSeverity::Yellow);
+    assert_eq!(tier(10, Some(128_000)), ContextSeverity::Yellow);
     // The percentage ramp alone climbs through all four tiers.
-    assert_eq!(tier(75, Some(10_000)), ContextSeverity::Amber);
+    assert_eq!(tier(80, Some(10_000)), ContextSeverity::Amber);
     assert_eq!(tier(90, Some(10_000)), ContextSeverity::Red);
     // Calm by percentage, but the token volume escalates it.
-    assert_eq!(tier(20, Some(258_000)), ContextSeverity::Amber);
-    assert_eq!(tier(20, Some(420_000)), ContextSeverity::Red);
+    assert_eq!(tier(20, Some(256_000)), ContextSeverity::Amber);
+    assert_eq!(tier(20, Some(384_000)), ContextSeverity::Red);
     // The worse severity wins regardless of which axis it comes from.
-    assert_eq!(tier(89, Some(419_999)), ContextSeverity::Amber);
+    assert_eq!(tier(89, Some(383_999)), ContextSeverity::Amber);
     // No token reading falls back to the percentage ramp alone.
-    assert_eq!(tier(75, None), ContextSeverity::Amber);
+    assert_eq!(tier(80, None), ContextSeverity::Amber);
     assert_eq!(tier(10, None), ContextSeverity::Calm);
     // An out-of-range percent clamps to full and reads red.
     assert_eq!(tier(200, None), ContextSeverity::Red);

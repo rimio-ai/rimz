@@ -137,7 +137,7 @@ Two nested tables set the meter color stops. The **context meter** (`[theme.disp
 
 ```toml
 [theme.display.context_meter]
-amber = { percent = 75, tokens = 258000 }
+amber = { percent = 80, tokens = 256000 }
 
 [theme.display.budget_bar]
 yellow = 50
