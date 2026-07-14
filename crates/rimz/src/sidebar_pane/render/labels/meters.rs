@@ -732,27 +732,6 @@ pub(in crate::sidebar_pane::render) fn infinite_bar_spans(
     )]
 }
 
-/// The `◇ {total}` marker: the blue diamond + the formatted cumulative
-/// total. The shared head of every token line — [`token_breakdown_spans`] builds
-/// on it, and a breakdown-less line (a Codex rollup-only total) uses it alone.
-/// `fmt` picks the magnitude form ([`tokens_int`](super::fmt::tokens_int) live,
-/// `tokens_short` for the precise W/M rows). The diamond is a colored marker;
-/// the figure reads at the soft tier ([`Theme::soft`]) like every stat figure.
-/// Display-only, never a decision driver.
-pub(in crate::sidebar_pane::render) fn tokens_total_spans(
-    theme: &Theme,
-    total: u64,
-    fmt: fn(u64) -> String,
-) -> Vec<Span<'static>> {
-    vec![
-        Span::styled(
-            token_total_glyph(theme),
-            theme.styled(Component::TokenTotal, Modifier::empty()),
-        ),
-        Span::styled(format!(" {}", fmt(total)), theme.body()),
-    ]
-}
-
 /// `⇡3 ⇣1`-style commit delta against the trunk: ahead then behind, zero
 /// components omitted. Both the dim accent — commit-level branch facts rhyme
 /// with the worktree name's accent and stay a category apart from the green/red
