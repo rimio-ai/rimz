@@ -540,6 +540,9 @@ fn spawn_width_nudge(pane_id: PaneId, session_name: &str, current_cols: u16, tar
 
 /// Refresh the backend's future-pane width seed off the render thread.
 fn spawn_width_default_record(mux: MuxName, session_name: &str, cols: u16) {
+    if mux == MuxName::Zellij {
+        return;
+    }
     let session_name = session_name.to_owned();
     std::thread::spawn(move || {
         let backend = crate::mux::backend_for(mux);
