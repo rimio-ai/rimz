@@ -59,6 +59,51 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
 }
 
 #[test]
+fn spending_walk_threads_user_inputs_into_session_headline() {
+    let dir = TempDir::new().unwrap();
+    let file = write_jsonl(
+        dir.path(),
+        "session.jsonl",
+        &[&claude_line_ts(
+            &iso_at(NOW_SECS),
+            1.0,
+            "msg-session",
+            "req-session",
+        )],
+    );
+    let files = [(claude_adapter(), file)];
+    let prices = PriceBook::default();
+    let origin_overrides = HashMap::new();
+    let user_inputs = [user_input::UserInputRecord {
+        at: jiff::Timestamp::from_second(NOW_SECS as i64).unwrap(),
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        origin: None,
+    }];
+    let live_excluded = BTreeSet::new();
+    let spec = HeadlineSpec::default();
+    let mut req = WalkRequest {
+        files: &files,
+        prices: &prices,
+        now_secs: NOW_SECS,
+        origin_overrides: &origin_overrides,
+        user_inputs: &user_inputs,
+        scope: None,
+        live_excluded: &live_excluded,
+        spec: &spec,
+    };
+    let mut walker = SpendingWalker::new();
+    let cache_path = dir.path().join("spending.json");
+
+    let included = walker.walk_local(&cache_path, &req, &mut SilentWalk);
+    req.user_inputs = &[];
+    let empty = walker.walk_local(&cache_path, &req, &mut SilentWalk);
+
+    assert!((included.spending.total.headline.usd - 1.0).abs() < 1e-9);
+    assert_eq!(empty.spending.total.headline, SpendWindow::default());
+    assert_eq!(empty.stats.dedup_passes, 0);
+}
+
+#[test]
 fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
