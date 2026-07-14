@@ -911,10 +911,18 @@ impl AgentAdapter for CodexAdapter {
         runtime: &crate::RuntimePaths,
     ) -> Option<RealtimeAccountUsage> {
         refresh_app_server_enrichment(None, None, Some(&runtime.codex_app_server_socket_path()))
-            .map(|enrichment| RealtimeAccountUsage {
-                rate_limits: enrichment.context.rate_limits,
-                extra_credits: enrichment.extra_credits,
-                reset_credits: enrichment.reset_credits,
+            .map(|enrichment| {
+                let plan = enrichment
+                    .context
+                    .account
+                    .as_ref()
+                    .and_then(|account| account.plan.clone());
+                RealtimeAccountUsage {
+                    plan,
+                    rate_limits: enrichment.context.rate_limits,
+                    extra_credits: enrichment.extra_credits,
+                    reset_credits: enrichment.reset_credits,
+                }
             })
     }
 

@@ -1954,4 +1954,8 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
         credits["entries"]["codex"]["extra_credits"]["known"]["remaining_usd"], 18.5,
         "the app-server credits balance lands in the shared credits cache"
     );
+    assert_eq!(
+        credits["entries"]["codex"]["plan"], "team",
+        "the app-server plan remains available after the session goes idle"
+    );
 }

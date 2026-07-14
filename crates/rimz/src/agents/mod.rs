@@ -494,6 +494,7 @@ pub struct RefreshSpawn {
 
 /// Account usage read from a provider-owned realtime account channel.
 pub struct RealtimeAccountUsage {
+    pub plan: Option<String>,
     pub rate_limits: Option<AgentRateLimits>,
     pub extra_credits: Option<ExtraCredits>,
     pub reset_credits: Option<ResetCredits>,

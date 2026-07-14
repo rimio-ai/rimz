@@ -267,7 +267,7 @@ fn account_key_change_bypasses_fresh_oauth_stamp() {
 }
 
 #[test]
-fn unknown_prior_account_key_stays_fresh_for_current_account() {
+fn identified_account_bypasses_fresh_unowned_entry() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
         .expect("runtime");
@@ -317,9 +317,9 @@ fn unknown_prior_account_key_stays_fresh_for_current_account() {
                 }
             },
         )
-        .is_none()
+        .is_some()
     );
-    assert_eq!(calls, 0);
+    assert_eq!(calls, 1);
 }
 
 #[test]
@@ -374,7 +374,7 @@ fn failed_oauth_after_account_key_change_does_not_carry_prior_account() {
 }
 
 #[test]
-fn failed_oauth_with_unknown_prior_account_key_carries_prior_display() {
+fn failed_oauth_with_identified_account_clears_unowned_prior_display() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
         .expect("runtime");
@@ -417,13 +417,61 @@ fn failed_oauth_with_unknown_prior_account_key_carries_prior_display() {
         .entries
         .remove("codex")
         .expect("codex entry");
-    assert!(entry.ok);
+    assert!(!entry.ok);
     assert_eq!(entry.account_key.as_deref(), Some("current"));
-    assert_eq!(entry.plan.as_deref(), Some("plus"));
-    assert_eq!(
-        entry.extra_credits,
-        Some(ExtraCredits::known(None, Some(5.0), None))
+    assert_eq!(entry.plan, None);
+    assert_eq!(entry.extra_credits, None);
+}
+
+#[test]
+fn account_key_mismatch_is_symmetric() {
+    assert!(!account_key_mismatch(None, None));
+    assert!(!account_key_mismatch(Some("a"), Some("a")));
+    assert!(account_key_mismatch(None, Some("a")));
+    assert!(account_key_mismatch(Some("a"), None));
+    assert!(account_key_mismatch(Some("a"), Some("b")));
+}
+
+#[test]
+fn successful_observation_overrides_stale_preflight_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    runtime.ensure_dirs().unwrap();
+    merge_provider_credits_entry(
+        &runtime,
+        "codex",
+        ProviderCreditsEntry {
+            observed_at_ms: 1,
+            oauth_read_at_ms: 1,
+            account_key: Some("old".to_owned()),
+            plan: Some("plus".to_owned()),
+            ok: true,
+            extra_credits: Some(ExtraCredits::known(None, Some(5.0), None)),
+            ..ProviderCreditsEntry::default()
+        },
     );
+
+    merge_provider_credits_entry_if_due(
+        &runtime,
+        "codex",
+        None,
+        Some("stale-preflight".to_owned()),
+        || ProviderCreditsEntry {
+            observed_at_ms: unix_now_ms(),
+            oauth_read_at_ms: unix_now_ms(),
+            account_key: Some("observed".to_owned()),
+            plan: Some("pro".to_owned()),
+            ok: true,
+            ..ProviderCreditsEntry::default()
+        },
+    );
+
+    let cache = read_credits_cache(&runtime.shared_credits_path());
+    let entry = cache.entries.get("codex").expect("codex entry");
+    assert_eq!(entry.account_key.as_deref(), Some("observed"));
+    assert_eq!(entry.plan.as_deref(), Some("pro"));
+    assert_eq!(entry.extra_credits, None);
 }
 
 #[test]
@@ -643,7 +691,7 @@ fn realtime_reset_credit_merge_preserves_paid_credit_and_oauth_state() {
         count: 2,
         soonest_expiry: jiff::Timestamp::from_second(1_800_000_000).ok(),
     };
-    merge_provider_realtime_credits(&runtime, "codex", None, Some(reset.clone()));
+    merge_provider_realtime_usage(&runtime, "codex", None, None, Some(reset.clone()));
 
     let cache = read_credits_cache(&runtime.shared_credits_path());
     let entry = cache.entries.get("codex").expect("codex credits");
@@ -651,6 +699,38 @@ fn realtime_reset_credit_merge_preserves_paid_credit_and_oauth_state() {
     assert_eq!(entry.reset_credits, Some(reset));
     assert_eq!(entry.oauth_read_at_ms, 1234);
     assert_eq!(entry.account_key.as_deref(), Some("acc"));
+    assert_eq!(entry.plan.as_deref(), Some("pro"));
+}
+
+#[test]
+fn realtime_plan_is_displayable_replaces_prior_and_survives_missing_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
+        .expect("runtime");
+    runtime.ensure_dirs().unwrap();
+
+    merge_provider_realtime_usage(&runtime, "codex", Some(" team ".to_owned()), None, None);
+    let cache = read_credits_cache(&runtime.shared_credits_path());
+    let entry = cache.entries.get("codex").expect("plan-only entry");
+    assert!(entry.ok);
+    assert_eq!(entry.plan.as_deref(), Some("team"));
+
+    merge_provider_realtime_usage(&runtime, "codex", Some("pro".to_owned()), None, None);
+    merge_provider_realtime_usage(
+        &runtime,
+        "codex",
+        None,
+        Some(ExtraCredits::known(None, Some(2.0), None)),
+        None,
+    );
+    let cache = read_credits_cache(&runtime.shared_credits_path());
+    assert_eq!(
+        cache
+            .entries
+            .get("codex")
+            .and_then(|entry| entry.plan.as_deref()),
+        Some("pro")
+    );
 }
 
 #[test]

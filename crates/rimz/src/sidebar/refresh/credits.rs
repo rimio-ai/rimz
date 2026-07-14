@@ -70,15 +70,17 @@ pub fn merge_provider_credits(
     kind: &str,
     extra_credits: Option<ExtraCredits>,
 ) {
-    merge_provider_realtime_credits(runtime, kind, extra_credits, None);
+    merge_provider_realtime_usage(runtime, kind, None, extra_credits, None);
 }
 
-pub fn merge_provider_realtime_credits(
+pub fn merge_provider_realtime_usage(
     runtime: &RuntimePaths,
     kind: &str,
+    plan: Option<String>,
     extra_credits: Option<ExtraCredits>,
     reset_credits: Option<ResetCredits>,
 ) {
+    let plan = plan.and_then(non_empty_trimmed);
     merge_provider_credits_entry(
         runtime,
         kind,
@@ -88,8 +90,8 @@ pub fn merge_provider_realtime_credits(
             auth_settled: false,
             credentials_stamp: None,
             account_key: None,
-            plan: None,
-            ok: extra_credits.is_some() || reset_credits.is_some(),
+            plan: plan.clone(),
+            ok: plan.is_some() || extra_credits.is_some() || reset_credits.is_some(),
             extra_credits,
             reset_credits,
         },
@@ -121,8 +123,19 @@ pub fn merge_provider_credits_entry_if_due(
     if entry.oauth_read_at_ms == 0 {
         entry.oauth_read_at_ms = unix_now_ms();
     }
+    let effective_account_key = if entry.ok {
+        entry
+            .account_key
+            .clone()
+            .or_else(|| current_account_key.clone())
+    } else {
+        current_account_key
+    };
     let prior_account_mismatch = prior.as_ref().is_some_and(|prior| {
-        account_key_mismatch(prior.account_key.as_deref(), current_account_key.as_deref())
+        account_key_mismatch(
+            prior.account_key.as_deref(),
+            effective_account_key.as_deref(),
+        )
     });
     if !entry.ok {
         if !prior_account_mismatch && let Some(prior) = prior.as_ref() {
@@ -132,12 +145,14 @@ pub fn merge_provider_credits_entry_if_due(
             entry.reset_credits = prior.reset_credits.clone();
             entry.plan = prior.plan.clone();
         }
-    } else if entry.reset_credits.is_none() && !prior_account_mismatch {
+    } else if !prior_account_mismatch && let Some(prior) = prior.as_ref() {
+        entry.plan = entry.plan.or_else(|| prior.plan.clone());
+        entry.extra_credits = entry.extra_credits.or_else(|| prior.extra_credits.clone());
         // A reading without reset-credit data must not erase the last successful
         // app-server or OAuth reset-credit read.
-        entry.reset_credits = prior.as_ref().and_then(|entry| entry.reset_credits.clone());
+        entry.reset_credits = entry.reset_credits.or_else(|| prior.reset_credits.clone());
     }
-    entry.account_key = current_account_key;
+    entry.account_key = effective_account_key;
     cache.refreshed_at_ms = unix_now_ms();
     cache.entries.insert(kind.to_owned(), entry.clone());
     write_credits_cache(&path, &cache);
@@ -155,6 +170,7 @@ pub(crate) fn merge_provider_credits_entry(
     };
     let mut cache = read_credits_cache(&path);
     let mut entry = entry;
+    entry.plan = entry.plan.and_then(non_empty_trimmed);
     let prior = cache.entries.get(kind);
     if entry.oauth_read_at_ms == 0
         && let Some(prior) = prior
@@ -163,7 +179,9 @@ pub(crate) fn merge_provider_credits_entry(
         entry.auth_settled = prior.auth_settled;
         entry.credentials_stamp = prior.credentials_stamp;
         entry.account_key = prior.account_key.clone();
-        entry.plan = prior.plan.clone();
+        if entry.plan.is_none() {
+            entry.plan = prior.plan.clone();
+        }
     }
     if entry.extra_credits.is_none() {
         entry.extra_credits = prior.and_then(|entry| entry.extra_credits.clone());
@@ -216,7 +234,12 @@ fn oauth_read_is_fresh(
 }
 
 pub(crate) fn account_key_mismatch(prior: Option<&str>, current: Option<&str>) -> bool {
-    prior.is_some() && prior != current
+    prior != current
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 fn entry_is_displayable(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {

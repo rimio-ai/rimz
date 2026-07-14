@@ -18,6 +18,8 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use serde::{Deserialize, Serialize};
+
 use crate::RuntimePaths;
 use crate::agents::OauthUsageProbe;
 use crate::sidebar::timing::unix_now_ms;
@@ -71,20 +73,10 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
     };
     let stamp = adapter.oauth_credentials_stamp();
     let account_key = adapter.oauth_account_key();
-    if read_credits_cache(&runtime.shared_credits_path())
+    let prior_account_key = read_credits_cache(&runtime.shared_credits_path())
         .entries
         .get(kind)
-        .is_some_and(|entry| {
-            account_key_mismatch(entry.account_key.as_deref(), account_key.as_deref())
-        })
-    {
-        tracing::info!(
-            target: crate::observability::BREADCRUMB_TARGET,
-            kind,
-            "provider account changed; dropping cached windows",
-        );
-        drop_kind_rate_limits(runtime, kind);
-    }
+        .map(|entry| entry.account_key.clone());
     let mut fetched_windows = None;
     let entry =
         merge_provider_credits_entry_if_due(runtime, kind, stamp, account_key.clone(), || {
@@ -96,7 +88,7 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
                         oauth_read_at_ms: unix_now_ms(),
                         auth_settled: false,
                         credentials_stamp: None,
-                        account_key: None,
+                        account_key: usage.account_key,
                         plan: usage.plan,
                         ok: true,
                         extra_credits: usage.extra_credits,
@@ -128,10 +120,38 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
             }
         });
     let written = entry.is_some();
+    if entry.as_ref().is_some_and(|entry| {
+        drop_windows_on_account_change(
+            runtime,
+            kind,
+            prior_account_key.as_ref(),
+            entry.account_key.as_deref(),
+        )
+    }) {
+        tracing::info!(
+            target: crate::observability::BREADCRUMB_TARGET,
+            kind,
+            "provider account changed; dropping cached windows",
+        );
+    }
     if merge_windows && let Some(rate_limits) = fetched_windows {
         merge_account_rate_limits(runtime, kind, rate_limits);
     }
     written
+}
+
+fn drop_windows_on_account_change(
+    runtime: &RuntimePaths,
+    kind: &str,
+    prior_account_key: Option<&Option<String>>,
+    current_account_key: Option<&str>,
+) -> bool {
+    let changed = prior_account_key
+        .is_some_and(|prior| account_key_mismatch(prior.as_deref(), current_account_key));
+    if changed {
+        drop_kind_rate_limits(runtime, kind);
+    }
+    changed
 }
 
 /// Whether the OAuth windows the API-query channel returns should be merged for
@@ -174,14 +194,39 @@ fn has_fresh_realtime_windows(snapshot: &SidebarSnapshot, kind: &str) -> bool {
 /// root: skip when the last attempt is younger than the OAuth TTL, touch it
 /// before spawning so a fetch that never publishes still backs off this kind.
 pub(crate) fn usage_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
+    let current_stamp =
+        crate::agents::find_adapter(kind).and_then(|adapter| adapter.oauth_credentials_stamp());
+    usage_probe_due_with_stamp(runtime, kind, current_stamp)
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct UsageProbeMarker {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credentials_stamp: Option<u64>,
+}
+
+fn usage_probe_due_with_stamp(
+    runtime: &RuntimePaths,
+    kind: &str,
+    current_stamp: Option<u64>,
+) -> bool {
     let path = usage_probe_marker(runtime, kind);
-    let due = std::fs::metadata(&path)
+    let age_due = std::fs::metadata(&path)
         .and_then(|meta| meta.modified())
         .ok()
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
         .is_none_or(|age| age >= OAUTH_USAGE_TTL);
+    let stored_stamp = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<UsageProbeMarker>(&bytes).ok())
+        .and_then(|marker| marker.credentials_stamp);
+    let due = age_due || stored_stamp != current_stamp;
     if due {
-        let _ = std::fs::write(&path, b"");
+        if let Ok(payload) = serde_json::to_vec(&UsageProbeMarker {
+            credentials_stamp: current_stamp,
+        }) {
+            let _ = std::fs::write(&path, payload);
+        }
     }
     due
 }
@@ -266,6 +311,60 @@ mod tests {
             .set_modified(old)
             .unwrap();
         assert!(usage_probe_due(&runtime, "opencode"));
+    }
+
+    #[test]
+    fn usage_probe_marker_tracks_credential_stamp_and_accepts_legacy_payloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+
+        assert!(usage_probe_due_with_stamp(&runtime, "codex", Some(1)));
+        assert!(!usage_probe_due_with_stamp(&runtime, "codex", Some(1)));
+        assert!(usage_probe_due_with_stamp(&runtime, "codex", Some(2)));
+
+        let legacy = usage_probe_marker(&runtime, "claude");
+        std::fs::write(&legacy, b"").unwrap();
+        assert!(
+            !usage_probe_due_with_stamp(&runtime, "claude", None),
+            "legacy markers still throttle sources without a file stamp"
+        );
+        assert!(
+            usage_probe_due_with_stamp(&runtime, "claude", Some(7)),
+            "a known file stamp bypasses a legacy marker"
+        );
+    }
+
+    #[test]
+    fn identified_owner_drops_unowned_cached_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        merge_account_rate_limits(
+            &runtime,
+            "codex",
+            AgentRateLimits {
+                windows: vec![RateLimitWindow {
+                    duration_mins: Some(300),
+                    used_percentage: Some(50),
+                    ..RateLimitWindow::default()
+                }],
+            },
+        );
+
+        assert!(drop_windows_on_account_change(
+            &runtime,
+            "codex",
+            Some(&None),
+            Some("acc")
+        ));
+        assert!(
+            !crate::agents::read_rate_limits_cache(&runtime.shared_rate_limits_path())
+                .windows
+                .contains_key("codex")
+        );
     }
 
     #[test]
