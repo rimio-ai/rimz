@@ -75,13 +75,18 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         Some(BodyFilter::Status(status)) => Some(status),
         Some(BodyFilter::Unread) | None => None,
     };
-    let working = status_total(groups, AgentStatus::Running);
-    let waiting = status_total(groups, AgentStatus::Waiting);
-    let failed = status_total(groups, AgentStatus::Failed);
-    let paused = status_total(groups, AgentStatus::Paused);
-    let idle = status_total(groups, AgentStatus::Idle);
-    let success = status_total(groups, AgentStatus::Success);
-    let total = working + waiting + failed + paused + idle + success;
+    let buckets = [
+        (AgentStatus::Waiting, BucketCluster::Left),
+        (AgentStatus::Failed, BucketCluster::Left),
+        (AgentStatus::Paused, BucketCluster::Left),
+        (AgentStatus::Success, BucketCluster::Left),
+        (AgentStatus::Running, BucketCluster::Right),
+        (AgentStatus::Idle, BucketCluster::Right),
+    ];
+    let total = buckets
+        .iter()
+        .map(|(status, _)| status_total(groups, *status))
+        .sum::<usize>();
 
     // An empty (or process-only) room has no make-up line — the `¤ 0  ◎ 0` summary
     // lives on the dashboard above. The make-up line is reserved for a room that
@@ -96,115 +101,27 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     // `paused` `⏸`, then success. The right cluster is the live-capacity tail:
     // working, then idle. Every bucket shows its count.
     let mut left = Cluster::new(theme, status_filter);
-    left.push_count(
-        AgentStatus::Waiting,
-        status_chip_color(theme, AgentStatus::Waiting),
-        waiting,
-        bucket_style(
-            theme,
-            groups,
-            AgentStatus::Waiting,
-            (
-                theme.style(
-                    theme.animations.status(AgentStatus::Waiting).color(),
-                    Modifier::empty(),
-                ),
-                Some(theme.animations.status(AgentStatus::Waiting).color()),
-            ),
-            now,
-            animation_phase,
-            lead_unread_status == Some(AgentStatus::Waiting),
-        ),
-    );
-    left.push_count(
-        AgentStatus::Failed,
-        status_chip_color(theme, AgentStatus::Failed),
-        failed,
-        bucket_style(
-            theme,
-            groups,
-            AgentStatus::Failed,
-            (
-                theme.style(
-                    theme.animations.status(AgentStatus::Failed).color(),
-                    Modifier::empty(),
-                ),
-                Some(theme.animations.status(AgentStatus::Failed).color()),
-            ),
-            now,
-            animation_phase,
-            lead_unread_status == Some(AgentStatus::Failed),
-        ),
-    );
-    // Paused stays with the attention-class cluster, after `?` / `!`: parked,
-    // but still a row worth spotting. It rests on held blue and takes the shared
-    // unread treatment when the inbox bit is set.
-    left.push_count(
-        AgentStatus::Paused,
-        status_chip_color(theme, AgentStatus::Paused),
-        paused,
-        bucket_style(
-            theme,
-            groups,
-            AgentStatus::Paused,
-            (
-                status_rest_style(theme, AgentStatus::Paused),
-                status_chip_color(theme, AgentStatus::Paused),
-            ),
-            now,
-            animation_phase,
-            false,
-        ),
-    );
-    left.push_count(
-        AgentStatus::Success,
-        status_chip_color(theme, AgentStatus::Success),
-        success,
-        bucket_style(
-            theme,
-            groups,
-            AgentStatus::Success,
-            (
-                status_rest_style(theme, AgentStatus::Success),
-                status_chip_color(theme, AgentStatus::Success),
-            ),
-            now,
-            animation_phase,
-            false,
-        ),
-    );
     let mut right = Cluster::new(theme, status_filter);
-    right.push_count(
-        AgentStatus::Running,
-        status_chip_color(theme, AgentStatus::Running),
-        working,
-        bucket_style(
-            theme,
-            groups,
-            AgentStatus::Running,
-            (
-                status_rest_style(theme, AgentStatus::Running),
-                status_chip_color(theme, AgentStatus::Running),
+    for (status, target) in buckets {
+        let cluster = match target {
+            BucketCluster::Left => &mut left,
+            BucketCluster::Right => &mut right,
+        };
+        cluster.push_count(
+            status,
+            status_chip_color(theme, status),
+            status_total(groups, status),
+            bucket_style(
+                theme,
+                groups,
+                status,
+                bucket_tone(theme, status),
+                now,
+                animation_phase,
+                lead_unread_status == Some(status),
             ),
-            now,
-            animation_phase,
-            false,
-        ),
-    );
-    right.push_count(
-        AgentStatus::Idle,
-        status_chip_color(theme, AgentStatus::Idle),
-        idle,
-        bucket_style(
-            theme,
-            groups,
-            AgentStatus::Idle,
-            (theme.body(), status_chip_color(theme, AgentStatus::Idle)),
-            now,
-            animation_phase,
-            false,
-        ),
-    );
+        );
+    }
 
     // Split left / right when both clusters fit; on a narrow sidebar (the right
     // cluster alone can outrun the width) fall back to one left-packed line so the
@@ -258,6 +175,12 @@ struct Cluster<'a> {
     col: usize,
 }
 
+#[derive(Clone, Copy)]
+enum BucketCluster {
+    Left,
+    Right,
+}
+
 impl<'a> Cluster<'a> {
     fn new(theme: &'a Theme, filter: Option<AgentStatus>) -> Self {
         Self {
@@ -299,12 +222,7 @@ impl<'a> Cluster<'a> {
                 style.add_modifier
             };
             let pick = if let Some(glyph_color) = glyph_color {
-                let chip = self.theme.chip(glyph_color, Modifier::empty());
-                if chip.bg.is_none() {
-                    chip.add_modifier(Modifier::REVERSED)
-                } else {
-                    chip
-                }
+                self.theme.picked_chip(glyph_color, Modifier::empty())
             } else {
                 style.add_modifier(Modifier::REVERSED)
             };
@@ -355,6 +273,20 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
         .map(|row| row.sub_agents().len())
         .sum();
     (main, subs)
+}
+
+fn bucket_tone(theme: &Theme, status: AgentStatus) -> (Style, Option<Color>) {
+    match status {
+        AgentStatus::Waiting | AgentStatus::Failed => {
+            let color = theme.animations.status(status).color();
+            (theme.style(color, Modifier::empty()), Some(color))
+        }
+        AgentStatus::Paused | AgentStatus::Success | AgentStatus::Running => (
+            status_rest_style(theme, status),
+            status_chip_color(theme, status),
+        ),
+        AgentStatus::Idle => (theme.body(), status_chip_color(theme, status)),
+    }
 }
 
 /// One cockpit bucket's tone, in lockstep with its rows. A `?`/`!` bucket owns

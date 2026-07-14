@@ -313,6 +313,17 @@ impl Theme {
         }
     }
 
+    /// A selected chip whose `no_color` fallback marks the same cells with
+    /// reverse video.
+    pub(crate) fn picked_chip(&self, bg: Color, modifier: Modifier) -> Style {
+        let chip = self.chip(bg, modifier);
+        if chip.bg.is_none() {
+            chip.add_modifier(Modifier::REVERSED)
+        } else {
+            chip
+        }
+    }
+
     pub(crate) fn pet_body_enabled(&self) -> bool {
         !self.no_color
     }

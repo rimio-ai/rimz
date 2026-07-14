@@ -100,12 +100,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         // and the make-up buckets; the cockpit count holds its attention tone.
         let waiting = theme.animations.status(AgentStatus::Waiting).color();
         let style = if unread_picked {
-            let chip = theme.chip(waiting, Modifier::BOLD);
-            if chip.bg.is_none() {
-                chip.add_modifier(Modifier::REVERSED)
-            } else {
-                chip
-            }
+            theme.picked_chip(waiting, Modifier::BOLD)
         } else {
             theme.style(waiting, Modifier::BOLD)
         };
