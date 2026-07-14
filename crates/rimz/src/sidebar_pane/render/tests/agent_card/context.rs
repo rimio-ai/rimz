@@ -204,6 +204,67 @@ fn codex_card_renders_the_per_call_composition() {
 }
 
 #[test]
+fn qwen_card_combines_live_gauge_with_correlated_call_split() {
+    let mut qwen = agent(
+        "qwen-1",
+        "qwen",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("inspect adapter"),
+    );
+    qwen.model = Some("[DeepSeek] deepseek-v4-pro".to_owned());
+    qwen.context_pct = Some(4);
+    qwen.context_window = Some(1_000_000);
+    qwen.total_tokens = Some(38_812);
+    qwen.cache_read_input_tokens = Some(38_656);
+    qwen.fresh_input_tokens = Some(71);
+    qwen.output_tokens = Some(85);
+    let mut context = codex_context(fixed_now());
+    context.source = "qwen".to_owned();
+    context.model_id = None;
+    context.model_display_name = Some("DeepSeek V4 Pro".to_owned());
+    context.effort = None;
+    context.agent_version = Some("0.19.10".to_owned());
+    context.rate_limits = None;
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        used_percentage: Some(4),
+        remaining_percentage: Some(96),
+        current_usage: None,
+    });
+    qwen.context = Some(context);
+
+    let render = |agent| {
+        snapshot_to_screen_with_alert_and_ui(
+            &snapshot_with(vec![agent]),
+            None,
+            &UiState {
+                selected_index: 0,
+                ..Default::default()
+            },
+            52,
+            17,
+        )
+    };
+    let first = render(qwen.clone());
+    assert!(first.contains("DeepSeek V4 Pro · 1m"), "{first}");
+    assert!(first.contains("3.9%"), "{first}");
+    assert!(first.contains("▤ 38k · ◌ 38k ↘ 71 ↗ 85"), "{first}");
+    assert!(!first.contains("[DeepSeek]"), "{first}");
+    assert!(!first.contains("↘ 38k"), "{first}");
+    assert!(!first.contains('◍'), "{first}");
+
+    qwen.total_tokens = Some(38_827);
+    qwen.fresh_input_tokens = Some(79);
+    qwen.output_tokens = Some(92);
+    let second = render(qwen);
+    assert!(second.contains("3.9%"), "{second}");
+    assert!(second.contains("▤ 38k · ◌ 38k ↘ 79 ↗ 92"), "{second}");
+    assert_ne!(first, second);
+}
+
+#[test]
 fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
     let mut codex = agent(
         "codex-1",

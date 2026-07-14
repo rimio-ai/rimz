@@ -47,6 +47,7 @@ fn title_word(word: &str) -> String {
     match word {
         "gpt" => "GPT".to_owned(),
         "codex" => "Codex".to_owned(),
+        "deepseek" => "DeepSeek".to_owned(),
         _ if word.chars().all(|c| c.is_ascii_digit() || c == '.') => word.to_owned(),
         _ => {
             let mut chars = word.chars();
@@ -70,6 +71,7 @@ mod tests {
         assert_eq!(display_model("gpt-5.5-codex"), "GPT 5.5 Codex");
         assert_eq!(display_model("claude-opus-4-7-20260101"), "Opus 4.7");
         assert_eq!(display_model("gpt-5-codex-20260101"), "GPT 5 Codex");
+        assert_eq!(display_model("deepseek-v4-pro"), "DeepSeek V4 Pro");
         assert_eq!(display_model("mystery-model"), "Mystery Model");
     }
 }

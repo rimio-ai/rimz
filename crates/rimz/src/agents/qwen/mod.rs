@@ -431,6 +431,11 @@ impl AgentAdapter for QwenAdapter {
             .unwrap_or_default();
         let start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let stop = (event_name == "Stop").then(|| parse_stop(payload));
+        let transcript_is_current = stop
+            .as_ref()
+            .and_then(|value| value.input_tokens)
+            .is_none_or(|prompt| usage.prompt_tokens == Some(prompt));
+        let accepted_usage = transcript_is_current.then_some(&usage);
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
         observation.parent_agent_id = parent_agent_id;
@@ -439,7 +444,7 @@ impl AgentAdapter for QwenAdapter {
             .as_ref()
             .and_then(|value| value.common.model.clone())
             .or_else(|| optional_payload_string(payload, &["model"]))
-            .or(usage.model);
+            .or_else(|| accepted_usage.and_then(|usage| usage.model.clone()));
         observation.prompt = (event_name == "UserPromptSubmit")
             .then(|| parse_user_prompt_submit(payload))
             .and_then(|value| sanitize_user_prompt(value.prompt.as_deref()));
@@ -455,13 +460,17 @@ impl AgentAdapter for QwenAdapter {
         observation.context_window = stop
             .as_ref()
             .and_then(|value| value.context_limit)
-            .or(usage.context_window);
-        observation.total_tokens = payload_total_tokens(
-            payload,
-            usage
-                .total_tokens
-                .or_else(|| stop.as_ref().and_then(|value| value.input_tokens)),
-        );
+            .or_else(|| accepted_usage.and_then(|usage| usage.context_window));
+        let transcript_total = accepted_usage.and_then(|usage| usage.total_tokens);
+        let fallback_total = transcript_total
+            .filter(|total| *total > 0)
+            .or_else(|| stop.as_ref().and_then(|value| value.input_tokens))
+            .or(transcript_total);
+        observation.total_tokens = payload_total_tokens(payload, fallback_total);
+        observation.cache_read_input_tokens =
+            accepted_usage.and_then(|usage| usage.cache_read_input_tokens);
+        observation.fresh_input_tokens = accepted_usage.and_then(|usage| usage.fresh_input_tokens);
+        observation.output_tokens = accepted_usage.and_then(|usage| usage.output_tokens);
         if event_name == "SessionStart"
             && start.as_ref().is_some_and(|value| {
                 matches!(value.source, SessionSource::Startup | SessionSource::Clear)
@@ -791,6 +800,10 @@ fn parse_physical_assistant_messages(lines: &str) -> Vec<String> {
 #[derive(Default)]
 struct TranscriptUsage {
     total_tokens: Option<u64>,
+    prompt_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+    fresh_input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
     model: Option<String>,
     context_window: Option<u64>,
 }
@@ -801,12 +814,20 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
     };
     let folded = payloads::fold_transcript(&text);
     if let Some(record) = folded.latest_active_assistant_with_usage() {
+        let Some(usage) = record.usage_metadata.as_ref() else {
+            return TranscriptUsage {
+                total_tokens: Some(0),
+                ..TranscriptUsage::default()
+            };
+        };
+        let prompt_tokens = usage.prompt_token_count;
         return TranscriptUsage {
-            total_tokens: record
-                .usage_metadata
-                .as_ref()
-                .and_then(payloads::TranscriptUsage::live_total)
-                .or(Some(0)),
+            total_tokens: usage.live_total().or(Some(0)),
+            prompt_tokens,
+            cache_read_input_tokens: prompt_tokens.and(usage.cached_content_token_count),
+            fresh_input_tokens: prompt_tokens
+                .map(|prompt| prompt.saturating_sub(usage.cache_read())),
+            output_tokens: prompt_tokens.map(|_| usage.output()),
             model: record.model.clone().filter(|value| !value.is_empty()),
             context_window: record.context_window_size,
         };

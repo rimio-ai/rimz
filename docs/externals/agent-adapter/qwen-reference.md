@@ -6,26 +6,27 @@ Coverage is **depth on viable adapter inputs, breadth as an index**. The hook, s
 
 ## Refresh target and upstream sources
 
-This mirror was refreshed against Qwen Code **0.19.8** at source commit [`b2601c86137d3c9850643dde2114dfd92fe9e1e9`](https://github.com/QwenLM/qwen-code/tree/b2601c86137d3c9850643dde2114dfd92fe9e1e9). Re-fetch the documentation and compare the linked types before implementation because Qwen Code is actively developing hooks, session persistence, subagents, dual output, and daemon mode.
+This mirror was refreshed against Qwen Code **0.19.10** at source commit [`095bd160918086a3a33192133e7923635f08f973`](https://github.com/QwenLM/qwen-code/tree/095bd160918086a3a33192133e7923635f08f973). Re-fetch the documentation and compare the linked types before implementation because Qwen Code is actively developing hooks, session persistence, subagents, dual output, and daemon mode.
 
 | Surface | Source |
 | --- | --- |
 | Project, installation, feature overview | <https://github.com/QwenLM/qwen-code> |
 | Hooks, events, payloads, outputs, execution | <https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/> |
-| Hook wire types | [`packages/core/src/hooks/types.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/core/src/hooks/types.ts) |
-| Hook runner, registry, and trust | [`hookRunner.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/core/src/hooks/hookRunner.ts), [`hookRegistry.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/core/src/hooks/hookRegistry.ts), [`trustedHooks.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/core/src/hooks/trustedHooks.ts) |
+| Hook wire types | [`packages/core/src/hooks/types.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/types.ts) |
+| Hook runner, registry, and trust | [`hookRunner.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/hookRunner.ts), [`hookRegistry.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/hookRegistry.ts), [`trustedHooks.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/trustedHooks.ts) |
 | Configuration layers, environment, settings | <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/> |
 | Authentication and providers | <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/>, <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/> |
 | Session commands and machine-readable listing | <https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/> |
-| Session JSONL writer and types | [`chatRecordingService.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/core/src/services/chatRecordingService.ts) |
-| Session loader and active-branch reconstruction | [`sessionService.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/core/src/services/sessionService.ts) |
-| Runtime PID/session sidecar | [`runtimeStatus.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/core/src/utils/runtimeStatus.ts) |
+| Session JSONL writer and types | [`chatRecordingService.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/services/chatRecordingService.ts) |
+| Session loader and active-branch reconstruction | [`sessionService.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/services/sessionService.ts) |
+| Usage output normalization | [`tokenEstimation.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/services/tokenEstimation.ts) |
+| Runtime PID/session sidecar | [`runtimeStatus.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/utils/runtimeStatus.ts) |
 | Statusline JSON | <https://qwenlm.github.io/qwen-code-docs/en/users/features/status-line/> |
 | Interactive dual-output protocol | <https://qwenlm.github.io/qwen-code-docs/en/users/features/dual-output/> |
-| Dual-output implementation and protocol version | [`DualOutputBridge.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/cli/src/dualOutput/DualOutputBridge.ts) |
-| Structured message types | [`packages/cli/src/nonInteractive/types.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/cli/src/nonInteractive/types.ts) |
+| Dual-output implementation and protocol version | [`DualOutputBridge.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/cli/src/dualOutput/DualOutputBridge.ts) |
+| Structured message types | [`packages/cli/src/nonInteractive/types.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/cli/src/nonInteractive/types.ts) |
 | Headless mode and exits | <https://qwenlm.github.io/qwen-code-docs/en/users/features/headless/> |
-| CLI option definitions | [`packages/cli/src/config/config.ts`](https://github.com/QwenLM/qwen-code/blob/b2601c86137d3c9850643dde2114dfd92fe9e1e9/packages/cli/src/config/config.ts) |
+| CLI option definitions | [`packages/cli/src/config/config.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/cli/src/config/config.ts) |
 | Permission modes | <https://qwenlm.github.io/qwen-code-docs/en/users/features/approval-mode/> |
 | Subagents | <https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/> |
 | ACP daemon/server mode | <https://qwenlm.github.io/qwen-code-docs/en/users/qwen-serve/> |
@@ -82,7 +83,7 @@ Every interactive session atomically writes:
   "work_dir": "/absolute/project/path",
   "hostname": "host",
   "started_at": 1783700000.125,
-  "qwen_version": "0.19.8"
+  "qwen_version": "0.19.10"
 }
 ```
 
@@ -156,6 +157,7 @@ The neutral RimZ path writes no logs to stdout and returns empty JSON or empty s
 | `PermissionRequest` | permission, tool name/input, optional suggestions | synchronous human wait or automatic decision |
 | `PermissionDenied` | tool identity/input, `reason` (`classifier_blocked|classifier_unavailable`) | completed auto denial, not a wait |
 | `Stop` | active flag, last assistant text, optional context, `background_tasks[]`, `crons[]` | clean turn end; detect background park |
+| `MessageDisplay` | stable `message_id`, cumulative `displayed_text`, `is_final` | fire-and-forget display observation before `Stop` |
 | `StopFailure` | typed `error`, optional details and last text | failed/paused evidence; fire-and-forget |
 | `SubagentStart` | permission, `agent_id`, `agent_type` | child start |
 | `SubagentStop` | start fields plus active flag, transcript, last text, tasks/crons | child stop; output can block |
@@ -166,7 +168,7 @@ The neutral RimZ path writes no logs to stdout and returns empty JSON or empty s
 | `InstructionsLoaded` | file, memory type, load reason, optional include-parent paths | index only |
 | `TodoCreated` / `TodoCompleted` | todo data and `phase` (`validation|postWrite`) | validation may block; post-write cannot undo |
 
-`Stop` context fields are optional: `context_usage` is a ratio and may exceed 1, `context_limit` is tokens, and `input_tokens` is the provider-normalized prompt count. Background tasks carry `id`, `status`, `agent_type`, `started_at`, and optional `description`. `StopFailure.error` is `rate_limit | authentication_failed | billing_error | invalid_request | server_error | max_output_tokens | unknown`.
+`Stop` context fields are optional: `context_usage` is a ratio and may exceed 1, `context_limit` is tokens, and `input_tokens` is the provider-normalized prompt count. The assistant JSONL write rides Qwen's serialized async recording queue, while `Stop` does not await a recorder flush; a hook can therefore observe the direct prompt count before the just-finished assistant record reaches disk. Correlate the latest transcript record by exact `promptTokenCount` before using its model, window, total, or category split. Background tasks carry `id`, `status`, `agent_type`, `started_at`, and optional `description`. `StopFailure.error` is `rate_limit | authentication_failed | billing_error | invalid_request | server_error | max_output_tokens | unknown`.
 
 The key decisions are:
 
@@ -226,13 +228,13 @@ Command mode at `ui.statusLine` runs a shell command, writes one JSON object to 
 ```json
 {
   "session_id": "UUID",
-  "version": "0.19.8",
-  "model": { "display_name": "qwen3-coder-plus" },
+  "version": "0.19.10",
+  "model": { "display_name": "[DeepSeek] deepseek-v4-pro" },
   "context_window": {
-    "context_window_size": 131072,
-    "used_percentage": 34.3,
-    "remaining_percentage": 65.7,
-    "current_usage": 45000,
+    "context_window_size": 1000000,
+    "used_percentage": 3.9,
+    "remaining_percentage": 96.1,
+    "current_usage": 38727,
     "total_input_tokens": 30000,
     "total_output_tokens": 5000
   },
@@ -258,7 +260,9 @@ Command mode at `ui.statusLine` runs a shell command, writes one JSON object to 
 }
 ```
 
-`git`, `worktree`, and `vim` are absent when inactive. `current_usage` is the last API call's current context size; cumulative input/output must not drive the live percentage. `metrics.models` is keyed by every model used, so routing or `/model` changes can produce multiple entries.
+`git`, `worktree`, and `vim` are absent when inactive. `current_usage` is the latest API call's whole prompt/context occupancy and is the numerator behind the live percentage; it is a scalar gauge, not uncached fresh input. `metrics.models` is keyed by every model used, so routing or `/model` changes can produce multiple entries.
+
+Registry model names can carry a provider label such as `[DeepSeek] deepseek-v4-pro`. Qwen's preset renderer removes a leading `/^\[[^\]]*\]\s*/` decoration before showing the model. Consumers of command-mode JSON receive the decorated label and apply the same stripping rule before their own canonical model formatting.
 
 Statusline is the preferred live enrichment channel because it supplies the upstream-selected context window instead of requiring a Qwen/provider limit table. Treat every field as optional and token categories as extensible. Hash the complete executable configuration, preserve the prior command, and keep wrapper diagnostics off stdout.
 
@@ -280,7 +284,7 @@ The first event is a capability handshake:
     "session_id": "session UUID",
     "cwd": "/work/project",
     "protocol_version": 1,
-    "version": "0.19.8",
+    "version": "0.19.10",
     "supported_events": ["system", "user", "assistant", "stream_event", "result", "control_request", "control_response"]
   }
 }
@@ -344,7 +348,7 @@ Disabling recording also disables resume. Use the hook's `transcript_path` for t
   "type": "user | assistant | tool_result | system",
   "subtype": "optional typed event subtype",
   "cwd": "/project/root",
-  "version": "0.19.8",
+  "version": "0.19.10",
   "gitBranch": "main",
   "message": { "role": "user | model", "parts": [] },
   "usageMetadata": {},
@@ -365,7 +369,7 @@ Disabling recording also disables resume. Use the hook's `transcript_path` for t
 
 Assistant records carry `model`, optional `contextWindowSize`, and normalized `usageMetadata`: `promptTokenCount`, `candidatesTokenCount`, `totalTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`, and `toolUsePromptTokenCount`. Use the newest active assistant's `totalTokenCount` as current request size and its `contextWindowSize` as divisor. Fall back to statusline rather than hard-coding a provider limit.
 
-For historical usage, sum each active assistant once. `promptTokenCount` includes cached prompt tokens; price uncached input as prompt minus cached, cached separately, and candidates/thoughts according to the selected provider's contract. Qwen supports OpenAI-compatible, Anthropic, Gemini, Vertex, Qwen, and local providers, so model alone is insufficient to infer billing. Retain provider identity where available and leave dollars unknown when metering is not established.
+For historical usage, sum each active assistant once. `promptTokenCount` includes cached prompt tokens; price uncached input as saturating prompt minus cached and cached separately. Qwen's resume normalization requires prompt accounting, prefers saturating `totalTokenCount - promptTokenCount` for output, and falls back to candidates alone when candidates exceed thoughts or candidates plus thoughts otherwise. `toolUsePromptTokenCount` is already part of the reported prompt and does not add to a derived total. Qwen supports OpenAI-compatible, Anthropic, Gemini, Vertex, Qwen, and local providers, so model alone is insufficient to infer billing. Retain provider identity where available and leave dollars unknown when metering is not established.
 
 ### Active-branch and special-record semantics
 

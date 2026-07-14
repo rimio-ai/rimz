@@ -56,7 +56,9 @@ use super::aggregate::{
 /// dedup key, or timestamp, so finalized files need one cold reprice. v17 keeps
 /// Pi token-only records, applies `totalTokens` fallback, and prices an absent
 /// direct cost, which also requires a cold parse of finalized Pi sessions.
-pub(crate) const SPENDING_CACHE_VERSION: u32 = 17;
+/// v18 corrects candidate/thought overlap in finalized Qwen transcripts, so
+/// their historical output tokens and cost receive one cold reprice.
+pub(crate) const SPENDING_CACHE_VERSION: u32 = 18;
 
 /// On-disk cache persisted at shared state `spending.json`.
 ///

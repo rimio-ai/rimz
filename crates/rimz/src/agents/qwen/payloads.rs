@@ -192,24 +192,25 @@ impl TranscriptUsage {
     }
 
     pub fn output(&self) -> u64 {
-        self.candidates_token_count
-            .unwrap_or(0)
-            .saturating_add(self.thoughts_token_count.unwrap_or(0))
+        let Some(prompt) = self.prompt_token_count else {
+            return 0;
+        };
+        if let Some(total) = self.total_token_count {
+            return total.saturating_sub(prompt);
+        }
+        let candidates = self.candidates_token_count.unwrap_or(0);
+        let thoughts = self.thoughts_token_count.unwrap_or(0);
+        if candidates > thoughts {
+            candidates
+        } else {
+            candidates.saturating_add(thoughts)
+        }
     }
 
     pub fn live_total(&self) -> Option<u64> {
         self.total_token_count.or_else(|| {
-            (self.prompt_token_count.is_some()
-                || self.candidates_token_count.is_some()
-                || self.thoughts_token_count.is_some()
-                || self.tool_use_prompt_token_count.is_some())
-            .then(|| {
-                self.prompt_token_count
-                    .unwrap_or(0)
-                    .saturating_add(self.candidates_token_count.unwrap_or(0))
-                    .saturating_add(self.thoughts_token_count.unwrap_or(0))
-                    .saturating_add(self.tool_use_prompt_token_count.unwrap_or(0))
-            })
+            self.prompt_token_count
+                .map(|prompt| prompt.saturating_add(self.output()))
         })
     }
 }
@@ -434,6 +435,51 @@ mod tests {
         assert_eq!(usage.uncached_prompt(), 75);
         assert_eq!(usage.cache_read(), 25);
         assert_eq!(usage.output(), 10);
-        assert_eq!(usage.live_total(), Some(115));
+        assert_eq!(usage.live_total(), Some(110));
+    }
+
+    #[test]
+    fn usage_normalizes_provider_output_without_double_counting() {
+        let usage = |prompt, candidates, thoughts, total| TranscriptUsage {
+            prompt_token_count: prompt,
+            candidates_token_count: candidates,
+            thoughts_token_count: thoughts,
+            total_token_count: total,
+            ..TranscriptUsage::default()
+        };
+
+        assert_eq!(usage(Some(100), Some(85), Some(77), Some(185)).output(), 85);
+        assert_eq!(usage(Some(100), Some(85), Some(77), None).output(), 85);
+        assert_eq!(usage(Some(100), Some(50), Some(77), None).output(), 127);
+        assert_eq!(usage(Some(100), Some(77), Some(77), None).output(), 154);
+        assert_eq!(usage(Some(100), Some(10), Some(5), Some(90)).output(), 0);
+        assert_eq!(usage(None, Some(85), Some(77), Some(162)).output(), 0);
+    }
+
+    #[test]
+    fn usage_total_requires_prompt_fallback_and_ignores_tool_prompt() {
+        let usage = TranscriptUsage {
+            prompt_token_count: Some(100),
+            candidates_token_count: Some(50),
+            thoughts_token_count: Some(77),
+            tool_use_prompt_token_count: Some(25),
+            ..TranscriptUsage::default()
+        };
+        assert_eq!(usage.live_total(), Some(227));
+
+        let no_prompt = TranscriptUsage {
+            candidates_token_count: Some(50),
+            thoughts_token_count: Some(77),
+            tool_use_prompt_token_count: Some(25),
+            ..TranscriptUsage::default()
+        };
+        assert_eq!(no_prompt.live_total(), None);
+
+        let explicit = TranscriptUsage {
+            prompt_token_count: Some(100),
+            total_token_count: Some(90),
+            ..TranscriptUsage::default()
+        };
+        assert_eq!(explicit.live_total(), Some(90));
     }
 }

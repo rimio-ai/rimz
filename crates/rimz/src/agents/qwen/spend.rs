@@ -217,6 +217,27 @@ mod tests {
     }
 
     #[test]
+    fn prices_overlapping_deepseek_thoughts_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"uuid":"a1","timestamp":"2026-06-02T10:00:00Z","type":"assistant","model":"deepseek-v4-pro","usageMetadata":{"promptTokenCount":38727,"cachedContentTokenCount":38656,"candidatesTokenCount":85,"thoughtsTokenCount":77,"totalTokenCount":38812}}"#,
+        )
+        .unwrap();
+        let prices = PriceBook::from_litellm_json(
+            r#"{"deepseek-v4-pro":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"cache_read_input_token_cost":0.0000002}}"#,
+        );
+
+        let parsed = parse_qwen_spend(&path, None, &prices);
+        let entry = &parsed.entries[0];
+        assert_eq!(entry.input, 71);
+        assert_eq!(entry.cache_read, 38_656);
+        assert_eq!(entry.output, 85);
+        assert!((entry.cost_usd - 0.007_972_2).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn preserves_physical_sidechain_attribution() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");

@@ -1541,12 +1541,12 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
 
     let statusline = json!({
         "session_id": "sess-qwen-rewind",
-        "version": "0.19.9",
-        "model": {"display_name": "qwen-statusline-selected"},
+        "version": "0.19.10",
+        "model": {"display_name": "[DeepSeek] deepseek-v4-pro"},
         "context_window": {
-            "context_window_size": 444444,
-            "used_percentage": 9.4,
-            "current_usage": 40000
+            "context_window_size": 1000000,
+            "used_percentage": 3.9,
+            "current_usage": 38727
         },
         "metrics": {
             "files": {"total_lines_added": 17, "total_lines_removed": 4}
@@ -1569,16 +1569,16 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
     assert_eq!(contexts.len(), 1);
     let context = &contexts[0];
     assert_eq!(context.agent_id, "sess-qwen-rewind");
-    assert_eq!(context.context.agent_version.as_deref(), Some("0.19.9"));
+    assert_eq!(context.context.agent_version.as_deref(), Some("0.19.10"));
     assert_eq!(
         context.context.model_display_name.as_deref(),
-        Some("qwen-statusline-selected")
+        Some("DeepSeek V4 Pro")
     );
     assert_eq!(context.context.vim_mode.as_deref(), Some("NORMAL"));
     let tokens = context.context.tokens.as_ref().unwrap();
-    assert_eq!(tokens.context_window_size, Some(444_444));
-    assert_eq!(tokens.used_percentage, Some(9));
-    assert_eq!(tokens.used_tokens(), Some(40_000));
+    assert_eq!(tokens.context_window_size, Some(1_000_000));
+    assert_eq!(tokens.used_percentage, Some(4));
+    assert_eq!(tokens.current_usage, None);
     let cost = context.context.cost.as_ref().unwrap();
     assert_eq!(cost.total_lines_added, Some(17));
     assert_eq!(cost.total_lines_removed, Some(4));
@@ -1612,16 +1612,13 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
     assert_eq!(agent["model"], "qwen-active-final");
     assert_eq!(agent["total_tokens"], 555);
     assert_eq!(agent["context_window"], 333_333);
-    assert_eq!(
-        agent["context"]["model_display_name"],
-        "qwen-statusline-selected"
-    );
-    assert_eq!(agent["context"]["tokens"]["context_window_size"], 444_444);
-    assert_eq!(agent["context"]["tokens"]["used_percentage"], 9);
-    assert_eq!(
-        agent["context"]["tokens"]["current_usage"]["input_tokens"],
-        40_000
-    );
+    assert_eq!(agent["cache_read_input_tokens"], 50);
+    assert_eq!(agent["fresh_input_tokens"], 400);
+    assert_eq!(agent["output_tokens"], 105);
+    assert_eq!(agent["context"]["model_display_name"], "DeepSeek V4 Pro");
+    assert_eq!(agent["context"]["tokens"]["context_window_size"], 1_000_000);
+    assert_eq!(agent["context"]["tokens"]["used_percentage"], 4);
+    assert!(agent["context"]["tokens"]["current_usage"].is_null());
     assert_eq!(agent["context"]["cost"]["total_lines_added"], 17);
     assert_eq!(agent["context"]["cost"]["total_lines_removed"], 4);
 }
