@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::diag::record::DiagEvent;
 use crate::diag::{DiagSink, Limiter};
-use crate::ids::SidebarInstanceId;
+use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::cache::read_snapshot_cache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::unix_now_ms;
@@ -23,18 +23,17 @@ use super::{AnomalyDraft, AnomalyKind, ObserveMsg, ObserveRole, RosterSig, cap_v
 pub fn spawn(
     runtime: RuntimePaths,
     sink: DiagSink,
-    instance: SidebarInstanceId,
+    election: ProducerElectionTracker,
     rx: Receiver<ObserveMsg>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         Writer {
             runtime,
             sink,
-            instance,
+            election,
             cooldowns: Limiter::new(OBSERVE_COOLDOWN),
             latest_roster: None,
             last_crosscheck: Instant::now(),
-            role: RoleCache::default(),
             dead_pids: DeadPidTracker::default(),
         }
         .run(rx);
@@ -48,11 +47,10 @@ pub fn crosscheck_enabled(role: ObserveRole) -> bool {
 struct Writer {
     runtime: RuntimePaths,
     sink: DiagSink,
-    instance: SidebarInstanceId,
+    election: ProducerElectionTracker,
     cooldowns: Limiter,
     latest_roster: Option<RosterSig>,
     last_crosscheck: Instant,
-    role: RoleCache,
     dead_pids: DeadPidTracker,
 }
 
@@ -79,7 +77,7 @@ impl Writer {
         else {
             return;
         };
-        let role = self.role.current(&self.runtime, &self.instance);
+        let role = current_role(&self.election);
         self.sink.emit_at_ms(
             DiagEvent::FrameAnomaly {
                 role,
@@ -97,7 +95,7 @@ impl Writer {
     }
 
     fn run_crosschecks(&mut self) {
-        let role = self.role.current(&self.runtime, &self.instance);
+        let role = current_role(&self.election);
         if !crosscheck_enabled(role) {
             return;
         }
@@ -119,32 +117,11 @@ impl Writer {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct RoleCache {
-    role: Option<ObserveRole>,
-    polled_at: Option<Instant>,
-}
-
-impl RoleCache {
-    pub(crate) fn current(
-        &mut self,
-        runtime: &RuntimePaths,
-        instance: &SidebarInstanceId,
-    ) -> ObserveRole {
-        if self
-            .polled_at
-            .is_none_or(|last| last.elapsed() >= OBSERVE_CROSSCHECK_TTL)
-        {
-            self.polled_at = Some(Instant::now());
-            self.role = Some(
-                if crate::sidebar::elder_sidebar_present(runtime, instance) {
-                    ObserveRole::Consumer
-                } else {
-                    ObserveRole::Elder
-                },
-            );
-        }
-        self.role.unwrap_or(ObserveRole::Consumer)
+fn current_role(election: &ProducerElectionTracker) -> ObserveRole {
+    if election.elder_instance().is_some() {
+        ObserveRole::Consumer
+    } else {
+        ObserveRole::Elder
     }
 }
 
@@ -259,7 +236,7 @@ fn timestamp_diff_gt(left: Timestamp, right: Timestamp, tolerance: std::time::Du
 mod tests {
     use super::*;
     use crate::diag::record::DiagEnvelope;
-    use crate::ids::{MuxName, PaneId, ViewKind, WorkspaceId};
+    use crate::ids::{MuxName, PaneId, SidebarInstanceId, ViewKind, WorkspaceId};
     use crate::pane::PaneRef;
     use crate::sidebar::frame::assemble_frame;
     use crate::sidebar::observe::RosterRowSig;
@@ -420,7 +397,8 @@ mod tests {
         let instance = SidebarInstanceId::new();
         let (tx, rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(4);
 
-        let handle = spawn(runtime, sink, instance, rx);
+        let election = ProducerElectionTracker::new(runtime.clone(), instance);
+        let handle = spawn(runtime, sink, election, rx);
         let sig_rows = roster(10, vec![("a", "terminal_1")]);
         let mut draft = AnomalyDraft::from_roster(
             42,

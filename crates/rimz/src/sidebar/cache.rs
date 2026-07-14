@@ -113,9 +113,37 @@ pub struct PresenceStamp {
     pub written_at_ms: u64,
 }
 
+/// Timestamp of the latest tmux presence probe attempt. This cache-class hint
+/// throttles external `list-clients` calls; pane presence remains sourced from
+/// the published frame.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PresenceProbeStamp {
+    pub written_at_ms: u64,
+}
+
 /// Path of the presence stamp, beside the pane cache it gates.
 pub fn presence_stamp_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("presence.stamp")
+}
+
+pub fn presence_probe_stamp_path(runtime: &RuntimePaths) -> PathBuf {
+    runtime.root.join("client-presence-probe.stamp")
+}
+
+pub fn write_presence_probe_stamp(
+    runtime: &RuntimePaths,
+    written_at_ms: u64,
+) -> crate::store::atomic::Result<()> {
+    crate::store::atomic::write_temp_then_rename_cache(
+        &presence_probe_stamp_path(runtime),
+        &PresenceProbeStamp { written_at_ms },
+    )
+}
+
+pub fn read_presence_probe_stamp(runtime: &RuntimePaths) -> Option<u64> {
+    let bytes = std::fs::read(presence_probe_stamp_path(runtime)).ok()?;
+    let stamp: PresenceProbeStamp = serde_json::from_slice(&bytes).ok()?;
+    Some(stamp.written_at_ms)
 }
 
 /// Refresh the presence stamp. Best-effort and cache-class (rename atomicity,

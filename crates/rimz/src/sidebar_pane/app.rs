@@ -123,6 +123,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     set_terminal_title()?;
     let runtime = RuntimePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
+    let election =
+        crate::sidebar::ProducerElectionTracker::new(runtime.clone(), config.instance_id.clone());
     let diag = crate::diag::DiagSink::for_workspace(
         config.workspace_id.clone(),
         config.session_name.clone(),
@@ -171,12 +173,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // receiver drops here and the loop's sends simply count as dropped.
     let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(64);
     let _observe_handle = diag.is_enabled().then(|| {
-        observe::writer::spawn(
-            runtime.clone(),
-            diag.clone(),
-            config.instance_id.clone(),
-            observe_rx,
-        )
+        observe::writer::spawn(runtime.clone(), diag.clone(), election.clone(), observe_rx)
     });
     let read_marks = ReadMarkStore::new(runtime.clone(), config.instance_id.clone());
     let mut state = LoopState::new(
@@ -216,10 +213,16 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         socket_path.clone(),
         config.notification_prefs.clone(),
         diag.clone(),
+        election.clone(),
         request_rx,
         result_tx,
     );
-    let _cache_refresh_handle = cache_refresh::spawn(config.clone(), runtime.clone(), diag.clone());
+    let _cache_refresh_handle = cache_refresh::spawn(
+        config.clone(),
+        runtime.clone(),
+        diag.clone(),
+        election.clone(),
+    );
     let mut fetch = FetchDispatcher::new(request_tx);
 
     // tmux fast path: the elected producer streams control-mode topology
@@ -230,8 +233,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     if config.mux == MuxName::Tmux {
         let _ = tmux_watch::spawn(
             runtime.clone(),
-            config.instance_id.clone(),
             config.session_name.clone(),
+            election.clone(),
         );
     }
 
@@ -240,7 +243,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // on the write, so mid-turn token/cost updates repaint without waiting for
     // the next hook push or producer tick. Latency only — the tick backstop
     // stays truth. Backend-independent; the elder gate inside scopes the work.
-    let _ = transcript_watch::spawn(runtime.clone(), config.instance_id.clone());
+    let _ = transcript_watch::spawn(runtime.clone(), election);
 
     // Write the heartbeat immediately so the freshness gate never sees a gap.
     // Errors are non-fatal; the gate re-probes after the TTL.

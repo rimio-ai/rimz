@@ -13,8 +13,9 @@ use crate::diag::record::{
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::sidebar::cache::{
-    effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched, read_snapshot_cache,
-    snapshot_cache_is_fresh,
+    effective_pane_ttl, presence_stamp_age_ms, published_frame_unwatched,
+    read_presence_probe_stamp, read_snapshot_cache, snapshot_cache_is_fresh,
+    write_presence_probe_stamp,
 };
 use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
 use crate::sidebar::timing::{PRESENCE_SAMPLE_TTL, SNAPSHOT_CACHE_TTL, unix_now_ms};
@@ -1259,14 +1260,16 @@ fn refresh_cached_metrics(
     }
 }
 
-fn presence_sample_due(frame: &PaneFrame) -> bool {
+fn presence_sample_due(frame: &PaneFrame, probe_at_ms: Option<u64>, now_ms: u64) -> bool {
     let Some(sample) = frame.presence else {
         return false;
     };
+    let sampled_or_probed_at_ms = probe_at_ms
+        .map(|probe_at_ms| probe_at_ms.max(sample.sampled_at_ms))
+        .unwrap_or(sample.sampled_at_ms);
     sample.last_input_ms.is_some()
         && sample.human_clients > 0
-        && unix_now_ms().saturating_sub(sample.sampled_at_ms)
-            >= PRESENCE_SAMPLE_TTL.as_millis() as u64
+        && now_ms.saturating_sub(sampled_or_probed_at_ms) >= PRESENCE_SAMPLE_TTL.as_millis() as u64
 }
 
 fn presence_meaningfully_changed(prior: Option<&PresenceSample>, sample: &PresenceSample) -> bool {
@@ -1276,6 +1279,23 @@ fn presence_meaningfully_changed(prior: Option<&PresenceSample>, sample: &Presen
                 || prior.human_clients != sample.human_clients
         }
         None => true,
+    }
+}
+
+fn apply_presence_sample(frame: &mut PaneFrame, sample: PresenceSample) -> bool {
+    let changed = presence_meaningfully_changed(frame.presence.as_ref(), &sample);
+    frame.presence = Some(sample);
+    changed
+}
+
+fn apply_presence_sample_and_publish(
+    frame: &mut PaneFrame,
+    sample: PresenceSample,
+    runtime: &crate::RuntimePaths,
+    cache_path: &Path,
+) {
+    if apply_presence_sample(frame, sample) {
+        publish_frame(runtime, cache_path, frame);
     }
 }
 
@@ -1296,7 +1316,7 @@ fn refresh_cached_presence(
     own_pane: Option<&PaneId>,
     diag: &crate::diag::DiagSink,
 ) -> PaneFrame {
-    if !presence_sample_due(&frame) {
+    if !presence_sample_due(&frame, read_presence_probe_stamp(runtime), unix_now_ms()) {
         return frame;
     }
     let fresh = || {
@@ -1308,7 +1328,8 @@ fn refresh_cached_presence(
             own_pane,
             diag,
         )?;
-        (!presence_sample_due(&cache)).then_some(cache)
+        (!presence_sample_due(&cache, read_presence_probe_stamp(runtime), unix_now_ms()))
+            .then_some(cache)
     };
     match single_flight::coalesce(
         lock_path,
@@ -1331,11 +1352,13 @@ fn refresh_cached_presence(
                 diag,
             )
             .unwrap_or(frame);
-            if let Some(sample) = sample_client_presence(mux, session)
-                && presence_meaningfully_changed(latest.presence.as_ref(), &sample)
-            {
-                latest.presence = Some(sample);
-                publish_frame(runtime, cache_path, &latest);
+            let probed_at_ms = unix_now_ms();
+            if let Err(err) = write_presence_probe_stamp(runtime, probed_at_ms) {
+                tracing::debug!(error = %err, "tmux presence probe stamp write failed");
+                return latest;
+            }
+            if let Some(sample) = sample_client_presence(mux, session) {
+                apply_presence_sample_and_publish(&mut latest, sample, runtime, cache_path);
             }
             latest
         }

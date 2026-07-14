@@ -70,6 +70,10 @@ fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'stati
         ("provider_spending", runtime.shared_provider_spending_path()),
         ("spending_cursor", runtime.shared_spending_cursor_path()),
         ("metrics_sample", runtime.root.join("metrics-sample.json")),
+        (
+            "codex_daemon_reap",
+            crate::sidebar::refresh::daemon_reap::codex_daemon_reap_path(runtime),
+        ),
     ]
 }
 
@@ -80,7 +84,6 @@ fn dir_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'static
         ("subagent_context_dir", runtime.subagent_context_dir.clone()),
         ("agent_activity_dir", runtime.agent_activity_dir.clone()),
         ("read_marks_dir", runtime.read_marks_dir.clone()),
-        ("runtime_root", runtime.root.clone()),
     ]
 }
 
@@ -121,6 +124,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
         "provider_spending",
         "spending_cursor",
         "metrics_sample",
+        "codex_daemon_reap",
     ] {
         let fixture = StampFixture::new();
         let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
@@ -148,7 +152,6 @@ fn consumer_fold_inputs_stamp_changes_for_each_dir_input() {
         "subagent_context_dir",
         "agent_activity_dir",
         "read_marks_dir",
-        "runtime_root",
     ] {
         let fixture = StampFixture::new();
         let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
@@ -164,6 +167,75 @@ fn consumer_fold_inputs_stamp_changes_for_each_dir_input() {
             consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
             before,
             "{name} must participate in the consumer fold input stamp",
+        );
+    }
+}
+
+#[test]
+fn consumer_fold_inputs_stamp_ignores_unrelated_runtime_churn() {
+    let fixture = StampFixture::new();
+    let baseline = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
+    let unrelated = [
+        fixture.runtime.root.join("snapshot.lock"),
+        fixture.runtime.root.join("presence.stamp"),
+        fixture.runtime.root.join("client-presence-probe.stamp"),
+        fixture.runtime.root.join("producer-cache.json"),
+    ];
+    for path in unrelated {
+        std::fs::write(&path, b"churn").unwrap();
+        assert_eq!(
+            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+            baseline,
+            "{} is not a consumer fold input",
+            path.display(),
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    let temp = fixture.runtime.root.join(".snapshot.tmp-123");
+    let renamed = fixture.runtime.root.join("producer-only.cache");
+    std::fs::write(&temp, b"temp").unwrap();
+    std::fs::rename(&temp, &renamed).unwrap();
+    std::fs::remove_file(renamed).unwrap();
+    let heartbeat = fixture.runtime.heartbeat_dir.join("sidebar.unrelated.json");
+    std::fs::write(heartbeat, b"{}").unwrap();
+    assert_eq!(
+        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+        baseline,
+    );
+}
+
+#[test]
+fn consumer_fold_inputs_stamp_tracks_filtered_spending_and_budget_files() {
+    let fixture = StampFixture::new();
+    for path in [
+        fixture
+            .runtime
+            .root
+            .join("workspace-spending.0123456789abcdef.json"),
+        fixture.runtime.root.join("budget.0123456789abcdef.json"),
+        fixture.runtime.root.join("budget.fleet.json"),
+        fixture.runtime.root.join("budget.scopes.json"),
+        fixture
+            .runtime
+            .persistent_shared_root
+            .join("budget.account.codex.json"),
+    ] {
+        let before_create = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
+        write_stamp_file(&path, "created");
+        let after_create = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
+        assert_ne!(after_create, before_create, "create {}", path.display());
+
+        std::fs::write(&path, b"replaced-with-a-longer-payload").unwrap();
+        let after_replace = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
+        assert_ne!(after_replace, after_create, "replace {}", path.display());
+
+        std::fs::remove_file(&path).unwrap();
+        assert_ne!(
+            consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+            after_replace,
+            "remove {}",
+            path.display(),
         );
     }
 }

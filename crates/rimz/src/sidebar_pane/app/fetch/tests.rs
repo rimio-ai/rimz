@@ -200,6 +200,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     .unwrap();
 
     let config = test_config(workspace_id, SidebarInstanceId::new());
+    let election = ProducerElectionTracker::new(runtime.clone(), config.instance_id.clone());
     let request = FetchRequest {
         mode: FetchMode::HardRefresh,
         min_pane_cache_ms: None,
@@ -221,6 +222,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
             notifications: &mut notifications,
             link_notifications: &mut link_notifications,
             diag: &crate::diag::DiagSink::disabled(),
+            election: &election,
             last_election: &mut last_election,
         },
         request,
@@ -431,6 +433,7 @@ impl ConsumerFixture {
         consumer_memo: &mut ConsumerFoldMemo,
     ) -> Vec<FetchOutcome> {
         let config = test_config(self.workspace_id.clone(), self.younger.clone());
+        let election = ProducerElectionTracker::new(self.runtime.clone(), self.younger.clone());
         let mut notifications = NotificationState::default();
         let mut link_notifications = LinkNotificationState::default();
         let mut outcomes = Vec::new();
@@ -444,6 +447,7 @@ impl ConsumerFixture {
                 notifications: &mut notifications,
                 link_notifications: &mut link_notifications,
                 diag: &crate::diag::DiagSink::disabled(),
+                election: &election,
                 last_election: &mut last_election,
             },
             request,
@@ -498,6 +502,63 @@ fn unchanged_consumer_inputs_skip_the_second_fold() {
     assert_eq!(second.len(), 1);
     assert!(second[0].unchanged);
     assert!(second[0].final_for_request);
+}
+
+#[test]
+fn consumer_stamp_eligibility_excludes_every_mandatory_request() {
+    assert!(consumer_stamp_eligible(FetchRequest::default(), false));
+    assert!(!consumer_stamp_eligible(FetchRequest::default(), true));
+    for request in [
+        FetchRequest::force_fold(),
+        FetchRequest::pane_frame_published(),
+        FetchRequest::producer_fresh_panes(),
+        FetchRequest::hard_refresh(),
+        FetchRequest {
+            min_pane_cache_ms: Some(1),
+            ..FetchRequest::default()
+        },
+    ] {
+        assert!(!consumer_stamp_eligible(request, false));
+    }
+}
+
+#[test]
+fn mandatory_consumer_fold_requires_one_ordinary_reseed_before_skip() {
+    for mandatory in [
+        FetchRequest::force_fold(),
+        FetchRequest::pane_frame_published(),
+        FetchRequest::producer_fresh_panes(),
+    ] {
+        let fixture = ConsumerFixture::new();
+        fixture.write_pane_frame();
+        let mut rollup = SidebarSnapshot::build(
+            fixture.workspace_id.clone(),
+            Vec::new(),
+            jiff::Timestamp::now(),
+        );
+        rollup.reflects_log = Some(crate::store::event_log::LogExtent {
+            generation: 0,
+            offset: 0,
+        });
+        std::fs::write(
+            &fixture.state.latest_snapshot,
+            serde_json::to_vec(&rollup).unwrap(),
+        )
+        .unwrap();
+        let mut cursor = RollupCursor::new();
+        let mut memo = ConsumerFoldMemo::default();
+
+        assert!(!fixture.run_with(FetchRequest::default(), &mut cursor, &mut memo)[0].unchanged);
+        assert!(!fixture.run_with(mandatory, &mut cursor, &mut memo)[0].unchanged);
+        assert!(
+            !fixture.run_with(FetchRequest::default(), &mut cursor, &mut memo)[0].unchanged,
+            "the first ordinary request reseeds the cleared memo",
+        );
+        assert!(
+            fixture.run_with(FetchRequest::default(), &mut cursor, &mut memo)[0].unchanged,
+            "the next unchanged request skips",
+        );
+    }
 }
 
 #[test]

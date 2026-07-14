@@ -24,7 +24,7 @@ pub struct CodexDaemonReap {
     pub loaded: Option<BTreeSet<String>>,
 }
 
-fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
+pub(crate) fn codex_daemon_reap_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("codex-daemon-reap.json")
 }
 

@@ -123,6 +123,7 @@ pub fn consumer_fold_inputs_stamp(
         runtime.shared_provider_spending_path(),
         runtime.shared_spending_cursor_path(),
         runtime.root.join("metrics-sample.json"),
+        super::refresh::daemon_reap::codex_daemon_reap_path(runtime),
     ];
     let dirs = [
         state.messages_dir.as_path(),
@@ -130,19 +131,54 @@ pub fn consumer_fold_inputs_stamp(
         runtime.subagent_context_dir.as_path(),
         runtime.agent_activity_dir.as_path(),
         runtime.read_marks_dir.as_path(),
-        runtime.root.as_path(),
     ];
+    let mut runtime_stamps = runtime_files
+        .iter()
+        .map(|path| StampedPath::of(path.as_path()))
+        .collect::<Vec<_>>();
+    runtime_stamps.extend(filtered_runtime_inputs(runtime));
 
     ConsumerFoldInputsStamp {
         state: state_files
             .into_iter()
             .map(|path| StampedPath::of(&path))
             .collect::<Vec<_>>(),
-        runtime: runtime_files
-            .iter()
-            .map(|path| StampedPath::of(path.as_path()))
-            .collect::<Vec<_>>(),
+        runtime: runtime_stamps,
         dirs: dirs.into_iter().map(StampedPath::of).collect::<Vec<_>>(),
         config_generation: crate::config::MachineConfig::load_stamp_generation(),
     }
+}
+
+fn filtered_runtime_inputs(runtime: &RuntimePaths) -> Vec<StampedPath> {
+    let mut paths = filtered_paths(&runtime.root, |name| {
+        (name.starts_with("workspace-spending.") || name.starts_with("budget."))
+            && name.ends_with(".json")
+    });
+    paths.extend(filtered_paths(&runtime.persistent_shared_root, |name| {
+        name.starts_with("budget.account.") && name.ends_with(".json")
+    }));
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| StampedPath::of(&path))
+        .collect()
+}
+
+fn filtered_paths(
+    dir: &std::path::Path,
+    include: impl Fn(&str) -> bool,
+) -> Vec<std::path::PathBuf> {
+    let mut paths = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(&include)
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
 }

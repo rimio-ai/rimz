@@ -114,24 +114,72 @@ fn multi_focus_topology_detects_multiple_focused_tiled_panes_per_tab() {
 
 #[test]
 fn presence_sample_due_requires_idle_capable_attached_stale_sample() {
-    let stale = unix_now_ms()
-        .saturating_sub(crate::sidebar::timing::PRESENCE_SAMPLE_TTL.as_millis() as u64 + 1);
-    let fresh = unix_now_ms()
-        .saturating_add(crate::sidebar::timing::PRESENCE_SAMPLE_TTL.as_millis() as u64);
+    let now = 10_000;
+    let ttl = crate::sidebar::timing::PRESENCE_SAMPLE_TTL.as_millis() as u64;
+    let stale = now - ttl;
+    let fresh = now - ttl + 1;
 
-    assert!(presence_sample_due(&frame_with_presence(Some(
-        presence_sample(1, Some(stale - 1), stale),
-    ))));
-    assert!(!presence_sample_due(&frame_with_presence(None)));
-    assert!(!presence_sample_due(&frame_with_presence(Some(
-        presence_sample(0, Some(stale - 1), stale),
-    ))));
-    assert!(!presence_sample_due(&frame_with_presence(Some(
-        presence_sample(1, None, stale),
-    ))));
-    assert!(!presence_sample_due(&frame_with_presence(Some(
-        presence_sample(1, Some(fresh - 1), fresh),
-    ))));
+    assert!(presence_sample_due(
+        &frame_with_presence(Some(presence_sample(1, Some(stale - 1), stale),)),
+        None,
+        now
+    ));
+    assert!(!presence_sample_due(&frame_with_presence(None), None, now));
+    assert!(!presence_sample_due(
+        &frame_with_presence(Some(presence_sample(0, Some(stale - 1), stale),)),
+        None,
+        now
+    ));
+    assert!(!presence_sample_due(
+        &frame_with_presence(Some(presence_sample(1, None, stale),)),
+        None,
+        now
+    ));
+    assert!(!presence_sample_due(
+        &frame_with_presence(Some(presence_sample(1, Some(fresh - 1), fresh),)),
+        None,
+        now
+    ));
+    assert!(presence_sample_due(
+        &frame_with_presence(Some(presence_sample(1, Some(1), 1))),
+        Some(stale),
+        now,
+    ));
+    assert!(!presence_sample_due(
+        &frame_with_presence(Some(presence_sample(1, Some(1), 1))),
+        Some(fresh),
+        now,
+    ));
+    assert!(!presence_sample_due(
+        &frame_with_presence(Some(presence_sample(1, Some(1), 1))),
+        Some(now + 1_000),
+        now,
+    ));
+}
+
+#[test]
+fn failed_presence_attempt_stamp_suppresses_retries_until_ttl() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = crate::WorkspaceId::from_project_root(dir.path());
+    let runtime = crate::RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let frame = frame_with_presence(Some(presence_sample(1, Some(1), 1)));
+    let attempted_at_ms = 10_000;
+    let ttl = crate::sidebar::timing::PRESENCE_SAMPLE_TTL.as_millis() as u64;
+
+    assert!(presence_sample_due(&frame, None, attempted_at_ms));
+    crate::sidebar::cache::write_presence_probe_stamp(&runtime, attempted_at_ms).unwrap();
+    let probe_at_ms = crate::sidebar::cache::read_presence_probe_stamp(&runtime);
+    assert!(!presence_sample_due(
+        &frame,
+        probe_at_ms,
+        attempted_at_ms + ttl - 1,
+    ));
+    assert!(presence_sample_due(
+        &frame,
+        probe_at_ms,
+        attempted_at_ms + ttl,
+    ));
 }
 
 #[test]
@@ -149,4 +197,83 @@ fn presence_meaningfully_changed_ignores_sample_timestamp() {
         Some(&prior),
         &presence_sample(2, Some(1_000), 2_000),
     ));
+}
+
+#[test]
+fn unchanged_presence_updates_returned_sample_without_selecting_publish() {
+    let prior = presence_sample(1, Some(1_000), 1_000);
+    let mut frame = frame_with_presence(Some(prior));
+
+    assert!(!apply_presence_sample(
+        &mut frame,
+        presence_sample(1, Some(1_000), 2_000),
+    ));
+    assert_eq!(frame.presence.unwrap().sampled_at_ms, 2_000);
+
+    assert!(apply_presence_sample(
+        &mut frame,
+        presence_sample(2, Some(1_000), 3_000),
+    ));
+    assert!(apply_presence_sample(
+        &mut frame,
+        presence_sample(2, Some(1_500), 4_000),
+    ));
+}
+
+#[test]
+fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
+    use std::os::unix::net::UnixDatagram;
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = crate::WorkspaceId::from_project_root(dir.path());
+    let runtime = crate::RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let socket_path = runtime.sock_dir.join("sidebar.test.sock");
+    let socket = UnixDatagram::bind(&socket_path).unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let instance = crate::SidebarInstanceId::new();
+    crate::sidebar::write_heartbeat(
+        &runtime,
+        workspace,
+        &instance,
+        crate::MuxName::Tmux,
+        "rimz-test",
+        &socket_path,
+        None,
+    )
+    .unwrap();
+    let cache_path = runtime.pane_frame_path();
+    let mut frame = frame_with_presence(Some(presence_sample(1, Some(1_000), 1_000)));
+    let produced_at_ms = frame.produced_at_ms;
+    atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
+
+    apply_presence_sample_and_publish(
+        &mut frame,
+        presence_sample(1, Some(1_000), 2_000),
+        &runtime,
+        &cache_path,
+    );
+
+    let published: PaneFrame =
+        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    assert_eq!(published.presence.unwrap().sampled_at_ms, 1_000);
+    assert_eq!(published.produced_at_ms, produced_at_ms);
+    assert_eq!(frame.presence.unwrap().sampled_at_ms, 2_000);
+    let mut buffer = [0; 256];
+    assert_eq!(
+        socket.recv(&mut buffer).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+    );
+
+    apply_presence_sample_and_publish(
+        &mut frame,
+        presence_sample(2, Some(1_000), 3_000),
+        &runtime,
+        &cache_path,
+    );
+    let published: PaneFrame =
+        serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+    assert_eq!(published.presence.unwrap().human_clients, 2);
+    assert_eq!(published.produced_at_ms, produced_at_ms);
+    assert!(socket.recv(&mut buffer).unwrap() > 0);
 }

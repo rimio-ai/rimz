@@ -18,7 +18,6 @@ use super::state::{
 use super::*;
 use crate::diag::record::RendererExitCause;
 use crate::observability::SIDEBAR_HEALTH_TARGET;
-use crate::sidebar::observe::writer::{RoleCache, crosscheck_enabled};
 use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pets::PixelRenderCaps;
@@ -118,7 +117,6 @@ pub(super) struct LoopState {
     last_pulled: SidebarSnapshot,
     own_pane: Option<PaneId>,
     last_known_elder: bool,
-    elder_role: RoleCache,
     pending_fetch: Option<PendingFetch>,
     optimistic_watch_until: Option<Instant>,
     /// Deadline for the tab-view read sweep: armed when the own tab comes on
@@ -208,7 +206,6 @@ impl LoopState {
             current,
             own_pane,
             last_known_elder: true,
-            elder_role: RoleCache::default(),
             pending_fetch: None,
             optimistic_watch_until: None,
             tab_read_dwell_until: None,
@@ -1288,11 +1285,7 @@ impl LoopState {
         outcome: FetchOutcome,
         diag: &crate::diag::DiagSink,
     ) -> (SidebarSnapshot, bool, Timestamp) {
-        let is_elder = !diag.is_enabled()
-            || RuntimePaths::for_workspace(config.workspace_id.clone())
-                .ok()
-                .map(|rt| crosscheck_enabled(self.elder_role.current(&rt, &config.instance_id)))
-                .unwrap_or(true);
+        let is_elder = outcome.producer;
         // The gate compares the incoming snapshot against the last frame we actually
         // committed; `current` still holds it until we overwrite it below.
         let fetch_was_ok = outcome.snapshot.is_ok();

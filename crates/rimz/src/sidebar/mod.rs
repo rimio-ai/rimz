@@ -23,6 +23,8 @@ pub mod meter;
 pub mod notify;
 pub mod observe;
 pub mod produce;
+#[cfg(test)]
+mod producer_election_tests;
 pub mod read_marks;
 pub mod refresh;
 #[cfg(test)]
@@ -34,14 +36,17 @@ pub mod width_override;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use tracing::debug;
 
 use crate::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use crate::mux::{DaemonView, MuxBackend, SidebarLiveness, SidebarPaneOptions};
-use crate::sidebar::heartbeat::{SidebarHeartbeat, read_current_heartbeats};
-use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
+use crate::sidebar::heartbeat::{
+    SIDEBAR_PROTOCOL_VERSION, SidebarHeartbeat, read_current_heartbeats,
+};
+use crate::sidebar::timing::{HEARTBEAT_WRITE_INTERVAL, SIDEBAR_HEARTBEAT_TTL};
 use crate::store::RuntimePaths;
 use crate::store::atomic;
 use crate::store::single_flight::{self, Coalesced};
@@ -176,6 +181,155 @@ pub fn elder_sidebar_instance(
 
 pub fn elder_sidebar_present(rt: &RuntimePaths, own_id: &SidebarInstanceId) -> bool {
     elder_sidebar_instance(rt, own_id).is_some()
+}
+
+/// Process-local memo of the renderer's producer election.
+///
+/// Heartbeats remain the liveness source and the snapshot single-flight remains
+/// the correctness boundary. This tracker only avoids making every long-lived
+/// renderer thread rescan every renderer heartbeat on every lookup.
+#[derive(Clone)]
+pub struct ProducerElectionTracker {
+    runtime: RuntimePaths,
+    own_id: SidebarInstanceId,
+    state: Arc<Mutex<ProducerElectionState>>,
+}
+
+#[derive(Default)]
+struct ProducerElectionState {
+    cached: CachedElection,
+    #[cfg(test)]
+    full_scans: u64,
+}
+
+#[derive(Default)]
+enum CachedElection {
+    #[default]
+    Unknown,
+    Elder {
+        id: SidebarInstanceId,
+        path: PathBuf,
+        expires_at: SystemTime,
+    },
+    Producer {
+        rescan_at: SystemTime,
+    },
+}
+
+impl ProducerElectionTracker {
+    pub fn new(runtime: RuntimePaths, own_id: SidebarInstanceId) -> Self {
+        Self {
+            runtime,
+            own_id,
+            state: Arc::new(Mutex::new(ProducerElectionState::default())),
+        }
+    }
+
+    /// Return the current elder, or `None` when this renderer is the producer.
+    pub fn elder_instance(&self) -> Option<SidebarInstanceId> {
+        self.elder_instance_at(SystemTime::now())
+    }
+
+    fn elder_instance_at(&self, now: SystemTime) -> Option<SidebarInstanceId> {
+        // A poisoned memo cannot invalidate election correctness. Recover its
+        // contents and let the normal validation/rescan path repair it.
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match &state.cached {
+            CachedElection::Elder { id, expires_at, .. } if now < *expires_at => {
+                return Some(id.clone());
+            }
+            CachedElection::Producer { rescan_at } if now < *rescan_at => return None,
+            _ => {}
+        }
+
+        if let CachedElection::Elder { id, path, .. } = &state.cached
+            && let Some(expires_at) = self.validate_cached_elder(path, id, now)
+        {
+            let id = id.clone();
+            state.cached = CachedElection::Elder {
+                id: id.clone(),
+                path: path.clone(),
+                expires_at,
+            };
+            return Some(id);
+        }
+
+        state.cached = self.full_scan(now);
+        #[cfg(test)]
+        {
+            state.full_scans = state.full_scans.saturating_add(1);
+        }
+        match &state.cached {
+            CachedElection::Elder { id, .. } => Some(id.clone()),
+            CachedElection::Unknown | CachedElection::Producer { .. } => None,
+        }
+    }
+
+    fn validate_cached_elder(
+        &self,
+        path: &Path,
+        cached_id: &SidebarInstanceId,
+        now: SystemTime,
+    ) -> Option<SystemTime> {
+        let modified = fs::metadata(path).ok()?.modified().ok()?;
+        let expires_at = modified.checked_add(SIDEBAR_HEARTBEAT_TTL)?;
+        if now > expires_at {
+            return None;
+        }
+        let heartbeat = SidebarHeartbeat::read_from(path).ok()?;
+        (heartbeat.protocol_version == SIDEBAR_PROTOCOL_VERSION
+            && heartbeat.workspace_id == self.runtime.workspace_id
+            && heartbeat.instance_id == *cached_id
+            && heartbeat.instance_id.as_str() < self.own_id.as_str()
+            && self.runtime.sidebar_heartbeat_path(cached_id) == path)
+            .then_some(expires_at)
+    }
+
+    fn full_scan(&self, now: SystemTime) -> CachedElection {
+        let heartbeats = match read_current_heartbeats(&self.runtime.heartbeat_dir) {
+            Ok(heartbeats) => heartbeats,
+            Err(err) => {
+                debug!(path = %self.runtime.heartbeat_dir.display(), error = %err, "sidebar heartbeat dir unreadable");
+                Vec::new()
+            }
+        };
+        let elder = heartbeats
+            .into_iter()
+            .filter_map(|(path, heartbeat)| {
+                if heartbeat.workspace_id != self.runtime.workspace_id
+                    || heartbeat.instance_id.as_str() >= self.own_id.as_str()
+                    || self.runtime.sidebar_heartbeat_path(&heartbeat.instance_id) != path
+                {
+                    return None;
+                }
+                let modified = fs::metadata(&path).ok()?.modified().ok()?;
+                let expires_at = modified.checked_add(SIDEBAR_HEARTBEAT_TTL)?;
+                (now <= expires_at).then_some((heartbeat.instance_id, path, expires_at))
+            })
+            .min_by(|(left, _, _), (right, _, _)| left.as_str().cmp(right.as_str()));
+
+        match elder {
+            Some((id, path, expires_at)) => CachedElection::Elder {
+                id,
+                path,
+                expires_at,
+            },
+            None => CachedElection::Producer {
+                rescan_at: now.checked_add(HEARTBEAT_WRITE_INTERVAL).unwrap_or(now),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn full_scan_count(&self) -> u64 {
+        match self.state.lock() {
+            Ok(state) => state.full_scans,
+            Err(poisoned) => poisoned.into_inner().full_scans,
+        }
+    }
 }
 
 /// Remove runtime files left by sidebars that exited without their RAII cleanup
@@ -623,6 +777,133 @@ mod tests {
             Some(elder.clone())
         );
         assert!(!elder_sidebar_present(&h.runtime, &elder));
+    }
+
+    #[test]
+    fn producer_election_tracker_shares_warm_elder_without_rescanning() {
+        let h = Harness::new();
+        let elder = instance("01");
+        let younger = instance("09");
+        let path = h.write_sidebar_for(&elder);
+        let modified = SystemTime::now() - Duration::from_secs(1);
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let tracker = ProducerElectionTracker::new(h.runtime.clone(), younger);
+
+        assert_eq!(tracker.elder_instance_at(modified), Some(elder.clone()));
+        assert_eq!(tracker.full_scan_count(), 1);
+        std::fs::remove_file(path).unwrap();
+
+        let clone = tracker.clone();
+        assert_eq!(
+            clone.elder_instance_at(modified + SIDEBAR_HEARTBEAT_TTL - Duration::from_millis(1)),
+            Some(elder),
+        );
+        assert_eq!(clone.full_scan_count(), 1, "clones share the warm memo");
+        assert_eq!(
+            clone.elder_instance_at(modified + SIDEBAR_HEARTBEAT_TTL),
+            None,
+        );
+        assert_eq!(
+            clone.full_scan_count(),
+            2,
+            "missing elder forces one rescan"
+        );
+    }
+
+    #[test]
+    fn producer_election_tracker_refreshes_one_cached_elder_at_expiry() {
+        let h = Harness::new();
+        let elder = instance("01");
+        let younger = instance("09");
+        let path = h.write_sidebar_for(&elder);
+        let first_modified = SystemTime::now() - Duration::from_secs(1);
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(first_modified)
+            .unwrap();
+        let tracker = ProducerElectionTracker::new(h.runtime.clone(), younger);
+        assert_eq!(
+            tracker.elder_instance_at(first_modified),
+            Some(elder.clone())
+        );
+
+        let refreshed_modified = first_modified + HEARTBEAT_WRITE_INTERVAL;
+        h.write_sidebar_for(&elder);
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(refreshed_modified)
+            .unwrap();
+
+        assert_eq!(
+            tracker.elder_instance_at(first_modified + SIDEBAR_HEARTBEAT_TTL),
+            Some(elder),
+        );
+        assert_eq!(
+            tracker.full_scan_count(),
+            1,
+            "expiry validates only the cached heartbeat"
+        );
+    }
+
+    #[test]
+    fn producer_election_tracker_rechecks_producer_on_heartbeat_cadence() {
+        let h = Harness::new();
+        h.ensure_runtime();
+        let older = instance("01");
+        let own = instance("09");
+        let tracker = ProducerElectionTracker::new(h.runtime.clone(), own);
+        let now = SystemTime::now();
+
+        assert_eq!(tracker.elder_instance_at(now), None);
+        h.write_sidebar_for(&older);
+        assert_eq!(
+            tracker.elder_instance_at(now + HEARTBEAT_WRITE_INTERVAL - Duration::from_millis(1)),
+            None,
+        );
+        assert_eq!(tracker.full_scan_count(), 1);
+        assert_eq!(
+            tracker.elder_instance_at(now + HEARTBEAT_WRITE_INTERVAL),
+            Some(older),
+        );
+        assert_eq!(tracker.full_scan_count(), 2);
+    }
+
+    #[test]
+    fn producer_election_tracker_ignores_build_changes_but_liveness_exposes_them() {
+        let h = Harness::new();
+        let elder = instance("01");
+        let own = instance("09");
+        let path = h.write_sidebar_for(&elder);
+        let modified = SystemTime::now() - Duration::from_secs(1);
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let tracker = ProducerElectionTracker::new(h.runtime.clone(), own);
+        assert_eq!(tracker.elder_instance_at(modified), Some(elder.clone()));
+
+        let mut heartbeat = SidebarHeartbeat::read_from(&path).unwrap();
+        heartbeat.build = Some("new-build".to_owned());
+        std::fs::write(&path, serde_json::to_vec(&heartbeat).unwrap()).unwrap();
+        let refreshed = modified + HEARTBEAT_WRITE_INTERVAL;
+        std::fs::File::open(&path)
+            .unwrap()
+            .set_modified(refreshed)
+            .unwrap();
+
+        assert_eq!(
+            tracker.elder_instance_at(modified + SIDEBAR_HEARTBEAT_TTL),
+            Some(elder),
+        );
+        assert_eq!(tracker.full_scan_count(), 1);
+        assert!(
+            fresh_sidebar_heartbeats(&h.runtime)
+                .iter()
+                .any(|heartbeat| heartbeat.build.as_deref() == Some("new-build"))
+        );
     }
 
     #[test]

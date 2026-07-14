@@ -18,8 +18,9 @@
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::RuntimePaths;
 use crate::mux::tmux::{PresenceRoster, PresenceWatch, control_socket_from_env};
-use crate::{RuntimePaths, SidebarInstanceId};
+use crate::sidebar::ProducerElectionTracker;
 use tracing::debug;
 
 /// Idle cadence for the producer-election re-check while not attached.
@@ -37,16 +38,16 @@ const SEED_WINDOW: Duration = Duration::from_millis(300);
 /// which process exit guarantees by closing the pipe.
 pub(super) fn spawn(
     runtime: RuntimePaths,
-    instance_id: SidebarInstanceId,
     session_name: String,
+    election: ProducerElectionTracker,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || watch_loop(&runtime, &instance_id, &session_name))
+    std::thread::spawn(move || watch_loop(&runtime, &session_name, &election))
 }
 
-fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId, session_name: &str) {
+fn watch_loop(runtime: &RuntimePaths, session_name: &str, election: &ProducerElectionTracker) {
     let control_socket = control_socket_from_env();
     loop {
-        if !is_producer(runtime, instance_id) {
+        if !is_producer(election) {
             std::thread::sleep(ELECTION_POLL);
             continue;
         }
@@ -58,7 +59,7 @@ fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId, session_n
                 while let Some(line) = watch.next_line() {
                     // Demotion check per nudge: a demoted instance stops
                     // forwarding and releases its control client.
-                    if !is_producer(runtime, instance_id) {
+                    if !is_producer(election) {
                         break;
                     }
                     let now = Instant::now();
@@ -82,6 +83,6 @@ fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId, session_n
     }
 }
 
-fn is_producer(runtime: &RuntimePaths, instance_id: &SidebarInstanceId) -> bool {
-    !crate::sidebar::elder_sidebar_present(runtime, instance_id)
+fn is_producer(election: &ProducerElectionTracker) -> bool {
+    election.elder_instance().is_none()
 }

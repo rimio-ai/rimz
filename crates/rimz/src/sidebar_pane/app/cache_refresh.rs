@@ -12,6 +12,7 @@ use tracing::{debug, error};
 
 use crate::agents::spending::SpendingWalker;
 use crate::diag::record::TickLoop;
+use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::consumer::RollupCursor;
 use crate::sidebar::meter::TickMeter;
 use crate::{RuntimePaths, StatePaths};
@@ -24,11 +25,17 @@ pub(super) fn spawn(
     config: ServeConfig,
     runtime: RuntimePaths,
     diag: crate::diag::DiagSink,
+    election: ProducerElectionTracker,
 ) -> JoinHandle<()> {
-    std::thread::spawn(move || refresh_loop(config, runtime, diag))
+    std::thread::spawn(move || refresh_loop(config, runtime, diag, election))
 }
 
-fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::DiagSink) {
+fn refresh_loop(
+    config: ServeConfig,
+    runtime: RuntimePaths,
+    diag: crate::diag::DiagSink,
+    election: ProducerElectionTracker,
+) {
     crate::lane::set(crate::lane::WorkLane::CacheRefresh);
     let mut cursor = RollupCursor::new();
     let mut spending_walker = SpendingWalker::new();
@@ -37,7 +44,7 @@ fn refresh_loop(config: ServeConfig, runtime: RuntimePaths, diag: crate::diag::D
     let mut daemon_view_repaired_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
     loop {
         std::thread::sleep(tick_for(config.tick_seconds));
-        if crate::sidebar::elder_sidebar_instance(&runtime, &config.instance_id).is_some() {
+        if election.elder_instance().is_some() {
             continue;
         }
         let state = match StatePaths::for_workspace(config.workspace_id.clone()) {

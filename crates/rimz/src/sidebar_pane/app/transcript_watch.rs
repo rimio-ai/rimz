@@ -23,8 +23,9 @@ use std::time::{Duration, Instant};
 use notify::{RecursiveMode, Watcher};
 use tracing::debug;
 
+use crate::RuntimePaths;
+use crate::sidebar::ProducerElectionTracker;
 use crate::store::agent_context::AgentContextRecord;
-use crate::{RuntimePaths, SidebarInstanceId};
 
 /// Idle cadence for the producer-election re-check while not elected.
 const ELECTION_POLL: Duration = Duration::from_secs(5);
@@ -50,17 +51,17 @@ struct WatchTarget {
 /// Spawn the watcher manager thread. It runs for the process lifetime; the
 /// watcher handle is dropped (releasing every OS watch) whenever the instance
 /// is not the producer.
-pub(super) fn spawn(runtime: RuntimePaths, instance_id: SidebarInstanceId) -> JoinHandle<()> {
-    std::thread::spawn(move || watch_loop(&runtime, &instance_id))
+pub(super) fn spawn(runtime: RuntimePaths, election: ProducerElectionTracker) -> JoinHandle<()> {
+    std::thread::spawn(move || watch_loop(&runtime, &election))
 }
 
-fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId) {
+fn watch_loop(runtime: &RuntimePaths, election: &ProducerElectionTracker) {
     loop {
-        if !is_producer(runtime, instance_id) {
+        if !is_producer(election) {
             std::thread::sleep(ELECTION_POLL);
             continue;
         }
-        if let Err(err) = watch_while_elected(runtime, instance_id) {
+        if let Err(err) = watch_while_elected(runtime, election) {
             debug!(error = %err, "transcript watch failed; tick backstop remains truth");
         }
         std::thread::sleep(RESPAWN_BACKOFF);
@@ -73,7 +74,7 @@ fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId) {
 /// watches) or on a dead event channel (the outer loop respawns with backoff).
 fn watch_while_elected(
     runtime: &RuntimePaths,
-    instance_id: &SidebarInstanceId,
+    election: &ProducerElectionTracker,
 ) -> notify::Result<()> {
     let (event_tx, event_rx) = mpsc::channel::<PathBuf>();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -92,7 +93,7 @@ fn watch_while_elected(
         if now >= rescan_at {
             // Demotion check per rescan: a demoted instance releases every
             // watch by dropping the watcher and returns to the election poll.
-            if !is_producer(runtime, instance_id) {
+            if !is_producer(election) {
                 return Ok(());
             }
             reconcile_roster(runtime, &mut watcher, &mut roster);
@@ -113,7 +114,7 @@ fn watch_while_elected(
             // Demotion check per flush, mirroring the rescan: a stray refresh
             // would be a stat-gated no-op, but a demoted instance should not
             // keep producing sidecar writes at all.
-            if !is_producer(runtime, instance_id) {
+            if !is_producer(election) {
                 return Ok(());
             }
             for target in due_refreshes(&pending, &roster) {
@@ -206,8 +207,8 @@ fn due_refreshes(
         .collect()
 }
 
-fn is_producer(runtime: &RuntimePaths, instance_id: &SidebarInstanceId) -> bool {
-    !crate::sidebar::elder_sidebar_present(runtime, instance_id)
+fn is_producer(election: &ProducerElectionTracker) -> bool {
+    election.elder_instance().is_none()
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ use std::sync::mpsc::Sender;
 use crate::config::NotificationsPrefs;
 use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
+use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::consumer::{ConsumerFoldInputsStamp, RollupCursor};
 use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::meter::TickMeter;
@@ -118,6 +119,7 @@ struct FetchCycle<'a> {
     notifications: &'a mut NotificationState,
     link_notifications: &'a mut LinkNotificationState,
     diag: &'a crate::diag::DiagSink,
+    election: &'a ProducerElectionTracker,
     last_election: &'a mut Option<ProducerElection>,
 }
 
@@ -129,17 +131,7 @@ struct ConsumerFoldMemo {
 }
 
 impl ConsumerFoldMemo {
-    fn should_skip(
-        &self,
-        stamp: &ConsumerFoldInputsStamp,
-        now_ms: u64,
-        request: FetchRequest,
-        is_producer: bool,
-        produce: bool,
-    ) -> bool {
-        if is_producer || produce || !request.allows_unchanged_skip() {
-            return false;
-        }
+    fn should_skip(&self, stamp: &ConsumerFoldInputsStamp, now_ms: u64) -> bool {
         self.last_ok.as_ref().is_some_and(|(last, folded_at_ms)| {
             last == stamp && now_ms.saturating_sub(*folded_at_ms) < CONSUMER_UNCHANGED_BACKSTOP_MS
         })
@@ -180,10 +172,11 @@ fn run_fetch_cycle(
         notifications,
         link_notifications,
         diag,
+        election,
         last_election,
     } = ctx;
     let election = ProducerElection {
-        elder: crate::sidebar::elder_sidebar_instance(runtime, &config.instance_id),
+        elder: election.elder_instance(),
     };
     let is_producer = election.is_producer();
     emit_producer_transition(diag, last_election, election);
@@ -191,8 +184,12 @@ fn run_fetch_cycle(
     let now_ms = crate::sidebar::timing::unix_now_ms();
     let published_frame_stamps =
         crate::sidebar::cache::published_frame_stamps(runtime, &config.session_name);
-    let fold_stamp = crate::sidebar::consumer::consumer_fold_inputs_stamp(state, runtime);
-    if consumer_memo.should_skip(&fold_stamp, now_ms, request, is_producer, false) {
+    let fold_stamp = consumer_stamp_eligible(request, is_producer)
+        .then(|| crate::sidebar::consumer::consumer_fold_inputs_stamp(state, runtime));
+    if fold_stamp
+        .as_ref()
+        .is_some_and(|stamp| consumer_memo.should_skip(stamp, now_ms))
+    {
         post(FetchOutcome {
             snapshot: Err("unchanged".to_owned()),
             final_for_request: true,
@@ -256,8 +253,8 @@ fn run_fetch_cycle(
                 producer: is_producer,
             });
             deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
-            if !produce {
-                consumer_memo.record(fold_stamp.clone(), now_ms);
+            if let Some(fold_stamp) = fold_stamp {
+                consumer_memo.record(fold_stamp, now_ms);
                 folded_consumer_ok = true;
             }
         }
@@ -335,6 +332,10 @@ fn run_fetch_cycle(
     if !folded_consumer_ok {
         consumer_memo.clear();
     }
+}
+
+fn consumer_stamp_eligible(request: FetchRequest, is_producer: bool) -> bool {
+    !is_producer && request.allows_unchanged_skip()
 }
 
 fn emit_producer_transition(
@@ -626,12 +627,14 @@ impl FetchRequest {
 /// [`run_fetch_cycle`], hands the result back over `result_tx`, and pokes the
 /// loop's wakeup socket so it folds the result without polling. The thread ends
 /// when the loop drops `request_tx`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_fetch_worker(
     config: ServeConfig,
     runtime: RuntimePaths,
     socket_path: PathBuf,
     notification_prefs: NotificationsPrefs,
     diag: crate::diag::DiagSink,
+    election: ProducerElectionTracker,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     result_tx: std::sync::mpsc::Sender<FetchOutcome>,
 ) -> std::thread::JoinHandle<()> {
@@ -685,6 +688,7 @@ pub(super) fn spawn_fetch_worker(
                             notifications: &mut notifications,
                             link_notifications: &mut link_notifications,
                             diag: &diag,
+                            election: &election,
                             last_election: &mut last_election,
                         },
                         request,
