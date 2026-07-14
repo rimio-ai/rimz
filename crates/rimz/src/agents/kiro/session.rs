@@ -97,8 +97,6 @@ enum Payload {
         category: Option<String>,
         context: Option<SessionEventContext>,
     },
-    #[serde(rename = "usage_summary")]
-    UsageSummary {},
     #[serde(other)]
     Unknown,
 }
@@ -119,16 +117,221 @@ struct ValidatedSession {
     messages: PathBuf,
 }
 
+#[derive(Clone, Copy)]
+enum TurnState {
+    Idle,
+    Running(TurnPhase),
+    Waiting,
+    Success,
+}
+
+impl TurnState {
+    fn from_metadata_status(status: Option<&str>) -> Self {
+        match status {
+            Some("active" | "running") => Self::Running(TurnPhase::Reasoning),
+            _ => Self::Idle,
+        }
+    }
+
+    fn observation(self) -> (AgentStatus, TurnPhase) {
+        match self {
+            Self::Idle => (AgentStatus::Idle, TurnPhase::Idle),
+            Self::Running(phase) => (AgentStatus::Running, phase),
+            Self::Waiting => (AgentStatus::Waiting, TurnPhase::Idle),
+            Self::Success => (AgentStatus::Success, TurnPhase::Idle),
+        }
+    }
+}
+
 #[derive(Clone)]
+struct Waiting {
+    since: Timestamp,
+    detail: Option<String>,
+}
+
 struct FoldedSession {
     first_event_at: Option<Timestamp>,
     last_activity: Timestamp,
-    status: AgentStatus,
-    phase: TurnPhase,
+    turn: TurnState,
     latest_prompt: Option<String>,
-    native_prompt_detail: Option<String>,
-    waiting_since: Option<Timestamp>,
+    waiting: Option<Waiting>,
+    pending: BTreeMap<String, Waiting>,
     context_pct: Option<u8>,
+}
+
+impl FoldedSession {
+    fn new(created_at: Timestamp, metadata_status: Option<&str>) -> Self {
+        Self {
+            first_event_at: None,
+            last_activity: created_at,
+            turn: TurnState::from_metadata_status(metadata_status),
+            latest_prompt: None,
+            waiting: None,
+            pending: BTreeMap::new(),
+            context_pct: None,
+        }
+    }
+
+    fn apply(&mut self, at: Timestamp, payload: Payload) {
+        self.first_event_at.get_or_insert(at);
+        self.last_activity = at;
+        match payload {
+            Payload::User { content } => self.latest_prompt = normalized(content),
+            Payload::TurnStart { execution_id } => self.start_turn(execution_id),
+            Payload::PendingInteraction {
+                interaction_type,
+                tool_call_id,
+                question,
+            } => self.request_approval(at, interaction_type, tool_call_id, question),
+            Payload::InteractionResolved { tool_call_id } => {
+                self.resolve_approval(tool_call_id);
+            }
+            Payload::ToolCall {
+                tool_call_id,
+                tool_name,
+                status,
+            } => self.apply_approved_tool(tool_call_id, tool_name, status),
+            Payload::ToolResult {
+                tool_call_id,
+                success,
+            } => self.apply_successful_tool_result(tool_call_id, success),
+            Payload::SessionMetadata { key, value } => self.apply_context_metadata(key, value),
+            Payload::SessionEvent { category, context } => {
+                self.apply_successful_pause(category, context);
+            }
+            Payload::TurnEnd {
+                execution_id,
+                stop_reason,
+            } => self.apply_successful_turn_end(execution_id, stop_reason),
+            Payload::Assistant { .. } | Payload::Unknown => {}
+        }
+    }
+
+    fn start_turn(&mut self, execution_id: Option<String>) {
+        if non_empty(execution_id.as_deref()).is_none() {
+            return;
+        }
+        self.turn = TurnState::Running(TurnPhase::Reasoning);
+        self.waiting = None;
+    }
+
+    fn request_approval(
+        &mut self,
+        at: Timestamp,
+        interaction_type: Option<String>,
+        tool_call_id: Option<String>,
+        question: Option<String>,
+    ) {
+        if interaction_type.as_deref() != Some("tool_approval") {
+            return;
+        }
+        let Some(tool_call_id) = normalized(tool_call_id) else {
+            return;
+        };
+        let waiting = Waiting {
+            since: at,
+            detail: normalized(question),
+        };
+        self.pending.insert(tool_call_id, waiting.clone());
+        self.turn = TurnState::Waiting;
+        self.waiting = Some(waiting);
+    }
+
+    fn resolve_approval(&mut self, tool_call_id: Option<String>) {
+        let Some(tool_call_id) = normalized(tool_call_id) else {
+            return;
+        };
+        if self.pending.remove(&tool_call_id).is_none() {
+            return;
+        }
+        if let Some((_, waiting)) = self.pending.iter().max_by_key(|(_, waiting)| waiting.since) {
+            self.turn = TurnState::Waiting;
+            self.waiting = Some(waiting.clone());
+        } else {
+            self.turn = TurnState::Running(TurnPhase::Reasoning);
+            self.waiting = None;
+        }
+    }
+
+    fn apply_approved_tool(
+        &mut self,
+        tool_call_id: Option<String>,
+        tool_name: Option<String>,
+        status: Option<String>,
+    ) {
+        if non_empty(tool_call_id.as_deref()).is_none()
+            || non_empty(status.as_deref()) != Some("approved")
+            || !self.pending.is_empty()
+        {
+            return;
+        }
+        let phase = if non_empty(tool_name.as_deref()) == Some("fs_write") {
+            TurnPhase::Acting
+        } else {
+            self.active_phase()
+        };
+        self.turn = TurnState::Running(phase);
+    }
+
+    fn apply_successful_tool_result(
+        &mut self,
+        tool_call_id: Option<String>,
+        success: Option<bool>,
+    ) {
+        if non_empty(tool_call_id.as_deref()).is_none()
+            || success != Some(true)
+            || !self.pending.is_empty()
+        {
+            return;
+        }
+        self.turn = TurnState::Running(self.active_phase());
+    }
+
+    fn active_phase(&self) -> TurnPhase {
+        match self.turn {
+            TurnState::Running(phase) if phase != TurnPhase::Idle => phase,
+            _ => TurnPhase::Reasoning,
+        }
+    }
+
+    fn apply_context_metadata(&mut self, key: Option<String>, value: Option<ContextUsage>) {
+        if key.as_deref() != Some("contextUsage") {
+            return;
+        }
+        let Some(context_pct) = value
+            .and_then(|value| value.usage_percentage)
+            .filter(|value| value.is_finite())
+            .map(|value| value.clamp(0.0, 100.0).round() as u8)
+        else {
+            return;
+        };
+        self.context_pct = Some(context_pct);
+    }
+
+    fn apply_successful_pause(
+        &mut self,
+        category: Option<String>,
+        context: Option<SessionEventContext>,
+    ) {
+        if category.as_deref() == Some("session_pause")
+            && context.and_then(|context| context.status).as_deref() == Some("success")
+            && self.pending.is_empty()
+        {
+            self.turn = TurnState::Success;
+        }
+    }
+
+    fn apply_successful_turn_end(
+        &mut self,
+        execution_id: Option<String>,
+        stop_reason: Option<String>,
+    ) {
+        if non_empty(execution_id.as_deref()).is_some()
+            && stop_reason.as_deref() == Some("end_turn")
+        {
+            self.turn = TurnState::Success;
+        }
+    }
 }
 
 pub(super) fn workspace_bucket(workspace: &Path) -> Option<String> {
@@ -299,6 +502,10 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         created_at,
         Some("idle"),
     );
+    let (status, phase) = folded.turn.observation();
+    let (native_prompt_detail, waiting_since) = folded.waiting.map_or((None, None), |waiting| {
+        (waiting.detail, Some(waiting.since))
+    });
     LocalSessionObservation {
         kind: AgentKind::new_unchecked("kiro"),
         session_id: AgentSessionId::from("sess_11111111-1111-4111-8111-111111111111"),
@@ -308,11 +515,11 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         fresh_binding_at: Some(created_at),
         first_event_at: folded.first_event_at,
         last_activity: folded.last_activity,
-        status: folded.status,
-        phase: folded.phase,
+        status,
+        phase,
         latest_prompt: folded.latest_prompt,
-        native_prompt_detail: folded.native_prompt_detail,
-        waiting_since: folded.waiting_since,
+        native_prompt_detail,
+        waiting_since,
         context_pct: folded.context_pct,
     }
 }
@@ -321,6 +528,10 @@ fn observation(session: ValidatedSession, workspace: &Path) -> Option<LocalSessi
     let created_at = session.metadata.created_at.parse::<Timestamp>().ok()?;
     let lines = read_transcript_tail(&session.messages).unwrap_or_default();
     let folded = fold(&lines, created_at, session.metadata.status.as_deref());
+    let (status, phase) = folded.turn.observation();
+    let (native_prompt_detail, waiting_since) = folded.waiting.map_or((None, None), |waiting| {
+        (waiting.detail, Some(waiting.since))
+    });
     Some(LocalSessionObservation {
         kind: AgentKind::new_unchecked("kiro"),
         session_id: AgentSessionId::from(session.metadata.id),
@@ -330,11 +541,11 @@ fn observation(session: ValidatedSession, workspace: &Path) -> Option<LocalSessi
         fresh_binding_at: Some(created_at),
         first_event_at: folded.first_event_at,
         last_activity: folded.last_activity,
-        status: folded.status,
-        phase: folded.phase,
+        status,
+        phase,
         latest_prompt: folded.latest_prompt,
-        native_prompt_detail: folded.native_prompt_detail,
-        waiting_since: folded.waiting_since,
+        native_prompt_detail,
+        waiting_since,
         context_pct: folded.context_pct,
     })
 }
@@ -398,129 +609,9 @@ fn parse_records(lines: &str) -> impl Iterator<Item = (Timestamp, Payload)> + '_
 }
 
 fn fold(lines: &str, created_at: Timestamp, metadata_status: Option<&str>) -> FoldedSession {
-    let mut folded = FoldedSession {
-        first_event_at: None,
-        last_activity: created_at,
-        status: match metadata_status {
-            Some("active" | "running") => AgentStatus::Running,
-            _ => AgentStatus::Idle,
-        },
-        phase: match metadata_status {
-            Some("active" | "running") => TurnPhase::Reasoning,
-            _ => TurnPhase::Idle,
-        },
-        latest_prompt: None,
-        native_prompt_detail: None,
-        waiting_since: None,
-        context_pct: None,
-    };
-    let mut pending: BTreeMap<String, (Timestamp, Option<String>)> = BTreeMap::new();
+    let mut folded = FoldedSession::new(created_at, metadata_status);
     for (at, payload) in parse_records(lines) {
-        folded.first_event_at.get_or_insert(at);
-        folded.last_activity = at;
-        match payload {
-            Payload::User { content } => folded.latest_prompt = normalized(content),
-            Payload::TurnStart { execution_id } if non_empty(execution_id.as_deref()).is_some() => {
-                folded.status = AgentStatus::Running;
-                folded.phase = TurnPhase::Reasoning;
-                folded.waiting_since = None;
-                folded.native_prompt_detail = None;
-            }
-            Payload::PendingInteraction {
-                interaction_type,
-                tool_call_id,
-                question,
-            } if interaction_type.as_deref() == Some("tool_approval") => {
-                if let Some(tool_call_id) = normalized(tool_call_id) {
-                    let question = normalized(question);
-                    pending.insert(tool_call_id, (at, question.clone()));
-                    folded.status = AgentStatus::Waiting;
-                    folded.phase = TurnPhase::Idle;
-                    folded.waiting_since = Some(at);
-                    folded.native_prompt_detail = question;
-                }
-            }
-            Payload::InteractionResolved { tool_call_id } => {
-                if normalized(tool_call_id)
-                    .and_then(|id| pending.remove(&id))
-                    .is_some()
-                {
-                    if let Some((_, (since, detail))) =
-                        pending.iter().max_by_key(|(_, (since, _))| *since)
-                    {
-                        folded.status = AgentStatus::Waiting;
-                        folded.phase = TurnPhase::Idle;
-                        folded.waiting_since = Some(*since);
-                        folded.native_prompt_detail = detail.clone();
-                    } else {
-                        folded.status = AgentStatus::Running;
-                        folded.phase = TurnPhase::Reasoning;
-                        folded.waiting_since = None;
-                        folded.native_prompt_detail = None;
-                    }
-                }
-            }
-            Payload::ToolCall {
-                tool_call_id,
-                tool_name,
-                status,
-            } if non_empty(tool_call_id.as_deref()).is_some()
-                && non_empty(status.as_deref()) == Some("approved") =>
-            {
-                if pending.is_empty() {
-                    folded.status = AgentStatus::Running;
-                    folded.phase = if non_empty(tool_name.as_deref()) == Some("fs_write") {
-                        TurnPhase::Acting
-                    } else if folded.phase == TurnPhase::Idle {
-                        TurnPhase::Reasoning
-                    } else {
-                        folded.phase
-                    };
-                }
-            }
-            Payload::ToolResult {
-                tool_call_id,
-                success,
-            } if non_empty(tool_call_id.as_deref()).is_some() && success == Some(true) => {
-                if pending.is_empty() {
-                    folded.status = AgentStatus::Running;
-                    if folded.phase == TurnPhase::Idle {
-                        folded.phase = TurnPhase::Reasoning;
-                    }
-                }
-            }
-            Payload::SessionMetadata { key, value } if key.as_deref() == Some("contextUsage") => {
-                let context_pct = value
-                    .and_then(|value| value.usage_percentage)
-                    .filter(|value| value.is_finite())
-                    .map(|value| value.clamp(0.0, 100.0).round() as u8);
-                if context_pct.is_some() {
-                    folded.context_pct = context_pct;
-                }
-            }
-            Payload::SessionEvent { category, context }
-                if category.as_deref() == Some("session_pause")
-                    && context
-                        .as_ref()
-                        .and_then(|context| context.status.as_deref())
-                        == Some("success") =>
-            {
-                if pending.is_empty() {
-                    folded.status = AgentStatus::Success;
-                    folded.phase = TurnPhase::Idle;
-                }
-            }
-            Payload::TurnEnd {
-                execution_id,
-                stop_reason,
-            } if non_empty(execution_id.as_deref()).is_some()
-                && stop_reason.as_deref() == Some("end_turn") =>
-            {
-                folded.status = AgentStatus::Success;
-                folded.phase = TurnPhase::Idle;
-            }
-            _ => {}
-        }
+        folded.apply(at, payload);
     }
     folded
 }
@@ -536,12 +627,14 @@ pub(super) fn fold_for_test(
     Option<Timestamp>,
 ) {
     let folded = fold(lines, Timestamp::UNIX_EPOCH, Some("idle"));
+    let (status, phase) = folded.turn.observation();
+    let waiting_since = folded.waiting.as_ref().map(|waiting| waiting.since);
     (
-        folded.status,
-        folded.phase,
-        folded.native_prompt_detail,
+        status,
+        phase,
+        folded.waiting.and_then(|waiting| waiting.detail),
         folded.context_pct,
-        folded.waiting_since,
+        waiting_since,
     )
 }
 
