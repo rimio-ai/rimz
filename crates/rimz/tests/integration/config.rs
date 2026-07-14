@@ -574,7 +574,7 @@ fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
     }
     assert_eq!(
         output
-            .matches("Install or refresh reporting hooks? [Y/n]")
+            .matches("Install or refresh reporting hooks?")
             .count(),
         1,
         "{output}"
