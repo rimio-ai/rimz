@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn focused_waiting_row_becoming_running_drops_attention() {
+    fn focused_waiting_row_becoming_running_is_an_interaction() {
         let selected = pane("terminal_1", "tab_0", false).pane_id;
         let prev = snapshot_with_groups(vec![group(
             "a",
