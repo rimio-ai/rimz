@@ -44,7 +44,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
         && let Some(info) = holder
         && wait_for_run_lock_release(name, &entry, STOP_GRACE)?
     {
-        append_stopped_record(name, info);
+        append_stopped_record(name, info, run.as_ref());
         write_stopped(name, run.as_ref(), true)?;
         return Ok(());
     }
@@ -88,7 +88,7 @@ fn lock_info(state: &RunLockState) -> Option<RunLockInfo> {
     }
 }
 
-fn append_stopped_record(name: &str, info: RunLockInfo) {
+fn append_stopped_record(name: &str, info: RunLockInfo, run: Option<&RunRecord>) {
     let elapsed = Timestamp::now()
         .as_millisecond()
         .saturating_sub(info.started_at.as_millisecond());
@@ -101,6 +101,7 @@ fn append_stopped_record(name: &str, info: RunLockInfo) {
     );
     record.mode = None;
     record.error = Some("stopped by rimz loop stop".to_owned());
+    record.run_id = run.map(|record| record.run_id.to_string());
     run_log::append(&record);
 }
 
