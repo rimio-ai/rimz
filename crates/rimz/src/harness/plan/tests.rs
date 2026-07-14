@@ -47,6 +47,380 @@ fn assert_arg_pair(argv: &[String], flag: &str, value: &str) {
     );
 }
 
+fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
+    Cell::Agent {
+        kind: AgentKind::new_unchecked(kind),
+        args: args.iter().map(|value| (*value).to_owned()).collect(),
+        mode: None,
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+        profile: Some(format!("{kind}-coder")),
+        role: None,
+        model: model.map(str::to_owned),
+        effort: effort.map(str::to_owned),
+        budget: None,
+    }
+}
+
+fn finalize<'a>(
+    layout: &mut LayoutSpec,
+    preset: &'a crate::agents::LaunchPreset,
+    passthrough: &'a [String],
+) -> std::result::Result<Vec<LaunchFinalizeWarning>, LaunchFinalizeError> {
+    finalize_launch_layout(
+        layout,
+        LaunchFinalizeOptions {
+            permission_mode: None,
+            preset,
+            passthrough,
+            budget: None,
+            max_turns: None,
+        },
+    )
+}
+
+#[test]
+fn launch_options_apply_without_overwriting_spec_identity() {
+    let auto_args = crate::agents::find_adapter("codex")
+        .expect("codex")
+        .permission_args(PermissionMode::Auto);
+    let cell = |args, mode| Cell::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        args,
+        mode,
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+        profile: Some("codex-coder".to_owned()),
+        role: Some("coder".to_owned()),
+        model: Some("profile-model".to_owned()),
+        effort: Some("medium".to_owned()),
+        budget: None,
+    };
+    let mut layout = LayoutSpec::single(cell(vec!["--model".into(), "profile-model".into()], None));
+    layout.columns[0]
+        .rows
+        .push(cell(auto_args.clone(), Some(PermissionMode::Auto)));
+    finalize_launch_layout(
+        &mut layout,
+        LaunchFinalizeOptions {
+            permission_mode: Some(PermissionMode::Yolo),
+            preset: &crate::agents::LaunchPreset {
+                model: Some("override-model".to_owned()),
+                effort: Some("xhigh".to_owned()),
+                ..Default::default()
+            },
+            passthrough: &["--debug".to_owned()],
+            budget: None,
+            max_turns: None,
+        },
+    )
+    .expect("finalize launch");
+    let [
+        Cell::Agent {
+            args: unset_args,
+            mode: unset_mode,
+            model: unset_model,
+            effort: unset_effort,
+            ..
+        },
+        Cell::Agent {
+            args: preset_args,
+            mode: preset_mode,
+            model: preset_model,
+            effort: preset_effort,
+            ..
+        },
+    ] = layout.columns[0].rows.as_slice()
+    else {
+        panic!("two agents")
+    };
+    assert_eq!(
+        (*unset_mode, *preset_mode),
+        (Some(PermissionMode::Yolo), Some(PermissionMode::Auto))
+    );
+    assert!(unset_args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_owned()));
+    assert!(preset_args.starts_with(&auto_args));
+    for args in [unset_args, preset_args] {
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--model", "override-model"])
+        );
+        assert!(
+            args.iter().any(|arg| arg.contains("xhigh")) && args.contains(&"--debug".to_owned())
+        );
+    }
+    assert_eq!(
+        (unset_model.as_deref(), unset_effort.as_deref()),
+        (Some("override-model"), Some("xhigh"))
+    );
+    assert_eq!(
+        (preset_model.as_deref(), preset_effort.as_deref()),
+        (Some("override-model"), Some("xhigh"))
+    );
+}
+
+#[test]
+fn default_launch_models_stamp_only_cells_without_models() {
+    let codex_default = crate::agents::find_adapter("codex")
+        .expect("codex")
+        .default_launch_model()
+        .expect("codex default model");
+    let explicit = Cell::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        args: vec!["--model".to_owned(), "o3".to_owned()],
+        mode: None,
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+        profile: None,
+        role: None,
+        model: Some("o3".to_owned()),
+        effort: None,
+        budget: None,
+    };
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    layout.columns[0]
+        .rows
+        .extend([explicit, Cell::agent(AgentKind::new_unchecked("claude"))]);
+    finalize(&mut layout, &Default::default(), &[]).expect("finalize launch");
+    assert!(matches!(&layout.columns[0].rows[0],
+        Cell::Agent { args, model: Some(model), .. }
+            if model == &codex_default && args == &["--model", codex_default.as_str()]));
+    assert!(matches!(&layout.columns[0].rows[1],
+        Cell::Agent { args, model: Some(model), .. }
+            if model == "o3" && args == &["--model", "o3"]));
+    assert_eq!(
+        layout.columns[0].rows[2],
+        Cell::agent(AgentKind::new_unchecked("claude"))
+    );
+}
+
+#[test]
+fn args_only_model_becomes_identity_and_suppresses_default() {
+    let mut layout = LayoutSpec::single(preset_cell(
+        "codex",
+        &["--debug", "--model", "gpt-5.6-sol"],
+        None,
+        None,
+    ));
+    assert!(
+        finalize(&mut layout, &Default::default(), &[])
+            .expect("finalize launch")
+            .is_empty()
+    );
+    assert!(matches!(&layout.columns[0].rows[0],
+        Cell::Agent { args, model: Some(model), .. }
+            if model == "gpt-5.6-sol"
+                && args == &["--debug", "--model", "gpt-5.6-sol"]));
+}
+
+#[test]
+fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
+    let mut different = LayoutSpec::single(preset_cell(
+        "codex",
+        &["--model", "gpt-5.6-max", "--model=gpt-5.6-sol"],
+        Some("gpt-5.6-max"),
+        None,
+    ));
+    assert_eq!(
+        finalize(&mut different, &Default::default(), &[])
+            .expect("finalize launch")
+            .into_iter()
+            .map(|warning| warning.to_string())
+            .collect::<Vec<_>>(),
+        [
+            "warning: profile `codex-coder` args set --model gpt-5.6-sol; declared model gpt-5.6-max wins"
+        ]
+    );
+    assert!(matches!(&different.columns[0].rows[0],
+        Cell::Agent { args, .. } if args == &["--model", "gpt-5.6-max"]));
+
+    let mut equal = LayoutSpec::single(preset_cell(
+        "codex",
+        &["--model", "gpt-5.6-max", "-m", "gpt-5.6-max"],
+        Some("gpt-5.6-max"),
+        None,
+    ));
+    assert!(
+        finalize(&mut equal, &Default::default(), &[])
+            .expect("finalize launch")
+            .is_empty()
+    );
+    assert!(matches!(&equal.columns[0].rows[0],
+        Cell::Agent { args, .. } if args == &["--model", "gpt-5.6-max"]));
+}
+
+#[test]
+fn args_only_model_uses_last_short_or_joined_occurrence() {
+    let mut layout = LayoutSpec::single(preset_cell(
+        "codex",
+        &["--model=first", "--debug", "-m", "second"],
+        None,
+        None,
+    ));
+    assert_eq!(
+        finalize(&mut layout, &Default::default(), &[])
+            .expect("finalize launch")
+            .len(),
+        1
+    );
+    assert!(matches!(&layout.columns[0].rows[0],
+        Cell::Agent { args, model: Some(model), .. }
+            if model == "second" && args == &["--debug", "-m", "second"]));
+}
+
+#[test]
+fn launch_model_override_wins_over_profile_and_args_models() {
+    let mut layout = LayoutSpec::single(preset_cell(
+        "codex",
+        &["--model", "profile", "--model", "raw"],
+        Some("profile"),
+        None,
+    ));
+    let warnings = finalize(
+        &mut layout,
+        &crate::agents::LaunchPreset {
+            model: Some("override".into()),
+            ..Default::default()
+        },
+        &[],
+    )
+    .expect("finalize launch");
+    assert_eq!(warnings.len(), 2);
+    assert!(matches!(&layout.columns[0].rows[0],
+        Cell::Agent { args, model: Some(model), .. }
+            if model == "override" && args == &["--model", "override"]));
+}
+
+#[test]
+fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags() {
+    let mut codex = LayoutSpec::single(preset_cell(
+        "codex",
+        &[
+            "-c",
+            "model_reasoning_effort=high",
+            "-c",
+            "web_search=cached",
+            "--config=model_reasoning_effort=low",
+        ],
+        None,
+        Some("high"),
+    ));
+    assert_eq!(
+        finalize(&mut codex, &Default::default(), &[])
+            .expect("finalize launch")
+            .len(),
+        1
+    );
+    let codex_default = crate::agents::find_adapter("codex")
+        .expect("codex")
+        .default_launch_model()
+        .expect("codex default model");
+    assert!(matches!(&codex.columns[0].rows[0],
+    Cell::Agent { args, .. }
+        if args == &[
+            "-c",
+            "web_search=cached",
+            "-c",
+            "model_reasoning_effort=high",
+            "--model",
+            codex_default.as_str(),
+        ]));
+
+    let mut claude = LayoutSpec::single(preset_cell("claude", &["--effort", "high"], None, None));
+    assert!(
+        finalize(&mut claude, &Default::default(), &[])
+            .expect("finalize launch")
+            .is_empty()
+    );
+    assert!(matches!(&claude.columns[0].rows[0],
+        Cell::Agent { args, effort: None, .. } if args == &["--effort", "high"]));
+}
+
+#[test]
+fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
+    let preset = crate::agents::LaunchPreset::default();
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
+    finalize_launch_layout(
+        &mut layout,
+        LaunchFinalizeOptions {
+            permission_mode: None,
+            preset: &preset,
+            passthrough: &[],
+            budget: None,
+            max_turns: Some(3),
+        },
+    )
+    .expect("claude supports max turns");
+    assert!(matches!(&layout.columns[0].rows[0],
+        Cell::Agent { args, .. } if args == &["--max-turns", "3"]));
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    let err = finalize_launch_layout(
+        &mut layout,
+        LaunchFinalizeOptions {
+            permission_mode: None,
+            preset: &preset,
+            passthrough: &[],
+            budget: None,
+            max_turns: Some(3),
+        },
+    )
+    .expect_err("codex rejects max turns");
+    assert_eq!(err.to_string(), "codex does not support --max-turns");
+}
+
+#[test]
+fn finalization_handles_mixed_cells_without_leaking_state() {
+    let codex_default = crate::agents::find_adapter("codex")
+        .expect("codex")
+        .default_launch_model()
+        .expect("codex default model");
+    let command = Cell::Command {
+        argv: vec!["printf".to_owned(), "untouched".to_owned()],
+    };
+    let mut layout = LayoutSpec {
+        columns: vec![Column {
+            rows: vec![
+                preset_cell(
+                    "codex",
+                    &["--model", "profile", "--model", "raw"],
+                    Some("profile"),
+                    None,
+                ),
+                Cell::agent(AgentKind::new_unchecked("codex")),
+                Cell::agent(AgentKind::new_unchecked("claude")),
+                command.clone(),
+            ],
+            stacked: false,
+        }],
+    };
+    finalize_launch_layout(
+        &mut layout,
+        LaunchFinalizeOptions {
+            permission_mode: Some(PermissionMode::Yolo),
+            preset: &Default::default(),
+            passthrough: &["--debug".to_owned()],
+            budget: Some("2/day".parse().expect("budget")),
+            max_turns: None,
+        },
+    )
+    .expect("finalize mixed layout");
+
+    let [profile, bare, no_default, actual_command] = layout.columns[0].rows.as_slice() else {
+        panic!("mixed cells")
+    };
+    assert!(matches!(profile,
+        Cell::Agent { model: Some(model), budget: Some(budget), .. }
+            if model == "profile" && budget == "$2.00/day"));
+    assert!(matches!(bare,
+        Cell::Agent { model: Some(model), budget: Some(budget), .. }
+            if model == &codex_default && budget == "$2.00/day"));
+    assert!(matches!(no_default,
+        Cell::Agent { model: None, budget: Some(budget), .. }
+            if budget == "$2.00/day"));
+    assert_eq!(actual_command, &command);
+}
+
 #[test]
 fn launch_placement_matrix() {
     use Placement::{NewPane, NewTab, SamePane};

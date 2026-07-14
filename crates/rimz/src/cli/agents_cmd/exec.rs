@@ -514,18 +514,20 @@ fn record_own_launch_pane(workspace: &rimz::ResolvedWorkspace, identity: &Launch
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
     match open_store(workspace).and_then(|store| {
-        append_launch_event(
-            &store,
-            workspace,
-            identity,
-            LaunchEventParams {
-                cwd: &cwd,
+        store.append_agent_launch_states(
+            std::slice::from_ref(identity),
+            &AgentLaunchAppend {
+                workspace_id: workspace.workspace_id.clone(),
+                session_name: workspace.session_name.clone(),
+                cwd: cwd.clone(),
                 worktree_name: None,
-                channel: identity.launch.channel.as_deref(),
+                channel: identity.launch.channel.clone(),
+                description: None,
                 state: rimz::store::event::AgentLaunchState::Bound,
                 pane_id: Some(pane_id.clone()),
             },
-        )
+        )?;
+        Ok(())
     }) {
         Ok(()) => {}
         Err(err) => tracing::debug!(
@@ -540,18 +542,20 @@ fn record_own_launch_pane(workspace: &rimz::ResolvedWorkspace, identity: &Launch
 fn record_launch_failed(workspace: &rimz::ResolvedWorkspace, identity: &LaunchIdentity) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
     if let Err(err) = open_store(workspace).and_then(|store| {
-        append_launch_event(
-            &store,
-            workspace,
-            identity,
-            LaunchEventParams {
-                cwd: &cwd,
+        store.append_agent_launch_states(
+            std::slice::from_ref(identity),
+            &AgentLaunchAppend {
+                workspace_id: workspace.workspace_id.clone(),
+                session_name: workspace.session_name.clone(),
+                cwd: cwd.clone(),
                 worktree_name: None,
-                channel: identity.launch.channel.as_deref(),
+                channel: identity.launch.channel.clone(),
+                description: None,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
-        )
+        )?;
+        Ok(())
     }) {
         tracing::debug!(
             agent_name = %identity.name,

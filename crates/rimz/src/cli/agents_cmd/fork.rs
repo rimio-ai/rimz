@@ -214,14 +214,15 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     if let Err(err) = open_result {
-        let _ = append_launch_events(
-            &store,
-            &workspace,
+        let _ = store.append_agent_launch_states(
             &launches,
-            LaunchEventParams {
-                cwd: &seed.cwd,
+            &AgentLaunchAppend {
+                workspace_id: workspace.workspace_id.clone(),
+                session_name: workspace.session_name.clone(),
+                cwd: seed.cwd.clone(),
                 worktree_name: None,
-                channel: channel.as_deref(),
+                channel: channel.clone(),
+                description: None,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },

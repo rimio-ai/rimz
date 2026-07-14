@@ -276,6 +276,24 @@ impl Store {
         })
     }
 
+    /// Append follow-up state for identities allocated by
+    /// [`Self::append_agent_launches_allocating`]. Each identity commits in
+    /// slice order so partial-failure and wake behavior match separate launch
+    /// transitions.
+    #[must_use = "durability barrier; check the result"]
+    pub fn append_agent_launch_states(
+        &self,
+        identities: &[AgentLaunchIdentity],
+        append: &AgentLaunchAppend,
+    ) -> Result<()> {
+        for identity in identities {
+            self.commit(PublishPolicy::Skip, |txn| {
+                txn.append(&agent_launch_event(append, identity))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Rotate the active event log when it exceeds `min_bytes`, preserving
     /// the agent rollup across the archive boundary.
     ///
@@ -537,6 +555,163 @@ mod tests {
     use crate::store::event::MessageEventMethod;
     use crate::store::paths::{RuntimePaths, StatePaths};
     use crate::workspace::WorkspaceResolver;
+
+    #[test]
+    fn launch_event_builder_preserves_follow_up_evidence_and_metadata() {
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/repo"));
+        let run_id = crate::ids::RunId::new();
+        let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%7");
+        let identity = AgentLaunchIdentity {
+            kind: AgentKind::new_unchecked("codex"),
+            agent_id: AgentSessionId::from("launch_follow_up"),
+            name: "writer".to_owned(),
+            name_explicit: true,
+            launch: LaunchParams {
+                profile: Some("codex-coder".to_owned()),
+                mode: Some(crate::harness::run::PermissionMode::Yolo),
+                role: Some("coder".to_owned()),
+                model: Some("gpt-5.6-sol".to_owned()),
+                effort: Some("xhigh".to_owned()),
+                budget: Some("$2.00/day".to_owned()),
+                team: Some("forge".to_owned()),
+                launch_group: Some("launch_group_1".to_owned()),
+                launch_ordinal: Some(1),
+                channel: Some("identity-channel".to_owned()),
+                kind_ordinal: Some(2),
+            },
+            run_id: Some(run_id.clone()),
+            prompt: Some("  ".to_owned()),
+        };
+        let append = AgentLaunchAppend {
+            workspace_id: workspace_id.clone(),
+            session_name: "rimz-test".to_owned(),
+            cwd: PathBuf::from("/repo-worktrees/auth"),
+            worktree_name: Some("auth".to_owned()),
+            channel: Some("fallback-channel".to_owned()),
+            description: Some("  ".to_owned()),
+            state: crate::store::event::AgentLaunchState::Bound,
+            pane_id: Some(pane_id.clone()),
+        };
+
+        let event = agent_launch_event(&append, &identity);
+        let crate::store::event::EventKind::AgentLaunch(payload) = event.kind() else {
+            panic!("agent launch event")
+        };
+        assert_eq!(event.workspace_id, workspace_id);
+        assert_eq!(event.session_name, "rimz-test");
+        assert_eq!(payload.agent_id, identity.agent_id);
+        assert_eq!(payload.agent_name, "writer");
+        assert!(payload.agent_name_explicit);
+        assert_eq!(payload.launch, identity.launch);
+        assert_eq!(payload.launch.channel.as_deref(), Some("identity-channel"));
+        assert_eq!(payload.state, crate::store::event::AgentLaunchState::Bound);
+        assert_eq!(payload.run_id, Some(run_id));
+        assert_eq!(payload.pane_id, Some(pane_id));
+        assert_eq!(
+            payload
+                .runtime_owner
+                .as_ref()
+                .map(|owner| owner.subject_id.as_str()),
+            Some("launch_follow_up")
+        );
+        assert_eq!(
+            payload.worktree_path.as_deref(),
+            Some("/repo-worktrees/auth")
+        );
+        assert_eq!(payload.worktree_branch.as_deref(), Some("auth"));
+        assert_eq!(payload.prompt, None);
+        assert_eq!(payload.description, None);
+
+        let mut fallback_identity = identity;
+        fallback_identity.launch.channel = None;
+        let fallback = agent_launch_event(&append, &fallback_identity);
+        let crate::store::event::EventKind::AgentLaunch(payload) = fallback.kind() else {
+            panic!("fallback launch event")
+        };
+        assert_eq!(payload.launch.channel.as_deref(), Some("fallback-channel"));
+    }
+
+    #[test]
+    fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+        let store = Store::open(paths, runtime).expect("open store");
+        let request = AgentLaunchRequest {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("launch_state_flow"),
+            name: AgentLaunchName::Explicit("planner".to_owned()),
+            launch: LaunchParams {
+                profile: Some("claude-planner".to_owned()),
+                role: Some("planner".to_owned()),
+                team: Some("forge".to_owned()),
+                launch_group: Some("launch_group_1".to_owned()),
+                launch_ordinal: Some(3),
+                channel: Some("auth".to_owned()),
+                model: Some("sonnet".to_owned()),
+                effort: Some("high".to_owned()),
+                ..LaunchParams::default()
+            },
+            run_id: None,
+            prompt: None,
+        };
+        let append = |state, pane_id| AgentLaunchAppend {
+            workspace_id: workspace_id.clone(),
+            session_name: "rimz-test".to_owned(),
+            cwd: dir.path().to_path_buf(),
+            worktree_name: Some("auth".to_owned()),
+            channel: Some("fallback".to_owned()),
+            description: None,
+            state,
+            pane_id,
+        };
+        let identities = store
+            .append_agent_launches_allocating(
+                &[request],
+                &append(crate::store::event::AgentLaunchState::Starting, None),
+            )
+            .expect("allocate launch");
+        let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_4");
+        store
+            .append_agent_launch_states(
+                &identities,
+                &append(
+                    crate::store::event::AgentLaunchState::Bound,
+                    Some(pane_id.clone()),
+                ),
+            )
+            .expect("bind launch");
+        store
+            .append_agent_launch_states(
+                &identities,
+                &append(crate::store::event::AgentLaunchState::Failed, None),
+            )
+            .expect("fail launch");
+
+        let projection = store
+            .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+            .expect("project launches");
+        let [agent] = projection.agents.as_slice() else {
+            panic!("one launch")
+        };
+        assert_eq!(agent.agent_id, identities[0].agent_id);
+        assert_eq!(agent.name.as_deref(), Some("planner"));
+        assert!(agent.name_explicit);
+        assert_eq!(agent.profile.as_deref(), Some("claude-planner"));
+        assert_eq!(agent.role.as_deref(), Some("planner"));
+        assert_eq!(agent.team.as_deref(), Some("forge"));
+        assert_eq!(agent.launch_group.as_deref(), Some("launch_group_1"));
+        assert_eq!(agent.launch_ordinal, Some(3));
+        assert_eq!(agent.channel.as_deref(), Some("auth"));
+        assert_eq!(agent.model.as_deref(), Some("sonnet"));
+        assert_eq!(agent.effort.as_deref(), Some("high"));
+        assert_eq!(agent.status, crate::agents::AgentStatus::Failed);
+        assert_eq!(
+            agent.pane.as_ref().map(|pane| &pane.pane_id),
+            Some(&pane_id)
+        );
+    }
 
     #[test]
     fn record_workspace_preserves_existing_room_bin() {

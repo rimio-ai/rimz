@@ -192,6 +192,28 @@ pub enum PresetField {
     AppendSystemPromptFile,
 }
 
+impl PresetField {
+    pub(crate) const fn flag_name(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Effort => "effort",
+            Self::SystemPromptFile => "system-prompt-file",
+            Self::AppendSystemPromptFile => "append-system-prompt-file",
+        }
+    }
+
+    pub(crate) fn launch_preset(self, value: String) -> LaunchPreset {
+        let mut preset = LaunchPreset::default();
+        match self {
+            Self::Model => preset.model = Some(value),
+            Self::Effort => preset.effort = Some(value),
+            Self::SystemPromptFile => preset.system_prompt_file = Some(value.into()),
+            Self::AppendSystemPromptFile => preset.append_system_prompt_file = Some(value.into()),
+        }
+        preset
+    }
+}
+
 /// How a launch-preset field appears in the agent's own CLI argv.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PresetArgMatcher {
@@ -199,6 +221,75 @@ pub enum PresetArgMatcher {
     Flag(Vec<String>),
     /// A repeatable config override carrying the field as `<flag> <key>=VALUE`.
     ConfigKey { flags: Vec<String>, key: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PresetArgOccurrence {
+    pub(crate) argv_range: std::ops::Range<usize>,
+    pub(crate) value: String,
+}
+
+impl PresetArgMatcher {
+    pub(crate) fn occurrences(&self, argv: &[String]) -> Vec<PresetArgOccurrence> {
+        let mut occurrences = Vec::new();
+        let mut index = 0;
+        while index < argv.len() {
+            let occurrence = match self {
+                Self::Flag(flags) => flags.iter().find_map(|flag| {
+                    if argv[index] == *flag {
+                        argv.get(index + 1).map(|value| PresetArgOccurrence {
+                            argv_range: index..index + 2,
+                            value: value.clone(),
+                        })
+                    } else {
+                        argv[index]
+                            .strip_prefix(flag)
+                            .and_then(|suffix| suffix.strip_prefix('='))
+                            .map(|value| PresetArgOccurrence {
+                                argv_range: index..index + 1,
+                                value: value.to_owned(),
+                            })
+                    }
+                }),
+                Self::ConfigKey { flags, key } => flags.iter().find_map(|flag| {
+                    let prefix = format!("{key}=");
+                    if argv[index] == *flag {
+                        argv.get(index + 1)
+                            .and_then(|value| value.strip_prefix(&prefix))
+                            .map(|value| PresetArgOccurrence {
+                                argv_range: index..index + 2,
+                                value: value.to_owned(),
+                            })
+                    } else {
+                        argv[index]
+                            .strip_prefix(flag)
+                            .and_then(|suffix| suffix.strip_prefix('='))
+                            .and_then(|value| value.strip_prefix(&prefix))
+                            .map(|value| PresetArgOccurrence {
+                                argv_range: index..index + 1,
+                                value: value.to_owned(),
+                            })
+                    }
+                }),
+            };
+            if let Some(occurrence) = occurrence {
+                index = occurrence.argv_range.end;
+                occurrences.push(occurrence);
+            } else {
+                index += 1;
+            }
+        }
+        occurrences
+    }
+
+    pub(crate) fn display_setting(&self, value: &str) -> String {
+        match self {
+            Self::Flag(flags) => flags
+                .first()
+                .map_or_else(|| value.to_owned(), |flag| format!("{flag} {value}")),
+            Self::ConfigKey { key, .. } => format!("{key} {value}"),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

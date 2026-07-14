@@ -1,15 +1,343 @@
-//! Compile resolved layouts into launch identities and backend-neutral pane commands.
+//! Finalize resolved launch layouts, then compile them into launch identities and
+//! backend-neutral pane commands.
 
+use std::fmt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
 use crate::config::{LaunchPlacement, RoleBinding};
+use crate::harness::budget::BudgetSpec;
 use crate::harness::resume::{CohortCell, CohortResumePlan, CohortSeed};
+use crate::harness::run::PermissionMode;
 use crate::harness::spec::{Cell, LayoutSpec};
 use crate::ids::{AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
 use crate::store::{AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
+
+#[derive(Clone, Copy, Debug)]
+pub struct LaunchFinalizeOptions<'a> {
+    pub permission_mode: Option<PermissionMode>,
+    pub preset: &'a crate::agents::LaunchPreset,
+    pub passthrough: &'a [String],
+    pub budget: Option<BudgetSpec>,
+    pub max_turns: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaunchFinalizeWarning {
+    LaterModelWins {
+        profile: String,
+        setting: String,
+        model: String,
+    },
+    DeclaredFieldWins {
+        profile: String,
+        setting: String,
+        field: &'static str,
+        value: String,
+    },
+}
+
+impl fmt::Display for LaunchFinalizeWarning {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LaterModelWins {
+                profile,
+                setting,
+                model,
+            } => write!(
+                formatter,
+                "warning: profile `{profile}` args set {setting}; later model {model} wins"
+            ),
+            Self::DeclaredFieldWins {
+                profile,
+                setting,
+                field,
+                value,
+            } => write!(
+                formatter,
+                "warning: profile `{profile}` args set {setting}; declared {field} {value} wins"
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum LaunchFinalizeError {
+    #[error("unknown agent kind `{kind}`")]
+    UnknownAdapter { kind: String },
+    #[error("{agent} does not support --{field}")]
+    UnsupportedPresetField {
+        agent: &'static str,
+        field: &'static str,
+    },
+    #[error("{agent} does not support --max-turns")]
+    UnsupportedMaxTurns { agent: &'static str },
+}
+
+/// Apply launch-wide CLI options and provider preset reconciliation to a
+/// resolved layout. Command cells remain unchanged.
+pub fn finalize_launch_layout(
+    layout: &mut LayoutSpec,
+    options: LaunchFinalizeOptions<'_>,
+) -> std::result::Result<Vec<LaunchFinalizeWarning>, LaunchFinalizeError> {
+    for cell in layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+    {
+        let Cell::Agent {
+            kind, args, mode, ..
+        } = cell
+        else {
+            continue;
+        };
+        if let Some(permission_mode) = options.permission_mode
+            && mode.is_none()
+            && let Some(adapter) = crate::agents::find_adapter(kind)
+        {
+            args.extend(adapter.permission_args(permission_mode));
+            *mode = Some(permission_mode);
+        }
+    }
+
+    if !options.preset.is_empty() {
+        for cell in layout
+            .columns
+            .iter_mut()
+            .flat_map(|column| &mut column.rows)
+        {
+            let Cell::Agent {
+                kind,
+                args,
+                model,
+                effort,
+                ..
+            } = cell
+            else {
+                continue;
+            };
+            let adapter = crate::agents::find_adapter(kind).ok_or_else(|| {
+                LaunchFinalizeError::UnknownAdapter {
+                    kind: kind.to_string(),
+                }
+            })?;
+            args.extend(
+                adapter
+                    .render_preset(options.preset)
+                    .map_err(unsupported_preset_error)?,
+            );
+            if let Some(preset_model) = options
+                .preset
+                .model
+                .as_ref()
+                .filter(|model| !model.is_empty())
+            {
+                *model = Some(preset_model.clone());
+            }
+            if let Some(preset_effort) = options
+                .preset
+                .effort
+                .as_ref()
+                .filter(|effort| !effort.is_empty())
+            {
+                *effort = Some(preset_effort.clone());
+            }
+        }
+    }
+
+    for cell in layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+    {
+        if let Cell::Agent { args, .. } = cell {
+            args.extend(options.passthrough.iter().cloned());
+        }
+    }
+
+    if let Some(budget) = options.budget {
+        let canonical = budget.to_string();
+        for cell in layout
+            .columns
+            .iter_mut()
+            .flat_map(|column| &mut column.rows)
+        {
+            if let Cell::Agent {
+                budget: cell_budget,
+                ..
+            } = cell
+            {
+                *cell_budget = Some(canonical.clone());
+            }
+        }
+    }
+
+    let warnings = reconcile_preset_args(layout)?;
+
+    for cell in layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+    {
+        let Cell::Agent {
+            kind, args, model, ..
+        } = cell
+        else {
+            continue;
+        };
+        if model.is_some() {
+            continue;
+        }
+        let Some(adapter) = crate::agents::find_adapter(kind) else {
+            continue;
+        };
+        let Some(default) = adapter.default_launch_model() else {
+            continue;
+        };
+        args.extend(
+            adapter
+                .render_preset(&crate::agents::LaunchPreset {
+                    model: Some(default.clone()),
+                    ..Default::default()
+                })
+                .map_err(unsupported_preset_error)?,
+        );
+        *model = Some(default);
+    }
+
+    if let Some(limit) = options.max_turns {
+        for cell in layout
+            .columns
+            .iter_mut()
+            .flat_map(|column| &mut column.rows)
+        {
+            let Cell::Agent { kind, args, .. } = cell else {
+                continue;
+            };
+            let adapter = crate::agents::find_adapter(kind).ok_or_else(|| {
+                LaunchFinalizeError::UnknownAdapter {
+                    kind: kind.to_string(),
+                }
+            })?;
+            let turn_args =
+                adapter
+                    .max_turns_args(limit)
+                    .ok_or(LaunchFinalizeError::UnsupportedMaxTurns {
+                        agent: adapter.descriptor().kind,
+                    })?;
+            args.extend(turn_args);
+        }
+    }
+
+    Ok(warnings)
+}
+
+fn reconcile_preset_args(
+    layout: &mut LayoutSpec,
+) -> std::result::Result<Vec<LaunchFinalizeWarning>, LaunchFinalizeError> {
+    use crate::agents::PresetField;
+
+    let mut warnings = Vec::new();
+    for cell in layout
+        .columns
+        .iter_mut()
+        .flat_map(|column| &mut column.rows)
+    {
+        let Cell::Agent {
+            kind,
+            args,
+            model,
+            effort,
+            system_prompt_file,
+            append_system_prompt_file,
+            profile,
+            ..
+        } = cell
+        else {
+            continue;
+        };
+        let Some(adapter) = crate::agents::find_adapter(kind) else {
+            continue;
+        };
+        let label = profile.as_deref().unwrap_or(kind.as_str()).to_owned();
+        let declared = [
+            (PresetField::Model, model.clone()),
+            (PresetField::Effort, effort.clone()),
+            (
+                PresetField::SystemPromptFile,
+                system_prompt_file
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            ),
+            (
+                PresetField::AppendSystemPromptFile,
+                append_system_prompt_file
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            ),
+        ];
+
+        for (field, value) in declared {
+            let Some(matcher) = adapter.preset_arg_matcher(field) else {
+                continue;
+            };
+            let occurrences = matcher.occurrences(args);
+            let Some(declared_value) = value else {
+                if field == PresetField::Model
+                    && let Some(winner) = occurrences.last()
+                {
+                    for occurrence in &occurrences[..occurrences.len() - 1] {
+                        if occurrence.value != winner.value {
+                            warnings.push(LaunchFinalizeWarning::LaterModelWins {
+                                profile: label.clone(),
+                                setting: matcher.display_setting(&occurrence.value),
+                                model: winner.value.clone(),
+                            });
+                        }
+                    }
+                    *model = Some(winner.value.clone());
+                    remove_occurrences(args, &occurrences[..occurrences.len() - 1]);
+                }
+                continue;
+            };
+            if occurrences.len() <= 1 {
+                continue;
+            }
+            for occurrence in &occurrences {
+                if occurrence.value != declared_value {
+                    warnings.push(LaunchFinalizeWarning::DeclaredFieldWins {
+                        profile: label.clone(),
+                        setting: matcher.display_setting(&occurrence.value),
+                        field: field.flag_name(),
+                        value: declared_value.clone(),
+                    });
+                }
+            }
+            let canonical = adapter
+                .render_preset(&field.launch_preset(declared_value))
+                .map_err(unsupported_preset_error)?;
+            remove_occurrences(args, &occurrences);
+            args.extend(canonical);
+        }
+    }
+    Ok(warnings)
+}
+
+fn remove_occurrences(args: &mut Vec<String>, occurrences: &[crate::agents::PresetArgOccurrence]) {
+    for occurrence in occurrences.iter().rev() {
+        args.drain(occurrence.argv_range.clone());
+    }
+}
+
+fn unsupported_preset_error(err: crate::agents::PresetErr) -> LaunchFinalizeError {
+    match err {
+        crate::agents::PresetErr::UnsupportedField { agent, field } => {
+            LaunchFinalizeError::UnsupportedPresetField { agent, field }
+        }
+    }
+}
 
 /// Reduce a resolved layout to the agent cells used by cohort resume matching.
 pub fn cohort_cells(layout: &LayoutSpec) -> Vec<CohortCell> {

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind, LifecycleState, TurnPhase, step};
 use super::{
     ADAPTERS, AgentAdapter, AgentHookClass, AskReply, ClassificationSample, ConcernCoverage,
-    DerivedAskFixture, HookCoverage, IntegrationConcern, LaunchPreset, PresetArgMatcher,
-    PresetField, PriceBook, SpendFixture, SpendFixtureBody,
+    DerivedAskFixture, HookCoverage, IntegrationConcern, PresetArgMatcher, PresetField, PriceBook,
+    SpendFixture, SpendFixtureBody,
 };
 use crate::agents::AgentStatus;
 use crate::agents::AskKind;
@@ -27,7 +27,7 @@ fn rendered_preset_flags_have_matching_argv_declarations() {
     ];
     for adapter in ADAPTERS {
         for (field, value) in fields {
-            let preset = preset_for_field(field, value);
+            let preset = field.launch_preset(value.to_owned());
             match adapter.render_preset(&preset) {
                 Ok(argv) => {
                     let matcher = adapter.preset_arg_matcher(field).unwrap_or_else(|| {
@@ -37,7 +37,10 @@ fn rendered_preset_flags_have_matching_argv_declarations() {
                         )
                     });
                     assert!(
-                        matcher_consumes(&matcher, &argv),
+                        matcher
+                            .occurrences(&argv)
+                            .iter()
+                            .any(|occurrence| occurrence.argv_range == (0..argv.len())),
                         "{} {field:?} matcher {matcher:?} does not consume {argv:?}",
                         adapter.descriptor().kind
                     );
@@ -52,41 +55,57 @@ fn rendered_preset_flags_have_matching_argv_declarations() {
     }
 }
 
-fn preset_for_field(field: PresetField, value: &str) -> LaunchPreset {
-    let mut preset = LaunchPreset::default();
-    match field {
-        PresetField::Model => preset.model = Some(value.to_owned()),
-        PresetField::Effort => preset.effort = Some(value.to_owned()),
-        PresetField::SystemPromptFile => preset.system_prompt_file = Some(value.into()),
-        PresetField::AppendSystemPromptFile => {
-            preset.append_system_prompt_file = Some(value.into());
-        }
-    }
-    preset
+#[test]
+fn preset_matchers_find_split_joined_and_config_key_occurrences() {
+    let flags = PresetArgMatcher::Flag(vec!["--model".to_owned(), "-m".to_owned()]);
+    let argv = strings(&[
+        "--debug",
+        "--model",
+        "split",
+        "-m",
+        "short",
+        "-m=short-joined",
+        "--model=joined",
+        "--model",
+    ]);
+    let occurrences = flags.occurrences(&argv);
+    assert_eq!(
+        occurrences
+            .iter()
+            .map(|occurrence| (occurrence.argv_range.clone(), occurrence.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (1..3, "split"),
+            (3..5, "short"),
+            (5..6, "short-joined"),
+            (6..7, "joined"),
+        ]
+    );
+
+    let config = PresetArgMatcher::ConfigKey {
+        flags: vec!["-c".to_owned(), "--config".to_owned()],
+        key: "model_reasoning_effort".to_owned(),
+    };
+    let argv = strings(&[
+        "-c",
+        "web_search=cached",
+        "-c",
+        "model_reasoning_effort=high",
+        "--config=model_reasoning_effort=low",
+        "--config",
+    ]);
+    let occurrences = config.occurrences(&argv);
+    assert_eq!(
+        occurrences
+            .iter()
+            .map(|occurrence| (occurrence.argv_range.clone(), occurrence.value.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(2..4, "high"), (4..5, "low")]
+    );
 }
 
-fn matcher_consumes(matcher: &PresetArgMatcher, argv: &[String]) -> bool {
-    match matcher {
-        PresetArgMatcher::Flag(flags) => match argv {
-            [flag, _value] => flags.contains(flag),
-            [joined] => flags.iter().any(|flag| {
-                joined
-                    .strip_prefix(flag)
-                    .is_some_and(|rest| rest.starts_with('='))
-            }),
-            _ => false,
-        },
-        PresetArgMatcher::ConfigKey { flags, key } => match argv {
-            [flag, value] => flags.contains(flag) && value.starts_with(&format!("{key}=")),
-            [joined] => flags.iter().any(|flag| {
-                joined
-                    .strip_prefix(flag)
-                    .and_then(|rest| rest.strip_prefix('='))
-                    .is_some_and(|value| value.starts_with(&format!("{key}=")))
-            }),
-            _ => false,
-        },
-    }
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
 }
 
 #[test]

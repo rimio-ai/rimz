@@ -332,14 +332,15 @@ fn mark_fresh_failed(
     let Some(identity) = identity else {
         return;
     };
-    let _ = super::launch::append_launch_event(
-        store,
-        workspace,
-        identity,
-        LaunchEventParams {
-            cwd,
+    let _ = store.append_agent_launch_states(
+        std::slice::from_ref(identity),
+        &AgentLaunchAppend {
+            workspace_id: workspace.workspace_id.clone(),
+            session_name: workspace.session_name.clone(),
+            cwd: cwd.to_path_buf(),
             worktree_name: None,
-            channel: identity.launch.channel.as_deref(),
+            channel: identity.launch.channel.clone(),
+            description: None,
             state: rimz::store::event::AgentLaunchState::Failed,
             pane_id: None,
         },

@@ -238,14 +238,15 @@ fn open_attempt_pane(
     };
     if let Err(err) = open_result {
         let _ = rimz::harness::run::fail(prepared.store.paths(), run_id);
-        let _ = append_launch_event(
-            &prepared.store,
-            &prepared.workspace,
-            launch_identity,
-            LaunchEventParams {
-                cwd: &prepared.launch.cwd,
-                worktree_name: prepared.launch.worktree_name.as_deref(),
-                channel: prepared.room_channel.as_deref(),
+        let _ = prepared.store.append_agent_launch_states(
+            std::slice::from_ref(launch_identity),
+            &AgentLaunchAppend {
+                workspace_id: prepared.workspace.workspace_id.clone(),
+                session_name: prepared.workspace.session_name.clone(),
+                cwd: prepared.launch.cwd.clone(),
+                worktree_name: prepared.launch.worktree_name.clone(),
+                channel: prepared.room_channel.clone(),
+                description: None,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
@@ -269,12 +270,9 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
     let PreparedLaunch {
         profiles: _profiles,
         teams: _teams,
-        mut layout,
+        layout,
         team_name: _team_name,
     } = prepare_launch_layout(args, &workspace, &machine_config, Some(mode), None)?;
-    if let Some(limit) = args.max_turns {
-        apply_supervised_turn_limit(&mut layout, limit)?;
-    }
     let agent_cells = agent_cells(&layout);
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");

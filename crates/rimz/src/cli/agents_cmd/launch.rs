@@ -1,4 +1,4 @@
-//! Interactive launch orchestration and CLI-side launch event sequencing.
+//! Interactive launch orchestration and presentation.
 
 use super::*;
 use crate::cli::room::build_sidebar_opts;
@@ -267,14 +267,15 @@ pub(super) fn launch_layout(
         }
     };
     if let Err(err) = open_result {
-        let _ = append_launch_events(
-            &store,
-            &workspace,
+        let _ = store.append_agent_launch_states(
             &launch_identities,
-            LaunchEventParams {
-                cwd: &cwd,
-                worktree_name: worktree_name.as_deref(),
-                channel: room_channel.as_deref(),
+            &AgentLaunchAppend {
+                workspace_id: workspace.workspace_id.clone(),
+                session_name: workspace.session_name.clone(),
+                cwd: cwd.clone(),
+                worktree_name: worktree_name.clone(),
+                channel: room_channel.clone(),
+                description: None,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
@@ -460,14 +461,15 @@ fn launch_resume_layout(
         }
     };
     if let Err(err) = open_result {
-        let _ = append_launch_events(
-            &store,
-            workspace,
+        let _ = store.append_agent_launch_states(
             &launch_identities,
-            LaunchEventParams {
-                cwd: &cwd,
+            &AgentLaunchAppend {
+                workspace_id: workspace.workspace_id.clone(),
+                session_name: workspace.session_name.clone(),
+                cwd: cwd.clone(),
                 worktree_name: None,
-                channel: channel.as_deref(),
+                channel: channel.clone(),
+                description: None,
                 state: rimz::store::event::AgentLaunchState::Failed,
                 pane_id: None,
             },
@@ -604,19 +606,20 @@ pub(super) fn prepare_launch_layout(
     if named_single_cell.is_some() && layout.agent_kinds().count() != 1 {
         bail!("--name requires a layout with exactly one agent cell");
     }
-    apply_launch_mode_and_passthrough(
+    let preset = launch_override_preset(args)?;
+    let warnings = finalize_launch_layout(
         &mut layout,
-        mode,
-        &launch_override_preset(args)?,
-        &args.passthrough,
+        LaunchFinalizeOptions {
+            permission_mode: mode,
+            preset: &preset,
+            passthrough: &args.passthrough,
+            budget: args.budget,
+            max_turns: args.max_turns,
+        },
     )?;
-    if let Some(budget) = args.budget {
-        apply_launch_budget(&mut layout, budget);
-    }
-    for warning in reconcile_preset_args(&mut layout) {
+    for warning in warnings {
         let _ = writeln!(std::io::stderr(), "{warning}");
     }
-    apply_default_launch_models(&mut layout)?;
     Ok(PreparedLaunch {
         profiles: launch.profiles,
         teams: launch.teams,
@@ -926,387 +929,10 @@ pub(super) fn reject_prompt_that_looks_like_spec(
     Ok(())
 }
 
-pub(super) fn apply_launch_mode_and_passthrough(
-    layout: &mut LayoutSpec,
-    mode: Option<PermissionMode>,
-    preset: &rimz::agents::LaunchPreset,
-    passthrough: &[String],
-) -> Result<()> {
-    for column in &mut layout.columns {
-        for cell in &mut column.rows {
-            let Cell::Agent {
-                kind,
-                args,
-                mode: cell_mode,
-                model,
-                effort,
-                ..
-            } = cell
-            else {
-                continue;
-            };
-            let adapter = rimz::agents::find_adapter(kind);
-            if let Some(mode) = mode
-                && cell_mode.is_none()
-                && let Some(adapter) = adapter
-            {
-                args.extend(adapter.permission_args(mode));
-                *cell_mode = Some(mode);
-            }
-            if !preset.is_empty() {
-                let adapter = adapter
-                    .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", kind.as_str()))?;
-                args.extend(adapter.render_preset(preset).map_err(launch_option_error)?);
-                if let Some(preset_model) = preset.model.as_ref().filter(|model| !model.is_empty())
-                {
-                    *model = Some(preset_model.clone());
-                }
-                if let Some(preset_effort) =
-                    preset.effort.as_ref().filter(|effort| !effort.is_empty())
-                {
-                    *effort = Some(preset_effort.clone());
-                }
-            }
-            args.extend(passthrough.iter().cloned());
-        }
-    }
-    Ok(())
-}
-
-fn apply_launch_budget(layout: &mut LayoutSpec, spec: rimz::harness::budget::BudgetSpec) {
-    let canonical = spec.to_string();
-    for column in &mut layout.columns {
-        for cell in &mut column.rows {
-            if let Cell::Agent { budget, .. } = cell {
-                *budget = Some(canonical.clone());
-            }
-        }
-    }
-}
-
-#[derive(Debug)]
-struct PresetArgOccurrence {
-    start: usize,
-    end: usize,
-    value: String,
-}
-
-/// Reconcile provider-native preset flags already present in a cell's argv.
-/// Declared RimZ fields win; an args-only model becomes the cell identity.
-pub(super) fn reconcile_preset_args(layout: &mut LayoutSpec) -> Vec<String> {
-    use rimz::agents::PresetField;
-
-    let mut warnings = Vec::new();
-    for column in &mut layout.columns {
-        for cell in &mut column.rows {
-            let Cell::Agent {
-                kind,
-                args,
-                model,
-                effort,
-                system_prompt_file,
-                append_system_prompt_file,
-                profile,
-                ..
-            } = cell
-            else {
-                continue;
-            };
-            let Some(adapter) = rimz::agents::find_adapter(kind) else {
-                continue;
-            };
-            let label = profile.as_deref().unwrap_or(kind.as_str());
-            let declared = [
-                (PresetField::Model, model.clone()),
-                (PresetField::Effort, effort.clone()),
-                (
-                    PresetField::SystemPromptFile,
-                    system_prompt_file
-                        .as_deref()
-                        .map(|path| path.to_string_lossy().into_owned()),
-                ),
-                (
-                    PresetField::AppendSystemPromptFile,
-                    append_system_prompt_file
-                        .as_deref()
-                        .map(|path| path.to_string_lossy().into_owned()),
-                ),
-            ];
-
-            for (field, value) in declared {
-                let Some(matcher) = adapter.preset_arg_matcher(field) else {
-                    continue;
-                };
-                let occurrences = preset_arg_occurrences(args, &matcher);
-                let Some(declared_value) = value else {
-                    if field == PresetField::Model
-                        && let Some(winner) = occurrences.last()
-                    {
-                        for occurrence in &occurrences[..occurrences.len() - 1] {
-                            if occurrence.value != winner.value {
-                                warnings.push(format!(
-                                    "warning: profile `{label}` args set {}; later model {} wins",
-                                    format_preset_setting(&matcher, &occurrence.value),
-                                    winner.value
-                                ));
-                            }
-                        }
-                        *model = Some(winner.value.clone());
-                        remove_occurrences(args, &occurrences[..occurrences.len() - 1]);
-                    }
-                    continue;
-                };
-                if occurrences.len() <= 1 {
-                    continue;
-                }
-                for occurrence in &occurrences {
-                    if occurrence.value != declared_value {
-                        warnings.push(format!(
-                            "warning: profile `{label}` args set {}; declared {} {} wins",
-                            format_preset_setting(&matcher, &occurrence.value),
-                            preset_field_name(field),
-                            declared_value
-                        ));
-                    }
-                }
-                // A matcher is declared only for fields this adapter renders;
-                // the registry-wide conformance test keeps the two in sync.
-                let canonical = adapter
-                    .render_preset(&single_field_preset(field, declared_value.clone()))
-                    .unwrap_or_else(|err| {
-                        unreachable!("matched preset field failed render: {err}")
-                    });
-                remove_occurrences(args, &occurrences);
-                args.extend(canonical);
-            }
-        }
-    }
-    warnings
-}
-
-fn single_field_preset(
-    field: rimz::agents::PresetField,
-    value: String,
-) -> rimz::agents::LaunchPreset {
-    use rimz::agents::PresetField;
-
-    let mut preset = rimz::agents::LaunchPreset::default();
-    match field {
-        PresetField::Model => preset.model = Some(value),
-        PresetField::Effort => preset.effort = Some(value),
-        PresetField::SystemPromptFile => preset.system_prompt_file = Some(value.into()),
-        PresetField::AppendSystemPromptFile => {
-            preset.append_system_prompt_file = Some(value.into())
-        }
-    }
-    preset
-}
-
-fn preset_field_name(field: rimz::agents::PresetField) -> &'static str {
-    match field {
-        rimz::agents::PresetField::Model => "model",
-        rimz::agents::PresetField::Effort => "effort",
-        rimz::agents::PresetField::SystemPromptFile => "system-prompt-file",
-        rimz::agents::PresetField::AppendSystemPromptFile => "append-system-prompt-file",
-    }
-}
-
-fn format_preset_setting(matcher: &rimz::agents::PresetArgMatcher, value: &str) -> String {
-    match matcher {
-        rimz::agents::PresetArgMatcher::Flag(flags) => format!("{} {value}", flags[0]),
-        rimz::agents::PresetArgMatcher::ConfigKey { key, .. } => format!("{key} {value}"),
-    }
-}
-
-fn preset_arg_occurrences(
-    args: &[String],
-    matcher: &rimz::agents::PresetArgMatcher,
-) -> Vec<PresetArgOccurrence> {
-    let mut occurrences = Vec::new();
-    let mut index = 0;
-    while index < args.len() {
-        let matched = match matcher {
-            rimz::agents::PresetArgMatcher::Flag(flags) => flags.iter().find_map(|flag| {
-                if args[index] == *flag {
-                    args.get(index + 1).map(|value| PresetArgOccurrence {
-                        start: index,
-                        end: index + 2,
-                        value: value.clone(),
-                    })
-                } else {
-                    args[index]
-                        .strip_prefix(flag)
-                        .and_then(|suffix| suffix.strip_prefix('='))
-                        .map(|value| PresetArgOccurrence {
-                            start: index,
-                            end: index + 1,
-                            value: value.to_owned(),
-                        })
-                }
-            }),
-            rimz::agents::PresetArgMatcher::ConfigKey { flags, key } => {
-                flags.iter().find_map(|flag| {
-                    let prefix = format!("{key}=");
-                    if args[index] == *flag {
-                        args.get(index + 1)
-                            .and_then(|value| value.strip_prefix(&prefix))
-                            .map(|value| PresetArgOccurrence {
-                                start: index,
-                                end: index + 2,
-                                value: value.to_owned(),
-                            })
-                    } else {
-                        args[index]
-                            .strip_prefix(flag)
-                            .and_then(|suffix| suffix.strip_prefix('='))
-                            .and_then(|value| value.strip_prefix(&prefix))
-                            .map(|value| PresetArgOccurrence {
-                                start: index,
-                                end: index + 1,
-                                value: value.to_owned(),
-                            })
-                    }
-                })
-            }
-        };
-        if let Some(occurrence) = matched {
-            index = occurrence.end;
-            occurrences.push(occurrence);
-        } else {
-            index += 1;
-        }
-    }
-    occurrences
-}
-
-fn remove_occurrences(args: &mut Vec<String>, occurrences: &[PresetArgOccurrence]) {
-    for occurrence in occurrences.iter().rev() {
-        args.drain(occurrence.start..occurrence.end);
-    }
-}
-
-pub(super) fn apply_supervised_turn_limit(layout: &mut LayoutSpec, limit: u32) -> Result<()> {
-    for column in &mut layout.columns {
-        for cell in &mut column.rows {
-            let Cell::Agent { kind, args, .. } = cell else {
-                continue;
-            };
-            let adapter = rimz::agents::find_adapter(kind)
-                .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", kind.as_str()))?;
-            let turn_args = adapter.max_turns_args(limit).ok_or_else(|| {
-                anyhow::anyhow!("{} does not support --max-turns", adapter.descriptor().kind)
-            })?;
-            args.extend(turn_args);
-        }
-    }
-    Ok(())
-}
-
-/// Fill each agent cell's launch model with the adapter's default when the spec
-/// left it unset. The default is rendered as a real provider argv preset and
-/// carried as the Rimz identity model, so a fresh card names a model
-/// immediately and the agent runs that model.
-pub(super) fn apply_default_launch_models(layout: &mut LayoutSpec) -> Result<()> {
-    for column in &mut layout.columns {
-        for cell in &mut column.rows {
-            let Cell::Agent {
-                kind, args, model, ..
-            } = cell
-            else {
-                continue;
-            };
-            if model.is_some() {
-                continue;
-            }
-            let Some(adapter) = rimz::agents::find_adapter(kind) else {
-                continue;
-            };
-            let Some(default) = adapter.default_launch_model() else {
-                continue;
-            };
-            let preset = rimz::agents::LaunchPreset {
-                model: Some(default.clone()),
-                ..Default::default()
-            };
-            args.extend(
-                adapter
-                    .render_preset(&preset)
-                    .map_err(launch_option_error)?,
-            );
-            *model = Some(default);
-        }
-    }
-    Ok(())
-}
-
-/// Map an unsupported-preset failure onto a CLI-shaped message naming the flag.
-fn launch_option_error(err: rimz::agents::PresetErr) -> anyhow::Error {
-    match err {
-        rimz::agents::PresetErr::UnsupportedField { agent, field } => {
-            anyhow::anyhow!("{agent} does not support --{field}")
-        }
-    }
-}
-
 pub(super) fn generated_worktree_name(launch: &agents_launch::ResolvedCwd) -> Option<&str> {
     launch
         .generated_worktree
         .then_some(launch.worktree_name.as_deref())?
-}
-
-pub(super) fn append_launch_events(
-    store: &rimz::Store,
-    workspace: &rimz::ResolvedWorkspace,
-    identities: &[LaunchIdentity],
-    params: LaunchEventParams<'_>,
-) -> Result<()> {
-    for identity in identities {
-        append_launch_event(store, workspace, identity, params.clone())?;
-    }
-    Ok(())
-}
-
-pub(super) fn append_launch_event(
-    store: &rimz::Store,
-    workspace: &rimz::ResolvedWorkspace,
-    identity: &LaunchIdentity,
-    params: LaunchEventParams<'_>,
-) -> Result<()> {
-    let runtime_owner = params.pane_id.as_ref().map(|_| {
-        rimz::store::runtime::current_process_owner(
-            rimz::pane::RuntimeOwnerKind::Agent,
-            identity.agent_id.as_str(),
-        )
-    });
-    let mut launch = identity.launch.clone();
-    launch.channel = launch
-        .channel
-        .or_else(|| params.channel.map(ToOwned::to_owned));
-    let event = rimz::store::event::EventEnvelope::agent_launched(
-        workspace.workspace_id.clone(),
-        workspace.session_name.clone(),
-        &identity.kind,
-        rimz::store::event::AgentLaunchPayload {
-            agent_id: identity.agent_id.clone(),
-            agent_name: identity.name.clone(),
-            agent_name_explicit: identity.name_explicit,
-            launch,
-            state: params.state,
-            run_id: identity.run_id.clone(),
-            pane_id: params.pane_id,
-            runtime_owner,
-            worktree_path: Some(params.cwd.to_string_lossy().into_owned()),
-            worktree_branch: params.worktree_name.map(ToOwned::to_owned),
-            prompt: identity
-                .prompt
-                .as_deref()
-                .filter(|prompt| !prompt.trim().is_empty())
-                .map(ToOwned::to_owned),
-            description: None,
-        },
-    );
-    store.append_event(&event)?;
-    Ok(())
 }
 
 #[cfg(test)]

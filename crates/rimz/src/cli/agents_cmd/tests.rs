@@ -21,16 +21,6 @@ struct AgentsHarness {
     args: AgentsArgs,
 }
 
-fn only_agent(layout: &LayoutSpec) -> (&[String], Option<PermissionMode>) {
-    let [column] = layout.columns.as_slice() else {
-        panic!("single column");
-    };
-    let [Cell::Agent { args, mode, .. }] = column.rows.as_slice() else {
-        panic!("single agent cell");
-    };
-    (args, *mode)
-}
-
 fn agent_profile(
     system_prompt_file: Option<&Path>,
     append_system_prompt_file: Option<&Path>,
@@ -695,255 +685,153 @@ mod launch_options {
     }
 
     #[test]
-    fn launch_options_apply_without_overwriting_spec_identity() {
-        let auto_args = rimz::agents::find_adapter("codex")
-            .expect("codex")
-            .permission_args(PermissionMode::Auto);
-        let cell = |args, mode| Cell::Agent {
-            kind: AgentKind::new_unchecked("codex"),
-            args,
-            mode,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: Some("codex-coder".to_owned()),
-            role: Some("coder".to_owned()),
-            model: Some("profile-model".to_owned()),
-            effort: Some("medium".to_owned()),
-            budget: None,
-        };
-        let mut layout =
-            LayoutSpec::single(cell(vec!["--model".into(), "profile-model".into()], None));
-        layout.columns[0]
-            .rows
-            .push(cell(auto_args.clone(), Some(PermissionMode::Auto)));
-        apply_launch_mode_and_passthrough(
-            &mut layout,
-            Some(PermissionMode::Yolo),
-            &rimz::agents::LaunchPreset {
-                model: Some("override-model".to_owned()),
-                effort: Some("xhigh".to_owned()),
-                ..rimz::agents::LaunchPreset::default()
+    fn prepare_launch_layout_finalizes_profile_cli_and_passthrough_precedence() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None)
+            .expect("resolve workspace");
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.agents.profiles.0.insert(
+            "planner".to_owned(),
+            rimz::config::Profile {
+                agent: "codex".to_owned(),
+                mode: None,
+                model: Some("profile".to_owned()),
+                effort: Some("high".to_owned()),
+                budget: None,
+                system_prompt_file: None,
+                append_system_prompt_file: None,
+                args: Some("--model raw-profile --config=model_reasoning_effort=low".to_owned()),
             },
-            &["--debug".to_owned()],
+        );
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz",
+            "planner",
+            "--model",
+            "override",
+            "--effort",
+            "xhigh",
+            "--budget",
+            "2/day",
+            "--yolo",
+            "--",
+            "--model",
+            "raw-cli",
+            "-c",
+            "model_reasoning_effort=medium",
+        ])
+        .expect("parse launch");
+
+        let prepared = prepare_launch_layout(
+            &parsed.args,
+            &workspace,
+            &machine,
+            interactive_permission_mode_from_flags(parsed.args.ask, parsed.args.yolo)
+                .expect("permission mode"),
+            None,
         )
-        .expect("apply launch options");
+        .expect("prepare launch");
         let [
             Cell::Agent {
-                args: unset_args,
-                mode: unset_mode,
-                model: unset_model,
-                effort: unset_effort,
+                args,
+                mode,
+                model,
+                effort,
+                budget,
                 ..
             },
-            Cell::Agent {
-                args: preset_args,
-                mode: preset_mode,
-                model: preset_model,
-                effort: preset_effort,
-                ..
-            },
-        ] = layout.columns[0].rows.as_slice()
+        ] = prepared.layout.columns[0].rows.as_slice()
         else {
-            panic!("two agents")
+            panic!("one agent")
         };
+        assert_eq!(*mode, Some(PermissionMode::Yolo));
+        assert_eq!(model.as_deref(), Some("override"));
+        assert_eq!(effort.as_deref(), Some("xhigh"));
+        assert_eq!(budget.as_deref(), Some("$2.00/day"));
         assert_eq!(
-            (*unset_mode, *preset_mode),
-            (Some(PermissionMode::Yolo), Some(PermissionMode::Auto))
-        );
-        assert!(unset_args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_owned()));
-        assert!(preset_args.starts_with(&auto_args));
-        for args in [unset_args, preset_args] {
-            assert!(
-                args.windows(2)
-                    .any(|pair| pair == ["--model", "override-model"])
-            );
-            assert!(
-                args.iter().any(|arg| arg.contains("xhigh"))
-                    && args.contains(&"--debug".to_owned())
-            );
-        }
-        assert_eq!(
-            (unset_model.as_deref(), unset_effort.as_deref()),
-            (Some("override-model"), Some("xhigh"))
-        );
-        assert_eq!(
-            (preset_model.as_deref(), preset_effort.as_deref()),
-            (Some("override-model"), Some("xhigh"))
-        );
-    }
-
-    #[test]
-    fn default_launch_models_stamp_only_cells_without_models() {
-        let codex_default = rimz::agents::find_adapter("codex")
-            .expect("codex")
-            .default_launch_model()
-            .expect("codex default model");
-        let explicit = Cell::Agent {
-            kind: AgentKind::new_unchecked("codex"),
-            args: vec!["--model".to_owned(), "o3".to_owned()],
-            mode: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: None,
-            role: None,
-            model: Some("o3".to_owned()),
-            effort: None,
-            budget: None,
-        };
-        let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
-        layout.columns[0]
-            .rows
-            .extend([explicit, Cell::agent(AgentKind::new_unchecked("claude"))]);
-        apply_default_launch_models(&mut layout).expect("apply defaults");
-        assert!(matches!(&layout.columns[0].rows[0],
-            Cell::Agent { args, model: Some(model), .. }
-                if model == &codex_default && args == &["--model", codex_default.as_str()]));
-        assert!(matches!(&layout.columns[0].rows[1],
-            Cell::Agent { args, model: Some(model), .. }
-                if model == "o3" && args == &["--model", "o3"]));
-        assert_eq!(
-            layout.columns[0].rows[2],
-            Cell::agent(AgentKind::new_unchecked("claude"))
-        );
-    }
-
-    fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&str>) -> Cell {
-        Cell::Agent {
-            kind: AgentKind::new_unchecked(kind),
-            args: args.iter().map(|value| (*value).to_owned()).collect(),
-            mode: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: Some(format!("{kind}-coder")),
-            role: None,
-            model: model.map(str::to_owned),
-            effort: effort.map(str::to_owned),
-            budget: None,
-        }
-    }
-
-    #[test]
-    fn args_only_model_becomes_identity_and_suppresses_default() {
-        let mut layout = LayoutSpec::single(preset_cell(
-            "codex",
-            &["--debug", "--model", "gpt-5.6-sol"],
-            None,
-            None,
-        ));
-        assert!(reconcile_preset_args(&mut layout).is_empty());
-        apply_default_launch_models(&mut layout).expect("apply defaults");
-        assert!(matches!(&layout.columns[0].rows[0],
-            Cell::Agent { args, model: Some(model), .. }
-                if model == "gpt-5.6-sol"
-                    && args == &["--debug", "--model", "gpt-5.6-sol"]));
-    }
-
-    #[test]
-    fn declared_model_replaces_different_args_and_dedupes_equal_args_silently() {
-        let mut different = LayoutSpec::single(preset_cell(
-            "codex",
-            &["--model", "gpt-5.6-max", "--model=gpt-5.6-sol"],
-            Some("gpt-5.6-max"),
-            None,
-        ));
-        assert_eq!(
-            reconcile_preset_args(&mut different),
-            [
-                "warning: profile `codex-coder` args set --model gpt-5.6-sol; declared model gpt-5.6-max wins"
+            args,
+            &[
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--model",
+                "override",
+                "-c",
+                "model_reasoning_effort=xhigh",
             ]
         );
-        assert!(matches!(&different.columns[0].rows[0],
-            Cell::Agent { args, .. } if args == &["--model", "gpt-5.6-max"]));
-
-        let mut equal = LayoutSpec::single(preset_cell(
-            "codex",
-            &["--model", "gpt-5.6-max", "-m", "gpt-5.6-max"],
-            Some("gpt-5.6-max"),
-            None,
-        ));
-        assert!(reconcile_preset_args(&mut equal).is_empty());
-        assert!(matches!(&equal.columns[0].rows[0],
-            Cell::Agent { args, .. } if args == &["--model", "gpt-5.6-max"]));
     }
 
     #[test]
-    fn args_only_model_uses_last_short_or_joined_occurrence() {
-        let mut layout = LayoutSpec::single(preset_cell(
-            "codex",
-            &["--model=first", "--debug", "-m", "second"],
-            None,
-            None,
-        ));
-        assert_eq!(reconcile_preset_args(&mut layout).len(), 1);
-        assert!(matches!(&layout.columns[0].rows[0],
-            Cell::Agent { args, model: Some(model), .. }
-                if model == "second" && args == &["--debug", "-m", "second"]));
-    }
-
-    #[test]
-    fn launch_model_override_wins_over_profile_and_args_models() {
-        let mut layout = LayoutSpec::single(preset_cell(
-            "codex",
-            &["--model", "profile", "--model", "raw"],
-            Some("profile"),
-            None,
-        ));
-        apply_launch_mode_and_passthrough(
-            &mut layout,
-            None,
-            &rimz::agents::LaunchPreset {
-                model: Some("override".into()),
-                ..Default::default()
+    fn prepare_launch_layout_retains_profile_mode_and_wires_turn_limits() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None)
+            .expect("resolve workspace");
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.agents.profiles.0.insert(
+            "asked".to_owned(),
+            rimz::config::Profile {
+                agent: "codex".to_owned(),
+                mode: Some(PermissionMode::Ask),
+                model: None,
+                effort: None,
+                budget: None,
+                system_prompt_file: None,
+                append_system_prompt_file: None,
+                args: None,
             },
-            &[],
-        )
-        .expect("apply override");
-        assert_eq!(reconcile_preset_args(&mut layout).len(), 2);
-        assert!(matches!(&layout.columns[0].rows[0],
-            Cell::Agent { args, model: Some(model), .. }
-                if model == "override" && args == &["--model", "override"]));
-    }
-
-    #[test]
-    fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags() {
-        let mut codex = LayoutSpec::single(preset_cell(
-            "codex",
-            &[
-                "-c",
-                "model_reasoning_effort=high",
-                "-c",
-                "web_search=cached",
-                "--config=model_reasoning_effort=low",
-            ],
-            None,
-            Some("high"),
-        ));
-        assert_eq!(reconcile_preset_args(&mut codex).len(), 1);
-        assert!(matches!(&codex.columns[0].rows[0],
-            Cell::Agent { args, .. }
-                if args == &["-c", "web_search=cached", "-c", "model_reasoning_effort=high"]));
-
-        let mut claude =
-            LayoutSpec::single(preset_cell("claude", &["--effort", "high"], None, None));
-        assert!(reconcile_preset_args(&mut claude).is_empty());
-        assert!(matches!(&claude.columns[0].rows[0],
-            Cell::Agent { args, effort: None, .. } if args == &["--effort", "high"]));
-    }
-
-    #[test]
-    fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
-        let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
-        apply_supervised_turn_limit(&mut layout, 3).expect("claude supports max turns");
-        let (args, _) = only_agent(&layout);
-        assert_eq!(args, &["--max-turns", "3"]);
-
-        let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
-        let err = apply_supervised_turn_limit(&mut layout, 3).expect_err("codex rejects max turns");
-        assert!(
-            err.to_string()
-                .contains("codex does not support --max-turns"),
-            "{err:#}"
         );
+        let parsed =
+            AgentsHarness::try_parse_from(["rimz", "asked,codex", "--yolo"]).expect("parse launch");
+        let prepared = prepare_launch_layout(
+            &parsed.args,
+            &workspace,
+            &machine,
+            Some(PermissionMode::Yolo),
+            None,
+        )
+        .expect("prepare launch");
+        let modes = prepared
+            .layout
+            .agent_cells()
+            .map(|cell| match cell {
+                Cell::Agent { mode, .. } => *mode,
+                Cell::Command { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            modes,
+            [Some(PermissionMode::Ask), Some(PermissionMode::Yolo)]
+        );
+
+        let parsed =
+            AgentsHarness::try_parse_from(["rimz", "claude", "run", "--print", "--max-turns", "3"])
+                .expect("parse supervised launch");
+        let prepared = prepare_launch_layout(
+            &parsed.args,
+            &workspace,
+            &machine,
+            Some(PermissionMode::Auto),
+            None,
+        )
+        .expect("prepare supervised launch");
+        let [Cell::Agent { args, model, .. }] = prepared.layout.columns[0].rows.as_slice() else {
+            panic!("one agent")
+        };
+        assert_eq!(args, &["--permission-mode", "auto", "--max-turns", "3"]);
+        assert_eq!(model, &None);
+
+        let parsed =
+            AgentsHarness::try_parse_from(["rimz", "codex", "run", "--print", "--max-turns", "3"])
+                .expect("parse unsupported turn limit");
+        let err = match prepare_launch_layout(
+            &parsed.args,
+            &workspace,
+            &machine,
+            Some(PermissionMode::Auto),
+            None,
+        ) {
+            Ok(_) => panic!("codex should reject max turns"),
+            Err(err) => err,
+        };
+        assert_eq!(err.to_string(), "codex does not support --max-turns");
     }
 }
 

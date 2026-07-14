@@ -39,9 +39,9 @@ use crate::cli::room::RoomTarget;
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
-    LayoutPaneParams, Placement, apply_in_place_downgrade, cohort_cells,
-    fresh_resume_launch_requests, launch_identity_requests, layout_panes_with_names,
-    mint_launch_id, resolve_placement, validate_agent_name,
+    LaunchFinalizeOptions, LayoutPaneParams, Placement, apply_in_place_downgrade, cohort_cells,
+    finalize_launch_layout, fresh_resume_launch_requests, launch_identity_requests,
+    layout_panes_with_names, mint_launch_id, resolve_placement, validate_agent_name,
 };
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::{Cell, LayoutSpec};
@@ -86,15 +86,6 @@ static CLEANUP_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 static INTERRUPT_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 type LaunchIdentity = AgentLaunchIdentity;
-
-#[derive(Clone)]
-struct LaunchEventParams<'a> {
-    cwd: &'a Path,
-    worktree_name: Option<&'a str>,
-    channel: Option<&'a str>,
-    state: rimz::store::event::AgentLaunchState,
-    pane_id: Option<rimz::ids::PaneId>,
-}
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
