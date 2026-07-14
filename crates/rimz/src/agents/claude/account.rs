@@ -44,11 +44,10 @@ struct ClaudeAuthStatus {
     subscription_type: Option<String>,
 }
 
-/// Map a `claude auth status` JSON payload onto a probe outcome. A subscription
-/// tier marks a metered (rate-limited) account; an API-key login carries no tier
-/// and is unmetered — the dashboard's "infinite" bar. A logged-out, or a valid
-/// payload naming neither a tier nor an auth method, is `LoggedOut`; unparseable
-/// output is `Unavailable` (the CLI misbehaved — retry), not a confident logout.
+/// Map a `claude auth status` JSON payload onto a probe outcome. The auth method
+/// determines metering; the subscription tier is an independent display label.
+/// Unparseable output is `Unavailable` (the CLI misbehaved — retry), not a
+/// confident logout.
 fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     let Ok(status) = serde_json::from_slice::<ClaudeAuthStatus>(stdout) else {
         return AccountProbe::Unavailable;
@@ -56,19 +55,25 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     if status.logged_in == Some(false) {
         return AccountProbe::LoggedOut;
     }
-    let plan = status.subscription_type.filter(|tier| !tier.is_empty());
-    if plan.is_none() && status.auth_method.is_none() {
+    let auth_method = status.auth_method.and_then(non_empty_trimmed);
+    let plan = status.subscription_type.and_then(non_empty_trimmed);
+    if status.logged_in != Some(true) && plan.is_none() && auth_method.is_none() {
         return AccountProbe::LoggedOut;
     }
-    let metered = plan.is_some() && status.auth_method.as_deref() != Some("apiKey");
+    let metered = auth_method.map(|method| method != "apiKey");
     AccountProbe::Found(AgentAccount {
         plan,
         account_id: None,
-        metered: Some(metered),
+        metered,
         version: None,
         sub_provider: None,
         credentials_updated_at_ms: None,
     })
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 #[cfg(test)]
@@ -96,10 +101,29 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("max"));
         assert_eq!(account.metered, Some(true));
 
+        let json = br#"{ "loggedIn": true, "authMethod": "claude.ai" }"#;
+        let account = found(parse_claude_auth(json), "metered account without tier");
+        assert_eq!(account.plan, None);
+        assert_eq!(account.metered, Some(true));
+
         let json = br#"{ "loggedIn": true, "authMethod": "apiKey" }"#;
         let account = found(parse_claude_auth(json), "api-key account");
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
+
+        let json = br#"{
+            "loggedIn": true,
+            "authMethod": " ",
+            "subscriptionType": " "
+        }"#;
+        let account = found(parse_claude_auth(json), "login without method or tier");
+        assert_eq!(account.plan, None);
+        assert_eq!(account.metered, None);
+
+        let json = br#"{ "loggedIn": true, "subscriptionType": " max " }"#;
+        let account = found(parse_claude_auth(json), "tier without method");
+        assert_eq!(account.plan.as_deref(), Some("max"));
+        assert_eq!(account.metered, None);
 
         let json = br#"{ "loggedIn": false }"#;
         assert!(matches!(parse_claude_auth(json), AccountProbe::LoggedOut));

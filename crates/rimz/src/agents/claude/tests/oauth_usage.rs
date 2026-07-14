@@ -32,6 +32,7 @@ fn credentials_parse_token_expiry_and_scope() {
     )
     .unwrap();
     assert_eq!(credentials.access_token, "tok_123");
+    assert_eq!(credentials.account_key.len(), 64);
 
     assert!(matches!(
         parse_credentials(
@@ -68,6 +69,44 @@ fn credentials_parse_token_expiry_and_scope() {
         ),
         Err(ClaudeOauthUsageErr::TokenExpired)
     ));
+}
+
+#[test]
+fn account_key_prefers_refresh_token_and_never_contains_credentials() {
+    fn credentials(access: &str, refresh: Option<&str>) -> ClaudeOauthCredentials {
+        let refresh = refresh
+            .map(|token| format!(r#", "refreshToken": "{token}""#))
+            .unwrap_or_default();
+        parse_credentials(
+            format!(
+                r#"{{
+                    "claudeAiOauth": {{
+                        "accessToken": "{access}"{refresh},
+                        "expiresAt": 4102444800000,
+                        "scopes": ["user:profile"]
+                    }}
+                }}"#
+            )
+            .as_bytes(),
+        )
+        .unwrap()
+    }
+
+    let first = credentials("access-one", Some("refresh-one"));
+    let rotated = credentials("access-two", Some("refresh-one"));
+    let switched = credentials("access-two", Some("refresh-two"));
+    let access_only = credentials("access-only", None);
+
+    assert_eq!(first.account_key, rotated.account_key);
+    assert_ne!(first.account_key, switched.account_key);
+    assert_eq!(
+        access_only.account_key,
+        account_key("access-token", "access-only")
+    );
+    for secret in ["access-one", "access-two", "refresh-one", "refresh-two"] {
+        assert!(!first.account_key.contains(secret));
+        assert!(!switched.account_key.contains(secret));
+    }
 }
 
 #[test]

@@ -13,7 +13,7 @@ fn reportable_classifier_treats_unauthorized_as_settled_auth() {
         .should_report()
     );
     assert!(
-        CodexOauthUsageErr::Http {
+        !CodexOauthUsageErr::Http {
             kind: HttpErrKind::Status(403),
             host: "chatgpt.com".to_owned(),
         }
@@ -53,6 +53,13 @@ fn credentials_distinguish_api_key_and_oauth_login() {
     )
     .unwrap();
     assert_eq!(credentials.access_token, "ya29-token");
+    assert_eq!(credentials.account_id.as_deref(), Some("acc_123"));
+
+    let credentials = parse_credentials(
+        br#"{ "tokens": { "access_token": " token ", "account_id": " acc_123 " } }"#,
+    )
+    .unwrap();
+    assert_eq!(credentials.access_token, "token");
     assert_eq!(credentials.account_id.as_deref(), Some("acc_123"));
 }
 

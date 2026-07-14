@@ -154,6 +154,9 @@ fn oauth_http_get_once(
 /// balances.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AccountUsageSnapshot {
+    /// Opaque, non-secret discriminator for the local login whose credentials
+    /// produced this observation. This is cache identity, never display identity.
+    pub account_key: Option<String>,
     pub rate_limits: Option<AgentRateLimits>,
     pub extra_credits: Option<ExtraCredits>,
     pub reset_credits: Option<ResetCredits>,

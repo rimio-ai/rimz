@@ -110,6 +110,8 @@ struct CodexAuth {
 struct CodexTokens {
     #[serde(default)]
     access_token: Option<String>,
+    #[serde(default)]
+    account_id: Option<String>,
 }
 
 /// Map a `~/.codex/auth.json` payload onto a probe outcome by login shape: a
@@ -137,14 +139,12 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
             credentials_updated_at_ms: None,
         });
     }
-    if auth
-        .tokens
-        .and_then(|tokens| tokens.access_token)
-        .is_some_and(|token| !token.is_empty())
+    if let Some(tokens) = auth.tokens
+        && tokens.access_token.is_some_and(|token| !token.is_empty())
     {
         return AccountProbe::Found(AgentAccount {
             plan: None,
-            account_id: None,
+            account_id: tokens.account_id.and_then(non_empty_trimmed),
             metered: Some(true),
             version: None,
             sub_provider: None,
@@ -152,6 +152,11 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
         });
     }
     AccountProbe::LoggedOut
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 #[cfg(test)]
@@ -180,6 +185,7 @@ mod tests {
         let account = found(parse_codex_auth(json), "chatgpt login");
         // The plan tier and budgets ride the live app-server context, not the file.
         assert_eq!(account.plan, None);
+        assert_eq!(account.account_id.as_deref(), Some("acc_1"));
         assert_eq!(account.metered, Some(true));
 
         // A readable auth file remains authoritative. The CLI fallback is only

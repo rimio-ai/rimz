@@ -9,10 +9,13 @@
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
+#[cfg(target_os = "macos")]
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use jiff::Timestamp;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::{OauthUsageResponse, file_mtime_ms, oauth_http_get};
@@ -23,6 +26,9 @@ use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate
 const DEFAULT_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const URL_ENV: &str = "RIMZ_CLAUDE_OAUTH_USAGE_URL";
 const USER_AGENT_FALLBACK_VERSION: &str = "unknown";
+const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz/claude-oauth-account-key/v1";
+#[cfg(target_os = "macos")]
+const KEYCHAIN_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ClaudeOauthUsageErr {
@@ -61,6 +67,7 @@ pub(crate) type Result<T> = std::result::Result<T, ClaudeOauthUsageErr>;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClaudeOauthCredentials {
     access_token: String,
+    account_key: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -73,6 +80,7 @@ struct CredentialsFile {
 #[serde(default, rename_all = "camelCase")]
 struct ClaudeAiOauth {
     access_token: Option<String>,
+    refresh_token: Option<String>,
     expires_at: Option<i64>,
     scopes: Option<Vec<String>>,
 }
@@ -112,7 +120,8 @@ pub(crate) fn fetch_usage_with_token(
     fetch_usage_with_url(
         &usage_url(),
         &ClaudeOauthCredentials {
-            access_token: access_token.to_owned(),
+            access_token: access_token.trim().to_owned(),
+            account_key: account_key("access-token", access_token.trim()),
         },
         cli_version,
     )
@@ -130,7 +139,8 @@ pub(crate) fn load_credentials() -> Result<ClaudeOauthCredentials> {
 fn load_keychain_credentials() -> Result<ClaudeOauthCredentials> {
     #[cfg(target_os = "macos")]
     {
-        let output = Command::new("security")
+        let mut command = Command::new("/usr/bin/security");
+        command
             .args([
                 "find-generic-password",
                 "-s",
@@ -139,10 +149,10 @@ fn load_keychain_credentials() -> Result<ClaudeOauthCredentials> {
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
+            .stderr(Stdio::null());
+        let output = crate::proc::run_bounded_output(&mut command, KEYCHAIN_TIMEOUT)
             .map_err(ClaudeOauthUsageErr::Io)?;
-        if !output.status.success() {
+        if output.timed_out || !output.status.success() {
             return Err(ClaudeOauthUsageErr::NoCredentials);
         }
         parse_credentials(&output.stdout)
@@ -161,14 +171,21 @@ pub(crate) fn credentials_stamp() -> Option<u64> {
     file_mtime_ms(&credentials_path())
 }
 
+pub(crate) fn current_account_key() -> Option<String> {
+    load_credentials()
+        .ok()
+        .map(|credentials| credentials.account_key)
+}
+
 pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {
     let parsed: CredentialsFile = serde_json::from_slice(bytes)?;
     let Some(oauth) = parsed.claude_ai_oauth else {
         return Err(ClaudeOauthUsageErr::NoCredentials);
     };
-    let Some(access_token) = oauth.access_token.filter(|token| !token.is_empty()) else {
+    let Some(access_token) = oauth.access_token.and_then(non_empty_trimmed) else {
         return Err(ClaudeOauthUsageErr::NoCredentials);
     };
+    let refresh_token = oauth.refresh_token.and_then(non_empty_trimmed);
     let scopes = oauth.scopes.unwrap_or_default();
     if !scopes.iter().any(|scope| scope == "user:profile") {
         return Err(ClaudeOauthUsageErr::MissingScope);
@@ -179,7 +196,16 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> 
     if expires_at <= unix_now_ms() as i64 {
         return Err(ClaudeOauthUsageErr::TokenExpired);
     }
-    Ok(ClaudeOauthCredentials { access_token })
+    let account_key_source = refresh_token
+        .as_deref()
+        .map_or(("access-token", access_token.as_str()), |token| {
+            ("refresh-token", token)
+        });
+    let account_key = account_key(account_key_source.0, account_key_source.1);
+    Ok(ClaudeOauthCredentials {
+        access_token,
+        account_key,
+    })
 }
 
 pub(crate) fn fetch_usage_with_url(
@@ -188,7 +214,24 @@ pub(crate) fn fetch_usage_with_url(
     cli_version: Option<&str>,
 ) -> Result<AccountUsageSnapshot> {
     let body = http_get(url, &credentials.access_token, cli_version)?;
-    parse_usage_response(&body)
+    let mut snapshot = parse_usage_response(&body)?;
+    snapshot.account_key = Some(credentials.account_key.clone());
+    Ok(snapshot)
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn account_key(secret_kind: &str, secret: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(ACCOUNT_KEY_DOMAIN);
+    hasher.update([0]);
+    hasher.update(secret_kind.as_bytes());
+    hasher.update([0]);
+    hasher.update(secret.as_bytes());
+    hex::encode(hasher.finalize())
 }
 
 fn usage_url() -> String {
@@ -229,6 +272,7 @@ pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
 impl OauthUsageResponse for UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
         AccountUsageSnapshot {
+            account_key: None,
             rate_limits: collect_rate_limits(self.five_hour, self.seven_day),
             extra_credits: collect_extra_usage(self.extra_usage),
             reset_credits: None,

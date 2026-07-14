@@ -36,13 +36,16 @@ pub(crate) enum CodexOauthUsageErr {
 impl crate::agents::credits::OauthReportable for CodexOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent or API-key-only
     /// credentials are the normal state for an app-server or logged-out account,
-    /// not a fault; a provider 401 is the expired/revoked-token state rather
-    /// than a Rimz fault. Parse and other HTTP failures are.
+    /// not a fault; provider 401 and 403 responses are settled auth verdicts
+    /// rather than Rimz faults. Parse and other HTTP failures are.
     fn should_report(&self) -> bool {
         !matches!(self, Self::NoCredentials | Self::ApiKeyOnly)
             && !matches!(
                 self,
-                Self::Http { kind, .. } if kind.is_auth_rejected()
+                Self::Http {
+                    kind: HttpErrKind::Status(401 | 403),
+                    ..
+                }
             )
     }
 }
@@ -167,12 +170,12 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
     let Some(tokens) = auth.tokens else {
         return Err(CodexOauthUsageErr::NoCredentials);
     };
-    let Some(access_token) = tokens.access_token.filter(|token| !token.is_empty()) else {
+    let Some(access_token) = tokens.access_token.and_then(non_empty_trimmed) else {
         return Err(CodexOauthUsageErr::NoCredentials);
     };
     Ok(CodexOauthCredentials {
         access_token,
-        account_id: tokens.account_id.filter(|id| !id.is_empty()),
+        account_id: tokens.account_id.and_then(non_empty_trimmed),
     })
 }
 
@@ -215,7 +218,9 @@ pub(crate) fn fetch_usage_with_url(
     credentials: &CodexOauthCredentials,
 ) -> Result<AccountUsageSnapshot> {
     let body = http_get(url, credentials)?;
-    parse_usage_response(&body)
+    let mut snapshot = parse_usage_response(&body)?;
+    snapshot.account_key = credentials.account_id.clone();
+    Ok(snapshot)
 }
 
 fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
@@ -282,6 +287,7 @@ fn fetch_reset_credits(url: &str, credentials: &CodexOauthCredentials) -> Result
 impl OauthUsageResponse for UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
         AccountUsageSnapshot {
+            account_key: None,
             rate_limits: collect_windows(
                 self.rate_limit.primary_window,
                 self.rate_limit.secondary_window,
