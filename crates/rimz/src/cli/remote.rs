@@ -367,6 +367,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 remote.mux,
                 &term,
                 rimz::tui::truecolor(),
+                false,
                 None,
             );
             supervisor::print_remote_command(&plain_spec);
@@ -391,22 +392,47 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 remote.mux,
                 &term,
                 truecolor,
+                false,
                 None,
             );
             if remote.reconnect {
                 let control = rimz::remote::link::validated_control_path()
                     .context("checking SSH ControlMaster socket path")?;
-                let control_spec = ssh_attach_spec(
-                    &remote.target,
-                    remote.no_resume,
-                    remote.mux,
-                    &term,
-                    truecolor,
-                    Some(&control),
-                );
+                let first = supervisor::AttachSpecs {
+                    control: ssh_attach_spec(
+                        &remote.target,
+                        remote.no_resume,
+                        remote.mux,
+                        &term,
+                        truecolor,
+                        false,
+                        Some(&control),
+                    ),
+                    plain: plain_spec,
+                };
+                let retry = supervisor::AttachSpecs {
+                    control: ssh_attach_spec(
+                        &remote.target,
+                        remote.no_resume,
+                        remote.mux,
+                        &term,
+                        truecolor,
+                        true,
+                        Some(&control),
+                    ),
+                    plain: ssh_attach_spec(
+                        &remote.target,
+                        remote.no_resume,
+                        remote.mux,
+                        &term,
+                        truecolor,
+                        true,
+                        None,
+                    ),
+                };
                 supervisor::supervise_remote(
-                    &control_spec,
-                    &plain_spec,
+                    &first,
+                    &retry,
                     &remote.target,
                     &control,
                     remote.origin.as_str(),
@@ -513,6 +539,7 @@ mod tests {
             raw.mux,
             &TermPlan::Keep,
             false,
+            false,
             None,
         );
         assert_eq!(raw_spec.args[10], "prod");
@@ -526,6 +553,7 @@ mod tests {
             named.no_resume,
             named.mux,
             &TermPlan::Keep,
+            false,
             false,
             None,
         );

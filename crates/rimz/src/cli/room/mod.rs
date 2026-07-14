@@ -134,7 +134,7 @@ impl RoomEntry<'_> {
             }
             Self::Start { .. } | Self::AttachCwd { .. } | Self::AttachSession { .. } => false,
         };
-        resume_prompt_mode(confirm_resume, std::io::stdin().is_terminal())
+        resume_prompt_mode(confirm_resume, start_attended())
     }
 
     fn refresh_ms(&self) -> Option<u16> {
@@ -164,6 +164,12 @@ fn resume_prompt_mode(confirm_resume: bool, stdin_is_terminal: bool) -> ResumePr
     } else {
         ResumePromptMode::Silent
     }
+}
+
+/// A start driven by the remote link supervisor's retry loop is unattended:
+/// consent gates fall back to their non-interactive behavior.
+fn start_attended() -> bool {
+    std::io::stdin().is_terminal() && !rimz::remote::reconnect_marked()
 }
 
 pub(crate) fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
@@ -335,7 +341,7 @@ fn ensure_default_config_for_start() -> Result<bool> {
     let config_was_missing = !rimz::config::MachineConfig::config_path().exists();
     let initialized_config = setup::ensure_default_config()?;
     let first_run = config_was_missing && rimz::config::MachineConfig::config_path().exists();
-    if initialized_config && !(first_run && std::io::stdin().is_terminal()) {
+    if initialized_config && !(first_run && start_attended()) {
         report_initialized_config()?;
     }
     Ok(first_run)
@@ -444,15 +450,22 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     };
 
     run_room_preflights(&entry, mux)?;
-    let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) {
-        ensure_detected_agent_hooks()?
+
+    let backend = rimz::mux::backend_for(mux);
+    // Capture whether this is a plain reattach *before* `ensure_session`, which on
+    // tmux would create the session and erase the distinction. A healthy live room
+    // re-seeds nothing; only a birth (absent or stuck) resumes prior agents.
+    let was_live = session_is_healthy_live(backend.as_ref(), entry.session_name());
+
+    let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
+        ensure_detected_agent_hooks(start_attended())?
     } else {
         false
     };
     if let RoomEntry::Start {
         first_run: true, ..
     } = &entry
-        && std::io::stdin().is_terminal()
+        && start_attended()
     {
         let defaults = first_run::Defaults::from_config(&machine_config, rimz::tui::truecolor());
         first_run::run(
@@ -477,17 +490,12 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     // pane's birth size; the pair sizes a detached tmux birth.
     let detected_size = rimz::mux::detect_terminal_size();
     let remote_control = &machine_config.remote_control;
-    let backend = rimz::mux::backend_for(mux);
     if let RoomEntry::Start { workspace, .. }
     | RoomEntry::StartWeb { workspace, .. }
     | RoomEntry::AttachCwd { workspace, .. } = &entry
     {
         retire_renamed_session(backend.as_ref(), workspace);
     }
-    // Capture whether this is a plain reattach *before* `ensure_session`, which on
-    // tmux would create the session and erase the distinction. A healthy live room
-    // re-seeds nothing; only a birth (absent or stuck) resumes prior agents.
-    let was_live = session_is_healthy_live(backend.as_ref(), entry.session_name());
     if let RoomEntry::Start { workspace, .. }
     | RoomEntry::StartWeb { workspace, .. }
     | RoomEntry::AttachCwd { workspace, .. } = &entry
@@ -497,7 +505,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     }
     if let RoomEntry::Start { workspace, .. } = &entry
         && !was_live
-        && std::io::stdin().is_terminal()
+        && start_attended()
     {
         prompt_project_trust(&workspace.project_root);
     }

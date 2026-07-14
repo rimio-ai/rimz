@@ -1,6 +1,6 @@
 //! Start-time agent hook auto-install prompt.
 
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{BufRead, Write};
 
 use anyhow::Result;
 use rimz::agents::{
@@ -55,7 +55,7 @@ pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::
     detected
 }
 
-pub(crate) fn ensure_detected_agent_hooks() -> Result<bool> {
+pub(crate) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool> {
     let mut actionable = Vec::new();
 
     for agent in detected_installable_adapters() {
@@ -72,7 +72,7 @@ pub(crate) fn ensure_detected_agent_hooks() -> Result<bool> {
         return Ok(false);
     }
 
-    if !std::io::stdin().is_terminal() {
+    if !attended {
         print_noninteractive_notice(&actionable)?;
         return Ok(true);
     }

@@ -26,9 +26,14 @@ const PROBE_RESPAWN_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
+pub(super) struct AttachSpecs {
+    pub(super) control: rimz::mux::CommandSpec,
+    pub(super) plain: rimz::mux::CommandSpec,
+}
+
 pub(super) fn supervise_remote(
-    control_spec: &rimz::mux::CommandSpec,
-    plain_spec: &rimz::mux::CommandSpec,
+    first: &AttachSpecs,
+    retry: &AttachSpecs,
     target: &RemoteTarget,
     control_path: &Path,
     setup_hint: &str,
@@ -41,6 +46,7 @@ pub(super) fn supervise_remote(
     let dial_plan = resolve_dial_plan(&target.ssh_destination().destination);
     let stop = AtomicBool::new(false);
     let mut outage_active = false;
+    let mut first_attempt = true;
     report_remote_connect(host, true);
     loop {
         let control_ready = match prepare_control_path(control_path) {
@@ -61,10 +67,12 @@ pub(super) fn supervise_remote(
             drop(events_tx);
             ProbeHandle::disabled()
         };
+        let specs = if first_attempt { first } else { retry };
+        first_attempt = false;
         let spec = if control_ready {
-            control_spec
+            &specs.control
         } else {
-            plain_spec
+            &specs.plain
         };
         let restore_existing_outage_after_gatetime = outage_active;
         let outcome = run_ssh_session(

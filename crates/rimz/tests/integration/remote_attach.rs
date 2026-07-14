@@ -413,10 +413,20 @@ fn link_drop_on_an_established_session_reconnects() {
         "reconnect ends on the clean detach\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(
-        shim_invocations(&log).len(),
-        2,
-        "dropped once, reattached once"
+    let invocations = shim_invocations(&log)
+        .into_iter()
+        .filter(|argv| is_main_invocation(argv))
+        .collect::<Vec<_>>();
+    assert_eq!(invocations.len(), 2, "dropped once, reattached once");
+    assert!(
+        !snippet(&invocations[0]).contains("RIMZ_REMOTE_RECONNECT"),
+        "the initial attach stays attended: {:?}",
+        invocations[0]
+    );
+    assert!(
+        snippet(&invocations[1]).contains("export RIMZ_REMOTE_RECONNECT=1;"),
+        "the retry is marked unattended: {:?}",
+        invocations[1]
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -524,6 +534,20 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
         .expect("spawn supervised remote connect");
 
     wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(2));
+    let invocations = shim_invocations(&log)
+        .into_iter()
+        .filter(|argv| is_main_invocation(argv))
+        .collect::<Vec<_>>();
+    assert!(
+        !snippet(&invocations[0]).contains("RIMZ_REMOTE_RECONNECT"),
+        "the initial attach stays attended: {:?}",
+        invocations[0]
+    );
+    assert!(
+        snippet(&invocations[1]).contains("export RIMZ_REMOTE_RECONNECT=1;"),
+        "a zombie replacement is marked unattended: {:?}",
+        invocations[1]
+    );
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "the replacement attach must beat the parked three-second ssh child"

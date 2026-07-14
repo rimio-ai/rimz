@@ -38,7 +38,7 @@ rimz remote rm devbox                             # forget one
 
 ## A link that heals itself
 
-A plain `ssh` ends the moment the connection drops. `rimz remote connect` supervises the SSH link instead: when the train wifi cuts out or a laptop sleeps, it reconnects on its own and reattaches to the untouched room on the host, so a flaky connection never costs you your place. The link watches for the network's return and normally reattaches within a couple of seconds after the host becomes reachable again. Your terminal beeps when the link drops and again when it comes back, and any notification handler fires on the same edges, because a dead link cannot count on the remote sidebar to reach you.
+A plain `ssh` ends the moment the connection drops. `rimz remote connect` supervises the SSH link instead: when the train wifi cuts out or a laptop sleeps, it reconnects on its own and reattaches to the untouched room on the host, so a flaky connection never costs you your place. The link watches for the network's return and normally reattaches within a couple of seconds after the host becomes reachable again. Retry attempts run unattended, so hook installation, project trust, and recovery consent wait for the next start you make while present instead of parking the link. Your terminal beeps when the link drops and again when it comes back, and any notification handler fires on the same edges, because a dead link cannot count on the remote sidebar to reach you.
 
 Two flags tune the posture:
 
@@ -73,7 +73,7 @@ Run it on the Linux host serving the room, where the write-rate counters live, f
 
 ## Continuity across reboots
 
-The room and its state both live on the host, in durable flat files under `~/.local/state/rimz/` there, so the room survives a mux crash or a reboot of the host. On the next start the host's `rimz` offers the fleet back: prior agents idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). The offer defaults yes, non-interactive starts recover automatically, and a room you closed deliberately stays closed. Run these on the host:
+The room and its state both live on the host, in durable flat files under `~/.local/state/rimz/` there, so the room survives a mux crash or a reboot of the host. On the next attended start the host's `rimz` offers the fleet back: prior agents idle in their tabs, one prompt from where they stopped (`claude --resume`, `codex resume`, `pi --session`). The offer defaults yes, non-interactive starts recover automatically, and a room you closed deliberately stays closed. A supervised reconnect after a reboot uses that automatic recovery path; hook installation and project-trust offers remain pending for the next attended start. Run these on the host:
 
 ```sh
 rimz --no-resume         # come up empty: skip recovering prior agents

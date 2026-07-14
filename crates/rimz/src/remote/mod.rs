@@ -27,6 +27,10 @@ use crate::mux::CommandSpec;
 /// through.
 pub const SSH_BIN_ENV: &str = "RIMZ_SSH_BIN";
 
+/// Marks an SSH attach started by the local reconnect supervisor's retry
+/// loop, so the remote room start uses its unattended posture.
+pub const REMOTE_RECONNECT_ENV: &str = "RIMZ_REMOTE_RECONNECT";
+
 /// Binary override for tests, mirroring `RIMZ_SSH_BIN`.
 pub const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";
 
@@ -237,6 +241,11 @@ pub fn ssh_program() -> String {
     std::env::var(SSH_BIN_ENV).unwrap_or_else(|_| "ssh".to_owned())
 }
 
+/// Whether this process was launched by a remote reconnect retry.
+pub fn reconnect_marked() -> bool {
+    std::env::var_os(REMOTE_RECONNECT_ENV).is_some_and(|value| !value.is_empty())
+}
+
 /// The `infocmp` program, honoring the `RIMZ_INFOCMP_BIN` test-shim override.
 pub fn infocmp_program() -> String {
     std::env::var(INFOCMP_BIN_ENV).unwrap_or_else(|_| "infocmp".to_owned())
@@ -256,6 +265,7 @@ pub fn ssh_attach_spec(
     mux: Option<MuxName>,
     term: &TermPlan,
     truecolor: bool,
+    reconnect: bool,
     control: Option<&Path>,
 ) -> CommandSpec {
     CommandSpec::new(ssh_program())
@@ -272,7 +282,9 @@ pub fn ssh_attach_spec(
         .args(control.into_iter().flat_map(link::control_options))
         .args(["-t", "--"])
         .arg(target.destination.clone())
-        .arg(guarded_snippet(target, no_resume, mux, term, truecolor))
+        .arg(guarded_snippet(
+            target, no_resume, mux, term, truecolor, reconnect,
+        ))
 }
 
 /// How the remote session resolves the local terminal. `-t` carries the local
@@ -357,6 +369,7 @@ fn guarded_snippet(
     mux: Option<MuxName>,
     term: &TermPlan,
     truecolor: bool,
+    reconnect: bool,
 ) -> String {
     let (verb, arg) = match &target.spec {
         RemoteSpec::Path(path) => ("start", quote_remote_path(path)),
@@ -370,6 +383,9 @@ fn guarded_snippet(
         rimz.push_str(&format!(" --mux {mux}"));
     }
     let mut env_setup = String::new();
+    if reconnect {
+        env_setup.push_str("export RIMZ_REMOTE_RECONNECT=1; ");
+    }
     if truecolor {
         env_setup.push_str("export COLORTERM=truecolor; ");
     }

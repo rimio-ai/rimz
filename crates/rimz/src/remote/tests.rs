@@ -198,6 +198,7 @@ fn quote_and_display_are_shell_safe() {
         None,
         &TermPlan::Keep,
         false,
+        false,
         None,
     ));
     assert!(line.starts_with("ssh -o ServerAliveInterval=5"), "{line}");
@@ -209,6 +210,7 @@ fn quote_and_display_are_shell_safe() {
         false,
         None,
         &TermPlan::Keep,
+        false,
         false,
         None,
     ));
@@ -399,6 +401,7 @@ fn ssh_attach_spec_compiles_session_path_flags_control_and_term() {
             case.mux,
             &case.term,
             case.truecolor,
+            false,
             case.control,
         );
         assert_eq!(spec.program, "ssh", "{}", case.name);
@@ -457,6 +460,26 @@ fn ssh_attach_spec_compiles_session_path_flags_control_and_term() {
             );
         }
     }
+}
+
+#[test]
+fn ssh_attach_spec_marks_retries_only() {
+    let target = parse("dev-box:~/code/query-engine");
+    let attended = ssh_attach_spec(&target, false, None, &TermPlan::Keep, false, false, None);
+    let retry = ssh_attach_spec(&target, false, None, &TermPlan::Keep, false, true, None);
+
+    assert!(
+        !attended.args.last().unwrap().contains(REMOTE_RECONNECT_ENV),
+        "the first connect stays attended"
+    );
+    assert!(
+        retry
+            .args
+            .last()
+            .unwrap()
+            .contains("export RIMZ_REMOTE_RECONNECT=1;"),
+        "retry snippet marks an unattended reconnect"
+    );
 }
 
 #[test]
