@@ -1,5 +1,21 @@
 use super::*;
 
+const EXPECTED_EVENTS: &[&str] = &[
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "Stop",
+    "StopFailure",
+    "Notification",
+    "PermissionRequest",
+    "PreToolUse",
+    "PostToolUse",
+    "SubagentStart",
+    "SubagentStop",
+    "PreCompact",
+    "PostCompact",
+];
+
 use crate::agents::AgentErr;
 
 #[test]
@@ -47,19 +63,19 @@ fn assert_managed_settings_json(path: &std::path::Path) {
 }
 
 fn assert_managed_hook_entries(hooks: &serde_json::Map<String, Value>) {
-    let expected = INSTALLED_EVENTS
+    let expected = EXPECTED_EVENTS
         .iter()
-        .map(|(event, _)| *event)
+        .copied()
         .collect::<std::collections::BTreeSet<_>>();
     let actual = hooks
         .keys()
         .map(String::as_str)
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(actual, expected);
-    for (event, matcher) in INSTALLED_EVENTS {
+    for event in EXPECTED_EVENTS {
         let entries = hooks[*event].as_array().unwrap();
         assert_eq!(entries.len(), 1, "event {event}");
-        assert_managed_hook_entry(&entries[0], event, *matcher);
+        assert_managed_hook_entry(&entries[0], event, None);
     }
 }
 
@@ -75,9 +91,7 @@ fn assert_managed_hook_entry(entry: &Value, event: &str, matcher: Option<&str>) 
 }
 
 fn blocking_event_sync(event: &str, matcher: Option<&str>) -> bool {
-    BLOCKING_EVENTS
-        .iter()
-        .any(|(blocking, blocking_matcher)| *blocking == event && *blocking_matcher == matcher)
+    event == "PermissionRequest" && matcher.is_none()
 }
 
 fn assert_status_command(root: &Value, key: &str, command: &str) {
@@ -288,7 +302,7 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
     let path = dir.path().join("marker-only.json");
     let command = format!(r#"RIMZ_AGENT_PID=$PPID exec {RIMZ_HOOK_MARKER}"#);
     let mut hooks = serde_json::Map::new();
-    for (event, _) in INSTALLED_EVENTS {
+    for event in EXPECTED_EVENTS {
         hooks.insert(
             (*event).to_owned(),
             serde_json::json!([
@@ -307,7 +321,7 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
 
     let path = dir.path().join("legacy-matcher.json");
     let mut hooks = serde_json::Map::new();
-    for (event, matcher) in INSTALLED_EVENTS {
+    for event in EXPECTED_EVENTS {
         let mut entry = serde_json::json!({
             "_rimz_managed": true,
             "hooks": [{"type": "command", "command": command.clone()}],
@@ -315,7 +329,7 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
         let on_disk_matcher = if *event == "PreToolUse" {
             Some("ExitPlanMode")
         } else {
-            *matcher
+            None
         };
         if let Some(matcher) = on_disk_matcher {
             entry

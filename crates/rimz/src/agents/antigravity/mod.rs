@@ -18,10 +18,11 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, LocalSessionObservation,
@@ -86,18 +87,11 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        blocking_asks: false,
         native_ask_ui: true,
-        rich_context: true,
         transcript_tail_context: false,
-        context_usage: true,
-        account_spend: false,
-        subagents: false,
-        background_tasks: true,
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: true,
@@ -116,184 +110,102 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     bin_names: &["agy"],
     extra_bin_dirs: &[".local/bin"],
     activity_events: INSTALLED_EVENT_LABELS,
-    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-const ANTIGRAVITY_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "neutral PreInvocation, PostToolUse, and Stop hooks",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Partial {
-            via: "statusline tool_confirmation_pending routes the card to the native pane",
-            gap: "PreToolUse has no behavior-preserving observer decision, so there is no durable ask or permission detail",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "artifact status enums and review transitions remain uncaptured",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Partial {
-            via: "validated local transcripts project ask_question records to a native waiting card",
-            gap: "there is no durable RimZ ask or out-of-band answer API",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "no out-of-band answer API or verified native-key planner",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Unsupported {
-            reason: "no documented compaction command, event, or transcript marker",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Unsupported {
-            reason: "verified local records expose no stable child identity and parent relation",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Wired {
-            via: "Stop.fullyIdle parks a clean foreground stop while background work remains",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Partial {
-            via: "pane liveness + rollup reaper",
-            gap: "Antigravity publishes no session-end event",
-        },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "native Stop wakeup + pane liveness",
-            gap: "Antigravity publishes no separate idle-notification event",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Wired {
-            via: "custom statusline context_window payload",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Partial {
-            via: "current statusline usage is priced through the local model price book",
-            gap: "no cumulative session or provider billing ledger is published",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Wired {
-            via: "custom statusline context plus local account identity and subscription quota",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "idempotent global hooks.json merge plus reversible statusLine wrap",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Unsupported {
-            reason: "quota is work-metered and no cumulative billing ledger is published",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "no CLI remote-control host is documented",
-        },
-    ),
-];
+const ANTIGRAVITY_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "neutral PreInvocation, PostToolUse, and Stop hooks",
+    },
+    permission: ConcernCoverage::Partial {
+        via: "statusline tool_confirmation_pending routes the card to the native pane",
+        gap: "PreToolUse has no behavior-preserving observer decision, so there is no durable ask or permission detail",
+    },
+    plan_approval: ConcernCoverage::Unsupported {
+        reason: "artifact status enums and review transitions remain uncaptured",
+    },
+    user_question: ConcernCoverage::Partial {
+        via: "validated local transcripts project ask_question records to a native waiting card",
+        gap: "there is no durable RimZ ask or out-of-band answer API",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "no out-of-band answer API or verified native-key planner",
+    },
+    compaction: ConcernCoverage::Unsupported {
+        reason: "no documented compaction command, event, or transcript marker",
+    },
+    subagents: ConcernCoverage::Unsupported {
+        reason: "verified local records expose no stable child identity and parent relation",
+    },
+    background_parking: ConcernCoverage::Wired {
+        via: "Stop.fullyIdle parks a clean foreground stop while background work remains",
+    },
+    session_end: ConcernCoverage::Partial {
+        via: "pane liveness + rollup reaper",
+        gap: "Antigravity publishes no session-end event",
+    },
+    idle_notification: ConcernCoverage::Partial {
+        via: "native Stop wakeup + pane liveness",
+        gap: "Antigravity publishes no separate idle-notification event",
+    },
+    context_usage: ConcernCoverage::Wired {
+        via: "custom statusline context_window payload",
+    },
+    realtime_cost: ConcernCoverage::Partial {
+        via: "current statusline usage is priced through the local model price book",
+        gap: "no cumulative session or provider billing ledger is published",
+    },
+    rich_context: ConcernCoverage::Wired {
+        via: "custom statusline context plus local account identity and subscription quota",
+    },
+    hook_install: ConcernCoverage::Wired {
+        via: "idempotent global hooks.json merge plus reversible statusLine wrap",
+    },
+    account_spend: ConcernCoverage::Unsupported {
+        reason: "quota is work-metered and no cumulative billing ledger is published",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "no CLI remote-control host is documented",
+    },
+};
 
-const ANTIGRAVITY_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Derived {
-            via: "first PreInvocation create-on-miss + validated local conversation discovery",
-            gap: "Antigravity publishes no session-only registration event",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "PreInvocation",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "Stop" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "PostToolUse:edit",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Derived {
-            via: "statusline tool_confirmation_pending marker + pulled transcript questions",
-            gap: "read-only attention projection, not a durable AwaitingInput lifecycle signal",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Absent {
-            reason: "no verified child identity relation",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Absent {
-            reason: "no verified child identity relation",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Absent {
-            reason: "no compaction signal",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Absent {
-            reason: "no compaction signal",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Derived {
-            via: "pane liveness + rollup reaper",
-            gap: "no session-end event",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "provider callbacks stop with the mux session",
-        },
-    ),
-];
+const ANTIGRAVITY_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Derived {
+        via: "first PreInvocation create-on-miss + validated local conversation discovery",
+        gap: "Antigravity publishes no session-only registration event",
+    },
+    turn_started: HookCoverage::Native {
+        event: "PreInvocation",
+    },
+    turn_ended: HookCoverage::Native { event: "Stop" },
+    tool_used: HookCoverage::Native {
+        event: "PostToolUse:edit",
+    },
+    awaiting_input: HookCoverage::Derived {
+        via: "statusline tool_confirmation_pending marker + pulled transcript questions",
+        gap: "read-only attention projection, not a durable AwaitingInput lifecycle signal",
+    },
+    subagent_started: HookCoverage::Absent {
+        reason: "no verified child identity relation",
+    },
+    subagent_stopped: HookCoverage::Absent {
+        reason: "no verified child identity relation",
+    },
+    compacting: HookCoverage::Absent {
+        reason: "no compaction signal",
+    },
+    compaction_ended: HookCoverage::Absent {
+        reason: "no compaction signal",
+    },
+    ended: HookCoverage::Derived {
+        via: "pane liveness + rollup reaper",
+        gap: "no session-end event",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "provider callbacks stop with the mux session",
+    },
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct AntigravityAdapter;
@@ -362,7 +274,7 @@ impl AgentAdapter for AntigravityAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         INSTALLED_EVENT_LABELS.to_vec()
     }
 
@@ -439,10 +351,6 @@ impl AgentAdapter for AntigravityAdapter {
             .rev()
             .find(|message| message.role == super::TranscriptRole::Assistant)
             .map(|message| message.text)
-    }
-
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "PreInvocation" | "Stop")
     }
 
     fn discover_local_sessions(&self, workspace: &Path) -> Vec<LocalSessionObservation> {

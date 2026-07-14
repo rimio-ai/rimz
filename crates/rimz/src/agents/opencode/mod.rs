@@ -29,10 +29,10 @@ use serde_json::json;
 use super::AskKind;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
-    IntegrationConcern, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    IntegrationCoverage, LifecycleCoverage, PlanLabel, RealtimeUsageChannel,
+    RemoteControlCapability, ThreadKey, ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
@@ -60,18 +60,11 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        blocking_asks: true,
         native_ask_ui: true,
-        rich_context: true,
         transcript_tail_context: false,
-        context_usage: true,
-        account_spend: true,
-        subagents: true,
-        background_tasks: false,
         registers_lazily: true,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[ImplicitUnlimitedWindow::sub_provider(
             5 * 60,
             "openai",
@@ -102,182 +95,100 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "SubagentStart",
         "SubagentStop",
     ],
-    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "session_created/chat_message/session_idle",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Wired {
-            via: "permission_ask",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Wired {
-            via: "session_idle + resting plan-agent turn",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Wired {
-            via: "question.asked",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "native answers are observed; Rimz-to-OpenCode answer transport is not mapped",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Wired {
-            via: "session_compacting/session_compacted",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Wired {
-            via: "SubagentStart/SubagentStop",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "no background-task parking",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Wired {
-            via: "session_ended (session.deleted + dispose sweep)",
-        },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "turn-end + permission.ask/question.asked + stall window",
-            gap: "no idle Notification hook; no idle-timeout nudge",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Wired {
-            via: "message.updated token split",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Wired {
-            via: "authoritative per-session SQLite message spend sum, reconciled at each turn boundary",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Wired {
-            via: "embedded server /config/providers + /session over plugin serverUrl",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.config/opencode/plugin/rimz.ts",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Wired {
-            via: "SQLite message store + auth.json OAuth usage probe",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "no remote-control surface",
-        },
-    ),
-];
+const OPENCODE_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "session_created/chat_message/session_idle",
+    },
+    permission: ConcernCoverage::Wired {
+        via: "permission_ask",
+    },
+    plan_approval: ConcernCoverage::Wired {
+        via: "session_idle + resting plan-agent turn",
+    },
+    user_question: ConcernCoverage::Wired {
+        via: "question.asked",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "native answers are observed; Rimz-to-OpenCode answer transport is not mapped",
+    },
+    compaction: ConcernCoverage::Wired {
+        via: "session_compacting/session_compacted",
+    },
+    subagents: ConcernCoverage::Wired {
+        via: "SubagentStart/SubagentStop",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "no background-task parking",
+    },
+    session_end: ConcernCoverage::Wired {
+        via: "session_ended (session.deleted + dispose sweep)",
+    },
+    idle_notification: ConcernCoverage::Partial {
+        via: "turn-end + permission.ask/question.asked + stall window",
+        gap: "no idle Notification hook; no idle-timeout nudge",
+    },
+    context_usage: ConcernCoverage::Wired {
+        via: "message.updated token split",
+    },
+    realtime_cost: ConcernCoverage::Wired {
+        via: "authoritative per-session SQLite message spend sum, reconciled at each turn boundary",
+    },
+    rich_context: ConcernCoverage::Wired {
+        via: "embedded server /config/providers + /session over plugin serverUrl",
+    },
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.config/opencode/plugin/rimz.ts",
+    },
+    account_spend: ConcernCoverage::Wired {
+        via: "SQLite message store + auth.json OAuth usage probe",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "no remote-control surface",
+    },
+};
 
-const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "session_created",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "chat_message",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native {
-            event: "session_idle",
-        },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "tool_after",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Native {
-            // One representative installed event names the signal, the Codex
-            // precedent; `question_ask` is the other awaiting-user event and
-            // rides the separately-wired `UserQuestion` concern.
-            event: "permission_ask",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Native {
-            event: "SubagentStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Native {
-            event: "SubagentStop",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "session_compacting",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Native {
-            event: "session_compacted",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Native {
-            event: "session_ended",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const OPENCODE_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "session_created",
+    },
+    turn_started: HookCoverage::Native {
+        event: "chat_message",
+    },
+    turn_ended: HookCoverage::Native {
+        event: "session_idle",
+    },
+    tool_used: HookCoverage::Native {
+        event: "tool_after",
+    },
+    awaiting_input: HookCoverage::Native {
+        // One representative installed event names the signal, the Codex
+        // precedent; `question_ask` is the other awaiting-user event and
+        // rides the separately-wired `UserQuestion` concern.
+        event: "permission_ask",
+    },
+    subagent_started: HookCoverage::Native {
+        event: "SubagentStart",
+    },
+    subagent_stopped: HookCoverage::Native {
+        event: "SubagentStop",
+    },
+    compacting: HookCoverage::Native {
+        event: "session_compacting",
+    },
+    compaction_ended: HookCoverage::Native {
+        event: "session_compacted",
+    },
+    ended: HookCoverage::Native {
+        event: "session_ended",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 // The awaiting-user events (`permission_ask`, `question_ask`) are absent by
 // design: `classify_hook` hands their `AskKind` to `classify_agent_hook`, which
@@ -346,7 +257,7 @@ impl AgentAdapter for OpencodeAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         WIRED_EVENTS.to_vec()
     }
 
@@ -649,13 +560,6 @@ impl AgentAdapter for OpencodeAdapter {
         }
     }
 
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(
-            event_name,
-            "chat_message" | "session_idle" | "session_error"
-        )
-    }
-
     fn last_assistant_message(
         &self,
         event_name: &str,
@@ -860,16 +764,8 @@ impl AgentAdapter for OpencodeAdapter {
         crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "opencode")
     }
 
-    fn oauth_credentials_stamp(&self) -> Option<u64> {
-        oauth_usage::credentials_stamp()
-    }
-
-    fn oauth_account_key(&self) -> Option<String> {
-        oauth_usage::current_account_key()
-    }
-
-    fn oauth_account_scope(&self) -> crate::agents::ProviderAccountScope {
-        oauth_usage::current_account_scope()
+    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+        oauth_usage::account_usage_identity()
     }
 }
 

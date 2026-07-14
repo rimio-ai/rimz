@@ -23,7 +23,7 @@ An adapter is the *single* place an agent protocol is normalized. It owns `class
 
 ## Hook discipline
 
-- **Blocking ask hooks are sync.** Installing one as async is a hard install error — the source of truth for "must block" is the adapter's `BLOCKING_EVENTS`-style constant, never the on-disk config.
+- **Blocking ask hooks are sync.** Installing one as async is a hard install error — the source of truth for "must block" is the adapter's hook catalog or equivalent typed installer declaration, never the on-disk config.
 - **Neutral follows the agent's decision contract.** Claude, Codex, Pi, and OpenCode use empty stdout; Cursor returns `{}` on every wired event because its hook contract requires JSON. Diagnostics stay off stdout. The fresh-stdio rule for helper children (a wrapped statusline, a notifier) is enforced by the no-`Stdio::inherit` CI grep.
 - **Set installed hook timeouts from upstream deadlines**, leaving margin for RimZ to finish store writes before the agent kills the hook.
 - **Install is idempotent.** Reclaim every rimz-owned entry by the stable command substring before rewriting the canonical set; leave user-authored entries untouched.

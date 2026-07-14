@@ -23,10 +23,11 @@ use serde_json::Value;
 use serde_json::json;
 
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
@@ -54,18 +55,11 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[("ask_user", AskKind::Question)],
     },
     capabilities: Capabilities {
-        blocking_asks: true,
         native_ask_ui: true,
-        rich_context: false,
         transcript_tail_context: true,
-        context_usage: true,
-        account_spend: false,
-        subagents: false,
-        background_tasks: false,
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -90,179 +84,97 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "postToolUseFailure",
         "agentStop",
     ],
-    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-const COPILOT_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "sessionStart/userPromptSubmitted/agentStop",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Wired {
-            via: "permissionRequest",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "plan mode has no approval hook",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Wired {
-            via: "preToolUse(ask_user)",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "no native answer protocol; answer in the pane",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Partial {
-            via: "preCompact + next lifecycle signal",
-            gap: "no native post-compact hook",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Unsupported {
-            reason: "hooks publish no unique child instance id",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "no parked-on-background signal",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Wired { via: "sessionEnd" },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "agentStop + stall window",
-            gap: "notification(agent_idle) is not wired",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Partial {
-            via: "optional metadata-only OTel chat spans",
-            gap: "latest-call token composition has no context-window denominator",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Unsupported {
-            reason: "OTel chat spans expose token counts but no authoritative session cost",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Partial {
-            via: "optional metadata-only OTel chat spans + environment-backed GitHub plan/quota read",
-            gap: "no authoritative context-window denominator or session cost",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "$COPILOT_HOME/hooks/rimz.json",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Unsupported {
-            reason: "plan and included quotas expose no dollar ledger",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "remote-control preflight is not wired",
-        },
-    ),
-];
+const COPILOT_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "sessionStart/userPromptSubmitted/agentStop",
+    },
+    permission: ConcernCoverage::Wired {
+        via: "permissionRequest",
+    },
+    plan_approval: ConcernCoverage::Unsupported {
+        reason: "plan mode has no approval hook",
+    },
+    user_question: ConcernCoverage::Wired {
+        via: "preToolUse(ask_user)",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "no native answer protocol; answer in the pane",
+    },
+    compaction: ConcernCoverage::Partial {
+        via: "preCompact + next lifecycle signal",
+        gap: "no native post-compact hook",
+    },
+    subagents: ConcernCoverage::Unsupported {
+        reason: "hooks publish no unique child instance id",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "no parked-on-background signal",
+    },
+    session_end: ConcernCoverage::Wired { via: "sessionEnd" },
+    idle_notification: ConcernCoverage::Partial {
+        via: "agentStop + stall window",
+        gap: "notification(agent_idle) is not wired",
+    },
+    context_usage: ConcernCoverage::Partial {
+        via: "optional metadata-only OTel chat spans",
+        gap: "latest-call token composition has no context-window denominator",
+    },
+    realtime_cost: ConcernCoverage::Unsupported {
+        reason: "OTel chat spans expose token counts but no authoritative session cost",
+    },
+    rich_context: ConcernCoverage::Partial {
+        via: "optional metadata-only OTel chat spans + environment-backed GitHub plan/quota read",
+        gap: "no authoritative context-window denominator or session cost",
+    },
+    hook_install: ConcernCoverage::Wired {
+        via: "$COPILOT_HOME/hooks/rimz.json",
+    },
+    account_spend: ConcernCoverage::Unsupported {
+        reason: "plan and included quotas expose no dollar ledger",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "remote-control preflight is not wired",
+    },
+};
 
-const COPILOT_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "sessionStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "userPromptSubmitted",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "agentStop" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "postToolUse",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Native {
-            event: "permissionRequest",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Absent {
-            reason: "hooks publish no unique child instance id",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Absent {
-            reason: "hooks publish no unique child instance id",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "preCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Derived {
-            via: "next lifecycle signal + display-window expiry",
-            gap: "no native post-compact hook",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Native {
-            event: "sessionEnd",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const COPILOT_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "sessionStart",
+    },
+    turn_started: HookCoverage::Native {
+        event: "userPromptSubmitted",
+    },
+    turn_ended: HookCoverage::Native { event: "agentStop" },
+    tool_used: HookCoverage::Native {
+        event: "postToolUse",
+    },
+    awaiting_input: HookCoverage::Native {
+        event: "permissionRequest",
+    },
+    subagent_started: HookCoverage::Absent {
+        reason: "hooks publish no unique child instance id",
+    },
+    subagent_stopped: HookCoverage::Absent {
+        reason: "hooks publish no unique child instance id",
+    },
+    compacting: HookCoverage::Native {
+        event: "preCompact",
+    },
+    compaction_ended: HookCoverage::Derived {
+        via: "next lifecycle signal + display-window expiry",
+        gap: "no native post-compact hook",
+    },
+    ended: HookCoverage::Native {
+        event: "sessionEnd",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 const LIFECYCLE_EVENTS: &[&str] = &[
     "sessionStart",
@@ -322,7 +234,7 @@ impl AgentAdapter for CopilotAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         WIRED_EVENTS.to_vec()
     }
 
@@ -557,10 +469,6 @@ impl AgentAdapter for CopilotAdapter {
         event_name == "sessionEnd"
     }
 
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "userPromptSubmitted" | "agentStop")
-    }
-
     fn last_assistant_message(
         &self,
         event_name: &str,
@@ -724,8 +632,11 @@ impl AgentAdapter for CopilotAdapter {
         crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "copilot")
     }
 
-    fn oauth_account_key(&self) -> Option<String> {
-        oauth_usage::account_key()
+    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+        crate::agents::AccountUsageIdentity {
+            account_key: oauth_usage::account_key(),
+            ..Default::default()
+        }
     }
 }
 

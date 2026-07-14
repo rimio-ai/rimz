@@ -16,10 +16,10 @@ use std::time::UNIX_EPOCH;
 use serde_json::Value;
 
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
-use super::lifecycle::LifecycleSignalKind;
 use super::{
     AgentAdapter, AgentErr, AgentHookClass, ClassifiedHook, HookInstallPreview, HookInstallReport,
     HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx, LocalSessionObservation,
@@ -45,20 +45,13 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        blocking_asks: false,
         // Kiro can draw native prompts, but v3 exposes no hook that records
         // them for Rimz routing.
         native_ask_ui: true,
-        rich_context: false,
         transcript_tail_context: true,
-        context_usage: true,
-        account_spend: false,
-        subagents: false,
-        background_tasks: false,
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
-        hook_install: false,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -81,189 +74,107 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["kiro-cli", "kiro-cli-chat"],
     extra_bin_dirs: &[],
     activity_events: &[],
-    hook_install_unavailable: Some(HOOK_INSTALL_UNAVAILABLE),
     thread_key: ThreadKey::PerFile,
 };
 
-const KIRO_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Partial {
-            via: "ordered stock-v3 session store records",
-            gap: "pulled display truth; no executable hook or uncaptured failure/cancel shapes",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Partial {
-            via: "unresolved pending_interaction tool_approval records",
-            gap: "waiting is visible but not routable through rimz asks/answer",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "no v3 plan-approval hook",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Unsupported {
-            reason: "no v3 native-question hook",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "native prompt choreography is not mapped",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Unsupported {
-            reason: "no stock-TUI compaction hook; compaction rotates the session id",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Unsupported {
-            reason: "v3 hooks do not fire in subagents and publish no child lifecycle",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "no background-task parking signal",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Partial {
-            via: "pane liveness + rollup reaper",
-            gap: "no SessionEnd hook; v3 Stop is turn end, not session end",
-        },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "successful session_pause and turn_end records",
-            gap: "pulled state has no native notification wakeup",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Partial {
-            via: "latest contextUsage session_metadata percentage",
-            gap: "percentage only; no token counts or context-window size",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Unsupported {
-            reason: "credit-metered; no machine-readable usage surface",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "hooks publish no model, effort, context, or transcript contract",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Unsupported {
-            reason: HOOK_INSTALL_UNAVAILABLE,
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Unsupported {
-            reason: "whoami schema and credit ledger are unpublished",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "no stock-TUI remote-control surface",
-        },
-    ),
-];
+const KIRO_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Partial {
+        via: "ordered stock-v3 session store records",
+        gap: "pulled display truth; no executable hook or uncaptured failure/cancel shapes",
+    },
+    permission: ConcernCoverage::Partial {
+        via: "unresolved pending_interaction tool_approval records",
+        gap: "waiting is visible but not routable through rimz asks/answer",
+    },
+    plan_approval: ConcernCoverage::Unsupported {
+        reason: "no v3 plan-approval hook",
+    },
+    user_question: ConcernCoverage::Unsupported {
+        reason: "no v3 native-question hook",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "native prompt choreography is not mapped",
+    },
+    compaction: ConcernCoverage::Unsupported {
+        reason: "no stock-TUI compaction hook; compaction rotates the session id",
+    },
+    subagents: ConcernCoverage::Unsupported {
+        reason: "v3 hooks do not fire in subagents and publish no child lifecycle",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "no background-task parking signal",
+    },
+    session_end: ConcernCoverage::Partial {
+        via: "pane liveness + rollup reaper",
+        gap: "no SessionEnd hook; v3 Stop is turn end, not session end",
+    },
+    idle_notification: ConcernCoverage::Partial {
+        via: "successful session_pause and turn_end records",
+        gap: "pulled state has no native notification wakeup",
+    },
+    context_usage: ConcernCoverage::Partial {
+        via: "latest contextUsage session_metadata percentage",
+        gap: "percentage only; no token counts or context-window size",
+    },
+    realtime_cost: ConcernCoverage::Unsupported {
+        reason: "credit-metered; no machine-readable usage surface",
+    },
+    rich_context: ConcernCoverage::Unsupported {
+        reason: "hooks publish no model, effort, context, or transcript contract",
+    },
+    hook_install: ConcernCoverage::Unsupported {
+        reason: HOOK_INSTALL_UNAVAILABLE,
+    },
+    account_spend: ConcernCoverage::Unsupported {
+        reason: "whoami schema and credit ledger are unpublished",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "no stock-TUI remote-control surface",
+    },
+};
 
-const KIRO_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Derived {
-            via: "validated local session metadata",
-            gap: "provider store discovery replaces an executable registration hook",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Derived {
-            via: "ordered turn_start records",
-            gap: "pulled provider state, not an installed hook",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Derived {
-            via: "verified successful turn_end/session_pause records",
-            gap: "failure and cancellation records remain uncaptured",
-        },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Derived {
-            via: "verified tool_call/tool_result records",
-            gap: "only observed stock-v3 tool vocabulary is classified",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Derived {
-            via: "unresolved pending_interaction tool approval",
-            gap: "native prompt is visible but has no structured Rimz answer route",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Absent {
-            reason: "v3 hooks do not fire in subagents",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Absent {
-            reason: "v3 hooks do not fire in subagents",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Absent {
-            reason: "no stock-TUI compaction hook",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Absent {
-            reason: "no stock-TUI compaction hook",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Derived {
-            via: "pane liveness + rollup reaper",
-            gap: "Stop ends a turn, not the session",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const KIRO_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Derived {
+        via: "validated local session metadata",
+        gap: "provider store discovery replaces an executable registration hook",
+    },
+    turn_started: HookCoverage::Derived {
+        via: "ordered turn_start records",
+        gap: "pulled provider state, not an installed hook",
+    },
+    turn_ended: HookCoverage::Derived {
+        via: "verified successful turn_end/session_pause records",
+        gap: "failure and cancellation records remain uncaptured",
+    },
+    tool_used: HookCoverage::Derived {
+        via: "verified tool_call/tool_result records",
+        gap: "only observed stock-v3 tool vocabulary is classified",
+    },
+    awaiting_input: HookCoverage::Derived {
+        via: "unresolved pending_interaction tool approval",
+        gap: "native prompt is visible but has no structured Rimz answer route",
+    },
+    subagent_started: HookCoverage::Absent {
+        reason: "v3 hooks do not fire in subagents",
+    },
+    subagent_stopped: HookCoverage::Absent {
+        reason: "v3 hooks do not fire in subagents",
+    },
+    compacting: HookCoverage::Absent {
+        reason: "no stock-TUI compaction hook",
+    },
+    compaction_ended: HookCoverage::Absent {
+        reason: "no stock-TUI compaction hook",
+    },
+    ended: HookCoverage::Derived {
+        via: "pane liveness + rollup reaper",
+        gap: "Stop ends a turn, not the session",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct KiroAdapter;

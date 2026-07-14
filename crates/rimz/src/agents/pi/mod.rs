@@ -46,10 +46,10 @@ use super::context::{
 };
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
-    IntegrationConcern, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    IntegrationCoverage, LifecycleCoverage, PlanLabel, RealtimeUsageChannel,
+    RemoteControlCapability, ThreadKey, ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
@@ -86,21 +86,14 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capabilities: Capabilities {
         // `tool_call` is pi's awaited pre-tool gate. Pi has no native ask UI,
         // so Rimz records no ask and returns neutral.
-        blocking_asks: true,
         // Pi never asks natively — no permission prompts, plan approvals, or
         // questions — so Rimz has no surface to route to. It returns neutral
         // with no waiting state.
         native_ask_ui: false,
-        rich_context: true,
         transcript_tail_context: false,
-        context_usage: true,
-        account_spend: true,
-        subagents: false,
-        background_tasks: false,
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[ImplicitUnlimitedWindow::sub_provider(
             5 * 60,
             "openai",
@@ -134,179 +127,97 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "turn_end",
         "tool_execution_end",
     ],
-    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "session_start/before_agent_start/agent_settled",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Wired { via: "tool_call" },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "no plan-approval gate",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Unsupported {
-            reason: "no native question tool",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "native prompt choreography is not mapped",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Wired {
-            via: "session_before_compact/session_compact",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Unsupported {
-            reason: "no subagent hook surface",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "no background-task parking",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Wired {
-            via: "session_shutdown",
-        },
-    ),
-    (
-        // `agent_settled` is the native final-idle boundary, while the shared
-        // coverage concern also asks for an idle-timeout Notification nudge.
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "agent_settled + stall window",
-            gap: "no idle-timeout Notification nudge",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Wired {
-            via: "extension context usage (row gauge + AgentContext.tokens)",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Wired {
-            via: "extension cumulative-cost push reconciled to the authoritative turn-end session-transcript spend sum",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Wired {
-            via: "extension envelopes on every value-changing event, including throttled streaming updates and resume hydration",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.pi/agent/extensions/rimz.ts",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Wired {
-            via: "auth.json/session spend + after_provider_response headers + OAuth usage probe",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "no remote-control surface",
-        },
-    ),
-];
+const PI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "session_start/before_agent_start/agent_settled",
+    },
+    permission: ConcernCoverage::Wired { via: "tool_call" },
+    plan_approval: ConcernCoverage::Unsupported {
+        reason: "no plan-approval gate",
+    },
+    user_question: ConcernCoverage::Unsupported {
+        reason: "no native question tool",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "native prompt choreography is not mapped",
+    },
+    compaction: ConcernCoverage::Wired {
+        via: "session_before_compact/session_compact",
+    },
+    subagents: ConcernCoverage::Unsupported {
+        reason: "no subagent hook surface",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "no background-task parking",
+    },
+    session_end: ConcernCoverage::Wired {
+        via: "session_shutdown",
+    },
+    // `agent_settled` is the native final-idle boundary, while the shared
+    // coverage concern also asks for an idle-timeout Notification nudge.
+    idle_notification: ConcernCoverage::Partial {
+        via: "agent_settled + stall window",
+        gap: "no idle-timeout Notification nudge",
+    },
+    context_usage: ConcernCoverage::Wired {
+        via: "extension context usage (row gauge + AgentContext.tokens)",
+    },
+    realtime_cost: ConcernCoverage::Wired {
+        via: "extension cumulative-cost push reconciled to the authoritative turn-end session-transcript spend sum",
+    },
+    rich_context: ConcernCoverage::Wired {
+        via: "extension envelopes on every value-changing event, including throttled streaming updates and resume hydration",
+    },
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.pi/agent/extensions/rimz.ts",
+    },
+    account_spend: ConcernCoverage::Wired {
+        via: "auth.json/session spend + after_provider_response headers + OAuth usage probe",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "no remote-control surface",
+    },
+};
 
-const PI_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "session_start",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "before_agent_start",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native {
-            event: "agent_settled",
-        },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "tool_execution_end",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Absent {
-            reason: "pi has no native ask UI",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Absent {
-            reason: "pi has no subagents",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Absent {
-            reason: "pi has no subagents",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "session_before_compact",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Native {
-            event: "session_compact",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Native {
-            event: "session_shutdown",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const PI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "session_start",
+    },
+    turn_started: HookCoverage::Native {
+        event: "before_agent_start",
+    },
+    turn_ended: HookCoverage::Native {
+        event: "agent_settled",
+    },
+    tool_used: HookCoverage::Native {
+        event: "tool_execution_end",
+    },
+    awaiting_input: HookCoverage::Absent {
+        reason: "pi has no native ask UI",
+    },
+    subagent_started: HookCoverage::Absent {
+        reason: "pi has no subagents",
+    },
+    subagent_stopped: HookCoverage::Absent {
+        reason: "pi has no subagents",
+    },
+    compacting: HookCoverage::Native {
+        event: "session_before_compact",
+    },
+    compaction_ended: HookCoverage::Native {
+        event: "session_compact",
+    },
+    ended: HookCoverage::Native {
+        event: "session_shutdown",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 /// The non-blocking events the embedded extension forwards — the lifecycle
 /// channel, the single source of truth for classification. The selectors and
@@ -379,7 +290,7 @@ impl AgentAdapter for PiAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         WIRED_EVENTS.to_vec()
     }
 
@@ -599,13 +510,6 @@ impl AgentAdapter for PiAdapter {
         event_name == "session_shutdown"
     }
 
-    fn moves_on(&self, event_name: &str) -> bool {
-        // A new prompt starts a fresh turn; agent_settled completes the current
-        // one after retries and queued continuations. Pi raises no native asks
-        // today, so this only future-proofs enrichment-sourced ask handling.
-        matches!(event_name, "before_agent_start" | "agent_settled")
-    }
-
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::pi_session_files()
     }
@@ -737,16 +641,8 @@ impl AgentAdapter for PiAdapter {
         crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "pi")
     }
 
-    fn oauth_credentials_stamp(&self) -> Option<u64> {
-        oauth_usage::credentials_stamp()
-    }
-
-    fn oauth_account_key(&self) -> Option<String> {
-        oauth_usage::current_account_key()
-    }
-
-    fn oauth_account_scope(&self) -> crate::agents::ProviderAccountScope {
-        oauth_usage::current_account_scope()
+    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+        oauth_usage::account_usage_identity()
     }
 }
 

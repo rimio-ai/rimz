@@ -18,10 +18,11 @@ use serde_json::Value;
 use serde_json::json;
 
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentCost, AgentCurrentUsage, AgentErr, AgentLifecycleObservation,
@@ -48,18 +49,11 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        blocking_asks: true,
         native_ask_ui: true,
-        rich_context: false,
         transcript_tail_context: false,
-        context_usage: true,
-        account_spend: true,
-        subagents: false,
-        background_tasks: false,
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -78,182 +72,100 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     bin_names: &["amp"],
     extra_bin_dirs: &[],
     activity_events: &["session_start", "agent_start", "tool_result", "agent_end"],
-    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-const AMP_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "agent_start/agent_end",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Wired {
-            via: "thread-state awaiting-approval",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "no native event",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Unsupported {
-            reason: "no native event",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "no external resolver",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Unsupported {
-            reason: "automatic compaction has no event",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Unsupported {
-            reason: "interactive events expose no durable child identity",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "no background-task parking signal",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Partial {
-            via: "pane liveness + rollup reaper",
-            gap: "no session-end event",
-        },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "turn-end + awaiting-approval + stall window",
-            gap: "no notification event",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Partial {
-            via: "private thread cache on turn boundaries + producer tick",
-            gap: "no stable context-window divisor",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Partial {
-            via: "private thread cache tokens + estimated model pricing",
-            gap: "60s mid-turn cadence and unknown models can omit dollars",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "no out-of-band context transport",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.config/amp/plugins/rimz.ts",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Partial {
-            via: "private rewritten thread-cache fold",
-            gap: "estimated pricing does not reconcile Amp credits or workspace billing",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "readiness is not detectable",
-        },
-    ),
-];
+const AMP_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "agent_start/agent_end",
+    },
+    permission: ConcernCoverage::Wired {
+        via: "thread-state awaiting-approval",
+    },
+    plan_approval: ConcernCoverage::Unsupported {
+        reason: "no native event",
+    },
+    user_question: ConcernCoverage::Unsupported {
+        reason: "no native event",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "no external resolver",
+    },
+    compaction: ConcernCoverage::Unsupported {
+        reason: "automatic compaction has no event",
+    },
+    subagents: ConcernCoverage::Unsupported {
+        reason: "interactive events expose no durable child identity",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "no background-task parking signal",
+    },
+    session_end: ConcernCoverage::Partial {
+        via: "pane liveness + rollup reaper",
+        gap: "no session-end event",
+    },
+    idle_notification: ConcernCoverage::Partial {
+        via: "turn-end + awaiting-approval + stall window",
+        gap: "no notification event",
+    },
+    context_usage: ConcernCoverage::Partial {
+        via: "private thread cache on turn boundaries + producer tick",
+        gap: "no stable context-window divisor",
+    },
+    realtime_cost: ConcernCoverage::Partial {
+        via: "private thread cache tokens + estimated model pricing",
+        gap: "60s mid-turn cadence and unknown models can omit dollars",
+    },
+    rich_context: ConcernCoverage::Unsupported {
+        reason: "no out-of-band context transport",
+    },
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.config/amp/plugins/rimz.ts",
+    },
+    account_spend: ConcernCoverage::Partial {
+        via: "private rewritten thread-cache fold",
+        gap: "estimated pricing does not reconcile Amp credits or workspace billing",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "readiness is not detectable",
+    },
+};
 
-const AMP_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "session_start",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "agent_start",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "agent_end" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "tool_result",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Native {
-            event: "permission_ask",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Absent {
-            reason: "no interactive subagent event",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Absent {
-            reason: "no interactive subagent event",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Absent {
-            reason: "automatic compaction has no event",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Absent {
-            reason: "automatic compaction has no event",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Derived {
-            via: "pane liveness + rollup reaper",
-            gap: "no session-end event",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const AMP_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "session_start",
+    },
+    turn_started: HookCoverage::Native {
+        event: "agent_start",
+    },
+    turn_ended: HookCoverage::Native { event: "agent_end" },
+    tool_used: HookCoverage::Native {
+        event: "tool_result",
+    },
+    awaiting_input: HookCoverage::Native {
+        event: "permission_ask",
+    },
+    subagent_started: HookCoverage::Absent {
+        reason: "no interactive subagent event",
+    },
+    subagent_stopped: HookCoverage::Absent {
+        reason: "no interactive subagent event",
+    },
+    compacting: HookCoverage::Absent {
+        reason: "automatic compaction has no event",
+    },
+    compaction_ended: HookCoverage::Absent {
+        reason: "automatic compaction has no event",
+    },
+    ended: HookCoverage::Derived {
+        via: "pane liveness + rollup reaper",
+        gap: "no session-end event",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 const LIFECYCLE_EVENTS: &[&str] = &["session_start", "agent_start", "tool_result", "agent_end"];
 const WIRED_EVENTS: &[&str] = &[
@@ -285,7 +197,7 @@ impl AgentAdapter for AmpAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         WIRED_EVENTS.to_vec()
     }
 
@@ -389,10 +301,6 @@ impl AgentAdapter for AmpAdapter {
             observation.origin = Some(SessionOrigin::Fresh);
         }
         Some(observation)
-    }
-
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "agent_start" | "agent_end")
     }
 
     fn local_context_refresh(

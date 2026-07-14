@@ -34,8 +34,7 @@ pub(crate) fn probe() -> AccountProbe {
 fn with_credentials_mtime(probe: AccountProbe, path: &std::path::Path) -> AccountProbe {
     match probe {
         AccountProbe::Found(mut account) => {
-            account.credentials_updated_at_ms =
-                crate::agents::account::credentials_updated_at_ms(path);
+            account.credentials_updated_at_ms = crate::agents::account::file_mtime_ms(path);
             AccountProbe::Found(account)
         }
         other => other,
@@ -100,19 +99,23 @@ fn parse_login_status(text: &str) -> AccountProbe {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct CodexAuth {
+pub(super) struct CodexAuth {
     #[serde(default, rename = "OPENAI_API_KEY")]
-    openai_api_key: Option<String>,
+    pub(super) openai_api_key: Option<String>,
     #[serde(default)]
-    tokens: Option<CodexTokens>,
+    pub(super) tokens: Option<CodexTokens>,
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct CodexTokens {
+pub(super) struct CodexTokens {
     #[serde(default)]
-    access_token: Option<String>,
+    pub(super) access_token: Option<String>,
     #[serde(default)]
-    account_id: Option<String>,
+    pub(super) account_id: Option<String>,
+}
+
+pub(super) fn decode_auth(auth_json: &[u8]) -> serde_json::Result<CodexAuth> {
+    serde_json::from_slice(auth_json)
 }
 
 /// Map a `~/.codex/auth.json` payload onto a probe outcome by login shape: a
@@ -123,7 +126,7 @@ struct CodexTokens {
 /// file is unparseable — a corrupt auth file is rewritten on the next login, and
 /// the read is cheap, so there is nothing a short retry would recover.
 fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
-    let Ok(auth) = serde_json::from_slice::<CodexAuth>(auth_json) else {
+    let Ok(auth) = decode_auth(auth_json) else {
         return AccountProbe::LoggedOut;
     };
     if auth
@@ -179,6 +182,14 @@ mod tests {
         let json = br#"{ "OPENAI_API_KEY": "sk-abc", "tokens": null }"#;
         let account = found(parse_codex_auth(json), "api-key login");
         assert_eq!(account.plan, None);
+        assert_eq!(account.metered, Some(false));
+
+        let json = br#"{
+            "OPENAI_API_KEY": "sk-abc",
+            "tokens": { "access_token": "ya29-token", "account_id": "acc_1" }
+        }"#;
+        let account = found(parse_codex_auth(json), "mixed API-key and ChatGPT login");
+        assert_eq!(account.account_id, None);
         assert_eq!(account.metered, Some(false));
 
         let json = br#"{

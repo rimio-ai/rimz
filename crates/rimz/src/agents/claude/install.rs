@@ -13,8 +13,8 @@ use crate::agents::{
 use crate::store::atomic;
 
 use super::{
-    BLOCKING_EVENTS, CLAUDE_HOOK_TIMEOUT_SECS, HOOKS_KEY, INSTALLED_EVENTS, RIMZ_HOOK_COMMAND,
-    RIMZ_HOOK_MARKER, RIMZ_MANAGED_KEY, RIMZ_SYNC_KEY, STATUS_LINE, SUBAGENT_STATUS_LINE,
+    CLAUDE_HOOK_TIMEOUT_SECS, CLAUDE_HOOKS, HOOKS_KEY, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER,
+    RIMZ_MANAGED_KEY, RIMZ_SYNC_KEY, STATUS_LINE, SUBAGENT_STATUS_LINE,
 };
 use crate::agents::managed_statusline::ManagedStatusLineSpec;
 
@@ -77,9 +77,9 @@ fn install_candidate(path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
     let _ = strip_rimz_matchers(&mut root);
 
     let mut installed = Vec::new();
-    for &(event, matcher) in INSTALLED_EVENTS {
-        upsert_rimz_matcher(&mut root, event, matcher);
-        installed.push(event_label(event, matcher));
+    for hook in CLAUDE_HOOKS {
+        upsert_rimz_matcher(&mut root, hook.event, hook.matcher);
+        installed.push(event_label(hook.event, hook.matcher));
     }
 
     // Wrap both render commands so Rimz captures Claude's rich per-render JSON —
@@ -133,15 +133,15 @@ pub(super) fn hooks_installed_at(path: &Path) -> bool {
     let Some(hooks) = root.get(HOOKS_KEY).and_then(Value::as_object) else {
         return false;
     };
-    INSTALLED_EVENTS.iter().all(|(event, matcher)| {
+    CLAUDE_HOOKS.iter().all(|hook| {
         hooks
-            .get(*event)
+            .get(hook.event)
             .and_then(Value::as_array)
             .is_some_and(|arr| {
                 arr.iter().any(|entry| {
-                    entry
-                        .as_object()
-                        .is_some_and(|obj| canonical_entry_is_installed(obj, event, *matcher))
+                    entry.as_object().is_some_and(|obj| {
+                        canonical_entry_is_installed(obj, hook.event, hook.matcher)
+                    })
                 })
             })
     })
@@ -184,9 +184,7 @@ fn blocking_sync_marker_is_usable(
     event: &str,
     matcher: Option<&str>,
 ) -> bool {
-    let blocking = BLOCKING_EVENTS
-        .iter()
-        .any(|&(e, m)| e == event && matcher_matches(m, matcher));
+    let blocking = hook_requires_sync(event, matcher);
     if !blocking {
         return true;
     }
@@ -256,14 +254,15 @@ fn json_type_name(v: &Value) -> &'static str {
 }
 
 /// Walk the `hooks.<Event>` arrays and reject any matcher tagged
-/// `_rimz_managed = true` that targets a blocking event but is marked
-/// `_rimz_sync = false`. The set of "must block" events is owned by
-/// [`BLOCKING_EVENTS`] — not the on-disk file.
+/// `_rimz_managed = true` that targets a synchronous catalog event but is
+/// marked `_rimz_sync = false`.
 fn reject_async_blocking_in_existing(root: &Map<String, Value>) -> Result<()> {
     let Some(hooks) = root.get(HOOKS_KEY).and_then(Value::as_object) else {
         return Ok(());
     };
-    for &(event, expected_matcher) in BLOCKING_EVENTS {
+    for hook in CLAUDE_HOOKS.iter().filter(|hook| hook.synchronous) {
+        let event = hook.event;
+        let expected_matcher = hook.matcher;
         let Some(entries) = hooks.get(event).and_then(Value::as_array) else {
             continue;
         };
@@ -346,9 +345,7 @@ fn upsert_rimz_matcher(root: &mut Map<String, Value>, event: &str, matcher: Opti
 }
 
 fn build_matcher_entry(event: &str, matcher: Option<&str>) -> Value {
-    let blocking = BLOCKING_EVENTS
-        .iter()
-        .any(|&(e, m)| e == event && matcher_matches(m, matcher));
+    let blocking = hook_requires_sync(event, matcher);
     let mut entry = Map::new();
     if let Some(m) = matcher {
         entry.insert("matcher".to_owned(), Value::String(m.to_owned()));
@@ -367,6 +364,12 @@ fn build_matcher_entry(event: &str, matcher: Option<&str>) -> Value {
     );
     entry.insert("hooks".to_owned(), Value::Array(vec![Value::Object(hook)]));
     Value::Object(entry)
+}
+
+fn hook_requires_sync(event: &str, matcher: Option<&str>) -> bool {
+    CLAUDE_HOOKS.iter().any(|hook| {
+        hook.event == event && hook.synchronous && matcher_matches(hook.matcher, matcher)
+    })
 }
 
 /// Whether a `hooks.<Event>` entry belongs to Rimz: either tagged

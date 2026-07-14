@@ -64,6 +64,7 @@ use crate::harness::run::PermissionMode;
 use crate::mux::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
+pub use account::AccountUsageIdentity;
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostCoverage, ProviderAccountScope,
@@ -210,7 +211,7 @@ pub enum PresetErr {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentHookClass {
     /// Non-blocking event that may carry a status/mode/task transition for
     /// the agent rollup (`SessionStart`, `UserPromptSubmit`, `Stop`, …). Per
@@ -594,18 +595,18 @@ pub trait AgentAdapter: Send + Sync {
     /// Test-only native payload corpus for registry-wide adapter conformance.
     /// Keeping it on the adapter avoids a parallel per-agent registry. The
     /// corpus must cover every event name in
-    /// [`installed_hook_events`](Self::installed_hook_events), and may include
+    /// [`native_hook_events`](Self::native_hook_events), and may include
     /// multiple payload variants for broad hooks such as `PreToolUse`.
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<ClassificationSample> {
         Vec::new()
     }
 
-    /// Test-only list of native event names the installer wires for this
-    /// adapter. Conformance uses it to prove the hand-authored corpus covers the
-    /// installed surface instead of only proving the samples it happens to name.
+    /// Test-only list of native event names the adapter emits. Conformance uses
+    /// it to prove the hand-authored corpus and lifecycle coverage include the
+    /// declared native surface, independently of who installs its hooks.
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         Vec::new()
     }
 
@@ -706,14 +707,6 @@ pub trait AgentAdapter: Send + Sync {
     /// same evidence inside [`observe_lifecycle`](Self::observe_lifecycle) to set
     /// a lifecycle error bit when the native turn-end payload lacks one.
     fn observe_turn_error(&self, _payload: &Value) -> Option<AgentTurnError> {
-        None
-    }
-
-    /// Detect a provider turn-interruption marker from local transcript or
-    /// rollout evidence. The marker is display-only enrichment: it rides the
-    /// context sidecar and settles a falsely active row when it postdates the
-    /// latest lifecycle activity.
-    fn observe_turn_interrupted(&self, _payload: &Value) -> Option<Timestamp> {
         None
     }
 
@@ -820,13 +813,6 @@ pub trait AgentAdapter: Send + Sync {
     /// Whether this event ends an agent session. Defaults to `false`; adapters
     /// override for their session-exit event.
     fn ends_session(&self, _event_name: &str) -> bool {
-        false
-    }
-
-    /// Whether this event means a still-live session moved on from a native
-    /// prompt — a new prompt or the end of its turn. Defaults to `false`;
-    /// adapters override for their turn-boundary events.
-    fn moves_on(&self, _event_name: &str) -> bool {
         false
     }
 
@@ -953,26 +939,9 @@ pub trait AgentAdapter: Send + Sync {
         OauthUsageProbe::Unsupported
     }
 
-    /// Modification stamp (unix ms) of the credential source behind
-    /// [`probe_oauth_usage`](Self::probe_oauth_usage), so the refresh driver
-    /// can retry a settled auth failure the moment credentials change. `None`
-    /// when the source is not a local file.
-    fn oauth_credentials_stamp(&self) -> Option<u64> {
-        None
-    }
-
-    /// Stable identifier of the current local OAuth login behind
-    /// [`probe_oauth_usage`](Self::probe_oauth_usage), used to detect an
-    /// account switch and drop account-scoped caches. `None` when the provider
-    /// has no cheap local identity.
-    fn oauth_account_key(&self) -> Option<String> {
-        None
-    }
-
-    /// Provider identity for account-usage cache entries. Single-provider
-    /// adapters share one kind-wide cache; multi-provider adapters override it.
-    fn oauth_account_scope(&self) -> ProviderAccountScope {
-        ProviderAccountScope::KindWide
+    /// Cache identity of the credentials behind this provider usage probe.
+    fn account_usage_identity(&self) -> AccountUsageIdentity {
+        AccountUsageIdentity::default()
     }
 
     /// Probe the provider's own realtime account channel while idle.
@@ -1297,19 +1266,14 @@ pub fn preflight_hooks(
     Ok(())
 }
 
-fn turn_lifecycle_gap(
-    coverage: Option<ConcernCoverage>,
-    need: TurnLifecycleNeed,
-) -> Option<&'static str> {
+fn turn_lifecycle_gap(coverage: ConcernCoverage, need: TurnLifecycleNeed) -> Option<&'static str> {
     match need {
         TurnLifecycleNeed::None => None,
         TurnLifecycleNeed::NotUnsupported => match coverage {
-            Some(ConcernCoverage::Unsupported { reason }) => Some(reason),
-            None | Some(ConcernCoverage::Wired { .. } | ConcernCoverage::Partial { .. }) => None,
+            ConcernCoverage::Unsupported { reason } => Some(reason),
+            ConcernCoverage::Wired { .. } | ConcernCoverage::Partial { .. } => None,
         },
-        TurnLifecycleNeed::Wired => coverage
-            .filter(|coverage| !coverage.is_wired())
-            .map(ConcernCoverage::detail),
+        TurnLifecycleNeed::Wired => (!coverage.is_wired()).then(|| coverage.detail()),
     }
 }
 
@@ -1325,13 +1289,13 @@ mod tests {
 
     #[test]
     fn lifecycle_preflight_preserves_partial_coverage_strictness() {
-        let partial = Some(ConcernCoverage::Partial {
+        let partial = ConcernCoverage::Partial {
             via: "derived",
             gap: "not executable",
-        });
-        let unsupported = Some(ConcernCoverage::Unsupported {
+        };
+        let unsupported = ConcernCoverage::Unsupported {
             reason: "no lifecycle signal",
-        });
+        };
 
         assert_eq!(
             turn_lifecycle_gap(partial, TurnLifecycleNeed::NotUnsupported),

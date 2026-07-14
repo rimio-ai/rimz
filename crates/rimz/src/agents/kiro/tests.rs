@@ -11,16 +11,12 @@ use serde_json::json;
 #[test]
 fn native_hooks_are_explicitly_unsupported() {
     let descriptor = KiroAdapter.descriptor();
-    assert!(!descriptor.capabilities.hook_install);
+    assert!(!descriptor.has_wired_hook_install());
     assert!(descriptor.activity_events.is_empty());
-    assert!(KiroAdapter.installed_hook_events().is_empty());
+    assert!(KiroAdapter.native_hook_events().is_empty());
     assert!(matches!(
-        descriptor
-            .coverage
-            .iter()
-            .find(|(concern, _)| *concern == IntegrationConcern::TurnLifecycle)
-            .map(|(_, coverage)| *coverage),
-        Some(ConcernCoverage::Partial { .. })
+        descriptor.concern_coverage(IntegrationConcern::TurnLifecycle),
+        ConcernCoverage::Partial { .. }
     ));
 
     for event in ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"] {
@@ -47,9 +43,7 @@ fn stock_store_transcript_context_and_lifecycle_are_normalized() {
     let descriptor = KiroAdapter.descriptor();
     assert!(descriptor.capabilities.local_session_discovery);
     assert!(descriptor.capabilities.transcript_tail_context);
-    assert!(descriptor.capabilities.context_usage);
-    assert!(!descriptor.capabilities.rich_context);
-    assert!(!descriptor.capabilities.account_spend);
+    assert!(!descriptor.has_authoritative_account_spend());
     assert!(
         !descriptor
             .capabilities

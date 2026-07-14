@@ -484,14 +484,9 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
     );
     assert_eq!(PiAdapter.observe_lifecycle("bogus", &json!({})), None);
 
-    // The session-end and moved-on predicates track those signals: only a real
-    // shutdown ends the session, and only the turn boundaries move the row on.
+    // Only a real shutdown ends the session.
     assert!(PiAdapter.ends_session("session_shutdown"));
     assert!(!PiAdapter.ends_session("agent_end"));
-    assert!(PiAdapter.moves_on("before_agent_start"));
-    assert!(!PiAdapter.moves_on("agent_end"));
-    assert!(PiAdapter.moves_on("agent_settled"));
-    assert!(!PiAdapter.moves_on("session_start"));
 }
 
 #[test]

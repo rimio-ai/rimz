@@ -71,7 +71,7 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
         },
         version: None,
         sub_provider: Some(provider.clone()),
-        credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
+        credentials_updated_at_ms: crate::agents::account::file_mtime_ms(path),
     })
 }
 

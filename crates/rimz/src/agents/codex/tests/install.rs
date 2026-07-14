@@ -1,5 +1,18 @@
 use super::*;
 
+const EXPECTED_EVENTS: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "PermissionRequest",
+    "PreToolUse",
+    "PostToolUse",
+    "PreCompact",
+    "PostCompact",
+];
+
 #[test]
 fn install_into_empty_dir_creates_documented_inline_hooks() {
     let dir = tempfile::tempdir().unwrap();
@@ -7,8 +20,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
     let report = install_into(&path).unwrap();
     assert!(!report.files[0].existed);
     assert_eq!(report.agent, "codex");
-    let expected: Vec<&str> = INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect();
-    assert_eq!(report.installed_events, expected);
+    assert_eq!(report.installed_events, EXPECTED_EVENTS);
     assert!(hooks_installed_at(&path));
 
     // Every command is identical (no `--event`; the helper reads the event
@@ -348,21 +360,21 @@ fn untrusted_hooks_report_by_trust_state() {
         let expected = match case {
             Case::StateAbsent => {
                 install_into(&path).unwrap();
-                INSTALLED_EVENTS
+                EXPECTED_EVENTS
                     .iter()
-                    .map(|(event, _)| (*event).to_owned())
+                    .map(|event| (*event).to_owned())
                     .collect::<Vec<_>>()
             }
             Case::EveryEventTrusted => {
                 install_into(&path).unwrap();
-                for (event, _) in INSTALLED_EVENTS {
+                for event in EXPECTED_EVENTS {
                     trust_event(&path, &snake_event_token(event));
                 }
                 Vec::new()
             }
             Case::MissingStopAndPermission => {
                 install_into(&path).unwrap();
-                for (event, _) in INSTALLED_EVENTS {
+                for event in EXPECTED_EVENTS {
                     // `subagent_stop` trusted while `stop` is not also proves
                     // the token match is colon-delimited, not substring-loose.
                     if *event != "Stop" && *event != "PermissionRequest" {

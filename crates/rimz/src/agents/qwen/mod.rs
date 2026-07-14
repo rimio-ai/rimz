@@ -23,11 +23,12 @@ use self::payloads::{
     parse_subagent, parse_tool_use, parse_user_prompt_submit,
 };
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::hook_types::{BackgroundTask, SessionSource};
-use super::lifecycle::{AskKind, LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::{AskKind, LifecycleSignal};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
@@ -68,18 +69,11 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         ],
     },
     capabilities: Capabilities {
-        blocking_asks: true,
         native_ask_ui: true,
-        rich_context: true,
         transcript_tail_context: false,
-        context_usage: true,
-        account_spend: true,
-        subagents: true,
-        background_tasks: true,
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -108,174 +102,92 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "SubagentStart",
         "SubagentStop",
     ],
-    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-const QWEN_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "SessionStart/UserPromptSubmit/Stop/StopFailure",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Wired {
-            via: "PermissionRequest",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Wired {
-            via: "PreToolUse:exit_plan_mode",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Wired {
-            via: "PreToolUse:ask_user_question",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "native dialog answering not wired; answer in the pane",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Wired {
-            via: "PreCompact/PostCompact/SessionStart:compact",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Wired {
-            via: "SubagentStart/SubagentStop",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Wired {
-            via: "Stop.background_tasks/crons",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Wired { via: "SessionEnd" },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Wired {
-            via: "Notification audit hook",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Wired {
-            via: "transcript tail/statusline",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Partial {
-            via: "priced transcript tokens",
-            gap: "multi-provider billing; sidechain branch pruning is not reconstructed; off-book models cost $0",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Wired { via: "statusline" },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.qwen/settings.json",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Partial {
-            via: "effective provider credentials/Alibaba quota/transcripts",
-            gap: "multi-provider billing; sidechain branch pruning is not reconstructed; Alibaba quota is experimental and display-only; other subscription metering is unknown",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "ACP/daemon mode is outside the pane-first adapter",
-        },
-    ),
-];
+const QWEN_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "SessionStart/UserPromptSubmit/Stop/StopFailure",
+    },
+    permission: ConcernCoverage::Wired {
+        via: "PermissionRequest",
+    },
+    plan_approval: ConcernCoverage::Wired {
+        via: "PreToolUse:exit_plan_mode",
+    },
+    user_question: ConcernCoverage::Wired {
+        via: "PreToolUse:ask_user_question",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "native dialog answering not wired; answer in the pane",
+    },
+    compaction: ConcernCoverage::Wired {
+        via: "PreCompact/PostCompact/SessionStart:compact",
+    },
+    subagents: ConcernCoverage::Wired {
+        via: "SubagentStart/SubagentStop",
+    },
+    background_parking: ConcernCoverage::Wired {
+        via: "Stop.background_tasks/crons",
+    },
+    session_end: ConcernCoverage::Wired { via: "SessionEnd" },
+    idle_notification: ConcernCoverage::Wired {
+        via: "Notification audit hook",
+    },
+    context_usage: ConcernCoverage::Wired {
+        via: "transcript tail/statusline",
+    },
+    realtime_cost: ConcernCoverage::Partial {
+        via: "priced transcript tokens",
+        gap: "multi-provider billing; sidechain branch pruning is not reconstructed; off-book models cost $0",
+    },
+    rich_context: ConcernCoverage::Wired { via: "statusline" },
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.qwen/settings.json",
+    },
+    account_spend: ConcernCoverage::Partial {
+        via: "effective provider credentials/Alibaba quota/transcripts",
+        gap: "multi-provider billing; sidechain branch pruning is not reconstructed; Alibaba quota is experimental and display-only; other subscription metering is unknown",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "ACP/daemon mode is outside the pane-first adapter",
+    },
+};
 
-const QWEN_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "SessionStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "UserPromptSubmit",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "Stop" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "PostToolUse",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Native {
-            event: "PermissionRequest",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Native {
-            event: "SubagentStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Native {
-            event: "SubagentStop",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "PreCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Native {
-            event: "PostCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Native {
-            event: "SessionEnd",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const QWEN_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "SessionStart",
+    },
+    turn_started: HookCoverage::Native {
+        event: "UserPromptSubmit",
+    },
+    turn_ended: HookCoverage::Native { event: "Stop" },
+    tool_used: HookCoverage::Native {
+        event: "PostToolUse",
+    },
+    awaiting_input: HookCoverage::Native {
+        event: "PermissionRequest",
+    },
+    subagent_started: HookCoverage::Native {
+        event: "SubagentStart",
+    },
+    subagent_stopped: HookCoverage::Native {
+        event: "SubagentStop",
+    },
+    compacting: HookCoverage::Native {
+        event: "PreCompact",
+    },
+    compaction_ended: HookCoverage::Native {
+        event: "PostCompact",
+    },
+    ended: HookCoverage::Native {
+        event: "SessionEnd",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 const QWEN_HOOK_TIMEOUT_MS: u64 = 10_000;
 const BLOCKING_TOOL_MATCHER: &str = "exit_plan_mode|ask_user_question";
@@ -347,7 +259,7 @@ impl AgentAdapter for QwenAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect()
     }
 
@@ -395,10 +307,6 @@ impl AgentAdapter for QwenAdapter {
     fn ends_session(&self, event_name: &str) -> bool {
         event_name == "SessionEnd"
     }
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "Stop" | "UserPromptSubmit")
-    }
-
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
         (event_name == "PreToolUse")
             .then(|| parse_tool_use(payload))
@@ -567,23 +475,11 @@ impl AgentAdapter for QwenAdapter {
             selection::SelectionState::Unavailable => super::OauthUsageProbe::Failed,
         }
     }
-    fn oauth_credentials_stamp(&self) -> Option<u64> {
+    fn account_usage_identity(&self) -> super::AccountUsageIdentity {
         match selection::resolve() {
-            selection::SelectionState::Found(selection) => selection.credentials_stamp(),
-            selection::SelectionState::LoggedOut | selection::SelectionState::Unavailable => None,
-        }
-    }
-    fn oauth_account_key(&self) -> Option<String> {
-        match selection::resolve() {
-            selection::SelectionState::Found(selection) => Some(selection.account_key()),
-            selection::SelectionState::LoggedOut | selection::SelectionState::Unavailable => None,
-        }
-    }
-    fn oauth_account_scope(&self) -> super::ProviderAccountScope {
-        match selection::resolve() {
-            selection::SelectionState::Found(selection) => selection.scope(),
+            selection::SelectionState::Found(selection) => selection.account_usage_identity(),
             selection::SelectionState::LoggedOut | selection::SelectionState::Unavailable => {
-                super::ProviderAccountScope::KindWide
+                super::AccountUsageIdentity::default()
             }
         }
     }

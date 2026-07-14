@@ -251,9 +251,7 @@ pub(super) fn supplement_realtime_cost(
     if !turn_ended || refresh_total_cost(refresh.as_ref()).is_some() {
         return;
     }
-    let Some(coverage) = realtime_cost_coverage(agent) else {
-        return;
-    };
+    let coverage = realtime_cost_coverage(agent);
     let partial = matches!(coverage, rimz::agents::ConcernCoverage::Partial { .. });
     if matches!(coverage, rimz::agents::ConcernCoverage::Unsupported { .. }) {
         return;
@@ -319,15 +317,10 @@ pub(super) fn supplement_realtime_cost(
     refresh.transcript_stat = Some(stat);
 }
 
-pub(super) fn realtime_cost_coverage(
-    agent: &dyn AgentAdapter,
-) -> Option<rimz::agents::ConcernCoverage> {
+pub(super) fn realtime_cost_coverage(agent: &dyn AgentAdapter) -> rimz::agents::ConcernCoverage {
     agent
         .descriptor()
-        .coverage
-        .iter()
-        .find(|(concern, _)| *concern == rimz::agents::IntegrationConcern::RealtimeCost)
-        .map(|(_, coverage)| *coverage)
+        .concern_coverage(rimz::agents::IntegrationConcern::RealtimeCost)
 }
 
 pub(super) fn refresh_total_cost(

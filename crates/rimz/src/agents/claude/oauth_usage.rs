@@ -17,8 +17,9 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::{OauthUsageResponse, file_mtime_ms, oauth_http_get};
+use crate::agents::credits::oauth_http_get;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, transcript_fs::home_dir};
 
 use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate_limit_used_pct};
@@ -177,6 +178,14 @@ pub(crate) fn current_account_key() -> Option<String> {
         .map(|credentials| credentials.account_key)
 }
 
+pub(crate) fn account_usage_identity() -> crate::agents::AccountUsageIdentity {
+    crate::agents::AccountUsageIdentity {
+        credentials_stamp: credentials_stamp(),
+        account_key: current_account_key(),
+        ..Default::default()
+    }
+}
+
 pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {
     let parsed: CredentialsFile = serde_json::from_slice(bytes)?;
     let Some(oauth) = parsed.claude_ai_oauth else {
@@ -269,7 +278,7 @@ pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
     Ok(serde_json::from_str::<UsageWire>(body)?.into_account_usage())
 }
 
-impl OauthUsageResponse for UsageWire {
+impl UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
         AccountUsageSnapshot {
             account_key: None,

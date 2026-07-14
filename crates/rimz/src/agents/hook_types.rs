@@ -6,6 +6,63 @@
 
 use serde::Deserialize;
 
+use super::{AgentHookClass, AskKind, ClassifiedHook};
+
+/// One installed Claude/Codex hook and its classification policy.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HookRecord {
+    pub(crate) event: &'static str,
+    pub(crate) matcher: Option<&'static str>,
+    pub(crate) lifecycle_fallback: bool,
+    pub(crate) synchronous: bool,
+    #[cfg(test)]
+    pub(crate) test_payload: &'static str,
+    #[cfg(test)]
+    pub(crate) test_class: AgentHookClass,
+    #[cfg(test)]
+    pub(crate) test_ask: Option<AskKind>,
+}
+
+macro_rules! hook_record {
+    ($event:literal, $matcher:expr, $lifecycle:expr, $sync:expr, $payload:literal, $class:expr, $ask:expr) => {
+        $crate::agents::hook_types::HookRecord {
+            event: $event,
+            matcher: $matcher,
+            lifecycle_fallback: $lifecycle,
+            synchronous: $sync,
+            #[cfg(test)]
+            test_payload: $payload,
+            #[cfg(test)]
+            test_class: $class,
+            #[cfg(test)]
+            test_ask: $ask,
+        }
+    };
+}
+pub(crate) use hook_record;
+
+pub(crate) fn classify_catalog_hook(
+    hooks: &[HookRecord],
+    event_name: &str,
+    ask_kind: Option<AskKind>,
+) -> ClassifiedHook {
+    let class = if ask_kind.is_some() {
+        AgentHookClass::AwaitingUser
+    } else if hooks
+        .iter()
+        .any(|hook| hook.event == event_name && hook.lifecycle_fallback)
+    {
+        AgentHookClass::Lifecycle
+    } else {
+        AgentHookClass::Unknown
+    };
+    ClassifiedHook {
+        class,
+        ask_kind,
+        event_name: event_name.to_owned(),
+    }
+}
+
 /// `source` field on `SessionStart` events, shared by both adapters.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -46,12 +103,6 @@ impl CompactTrigger {
 #[serde(default)]
 pub struct HookEventCommon {
     pub session_id: Option<String>,
-    /// Claude Code v2.1.196+ correlates hook callbacks for one user prompt with
-    /// this UUID. Other adapters and pre-prompt events leave it absent.
-    pub prompt_id: Option<String>,
-    pub transcript_path: Option<String>,
-    pub cwd: Option<String>,
-    pub hook_event_name: Option<String>,
 }
 
 /// One entry in the `background_tasks` array on a Claude `Stop` payload
@@ -61,14 +112,9 @@ pub struct HookEventCommon {
 #[serde(default)]
 pub struct BackgroundTask {
     pub id: Option<String>,
-    pub r#type: Option<String>,
     pub status: Option<String>,
     pub description: Option<String>,
     pub command: Option<String>,
-    pub agent_type: Option<String>,
-    pub server: Option<String>,
-    pub tool: Option<String>,
-    pub name: Option<String>,
 }
 
 #[cfg(test)]

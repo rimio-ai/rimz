@@ -431,14 +431,6 @@ fn expiry_predicates_match_observed_root_signals() {
             matches!(obs.signal, LifecycleSignal::Ended),
             "{event} session-end predicate"
         );
-        assert_eq!(
-            CodexAdapter.moves_on(event),
-            matches!(
-                obs.signal,
-                LifecycleSignal::TurnStarted | LifecycleSignal::TurnEnded { .. }
-            ),
-            "{event} moved-on predicate",
-        );
     }
 }
 

@@ -76,15 +76,17 @@ pub use self::transcript::{
     refine_turn_death_from_frame, refresh_transcript_context, session_origin,
     turn_death_needs_pane_confirmation,
 };
+#[cfg(test)]
+use super::AgentHookClass;
 use super::AskKind;
 use super::context::AgentContext;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
-    IntegrationConcern, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    IntegrationCoverage, LifecycleCoverage, PlanLabel, RealtimeUsageChannel,
+    RemoteControlCapability, ThreadKey, ToolClassification,
 };
-use super::hook_types::SessionSource;
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::hook_types::{HookRecord, SessionSource, classify_catalog_hook, hook_record};
+use super::lifecycle::LifecycleSignal;
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
@@ -92,9 +94,9 @@ use super::{
     ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport,
     LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RealtimeAccountUsage,
     RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity, SubagentIdentity,
-    TranscriptMessage, TranscriptRole, classify_agent_hook, non_empty_trimmed,
-    optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    TranscriptMessage, TranscriptRole, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::harness::run::PermissionMode;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
@@ -164,15 +166,9 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[("request_user_input", AskKind::Question)],
     },
     capabilities: Capabilities {
-        blocking_asks: true,
         native_ask_ui: true,
-        rich_context: true,
         transcript_tail_context: true,
-        context_usage: true,
-        account_spend: true,
-        subagents: true,
         // Codex has no background-task parking.
-        background_tasks: false,
         // Codex fires no `SessionStart` on a plain CLI launch — it rides the
         // first `UserPromptSubmit` — and its hooks fire from the app-server
         // with no mux pane env, so a session is unstamped. Both make a Codex
@@ -182,7 +178,6 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: false,
         daemon_hooked_sessions: true,
-        hook_install: true,
         implicit_unlimited_windows: &[ImplicitUnlimitedWindow::kind_wide(5 * 60)],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: true,
@@ -212,211 +207,197 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "SubagentStart",
         "SubagentStop",
     ],
-    hook_install_unavailable: None,
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,
 };
 
-const CODEX_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "SessionStart/UserPromptSubmit/Stop",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Wired {
-            via: "PermissionRequest",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Wired {
-            via: "Stop + resting rollout Plan item",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Wired {
-            via: "PreToolUse:request_user_input",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Wired {
-            via: "pane keystroke choreography",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Wired {
-            via: "PreCompact/PostCompact/SessionStart:compact",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Wired {
-            via: "SubagentStart/SubagentStop",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "no background-task parking",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Partial {
-            via: "pane liveness + rollup reaper",
-            gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
-        },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "turn-end + request_user_input + stall window",
-            gap: "no idle Notification hook; no idle-timeout nudge",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Wired {
-            via: "rollout tail",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Wired {
-            via: "rollout tail",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Wired { via: "app-server" },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.codex/config.toml",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Wired {
-            via: "app-server/OAuth usage/rollouts",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Wired {
-            via: "pane/background",
-        },
-    ),
-];
+const CODEX_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "SessionStart/UserPromptSubmit/Stop",
+    },
+    permission: ConcernCoverage::Wired {
+        via: "PermissionRequest",
+    },
+    plan_approval: ConcernCoverage::Wired {
+        via: "Stop + resting rollout Plan item",
+    },
+    user_question: ConcernCoverage::Wired {
+        via: "PreToolUse:request_user_input",
+    },
+    answer: ConcernCoverage::Wired {
+        via: "pane keystroke choreography",
+    },
+    compaction: ConcernCoverage::Wired {
+        via: "PreCompact/PostCompact/SessionStart:compact",
+    },
+    subagents: ConcernCoverage::Wired {
+        via: "SubagentStart/SubagentStop",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "no background-task parking",
+    },
+    session_end: ConcernCoverage::Partial {
+        via: "pane liveness + rollup reaper",
+        gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
+    },
+    idle_notification: ConcernCoverage::Partial {
+        via: "turn-end + request_user_input + stall window",
+        gap: "no idle Notification hook; no idle-timeout nudge",
+    },
+    context_usage: ConcernCoverage::Wired {
+        via: "rollout tail",
+    },
+    realtime_cost: ConcernCoverage::Wired {
+        via: "rollout tail",
+    },
+    rich_context: ConcernCoverage::Wired { via: "app-server" },
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.codex/config.toml",
+    },
+    account_spend: ConcernCoverage::Wired {
+        via: "app-server/OAuth usage/rollouts",
+    },
+    remote_control: ConcernCoverage::Wired {
+        via: "pane/background",
+    },
+};
 
-const CODEX_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "SessionStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "UserPromptSubmit",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "Stop" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "PostToolUse",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Native {
-            event: "PermissionRequest",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Native {
-            event: "SubagentStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Native {
-            event: "SubagentStop",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "PreCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Native {
-            event: "PostCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Derived {
-            via: "pane liveness + rollup reaper",
-            gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const CODEX_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "SessionStart",
+    },
+    turn_started: HookCoverage::Native {
+        event: "UserPromptSubmit",
+    },
+    turn_ended: HookCoverage::Native { event: "Stop" },
+    tool_used: HookCoverage::Native {
+        event: "PostToolUse",
+    },
+    awaiting_input: HookCoverage::Native {
+        event: "PermissionRequest",
+    },
+    subagent_started: HookCoverage::Native {
+        event: "SubagentStart",
+    },
+    subagent_stopped: HookCoverage::Native {
+        event: "SubagentStop",
+    },
+    compacting: HookCoverage::Native {
+        event: "PreCompact",
+    },
+    compaction_ended: HookCoverage::Native {
+        event: "PostCompact",
+    },
+    ended: HookCoverage::Derived {
+        via: "pane liveness + rollup reaper",
+        gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
-/// Installed events. Tuple is `(event_name, optional_matcher)` — the single
-/// source of truth for which Codex events Rimz wires and with which matcher,
-/// mirroring the Claude adapter's table. `SessionStart` filters to its
+/// Installed events and classification policy — the single source of truth for
+/// which Codex events Rimz wires and with which matcher, mirroring the Claude
+/// adapter's catalog. `SessionStart` filters to its
 /// lifecycle subtypes; the per-call hooks match everything (`.*`); the
 /// turn-boundary events (`UserPromptSubmit`, `Stop`) carry no matcher.
 /// `UserPromptSubmit` is state signal — it moves the root agent to running and
 /// carries the task. The broad `PreToolUse`/`PostToolUse` hooks fire on every
 /// tool call; they keep the sidebar's enrichment current, with their payload
 /// content gated by `[privacy] payload_mode`.
-const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
-    ("SessionStart", Some("startup|resume|clear|compact")),
-    ("UserPromptSubmit", None),
-    ("SubagentStart", Some(".*")),
-    ("SubagentStop", Some(".*")),
-    ("Stop", None),
-    ("PermissionRequest", Some(".*")),
-    ("PreToolUse", Some(".*")),
-    ("PostToolUse", Some(".*")),
-    ("PreCompact", Some(".*")),
-    ("PostCompact", Some(".*")),
-];
-
-const LIFECYCLE_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "SubagentStart",
-    "SubagentStop",
-    "Stop",
-    "PreToolUse",
-    "PostToolUse",
-    "PreCompact",
-    "PostCompact",
+const CODEX_HOOKS: &[HookRecord] = &[
+    hook_record!(
+        "SessionStart",
+        Some("startup|resume|clear|compact"),
+        true,
+        false,
+        r#"{"session_id":"sess-1","source":"startup"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "UserPromptSubmit",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1","prompt":"fix auth"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "SubagentStart",
+        Some(".*"),
+        true,
+        false,
+        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "SubagentStop",
+        Some(".*"),
+        true,
+        false,
+        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "Stop",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PermissionRequest",
+        Some(".*"),
+        false,
+        true,
+        r#"{"session_id":"sess-1","tool_name":"shell"}"#,
+        AgentHookClass::AwaitingUser,
+        Some(AskKind::Permission)
+    ),
+    hook_record!(
+        "PreToolUse",
+        Some(".*"),
+        true,
+        false,
+        r#"{"session_id":"sess-1","tool_name":"shell"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PostToolUse",
+        Some(".*"),
+        true,
+        false,
+        r#"{"session_id":"sess-1","tool_name":"apply_patch"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PreCompact",
+        Some(".*"),
+        true,
+        false,
+        r#"{"session_id":"sess-1","trigger":"manual"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PostCompact",
+        Some(".*"),
+        true,
+        false,
+        r#"{"session_id":"sess-1","trigger":"manual"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
 ];
 
 /// Legacy config block written by older Rimz builds. Codex ignores this block;
@@ -556,94 +537,36 @@ impl AgentAdapter for CodexAdapter {
                 .blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()),
             _ => None,
         };
-        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
+        classify_catalog_hook(CODEX_HOOKS, event_name, ask_kind)
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
-        INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect()
+    fn native_hook_events(&self) -> Vec<&'static str> {
+        CODEX_HOOKS.iter().map(|hook| hook.event).collect()
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
 
-        vec![
-            ClassificationSample::new(
-                "PermissionRequest",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "shell" }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Permission),
-            ),
-            ClassificationSample::new(
-                "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "request_user_input" }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Question),
-            ),
-            ClassificationSample::new(
-                "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "shell" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PostToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "apply_patch" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SessionStart",
-                serde_json::json!({ "session_id": "sess-1", "source": "startup" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "UserPromptSubmit",
-                serde_json::json!({ "session_id": "sess-1", "prompt": "fix auth" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SubagentStart",
-                serde_json::json!({
-                    "session_id": "sess-parent",
-                    "agent_id": "child-thread-1",
-                    "agent_type": "review"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SubagentStop",
-                serde_json::json!({
-                    "session_id": "sess-parent",
-                    "agent_id": "child-thread-1",
-                    "agent_type": "review"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "Stop",
-                serde_json::json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PreCompact",
-                serde_json::json!({ "session_id": "sess-1", "trigger": "manual" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PostCompact",
-                serde_json::json!({ "session_id": "sess-1", "trigger": "manual" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-        ]
+        let mut samples = CODEX_HOOKS
+            .iter()
+            .map(|hook| {
+                ClassificationSample::new(
+                    hook.event,
+                    serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
+                    hook.test_class,
+                    hook.test_ask,
+                )
+            })
+            .collect::<Vec<_>>();
+        samples.extend([ClassificationSample::new(
+            "PreToolUse",
+            serde_json::json!({ "session_id": "sess-1", "tool_name": "request_user_input" }),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::Question),
+        )]);
+        samples
     }
 
     #[cfg(test)]
@@ -735,14 +658,6 @@ impl AgentAdapter for CodexAdapter {
             }
             _ => None,
         }
-    }
-
-    fn moves_on(&self, event_name: &str) -> bool {
-        // Same turn-boundary signal as Claude: a fresh prompt or the root Stop
-        // means the agent is past any native prompt it raised mid-turn. A
-        // SubagentStop is a child finishing, not the human answering, so it does
-        // not clear the root's asks.
-        matches!(event_name, "Stop" | "UserPromptSubmit")
     }
 
     fn observe_lifecycle(
@@ -846,12 +761,8 @@ impl AgentAdapter for CodexAdapter {
         crate::agents::credits::map_probe_snapshot(oauth_usage::fetch_usage(), "codex")
     }
 
-    fn oauth_credentials_stamp(&self) -> Option<u64> {
-        oauth_usage::credentials_stamp()
-    }
-
-    fn oauth_account_key(&self) -> Option<String> {
-        oauth_usage::account_key()
+    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+        oauth_usage::account_usage_identity()
     }
 
     /// Codex has no statusline, so app-server-owned metadata (rate-limit

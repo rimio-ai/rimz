@@ -153,25 +153,11 @@ fn matrix_agents() -> Vec<String> {
 }
 
 fn concern_coverage(descriptor: &AgentDescriptor, concern: IntegrationConcern) -> ConcernCoverage {
-    descriptor
-        .coverage
-        .iter()
-        .find(|(declared, _)| *declared == concern)
-        .map(|(_, coverage)| *coverage)
-        .unwrap_or(ConcernCoverage::Unsupported {
-            reason: "coverage row missing",
-        })
+    descriptor.concern_coverage(concern)
 }
 
 fn hook_coverage(descriptor: &AgentDescriptor, signal_kind: LifecycleSignalKind) -> HookCoverage {
-    descriptor
-        .lifecycle_hooks
-        .iter()
-        .find(|(declared, _)| *declared == signal_kind)
-        .map(|(_, coverage)| *coverage)
-        .unwrap_or(HookCoverage::Absent {
-            reason: "lifecycle hook row missing",
-        })
+    descriptor.lifecycle_hooks.get(signal_kind)
 }
 
 fn render_human(report: &CoverageReport, w: &mut impl Write) -> io::Result<()> {

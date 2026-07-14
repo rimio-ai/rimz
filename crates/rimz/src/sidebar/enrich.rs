@@ -213,9 +213,9 @@ pub fn wired_kinds() -> Vec<String> {
     crate::agents::ADAPTERS
         .iter()
         .filter(|agent| {
-            let capabilities = agent.descriptor().capabilities;
-            capabilities.local_session_discovery
-                || (capabilities.hook_install && agent.hooks_installed())
+            let descriptor = agent.descriptor();
+            descriptor.capabilities.local_session_discovery
+                || (descriptor.has_wired_hook_install() && agent.hooks_installed())
         })
         .map(|agent| agent.descriptor().kind.to_owned())
         .collect()
@@ -227,9 +227,9 @@ pub fn wired_default_models() -> BTreeMap<String, String> {
     crate::agents::ADAPTERS
         .iter()
         .filter(|agent| {
-            let capabilities = agent.descriptor().capabilities;
-            capabilities.local_session_discovery
-                || (capabilities.hook_install && agent.hooks_installed())
+            let descriptor = agent.descriptor();
+            descriptor.capabilities.local_session_discovery
+                || (descriptor.has_wired_hook_install() && agent.hooks_installed())
         })
         .filter_map(|agent| {
             agent

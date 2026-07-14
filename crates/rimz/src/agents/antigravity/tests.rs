@@ -15,10 +15,9 @@ const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 #[test]
 fn safe_native_hooks_map_lifecycle_and_keep_pre_tool_policy_untouched() {
     let descriptor = AntigravityAdapter.descriptor();
-    assert!(descriptor.capabilities.hook_install);
-    assert!(!descriptor.capabilities.blocking_asks);
+    assert!(descriptor.has_wired_hook_install());
     assert_eq!(
-        AntigravityAdapter.installed_hook_events(),
+        AntigravityAdapter.native_hook_events(),
         INSTALLED_EVENT_LABELS
     );
 
@@ -1311,13 +1310,19 @@ mod local_account_api {
 
     #[test]
     fn adapter_keeps_dollars_credits_and_oauth_unsupported() {
-        assert!(!AntigravityAdapter.descriptor().capabilities.account_spend);
+        assert!(
+            !AntigravityAdapter
+                .descriptor()
+                .has_authoritative_account_spend()
+        );
         assert!(matches!(
             AntigravityAdapter.probe_oauth_usage(),
             crate::agents::OauthUsageProbe::Unsupported
         ));
-        assert_eq!(AntigravityAdapter.oauth_credentials_stamp(), None);
-        assert_eq!(AntigravityAdapter.oauth_account_key(), None);
+        assert_eq!(
+            AntigravityAdapter.account_usage_identity(),
+            crate::agents::AccountUsageIdentity::default()
+        );
         assert_eq!(AntigravityAdapter.probe_version(), None);
     }
 }

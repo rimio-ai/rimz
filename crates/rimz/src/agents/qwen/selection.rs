@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentAccount, ProviderAccountScope};
-use crate::agents::credits::file_mtime_ms;
 
 const ALIBABA_KEY: &str = "BAILIAN_CODING_PLAN_API_KEY";
 const ALIBABA_INTL_ENDPOINT: &str = "https://coding-intl.dashscope.aliyuncs.com/v1";
@@ -141,6 +141,14 @@ impl Selection {
             self.credential_key,
             self.credential_source.account_fact(),
         )
+    }
+
+    pub(crate) fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+        crate::agents::AccountUsageIdentity {
+            scope: self.scope(),
+            account_key: Some(self.account_key()),
+            credentials_stamp: self.credentials_stamp(),
+        }
     }
 
     pub(crate) fn account(&self) -> AgentAccount {

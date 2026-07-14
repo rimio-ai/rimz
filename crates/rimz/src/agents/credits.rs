@@ -6,8 +6,7 @@
 //! API-key spend projection, or a future admin API, so the type keeps each
 //! figure optional and lets the renderer state only what is known.
 
-use std::path::Path;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -50,16 +49,6 @@ impl HttpErrKind {
     fn is_transient(&self) -> bool {
         matches!(self, Self::Transport | Self::Body | Self::Status(500..=599))
     }
-}
-
-pub(crate) fn file_mtime_ms(path: &Path) -> Option<u64> {
-    std::fs::metadata(path)
-        .ok()?
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
 /// The host authority of `url` — scheme stripped, path/query/fragment and any
@@ -233,11 +222,6 @@ pub struct AccountUsageSnapshot {
     pub reset_credits: Option<ResetCredits>,
     pub plan: Option<String>,
     pub scope: ProviderAccountScope,
-}
-
-/// A provider's raw OAuth usage response, normalized to the shared snapshot.
-pub(crate) trait OauthUsageResponse {
-    fn into_account_usage(self) -> AccountUsageSnapshot;
 }
 
 /// Paid usage beyond the subscription windows: Claude extra usage, Codex

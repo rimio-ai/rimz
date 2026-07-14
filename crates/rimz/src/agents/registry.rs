@@ -160,7 +160,7 @@ mod tests {
                     adapter
                         .descriptor()
                         .concern_coverage(IntegrationConcern::Compaction),
-                    Some(ConcernCoverage::Unsupported { .. })
+                    ConcernCoverage::Unsupported { .. }
                 ),
                 "missing compact command for {}",
                 adapter.descriptor().kind

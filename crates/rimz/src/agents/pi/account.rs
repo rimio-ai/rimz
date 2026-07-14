@@ -87,7 +87,7 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
         // The raw credential key (`anthropic`, `openai`, …), retained so the
         // panel can name which backing subscription Pi is using.
         sub_provider: Some(provider.clone()),
-        credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
+        credentials_updated_at_ms: crate::agents::account::file_mtime_ms(path),
     })
 }
 

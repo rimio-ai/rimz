@@ -59,7 +59,7 @@ pub(crate) fn probe_at(path: &Path) -> AccountProbe {
         metered: Some(true),
         version: None,
         sub_provider: None,
-        credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
+        credentials_updated_at_ms: crate::agents::account::file_mtime_ms(path),
     })
 }
 

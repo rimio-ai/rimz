@@ -6,8 +6,9 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::{file_mtime_ms, oauth_http_get};
+use crate::agents::credits::oauth_http_get;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind};
 
 const USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";

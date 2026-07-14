@@ -11,8 +11,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 
+use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::credits::{OauthUsageResponse, file_mtime_ms, oauth_http_get};
+use crate::agents::credits::oauth_http_get;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, ResetCredits};
 
 use super::app_server::codex_home;
@@ -55,22 +56,6 @@ pub(crate) type Result<T> = std::result::Result<T, CodexOauthUsageErr>;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CodexOauthCredentials {
     access_token: String,
-    account_id: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct CodexAuth {
-    #[serde(default, rename = "OPENAI_API_KEY")]
-    openai_api_key: Option<String>,
-    #[serde(default)]
-    tokens: Option<CodexTokens>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct CodexTokens {
-    #[serde(default)]
-    access_token: Option<String>,
-    #[serde(default)]
     account_id: Option<String>,
 }
 
@@ -133,6 +118,14 @@ pub(crate) fn account_key() -> Option<String> {
         .account_id
 }
 
+pub(crate) fn account_usage_identity() -> crate::agents::AccountUsageIdentity {
+    crate::agents::AccountUsageIdentity {
+        credentials_stamp: credentials_stamp(),
+        account_key: account_key(),
+        ..Default::default()
+    }
+}
+
 pub(crate) fn fetch_usage_with_token(
     access_token: &str,
     account_id: Option<&str>,
@@ -158,7 +151,7 @@ pub(crate) fn load_credentials_from(path: &Path) -> Result<CodexOauthCredentials
 }
 
 pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
-    let auth: CodexAuth = serde_json::from_slice(bytes)?;
+    let auth = super::account::decode_auth(bytes)?;
     if auth
         .openai_api_key
         .as_deref()
@@ -284,7 +277,7 @@ fn fetch_reset_credits(url: &str, credentials: &CodexOauthCredentials) -> Result
     parse_reset_credits(&body)
 }
 
-impl OauthUsageResponse for UsageWire {
+impl UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
         AccountUsageSnapshot {
             account_key: None,

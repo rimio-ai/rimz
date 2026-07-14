@@ -36,11 +36,7 @@ fn pay_per_use_account(credentials_updated_at_ms: Option<u64>) -> AgentAccount {
 fn probe_path(path: &Path) -> AccountProbe {
     match std::fs::metadata(path) {
         Ok(metadata) if metadata.is_file() => {
-            let credentials_updated_at_ms = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|duration| duration.as_millis() as u64);
+            let credentials_updated_at_ms = crate::agents::account::file_mtime_ms(path);
             AccountProbe::Found(pay_per_use_account(credentials_updated_at_ms))
         }
         Ok(_) => AccountProbe::Unavailable,

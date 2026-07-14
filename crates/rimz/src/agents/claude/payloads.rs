@@ -1,19 +1,8 @@
 //! Typed input structs for the Claude Code hook protocol.
 //!
-//! **Input** (Deserialize): one struct per event in the installed and catalog
-//! sets. All use `#[serde(default)]` so sparse or out-of-spec payloads always
-//! deserialize cleanly. `parse_*` free functions are the entry points called by
-//! the adapter. Silent events (PostToolUse, Notification) and identity events
-//! (PermissionRequest, SessionEnd) carry no observation but are parsed to keep
-//! the wire surface typed and auditable.
-//!
-//! This module is the **complete, parse-ready wire catalog**: every installed
-//! and near-term-catalog event has a struct and a `parse_*` entry point, even
-//! where the adapter doesn't consume it yet (an upcoming agent state machine
-//! will wire more events — notably the start/end pairs). `#![allow(dead_code)]`
-//! keeps that forward-ready surface from tripping the warnings-as-errors gate
-//! without scattering per-item attributes.
-#![allow(dead_code)]
+//! Structs contain only fields Rimz consumes. All use `#[serde(default)]` so
+//! sparse or out-of-spec payloads deserialize cleanly; `parse_*` functions are
+//! the adapter entry points.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -56,31 +45,17 @@ pub struct ClaudeSessionStart {
     #[serde(flatten)]
     pub common: ClaudeCommon,
     pub source: SessionSource,
-    pub session_title: Option<String>,
-}
-
-/// `SessionEnd` carries a `reason` field documenting why the session ended.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct ClaudeSessionEnd {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
-    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudeUserPromptSubmit {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
     pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudePreToolUse {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
     pub tool_name: Option<String>,
     pub tool_input: Option<Value>,
 }
@@ -89,10 +64,7 @@ pub struct ClaudePreToolUse {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudePostToolUse {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
     pub tool_name: Option<String>,
-    pub tool_input: Option<Value>,
     pub tool_response: Option<Value>,
 }
 
@@ -101,7 +73,6 @@ pub struct ClaudePostToolUse {
 pub struct ClaudeStop {
     #[serde(flatten)]
     pub common: ClaudeCommon,
-    pub stop_hook_active: Option<bool>,
     /// In-flight background tasks (Claude Code v2.1.145+). An empty vec or
     /// absent field means a genuine turn end; any in-flight entry means the
     /// main thread has parked and will reawaken.
@@ -119,27 +90,14 @@ pub struct ClaudeStop {
 pub struct SessionCron {
     pub id: Option<String>,
     pub schedule: Option<String>,
-    pub recurring: Option<bool>,
     pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudeStopFailure {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
     pub error: Option<String>,
-    pub error_details: Option<Value>,
     pub last_assistant_message: Option<String>,
-}
-
-/// Silent lifecycle event. `message` is the notification text.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct ClaudeNotification {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
-    pub message: Option<String>,
 }
 
 /// `agent_id` and `agent_type` are carried in [`ClaudeCommon`].
@@ -155,22 +113,6 @@ pub struct ClaudeSubagentStart {
 pub struct ClaudeSubagentStop {
     #[serde(flatten)]
     pub common: ClaudeCommon,
-    pub stop_hook_active: Option<bool>,
-    pub agent_transcript_path: Option<String>,
-    pub last_assistant_message: Option<String>,
-    /// These arrays describe the parent session's pending work.
-    pub background_tasks: Vec<BackgroundTask>,
-    pub session_crons: Vec<SessionCron>,
-}
-
-/// Fires before context compaction. `trigger` distinguishes manual (`/compact`)
-/// from automatic compaction.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct ClaudePreCompact {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
-    pub trigger: CompactTrigger,
 }
 
 /// Fires after context compaction completes. The `trigger` shape mirrors
@@ -178,8 +120,6 @@ pub struct ClaudePreCompact {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudePostCompact {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
     pub trigger: CompactTrigger,
 }
 
@@ -189,10 +129,7 @@ pub struct ClaudePostCompact {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudePermissionRequest {
-    #[serde(flatten)]
-    pub common: ClaudeCommon,
     pub tool_name: Option<String>,
-    pub tool_input: Option<Value>,
 }
 
 // ── Parse helpers ──────────────────────────────────────────────────────────
@@ -209,16 +146,13 @@ macro_rules! parse_fn {
 }
 
 parse_fn!(parse_session_start, ClaudeSessionStart);
-parse_fn!(parse_session_end, ClaudeSessionEnd);
 parse_fn!(parse_user_prompt_submit, ClaudeUserPromptSubmit);
 parse_fn!(parse_pre_tool_use, ClaudePreToolUse);
 parse_fn!(parse_post_tool_use, ClaudePostToolUse);
 parse_fn!(parse_stop, ClaudeStop);
 parse_fn!(parse_stop_failure, ClaudeStopFailure);
-parse_fn!(parse_notification, ClaudeNotification);
 parse_fn!(parse_subagent_start, ClaudeSubagentStart);
 parse_fn!(parse_subagent_stop, ClaudeSubagentStop);
-parse_fn!(parse_pre_compact, ClaudePreCompact);
 parse_fn!(parse_post_compact, ClaudePostCompact);
 parse_fn!(parse_permission_request, ClaudePermissionRequest);
 
@@ -238,20 +172,13 @@ mod tests {
     fn parse_helpers_flatten_default_and_tolerate_drift() {
         let session = parse_session_start(&json!({
             "session_id": "sess-1",
-            "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
             "model": "claude-opus-4-8",
             "source": "startup",
-            "session_title": "My session",
             "future_field_from_anthropic": {"nested": 1},
         }));
         assert_eq!(session.common.common.session_id.as_deref(), Some("sess-1"));
-        assert_eq!(
-            session.common.common.prompt_id.as_deref(),
-            Some("550e8400-e29b-41d4-a716-446655440000")
-        );
         assert_eq!(session.common.model.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(session.source, SessionSource::Startup);
-        assert_eq!(session.session_title.as_deref(), Some("My session"));
         // An unknown source variant falls back rather than failing the parse.
         assert_eq!(
             parse_session_start(&json!({"source": "brand_new_source"})).source,
@@ -261,7 +188,6 @@ mod tests {
         let sparse = parse_stop(&json!({}));
         assert!(sparse.background_tasks.is_empty());
         assert!(sparse.session_crons.is_empty());
-        assert_eq!(sparse.stop_hook_active, None);
         assert_eq!(sparse.common.common.session_id, None);
 
         let stop = parse_stop(&json!({
@@ -270,7 +196,7 @@ mod tests {
                 {"id": "t2", "status": "completed", "description": "done"}
             ],
             "session_crons": [
-                {"id": "cron-1", "schedule": "0 9 * * 1-5", "recurring": true, "prompt": "check build"}
+                {"id": "cron-1", "schedule": "0 9 * * 1-5", "prompt": "check build"}
             ],
             "effort": {"level": "high"}
         }));
@@ -285,19 +211,6 @@ mod tests {
             Some("high")
         );
 
-        let subagent_stop = parse_subagent_stop(&json!({
-            "agent_id": "child-1",
-            "agent_transcript_path": "/tmp/agent-child-1.jsonl",
-            "last_assistant_message": "done"
-        }));
-        assert_eq!(
-            subagent_stop.agent_transcript_path.as_deref(),
-            Some("/tmp/agent-child-1.jsonl")
-        );
-        assert_eq!(
-            parse_pre_compact(&json!({"trigger": "auto"})).trigger,
-            CompactTrigger::Auto
-        );
         assert_eq!(
             parse_post_compact(&json!({"trigger": "manual"})).trigger,
             CompactTrigger::Manual

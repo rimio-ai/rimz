@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::agents::credits::file_mtime_ms;
+use crate::agents::account::file_mtime_ms;
 use crate::agents::{AccountUsageSnapshot, ProviderAccountScope};
 
 use super::account;
@@ -94,20 +94,19 @@ pub(crate) fn fetch() -> Result<AccountUsageSnapshot> {
     Ok(with_selected_identity(snapshot, &credential))
 }
 
-pub(crate) fn credentials_stamp() -> Option<u64> {
-    file_mtime_ms(&pi_config_dir().join("auth.json"))
-}
-
-pub(crate) fn current_account_key() -> Option<String> {
-    current_credential()
-        .ok()
-        .map(|credential| credential.account_key)
-}
-
-pub(crate) fn current_account_scope() -> ProviderAccountScope {
-    current_credential()
-        .map(|credential| credential.scope)
-        .unwrap_or_default()
+pub(crate) fn account_usage_identity() -> crate::agents::AccountUsageIdentity {
+    let credentials_stamp = file_mtime_ms(&pi_config_dir().join("auth.json"));
+    let Ok(credential) = current_credential() else {
+        return crate::agents::AccountUsageIdentity {
+            credentials_stamp,
+            ..Default::default()
+        };
+    };
+    crate::agents::AccountUsageIdentity {
+        scope: credential.scope,
+        account_key: Some(credential.account_key),
+        credentials_stamp,
+    }
 }
 
 fn current_credential() -> Result<SelectedCredential> {

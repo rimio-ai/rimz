@@ -92,7 +92,7 @@ fn observe_turn_error_reads_the_tail_from_the_payload_path() {
 }
 
 #[test]
-fn observe_turn_interrupted_reads_the_tail_from_the_payload_path() {
+fn turn_interrupted_reads_the_tail_from_the_payload_path() {
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("session.jsonl");
     std::fs::write(
@@ -106,7 +106,7 @@ fn observe_turn_interrupted_reads_the_tail_from_the_payload_path() {
     .unwrap();
 
     assert_eq!(
-        ClaudeAdapter.observe_turn_interrupted(&json!({
+        ClaudeAdapter.turn_interrupted(&json!({
             "session_id": "sess-1",
             "transcript_path": transcript.to_str().unwrap(),
         })),
@@ -114,7 +114,7 @@ fn observe_turn_interrupted_reads_the_tail_from_the_payload_path() {
     );
     assert!(
         ClaudeAdapter
-            .observe_turn_interrupted(&json!({ "session_id": "sess-1" }))
+            .turn_interrupted(&json!({ "session_id": "sess-1" }))
             .is_none()
     );
 }

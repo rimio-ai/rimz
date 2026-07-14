@@ -22,10 +22,11 @@ use self::protocol::{CanonicalEvent, CompactionTrigger, Envelope};
 use super::AskKind;
 use super::account::AccountProbe;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
 use super::{
@@ -94,7 +95,7 @@ impl AgentAdapter for PluginAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         let manifest: &'static PluginManifest = self.manifest;
         manifest.emits.iter().map(String::as_str).collect()
     }
@@ -303,10 +304,6 @@ impl AgentAdapter for PluginAdapter {
         event_name == "session_end"
     }
 
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "turn_start" | "turn_end")
-    }
-
     fn transcript_files(&self) -> Vec<PathBuf> {
         let Some(transcripts) = &self.manifest.transcripts else {
             return Vec::new();
@@ -353,9 +350,16 @@ impl AgentAdapter for PluginAdapter {
         probes::account_usage(self.descriptor.kind, self.plugin_dir, argv)
     }
 
-    fn oauth_account_key(&self) -> Option<String> {
-        let argv = self.manifest.probes.account.as_deref()?;
-        probes::account_key(self.descriptor.kind, self.plugin_dir, argv)
+    fn account_usage_identity(&self) -> super::AccountUsageIdentity {
+        super::AccountUsageIdentity {
+            account_key: self
+                .manifest
+                .probes
+                .account
+                .as_deref()
+                .and_then(|argv| probes::account_key(self.descriptor.kind, self.plugin_dir, argv)),
+            ..Default::default()
+        }
     }
 
     fn probe_version(&self) -> Option<String> {
@@ -454,7 +458,6 @@ fn build_descriptor(
     manifest: &'static PluginManifest,
     plugin_dir: &'static Path,
 ) -> AgentDescriptor {
-    let event = |name: &str| manifest.emits.iter().any(|event| event == name);
     let setup_doc = manifest::resolve_path(plugin_dir, &manifest.setup_doc);
     let hook_reason = leak_string(format!(
         "hook wiring is self-managed; see {}",
@@ -500,18 +503,11 @@ fn build_descriptor(
             blocking: &[],
         },
         capabilities: Capabilities {
-            blocking_asks: event("awaiting_input"),
             native_ask_ui: manifest.capabilities.native_ask_ui,
-            rich_context: event("context"),
             transcript_tail_context: false,
-            context_usage: manifest.capabilities.context_usage || event("context"),
-            account_spend: manifest.probes.spend.is_some(),
-            subagents: manifest.capabilities.subagents,
-            background_tasks: manifest.capabilities.background_tasks,
             registers_lazily: manifest.capabilities.registers_lazily,
             local_session_discovery: false,
             daemon_hooked_sessions: false,
-            hook_install: false,
             implicit_unlimited_windows: &[],
             realtime_usage: RealtimeUsageChannel {
                 covers_account_while_live: false,
@@ -530,7 +526,6 @@ fn build_descriptor(
         bin_names: leak_strings(std::slice::from_ref(&manifest.kind)),
         extra_bin_dirs: &[],
         activity_events: leak_slice(activity_events),
-        hook_install_unavailable: Some(hook_reason),
         thread_key: match manifest.transcripts.as_ref().map(|value| value.thread_key) {
             Some(TranscriptThreadKey::SessionDir) => ThreadKey::SessionDir,
             Some(TranscriptThreadKey::PerFile) | None => ThreadKey::PerFile,
@@ -538,140 +533,87 @@ fn build_descriptor(
     }
 }
 
-fn derive_coverage(
-    manifest: &PluginManifest,
-    hook_reason: &'static str,
-) -> &'static [(IntegrationConcern, ConcernCoverage)] {
+fn derive_coverage(manifest: &PluginManifest, hook_reason: &'static str) -> IntegrationCoverage {
     let has = |name: &str| manifest.emits.iter().any(|event| event == name);
     let turn = has("session_start") && has("turn_start") && has("turn_end");
     let asks = has("awaiting_input") && manifest.capabilities.native_ask_ui;
     let subagents = manifest.capabilities.subagents && has("subagent_start") && has("subagent_end");
-    leak_slice(vec![
-        (
-            IntegrationConcern::TurnLifecycle,
-            coverage(
-                turn,
-                "canonical session_start/turn_start/turn_end",
-                "canonical turn events not declared",
-            ),
+    IntegrationCoverage {
+        turn_lifecycle: coverage(
+            turn,
+            "canonical session_start/turn_start/turn_end",
+            "canonical turn events not declared",
         ),
-        (
-            IntegrationConcern::Permission,
-            coverage(
-                asks,
-                "canonical awaiting_input",
-                "canonical awaiting_input with native-ask-ui not declared",
-            ),
+        permission: coverage(
+            asks,
+            "canonical awaiting_input",
+            "canonical awaiting_input with native-ask-ui not declared",
         ),
-        (
-            IntegrationConcern::PlanApproval,
-            coverage(
-                asks,
-                "canonical awaiting_input",
-                "canonical awaiting_input with native-ask-ui not declared",
-            ),
+        plan_approval: coverage(
+            asks,
+            "canonical awaiting_input",
+            "canonical awaiting_input with native-ask-ui not declared",
         ),
-        (
-            IntegrationConcern::UserQuestion,
-            coverage(
-                asks,
-                "canonical awaiting_input",
-                "canonical awaiting_input with native-ask-ui not declared",
-            ),
+        user_question: coverage(
+            asks,
+            "canonical awaiting_input",
+            "canonical awaiting_input with native-ask-ui not declared",
         ),
-        (
-            IntegrationConcern::Answer,
-            ConcernCoverage::Unsupported {
-                reason: "plugin prompts are answered in the agent's own UI",
-            },
+        answer: ConcernCoverage::Unsupported {
+            reason: "plugin prompts are answered in the agent's own UI",
+        },
+        compaction: coverage(
+            has("compaction_start") && has("compaction_end"),
+            "canonical compaction_start/compaction_end",
+            "canonical compaction pair not declared",
         ),
-        (
-            IntegrationConcern::Compaction,
-            coverage(
-                has("compaction_start") && has("compaction_end"),
-                "canonical compaction_start/compaction_end",
-                "canonical compaction pair not declared",
-            ),
+        subagents: coverage(
+            subagents,
+            "canonical subagent_start/subagent_end",
+            "canonical subagent pair and capability not declared",
         ),
-        (
-            IntegrationConcern::Subagents,
-            coverage(
-                subagents,
-                "canonical subagent_start/subagent_end",
-                "canonical subagent pair and capability not declared",
-            ),
+        background_parking: ConcernCoverage::Unsupported {
+            reason: "canonical protocol has no background-parking signal",
+        },
+        session_end: coverage(
+            has("session_end"),
+            "canonical session_end",
+            "canonical session_end not declared",
         ),
-        (
-            IntegrationConcern::BackgroundParking,
-            ConcernCoverage::Unsupported {
-                reason: "canonical protocol has no background-parking signal",
-            },
+        idle_notification: ConcernCoverage::Partial {
+            via: "turn_end + stall window",
+            gap: "canonical protocol has no idle notification",
+        },
+        context_usage: coverage(
+            manifest.capabilities.context_usage || has("context"),
+            "canonical context/gauge fields",
+            "context usage not declared",
         ),
-        (
-            IntegrationConcern::SessionEnd,
-            coverage(
-                has("session_end"),
-                "canonical session_end",
-                "canonical session_end not declared",
-            ),
+        realtime_cost: coverage(
+            has("context"),
+            "canonical context total_cost_usd",
+            "context event not declared",
         ),
-        (
-            IntegrationConcern::IdleNotification,
-            ConcernCoverage::Partial {
-                via: "turn_end + stall window",
-                gap: "canonical protocol has no idle notification",
-            },
+        rich_context: coverage(
+            has("context"),
+            "canonical context event",
+            "context event not declared",
         ),
-        (
-            IntegrationConcern::ContextUsage,
-            coverage(
-                manifest.capabilities.context_usage || has("context"),
-                "canonical context/gauge fields",
-                "context usage not declared",
-            ),
+        hook_install: ConcernCoverage::Unsupported {
+            reason: hook_reason,
+        },
+        account_spend: coverage(
+            manifest.probes.spend.is_some(),
+            "plugin spend probe",
+            "spend probe not declared",
         ),
-        (
-            IntegrationConcern::RealtimeCost,
-            coverage(
-                has("context"),
-                "canonical context total_cost_usd",
-                "context event not declared",
-            ),
-        ),
-        (
-            IntegrationConcern::RichContext,
-            coverage(
-                has("context"),
-                "canonical context event",
-                "context event not declared",
-            ),
-        ),
-        (
-            IntegrationConcern::HookInstall,
-            ConcernCoverage::Unsupported {
-                reason: hook_reason,
-            },
-        ),
-        (
-            IntegrationConcern::AccountSpend,
-            coverage(
-                manifest.probes.spend.is_some(),
-                "plugin spend probe",
-                "spend probe not declared",
-            ),
-        ),
-        (
-            IntegrationConcern::RemoteControl,
-            ConcernCoverage::Unsupported {
-                reason: "plugin remote control is not supported",
-            },
-        ),
-    ])
+        remote_control: ConcernCoverage::Unsupported {
+            reason: "plugin remote control is not supported",
+        },
+    }
 }
 
-fn derive_lifecycle_hooks(
-    manifest: &PluginManifest,
-) -> &'static [(LifecycleSignalKind, HookCoverage)] {
+fn derive_lifecycle_hooks(manifest: &PluginManifest) -> LifecycleCoverage {
     let has = |name: &str| manifest.emits.iter().any(|event| event == name);
     let native = |event: &'static str| {
         if has(event) {
@@ -682,31 +624,22 @@ fn derive_lifecycle_hooks(
             }
         }
     };
-    leak_slice(vec![
-        (LifecycleSignalKind::Registered, native("session_start")),
-        (LifecycleSignalKind::TurnStarted, native("turn_start")),
-        (LifecycleSignalKind::TurnEnded, native("turn_end")),
-        (LifecycleSignalKind::ToolUsed, native("tool_use")),
-        (LifecycleSignalKind::AwaitingInput, native("awaiting_input")),
-        (
-            LifecycleSignalKind::SubagentStarted,
-            native("subagent_start"),
-        ),
-        (LifecycleSignalKind::SubagentStopped, native("subagent_end")),
-        (LifecycleSignalKind::Compacting, native("compaction_start")),
-        (
-            LifecycleSignalKind::CompactionEnded,
-            native("compaction_end"),
-        ),
-        (LifecycleSignalKind::Ended, native("session_end")),
-        (
-            LifecycleSignalKind::Lost,
-            HookCoverage::Derived {
-                via: "rimz exec wrapper",
-                gap: "canonical hooks do not report mux-session death",
-            },
-        ),
-    ])
+    LifecycleCoverage {
+        registered: native("session_start"),
+        turn_started: native("turn_start"),
+        turn_ended: native("turn_end"),
+        tool_used: native("tool_use"),
+        awaiting_input: native("awaiting_input"),
+        subagent_started: native("subagent_start"),
+        subagent_stopped: native("subagent_end"),
+        compacting: native("compaction_start"),
+        compaction_ended: native("compaction_end"),
+        ended: native("session_end"),
+        lost: HookCoverage::Derived {
+            via: "rimz exec wrapper",
+            gap: "canonical hooks do not report mux-session death",
+        },
+    }
 }
 
 fn coverage(wired: bool, via: &'static str, reason: &'static str) -> ConcernCoverage {
@@ -845,6 +778,8 @@ mod tests {
 
     use super::*;
     use crate::agents::AskKind;
+    use crate::agents::descriptor::IntegrationConcern;
+    use crate::agents::lifecycle::LifecycleSignalKind;
 
     fn adapter() -> &'static PluginAdapter {
         let root = TempDir::new().unwrap();
@@ -1008,7 +943,12 @@ setup-doc = "README.md"
                 .observe_context("minimalbot", &payload("context"))
                 .is_some()
         );
-        assert!(!adapter.descriptor().capabilities.rich_context);
+        assert!(matches!(
+            adapter
+                .descriptor()
+                .concern_coverage(IntegrationConcern::RichContext),
+            ConcernCoverage::Unsupported { .. }
+        ));
     }
 
     #[test]
@@ -1051,13 +991,36 @@ setup-doc = "README.md"
     #[test]
     fn derives_complete_coverage_tables() {
         let descriptor = adapter().descriptor();
-        assert_eq!(descriptor.coverage.len(), IntegrationConcern::ALL.len());
-        assert_eq!(
-            descriptor.lifecycle_hooks.len(),
-            LifecycleSignalKind::ALL.len()
+        let coverage = descriptor
+            .coverage
+            .iter()
+            .fold([0; 3], |mut totals, (_, row)| {
+                totals[match row {
+                    ConcernCoverage::Wired { .. } => 0,
+                    ConcernCoverage::Partial { .. } => 1,
+                    ConcernCoverage::Unsupported { .. } => 2,
+                }] += 1;
+                totals
+            });
+        assert_eq!(coverage, [10, 1, 5]);
+        let lifecycle = descriptor
+            .lifecycle_hooks
+            .iter()
+            .fold([0; 3], |mut totals, (_, row)| {
+                totals[match row {
+                    HookCoverage::Native { .. } => 0,
+                    HookCoverage::Derived { .. } => 1,
+                    HookCoverage::Absent { .. } => 2,
+                }] += 1;
+                totals
+            });
+        assert_eq!(lifecycle, [10, 1, 0]);
+        assert!(
+            descriptor
+                .concern_coverage(IntegrationConcern::RichContext)
+                .is_wired()
         );
-        assert!(descriptor.capabilities.rich_context);
-        assert!(!descriptor.capabilities.hook_install);
+        assert!(!descriptor.has_wired_hook_install());
     }
 
     #[test]

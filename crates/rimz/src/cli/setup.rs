@@ -144,7 +144,7 @@ impl SetupReport {
                         .iter()
                         .any(|name| which::which(name).is_ok()),
                     binary: rimz::agents::locate_binary(descriptor),
-                    hook_install: descriptor.capabilities.hook_install,
+                    hook_install: descriptor.has_wired_hook_install(),
                     hooks_installed: agent.hooks_installed(),
                     hook_upgrade_available: agent.hook_upgrade_available(),
                     local_session_discovery: descriptor.capabilities.local_session_discovery,

@@ -19,10 +19,11 @@ use serde_json::json as test_json;
 use serde_json::{Value, json};
 
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LocallyPricedTurnCost, PriceBook, Result,
@@ -47,18 +48,11 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        blocking_asks: false,
         native_ask_ui: false,
-        rich_context: true,
         transcript_tail_context: true,
-        context_usage: true,
-        account_spend: false,
-        subagents: false,
-        background_tasks: false,
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -84,178 +78,96 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "afterAgentResponse",
         "stop",
     ],
-    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-const CURSOR_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "sessionStart/beforeSubmitPrompt/stop including native interruption",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Unsupported {
-            reason: "no local permission hook; ACP-only",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "no local plan-approval hook; ACP-only",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Unsupported {
-            reason: "no local question hook; ACP-only",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "no observable local ask surface",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Partial {
-            via: "preCompact opens; the next lifecycle signal closes the bracket",
-            gap: "no post-compaction event; landing status and phase held",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Unsupported {
-            reason: "subagentStop omits the child id supplied by subagentStart",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "no background-task parking signal",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Wired { via: "sessionEnd" },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "turn boundaries + stall window",
-            gap: "no idle Notification hook",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Wired {
-            via: "statusline window/fill/token composition; preCompact and stop fallback",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Partial {
-            via: "model-priced response/stop-hook accumulation",
-            gap: "live session only; no historical Cursor usage ledger",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Wired {
-            via: "command statusline payload",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "managed ~/.cursor/hooks.json + cli-config.json transaction",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Unsupported {
-            reason: "identity/plan/version are wired; no durable provider usage history",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "no remote-control surface",
-        },
-    ),
-];
+const CURSOR_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "sessionStart/beforeSubmitPrompt/stop including native interruption",
+    },
+    permission: ConcernCoverage::Unsupported {
+        reason: "no local permission hook; ACP-only",
+    },
+    plan_approval: ConcernCoverage::Unsupported {
+        reason: "no local plan-approval hook; ACP-only",
+    },
+    user_question: ConcernCoverage::Unsupported {
+        reason: "no local question hook; ACP-only",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "no observable local ask surface",
+    },
+    compaction: ConcernCoverage::Partial {
+        via: "preCompact opens; the next lifecycle signal closes the bracket",
+        gap: "no post-compaction event; landing status and phase held",
+    },
+    subagents: ConcernCoverage::Unsupported {
+        reason: "subagentStop omits the child id supplied by subagentStart",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "no background-task parking signal",
+    },
+    session_end: ConcernCoverage::Wired { via: "sessionEnd" },
+    idle_notification: ConcernCoverage::Partial {
+        via: "turn boundaries + stall window",
+        gap: "no idle Notification hook",
+    },
+    context_usage: ConcernCoverage::Wired {
+        via: "statusline window/fill/token composition; preCompact and stop fallback",
+    },
+    realtime_cost: ConcernCoverage::Partial {
+        via: "model-priced response/stop-hook accumulation",
+        gap: "live session only; no historical Cursor usage ledger",
+    },
+    rich_context: ConcernCoverage::Wired {
+        via: "command statusline payload",
+    },
+    hook_install: ConcernCoverage::Wired {
+        via: "managed ~/.cursor/hooks.json + cli-config.json transaction",
+    },
+    account_spend: ConcernCoverage::Unsupported {
+        reason: "identity/plan/version are wired; no durable provider usage history",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "no remote-control surface",
+    },
+};
 
-const CURSOR_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "sessionStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "beforeSubmitPrompt",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "stop" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "postToolUse",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Absent {
-            reason: "no local permission/question/plan hook; ACP-only",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Absent {
-            reason: "subagentStop has no child id",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Absent {
-            reason: "subagentStop has no child id",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "preCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Derived {
-            via: "next lifecycle signal closes the bracket in step + display-window expiry",
-            gap: "no post-compaction event; landing status and phase held",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Native {
-            event: "sessionEnd",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const CURSOR_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "sessionStart",
+    },
+    turn_started: HookCoverage::Native {
+        event: "beforeSubmitPrompt",
+    },
+    turn_ended: HookCoverage::Native { event: "stop" },
+    tool_used: HookCoverage::Native {
+        event: "postToolUse",
+    },
+    awaiting_input: HookCoverage::Absent {
+        reason: "no local permission/question/plan hook; ACP-only",
+    },
+    subagent_started: HookCoverage::Absent {
+        reason: "subagentStop has no child id",
+    },
+    subagent_stopped: HookCoverage::Absent {
+        reason: "subagentStop has no child id",
+    },
+    compacting: HookCoverage::Native {
+        event: "preCompact",
+    },
+    compaction_ended: HookCoverage::Derived {
+        via: "next lifecycle signal closes the bracket in step + display-window expiry",
+        gap: "no post-compaction event; landing status and phase held",
+    },
+    ended: HookCoverage::Native {
+        event: "sessionEnd",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 const LIFECYCLE_EVENTS: &[&str] = &[
     "sessionStart",
@@ -298,7 +210,7 @@ impl AgentAdapter for CursorAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         WIRED_EVENTS.to_vec()
     }
 
@@ -536,10 +448,6 @@ impl AgentAdapter for CursorAdapter {
 
     fn ends_session(&self, event_name: &str) -> bool {
         event_name == "sessionEnd"
-    }
-
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "beforeSubmitPrompt" | "stop")
     }
 
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {

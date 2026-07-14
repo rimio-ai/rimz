@@ -61,7 +61,7 @@ fn probe_at(path: &Path, environment_token: bool) -> AccountProbe {
     }
     let credentials_updated_at_ms = account_id
         .as_ref()
-        .and_then(|_| crate::agents::account::credentials_updated_at_ms(path));
+        .and_then(|_| crate::agents::account::file_mtime_ms(path));
     found_account(account_id, credentials_updated_at_ms)
 }
 

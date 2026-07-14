@@ -11,7 +11,7 @@ use crate::agents::{
 use crate::store::atomic;
 
 use super::{
-    CODEX_HOOK_TIMEOUT_SECS, HOOKS_TABLE, INSTALLED_EVENTS, RIMZ_BLOCK, RIMZ_HOOK_COMMAND,
+    CODEX_HOOK_TIMEOUT_SECS, CODEX_HOOKS, HOOKS_TABLE, RIMZ_BLOCK, RIMZ_HOOK_COMMAND,
     RIMZ_HOOK_MARKER,
 };
 
@@ -68,9 +68,9 @@ fn install_candidate(path: &Path) -> Result<(toml::Table, Vec<String>)> {
     remove_rimz_block(&mut root);
 
     let mut installed = Vec::new();
-    for &(event, matcher) in INSTALLED_EVENTS {
-        insert_rimz_hook_group(&mut root, event, matcher);
-        installed.push(event.to_owned());
+    for hook in CODEX_HOOKS {
+        insert_rimz_hook_group(&mut root, hook.event, hook.matcher);
+        installed.push(hook.event.to_owned());
     }
 
     Ok((root, installed))
@@ -110,9 +110,9 @@ pub(super) fn hooks_installed_at(path: &Path) -> bool {
     let Ok(root) = read_existing_table(path) else {
         return false;
     };
-    INSTALLED_EVENTS
+    CODEX_HOOKS
         .iter()
-        .all(|(event, _)| has_rimz_hook_command(&root, event))
+        .all(|hook| has_rimz_hook_command(&root, hook.event))
 }
 
 pub(super) fn managed_artifacts_at(path: &Path) -> bool {
@@ -141,14 +141,14 @@ pub(super) fn untrusted_hook_events_at(path: &Path) -> Vec<String> {
         .and_then(toml::Value::as_table)
         .and_then(|hooks| hooks.get("state"))
         .and_then(toml::Value::as_table);
-    INSTALLED_EVENTS
+    CODEX_HOOKS
         .iter()
-        .filter(|(event, _)| has_rimz_hook_command(&root, event))
-        .filter(|(event, _)| {
-            let needle = format!(":{}:", snake_event_token(event));
+        .filter(|hook| has_rimz_hook_command(&root, hook.event))
+        .filter(|hook| {
+            let needle = format!(":{}:", snake_event_token(hook.event));
             !state.is_some_and(|state| state.keys().any(|key| key.contains(&needle)))
         })
-        .map(|(event, _)| (*event).to_owned())
+        .map(|hook| hook.event.to_owned())
         .collect()
 }
 

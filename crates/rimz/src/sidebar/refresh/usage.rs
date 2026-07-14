@@ -71,9 +71,10 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return false;
     };
-    let stamp = adapter.oauth_credentials_stamp();
-    let account_key = adapter.oauth_account_key();
-    let account_scope = adapter.oauth_account_scope();
+    let identity = adapter.account_usage_identity();
+    let stamp = identity.credentials_stamp;
+    let account_key = identity.account_key;
+    let account_scope = identity.scope;
     let prior_identity = read_credits_cache(&runtime.shared_credits_path())
         .entries
         .get(kind)
@@ -221,15 +222,13 @@ pub(crate) fn usage_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return false;
     };
-    let credentials_stamp = adapter.oauth_credentials_stamp();
-    let account_key = adapter.oauth_account_key();
-    let account_scope = adapter.oauth_account_scope();
+    let identity = adapter.account_usage_identity();
     usage_probe_due_with_scope(
         runtime,
         kind,
-        credentials_stamp,
-        account_key.as_deref(),
-        &account_scope,
+        identity.credentials_stamp,
+        identity.account_key.as_deref(),
+        &identity.scope,
     )
 }
 

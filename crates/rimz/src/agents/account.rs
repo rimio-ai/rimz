@@ -26,15 +26,25 @@
 
 use std::path::Path;
 
+use super::ProviderAccountScope;
+
+/// Cache identity of the credentials behind one provider usage probe.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccountUsageIdentity {
+    pub scope: ProviderAccountScope,
+    pub account_key: Option<String>,
+    pub credentials_stamp: Option<u64>,
+}
+
 /// Best-effort credential-file mtime for provider usage ranking.
-pub(crate) fn credentials_updated_at_ms(path: &Path) -> Option<u64> {
+pub(crate) fn file_mtime_ms(path: &Path) -> Option<u64> {
     std::fs::metadata(path)
         .ok()?
         .modified()
         .ok()?
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
-        .map(|duration| duration.as_millis() as u64)
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
 /// The outcome of an out-of-band account probe. The three arms drive the

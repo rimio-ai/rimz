@@ -106,26 +106,15 @@ fn classify_matches_corpus() {
 }
 
 #[test]
-fn installed_events_are_covered_by_the_corpus_and_classify_to_a_channel() {
+fn native_events_are_covered_by_the_corpus_and_classify_to_a_channel() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;
         let samples = corpus(*adapter);
-        let installed_events = adapter.installed_hook_events();
-        assert_eq!(
-            !installed_events.is_empty(),
-            adapter.descriptor().capabilities.hook_install,
-            "{kind} installed hook events must match hook-install capability"
-        );
-        if installed_events.is_empty() {
-            assert!(
-                samples.is_empty(),
-                "{kind} adapter without installed hooks must not claim a native classification corpus"
-            );
-        }
-        for event in installed_events {
+        let native_events = adapter.native_hook_events();
+        for event in native_events {
             assert!(
                 samples.iter().any(|sample| sample.event_name == event),
-                "{kind} installed event {event} has no classification corpus sample"
+                "{kind} native event {event} has no classification corpus sample"
             );
         }
         for sample in samples {
@@ -140,7 +129,7 @@ fn installed_events_are_covered_by_the_corpus_and_classify_to_a_channel() {
                     .classify_hook(sample.event_name, &sample.payload)
                     .class,
                 AgentHookClass::Unknown,
-                "{kind} installed sample {} classified as unknown",
+                "{kind} native sample {} classified as unknown",
                 sample.event_name
             );
         }
@@ -159,8 +148,15 @@ fn capability_honesty() {
             .any(|sample| sample.expected.class == AgentHookClass::AwaitingUser);
 
         assert_eq!(
-            capabilities.blocking_asks, has_blocking,
-            "{kind} blocking_asks capability must match the declared corpus"
+            has_blocking,
+            [
+                IntegrationConcern::Permission,
+                IntegrationConcern::PlanApproval,
+                IntegrationConcern::UserQuestion,
+            ]
+            .into_iter()
+            .any(|concern| adapter.descriptor().concern_coverage(concern).is_wired()),
+            "{kind} blocking classification must match ask coverage"
         );
 
         // Subagent honesty (capability ⟹ an observed subagent lifecycle sample) is
@@ -179,8 +175,11 @@ fn capability_honesty() {
             || capabilities.realtime_usage.windows_defer_to_fresh_realtime
         {
             assert!(
-                capabilities.rich_context,
-                "{kind} realtime account-usage channel requires rich_context"
+                adapter
+                    .descriptor()
+                    .concern_coverage(IntegrationConcern::RichContext)
+                    .is_wired(),
+                "{kind} realtime account-usage channel requires wired RichContext coverage"
             );
         }
 
@@ -205,26 +204,10 @@ fn coverage_is_complete_and_honest() {
         let descriptor = adapter.descriptor();
         let kind = descriptor.kind;
         let samples = corpus(*adapter);
-        let installed_events = adapter.installed_hook_events();
-
-        assert_eq!(
-            descriptor.coverage.len(),
-            IntegrationConcern::ALL.len(),
-            "{kind} coverage must list every integration concern exactly once"
-        );
+        let native_events = adapter.native_hook_events();
 
         for concern in IntegrationConcern::ALL {
-            let matching: Vec<_> = descriptor
-                .coverage
-                .iter()
-                .filter(|(declared, _)| *declared == concern)
-                .collect();
-            assert_eq!(
-                matching.len(),
-                1,
-                "{kind} coverage must list {concern:?} exactly once"
-            );
-            let &(_, coverage) = matching[0];
+            let coverage = descriptor.concern_coverage(concern);
             assert!(
                 !coverage.detail().trim().is_empty(),
                 "{kind} {concern:?} coverage must explain its wire, derivation gap, or unsupported reason"
@@ -235,7 +218,7 @@ fn coverage_is_complete_and_honest() {
                     "{kind} {concern:?} partial coverage must name the derivation that reconstructs it"
                 );
             }
-            assert_coverage_honest(*adapter, &samples, &installed_events, concern, coverage);
+            assert_coverage_honest(*adapter, &samples, &native_events, concern, coverage);
         }
     }
 }
@@ -246,26 +229,10 @@ fn lifecycle_hooks_are_complete_and_honest() {
         let descriptor = adapter.descriptor();
         let kind = descriptor.kind;
         let samples = corpus(*adapter);
-        let installed_events = adapter.installed_hook_events();
-
-        assert_eq!(
-            descriptor.lifecycle_hooks.len(),
-            LifecycleSignalKind::ALL.len(),
-            "{kind} lifecycle_hooks must list every lifecycle signal exactly once"
-        );
+        let native_events = adapter.native_hook_events();
 
         for signal_kind in LifecycleSignalKind::ALL {
-            let matching: Vec<_> = descriptor
-                .lifecycle_hooks
-                .iter()
-                .filter(|(declared, _)| *declared == signal_kind)
-                .collect();
-            assert_eq!(
-                matching.len(),
-                1,
-                "{kind} lifecycle_hooks must list {signal_kind:?} exactly once"
-            );
-            let &(_, coverage) = matching[0];
+            let coverage = descriptor.lifecycle_hooks.get(signal_kind);
             assert!(
                 !coverage.detail().trim().is_empty(),
                 "{kind} {signal_kind:?} hook coverage must name its native event, derivation gap, or absent reason"
@@ -276,13 +243,7 @@ fn lifecycle_hooks_are_complete_and_honest() {
                     "{kind} {signal_kind:?} derived hook coverage must name the derivation that reconstructs it"
                 );
             }
-            assert_lifecycle_hook_honest(
-                *adapter,
-                &samples,
-                &installed_events,
-                signal_kind,
-                coverage,
-            );
+            assert_lifecycle_hook_honest(*adapter, &samples, &native_events, signal_kind, coverage);
         }
 
         assert_hook_matches_concern(
@@ -370,23 +331,17 @@ setup-doc = "README.md"
     let loaded = super::plugin::load_from_root(root.path());
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     let adapter = loaded.adapters[0];
-    let descriptor = adapter.descriptor();
     let samples = corpus(adapter);
-    let installed_events = adapter.installed_hook_events();
+    let native_events = adapter.native_hook_events();
 
-    assert_eq!(descriptor.coverage.len(), IntegrationConcern::ALL.len());
     for concern in IntegrationConcern::ALL {
         let coverage = coverage_for(adapter, concern);
-        assert_coverage_honest(adapter, &samples, &installed_events, concern, coverage);
+        assert_coverage_honest(adapter, &samples, &native_events, concern, coverage);
     }
 
-    assert_eq!(
-        descriptor.lifecycle_hooks.len(),
-        LifecycleSignalKind::ALL.len()
-    );
     for signal_kind in LifecycleSignalKind::ALL {
         let coverage = hook_coverage_for(adapter, signal_kind);
-        assert_lifecycle_hook_honest(adapter, &samples, &installed_events, signal_kind, coverage);
+        assert_lifecycle_hook_honest(adapter, &samples, &native_events, signal_kind, coverage);
     }
     assert_hook_matches_concern(
         adapter,
@@ -425,7 +380,7 @@ fn producible_ask_kinds(samples: &[ClassificationSample]) -> Vec<AskKind> {
 fn assert_coverage_honest(
     adapter: &dyn AgentAdapter,
     samples: &[ClassificationSample],
-    installed_events: &[&str],
+    native_events: &[&str],
     concern: IntegrationConcern,
     coverage: ConcernCoverage,
 ) {
@@ -489,63 +444,41 @@ fn assert_coverage_honest(
         }
         IntegrationConcern::Subagents => {
             assert_eq!(
-                wired, descriptor.capabilities.subagents,
-                "{kind} Subagents coverage must match the subagents capability"
+                wired,
+                observes_subagent_lifecycle(adapter, samples),
+                "{kind} Subagents coverage must match observed subagent lifecycle samples"
             );
-            if wired {
-                assert!(
-                    observes_subagent_lifecycle(adapter, samples),
-                    "{kind} declares subagents but has no observed subagent lifecycle sample"
-                );
-            }
         }
-        IntegrationConcern::BackgroundParking => assert_eq!(
-            wired, descriptor.capabilities.background_tasks,
-            "{kind} BackgroundParking coverage must match the background_tasks capability"
-        ),
+        IntegrationConcern::BackgroundParking => {}
         IntegrationConcern::SessionEnd => assert_eq!(
             wired,
-            installed_events
+            native_events
                 .iter()
                 .any(|event| adapter.ends_session(event)),
-            "{kind} SessionEnd coverage must match an installed session-ending event"
+            "{kind} SessionEnd coverage must match a native session-ending event"
         ),
         IntegrationConcern::IdleNotification => {
             if wired {
                 assert!(
-                    installed_event_classifies(adapter, samples, installed_events, "Notification"),
-                    "{kind} wired IdleNotification coverage requires an installed Notification event"
+                    native_event_classifies(adapter, samples, native_events, "Notification"),
+                    "{kind} wired IdleNotification coverage requires a native Notification event"
                 );
             }
         }
-        IntegrationConcern::RichContext => assert_eq!(
-            wired, descriptor.capabilities.rich_context,
-            "{kind} RichContext coverage must match the rich_context capability"
-        ),
-        IntegrationConcern::HookInstall => assert_eq!(
-            wired, descriptor.capabilities.hook_install,
-            "{kind} HookInstall coverage must match the hook_install capability"
-        ),
+        IntegrationConcern::RichContext | IntegrationConcern::HookInstall => {}
         IntegrationConcern::RemoteControl => assert_eq!(
             wired,
             descriptor.capabilities.remote_control.pane_sessions
                 || descriptor.capabilities.remote_control.background_sessions,
             "{kind} RemoteControl coverage must match remote-control capabilities"
         ),
-        IntegrationConcern::ContextUsage => assert_eq!(
-            !matches!(coverage, ConcernCoverage::Unsupported { .. }),
-            descriptor.capabilities.context_usage,
-            "{kind} ContextUsage coverage must match the context_usage capability"
-        ),
+        IntegrationConcern::ContextUsage => {}
         IntegrationConcern::RealtimeCost => assert_eq!(
             !matches!(coverage, ConcernCoverage::Unsupported { .. }),
             realtime_cost_from_fixture(adapter),
             "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
         ),
-        IntegrationConcern::AccountSpend => assert!(
-            !descriptor.has_authoritative_account_spend() || descriptor.capabilities.account_spend,
-            "{kind} wired AccountSpend coverage requires the account_spend capability"
-        ),
+        IntegrationConcern::AccountSpend => {}
     }
 }
 
@@ -572,33 +505,17 @@ fn has_answer_plan(adapter: &dyn AgentAdapter) -> bool {
 }
 
 fn coverage_for(adapter: &dyn AgentAdapter, concern: IntegrationConcern) -> ConcernCoverage {
-    adapter
-        .descriptor()
-        .coverage
-        .iter()
-        .find(|(declared, _)| *declared == concern)
-        .map(|(_, coverage)| *coverage)
-        .unwrap_or(ConcernCoverage::Unsupported {
-            reason: "coverage row missing",
-        })
+    adapter.descriptor().concern_coverage(concern)
 }
 
 fn hook_coverage_for(adapter: &dyn AgentAdapter, signal_kind: LifecycleSignalKind) -> HookCoverage {
-    adapter
-        .descriptor()
-        .lifecycle_hooks
-        .iter()
-        .find(|(declared, _)| *declared == signal_kind)
-        .map(|(_, coverage)| *coverage)
-        .unwrap_or(HookCoverage::Absent {
-            reason: "lifecycle hook row missing",
-        })
+    adapter.descriptor().lifecycle_hooks.get(signal_kind)
 }
 
 fn assert_lifecycle_hook_honest(
     adapter: &dyn AgentAdapter,
     samples: &[ClassificationSample],
-    installed_events: &[&str],
+    native_events: &[&str],
     signal_kind: LifecycleSignalKind,
     coverage: HookCoverage,
 ) {
@@ -606,8 +523,8 @@ fn assert_lifecycle_hook_honest(
     match coverage {
         HookCoverage::Native { event } => {
             assert!(
-                installed_events.contains(&event),
-                "{kind} {signal_kind:?} native event {event} must be installed"
+                native_events.contains(&event),
+                "{kind} {signal_kind:?} native event {event} must be declared"
             );
             assert!(
                 samples.iter().any(|sample| {
@@ -850,13 +767,13 @@ fn observes_subagent_lifecycle(
     })
 }
 
-fn installed_event_classifies(
+fn native_event_classifies(
     adapter: &dyn AgentAdapter,
     samples: &[ClassificationSample],
-    installed_events: &[&str],
+    native_events: &[&str],
     event_name: &str,
 ) -> bool {
-    installed_events.contains(&event_name)
+    native_events.contains(&event_name)
         && samples.iter().any(|sample| {
             sample.event_name == event_name
                 && adapter

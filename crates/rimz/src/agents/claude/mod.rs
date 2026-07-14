@@ -13,7 +13,7 @@
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.claude/settings.json` under per-matcher `_rimz_managed` markers. The
 //! `PermissionRequest` blocking hook is marked `_rimz_sync = true`; an existing
-//! async marker on it is a hard install error (see [`BLOCKING_EVENTS`] and
+//! async marker on it is a hard install error (see [`CLAUDE_HOOKS`] and
 //! `docs/internals/agents/claude.md`). The `PreToolUse` blocking sub-events ride the
 //! broad `PreToolUse` hook and self-classify from `tool_name`.
 
@@ -51,19 +51,22 @@ use super::RemoteControlStatus;
 #[cfg(test)]
 use super::StatusLineChange;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
-use super::hook_types::{BackgroundTask, SessionSource};
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::hook_types::{
+    BackgroundTask, HookRecord, SessionSource, classify_catalog_hook, hook_record,
+};
+use super::lifecycle::LifecycleSignal;
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
     RootIdentity, SessionOrigin, SubagentIdentity, SubagentObservation, TranscriptMessage,
-    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::harness::run::PermissionMode;
@@ -92,14 +95,8 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         ],
     },
     capabilities: Capabilities {
-        blocking_asks: true,
         native_ask_ui: true,
-        rich_context: true,
         transcript_tail_context: false,
-        context_usage: true,
-        account_spend: true,
-        subagents: true,
-        background_tasks: true,
         // Claude stamps a live pane on every session, so it opts out of the
         // lazy dead-stamp rebind. A genuinely paneless session can still be
         // recovered by cwd, and a pane with no session, such as the login
@@ -107,7 +104,6 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -135,182 +131,100 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "SubagentStart",
         "SubagentStop",
     ],
-    hook_install_unavailable: None,
     // A Claude session spreads across `<session_id>/chat.jsonl` plus
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
     thread_key: ThreadKey::SessionDir,
 };
 
-const CLAUDE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "SessionStart/UserPromptSubmit/Stop",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Wired {
-            via: "PermissionRequest",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Wired {
-            via: "PreToolUse:ExitPlanMode",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Wired {
-            via: "PreToolUse:AskUserQuestion",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Wired {
-            via: "pane-native AskUserQuestion controls",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Wired {
-            via: "PreCompact/PostCompact/SessionStart:compact",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Wired {
-            via: "SubagentStart/SubagentStop/statusline",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Wired {
-            via: "Stop.background_tasks/session_crons",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Wired { via: "SessionEnd" },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Wired {
-            via: "Notification audit hook",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Wired {
-            via: "transcript tail",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Wired {
-            via: "statusline cost",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Wired { via: "statusline" },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.claude/settings.json",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Wired {
-            via: "OAuth usage/transcripts",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Wired {
-            via: "pane/background",
-        },
-    ),
-];
+const CLAUDE_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "SessionStart/UserPromptSubmit/Stop",
+    },
+    permission: ConcernCoverage::Wired {
+        via: "PermissionRequest",
+    },
+    plan_approval: ConcernCoverage::Wired {
+        via: "PreToolUse:ExitPlanMode",
+    },
+    user_question: ConcernCoverage::Wired {
+        via: "PreToolUse:AskUserQuestion",
+    },
+    answer: ConcernCoverage::Wired {
+        via: "pane-native AskUserQuestion controls",
+    },
+    compaction: ConcernCoverage::Wired {
+        via: "PreCompact/PostCompact/SessionStart:compact",
+    },
+    subagents: ConcernCoverage::Wired {
+        via: "SubagentStart/SubagentStop/statusline",
+    },
+    background_parking: ConcernCoverage::Wired {
+        via: "Stop.background_tasks/session_crons",
+    },
+    session_end: ConcernCoverage::Wired { via: "SessionEnd" },
+    idle_notification: ConcernCoverage::Wired {
+        via: "Notification audit hook",
+    },
+    context_usage: ConcernCoverage::Wired {
+        via: "transcript tail",
+    },
+    realtime_cost: ConcernCoverage::Wired {
+        via: "statusline cost",
+    },
+    rich_context: ConcernCoverage::Wired { via: "statusline" },
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.claude/settings.json",
+    },
+    account_spend: ConcernCoverage::Wired {
+        via: "OAuth usage/transcripts",
+    },
+    remote_control: ConcernCoverage::Wired {
+        via: "pane/background",
+    },
+};
 
-const CLAUDE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "SessionStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "UserPromptSubmit",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "Stop" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "PostToolUse",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Native {
-            event: "PermissionRequest",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Native {
-            event: "SubagentStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Native {
-            event: "SubagentStop",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "PreCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Native {
-            event: "PostCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Native {
-            event: "SessionEnd",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const CLAUDE_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "SessionStart",
+    },
+    turn_started: HookCoverage::Native {
+        event: "UserPromptSubmit",
+    },
+    turn_ended: HookCoverage::Native { event: "Stop" },
+    tool_used: HookCoverage::Native {
+        event: "PostToolUse",
+    },
+    awaiting_input: HookCoverage::Native {
+        event: "PermissionRequest",
+    },
+    subagent_started: HookCoverage::Native {
+        event: "SubagentStart",
+    },
+    subagent_stopped: HookCoverage::Native {
+        event: "SubagentStop",
+    },
+    compacting: HookCoverage::Native {
+        event: "PreCompact",
+    },
+    compaction_ended: HookCoverage::Native {
+        event: "PostCompact",
+    },
+    ended: HookCoverage::Native {
+        event: "SessionEnd",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 /// Per-hook timeout written into the Claude config (seconds). Hooks write a
 /// Waiting state and return neutral immediately, so the value is a short guard
 /// for local I/O failures rather than an answer window.
 const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
 
-/// Installed events. Tuple is `(event_name, optional_matcher)`. Rimz installs
-/// every event as a single broad hook with no matcher: the helper classifies
+/// Installed events and classification policy. Rimz installs every event as a
+/// single broad hook with no matcher: the helper classifies
 /// each call from the payload's `tool_name`, so `PreToolUse: ExitPlanMode` and
 /// `PreToolUse: AskUserQuestion` still route to their blocking ask kinds off
 /// the broad `PreToolUse` hook. A dedicated `ExitPlanMode|AskUserQuestion`
@@ -318,50 +232,133 @@ const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
 /// and the broad entry already matches those tools. The broad
 /// `PreToolUse`/`PostToolUse` hooks also keep the sidebar's enrichment current,
 /// with their payload content gated by `[privacy] payload_mode`. The matcher
-/// slot stays in the tuple because the reclaim path still reasons about
+/// field stays explicit because the reclaim path still reasons about
 /// on-disk matchers left by users or older builds.
-const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
-    ("SessionStart", None),
-    ("SessionEnd", None),
-    ("UserPromptSubmit", None),
-    ("Stop", None),
-    ("StopFailure", None),
-    ("Notification", None),
-    ("PermissionRequest", None),
-    ("PreToolUse", None),
-    ("PostToolUse", None),
+const CLAUDE_HOOKS: &[HookRecord] = &[
+    hook_record!(
+        "SessionStart",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1","source":"startup"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "SessionEnd",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "UserPromptSubmit",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1","prompt":"fix auth"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "Stop",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "StopFailure",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1","error":"api_error"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "Notification",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PermissionRequest",
+        None,
+        true,
+        true,
+        r#"{"session_id":"sess-1","tool_name":"Bash"}"#,
+        AgentHookClass::AwaitingUser,
+        Some(AskKind::Permission)
+    ),
+    hook_record!(
+        "PreToolUse",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1","tool_name":"Bash"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PostToolUse",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1","tool_name":"Edit"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
     // Subagent lifecycle (Claude Code's Task-tool children, parity with Codex's
     // threads): `SubagentStart` registers a child row keyed by its `agent_id`,
     // `SubagentStop` returns it to idle. Both carry the parent root `session_id`.
-    ("SubagentStart", None),
-    ("SubagentStop", None),
+    hook_record!(
+        "SubagentStart",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-parent","agent_id":"child-1","subagent_type":"Explore"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "SubagentStop",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-parent","agent_id":"child-1","agent_type":"Explore"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
     // Fires around context compaction (manual `/compact` or auto). Pre opens
     // the transient compacting head; Post carries the trigger bit when present,
     // while SessionStart(source=compact) is the reliable triggerless closer.
-    ("PreCompact", None),
-    ("PostCompact", None),
+    hook_record!(
+        "PreCompact",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PostCompact",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1","trigger":"manual"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
 ];
-
-const LIFECYCLE_EVENTS: &[&str] = &[
-    "SessionStart",
-    "SessionEnd",
-    "UserPromptSubmit",
-    "Stop",
-    "StopFailure",
-    "Notification",
-    "PermissionRequest",
-    "PreToolUse",
-    "PostToolUse",
-    "SubagentStart",
-    "SubagentStop",
-    "PreCompact",
-    "PostCompact",
-];
-
-/// Ask events that should run synchronously so the waiting observation lands
-/// before Claude continues to its own prompt. Installing one with
-/// `_rimz_sync = false` in an existing Rimz-managed config is a hard error.
-const BLOCKING_EVENTS: &[(&str, Option<&str>)] = &[("PermissionRequest", None)];
 
 const HOOKS_KEY: &str = "hooks";
 const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
@@ -414,6 +411,14 @@ const SUBAGENT_STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
 
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeAdapter;
+
+impl ClaudeAdapter {
+    fn turn_interrupted(&self, payload: &Value) -> Option<Timestamp> {
+        let path = optional_payload_string(payload, &["transcript_path"])?;
+        let tail = read_transcript_tail(Path::new(&path))?;
+        statusline::detect_turn_interrupted(&tail)
+    }
+}
 
 impl AgentAdapter for ClaudeAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
@@ -532,25 +537,30 @@ impl AgentAdapter for ClaudeAdapter {
             _ => None,
         };
 
-        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
+        classify_catalog_hook(CLAUDE_HOOKS, event_name, ask_kind)
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
-        INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect()
+    fn native_hook_events(&self) -> Vec<&'static str> {
+        CLAUDE_HOOKS.iter().map(|hook| hook.event).collect()
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
 
-        vec![
-            ClassificationSample::new(
-                "PermissionRequest",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "Bash" }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Permission),
-            ),
+        let mut samples = CLAUDE_HOOKS
+            .iter()
+            .map(|hook| {
+                ClassificationSample::new(
+                    hook.event,
+                    serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
+                    hook.test_class,
+                    hook.test_ask,
+                )
+            })
+            .collect::<Vec<_>>();
+        samples.extend([
             ClassificationSample::new(
                 "PermissionRequest",
                 serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
@@ -575,87 +585,8 @@ impl AgentAdapter for ClaudeAdapter {
                 AgentHookClass::AwaitingUser,
                 Some(AskKind::Question),
             ),
-            ClassificationSample::new(
-                "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "Bash" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PostToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "Edit" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SessionStart",
-                serde_json::json!({ "session_id": "sess-1", "source": "startup" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "UserPromptSubmit",
-                serde_json::json!({ "session_id": "sess-1", "prompt": "fix auth" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "Stop",
-                serde_json::json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "StopFailure",
-                serde_json::json!({ "session_id": "sess-1", "error": "api_error" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "Notification",
-                serde_json::json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SubagentStart",
-                serde_json::json!({
-                    "session_id": "sess-parent",
-                    "agent_id": "child-1",
-                    "subagent_type": "Explore"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SubagentStop",
-                serde_json::json!({
-                    "session_id": "sess-parent",
-                    "agent_id": "child-1",
-                    "agent_type": "Explore"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PreCompact",
-                serde_json::json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PostCompact",
-                serde_json::json!({ "session_id": "sess-1", "trigger": "manual" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SessionEnd",
-                serde_json::json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-        ]
+        ]);
+        samples
     }
 
     #[cfg(test)]
@@ -677,19 +608,6 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn ends_session(&self, event_name: &str) -> bool {
         event_name == "SessionEnd"
-    }
-
-    fn moves_on(&self, event_name: &str) -> bool {
-        // A new prompt starts a fresh turn; a Stop ends the current one. Either
-        // way the agent is past any native prompt it raised mid-turn — Claude's
-        // *main thread* blocks on its own prompt and emits no events until the
-        // human answers it, so by the time one of these arrives the ask is
-        // settled in its UI. A backgrounded subagent does keep emitting while
-        // the main thread blocks, but every in-subagent payload carries the
-        // child `agent_id`, so expiry (keyed by `payload_agent_id`) scopes to
-        // the child and the lifecycle channel drops the event entirely
-        // (`resolve_root_identity`) — neither can settle the parent's ask.
-        matches!(event_name, "Stop" | "UserPromptSubmit")
     }
 
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
@@ -774,7 +692,7 @@ impl AgentAdapter for ClaudeAdapter {
         let parsed: statusline::StatuslinePayload = serde_json::from_value(payload.clone()).ok()?;
         let mut context = parsed.into_context(source, Timestamp::now());
         context.turn_error = self.observe_turn_error(payload);
-        context.turn_interrupted = self.observe_turn_interrupted(payload);
+        context.turn_interrupted = self.turn_interrupted(payload);
         Some(context)
     }
 
@@ -786,12 +704,6 @@ impl AgentAdapter for ClaudeAdapter {
         let path = optional_payload_string(payload, &["transcript_path"])?;
         let tail = read_transcript_tail(Path::new(&path))?;
         statusline::detect_turn_error(&tail)
-    }
-
-    fn observe_turn_interrupted(&self, payload: &Value) -> Option<Timestamp> {
-        let path = optional_payload_string(payload, &["transcript_path"])?;
-        let tail = read_transcript_tail(Path::new(&path))?;
-        statusline::detect_turn_interrupted(&tail)
     }
 
     fn observe_turn_error_from_hook(
@@ -900,12 +812,8 @@ impl AgentAdapter for ClaudeAdapter {
         crate::agents::credits::map_probe_snapshot(oauth_usage::fetch_usage(None), "claude")
     }
 
-    fn oauth_credentials_stamp(&self) -> Option<u64> {
-        oauth_usage::credentials_stamp()
-    }
-
-    fn oauth_account_key(&self) -> Option<String> {
-        oauth_usage::current_account_key()
+    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
+        oauth_usage::account_usage_identity()
     }
 
     fn remote_control_status(

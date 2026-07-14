@@ -69,10 +69,10 @@ pub(super) fn collect_hooks() -> Vec<HookRow> {
         .map(|agent| {
             let descriptor = agent.descriptor();
             let name = descriptor.kind;
-            let status = if !descriptor.capabilities.hook_install {
+            let status = if !descriptor.has_wired_hook_install() {
                 HookStatus::Unsupported {
                     reason: descriptor
-                        .hook_install_unavailable
+                        .hook_install_failure_detail()
                         .unwrap_or("hook install is not supported for this adapter")
                         .to_owned(),
                 }

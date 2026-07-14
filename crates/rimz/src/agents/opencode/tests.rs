@@ -235,9 +235,6 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         .expect("end observation");
     assert_eq!(ended.signal, LifecycleSignal::Ended);
     assert!(OpencodeAdapter.ends_session("session_ended"));
-    assert!(OpencodeAdapter.moves_on("chat_message"));
-    assert!(OpencodeAdapter.moves_on("session_idle"));
-    assert!(OpencodeAdapter.moves_on("session_error"));
 }
 
 #[test]

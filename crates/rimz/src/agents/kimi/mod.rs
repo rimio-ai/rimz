@@ -16,10 +16,11 @@ use serde_json::Value;
 
 use super::context::{AgentCurrentUsage, AgentTokenUsage};
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTurnError, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx,
@@ -87,18 +88,11 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         ],
     },
     capabilities: Capabilities {
-        blocking_asks: true,
         native_ask_ui: true,
-        rich_context: false,
         transcript_tail_context: true,
-        context_usage: true,
-        account_spend: true,
-        subagents: false,
-        background_tasks: false,
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -128,180 +122,98 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "SubagentStop",
         "Notification",
     ],
-    hook_install_unavailable: None,
     thread_key: ThreadKey::SessionDir,
 };
 
-const KIMI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "SessionStart/UserPromptSubmit/Stop",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Wired {
-            via: "PermissionRequest hook",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Wired {
-            via: "PermissionRequest ExitPlanMode",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Wired {
-            via: "PreToolUse AskUserQuestion",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "native Kimi UI owns answers",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Wired {
-            via: "PreCompact/PostCompact",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Partial {
-            via: "parent activity hooks",
-            gap: "hooks carry no child identity; Wire child rows are deferred",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "background parking is not mapped",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Wired { via: "SessionEnd" },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Partial {
-            via: "turn boundaries + ask path + stall window",
-            gap: "no idle notification hook",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Partial {
-            via: "derived from Wire usage.record token totals",
-            gap: "kimi-code omits the exact context ratio from the durable log",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Wired {
-            via: "priced Wire usage.record (model present)",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "no push transport; bounded Wire tail only",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.kimi-code/config.toml [[hooks]]",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Partial {
-            via: "managed OAuth quota plus priced agent-record tokens",
-            gap: "effective provider attribution and non-USD balance currency need shared model support",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "no remote-control surface",
-        },
-    ),
-];
+const KIMI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "SessionStart/UserPromptSubmit/Stop",
+    },
+    permission: ConcernCoverage::Wired {
+        via: "PermissionRequest hook",
+    },
+    plan_approval: ConcernCoverage::Wired {
+        via: "PermissionRequest ExitPlanMode",
+    },
+    user_question: ConcernCoverage::Wired {
+        via: "PreToolUse AskUserQuestion",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "native Kimi UI owns answers",
+    },
+    compaction: ConcernCoverage::Wired {
+        via: "PreCompact/PostCompact",
+    },
+    subagents: ConcernCoverage::Partial {
+        via: "parent activity hooks",
+        gap: "hooks carry no child identity; Wire child rows are deferred",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "background parking is not mapped",
+    },
+    session_end: ConcernCoverage::Wired { via: "SessionEnd" },
+    idle_notification: ConcernCoverage::Partial {
+        via: "turn boundaries + ask path + stall window",
+        gap: "no idle notification hook",
+    },
+    context_usage: ConcernCoverage::Partial {
+        via: "derived from Wire usage.record token totals",
+        gap: "kimi-code omits the exact context ratio from the durable log",
+    },
+    realtime_cost: ConcernCoverage::Wired {
+        via: "priced Wire usage.record (model present)",
+    },
+    rich_context: ConcernCoverage::Unsupported {
+        reason: "no push transport; bounded Wire tail only",
+    },
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.kimi-code/config.toml [[hooks]]",
+    },
+    account_spend: ConcernCoverage::Partial {
+        via: "managed OAuth quota plus priced agent-record tokens",
+        gap: "effective provider attribution and non-USD balance currency need shared model support",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "no remote-control surface",
+    },
+};
 
-const KIMI_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "SessionStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "UserPromptSubmit",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "Stop" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "PostToolUse",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Native {
-            event: "PermissionRequest",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Derived {
-            via: "parent activity only",
-            gap: "child identity is absent from hooks",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Derived {
-            via: "parent activity only",
-            gap: "child identity is absent from hooks",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "PreCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Native {
-            event: "PostCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Native {
-            event: "SessionEnd",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const KIMI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "SessionStart",
+    },
+    turn_started: HookCoverage::Native {
+        event: "UserPromptSubmit",
+    },
+    turn_ended: HookCoverage::Native { event: "Stop" },
+    tool_used: HookCoverage::Native {
+        event: "PostToolUse",
+    },
+    awaiting_input: HookCoverage::Native {
+        event: "PermissionRequest",
+    },
+    subagent_started: HookCoverage::Derived {
+        via: "parent activity only",
+        gap: "child identity is absent from hooks",
+    },
+    subagent_stopped: HookCoverage::Derived {
+        via: "parent activity only",
+        gap: "child identity is absent from hooks",
+    },
+    compacting: HookCoverage::Native {
+        event: "PreCompact",
+    },
+    compaction_ended: HookCoverage::Native {
+        event: "PostCompact",
+    },
+    ended: HookCoverage::Native {
+        event: "SessionEnd",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct KimiAdapter;
@@ -335,7 +247,7 @@ impl AgentAdapter for KimiAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         WIRED_EVENTS.to_vec()
     }
 
@@ -621,10 +533,6 @@ impl AgentAdapter for KimiAdapter {
         event_name == "SessionEnd"
     }
 
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "UserPromptSubmit" | "Stop" | "Interrupt")
-    }
-
     fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
         match mode {
             PermissionMode::Ask => Vec::new(),
@@ -764,8 +672,11 @@ impl AgentAdapter for KimiAdapter {
         super::credits::map_probe_snapshot(oauth_usage::fetch(), "kimi")
     }
 
-    fn oauth_credentials_stamp(&self) -> Option<u64> {
-        oauth_usage::credentials_stamp()
+    fn account_usage_identity(&self) -> super::AccountUsageIdentity {
+        super::AccountUsageIdentity {
+            credentials_stamp: oauth_usage::credentials_stamp(),
+            ..Default::default()
+        }
     }
 }
 

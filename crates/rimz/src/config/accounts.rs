@@ -240,7 +240,7 @@ spend = ["./spend"]
         let loaded = crate::agents::plugin::load_from_root(root.path());
         assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
         let descriptor = loaded.adapters[0].descriptor();
-        assert!(descriptor.capabilities.account_spend);
+        assert!(descriptor.has_authoritative_account_spend());
         assert_eq!(
             validate_budget_descriptor("spendbot", Some(descriptor)),
             Ok(())

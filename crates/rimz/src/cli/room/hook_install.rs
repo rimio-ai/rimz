@@ -38,9 +38,9 @@ pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::
             continue;
         }
 
-        if !descriptor.capabilities.hook_install {
+        if !descriptor.has_wired_hook_install() {
             let reason = descriptor
-                .hook_install_unavailable
+                .hook_install_failure_detail()
                 .unwrap_or("hook install is not supported for this adapter");
             tracing::debug!(
                 agent = descriptor.kind,

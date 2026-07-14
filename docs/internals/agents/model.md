@@ -16,7 +16,7 @@ An adapter *produces* an [`AgentLifecycleObservation`](../../../crates/rimz/src/
 
 Four nouns carry the model:
 
-- An **agent kind** is a wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs) whose `Capabilities` (`registers_lazily`, `subagents`, `background_tasks`, …) declare how that agent behaves. Every behavior below is capability-gated, so a new agent slots in by declaring what it does rather than by growing special cases.
+- An **agent kind** is a wired integration (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `cursor`, `droid`, `kiro`, `qwen`), described by an [`AgentDescriptor`](../../../crates/rimz/src/agents/descriptor.rs). Compile-time-complete integration and lifecycle coverage records own support claims; `Capabilities` carries only operational policy such as lazy registration, transcript-tail reads, realtime-usage precedence, and native ask UI.
 - An **agent instance** is presence: a live local pane running a known agent right now, read from the multiplexer every tick.
 - A **session** is identity: the id the agent's own hooks report, keyed `(kind, agent_id)`, where every durable fact attaches.
 - The **rollup entry** is the one [`AgentState`](../../../crates/rimz/src/agents/state.rs) per session that store replay derives: the durable record the sidebar enriches and renders.
@@ -318,8 +318,8 @@ Claude, Codex, Amp, Copilot, Kimi, Pi, OpenCode, Antigravity, Cursor, Droid, Kir
 
 The descriptor carries two declared matrices, both conformance-checked and both printed by `rimz coverage` (wired green, partial yellow, unsupported/absent dim, so absences are visible at a glance):
 
-- The **`coverage`** table declares every `IntegrationConcern` as `Wired { via }`, `Partial { via, gap }` (native coverage is incomplete, the remaining behaviour reconstructed by derivation, the gap named), or `Unsupported { reason }`. Codex and OpenCode use partial `end` and `idle`: no per-session end or idle hook exists, yet pane liveness plus the reaper reconstruct end, and turn boundaries plus the ask path plus the stall window cover the attention slice of idle. Cursor uses partial `compact`: `preCompact` opens natively and the next lifecycle signal derives the close. Pi and OpenCode use partial `live$`.
-- The **`lifecycle_hooks`** table declares every `LifecycleSignalKind` as `Native { event }`, `Derived { via, gap }`, or `Absent { reason }`.
+- The **`coverage`** record has one named field per `IntegrationConcern`, each `Wired { via }`, `Partial { via, gap }` (native coverage is incomplete, remaining behaviour is reconstructed, and the gap is named), or `Unsupported { reason }`. Named fields make omissions compile errors. Codex and OpenCode use partial `end` and `idle`: no per-session end or idle hook exists, yet pane liveness plus the reaper reconstruct end, and turn boundaries plus the ask path plus the stall window cover the attention slice of idle. Cursor uses partial `compact`: `preCompact` opens natively and the next lifecycle signal derives the close. Pi and OpenCode use partial `live$`.
+- The **`lifecycle_hooks`** record has one named field per `LifecycleSignalKind`, each `Native { event }`, `Derived { via, gap }`, or `Absent { reason }`; omissions are likewise compile errors.
 
 The hook mapping has four jobs: route each native event to a channel, map lifecycle events to observations, render the agent's neutral no-op, and put tool-name vocabularies in the descriptor. The context read path adds two more; either alone is valid:
 

@@ -40,12 +40,12 @@ pub struct AgentDescriptor {
     /// exactly once as wired, partial, or unsupported, and conformance tests
     /// cross-check the declaration against the descriptor and classification
     /// corpus.
-    pub coverage: &'static [(IntegrationConcern, ConcernCoverage)],
+    pub coverage: IntegrationCoverage,
     /// Declared lifecycle-hook checklist. Every [`LifecycleSignalKind`] appears
     /// exactly once as native, derived, or absent; conformance checks the
     /// native event names against the installed hook events and classification
     /// corpus.
-    pub lifecycle_hooks: &'static [(LifecycleSignalKind, HookCoverage)],
+    pub lifecycle_hooks: LifecycleCoverage,
     /// Provider-owned fallback for the model context window shown in an agent
     /// card before a richer runtime source reports the exact value.
     pub default_context_window: Option<u64>,
@@ -77,9 +77,6 @@ pub struct AgentDescriptor {
     /// creation and instantly un-block the row. An idle notification is
     /// excluded too — waiting for input is not progress.
     pub activity_events: &'static [&'static str],
-    /// User-facing reason shown by doctor/start when
-    /// [`Capabilities::hook_install`] is false.
-    pub hook_install_unavailable: Option<&'static str>,
     /// How this agent's transcript files map to billing threads, for the
     /// spending session count.
     pub thread_key: ThreadKey,
@@ -298,42 +295,108 @@ impl HookCoverage {
     }
 }
 
-/// Explicit capability declaration. A provider that *cannot* do something
-/// declares it here instead of leaving an inferable absence. Several flags
-/// gate behavior today: `rich_context` (the provider-owned live context
-/// transport), `context_usage` and `account_spend` (the token/cost read
-/// paths), `registers_lazily` (cwd session binding),
-/// `local_session_discovery` (provider-owned store bootstrapping),
-/// `hook_install` (the install and doctor surfaces), and `native_ask_ui`
-/// (whether an unresolved blocking ask has a native pane prompt). The
-/// rest state the adapter contract up front — pinned by each adapter's tests,
-/// consumed as shared sites grow capability-aware.
+/// Compile-time-complete integration support claims for one adapter.
+#[derive(Clone, Copy, Debug)]
+pub struct IntegrationCoverage {
+    pub turn_lifecycle: ConcernCoverage,
+    pub permission: ConcernCoverage,
+    pub plan_approval: ConcernCoverage,
+    pub user_question: ConcernCoverage,
+    pub answer: ConcernCoverage,
+    pub compaction: ConcernCoverage,
+    pub subagents: ConcernCoverage,
+    pub background_parking: ConcernCoverage,
+    pub session_end: ConcernCoverage,
+    pub idle_notification: ConcernCoverage,
+    pub context_usage: ConcernCoverage,
+    pub realtime_cost: ConcernCoverage,
+    pub rich_context: ConcernCoverage,
+    pub hook_install: ConcernCoverage,
+    pub account_spend: ConcernCoverage,
+    pub remote_control: ConcernCoverage,
+}
+
+impl IntegrationCoverage {
+    pub const fn get(self, concern: IntegrationConcern) -> ConcernCoverage {
+        match concern {
+            IntegrationConcern::TurnLifecycle => self.turn_lifecycle,
+            IntegrationConcern::Permission => self.permission,
+            IntegrationConcern::PlanApproval => self.plan_approval,
+            IntegrationConcern::UserQuestion => self.user_question,
+            IntegrationConcern::Answer => self.answer,
+            IntegrationConcern::Compaction => self.compaction,
+            IntegrationConcern::Subagents => self.subagents,
+            IntegrationConcern::BackgroundParking => self.background_parking,
+            IntegrationConcern::SessionEnd => self.session_end,
+            IntegrationConcern::IdleNotification => self.idle_notification,
+            IntegrationConcern::ContextUsage => self.context_usage,
+            IntegrationConcern::RealtimeCost => self.realtime_cost,
+            IntegrationConcern::RichContext => self.rich_context,
+            IntegrationConcern::HookInstall => self.hook_install,
+            IntegrationConcern::AccountSpend => self.account_spend,
+            IntegrationConcern::RemoteControl => self.remote_control,
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = (IntegrationConcern, ConcernCoverage)> {
+        IntegrationConcern::ALL
+            .into_iter()
+            .map(move |concern| (concern, self.get(concern)))
+    }
+}
+
+/// Compile-time-complete lifecycle-signal support claims for one adapter.
+#[derive(Clone, Copy, Debug)]
+pub struct LifecycleCoverage {
+    pub registered: HookCoverage,
+    pub turn_started: HookCoverage,
+    pub turn_ended: HookCoverage,
+    pub tool_used: HookCoverage,
+    pub awaiting_input: HookCoverage,
+    pub subagent_started: HookCoverage,
+    pub subagent_stopped: HookCoverage,
+    pub compacting: HookCoverage,
+    pub compaction_ended: HookCoverage,
+    pub ended: HookCoverage,
+    pub lost: HookCoverage,
+}
+
+impl LifecycleCoverage {
+    pub const fn get(self, signal: LifecycleSignalKind) -> HookCoverage {
+        match signal {
+            LifecycleSignalKind::Registered => self.registered,
+            LifecycleSignalKind::TurnStarted => self.turn_started,
+            LifecycleSignalKind::TurnEnded => self.turn_ended,
+            LifecycleSignalKind::ToolUsed => self.tool_used,
+            LifecycleSignalKind::AwaitingInput => self.awaiting_input,
+            LifecycleSignalKind::SubagentStarted => self.subagent_started,
+            LifecycleSignalKind::SubagentStopped => self.subagent_stopped,
+            LifecycleSignalKind::Compacting => self.compacting,
+            LifecycleSignalKind::CompactionEnded => self.compaction_ended,
+            LifecycleSignalKind::Ended => self.ended,
+            LifecycleSignalKind::Lost => self.lost,
+        }
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = (LifecycleSignalKind, HookCoverage)> {
+        LifecycleSignalKind::ALL
+            .into_iter()
+            .map(move |signal| (signal, self.get(signal)))
+    }
+}
+
+/// Operational policy that cannot be derived from integration coverage.
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
-    /// Can natively hold a turn open for a permission/plan/question decision.
-    pub blocking_asks: bool,
     /// Renders its own ask UI in the pane — permission prompts, plan
     /// approvals, questions — so Rimz can mark the agent waiting while the
     /// prompt stays in the native UI. An agent without one (pi gates tools
     /// only through the extension) resolves the same ask neutrally with no
     /// waiting state: there is no native prompt to route the human to.
     pub native_ask_ui: bool,
-    /// Surfaces provider-owned rich context beyond the local lifecycle and
-    /// transcript tail, such as account windows, official model labels, PR
-    /// metadata, or agent version.
-    pub rich_context: bool,
     /// Local transcript/rollout tail is a live context source refreshable
     /// outside hooks. Drives producer ticks and renderer transcript watches.
     pub transcript_tail_context: bool,
-    /// Surfaces per-session token/context usage into the agent row.
-    pub context_usage: bool,
-    /// Aggregates durable provider-history spend and is therefore eligible for
-    /// provider account-day caps.
-    pub account_spend: bool,
-    /// Routes child tasks through `Subagent{Start,Stop}` lifecycle signals.
-    pub subagents: bool,
-    /// Has a notion of parking a turn on still-in-flight background work.
-    pub background_tasks: bool,
     /// Registers its session lazily and/or routes hooks through a daemon, so
     /// an instance can be present without a stamped session. The sidebar binds
     /// such a session to its pane by cwd.
@@ -345,8 +408,6 @@ pub struct Capabilities {
     /// conversation, so a new session may succeed another in the same pane
     /// before the reaper clears the stamp.
     pub daemon_hooked_sessions: bool,
-    /// Rimz can install a hook configuration the agent actually executes.
-    pub hook_install: bool,
     /// Rate-limit windows this provider conceptually enforces but may omit
     /// from authoritative readings on some plans. Applicability follows the
     /// account scope so a multi-provider agent inherits only its backing
@@ -449,10 +510,22 @@ pub struct RemoteControlCapability {
 
 impl AgentDescriptor {
     /// Declared support for one product concern.
-    pub fn concern_coverage(&self, concern: IntegrationConcern) -> Option<ConcernCoverage> {
-        self.coverage
-            .iter()
-            .find_map(|(declared, coverage)| (*declared == concern).then_some(*coverage))
+    pub const fn concern_coverage(&self, concern: IntegrationConcern) -> ConcernCoverage {
+        self.coverage.get(concern)
+    }
+
+    /// Whether Rimz can install hooks this adapter executes.
+    pub const fn has_wired_hook_install(&self) -> bool {
+        self.concern_coverage(IntegrationConcern::HookInstall)
+            .is_wired()
+    }
+
+    /// User-facing reason shown when hook installation is unavailable.
+    pub const fn hook_install_failure_detail(&self) -> Option<&'static str> {
+        match self.concern_coverage(IntegrationConcern::HookInstall) {
+            ConcernCoverage::Wired { .. } => None,
+            coverage => Some(coverage.detail()),
+        }
     }
 
     /// Whether this adapter publishes authoritative account-level dollars that
@@ -460,7 +533,7 @@ impl AgentDescriptor {
     pub fn has_authoritative_account_spend(&self) -> bool {
         matches!(
             self.concern_coverage(IntegrationConcern::AccountSpend),
-            Some(ConcernCoverage::Wired { .. })
+            ConcernCoverage::Wired { .. }
         )
     }
 
@@ -607,30 +680,9 @@ mod tests {
         assert!(codex.runs_as("codex-aarch64-a"));
         assert!(!codex.runs_as("zsh"));
     }
-
     #[test]
-    fn capabilities_are_pinned_per_adapter() {
-        let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
-        assert!(claude.capabilities.remote_control.pane_sessions);
-        assert!(claude.capabilities.remote_control.background_sessions);
-        assert!(claude.capabilities.rich_context);
-        assert!(!claude.capabilities.transcript_tail_context);
-        assert!(!claude.capabilities.daemon_hooked_sessions);
-        assert!(claude.capabilities.implicit_unlimited_windows.is_empty());
-        assert!(!claude.capabilities.realtime_usage.covers_account_while_live);
-        assert!(
-            claude
-                .capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
-
+    fn implicit_unlimited_windows_follow_account_scope() {
         let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
-        assert!(codex.capabilities.remote_control.pane_sessions);
-        assert!(codex.capabilities.remote_control.background_sessions);
-        assert!(codex.capabilities.rich_context);
-        assert!(codex.capabilities.transcript_tail_context);
-        assert!(codex.capabilities.daemon_hooked_sessions);
         assert_eq!(
             codex.capabilities.implicit_unlimited_windows,
             &[ImplicitUnlimitedWindow::kind_wide(300)]
@@ -641,13 +693,6 @@ mod tests {
                 .implicit_unlimited_window_mins(&ProviderAccountScope::KindWide)
                 .collect::<Vec<_>>(),
             vec![300]
-        );
-        assert!(codex.capabilities.realtime_usage.covers_account_while_live);
-        assert!(
-            !codex
-                .capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
         );
 
         let openai_oauth = ProviderAccountScope::sub_provider("openai", "oauth");
@@ -675,175 +720,5 @@ mod tests {
                     .is_none()
             );
         }
-
-        let copilot = crate::agents::registry::descriptor_by_kind("copilot").unwrap();
-        assert!(!copilot.capabilities.remote_control.pane_sessions);
-        assert!(!copilot.capabilities.remote_control.background_sessions);
-        assert!(!copilot.capabilities.rich_context);
-        assert!(copilot.capabilities.transcript_tail_context);
-        assert!(!copilot.capabilities.daemon_hooked_sessions);
-        assert!(
-            !copilot
-                .capabilities
-                .realtime_usage
-                .covers_account_while_live
-        );
-        assert!(
-            !copilot
-                .capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
-
-        let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
-        assert!(!pi.capabilities.remote_control.pane_sessions);
-        assert!(!pi.capabilities.remote_control.background_sessions);
-        assert!(pi.capabilities.rich_context);
-        assert!(!pi.capabilities.transcript_tail_context);
-        assert!(!pi.capabilities.daemon_hooked_sessions);
-        assert!(!pi.capabilities.realtime_usage.covers_account_while_live);
-        assert!(
-            !pi.capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
-
-        let opencode = crate::agents::registry::descriptor_by_kind("opencode").unwrap();
-        assert!(!opencode.capabilities.remote_control.pane_sessions);
-        assert!(!opencode.capabilities.remote_control.background_sessions);
-        assert!(opencode.capabilities.rich_context);
-        assert!(!opencode.capabilities.transcript_tail_context);
-        assert!(!opencode.capabilities.daemon_hooked_sessions);
-        assert!(
-            !opencode
-                .capabilities
-                .realtime_usage
-                .covers_account_while_live
-        );
-        assert!(
-            !opencode
-                .capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
-
-        let amp = crate::agents::registry::descriptor_by_kind("amp").unwrap();
-        assert!(amp.capabilities.context_usage);
-        assert!(amp.capabilities.account_spend);
-        assert!(!amp.capabilities.rich_context);
-        assert!(!amp.capabilities.transcript_tail_context);
-        assert_eq!(amp.default_context_window, None);
-        assert!(!amp.capabilities.realtime_usage.covers_account_while_live);
-        assert!(
-            !amp.capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
-
-        let cursor = crate::agents::registry::descriptor_by_kind("cursor").unwrap();
-        assert!(!cursor.capabilities.remote_control.pane_sessions);
-        assert!(!cursor.capabilities.remote_control.background_sessions);
-        assert!(cursor.capabilities.rich_context);
-        assert!(cursor.capabilities.transcript_tail_context);
-        assert!(!cursor.capabilities.daemon_hooked_sessions);
-        assert!(cursor.capabilities.context_usage);
-        assert!(!cursor.capabilities.account_spend);
-        assert!(!cursor.capabilities.subagents);
-        assert!(!cursor.capabilities.realtime_usage.covers_account_while_live);
-        assert!(
-            !cursor
-                .capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
-
-        let droid = crate::agents::registry::descriptor_by_kind("droid").unwrap();
-        assert!(!droid.capabilities.blocking_asks);
-        assert!(droid.capabilities.native_ask_ui);
-        assert!(!droid.capabilities.rich_context);
-        assert!(droid.capabilities.transcript_tail_context);
-        assert!(droid.capabilities.context_usage);
-        assert!(!droid.capabilities.account_spend);
-        assert!(!droid.capabilities.subagents);
-        assert!(!droid.capabilities.background_tasks);
-        assert!(!droid.capabilities.registers_lazily);
-        assert!(!droid.capabilities.daemon_hooked_sessions);
-        assert!(droid.capabilities.hook_install);
-        assert!(!droid.capabilities.remote_control.pane_sessions);
-        assert!(!droid.capabilities.remote_control.background_sessions);
-        assert!(!droid.capabilities.realtime_usage.covers_account_while_live);
-        assert!(
-            !droid
-                .capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
-
-        let kiro = crate::agents::registry::descriptor_by_kind("kiro").unwrap();
-        assert_eq!(kiro.bin_names, &["kiro-cli"]);
-        assert!(!kiro.capabilities.blocking_asks);
-        assert!(kiro.capabilities.native_ask_ui);
-        assert!(!kiro.capabilities.rich_context);
-        assert!(kiro.capabilities.transcript_tail_context);
-        assert!(kiro.capabilities.context_usage);
-        assert!(!kiro.capabilities.account_spend);
-        assert!(kiro.capabilities.registers_lazily);
-        assert!(kiro.capabilities.local_session_discovery);
-        assert!(!kiro.capabilities.hook_install);
-        assert!(kiro.activity_events.is_empty());
-        assert!(!kiro.capabilities.remote_control.pane_sessions);
-        assert!(!kiro.capabilities.remote_control.background_sessions);
-
-        let antigravity = crate::agents::registry::descriptor_by_kind("antigravity").unwrap();
-        assert_eq!(antigravity.bin_names, &["agy"]);
-        assert!(!antigravity.capabilities.blocking_asks);
-        assert!(antigravity.capabilities.native_ask_ui);
-        assert!(antigravity.capabilities.rich_context);
-        assert!(!antigravity.capabilities.transcript_tail_context);
-        assert!(antigravity.capabilities.context_usage);
-        assert!(!antigravity.capabilities.account_spend);
-        assert!(!antigravity.has_authoritative_account_spend());
-        assert!(!antigravity.capabilities.subagents);
-        assert!(antigravity.capabilities.background_tasks);
-        assert!(antigravity.capabilities.registers_lazily);
-        assert!(antigravity.capabilities.local_session_discovery);
-        assert!(!antigravity.capabilities.daemon_hooked_sessions);
-        assert!(antigravity.capabilities.hook_install);
-        assert_eq!(
-            antigravity.activity_events,
-            &[
-                "PreInvocation",
-                "PostToolUse:edit",
-                "PostToolUse:mutating",
-                "PostToolUse:observed",
-                "PostInvocation",
-                "Stop",
-            ]
-        );
-        assert!(!antigravity.capabilities.remote_control.pane_sessions);
-        assert!(!antigravity.capabilities.remote_control.background_sessions);
-
-        for adapter in crate::agents::registry::ADAPTERS {
-            assert_eq!(
-                adapter.descriptor().capabilities.local_session_discovery,
-                matches!(adapter.descriptor().kind, "kiro" | "antigravity"),
-                "local session discovery is an explicit pulled-store capability"
-            );
-        }
-
-        let qwen = crate::agents::registry::descriptor_by_kind("qwen").unwrap();
-        assert!(!qwen.capabilities.remote_control.pane_sessions);
-        assert!(!qwen.capabilities.remote_control.background_sessions);
-        assert!(qwen.capabilities.rich_context);
-        assert!(!qwen.capabilities.transcript_tail_context);
-        assert_eq!(qwen.default_model, None);
-        assert!(!qwen.capabilities.daemon_hooked_sessions);
-        assert!(!qwen.capabilities.realtime_usage.covers_account_while_live);
-        assert!(
-            !qwen
-                .capabilities
-                .realtime_usage
-                .windows_defer_to_fresh_realtime
-        );
     }
 }

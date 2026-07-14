@@ -24,11 +24,12 @@ use self::install::{
 };
 use self::payloads::{parse_session_start, parse_user_prompt_submit};
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::hook_types::SessionSource;
-use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
+use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx,
@@ -54,20 +55,13 @@ static DROID_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        blocking_asks: false,
         // Droid renders native permission prompts, but its hooks expose no
         // structured prompt event RimZ can route or answer.
         native_ask_ui: true,
-        rich_context: false,
         transcript_tail_context: true,
-        context_usage: true,
-        account_spend: false,
-        subagents: false,
-        background_tasks: false,
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        hook_install: true,
         implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -86,178 +80,96 @@ static DROID_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     bin_names: &["droid"],
     extra_bin_dirs: &[],
     activity_events: &["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"],
-    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
-const DROID_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
-    (
-        IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Wired {
-            via: "SessionStart/UserPromptSubmit/Stop",
-        },
-    ),
-    (
-        IntegrationConcern::Permission,
-        ConcernCoverage::Unsupported {
-            reason: "no PermissionRequest hook or structured Notification discriminator",
-        },
-    ),
-    (
-        IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "no plan-approval hook; spec-mode exit is invisible",
-        },
-    ),
-    (
-        IntegrationConcern::UserQuestion,
-        ConcernCoverage::Partial {
-            via: "v2 transcript AskUser tool calls project a native waiting card",
-            gap: "there is no durable RimZ ask or out-of-band answer API",
-        },
-    ),
-    (
-        IntegrationConcern::Answer,
-        ConcernCoverage::Unsupported {
-            reason: "native prompt choreography is not mapped",
-        },
-    ),
-    (
-        IntegrationConcern::Compaction,
-        ConcernCoverage::Wired {
-            via: "PreCompact/SessionStart:compact",
-        },
-    ),
-    (
-        IntegrationConcern::Subagents,
-        ConcernCoverage::Unsupported {
-            reason: "SubagentStop carries no child identity",
-        },
-    ),
-    (
-        IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "no background-task parking",
-        },
-    ),
-    (
-        IntegrationConcern::SessionEnd,
-        ConcernCoverage::Wired { via: "SessionEnd" },
-    ),
-    (
-        IntegrationConcern::IdleNotification,
-        ConcernCoverage::Wired {
-            via: "Notification",
-        },
-    ),
-    (
-        IntegrationConcern::ContextUsage,
-        ConcernCoverage::Wired {
-            via: "v2 session settings lastCallTokenUsage/tokenUsage plus exact configured/model capacity",
-        },
-    ),
-    (
-        IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Partial {
-            via: "v2 session tokenUsage priced through an exact canonical model id",
-            gap: "local USD is estimated rather than authoritative provider billing",
-        },
-    ),
-    (
-        IntegrationConcern::RichContext,
-        ConcernCoverage::Partial {
-            via: "v2 session settings plus typed custom-model configuration and current-call usage",
-            gap: "no authoritative USD, account, or quota metadata",
-        },
-    ),
-    (
-        IntegrationConcern::HookInstall,
-        ConcernCoverage::Wired {
-            via: "~/.factory/settings.json",
-        },
-    ),
-    (
-        IntegrationConcern::AccountSpend,
-        ConcernCoverage::Unsupported {
-            reason: "no machine-readable auth or usage surface",
-        },
-    ),
-    (
-        IntegrationConcern::RemoteControl,
-        ConcernCoverage::Unsupported {
-            reason: "no remote-control surface",
-        },
-    ),
-];
+const DROID_COVERAGE: IntegrationCoverage = IntegrationCoverage {
+    turn_lifecycle: ConcernCoverage::Wired {
+        via: "SessionStart/UserPromptSubmit/Stop",
+    },
+    permission: ConcernCoverage::Unsupported {
+        reason: "no PermissionRequest hook or structured Notification discriminator",
+    },
+    plan_approval: ConcernCoverage::Unsupported {
+        reason: "no plan-approval hook; spec-mode exit is invisible",
+    },
+    user_question: ConcernCoverage::Partial {
+        via: "v2 transcript AskUser tool calls project a native waiting card",
+        gap: "there is no durable RimZ ask or out-of-band answer API",
+    },
+    answer: ConcernCoverage::Unsupported {
+        reason: "native prompt choreography is not mapped",
+    },
+    compaction: ConcernCoverage::Wired {
+        via: "PreCompact/SessionStart:compact",
+    },
+    subagents: ConcernCoverage::Unsupported {
+        reason: "SubagentStop carries no child identity",
+    },
+    background_parking: ConcernCoverage::Unsupported {
+        reason: "no background-task parking",
+    },
+    session_end: ConcernCoverage::Wired { via: "SessionEnd" },
+    idle_notification: ConcernCoverage::Wired {
+        via: "Notification",
+    },
+    context_usage: ConcernCoverage::Wired {
+        via: "v2 session settings lastCallTokenUsage/tokenUsage plus exact configured/model capacity",
+    },
+    realtime_cost: ConcernCoverage::Partial {
+        via: "v2 session tokenUsage priced through an exact canonical model id",
+        gap: "local USD is estimated rather than authoritative provider billing",
+    },
+    rich_context: ConcernCoverage::Partial {
+        via: "v2 session settings plus typed custom-model configuration and current-call usage",
+        gap: "no authoritative USD, account, or quota metadata",
+    },
+    hook_install: ConcernCoverage::Wired {
+        via: "~/.factory/settings.json",
+    },
+    account_spend: ConcernCoverage::Unsupported {
+        reason: "no machine-readable auth or usage surface",
+    },
+    remote_control: ConcernCoverage::Unsupported {
+        reason: "no remote-control surface",
+    },
+};
 
-const DROID_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
-    (
-        LifecycleSignalKind::Registered,
-        HookCoverage::Native {
-            event: "SessionStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnStarted,
-        HookCoverage::Native {
-            event: "UserPromptSubmit",
-        },
-    ),
-    (
-        LifecycleSignalKind::TurnEnded,
-        HookCoverage::Native { event: "Stop" },
-    ),
-    (
-        LifecycleSignalKind::ToolUsed,
-        HookCoverage::Native {
-            event: "PostToolUse",
-        },
-    ),
-    (
-        LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Derived {
-            via: "v2 transcript AskUser tool call",
-            gap: "no hook or durable ask record",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStarted,
-        HookCoverage::Absent {
-            reason: "no child identity",
-        },
-    ),
-    (
-        LifecycleSignalKind::SubagentStopped,
-        HookCoverage::Absent {
-            reason: "no child identity",
-        },
-    ),
-    (
-        LifecycleSignalKind::Compacting,
-        HookCoverage::Native {
-            event: "PreCompact",
-        },
-    ),
-    (
-        LifecycleSignalKind::CompactionEnded,
-        HookCoverage::Native {
-            event: "SessionStart",
-        },
-    ),
-    (
-        LifecycleSignalKind::Ended,
-        HookCoverage::Native {
-            event: "SessionEnd",
-        },
-    ),
-    (
-        LifecycleSignalKind::Lost,
-        HookCoverage::Derived {
-            via: "rimz exec wrapper",
-            gap: "native hooks do not report mux-session death",
-        },
-    ),
-];
+const DROID_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
+    registered: HookCoverage::Native {
+        event: "SessionStart",
+    },
+    turn_started: HookCoverage::Native {
+        event: "UserPromptSubmit",
+    },
+    turn_ended: HookCoverage::Native { event: "Stop" },
+    tool_used: HookCoverage::Native {
+        event: "PostToolUse",
+    },
+    awaiting_input: HookCoverage::Derived {
+        via: "v2 transcript AskUser tool call",
+        gap: "no hook or durable ask record",
+    },
+    subagent_started: HookCoverage::Absent {
+        reason: "no child identity",
+    },
+    subagent_stopped: HookCoverage::Absent {
+        reason: "no child identity",
+    },
+    compacting: HookCoverage::Native {
+        event: "PreCompact",
+    },
+    compaction_ended: HookCoverage::Native {
+        event: "SessionStart",
+    },
+    ended: HookCoverage::Native {
+        event: "SessionEnd",
+    },
+    lost: HookCoverage::Derived {
+        via: "rimz exec wrapper",
+        gap: "native hooks do not report mux-session death",
+    },
+};
 
 const DROID_HOOK_TIMEOUT_SECS: u64 = 10;
 const INSTALLED_EVENTS: &[&str] = &[
@@ -288,7 +200,7 @@ impl AgentAdapter for DroidAdapter {
     }
 
     #[cfg(test)]
-    fn installed_hook_events(&self) -> Vec<&'static str> {
+    fn native_hook_events(&self) -> Vec<&'static str> {
         INSTALLED_EVENTS.to_vec()
     }
 
@@ -443,10 +355,6 @@ impl AgentAdapter for DroidAdapter {
 
     fn ends_session(&self, event_name: &str) -> bool {
         event_name == "SessionEnd"
-    }
-
-    fn moves_on(&self, event_name: &str) -> bool {
-        matches!(event_name, "Stop" | "UserPromptSubmit")
     }
 
     fn local_context_refresh(
