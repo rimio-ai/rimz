@@ -35,6 +35,14 @@ fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
 }
 
 #[test]
+fn agent_digest_preserves_existing_ledger_names() {
+    assert_eq!(
+        agent_digest(&AgentKind::new_unchecked("claude"), &"sess".into()),
+        "4a8d94f232e55a6a0879ba0858b59241"
+    );
+}
+
+#[test]
 fn current_usage_cost_cannot_trigger_budget_enforcement() {
     let now = Timestamp::from_second(200).expect("timestamp");
     let mut current_usage = agent(99.0, AgentStatus::Idle, Some(now));
@@ -482,7 +490,9 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     };
     write_fleet_ledger(&runtime, &fleet).expect("fleet write");
     assert_eq!(read_fleet_ledger(&runtime), fleet);
-    merge_fleet_park(&runtime, None).expect("merge fleet park");
+    fleet_scope_file(&runtime)
+        .merge_park::<FleetBudgetLedger>(None)
+        .expect("merge fleet park");
     assert_eq!(
         read_fleet_ledger(&runtime),
         FleetBudgetLedger {
@@ -500,7 +510,9 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
     };
     write_account_ledger(&runtime, &kind, &account).expect("account write");
     assert_eq!(read_account_ledger(&runtime, &kind), account);
-    merge_account_park(&runtime, &kind, None).expect("merge account park");
+    account_scope_file(&runtime, &kind)
+        .merge_park::<AccountBudgetLedger>(None)
+        .expect("merge account park");
     assert_eq!(
         read_account_ledger(&runtime, &kind),
         AccountBudgetLedger {

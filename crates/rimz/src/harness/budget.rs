@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use jiff::{Timestamp, civil::Date, tz::TimeZone};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -23,6 +24,8 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use crate::store::SidebarSnapshot;
 use crate::store::atomic::write_temp_then_rename_cache;
+
+pub use crate::harness::auto_continue::clear_budget_park;
 
 const INTERRUPT_RETRY_SECS: i64 = 120;
 
@@ -630,13 +633,15 @@ pub fn enforce(
     }
 
     if scopes.fleet.parked != scopes.fleet_parked_before
-        && let Err(err) = merge_fleet_park(runtime, scopes.fleet.parked)
+        && let Err(err) =
+            fleet_scope_file(runtime).merge_park::<FleetBudgetLedger>(scopes.fleet.parked)
     {
         warn_write("fleet budget ledger", err);
     }
     for (kind, account) in scopes.accounts {
         if account.ledger.parked != account.parked_before
-            && let Err(err) = merge_account_park(runtime, &kind, account.ledger.parked)
+            && let Err(err) = account_scope_file(runtime, &kind)
+                .merge_park::<AccountBudgetLedger>(account.ledger.parked)
         {
             warn_write("account budget ledger", err);
         }
@@ -1251,12 +1256,18 @@ pub fn budget_ledger_path(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> PathBuf {
+    runtime
+        .root
+        .join(format!("budget.{}.json", agent_digest(kind, agent_id)))
+}
+
+pub(crate) fn agent_digest(kind: &AgentKind, agent_id: &AgentSessionId) -> String {
     let mut hasher = Sha256::new();
     hasher.update(kind.as_str().as_bytes());
     hasher.update([0]);
     hasher.update(agent_id.as_str().as_bytes());
     let digest = hex::encode(hasher.finalize());
-    runtime.root.join(format!("budget.{}.json", &digest[..32]))
+    digest[..32].to_owned()
 }
 
 pub fn read_ledger(
@@ -1279,59 +1290,41 @@ pub fn write_ledger(
 }
 
 pub fn fleet_ledger_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("budget.fleet.json")
+    fleet_scope_file(runtime).path
 }
 
-fn fleet_ledger_lock_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("budget.fleet.lock")
+fn fleet_scope_file(runtime: &RuntimePaths) -> ScopeLedgerFile {
+    ScopeLedgerFile {
+        path: runtime.root.join("budget.fleet.json"),
+        lock_path: runtime.root.join("budget.fleet.lock"),
+    }
 }
 
 pub fn read_fleet_ledger(runtime: &RuntimePaths) -> FleetBudgetLedger {
-    std::fs::read(fleet_ledger_path(runtime))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    fleet_scope_file(runtime).read()
 }
 
 pub fn write_fleet_ledger(
     runtime: &RuntimePaths,
     ledger: &FleetBudgetLedger,
 ) -> Result<(), ScopeLedgerWriteError> {
-    let _guard = crate::store::lock::WorkspaceLock::acquire(&fleet_ledger_lock_path(runtime))?;
-    write_fleet_ledger_unlocked(runtime, ledger)?;
-    Ok(())
-}
-
-fn write_fleet_ledger_unlocked(
-    runtime: &RuntimePaths,
-    ledger: &FleetBudgetLedger,
-) -> crate::store::atomic::Result<()> {
-    write_temp_then_rename_cache(&fleet_ledger_path(runtime), ledger)
-}
-
-fn merge_fleet_park(
-    runtime: &RuntimePaths,
-    parked: Option<BudgetParkStamp>,
-) -> Result<(), ScopeLedgerWriteError> {
-    let _guard = crate::store::lock::WorkspaceLock::acquire(&fleet_ledger_lock_path(runtime))?;
-    let mut current = read_fleet_ledger(runtime);
-    current.parked = parked;
-    write_fleet_ledger_unlocked(runtime, &current)?;
-    Ok(())
+    fleet_scope_file(runtime).write(ledger)
 }
 
 pub fn account_ledger_path(runtime: &RuntimePaths, kind: &AgentKind) -> PathBuf {
-    runtime.persistent_shared_root.join(format!(
-        "budget.account.{}.json",
-        account_ledger_component(kind)
-    ))
+    account_scope_file(runtime, kind).path
 }
 
-fn account_ledger_lock_path(runtime: &RuntimePaths, kind: &AgentKind) -> PathBuf {
-    runtime.shared_root.join(format!(
-        "budget.account.{}.lock",
-        account_ledger_component(kind)
-    ))
+fn account_scope_file(runtime: &RuntimePaths, kind: &AgentKind) -> ScopeLedgerFile {
+    let component = account_ledger_component(kind);
+    ScopeLedgerFile {
+        path: runtime
+            .persistent_shared_root
+            .join(format!("budget.account.{component}.json")),
+        lock_path: runtime
+            .shared_root
+            .join(format!("budget.account.{component}.lock")),
+    }
 }
 
 fn account_ledger_component(kind: &AgentKind) -> String {
@@ -1349,10 +1342,7 @@ fn account_ledger_component(kind: &AgentKind) -> String {
 }
 
 pub fn read_account_ledger(runtime: &RuntimePaths, kind: &AgentKind) -> AccountBudgetLedger {
-    std::fs::read(account_ledger_path(runtime, kind))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    account_scope_file(runtime, kind).read()
 }
 
 pub fn write_account_ledger(
@@ -1360,31 +1350,58 @@ pub fn write_account_ledger(
     kind: &AgentKind,
     ledger: &AccountBudgetLedger,
 ) -> Result<(), ScopeLedgerWriteError> {
-    let _guard =
-        crate::store::lock::WorkspaceLock::acquire(&account_ledger_lock_path(runtime, kind))?;
-    write_account_ledger_unlocked(runtime, kind, ledger)?;
-    Ok(())
+    account_scope_file(runtime, kind).write(ledger)
 }
 
-fn write_account_ledger_unlocked(
-    runtime: &RuntimePaths,
-    kind: &AgentKind,
-    ledger: &AccountBudgetLedger,
-) -> crate::store::atomic::Result<()> {
-    write_temp_then_rename_cache(&account_ledger_path(runtime, kind), ledger)
+struct ScopeLedgerFile {
+    path: PathBuf,
+    lock_path: PathBuf,
 }
 
-fn merge_account_park(
-    runtime: &RuntimePaths,
-    kind: &AgentKind,
-    parked: Option<BudgetParkStamp>,
-) -> Result<(), ScopeLedgerWriteError> {
-    let _guard =
-        crate::store::lock::WorkspaceLock::acquire(&account_ledger_lock_path(runtime, kind))?;
-    let mut current = read_account_ledger(runtime, kind);
-    current.parked = parked;
-    write_account_ledger_unlocked(runtime, kind, &current)?;
-    Ok(())
+impl ScopeLedgerFile {
+    fn read<T: DeserializeOwned + Default>(&self) -> T {
+        std::fs::read(&self.path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    fn write<T: Serialize>(&self, value: &T) -> Result<(), ScopeLedgerWriteError> {
+        let _guard = crate::store::lock::WorkspaceLock::acquire(&self.lock_path)?;
+        self.write_unlocked(value)?;
+        Ok(())
+    }
+
+    fn merge_park<T>(&self, parked: Option<BudgetParkStamp>) -> Result<(), ScopeLedgerWriteError>
+    where
+        T: DeserializeOwned + Default + Serialize + HasParked,
+    {
+        let _guard = crate::store::lock::WorkspaceLock::acquire(&self.lock_path)?;
+        let mut current: T = self.read();
+        current.set_parked(parked);
+        self.write_unlocked(&current)?;
+        Ok(())
+    }
+
+    fn write_unlocked<T: Serialize>(&self, value: &T) -> crate::store::atomic::Result<()> {
+        write_temp_then_rename_cache(&self.path, value)
+    }
+}
+
+trait HasParked {
+    fn set_parked(&mut self, parked: Option<BudgetParkStamp>);
+}
+
+impl HasParked for FleetBudgetLedger {
+    fn set_parked(&mut self, parked: Option<BudgetParkStamp>) {
+        self.parked = parked;
+    }
+}
+
+impl HasParked for AccountBudgetLedger {
+    fn set_parked(&mut self, parked: Option<BudgetParkStamp>) {
+        self.parked = parked;
+    }
 }
 
 pub fn scope_state_path(runtime: &RuntimePaths) -> PathBuf {
@@ -1403,10 +1420,6 @@ pub fn write_scope_state(
     state: &BudgetScopeState,
 ) -> crate::store::atomic::Result<()> {
     write_temp_then_rename_cache(&scope_state_path(runtime), state)
-}
-
-pub fn clear_resume_park(runtime: &RuntimePaths, kind: &AgentKind, agent_id: &AgentSessionId) {
-    crate::harness::auto_continue::clear_budget_park(runtime, kind, agent_id);
 }
 
 #[cfg(test)]

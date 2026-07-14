@@ -31,7 +31,6 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::RuntimePaths;
 use crate::SidebarSnapshot;
@@ -113,6 +112,14 @@ pub(crate) fn resume_parked(
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
     let account_budgets = crate::agents::account_budgets_from_caches(runtime, now);
+    let ctx = FireContext {
+        snapshot,
+        runtime,
+        now,
+        text,
+        config,
+        resume_messages,
+    };
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
             continue;
@@ -121,18 +128,7 @@ pub(crate) fn resume_parked(
         if let Some(park) = agent.budget_park.as_ref() {
             if let Some(deadline) = park.resets_at {
                 arm_park(&path, ParkKind::Budget { deadline }, agent.last_activity);
-                fire_if_due(
-                    agent,
-                    &path,
-                    FireContext {
-                        snapshot,
-                        runtime,
-                        now,
-                        text,
-                        config,
-                        resume_messages,
-                    },
-                );
+                fire_if_due(agent, &path, ctx);
             }
             continue;
         }
@@ -141,18 +137,7 @@ pub(crate) fn resume_parked(
         match resume_park(agent, budget, now) {
             Some(ResumeArm::RateLimit { deadline }) => {
                 arm_park(&path, ParkKind::RateLimit { deadline }, agent.last_activity);
-                fire_if_due(
-                    agent,
-                    &path,
-                    FireContext {
-                        snapshot,
-                        runtime,
-                        now,
-                        text,
-                        config,
-                        resume_messages,
-                    },
-                );
+                fire_if_due(agent, &path, ctx);
             }
             Some(ResumeArm::Overloaded { overloaded_at }) => {
                 arm_park(
@@ -160,18 +145,7 @@ pub(crate) fn resume_parked(
                     ParkKind::Overloaded { overloaded_at },
                     agent.last_activity,
                 );
-                fire_if_due(
-                    agent,
-                    &path,
-                    FireContext {
-                        snapshot,
-                        runtime,
-                        now,
-                        text,
-                        config,
-                        resume_messages,
-                    },
-                );
+                fire_if_due(agent, &path, ctx);
             }
             _ => {
                 // No arm this frame means "no recovering window", not "forget
@@ -186,33 +160,11 @@ pub(crate) fn resume_parked(
                             agent.last_activity,
                         );
                     }
-                    fire_if_due(
-                        agent,
-                        &path,
-                        FireContext {
-                            snapshot,
-                            runtime,
-                            now,
-                            text,
-                            config,
-                            resume_messages,
-                        },
-                    );
+                    fire_if_due(agent, &path, ctx);
                 } else if budget_recovered(budget, now) {
                     remove_park(&path);
                 } else {
-                    fire_if_due(
-                        agent,
-                        &path,
-                        FireContext {
-                            snapshot,
-                            runtime,
-                            now,
-                            text,
-                            config,
-                            resume_messages,
-                        },
-                    );
+                    fire_if_due(agent, &path, ctx);
                 }
             }
         }
@@ -307,6 +259,7 @@ fn same_park_class(left: &ParkKind, right: &ParkKind) -> bool {
     )
 }
 
+#[derive(Clone, Copy)]
 struct FireContext<'a> {
     snapshot: &'a SidebarSnapshot,
     runtime: &'a RuntimePaths,
@@ -415,17 +368,7 @@ fn nudge_due(
     max_retries: u32,
 ) -> bool {
     match &record.kind {
-        ParkKind::RateLimit { deadline } => {
-            if attempts >= max_retries {
-                return false;
-            }
-            now >= *deadline
-                && record.last_nudge_at.is_none_or(|at| {
-                    now.as_second() - at.as_second()
-                        >= AUTO_CONTINUE_RETRY_INTERVAL.as_secs() as i64
-                })
-        }
-        ParkKind::Budget { deadline } => {
+        ParkKind::RateLimit { deadline } | ParkKind::Budget { deadline } => {
             if attempts >= max_retries {
                 return false;
             }
@@ -584,14 +527,10 @@ fn park_record_path(
     kind: &AgentKind,
     agent_id: &AgentSessionId,
 ) -> PathBuf {
-    let mut hasher = Sha256::new();
-    hasher.update(kind.as_str().as_bytes());
-    hasher.update([0]);
-    hasher.update(agent_id.as_str().as_bytes());
-    let digest = hex::encode(hasher.finalize());
-    runtime
-        .root
-        .join(format!("auto-continue.{}.json", &digest[..32]))
+    runtime.root.join(format!(
+        "auto-continue.{}.json",
+        crate::harness::budget::agent_digest(kind, agent_id)
+    ))
 }
 
 pub(crate) fn arm_budget_park(
@@ -608,11 +547,7 @@ pub(crate) fn arm_budget_park(
     );
 }
 
-pub(crate) fn clear_budget_park(
-    runtime: &RuntimePaths,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-) {
+pub fn clear_budget_park(runtime: &RuntimePaths, kind: &AgentKind, agent_id: &AgentSessionId) {
     let path = park_record_path(runtime, kind, agent_id);
     if read_park(&path).is_some_and(|record| matches!(record.kind, ParkKind::Budget { .. })) {
         remove_park(&path);

@@ -358,18 +358,18 @@ pub fn worktree_path(repo_root: &Path, config: &WorktreeConfig, name: &str) -> R
 }
 
 pub fn parse_requested_name(raw: &str) -> Result<RequestedName> {
-    let mut name = String::with_capacity(raw.len());
-    for (index, segment) in raw.split('/').enumerate() {
+    for segment in raw.split('/') {
         validate_requested_segment(raw, segment)?;
-        if index > 0 {
-            name.push('-');
-        }
-        name.push_str(segment);
     }
     Ok(RequestedName {
-        name,
+        name: dashed_name(raw),
         branch: raw.contains('/').then(|| raw.to_owned()),
     })
+}
+
+/// The worktree directory name a branch-style request maps to: `/` joins as `-`.
+pub fn dashed_name(raw: &str) -> String {
+    raw.replace('/', "-")
 }
 
 pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {

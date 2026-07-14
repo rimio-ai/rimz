@@ -99,7 +99,7 @@ pub fn run_budget(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     ledger.waived_delivery_at = None;
     write_ledger(store.runtime_paths(), &agent.kind, &agent.agent_id, &ledger)
         .context("writing the agent budget ledger")?;
-    rimz::harness::budget::clear_resume_park(store.runtime_paths(), &agent.kind, &agent.agent_id);
+    rimz::harness::budget::clear_budget_park(store.runtime_paths(), &agent.kind, &agent.agent_id);
 
     if was_paused && !args.no_continue {
         let text = rimz::config::MachineConfig::load_lenient()

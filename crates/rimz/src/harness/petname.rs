@@ -36,8 +36,10 @@ const NOUNS: &[&str] = &[
     "thicket", "thread", "tower", "trace", "valley", "vector", "vista", "wicket", "yard",
 ];
 
-const RESERVED: &[&str] = &[
-    "all", "exec", "focus", "list", "ls", "show", "stop", "term", "wait",
+/// Words `rimz agents` owns as verbs or cells; no profile, command, team, or agent name may claim them.
+/// TODO(reserved-words): decide whether to reserve the newer restart, resume, budget, logs, history, top, check, register, and refresh verbs.
+pub const RESERVED_AGENT_WORDS: &[&str] = &[
+    "exec", "focus", "fork", "list", "ls", "show", "stop", "term", "wait",
 ];
 
 pub fn mint(taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
@@ -58,7 +60,8 @@ pub fn valid_name(name: &str) -> bool {
         && name
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
-        && !RESERVED.contains(&name)
+        && name != "all"
+        && !RESERVED_AGENT_WORDS.contains(&name)
 }
 
 pub fn collides_with_reserved_prefix(
@@ -125,6 +128,7 @@ mod tests {
     fn validates_cli_safe_names() {
         assert!(valid_name("amber-atlas"));
         assert!(!valid_name("show"));
+        assert!(!valid_name("fork"));
         // `all` is the @all fan-out keyword; the generator must never mint it.
         assert!(!valid_name("all"));
         assert!(!valid_name("two words"));

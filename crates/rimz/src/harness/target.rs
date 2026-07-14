@@ -115,7 +115,9 @@ trait Candidate<'a>: Copy {
     }
 
     fn in_worktree(self, filter: &str) -> bool {
-        let branch_style_filter = filter.contains('/').then(|| filter.replace('/', "-"));
+        let branch_style_filter = filter
+            .contains('/')
+            .then(|| crate::worktree::dashed_name(filter));
         if let Some(channel) = self.channel().filter(|channel| !channel.is_empty()) {
             return channel == filter || branch_style_filter.as_deref() == Some(channel);
         }

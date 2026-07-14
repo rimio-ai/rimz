@@ -126,7 +126,7 @@ pub(super) fn agent_argv(
     }
 }
 
-fn exec_invocation<'a>(
+pub(super) fn exec_invocation<'a>(
     args: &'a ExecArgs,
     action: rimz::harness::launch::ExecAction<'a>,
 ) -> rimz::harness::launch::ExecInvocation<'a> {
@@ -476,7 +476,7 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
     }
 }
 
-fn launch_params(args: &ExecArgs) -> rimz::agents::LaunchParams {
+pub(super) fn launch_params(args: &ExecArgs) -> rimz::agents::LaunchParams {
     rimz::agents::LaunchParams {
         profile: args.agent_profile.clone(),
         mode: args.agent_mode,

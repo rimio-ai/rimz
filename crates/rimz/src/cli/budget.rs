@@ -81,7 +81,7 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
     });
     let continue_text = config.resume.auto_continue_text.trim();
     for agent in affected {
-        rimz::harness::budget::clear_resume_park(
+        rimz::harness::budget::clear_budget_park(
             store.runtime_paths(),
             &agent.kind,
             &agent.agent_id,

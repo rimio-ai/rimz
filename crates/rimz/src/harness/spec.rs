@@ -14,15 +14,13 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
+use crate::harness::petname;
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentKind;
 
 const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
 const PING_SUFFIX: &str = "ping";
-const RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES: &[&str] = &[
-    "list", "ls", "show", "stop", "focus", "fork", "wait", "term", "exec",
-];
 pub const MAX_PROFILE_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -535,27 +533,15 @@ fn role_cell(team_name: &str, binding: &RoleBinding, profiles: &ProfilesConfig) 
         other => other,
     })?;
     apply_role_overrides(&mut resolved, binding);
-    if let Some(raw) = resolved.budget.as_deref() {
-        let spec = raw
-            .parse::<crate::harness::budget::BudgetSpec>()
-            .map_err(|err| LayoutErr::InvalidProfile {
-                profile: binding.profile.clone(),
-                reason: err.to_string(),
-            })?;
-        resolved.budget = Some(spec.to_string());
-    }
-    Ok(Cell::Agent {
-        kind: resolved.kind.clone(),
-        args: render_profile_args(&binding.profile, &resolved)?,
-        mode: resolved.mode,
-        system_prompt_file: resolved.system_prompt_file.clone(),
-        append_system_prompt_file: resolved.append_system_prompt_file.clone(),
-        profile: Some(binding.profile.clone()),
-        role: Some(binding.role.clone()),
-        model: resolved.model.clone(),
-        effort: resolved.effort.clone(),
-        budget: resolved.budget.clone(),
-    })
+    normalize_budget(&mut resolved.budget, &binding.profile)?;
+    let args = render_profile_args(&binding.profile, &resolved)?;
+    Ok(agent_cell_from(
+        &resolved,
+        args,
+        Some(binding.profile.clone()),
+        Some(binding.role.clone()),
+        resolved.mode,
+    ))
 }
 
 fn parse_team_layout(
@@ -723,16 +709,22 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             profile: name.to_owned(),
             reason: err.to_string(),
         })?;
-    if let Some(raw) = resolved.budget.as_deref() {
-        let spec = raw
-            .parse::<crate::harness::budget::BudgetSpec>()
-            .map_err(|err| LayoutErr::InvalidProfile {
-                profile: name.to_owned(),
-                reason: err.to_string(),
-            })?;
-        resolved.budget = Some(spec.to_string());
-    }
+    normalize_budget(&mut resolved.budget, name)?;
     Ok(resolved)
+}
+
+fn normalize_budget(budget: &mut Option<String>, profile: &str) -> Result<()> {
+    let Some(raw) = budget.as_deref() else {
+        return Ok(());
+    };
+    let spec = raw
+        .parse::<crate::harness::budget::BudgetSpec>()
+        .map_err(|err| LayoutErr::InvalidProfile {
+            profile: profile.to_owned(),
+            reason: err.to_string(),
+        })?;
+    *budget = Some(spec.to_string());
+    Ok(())
 }
 
 /// The default tab title for a launch. Worktree launches use the `#channel`
@@ -917,18 +909,34 @@ fn parse_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -
 }
 
 fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<Cell> {
-    Ok(Cell::Agent {
+    Ok(agent_cell_from(
+        resolved,
+        render_profile_args(name, resolved)?,
+        Some(name.to_owned()),
+        None,
+        resolved.mode,
+    ))
+}
+
+fn agent_cell_from(
+    resolved: &ResolvedProfile,
+    args: Vec<String>,
+    profile: Option<String>,
+    role: Option<String>,
+    mode: Option<PermissionMode>,
+) -> Cell {
+    Cell::Agent {
         kind: resolved.kind.clone(),
-        args: render_profile_args(name, resolved)?,
-        mode: resolved.mode,
+        args,
+        mode,
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_file: resolved.append_system_prompt_file.clone(),
-        profile: Some(name.to_owned()),
-        role: None,
+        profile,
+        role,
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
         budget: resolved.budget.clone(),
-    })
+    }
 }
 
 fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<String>> {
@@ -1041,18 +1049,7 @@ fn virtual_cell_from(
         None => Vec::new(),
     };
     args.extend(extra_args);
-    Ok(Cell::Agent {
-        kind: resolved.kind,
-        args,
-        mode,
-        system_prompt_file: resolved.system_prompt_file,
-        append_system_prompt_file: resolved.append_system_prompt_file,
-        profile: profile_name,
-        role: None,
-        model: resolved.model,
-        effort: resolved.effort,
-        budget: resolved.budget,
-    })
+    Ok(agent_cell_from(&resolved, args, profile_name, None, mode))
 }
 
 fn virtual_base(
@@ -1113,7 +1110,7 @@ fn validate_profile_names(profiles: &ProfilesConfig) -> Result<()> {
         {
             return Err(LayoutErr::InvalidProfileName { name: name.clone() });
         }
-        if RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES.contains(&name.as_str()) {
+        if petname::RESERVED_AGENT_WORDS.contains(&name.as_str()) {
             return Err(LayoutErr::ReservedProfileName { name: name.clone() });
         }
         if let Some(reason) = address_grammar_clash(name) {
@@ -1135,7 +1132,7 @@ fn validate_command_names(commands: &CommandsConfig) -> Result<()> {
         {
             return Err(LayoutErr::InvalidCommandName { name: name.clone() });
         }
-        if RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES.contains(&name.as_str()) {
+        if petname::RESERVED_AGENT_WORDS.contains(&name.as_str()) {
             return Err(LayoutErr::ReservedCommandName { name: name.clone() });
         }
     }
@@ -1175,7 +1172,7 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
     if let Some(name) = teams
         .0
         .keys()
-        .find(|name| RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES.contains(&name.as_str()))
+        .find(|name| petname::RESERVED_AGENT_WORDS.contains(&name.as_str()))
     {
         return Err(LayoutErr::ReservedTeamName(name.clone()));
     }

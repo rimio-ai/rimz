@@ -1,7 +1,7 @@
 use super::exec::*;
 use super::launch::*;
 use super::*;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
@@ -63,6 +63,25 @@ fn parse_exec(argv: &[&str]) -> ExecArgs {
 fn assert_clap_error(argv: &[&str], kind: clap::error::ErrorKind) {
     let err = AgentsHarness::try_parse_from(argv).expect_err("invalid form");
     assert_eq!(err.kind(), kind, "{argv:?}");
+}
+
+#[test]
+fn reserved_agent_words_name_current_verbs() {
+    let command = AgentsHarness::command();
+    let mut verbs = BTreeSet::new();
+    for subcommand in command.get_subcommands() {
+        verbs.insert(subcommand.get_name().to_owned());
+        verbs.extend(subcommand.get_all_aliases().map(str::to_owned));
+    }
+    for word in rimz::harness::petname::RESERVED_AGENT_WORDS {
+        if *word == "term" {
+            continue;
+        }
+        assert!(
+            verbs.contains(*word),
+            "reserved word `{word}` is not an agents verb"
+        );
+    }
 }
 
 mod parse {
@@ -413,6 +432,106 @@ mod parse {
         ] {
             assert!(ExecHarness::try_parse_from(argv).is_err(), "{argv:?}");
         }
+    }
+
+    #[test]
+    fn exec_identity_argv_round_trips_through_cli() {
+        let extra_args = vec!["--dangerously-skip-permissions".to_owned()];
+        let input = rimz::harness::launch::ExecInvocation {
+            kind: "claude",
+            action: rimz::harness::launch::ExecAction::Launch {
+                prompt: Some("fix it"),
+                extra_args: &extra_args,
+            },
+            run_id: Some("run_0123456789abcdef0123456789abcdef"),
+            worktree_path: Some(Path::new("/repo/worktree")),
+            close_pane_on_exit: true,
+            exit_on_run_completion: true,
+            identity: rimz::harness::launch::ExecIdentity {
+                name: Some("swift-otter"),
+                name_explicit: true,
+                launch_id: Some("launch_0123456789abcdef0123456789abcdef"),
+                profile: Some("planner"),
+                mode: Some(PermissionMode::Yolo),
+                role: Some("coder"),
+                team: Some("forge"),
+                launch_group: Some("launch_group_1"),
+                launch_ordinal: Some(2),
+                channel: Some("design"),
+                model: Some("opus"),
+                effort: Some("high"),
+                budget: Some("$12.50/day"),
+            },
+        };
+
+        let argv = rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), &input);
+        let parsed = crate::cli::Cli::try_parse_from(argv).expect("parse rendered exec argv");
+        let Some(crate::cli::Subcmd::Agents(args)) = parsed.subcommand else {
+            panic!("expected agents subcommand");
+        };
+        let Some(AgentsSubcmd::Exec(args)) = args.command else {
+            panic!("expected exec subcommand");
+        };
+        let args = *args;
+        let action = exec_action(&args);
+        let actual = exec_invocation(&args, action);
+        let actual_identity = rimz::harness::launch::ExecIdentity {
+            launch_id: args.launch_id.as_deref(),
+            ..actual.identity
+        };
+
+        assert_eq!(actual.kind, input.kind);
+        assert_eq!(actual.run_id, input.run_id);
+        assert_eq!(actual.worktree_path, input.worktree_path);
+        assert_eq!(actual.close_pane_on_exit, input.close_pane_on_exit);
+        assert_eq!(actual.exit_on_run_completion, input.exit_on_run_completion);
+        let (
+            rimz::harness::launch::ExecAction::Launch {
+                prompt: actual_prompt,
+                extra_args: actual_extra_args,
+            },
+            rimz::harness::launch::ExecAction::Launch {
+                prompt: input_prompt,
+                extra_args: input_extra_args,
+            },
+        ) = (actual.action, input.action)
+        else {
+            panic!("expected launch actions");
+        };
+        assert_eq!(actual_prompt, input_prompt);
+        assert_eq!(actual_extra_args, input_extra_args);
+        assert_eq!(actual_identity.name, input.identity.name);
+        assert_eq!(actual_identity.name_explicit, input.identity.name_explicit);
+        assert_eq!(actual_identity.launch_id, input.identity.launch_id);
+        assert_eq!(actual_identity.profile, input.identity.profile);
+        assert_eq!(actual_identity.mode, input.identity.mode);
+        assert_eq!(actual_identity.role, input.identity.role);
+        assert_eq!(actual_identity.team, input.identity.team);
+        assert_eq!(actual_identity.launch_group, input.identity.launch_group);
+        assert_eq!(
+            actual_identity.launch_ordinal,
+            input.identity.launch_ordinal
+        );
+        assert_eq!(actual_identity.channel, input.identity.channel);
+        assert_eq!(actual_identity.model, input.identity.model);
+        assert_eq!(actual_identity.effort, input.identity.effort);
+        assert_eq!(actual_identity.budget, input.identity.budget);
+        assert_eq!(
+            launch_params(&args),
+            rimz::agents::LaunchParams {
+                profile: input.identity.profile.map(str::to_owned),
+                mode: input.identity.mode,
+                role: input.identity.role.map(str::to_owned),
+                model: input.identity.model.map(str::to_owned),
+                effort: input.identity.effort.map(str::to_owned),
+                budget: input.identity.budget.map(str::to_owned),
+                team: input.identity.team.map(str::to_owned),
+                launch_group: input.identity.launch_group.map(str::to_owned),
+                launch_ordinal: input.identity.launch_ordinal,
+                channel: input.identity.channel.map(str::to_owned),
+                kind_ordinal: None,
+            }
+        );
     }
 }
 
