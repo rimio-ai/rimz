@@ -1,14 +1,14 @@
 //! Uniform provider account-usage refresh helper (`rimz agents refresh-usage`).
 //!
 //! Spawned detached by the sidebar producer for one metered, logged-in provider.
-//! Every kind runs the same API-query channel — a direct OAuth read of its own
-//! quota surface through
+//! Every adapter with a supported usage surface runs the same API-query channel
+//! through
 //! [`AgentAdapter::probe_account_usage`](rimz::agents::AgentAdapter::probe_account_usage),
 //! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
 //! caches. An adapter may expose a pollable realtime account channel; the helper
-//! reads it first, then runs the OAuth channel on its own shared cadence.
-//! When OAuth windows are requested, they merge after the realtime fold so a
-//! fresh-token OAuth read can replace a stale warm realtime process.
+//! reads it first, then runs the direct channel on its own shared cadence. When
+//! direct-query windows are requested, they merge after the realtime fold so a
+//! fresh credential read can replace a stale warm realtime process.
 //! Best-effort and quiet: every provider-side failure exits successfully with
 //! the shared cache recording the retry state.
 
