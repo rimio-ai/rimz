@@ -195,16 +195,17 @@ An `agent` value ending in `<kind>-ping` starts a provider's budget window at a 
 
 ### State and code
 
-Durable definitions live in `~/.config/rimz/loop.toml` and trusted `<root>/.rimz/config.toml` under `[tasks.*]`. Once trusted, the merged read order is project, then machine config, then state instance, so a repository task shadows a same-named personal task without double-firing. Machine-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` with the same task shape; `is_ephemeral = every.is_none() && cron.is_none() || deadline.is_some()` routes a task between the machine stores on add and drives removal-on-fire. Per-machine pause overlays and consecutive counters live in `~/.local/state/rimz/loop-pauses.json` and `loop-strikes.json`. Per-room arm/fire stamps live in runtime `loop-fire.json`; per-task run locks live beside it. `Schedule::next_after` combines the effective last-fire stamp with the configured timezone so `rimz loop list` and `rimz loop show` render the NEXT column as `due`, `in 12m`, `paused`, or `-`. User-global run history lives in state `loop-runs.log.jsonl`, and `rimz loop show <name>` reads it for recent runs plus the newest stored check output, error chain, delivery target, run id, last message, pane output tail, and transcript path when the run store still has it.
+Durable definitions live in `~/.config/rimz/loop.toml` and trusted `<root>/.rimz/config.toml` under `[tasks.*]`. `schedule/catalog.rs` reads visible and runnable precedence together: visible project definitions shadow machine and instance rows regardless of trust, while runnable precedence admits only trusted project rows and falls back to a same-named machine task. Machine-generated one-shots, self-wakes, and poll-until instances live in `~/.local/state/rimz/loop-instances.json` with the same task shape; the catalog coordinates source mutation, scheduled consumption, and pause/strike overlays. Per-room arm/fire stamps live in runtime `loop-fire.json`; per-task run locks live beside it. `Schedule::next_after` combines the effective last-fire stamp with the configured timezone so `rimz loop list` and `rimz loop show` render the NEXT column as `due`, `in 12m`, `paused`, or `-`. User-global run history lives in state `loop-runs.log.jsonl`, and `rimz loop show <name>` reads it for recent runs plus the newest stored check output, error chain, delivery target, run id, last message, pane output tail, and transcript path when the run store still has it.
 
-- [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs) — pure parsing, descriptions, due evaluation, and next-occurrence calculation.
-- [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) — check execution, prompt augmentation, per-task run locks, and the window-priming ping gate.
-- [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd) — the `list`/`show` surfaces and hidden `run` orchestration.
+- [`schedule.rs`](../../../crates/rimz/src/harness/schedule.rs) — typed task actions plus parsing, descriptions, due evaluation, and next-occurrence calculation.
+- [`schedule/catalog.rs`](../../../crates/rimz/src/harness/schedule/catalog.rs) — visible/runnable precedence, source-aware mutation, scheduled consumption, and maintenance.
+- [`schedule/runner.rs`](../../../crates/rimz/src/harness/schedule/runner.rs) — runnable compilation, check execution, prompt resolution, per-task run locks, and window gates.
+- [`cli/loop_cmd/`](../../../crates/rimz/src/cli/loop_cmd) — argument translation, terminal orchestration, and rendering.
 - [`schedule/config_edit.rs`](../../../crates/rimz/src/harness/schedule/config_edit.rs) — comment-preserving machine and project task-store editing.
-- [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs) — the ephemeral state store and merged project/config/state read path; project definitions take precedence when supplied.
+- [`schedule/instances.rs`](../../../crates/rimz/src/harness/schedule/instances.rs) — private ephemeral instance storage used by the catalog.
 - [`schedule/pauses.rs`](../../../crates/rimz/src/harness/schedule/pauses.rs) — the machine-local pause overlay and effective-last-fire rule.
 - [`schedule/fire.rs`](../../../crates/rimz/src/harness/schedule/fire.rs) — elder firing and the `loop-fire.json` state.
-- [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) — result history, including mode, duration, check forensics, errors, run links, `check_skipped`, and `expired`.
+- [`schedule/run_log.rs`](../../../crates/rimz/src/harness/schedule/run_log.rs) — terminal outcome conversion, history, and strike-to-pause transitions.
 
 ## Cleanup
 

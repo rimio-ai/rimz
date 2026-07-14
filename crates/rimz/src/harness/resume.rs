@@ -8,25 +8,27 @@
 //! per prior root agent, so the next birth can recover where the user left off
 //! instead of empty.
 //!
-//! Pure over its inputs: the caller supplies the rollup and a worktree-exists
-//! predicate, and the flat rebirth planner also supplies the set of cleanly
-//! ended sessions, so every filtering rule is unit-tested without a multiplexer
-//! or the filesystem. The launcher ([`crate::mux::MuxBackend`]) seeds the
-//! resulting [`ResumeTab`]s at birth and stays ignorant of agents and the
-//! store.
+//! Planning stays pure over supplied rollups and filesystem predicates. Team
+//! materialization is the shared durable launch boundary used by room rebirth
+//! and explicit lane resume; the mux still receives only compiled tabs.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
+use crate::Store;
 use crate::agents::AgentState;
 use crate::agents::find_adapter;
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
-use crate::harness::plan::cohort_cells;
+use crate::harness::plan::{
+    LayoutPaneParams, cohort_cells, fresh_resume_launch_requests, layout_panes_with_names,
+};
 use crate::harness::spec::LayoutSpec;
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::mux::ResumeTab;
+use crate::store::AgentLaunchAppend;
+use crate::store::event::AgentLaunchState;
 use crate::store::runtime::AgentLiveness;
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
@@ -45,6 +47,16 @@ pub enum ResumeSkipReason {
     NoConversation,
     /// Dropped to stay within the resume cap.
     OverCap,
+}
+
+impl ResumeSkipReason {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NoResumeSupport => "no resume CLI",
+            Self::NoConversation => "no saved conversation",
+            Self::OverCap => "over the resume cap",
+        }
+    }
 }
 
 /// A candidate that the planner deliberately did not resume, with the reason.
@@ -132,6 +144,63 @@ impl ResumePlan {
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
     }
+}
+
+/// Allocate fresh team members and compile one planned team restore tab.
+pub fn materialize_team_restore_tab(
+    store: &Store,
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    teams: &TeamsConfig,
+    planned: &PlannedTeamTab,
+) -> anyhow::Result<ResumeTab> {
+    use anyhow::Context;
+
+    let team_roles = teams.0.get(&planned.team).map(|team| team.roles.as_slice());
+    let launch_requests = fresh_resume_launch_requests(
+        &planned.layout,
+        &planned.cohort,
+        Some(&planned.team),
+        team_roles,
+        planned.channel.as_deref(),
+    )?;
+    let identities = if launch_requests.is_empty() {
+        Vec::new()
+    } else {
+        store.append_agent_launches_allocating(
+            &launch_requests,
+            &AgentLaunchAppend {
+                workspace_id: workspace_id.clone(),
+                session_name: session_name.to_owned(),
+                cwd: planned.cwd.clone(),
+                worktree_name: None,
+                channel: planned.channel.clone(),
+                description: None,
+                state: AgentLaunchState::Starting,
+                pane_id: None,
+            },
+        )?
+    };
+    let layout = layout_panes_with_names(
+        &planned.layout,
+        LayoutPaneParams {
+            cwd: &planned.cwd,
+            prompt: None,
+            prompt_agent_index: None,
+            cleanup_worktree: false,
+            in_place: false,
+            team: Some(&planned.team),
+            channel: planned.channel.as_deref(),
+            resume_seeds: Some(&planned.cohort.seeds),
+        },
+        &identities,
+    )
+    .context("building team restore layout")?;
+    Ok(ResumeTab {
+        label: planned.label.clone(),
+        cwd: planned.cwd.clone(),
+        layout,
+    })
 }
 
 /// Plan restorable named-team tabs from prior root agents.

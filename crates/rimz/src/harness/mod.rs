@@ -5,6 +5,7 @@ pub mod budget;
 pub mod launch;
 pub mod petname;
 pub mod plan;
+pub mod rebirth;
 pub mod resume;
 pub mod run;
 pub mod run_wake;

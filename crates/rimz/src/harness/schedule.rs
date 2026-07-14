@@ -5,10 +5,9 @@
 //! `<kind>-ping` virtual cell is the window-priming special case; the schedule
 //! machinery stays generic by evaluating an externally resolved reset instant.
 //!
-//! This module is the pure core. It normalizes a [`crate::config::TaskEntry`]
-//! into a [`Schedule`], validates user-facing syntax, describes tasks for the
-//! CLI, and evaluates whether a schedule is due at a given local wall-clock
-//! instant. The side-effecting elder tick lives in the sidebar pane.
+//! This module owns task action validation, catalog precedence and mutation,
+//! runner policy, terminal transitions, schedule parsing, and due evaluation.
+//! CLI handlers translate flags, orchestrate terminal actions, and render.
 
 use std::time::Duration;
 
@@ -758,6 +757,63 @@ mod tests {
             cron: cron.map(ToOwned::to_owned),
             deadline: None,
         }
+    }
+
+    #[test]
+    fn task_action_rejects_invalid_combinations() {
+        let target = TaskTarget {
+            kind: "claude".to_owned(),
+            session: "sess".to_owned(),
+            handle: "@claude".to_owned(),
+        };
+        let error = |entry: &TaskEntry| TaskAction::from_entry("task", entry).unwrap_err();
+        assert!(matches!(
+            error(&TaskEntry {
+                agent: Some("claude".to_owned()),
+                wake: Some(target.clone()),
+                ..TaskEntry::default()
+            }),
+            TaskActionErr::ConflictingActions { .. }
+        ));
+        assert!(matches!(
+            error(&TaskEntry {
+                verify: Some("true".to_owned()),
+                check: Some("true".to_owned()),
+                ..TaskEntry::default()
+            }),
+            TaskActionErr::VerifyWithoutAgent { .. }
+        ));
+        assert!(matches!(
+            error(&TaskEntry {
+                agent: Some("claude".to_owned()),
+                max_attempts: Some(2),
+                ..TaskEntry::default()
+            }),
+            TaskActionErr::AttemptsWithoutVerify { .. }
+        ));
+        assert!(matches!(
+            error(&TaskEntry {
+                agent: Some("claude".to_owned()),
+                verify: Some("true".to_owned()),
+                max_attempts: Some(0),
+                ..TaskEntry::default()
+            }),
+            TaskActionErr::ZeroAttempts { .. }
+        ));
+        assert!(matches!(
+            error(&TaskEntry::default()),
+            TaskActionErr::MissingAction { .. }
+        ));
+        assert!(matches!(
+            TaskAction::from_entry(
+                "task",
+                &TaskEntry {
+                    wake: Some(target),
+                    ..TaskEntry::default()
+                }
+            ),
+            Ok(TaskAction::Deliver(_))
+        ));
     }
 
     #[test]

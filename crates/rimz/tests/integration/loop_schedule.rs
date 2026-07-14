@@ -447,11 +447,13 @@ fn loop_add_ephemeral_tasks_use_instance_state() {
         "--in should not create loop.toml"
     );
 
+    let history_before = read_loop_run_records(&env).len();
     loop_ok(&env, &["loop", "run", "later"]);
     assert!(
         !read_loop_instances(&env).0.contains_key("later"),
         "fired one-shot should be removed from state"
     );
+    assert_eq!(read_loop_run_records(&env).len(), history_before + 1);
 
     loop_ok(
         &env,
@@ -502,6 +504,7 @@ fn loop_fire_keeps_ephemeral_task() {
     );
 
     for _ in 0..2 {
+        let history_before = read_loop_run_records(&env).len();
         let stdout = loop_ok(&env, &["loop", "fire", "probe"]);
         assert!(
             stdout.contains("probe — check") && stdout.contains("✓ check passed (exit 0)"),
@@ -511,6 +514,7 @@ fn loop_fire_keeps_ephemeral_task() {
             read_loop_instances(&env).0.contains_key("probe"),
             "manual fire should keep the one-shot instance"
         );
+        assert_eq!(read_loop_run_records(&env).len(), history_before + 1);
     }
 
     let records = read_loop_run_records(&env);
@@ -914,6 +918,12 @@ fn loop_run_records_daily_budget_skip() {
             .is_some_and(|error| error.contains("daily budget")),
         "runner should record the daily-budget reason: {skip:?}"
     );
+    assert!(
+        std::fs::read_to_string(loop_config_path(&env))
+            .expect("read loop config")
+            .contains("[tasks.daily-bounded]"),
+        "budget skips should keep the task definition"
+    );
 }
 
 #[test]
@@ -1141,8 +1151,10 @@ fn loop_run_error_records_and_show_displays_message() {
         ),
     );
 
+    let history_before = read_loop_run_records(&env).len();
     loop_fail(&env, &["loop", "run", "bad_prompt"]);
     let records = read_loop_run_records(&env);
+    assert_eq!(records.len(), history_before + 1);
     let record = records.last().expect("errored record");
     assert_eq!(record.task, "bad_prompt");
     assert_eq!(record.result, LoopRunResult::Errored);
@@ -1152,6 +1164,12 @@ fn loop_run_error_records_and_show_displays_message() {
             .as_deref()
             .is_some_and(|error| error.contains("reading prompt-file")),
         "record should store error chain: {record:?}"
+    );
+    assert!(
+        std::fs::read_to_string(loop_config_path(&env))
+            .expect("read loop config")
+            .contains("[tasks.bad_prompt]"),
+        "pre-dispatch errors should keep the task definition"
     );
 
     let stdout = loop_ok(&env, &["loop", "show", "bad_prompt"]);
@@ -1183,6 +1201,79 @@ fn loop_run_missing_machine_prompt_error_names_task() {
             && !stderr.contains("loop task `claude` has no prompt"),
         "missing prompt error should name the task: {stderr}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_scheduled_spawn_consumes_one_shot_only_after_runner_preflight() {
+    let dispatch = Env::new();
+    dispatch.install_agent_hooks("claude");
+    loop_ok(
+        &dispatch,
+        &[
+            "loop",
+            "add",
+            "dispatch-fails",
+            "--agent",
+            "claude",
+            "--prompt",
+            "ship it",
+            "--at",
+            "07:00",
+        ],
+    );
+    let empty_path = dispatch.home_root.join("empty-path");
+    std::fs::create_dir_all(&empty_path).expect("empty PATH");
+    let history_before = read_loop_run_records(&dispatch).len();
+    let output = dispatch
+        .rimz()
+        .env("PATH", &empty_path)
+        .args(["loop", "run", "dispatch-fails"])
+        .output()
+        .expect("run scheduled spawn");
+    assert!(
+        !output.status.success(),
+        "missing agent binary should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("finding `claude` on PATH"),
+        "failure should come from supervised dispatch preflight: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !read_loop_instances(&dispatch)
+            .0
+            .contains_key("dispatch-fails"),
+        "terminal dispatch failures should not retry a consumed one-shot"
+    );
+    assert_eq!(read_loop_run_records(&dispatch).len(), history_before + 1);
+
+    let preflight = Env::new();
+    write_loop_instances(
+        &preflight,
+        Tasks(BTreeMap::from([(
+            "preflight-fails".to_owned(),
+            TaskEntry {
+                agent: Some("claude".to_owned()),
+                prompt: Some("ship it".to_owned()),
+                root: preflight.project_root.clone(),
+                at: Some("07:00".to_owned()),
+                ..TaskEntry::default()
+            },
+        )])),
+    );
+    let history_before = read_loop_run_records(&preflight).len();
+    let (_stdout, stderr) = loop_fail(&preflight, &["loop", "run", "preflight-fails"]);
+    assert!(stderr.contains("hooks are not installed"), "{stderr}");
+    assert!(
+        read_loop_instances(&preflight)
+            .0
+            .contains_key("preflight-fails"),
+        "runner preflight failures should keep a one-shot definition"
+    );
+    assert_eq!(read_loop_run_records(&preflight).len(), history_before + 1);
 }
 
 #[test]
@@ -1305,6 +1396,7 @@ fn loop_run_poll_until_fires_once_and_expires() {
         read_loop_instances(&env).0.contains_key("green"),
         "poll-until should persist as state"
     );
+    let history_before = read_loop_run_records(&env).len();
     loop_ok(&env, &["loop", "run", "green"]);
     assert_eq!(
         env.store().list_pending_messages().expect("messages").len(),
@@ -1314,6 +1406,7 @@ fn loop_run_poll_until_fires_once_and_expires() {
         !read_loop_instances(&env).0.contains_key("green"),
         "poll-until should be removed after firing"
     );
+    assert_eq!(read_loop_run_records(&env).len(), history_before + 1);
 
     let expired = Env::new();
     write_loop_instances(
@@ -1336,8 +1429,10 @@ fn loop_run_poll_until_fires_once_and_expires() {
             },
         )])),
     );
+    let history_before = read_loop_run_records(&expired).len();
     loop_ok(&expired, &["loop", "run", "expired"]);
     assert!(read_loop_instances(&expired).0.is_empty());
+    assert_eq!(read_loop_run_records(&expired).len(), history_before + 1);
     assert_eq!(
         read_loop_run_records(&expired)
             .last()
@@ -1424,6 +1519,7 @@ fn loop_run_bind_dead_session_reaps_schedule() {
         ),
     );
 
+    let history_before = read_loop_run_records(&env).len();
     let stdout = loop_ok(&env, &["loop", "run", "dead"]);
     assert!(
         stdout.contains("not alive; removing schedule"),
@@ -1434,6 +1530,7 @@ fn loop_run_bind_dead_session_reaps_schedule() {
         !config.contains("[tasks.dead]"),
         "dead schedule should be removed: {config}"
     );
+    assert_eq!(read_loop_run_records(&env).len(), history_before + 1);
 }
 
 #[test]
@@ -1451,6 +1548,7 @@ fn loop_fire_bind_dead_session_keeps_schedule() {
         ),
     );
 
+    let history_before = read_loop_run_records(&env).len();
     let stdout = loop_ok(&env, &["loop", "fire", "dead"]);
     assert!(
         stdout.contains("○ @claude not alive — schedule left in place"),
@@ -1467,6 +1565,7 @@ fn loop_fire_bind_dead_session_keeps_schedule() {
             .map(|record| record.result),
         Some(LoopRunResult::TargetGone)
     );
+    assert_eq!(read_loop_run_records(&env).len(), history_before + 1);
 }
 
 #[test]
@@ -1675,6 +1774,7 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
         .expect("open lock");
     lock_file.try_lock().expect("hold loop run lock");
 
+    let history_before = read_loop_run_records(&env).len();
     let stdout = loop_ok(&env, &["loop", "run", "busy"]);
     assert!(
         stdout.contains("previous run still active (pid 42424, started 25m ago) — skipped")
@@ -1694,13 +1794,17 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
         records.last().and_then(|record| record.error.as_deref()),
         Some("previous run still active (pid 42424, started 25m ago) — skipped")
     );
+    assert_eq!(records.len(), history_before + 1);
 
+    let history_before = records.len();
     let stdout = loop_ok(&env, &["loop", "fire", "busy"]);
     assert!(
         stdout.contains("previous run still active (pid 42424, started 25m ago) — skipped")
             && stdout.contains("stop it with `rimz loop stop busy`"),
         "manual overlap should print holder details: {stdout}"
     );
+    assert_eq!(read_loop_run_records(&env).len(), history_before + 1);
+    assert!(read_loop_instances(&env).0.contains_key("busy"));
 
     let mut linked_run = RunRecord::new(
         env.workspace_id.clone(),

@@ -1,7 +1,6 @@
 //! Room entry: the start/attach pipeline from workspace resolution to the mux attach command.
 
 mod attach_exec;
-mod coroner;
 mod daemon_view;
 mod hook_install;
 mod resume;
@@ -31,21 +30,19 @@ use crate::cli::{
 use attach_exec::{
     inside_selected_mux, report_already_inside, run_attach_action, should_report_already_inside,
 };
-use coroner::{BirthRecovery, inspect_previous_incarnation, report_previous_session_death};
 use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 pub(crate) use hook_install::{
     detected_installable_adapters, ensure_detected_agent_hooks, install_disposition,
     render_dry_run, write_install_result, write_post_install_footer, write_uninstall_result,
     write_untrusted_hooks_notice,
 };
-use resume::{AgentRecovery, materialize_room_resume, plan_room_resume, report_resume};
+use resume::{report_previous_session_death, report_resume};
+use rimz::harness::rebirth::{RebirthChoice, RebirthPlan};
 pub(crate) use room_recovery::gate_room_before_attach;
 use session_record::{retire_renamed_session, session_probe_retry_timeout, session_probe_timeout};
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
-pub(crate) use resume::materialize_team_restore_tab;
-pub(crate) use resume::record_rebirth_boundary;
 pub(crate) use resume::session_is_healthy_live;
 pub(crate) use room_recovery::{print_reset_report, rebirth_room};
 pub(crate) use session_record::{
@@ -987,96 +984,13 @@ pub(crate) fn register_focus_key(
     }
 }
 
-fn resume_plan_for_birth(
-    was_live: bool,
-    recovery: &BirthRecovery,
-    room: &RoomTarget<'_>,
-    machine_config: &rimz::config::MachineConfig,
-    no_resume: bool,
-    prompt_mode: ResumePromptMode,
-) -> Result<rimz::harness::resume::ResumePlan> {
-    if was_live {
-        return Ok(rimz::harness::resume::ResumePlan::default());
-    }
-    let effective_launch = rimz::config::effective::load(
-        &machine_config.agents,
-        room.project_root,
-        &rimz::store::paths::config_home(),
-    );
-    let (teams, profiles) = match &effective_launch {
-        Ok(launch) => (&launch.teams, &launch.profiles),
-        Err(err) => {
-            tracing::warn!(
-                workspace = %room.workspace_id,
-                error = %err,
-                "effective agent config unavailable; team resume uses machine config only",
-            );
-            (
-                &machine_config.agents.teams,
-                &machine_config.agents.profiles,
-            )
-        }
-    };
-    let plan = plan_room_resume(
-        room.workspace_id,
-        &machine_config.resume,
-        no_resume,
-        AgentRecovery {
-            enabled: recovery.recover_agents,
-            roster: &recovery.roster,
-        },
-        teams,
-        profiles,
-        &machine_config.agents.commands,
-    );
-    let plan = if plan.pane_count() > 0 {
-        if let Some(death) = recovery.death.as_ref() {
-            report_previous_session_death(death);
-        }
-        prompt_recover_or_fresh(plan, prompt_mode)?
-    } else {
-        Some(plan)
-    };
-    let plan = match plan {
-        Some(plan) => {
-            let paths = StatePaths::for_workspace(room.workspace_id.clone());
-            let runtime = RuntimePaths::for_workspace(room.workspace_id.clone());
-            match (paths, runtime) {
-                (Ok(paths), Ok(runtime)) => materialize_room_resume(
-                    plan,
-                    &paths,
-                    &runtime,
-                    room.session_name,
-                    teams,
-                    &recovery.roster,
-                ),
-                (Err(err), _) | (_, Err(err)) => {
-                    tracing::warn!(
-                        workspace = %room.workspace_id,
-                        error = %err,
-                        "resume materialization skipped",
-                    );
-                    rimz::harness::resume::ResumePlan::default()
-                }
-            }
-        }
-        None => rimz::harness::resume::ResumePlan::default(),
-    };
-    if let Some(death) = recovery.death.as_ref() {
-        let recovered = plan.tabs.iter().map(rimz::mux::ResumeTab::pane_count).sum();
-        coroner::record_recovery_outcome(room.workspace_id, death, recovered);
-    }
-    record_rebirth_boundary(room.workspace_id, room.session_name);
-    Ok(plan)
-}
-
 fn prompt_recover_or_fresh(
-    plan: resume::RoomResumePlan,
+    plan: &rimz::harness::rebirth::RebirthPreview,
     mode: ResumePromptMode,
-) -> Result<Option<resume::RoomResumePlan>> {
+) -> Result<RebirthChoice> {
     let agents = plan.pane_count();
     if agents == 0 || mode == ResumePromptMode::Silent {
-        return Ok(Some(plan));
+        return Ok(RebirthChoice::Recover);
     }
     let labels = plan.labels().join(", ");
     if confirm_with_default(
@@ -1086,9 +1000,9 @@ fn prompt_recover_or_fresh(
         ),
         true,
     )? {
-        Ok(Some(plan))
+        Ok(RebirthChoice::Recover)
     } else {
-        Ok(None)
+        Ok(RebirthChoice::Fresh)
     }
 }
 
@@ -1112,10 +1026,34 @@ struct RemoteControlLaunch<'a> {
 fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     let room = &birth.room;
     let machine_config = birth.machine_config;
-    let recovery = if birth.was_live {
-        coroner::BirthRecovery::default()
+    let rebirth = if birth.was_live {
+        None
     } else {
-        inspect_previous_incarnation(birth.backend, room.workspace_id, room.session_name)
+        match RebirthPlan::inspect(
+            birth.backend,
+            room.workspace_id,
+            room.session_name,
+            room.project_root,
+            machine_config,
+            birth.no_resume,
+        ) {
+            Ok(plan) => Some(plan),
+            Err(err) => {
+                tracing::warn!(workspace = %room.workspace_id, error = %err, "rebirth inspection skipped");
+                None
+            }
+        }
+    };
+    let rebirth_choice = if let Some(plan) = rebirth.as_ref() {
+        let preview = plan.preview();
+        if preview.pane_count() > 0
+            && let Some(death) = preview.death()
+        {
+            report_previous_session_death(death);
+        }
+        prompt_recover_or_fresh(&preview, birth.resume_prompt)?
+    } else {
+        RebirthChoice::Fresh
     };
     let pre_existed = match birth.backend.list_sessions() {
         Ok(sessions) => sessions
@@ -1147,18 +1085,14 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
     // through the presence plugin). Best-effort: a convenience key never blocks
     // the room from opening.
     register_focus_key(birth.backend, machine_config);
-    // Plan which prior agents the reborn room can recover, from the durable
-    // rollup. Empty on a healthy reattach (the agents are still alive), when
-    // nothing is recoverable, or when the user opted out — then the birth is
-    // exactly today's bare working room.
-    let resume_plan = resume_plan_for_birth(
-        birth.was_live,
-        &recovery,
-        room,
-        machine_config,
-        birth.no_resume,
-        birth.resume_prompt,
-    )?;
+    let resume_plan = match rebirth {
+        Some(plan) => plan.materialize(rebirth_choice, room.session_name).resume,
+        None if !birth.was_live => {
+            rimz::harness::rebirth::record_boundary(room.workspace_id, room.session_name);
+            rimz::harness::resume::ResumePlan::default()
+        }
+        None => rimz::harness::resume::ResumePlan::default(),
+    };
     launch_sidebar_for_workspace(
         birth.backend,
         room,
@@ -1261,7 +1195,7 @@ pub(crate) fn birth_room_for_run(
         truecolor: rimz::tui::truecolor(),
     })?;
     if !was_live {
-        record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
+        rimz::harness::rebirth::record_boundary(&workspace.workspace_id, &workspace.session_name);
     }
     register_focus_key(backend.as_ref(), machine_config);
     let room = RoomTarget {

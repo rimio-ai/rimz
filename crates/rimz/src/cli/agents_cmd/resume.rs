@@ -11,13 +11,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 use rimz::agents::AgentState;
-use rimz::harness::resume::{resume_session_present, split_team_and_flat};
+use rimz::harness::resume::{
+    materialize_team_restore_tab as build_team_restore_tab, resume_session_present,
+    split_team_and_flat,
+};
 use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{ResumeTab, SplitPaneOptions, TabOptions};
 use rimz::store::runtime::AgentLiveness;
 
-use super::GlobalFlags;
-use crate::cli::room::{RoomTarget, build_sidebar_opts, materialize_team_restore_tab};
+use super::{GlobalFlags, RoomTarget, build_sidebar_opts, room_env_for_workspace};
 
 #[derive(Clone, Debug)]
 struct LocalWorktree {
@@ -491,7 +493,7 @@ fn resume_closed_lane(
 
     let mut tabs = Vec::new();
     for planned in &team {
-        tabs.push(materialize_team_restore_tab(
+        tabs.push(build_team_restore_tab(
             store,
             &workspace.workspace_id,
             &workspace.session_name,
@@ -548,7 +550,7 @@ fn open_resume_tab(
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
         session_name: &workspace.session_name,
-        extra_env: crate::cli::room::room_env_for_workspace(&workspace.workspace_id)?,
+        extra_env: room_env_for_workspace(&workspace.workspace_id)?,
         cwd: &tab.cwd,
         mux_config: &mux_config,
         width,
