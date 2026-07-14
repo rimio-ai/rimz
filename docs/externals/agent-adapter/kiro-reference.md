@@ -33,7 +33,7 @@ ${KIRO_HOME:-~/.kiro}/sessions/
       messages.jsonl
 ```
 
-Observed `session.json` fields include `id`, `schemaVersion: "1.0.0"`, `dataModelVersion: 1`, `workspacePaths`, `createdAt`, `lastModifiedAt`, and `status`. The `id` matches the directory basename.
+Observed `session.json` fields include `id`, `schemaVersion: "1.0.0"`, `dataModelVersion: 1`, `workspacePaths`, `createdAt`, and `lastModifiedAt`; `status` is absent in the valid newborn file and appears after activity. The `id` matches the directory basename. Kiro creates this cwd-scoped metadata and a zero-byte `messages.jsonl` roughly two seconds after launch, before the first prompt.
 
 Each `messages.jsonl` line carries `{id,timestamp,payload}`. Observed payload types are:
 
@@ -51,7 +51,7 @@ Physical order is authoritative. In the captured successful turn, `session_start
 
 The captured approval turn ordered `pending_interaction(tool_approval)` → `interaction_resolved` → approved `tool_call(fs_write)` → successful `tool_result` → assistant `Say` → successful pause/turn end. This proves visible waiting and acting transitions. It does not establish failure, rejection, or cancellation shapes.
 
-`usage_summary` reports credits. Credits do not prove token counts, context-window size, USD price, or historical/account spend, so RimZ exposes none of those figures. Only the explicit context percentage is mapped.
+`usage_summary` reports credits. Kiro v3 exposes no authoritative machine-readable token totals, context-window size, active model, or session USD, and credit meaning is not universal, so RimZ exposes none of those figures. Only the explicit context percentage is mapped.
 
 ## Excluded session classes
 

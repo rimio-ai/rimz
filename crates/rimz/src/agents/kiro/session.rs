@@ -27,7 +27,7 @@ struct SessionMetadata {
     data_model_version: u32,
     workspace_paths: Vec<PathBuf>,
     created_at: String,
-    status: String,
+    status: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -297,7 +297,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
     let folded = fold(
         include_str!("tests/fixtures/stock_ping/messages.jsonl"),
         created_at,
-        "idle",
+        Some("idle"),
     );
     LocalSessionObservation {
         kind: AgentKind::new_unchecked("kiro"),
@@ -305,6 +305,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         workspace: PathBuf::from("/workspace/project"),
         transcript_path: PathBuf::from("/workspace/project/messages.jsonl"),
         created_at,
+        fresh_binding_at: Some(created_at),
         first_event_at: folded.first_event_at,
         last_activity: folded.last_activity,
         status: folded.status,
@@ -319,13 +320,14 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
 fn observation(session: ValidatedSession, workspace: &Path) -> Option<LocalSessionObservation> {
     let created_at = session.metadata.created_at.parse::<Timestamp>().ok()?;
     let lines = read_transcript_tail(&session.messages).unwrap_or_default();
-    let folded = fold(&lines, created_at, &session.metadata.status);
+    let folded = fold(&lines, created_at, session.metadata.status.as_deref());
     Some(LocalSessionObservation {
         kind: AgentKind::new_unchecked("kiro"),
         session_id: AgentSessionId::from(session.metadata.id),
         workspace: workspace.to_path_buf(),
         transcript_path: session.messages,
         created_at,
+        fresh_binding_at: Some(created_at),
         first_event_at: folded.first_event_at,
         last_activity: folded.last_activity,
         status: folded.status,
@@ -395,16 +397,16 @@ fn parse_records(lines: &str) -> impl Iterator<Item = (Timestamp, Payload)> + '_
     })
 }
 
-fn fold(lines: &str, created_at: Timestamp, metadata_status: &str) -> FoldedSession {
+fn fold(lines: &str, created_at: Timestamp, metadata_status: Option<&str>) -> FoldedSession {
     let mut folded = FoldedSession {
         first_event_at: None,
         last_activity: created_at,
         status: match metadata_status {
-            "active" | "running" => AgentStatus::Running,
+            Some("active" | "running") => AgentStatus::Running,
             _ => AgentStatus::Idle,
         },
         phase: match metadata_status {
-            "active" | "running" => TurnPhase::Reasoning,
+            Some("active" | "running") => TurnPhase::Reasoning,
             _ => TurnPhase::Idle,
         },
         latest_prompt: None,
@@ -525,7 +527,7 @@ fn fold(lines: &str, created_at: Timestamp, metadata_status: &str) -> FoldedSess
 
 #[cfg(test)]
 pub(super) fn fold_for_test(lines: &str) -> (AgentStatus, TurnPhase, Option<String>, Option<u8>) {
-    let folded = fold(lines, Timestamp::UNIX_EPOCH, "idle");
+    let folded = fold(lines, Timestamp::UNIX_EPOCH, Some("idle"));
     (
         folded.status,
         folded.phase,

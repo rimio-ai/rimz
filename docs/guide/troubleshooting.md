@@ -114,7 +114,7 @@ rimz hooks install claude       # wire one agent by name
 
 The install is additive, so your existing hooks stay, and `rimz doctor` reports per-agent hook status afterward. Restart the agent so it picks up the new hooks. To back the change out, `rimz hooks uninstall [AGENT]` removes exactly what RimZ added and restores any statusline it wrapped.
 
-Kiro CLI 2.12.1 v3 is the exception: RimZ reads its stock local session store and binds only validated sessions to live panes. A new or ambiguous session remains a process row until identity is safe. Hook installation stays unsupported; `rimz hooks uninstall kiro` still removes a legacy RimZ-owned hook file.
+Kiro CLI 2.12.1 v3 is the exception: RimZ reads its stock local session store and binds only validated sessions to live panes. A validated newborn session becomes an idle agent card before its first prompt when the pane process proves the current incarnation; missing, stale, or ambiguous identity remains a process row. Hook installation stays unsupported; `rimz hooks uninstall kiro` still removes a legacy RimZ-owned hook file.
 
 ### A card went quiet after a config edit
 

@@ -433,13 +433,15 @@ fn discovery_uses_cache_only_for_fresh_pairing_and_keeps_exact_resume_available(
     assert_eq!(observation.phase, TurnPhase::Idle);
     assert_eq!(observation.latest_prompt.as_deref(), Some("ping"));
     assert!(observation.first_event_at.is_some());
+    assert_eq!(observation.fresh_binding_at, observation.first_event_at);
 
     let other_workspace = dir.path().join("other");
     std::fs::create_dir(&other_workspace).unwrap();
     let observations = session::discover_under(dir.path(), &other_workspace);
     assert_eq!(observations.len(), 1);
+    assert!(observations[0].first_event_at.is_some());
     assert!(
-        observations[0].first_event_at.is_none(),
+        observations[0].fresh_binding_at.is_none(),
         "an unrelated workspace can bind this record only by exact resume id"
     );
 }

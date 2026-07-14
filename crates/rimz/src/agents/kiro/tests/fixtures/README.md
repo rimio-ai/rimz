@@ -1,6 +1,6 @@
 # Kiro CLI 2.12.1 transcript evidence
 
-The stock interactive captures launched `kiro-cli chat --v3` in disposable directories. `stock_ping/` preserves a ping/pong turn, context percentage, credit-only usage, and the physically late `session_start`; `stock_approval/` preserves native approval, `fs_write`, resolution, and settlement ordering.
+The stock interactive captures launched `kiro-cli chat --v3` in disposable directories. `stock_empty/` preserves the statusless metadata and zero-byte transcript written before the first prompt; `stock_ping/` preserves a ping/pong turn, context percentage, credit-only usage, and the physically late `session_start`; `stock_approval/` preserves native approval, `fs_write`, resolution, and settlement ordering.
 
 The UI reported a root session identity shaped as `sess_<uuid>`. Kiro CLI's stock structured store pairs `session.json` and `messages.jsonl` under the workspace-hash bucket. The older `root/*.history` fixture remains exclusion evidence: readline history alone carries no assistant, lifecycle, context, or tool result.
 

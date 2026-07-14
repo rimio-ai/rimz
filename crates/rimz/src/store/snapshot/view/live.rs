@@ -51,20 +51,34 @@ impl SidebarSnapshot {
             bindings.push((observation_index, pane.clone()));
         }
 
-        for (observation_index, observation) in observations.iter().enumerate() {
-            if used_sessions.contains(&observation_index) || observation.first_event_at.is_none() {
-                continue;
-            }
-            let first_event = observation.first_event_at.unwrap_or(observation.created_at);
+        let mut fresh = observations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, observation)| {
+                if used_sessions.contains(&index) {
+                    return None;
+                }
+                Some((index, observation, observation.fresh_binding_at?))
+            })
+            .collect::<Vec<_>>();
+        fresh.sort_by(
+            |(left_index, left, left_at), (right_index, right, right_at)| {
+                right_at
+                    .cmp(left_at)
+                    .then(right.created_at.cmp(&left.created_at))
+                    .then(right.session_id.cmp(&left.session_id))
+                    .then(right_index.cmp(left_index))
+            },
+        );
+        for (observation_index, observation, fresh_binding_at) in fresh {
             let viable = panes
                 .iter()
                 .filter(|pane| !used_panes.contains(&pane.pane_id))
                 .filter(|pane| pane.resumed_session_id.is_none())
                 .filter(|pane| local_pane_matches(pane, observation))
-                .filter(|pane| {
-                    pane.pane_process_start.is_none_or(|start| {
-                        start <= first_event && observation.last_activity >= start
-                    })
+                .filter(|pane| match pane.pane_process_start {
+                    Some(start) => start <= fresh_binding_at && observation.last_activity >= start,
+                    None => observation.first_event_at.is_some(),
                 })
                 .collect::<Vec<_>>();
             let Some(pane) = unique_closest_pane(&viable) else {

@@ -454,6 +454,11 @@ pub struct LocalSessionObservation {
     pub workspace: PathBuf,
     pub transcript_path: PathBuf,
     pub created_at: Timestamp,
+    /// Adapter-authorized evidence for fresh same-cwd binding. This is
+    /// independent of transcript activity: a provider may establish a safe
+    /// session identity before its first lifecycle record exists.
+    pub fresh_binding_at: Option<Timestamp>,
+    /// Timestamp of the first real transcript or lifecycle record.
     pub first_event_at: Option<Timestamp>,
     pub last_activity: Timestamp,
     pub status: AgentStatus,

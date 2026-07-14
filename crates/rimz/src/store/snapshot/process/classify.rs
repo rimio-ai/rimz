@@ -164,13 +164,19 @@ pub(crate) fn command_agent_kind_with_comm(
 
 fn command_agent_kind_from_program(program: EffectiveProgram<'_>) -> Option<&'static str> {
     let label = basename(program.program);
-    crate::agents::all_adapters().find_map(|adapter| {
-        let descriptor = adapter.descriptor();
-        (descriptor.launches_as(label)
-            || (program.from_launcher
-                && agent_script_path_names_kind(program.program, descriptor.kind)))
-        .then_some(descriptor.kind)
-    })
+    crate::agents::all_adapters()
+        .find_map(|adapter| {
+            let descriptor = adapter.descriptor();
+            (descriptor.launches_as(label)
+                || (program.from_launcher
+                    && agent_script_path_names_kind(program.program, descriptor.kind)))
+            .then_some(descriptor.kind)
+        })
+        .or_else(|| {
+            (!program.from_launcher)
+                .then(|| command_agent_kind_from_comm(program.program))
+                .flatten()
+        })
 }
 
 fn command_agent_kind_from_comm(comm: &str) -> Option<&'static str> {
@@ -227,6 +233,15 @@ mod tests {
         assert_eq!(command_agent_kind("antigravity"), None);
         assert_eq!(command_agent_kind("agent"), Some("cursor"));
         assert_eq!(command_agent_kind("cursor-agent"), Some("cursor"));
+        assert_eq!(command_agent_kind("kiro-cli-chat"), Some("kiro"));
+        assert_eq!(command_agent_kind("kiro-cli-term"), None);
+        assert_eq!(
+            crate::agents::find_adapter("kiro")
+                .unwrap()
+                .descriptor()
+                .bin_names,
+            &["kiro-cli"]
+        );
         assert_eq!(
             command_agent_kind("/home/me/.local/bin/agent"),
             Some("cursor")

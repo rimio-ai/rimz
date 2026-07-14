@@ -3,22 +3,54 @@ use super::*;
 use crate::agents::LocalSessionObservation;
 use crate::ids::{AgentKind, AgentSessionId};
 
-fn observation(id: &str, created_secs_ago: i64, event_secs_ago: i64) -> LocalSessionObservation {
+fn observation(
+    id: &str,
+    created_secs_ago: i64,
+    event_secs_ago: Option<i64>,
+    fresh_binding_secs_ago: Option<i64>,
+) -> LocalSessionObservation {
+    let event_at = event_secs_ago.map(ago);
     LocalSessionObservation {
         kind: AgentKind::new_unchecked("kiro"),
         session_id: AgentSessionId::from(id),
         workspace: PathBuf::from("/repo/main"),
         transcript_path: PathBuf::from(format!("/kiro/{id}/messages.jsonl")),
         created_at: ago(created_secs_ago),
-        first_event_at: Some(ago(event_secs_ago)),
-        last_activity: ago(event_secs_ago - 1),
-        status: AgentStatus::Running,
-        phase: TurnPhase::Reasoning,
-        latest_prompt: Some("ping".to_owned()),
+        fresh_binding_at: fresh_binding_secs_ago.map(ago),
+        first_event_at: event_at,
+        last_activity: event_at.unwrap_or_else(|| ago(created_secs_ago)),
+        status: if event_at.is_some() {
+            AgentStatus::Running
+        } else {
+            AgentStatus::Idle
+        },
+        phase: if event_at.is_some() {
+            TurnPhase::Reasoning
+        } else {
+            TurnPhase::Idle
+        },
+        latest_prompt: event_at.map(|_| "ping".to_owned()),
         native_prompt_detail: None,
         waiting_since: None,
-        context_pct: Some(12),
+        context_pct: event_at.map(|_| 12),
     }
+}
+
+fn event_observation(
+    id: &str,
+    created_secs_ago: i64,
+    event_secs_ago: i64,
+) -> LocalSessionObservation {
+    observation(
+        id,
+        created_secs_ago,
+        Some(event_secs_ago),
+        Some(created_secs_ago),
+    )
+}
+
+fn newborn_observation(id: &str, created_secs_ago: i64) -> LocalSessionObservation {
+    observation(id, created_secs_ago, None, Some(created_secs_ago))
 }
 
 #[test]
@@ -27,7 +59,7 @@ fn stock_kiro_session_bootstraps_only_when_a_live_pane_binds() {
     let snapshot = room(Vec::new())
         .with_local_sessions(
             std::slice::from_ref(&pane),
-            vec![observation("sess-live", 20, 10)],
+            vec![event_observation("sess-live", 20, 10)],
         )
         .with_live_panes(vec![pane], None);
     assert_eq!(snapshot.agents.len(), 1);
@@ -35,7 +67,7 @@ fn stock_kiro_session_bootstraps_only_when_a_live_pane_binds() {
     assert_eq!(rollup_agent(&snapshot, "sess-live").context_pct, Some(12));
 
     let paneless =
-        room(Vec::new()).with_local_sessions(&[], vec![observation("sess-disk", 20, 10)]);
+        room(Vec::new()).with_local_sessions(&[], vec![event_observation("sess-disk", 20, 10)]);
     assert!(paneless.agents.is_empty());
 }
 
@@ -44,7 +76,10 @@ fn exact_resume_wins_before_fresh_one_to_one_pairing() {
     let mut resumed = pane("%1", "kiro-cli chat --v3", "/repo/main");
     resumed.resumed_session_id = Some(AgentSessionId::from("sess-b"));
     let other = pane("%2", "kiro-cli chat --v3", "/repo/main");
-    let observations = vec![observation("sess-a", 20, 10), observation("sess-b", 20, 10)];
+    let observations = vec![
+        event_observation("sess-a", 20, 10),
+        event_observation("sess-b", 20, 10),
+    ];
     let snapshot = room(Vec::new())
         .with_local_sessions(&[resumed.clone(), other.clone()], observations)
         .with_live_panes(vec![resumed, other], None);
@@ -69,7 +104,7 @@ fn ambiguous_fresh_candidates_stay_identityless_idle_agent_rows() {
     let snapshot = snapshot
         .with_local_sessions(
             &[first.clone(), second.clone()],
-            vec![observation("sess-a", 20, 10)],
+            vec![event_observation("sess-a", 20, 10)],
         )
         .with_live_panes(vec![first, second], None);
     assert!(snapshot.agents.is_empty());
@@ -89,14 +124,14 @@ fn ambiguous_fresh_candidates_stay_identityless_idle_agent_rows() {
 }
 
 #[test]
-fn creation_times_assign_same_cwd_sessions_one_to_one() {
+fn newest_session_pairs_with_newest_compatible_pane() {
     let mut first = pane("%1", "kiro-cli chat --v3", "/repo/main");
     first.pane_process_start = Some(ago(100));
     let mut second = pane("%2", "kiro-cli chat --v3", "/repo/main");
-    second.pane_process_start = Some(ago(40));
+    second.pane_process_start = Some(ago(95));
     let observations = vec![
-        observation("sess-first", 90, 80),
-        observation("sess-second", 30, 20),
+        event_observation("sess-first", 90, 80),
+        event_observation("sess-second", 70, 60),
     ];
     let snapshot = room(Vec::new())
         .with_local_sessions(&[first.clone(), second.clone()], observations)
@@ -123,6 +158,97 @@ fn creation_times_assign_same_cwd_sessions_one_to_one() {
 }
 
 #[test]
+fn recordless_current_session_binds_only_to_its_live_process_incarnation() {
+    let mut current_pane = pane("%1", "kiro-cli-chat", "/repo/main");
+    current_pane.pane_process_start = Some(ago(21));
+    let snapshot = room(Vec::new())
+        .with_local_sessions(
+            std::slice::from_ref(&current_pane),
+            vec![newborn_observation("sess-newborn", 20)],
+        )
+        .with_live_panes(vec![current_pane], None);
+
+    let agent = rollup_agent(&snapshot, "sess-newborn");
+    assert_eq!(agent.status, AgentStatus::Idle);
+    assert_eq!(agent.phase, TurnPhase::Idle);
+    assert!(agent.turn_started_at.is_none());
+    assert!(agent.prompt.is_none());
+    assert!(agent.context_pct.is_none());
+    assert!(row(&snapshot, "sess-newborn").is_agent());
+
+    let mut stale_pane = pane("%2", "kiro-cli-chat", "/repo/main");
+    stale_pane.pane_process_start = Some(ago(19));
+    let stale = room(Vec::new())
+        .with_local_sessions(
+            std::slice::from_ref(&stale_pane),
+            vec![newborn_observation("sess-stale", 20)],
+        )
+        .with_live_panes(vec![stale_pane], None);
+    assert!(stale.agents.is_empty());
+    assert!(rows(&stale).iter().all(|row| row.is_process()));
+}
+
+#[test]
+fn recordless_session_without_process_start_stays_a_process_row() {
+    let pane = pane("%1", "kiro-cli-chat", "/repo/main");
+    let snapshot = room(Vec::new())
+        .with_local_sessions(
+            std::slice::from_ref(&pane),
+            vec![newborn_observation("sess-newborn", 20)],
+        )
+        .with_live_panes(vec![pane], None);
+
+    assert!(snapshot.agents.is_empty());
+    assert!(rows(&snapshot).iter().all(|row| row.is_process()));
+}
+
+#[test]
+fn exact_resume_binds_an_empty_session_without_fresh_authorization() {
+    let mut pane = pane("%1", "kiro-cli-chat", "/repo/main");
+    pane.resumed_session_id = Some(AgentSessionId::from("sess-resumed"));
+    let observation = observation("sess-resumed", 20, None, None);
+    let snapshot = room(Vec::new())
+        .with_local_sessions(std::slice::from_ref(&pane), vec![observation])
+        .with_live_panes(vec![pane], None);
+
+    assert_eq!(
+        rollup_agent(&snapshot, "sess-resumed").status,
+        AgentStatus::Idle
+    );
+}
+
+#[test]
+fn equal_process_starts_remain_ambiguous() {
+    let mut first = pane("%1", "kiro-cli-chat", "/repo/main");
+    first.pane_process_start = Some(ago(30));
+    let mut second = pane("%2", "kiro-cli-chat", "/repo/main");
+    second.pane_process_start = Some(ago(30));
+    let snapshot = room(Vec::new())
+        .with_local_sessions(
+            &[first.clone(), second.clone()],
+            vec![newborn_observation("sess-newborn", 20)],
+        )
+        .with_live_panes(vec![first, second], None);
+
+    assert!(snapshot.agents.is_empty());
+    assert!(rows(&snapshot).iter().all(|row| row.is_process()));
+}
+
+#[test]
+fn observations_without_fresh_authorization_are_exact_resume_only() {
+    let pane = pane("%1", "agy", "/repo/main");
+    let mut observation = observation("conversation-a", 20, Some(10), None);
+    observation.kind = AgentKind::new_unchecked("antigravity");
+    observation.transcript_path = PathBuf::from("/antigravity/conversation-a/transcript.jsonl");
+    let snapshot = room(Vec::new())
+        .with_local_sessions(std::slice::from_ref(&pane), vec![observation])
+        .with_live_panes(vec![pane], None);
+
+    assert!(snapshot.agents.is_empty());
+    assert!(rows(&snapshot).iter().all(|row| row.is_process()));
+}
+
+#[test]
 fn provider_session_adopts_provisional_launch_identity() {
     let mut provisional = agent("kiro", "launch_abc", AgentStatus::Idle, 1).in_pane("%1");
     provisional.name = Some("writer".to_owned());
@@ -134,7 +260,7 @@ fn provider_session_adopts_provisional_launch_identity() {
     provisional.budget = Some("$5.00".to_owned());
     let pane = pane("%1", "kiro-cli chat --v3", "/repo/main");
     let snapshot = room(vec![provisional])
-        .with_local_sessions(&[pane], vec![observation("sess-real", 20, 10)]);
+        .with_local_sessions(&[pane], vec![event_observation("sess-real", 20, 10)]);
     assert_eq!(snapshot.agents.len(), 1);
     let adopted = rollup_agent(&snapshot, "sess-real");
     assert_eq!(adopted.name.as_deref(), Some("writer"));

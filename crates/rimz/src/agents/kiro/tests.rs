@@ -85,40 +85,75 @@ fn discovery_validates_layout_and_folds_ordered_records() {
         .path()
         .join("sessions")
         .join(session::workspace_bucket(&workspace).unwrap());
-    let session_dir = bucket.join("sess_11111111-1111-4111-8111-111111111111");
+    let session_id = "sess_33333333-3333-4333-8333-333333333333";
+    let session_dir = bucket.join(session_id);
     std::fs::create_dir_all(&session_dir).unwrap();
-    std::fs::write(
-        session_dir.join("session.json"),
-        format!(
-            r#"{{"id":"sess_11111111-1111-4111-8111-111111111111","schemaVersion":"1.0.0","dataModelVersion":1,"workspacePaths":[{}],"createdAt":"2025-01-01T00:00:00Z","status":"idle"}}"#,
-            serde_json::to_string(&workspace).unwrap()
-        ),
-    )
-    .unwrap();
+    let mut metadata: serde_json::Value =
+        serde_json::from_str(include_str!("tests/fixtures/stock_empty/session.json")).unwrap();
+    metadata["workspacePaths"] = serde_json::json!([workspace]);
+    std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
     std::fs::write(
         session_dir.join("messages.jsonl"),
-        include_str!("tests/fixtures/stock_ping/messages.jsonl"),
+        include_bytes!("tests/fixtures/stock_empty/messages.jsonl"),
     )
     .unwrap();
 
     let observations = session::discover_under(dir.path(), &workspace);
     assert_eq!(observations.len(), 1);
     let observation = &observations[0];
-    assert_eq!(
-        observation.session_id.as_str(),
-        "sess_11111111-1111-4111-8111-111111111111"
-    );
+    assert_eq!(observation.session_id.as_str(), session_id);
+    assert_eq!(observation.status, crate::agents::AgentStatus::Idle);
+    assert_eq!(observation.phase, crate::agents::TurnPhase::Idle);
+    assert_eq!(observation.fresh_binding_at, Some(observation.created_at));
+    assert!(observation.first_event_at.is_none());
+    assert_eq!(observation.last_activity, observation.created_at);
+    assert!(observation.latest_prompt.is_none());
+    assert!(observation.context_pct.is_none());
+
+    std::fs::write(
+        session_dir.join("messages.jsonl"),
+        include_str!("tests/fixtures/stock_ping/messages.jsonl"),
+    )
+    .unwrap();
+    let observations = session::discover_under(dir.path(), &workspace);
+    let observation = &observations[0];
     assert_eq!(observation.status, crate::agents::AgentStatus::Success);
     assert_eq!(observation.phase, crate::agents::TurnPhase::Idle);
     assert_eq!(observation.latest_prompt.as_deref(), Some("ping"));
     assert_eq!(observation.context_pct, Some(13));
+    assert!(observation.first_event_at.is_some());
 
-    std::fs::write(
-        session_dir.join("session.json"),
-        r#"{"id":"sess_11111111-1111-4111-8111-111111111111","schemaVersion":"2.0.0","dataModelVersion":1,"workspacePaths":[],"createdAt":"2025-01-01T00:00:00Z","status":"idle"}"#,
-    )
-    .unwrap();
-    assert!(session::discover_under(dir.path(), &workspace).is_empty());
+    for (field, invalid) in [
+        ("schemaVersion", serde_json::json!("2.0.0")),
+        (
+            "id",
+            serde_json::json!("sess_44444444-4444-4444-8444-444444444444"),
+        ),
+        (
+            "workspacePaths",
+            serde_json::json!([workspace.join("other")]),
+        ),
+    ] {
+        let mut invalid_metadata = metadata.clone();
+        invalid_metadata[field] = invalid;
+        std::fs::write(
+            session_dir.join("session.json"),
+            invalid_metadata.to_string(),
+        )
+        .unwrap();
+        assert!(
+            session::discover_under(dir.path(), &workspace).is_empty(),
+            "accepted invalid {field}"
+        );
+    }
+
+    metadata["status"] = serde_json::Value::Null;
+    std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
+    std::fs::write(session_dir.join("messages.jsonl"), b"").unwrap();
+    assert_eq!(
+        session::discover_under(dir.path(), &workspace)[0].status,
+        crate::agents::AgentStatus::Idle
+    );
 }
 
 #[cfg(unix)]

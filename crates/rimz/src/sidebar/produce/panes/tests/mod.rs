@@ -11,18 +11,35 @@ fn frame(panes: Vec<crate::pane::PaneRef>) -> crate::sidebar::frame::PaneFrame {
 }
 
 #[test]
-fn resume_stamping_dispatches_for_kiro_panes() {
-    let mut pane = pane("terminal_1", Some("kiro-cli chat --v3"), Some("/repo/main"));
-    pane.pane_pid = Some(42);
-    let mut frame = frame(vec![pane]);
-    stamp_pane_resumed_session_ids(&mut frame, &|pid| {
-        (pid == 42)
-            .then(|| crate::ids::AgentSessionId::from("sess_11111111-1111-4111-8111-111111111111"))
-    });
-    assert_eq!(
-        first(&frame).current.resumed_session_id.as_deref(),
-        Some("sess_11111111-1111-4111-8111-111111111111")
-    );
+fn resume_and_process_start_stamping_dispatch_for_kiro_commands() {
+    let start: jiff::Timestamp = "2025-01-01T00:00:00Z".parse().unwrap();
+    for command in ["kiro-cli chat --v3", "kiro-cli-chat"] {
+        let mut pane = pane("terminal_1", Some(command), Some("/repo/main"));
+        pane.pane_pid = Some(42);
+        let mut frame = frame(vec![pane]);
+        let unstamped = natively_unstamped(&frame);
+        stamp_pane_resumed_session_ids(&mut frame, &|pid| {
+            (pid == 42).then(|| {
+                crate::ids::AgentSessionId::from("sess_11111111-1111-4111-8111-111111111111")
+            })
+        });
+        stamp_pane_process_starts(
+            &mut frame,
+            &unstamped,
+            &|kind, pid| {
+                assert_eq!(kind, "kiro", "{command}");
+                assert_eq!(pid, 42, "{command}");
+                Some(start)
+            },
+            &|_, _| -> Vec<jiff::Timestamp> { panic!("root-pid derivation owns {command}") },
+        );
+        assert_eq!(
+            first(&frame).current.resumed_session_id.as_deref(),
+            Some("sess_11111111-1111-4111-8111-111111111111"),
+            "{command}"
+        );
+        assert_eq!(first(&frame).current.started_at, Some(start), "{command}");
+    }
 }
 
 fn first(frame: &crate::sidebar::frame::PaneFrame) -> &crate::sidebar::frame::PaneState {

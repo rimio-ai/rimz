@@ -198,8 +198,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
             "dataModelVersion": 1,
             "workspacePaths": [env.project_root],
             "createdAt": "2025-01-01T00:00:00Z",
-            "lastModifiedAt": "2025-01-01T00:00:08Z",
-            "status": "idle"
+            "lastModifiedAt": "2025-01-01T00:00:00Z"
         })
         .to_string(),
     )
@@ -217,6 +216,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
         r#"{"id":"end","timestamp":"2025-01-01T00:00:08.100Z","payload":{"type":"turn_end","executionId":"turn","stopReason":"end_turn"}}"#,
     ];
     let transcript = session_dir.join("messages.jsonl");
+    std::fs::write(&transcript, b"").expect("write empty Kiro transcript");
     let pane = rimz::pane::PaneRef {
         pane_id: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Tmux, "%kiro"),
         session_name: "rimz-test".to_owned(),
@@ -225,12 +225,12 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
         view_name: None,
         is_focused: false,
         is_floating: false,
-        command: Some("kiro-cli chat --v3".to_owned()),
+        command: Some("kiro-cli-chat".to_owned()),
         foreground_cmdline: None,
         spawn_command: None,
         cwd: Some(env.project_root.to_string_lossy().into_owned()),
         pane_pid: None,
-        pane_process_start: None,
+        pane_process_start: Some("2024-12-31T23:59:58Z".parse().unwrap()),
         hosted_agent_kind: None,
         hosted_agent_process_start: None,
         resumed_session_id: None,
@@ -243,15 +243,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
     let session_name = rimz::workspace::WorkspaceResolver::resolve(&env.project_root, None)
         .expect("resolve workspace")
         .session_name;
-
-    for (end, expected, phase) in [
-        (2, "running", "reasoning"),
-        (3, "waiting", "idle"),
-        (5, "running", "acting"),
-        (10, "success", "idle"),
-    ] {
-        std::fs::write(&transcript, format!("{}\n", records[..end].join("\n")))
-            .expect("grow Kiro transcript");
+    let run_snapshot = || {
         let output = env
             .rimz()
             .args([
@@ -273,7 +265,53 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let snapshot: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+
+    let snapshot = run_snapshot();
+    let agent = snapshot["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == session_id)
+        .expect("newborn Kiro agent");
+    assert_eq!(agent["status"], "idle");
+    assert_eq!(agent["phase"], "idle");
+    assert!(agent.get("prompt").is_none());
+    assert!(agent["context_pct"].is_null());
+    assert!(agent["context_window"].is_null());
+    assert!(agent["total_tokens"].is_null());
+    assert!(agent["context"].get("model_id").is_none());
+    assert!(agent["context"].get("tokens").is_none());
+    assert!(agent["context"].get("cost").is_none());
+    assert!(agent["model"].is_null());
+    assert!(agent["effort"].is_null());
+    let row = snapshot["worktree_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["rows"].as_array().unwrap())
+        .find(|row| row["id"] == session_id)
+        .expect("newborn Kiro row");
+    assert_eq!(row["row_kind"], "agent");
+    assert_eq!(row["status"], "idle");
+    assert!(row.get("prompt").is_none());
+    assert_eq!(row["context_pct"], 0);
+    assert!(row.get("total_tokens").is_none());
+    assert!(row["context"].get("model_id").is_none());
+    assert!(row["context"].get("tokens").is_none());
+    assert!(row["context"].get("cost").is_none());
+    assert_eq!(std::fs::read(&event_log).unwrap_or_default(), before);
+
+    for (end, expected, phase) in [
+        (2, "running", "reasoning"),
+        (3, "waiting", "idle"),
+        (5, "running", "acting"),
+        (10, "success", "idle"),
+    ] {
+        std::fs::write(&transcript, format!("{}\n", records[..end].join("\n")))
+            .expect("grow Kiro transcript");
+        let snapshot = run_snapshot();
         let agent = snapshot["agents"]
             .as_array()
             .unwrap()

@@ -8,7 +8,7 @@ Kiro support targets the stock v3 engine selected by `kiro-cli chat --v3`. RimZ 
 
 Fresh sessions run `kiro-cli chat --v3`. Profiles map `model` and `effort` to chat-level flags. Exact resume runs `kiro-cli chat --v3 --resume-id <session_id>`; both split and joined flag forms are recognized on the launcher and `kiro-cli-chat` engine process. `kiro-cli-term` remains excluded because it is the shell-integration daemon.
 
-Fresh session binding starts from a live pane's effective Kiro kind and exact absolute cwd. RimZ hashes the cwd into Kiro's 16-hex workspace bucket, validates provider metadata, then pairs exact resume IDs first. Fresh sessions require record time compatible with the pane's current process incarnation and a unique one-to-one assignment. Indistinguishable candidates remain process rows.
+Fresh session binding starts from a live pane's effective Kiro kind and exact absolute cwd. Direct `kiro-cli-chat` commands identify the v3 engine alongside launcher commands, while `kiro-cli-term` and shared runtimes stay excluded. RimZ hashes the cwd into Kiro's 16-hex workspace bucket, validates provider metadata, then pairs exact resume IDs first. For fresh sessions, validated `createdAt` authorizes same-cwd binding: a recordless session requires a compatible pane process start, and fresh sessions pair newest-first to the newest uniquely compatible process. Missing process evidence for an empty session and indistinguishable candidates remain process rows.
 
 A provider session replacing a provisional launch row inherits launch-owned name, profile, permission mode, role, team, cohort, channel, description, model and effort fallbacks, worktree metadata, and budget. Provider sessions are transient in the snapshot; a dead pane removes the card while history remains on disk.
 
@@ -16,7 +16,7 @@ A provider session replacing a provisional launch row inherits launch-owned name
 
 The stock layout is `${KIRO_HOME:-~/.kiro}/sessions/<sha256(cwd)[0..16]>/<sess_uuid>/{session.json,messages.jsonl}`. Discovery inspects direct `sess_*` children of the requested workspace bucket only.
 
-A session is accepted when the directory and paired files are regular, non-symlink entries under the bucket, the ID is `sess_<uuid>` and matches metadata, `schemaVersion` is `1.0.0`, `dataModelVersion` is `1`, `workspacePaths` contains the requested absolute cwd, and `createdAt` parses. ACP UUID directories, v2/readline history, mismatched metadata, unsupported schema, and symlink escapes stay excluded.
+A session is accepted when the directory and paired files are regular, non-symlink entries under the bucket, the ID is `sess_<uuid>` and matches metadata, `schemaVersion` is `1.0.0`, `dataModelVersion` is `1`, `workspacePaths` contains the requested absolute cwd, and `createdAt` parses. Missing or null `status` means idle, and an empty regular `messages.jsonl` produces an immediate pre-prompt idle card once process identity binds. ACP UUID directories, v2/readline history, mismatched metadata, unsupported schema, and symlink escapes stay excluded.
 
 ## Transcript, lifecycle, and context
 
@@ -31,7 +31,7 @@ The adapter walks complete JSONL records in physical order and ignores malformed
 - Successful `session_pause` and `turn_end` settle the turn. Uncaptured failure and cancellation shapes remain unknown.
 - The latest finite `contextUsage.usagePercentage` is rounded and clamped to `0..=100`.
 
-Kiro usage summaries report credits. RimZ does not infer tokens, a context-window denominator, dollars, realtime cost, or historical/account spend from credits.
+Kiro usage summaries report credits. RimZ does not infer an active model, tokens, a context-window denominator, dollars, realtime cost, or historical/account spend from credits; a provisional RimZ launch may retain model and effort values it already owns.
 
 ## Hooks and supervised runs
 

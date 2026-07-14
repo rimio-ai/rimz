@@ -150,6 +150,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         workspace: PathBuf::from("/workspace/project"),
         transcript_path: PathBuf::from("/provider/brain/11111111/transcript.jsonl"),
         created_at,
+        fresh_binding_at: Some(created_at),
         first_event_at: Some(created_at),
         last_activity: folded.last_activity.unwrap(),
         status: folded.status,
@@ -264,7 +265,8 @@ fn observation(
         // Only the provider's current-workspace cache authorizes fresh-session
         // pairing. Other conversations remain available solely for exact
         // `--conversation` command-line binding.
-        first_event_at: (current_session_id == Some(session_id.as_str())).then_some(created_at),
+        fresh_binding_at: (current_session_id == Some(session_id.as_str())).then_some(created_at),
+        first_event_at: Some(created_at),
         last_activity,
         status: folded.status,
         phase: folded.phase,
