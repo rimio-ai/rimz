@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader, IsTerminal, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::Arc;
@@ -10,8 +11,12 @@ use anyhow::{Context, Result, bail};
 
 use rimz::remote::RemoteTarget;
 use rimz::remote::link::{
-    LinkAck, LinkEvent, LinkMonitor, LinkProbe, control_check_spec, probe_interval_from_env,
-    probe_stream_spec, probe_timeout_from_env,
+    LinkAck, LinkEvent, LinkMonitor, LinkProbe, blackout_after_from_env, control_check_spec,
+    probe_interval_from_env, probe_stream_spec, probe_timeout_from_env,
+};
+use rimz::remote::reachability::{
+    DIAL_TIMEOUT, DialGate, DialPlan, WaitVerdict, dial_interval_from_env, parse_dial_plan,
+    ssh_config_query_spec,
 };
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(50);
@@ -19,6 +24,7 @@ const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
 const PROBE_STREAM_BLACKOUT_FAILURES: u32 = 3;
 const PROBE_RESPAWN_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
+const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn supervise_remote(
     control_spec: &rimz::mux::CommandSpec,
@@ -32,6 +38,8 @@ pub(super) fn supervise_remote(
     let policy = ReconnectPolicy::from_env();
     let mut reconnect = ReconnectState::new(policy);
     let host = target.host_display();
+    let dial_plan = resolve_dial_plan(&target.ssh_destination().destination);
+    let stop = AtomicBool::new(false);
     let mut outage_active = false;
     report_remote_connect(host, true);
     loop {
@@ -66,10 +74,19 @@ pub(super) fn supervise_remote(
             &mut outage_active,
             policy.gatetime,
             restore_existing_outage_after_gatetime,
+            dial_plan.as_ref(),
         )?;
         probe.stop();
         if control_ready {
             remove_control_path(control_path);
+        }
+        if outcome.killed_zombie {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "rimz: link to {host} confirmed dead — host reachable, session silent; reconnecting now",
+            );
+            reconnect.settle_zombie_kill();
+            continue;
         }
         match reconnect.settle(outcome.status.code(), outcome.established) {
             Verdict::CleanExit => return Ok(()),
@@ -92,7 +109,18 @@ pub(super) fn supervise_remote(
                         LocalLinkNotificationDelivery::TerminalAndCommand,
                     );
                 }
-                std::thread::sleep(delay);
+                if matches!(
+                    wait_before_retry(dial_plan.as_ref(), delay, &stop),
+                    WaitVerdict::AttachNow {
+                        network_restored: true
+                    }
+                ) {
+                    reconnect.network_restored();
+                    let _ = writeln!(
+                        std::io::stderr().lock(),
+                        "rimz: network to {host} restored — reconnecting now",
+                    );
+                }
             }
         }
     }
@@ -119,6 +147,7 @@ fn run_ssh_session(
     outage_active: &mut bool,
     gatetime: Duration,
     restore_existing_outage_after_gatetime: bool,
+    dial_plan: Option<&DialPlan>,
 ) -> Result<SessionOutcome> {
     let mut child = spec
         .to_command()
@@ -127,6 +156,9 @@ fn run_ssh_session(
     let started = Instant::now();
     let mut reported_established = false;
     let mut transport_confirmed = false;
+    let mut zombie_watch = false;
+    let mut next_zombie_dial = Instant::now();
+    let dial_interval = dial_interval_from_env();
     loop {
         if let Some(status) = child.try_wait().context("polling ssh session")? {
             while let Ok(event) = events.try_recv() {
@@ -135,6 +167,7 @@ fn run_ssh_session(
             return Ok(SessionOutcome {
                 status,
                 established: session_established(transport_confirmed, started.elapsed(), gatetime),
+                killed_zombie: false,
             });
         }
         if !reported_established && started.elapsed() >= gatetime {
@@ -143,18 +176,82 @@ fn run_ssh_session(
                 report_link_restored(host, outage_active);
             }
         }
-        if let Some(event) = recv_link_event(
-            events,
-            ssh_session_poll_interval(started, gatetime, reported_established),
-        ) {
-            transport_confirmed |= matches!(event, LinkEvent::FirstAck);
-            handle_link_event(host, event, outage_active);
+        let mut poll = ssh_session_poll_interval(started, gatetime, reported_established);
+        if zombie_watch && dial_plan.is_some() {
+            poll = poll.min(next_zombie_dial.saturating_duration_since(Instant::now()));
+        }
+        if let Some(event) = recv_link_event(events, poll) {
+            observe_session_link_event(
+                host,
+                event,
+                outage_active,
+                &mut transport_confirmed,
+                &mut zombie_watch,
+            );
             while let Ok(event) = events.try_recv() {
-                transport_confirmed |= matches!(event, LinkEvent::FirstAck);
-                handle_link_event(host, event, outage_active);
+                observe_session_link_event(
+                    host,
+                    event,
+                    outage_active,
+                    &mut transport_confirmed,
+                    &mut zombie_watch,
+                );
+            }
+        }
+        let established = session_established(transport_confirmed, started.elapsed(), gatetime);
+        if zombie_watch
+            && established
+            && let (Some(plan), Some(interval)) = (dial_plan, dial_interval)
+            && Instant::now() >= next_zombie_dial
+        {
+            next_zombie_dial = Instant::now() + interval;
+            if dial(plan) {
+                // A reachable host plus an established, blacked-out probe
+                // proves this transport is a zombie. SIGKILL releases its tty
+                // immediately so the replacement ssh can own it.
+                match child.kill() {
+                    Ok(()) => {
+                        let status = child.wait().context("waiting for killed ssh session")?;
+                        return Ok(SessionOutcome {
+                            status,
+                            established: true,
+                            killed_zombie: true,
+                        });
+                    }
+                    Err(kill_err) => {
+                        if let Some(status) =
+                            child.try_wait().context("polling raced ssh session")?
+                        {
+                            return Ok(SessionOutcome {
+                                status,
+                                established,
+                                killed_zombie: false,
+                            });
+                        }
+                        return Err(kill_err).context("killing zombie ssh session");
+                    }
+                }
             }
         }
     }
+}
+
+fn observe_session_link_event(
+    host: &str,
+    event: LinkEvent,
+    outage_active: &mut bool,
+    transport_confirmed: &mut bool,
+    zombie_watch: &mut bool,
+) {
+    match event {
+        LinkEvent::FirstAck => {
+            *transport_confirmed = true;
+            *zombie_watch = false;
+        }
+        LinkEvent::Blackout(_) => *zombie_watch = true,
+        LinkEvent::Recovered => *zombie_watch = false,
+    }
+    handle_link_event(host, event, outage_active);
 }
 
 fn ssh_session_poll_interval(
@@ -178,6 +275,96 @@ fn ssh_session_poll_interval(
 struct SessionOutcome {
     status: std::process::ExitStatus,
     established: bool,
+    killed_zombie: bool,
+}
+
+pub(super) fn resolve_dial_plan(destination: &str) -> Option<DialPlan> {
+    dial_interval_from_env()?;
+    let output = match ssh_config_query_spec(destination).run_with_timeout(SSH_CONFIG_QUERY_TIMEOUT)
+    {
+        Ok(output) => output,
+        Err(err) => {
+            tracing::debug!(destination, error = %err, "SSH endpoint discovery failed");
+            return None;
+        }
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let plan = parse_dial_plan(&stdout);
+    if plan.is_none() {
+        tracing::debug!(destination, "SSH endpoint is not directly dialable");
+    }
+    plan
+}
+
+fn dial(plan: &DialPlan) -> bool {
+    dial_with_timeout(plan, DIAL_TIMEOUT)
+}
+
+fn dial_with_timeout(plan: &DialPlan, timeout: Duration) -> bool {
+    if timeout.is_zero() {
+        return false;
+    }
+    let Ok(addrs) = (plan.host.as_str(), plan.port).to_socket_addrs() else {
+        return false;
+    };
+    let deadline = Instant::now() + timeout;
+    for addr in addrs {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        if TcpStream::connect_timeout(&addr, remaining).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+pub(super) fn wait_before_retry(
+    dial_plan: Option<&DialPlan>,
+    delay: Duration,
+    stop: &AtomicBool,
+) -> WaitVerdict {
+    let Some(plan) = dial_plan else {
+        super::sleep_interruptibly(delay, stop);
+        return WaitVerdict::AttachNow {
+            network_restored: false,
+        };
+    };
+    let Some(interval) = dial_interval_from_env() else {
+        super::sleep_interruptibly(delay, stop);
+        return WaitVerdict::AttachNow {
+            network_restored: false,
+        };
+    };
+
+    let started = Instant::now();
+    let deadline = started + delay;
+    let mut gate = DialGate::new(started, delay);
+    let mut next_dial = started;
+    loop {
+        let now = Instant::now();
+        let verdict = gate.verdict(now);
+        if !matches!(verdict, WaitVerdict::KeepWaiting) {
+            return verdict;
+        }
+        if stop.load(Ordering::SeqCst) {
+            return WaitVerdict::AttachNow {
+                network_restored: false,
+            };
+        }
+        if now >= next_dial {
+            let timeout = DIAL_TIMEOUT.min(deadline.saturating_duration_since(now));
+            gate.note_dial(dial_with_timeout(plan, timeout));
+            let verdict = gate.verdict(Instant::now());
+            if !matches!(verdict, WaitVerdict::KeepWaiting) {
+                return verdict;
+            }
+            next_dial = Instant::now() + interval;
+        }
+        let wake_at = next_dial.min(deadline);
+        super::sleep_interruptibly(wake_at.saturating_duration_since(Instant::now()), stop);
+    }
 }
 
 /// A finished ssh session counts as established once its SSH transport is
@@ -391,7 +578,8 @@ fn probe_loop(
     events: mpsc::Sender<LinkEvent>,
     stop: Arc<AtomicBool>,
 ) {
-    let mut monitor = LinkMonitor::with_timeout(probe_timeout_from_env());
+    let mut monitor =
+        LinkMonitor::with_timeout(probe_timeout_from_env(), blackout_after_from_env());
     let mut failures = 0u32;
     while !stop.load(Ordering::Relaxed) {
         if !wait_for_control_master(&target, &control_path, &stop) {

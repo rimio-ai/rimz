@@ -6,6 +6,8 @@
 //! `$RIMZ_TEST_SSH_PLAN`. Quoting precision lives in `remote/mod.rs` unit tests;
 //! these prove the CLI surface end to end.
 
+use std::io::Read as _;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 use std::time::{Duration, Instant};
@@ -72,6 +74,7 @@ fn run_exec_with_term(term: &str, colorterm: Option<&str>, infocmp: InfocmpFixtu
     cmd.args(["remote", "connect", "dev-box:query-engine", "--attach"])
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "0")
         .env("TERM", term);
     match colorterm {
@@ -156,8 +159,52 @@ fn is_control_check_invocation(argv: &[String]) -> bool {
         .any(|args| args[0] == "-O" && args[1] == "check")
 }
 
+fn is_config_query_invocation(argv: &[String]) -> bool {
+    argv.iter().any(|arg| arg == "-G")
+}
+
 fn is_main_invocation(argv: &[String]) -> bool {
-    !is_probe_invocation(argv) && !is_control_check_invocation(argv)
+    !is_probe_invocation(argv)
+        && !is_control_check_invocation(argv)
+        && !is_config_query_invocation(argv)
+}
+
+fn main_invocation_count(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.split('\t').map(ToOwned::to_owned).collect::<Vec<_>>())
+        .filter(|argv| is_main_invocation(argv))
+        .count()
+}
+
+fn wait_for_main_invocations(
+    child: &mut std::process::Child,
+    log: &Path,
+    expected: usize,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let count = main_invocation_count(log);
+        if count >= expected {
+            return;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let mut stderr = String::new();
+            if let Some(mut pipe) = child.stderr.take() {
+                let _ = pipe.read_to_string(&mut stderr);
+            }
+            let trace = std::fs::read_to_string(log).unwrap_or_default();
+            panic!(
+                "expected {expected} main ssh invocations within {timeout:?}; saw {count}\ntrace:\n{trace}\nstderr:\n{stderr}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -304,6 +351,7 @@ fn probe_stream_waits_for_control_master_before_starting() {
         .env("RIMZ_TEST_CONTROL_MASTER_READY_DELAY_MS", "100")
         .env("RIMZ_TEST_PROBE_BEFORE_MASTER", &fallback)
         .env("RIMZ_TEST_SSH_SLEEP_MS", "220")
+        .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "20")
         .env("RIMZ_REMOTE_PROBE_TIMEOUT_MS", "20")
         .env("TERM", "xterm-256color")
@@ -352,6 +400,7 @@ fn link_drop_on_an_established_session_reconnects() {
         .env("RIMZ_SSH_BIN", ssh_shim())
         .env("RIMZ_TEST_SSH_LOG", &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "0")
         // Gatetime 0: even the shim's instant session counts as established.
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
@@ -385,6 +434,114 @@ fn link_drop_on_an_established_session_reconnects() {
 }
 
 #[test]
+fn network_transition_accelerates_a_long_reconnect_wait() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let ssh_config = env.project_root.join("ssh-config.txt");
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve dial port");
+    let address = reservation.local_addr().expect("dial address");
+    drop(reservation);
+    std::fs::write(&plan, "255\n0\n").expect("write plan");
+    std::fs::write(
+        &ssh_config,
+        format!("hostname 127.0.0.1\nport {}\n", address.port()),
+    )
+    .expect("write ssh config fixture");
+
+    let mut child = env
+        .rimz()
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
+        .env("RIMZ_SSH_BIN", ssh_shim())
+        .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
+        .env("RIMZ_REMOTE_GATETIME_MS", "0")
+        .env("RIMZ_REMOTE_BACKOFF_MS", "60000")
+        .env("RIMZ_REMOTE_DIAL_MS", "50")
+        .env("RIMZ_REMOTE_PROBE_MS", "0")
+        .env("TERM", "xterm-256color")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn supervised remote connect");
+
+    wait_for_main_invocations(&mut child, &log, 1, Duration::from_secs(2));
+    // The disconnected probe channel leaves the main-session poll on its
+    // 200ms cadence; keep the port closed long enough for the first retry dial.
+    std::thread::sleep(Duration::from_millis(500));
+    let _listener = TcpListener::bind(address).expect("restore reachable endpoint");
+    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(3));
+    let out = child.wait_with_output().expect("wait for clean reattach");
+
+    assert!(
+        out.status.success(),
+        "transition-accelerated reattach exits cleanly\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("network to dev-box restored — reconnecting now"),
+        "the network edge is visible: {stderr}"
+    );
+}
+
+#[test]
+fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let stderr_path = env.project_root.join("stderr.log");
+    let ready = env.project_root.join("control-master-ready");
+    let ssh_config = env.project_root.join("ssh-config.txt");
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind reachable endpoint");
+    let address = listener.local_addr().expect("dial address");
+    std::fs::write(
+        &ssh_config,
+        format!("hostname 127.0.0.1\nport {}\n", address.port()),
+    )
+    .expect("write ssh config fixture");
+    let stderr = std::fs::File::create(&stderr_path).expect("create stderr log");
+
+    let started = Instant::now();
+    let mut child = env
+        .rimz()
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
+        .env("RIMZ_SSH_BIN", ssh_shim())
+        .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
+        .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
+        .env("RIMZ_TEST_PROBE_SILENT_AFTER_ACKS", "2")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "3000")
+        .env("RIMZ_REMOTE_PROBE_MS", "20")
+        .env("RIMZ_REMOTE_PROBE_TIMEOUT_MS", "20")
+        .env("RIMZ_REMOTE_BLACKOUT_MS", "100")
+        .env("RIMZ_REMOTE_GATETIME_MS", "0")
+        .env("RIMZ_REMOTE_DIAL_MS", "50")
+        .env("TERM", "xterm-256color")
+        .stdout(Stdio::null())
+        .stderr(stderr)
+        .spawn()
+        .expect("spawn supervised remote connect");
+
+    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(2));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the replacement attach must beat the parked three-second ssh child"
+    );
+    child
+        .kill()
+        .expect("stop supervisor after observing reattach");
+    child.wait().expect("reap supervisor");
+    let stderr = std::fs::read_to_string(&stderr_path).expect("read stderr log");
+    assert!(
+        stderr.contains(
+            "link to dev-box confirmed dead — host reachable, session silent; reconnecting now"
+        ),
+        "the evidence-backed zombie kill is visible: {stderr}"
+    );
+}
+
+#[test]
 fn local_link_notify_command_receives_lost_and_restored_env() {
     let env = Env::new();
     write_link_notify_command_config(&env);
@@ -399,6 +556,7 @@ fn local_link_notify_command_receives_lost_and_restored_env() {
         .env("RIMZ_TEST_SSH_LOG", &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
+        .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "0")
         .env("RIMZ_REMOTE_GATETIME_MS", "20")
         .env("RIMZ_REMOTE_BACKOFF_MS", "1")

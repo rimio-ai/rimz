@@ -93,6 +93,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     let tunnel_spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
     let guard = spawn_tunnel_supervisor(
         tunnel_spec,
+        remote.target.ssh_destination().destination,
         remote.target.host_display().to_owned(),
         remote.reconnect,
     )?;
@@ -206,6 +207,7 @@ fn remote_output_context(label: &str, bytes: &[u8]) -> String {
 
 fn spawn_tunnel_supervisor(
     spec: rimz::mux::CommandSpec,
+    destination: String,
     host: String,
     reconnect: bool,
 ) -> Result<RemoteWebGuard> {
@@ -216,7 +218,16 @@ fn spawn_tunnel_supervisor(
     let thread_host = host.clone();
     let thread = std::thread::Builder::new()
         .name("rimz-remote-web-tunnel".to_owned())
-        .spawn(move || supervise_tunnel(spec, thread_host, reconnect, thread_stop, thread_child))
+        .spawn(move || {
+            supervise_tunnel(
+                spec,
+                destination,
+                thread_host,
+                reconnect,
+                thread_stop,
+                thread_child,
+            )
+        })
         .context("spawning remote web tunnel supervisor")?;
     Ok(RemoteWebGuard {
         host,
@@ -253,6 +264,7 @@ fn tunnel_step(verdict: rimz::remote::Verdict, reconnect: bool) -> TunnelStep {
 
 fn supervise_tunnel(
     spec: rimz::mux::CommandSpec,
+    destination: String,
     host: String,
     reconnect: bool,
     stop: Arc<AtomicBool>,
@@ -262,6 +274,7 @@ fn supervise_tunnel(
 
     let policy = ReconnectPolicy::from_env();
     let mut reconnect_state = ReconnectState::new(policy);
+    let dial_plan = super::supervisor::resolve_dial_plan(&destination);
     while !stop.load(Ordering::SeqCst) {
         let started = Instant::now();
         let child = match spec
@@ -295,7 +308,14 @@ fn supervise_tunnel(
                     "rimz: web tunnel to {host} lost — reconnecting in {}s (attempt {consecutive_failures})",
                     delay.as_secs(),
                 );
-                super::sleep_interruptibly(delay, &stop);
+                if matches!(
+                    super::supervisor::wait_before_retry(dial_plan.as_ref(), delay, &stop),
+                    rimz::remote::reachability::WaitVerdict::AttachNow {
+                        network_restored: true
+                    }
+                ) {
+                    reconnect_state.network_restored();
+                }
             }
         }
     }

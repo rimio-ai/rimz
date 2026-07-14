@@ -537,6 +537,17 @@ fn reconnect_state_settles_established_sessions_and_failures() {
     );
     assert_eq!(state.consecutive_failures(), 2);
 
+    state.network_restored();
+    assert_eq!(state.consecutive_failures(), 0);
+    assert_eq!(
+        state.settle(Some(SSH_TRANSPORT_EXIT), false),
+        Verdict::Retry {
+            delay: Duration::from_secs(1)
+        }
+    );
+    state.settle_zombie_kill();
+    assert_eq!(state.consecutive_failures(), 0);
+
     assert_eq!(
         state.settle(Some(REMOTE_RIMZ_MISSING_EXIT), true),
         Verdict::Fatal {

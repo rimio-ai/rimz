@@ -23,6 +23,10 @@ fn main() {
         .expect("open trace log");
     file.write_all(line.as_bytes()).expect("write trace line");
 
+    if is_config_query(&argv) {
+        exit_config_query();
+    }
+
     if is_control_check(&argv) {
         exit_control_check();
     }
@@ -58,6 +62,21 @@ fn main() {
     let rest = lines.collect::<Vec<_>>().join("\n");
     std::fs::write(&plan_path, rest).expect("rewrite exit plan");
     std::process::exit(code);
+}
+
+fn is_config_query(argv: &[String]) -> bool {
+    argv.iter().any(|arg| arg == "-G")
+}
+
+fn exit_config_query() -> ! {
+    let Some(path) = env::var_os("RIMZ_TEST_SSH_G_FILE") else {
+        std::process::exit(255);
+    };
+    let output = std::fs::read(path).expect("read ssh -G fixture");
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(&output).expect("write ssh -G fixture");
+    stdout.flush().expect("flush ssh -G fixture");
+    std::process::exit(0);
 }
 
 fn is_control_check(argv: &[String]) -> bool {
@@ -103,6 +122,9 @@ fn ack_probe_stream() {
     let exit_after_acks = env::var("RIMZ_TEST_PROBE_EXIT_AFTER_ACKS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok());
+    let silent_after_acks = env::var("RIMZ_TEST_PROBE_SILENT_AFTER_ACKS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok());
     let mut ack_count = 0u64;
     for line in stdin.lock().lines().map_while(Result::ok) {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
@@ -111,6 +133,9 @@ fn ack_probe_stream() {
         let Some(seq) = value.get("seq").and_then(|seq| seq.as_u64()) else {
             continue;
         };
+        if silent_after_acks.is_some_and(|limit| ack_count >= limit) {
+            continue;
+        }
         writeln!(stdout, r#"{{"v":"rimz.link.v1","seq":{seq}}}"#).expect("write ack");
         stdout.flush().expect("flush ack");
         ack_count = ack_count.saturating_add(1);

@@ -24,6 +24,7 @@ pub const LINK_WINDOW: usize = 30;
 
 const PROBE_INTERVAL_ENV: &str = "RIMZ_REMOTE_PROBE_MS";
 const PROBE_TIMEOUT_ENV: &str = "RIMZ_REMOTE_PROBE_TIMEOUT_MS";
+const BLACKOUT_AFTER_ENV: &str = "RIMZ_REMOTE_BLACKOUT_MS";
 
 /// Link-health tier for notifications, diagnostics, and CLI health output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -283,6 +284,10 @@ pub fn probe_timeout_from_env() -> Duration {
     env_ms(PROBE_TIMEOUT_ENV).unwrap_or(LINK_PROBE_TIMEOUT)
 }
 
+pub fn blackout_after_from_env() -> Duration {
+    env_ms(BLACKOUT_AFTER_ENV).unwrap_or(LINK_BLACKOUT_AFTER)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProbeOutcome {
     Pending { seq: u64, sent_at_ms: u64 },
@@ -461,15 +466,17 @@ pub struct AckOutcome {
 #[derive(Clone, Debug)]
 pub struct LinkMonitor {
     window: ProbeWindow,
+    blackout_after: Duration,
     seen_ack: bool,
     blackout_latched: bool,
     seq: u64,
 }
 
 impl LinkMonitor {
-    pub fn with_timeout(timeout: Duration) -> Self {
+    pub fn with_timeout(timeout: Duration, blackout_after: Duration) -> Self {
         Self {
             window: ProbeWindow::with_timeout(timeout),
+            blackout_after,
             seen_ack: false,
             blackout_latched: false,
             seq: 0,
@@ -524,7 +531,7 @@ impl LinkMonitor {
         }
         self.window.expire(now_ms);
         let blackout_ms = self.window.blackout_ms(now_ms);
-        if blackout_ms >= LINK_BLACKOUT_AFTER.as_millis() as u64 && !self.blackout_latched {
+        if blackout_ms >= self.blackout_after.as_millis() as u64 && !self.blackout_latched {
             self.blackout_latched = true;
             return Some(LinkEvent::Blackout(Duration::from_millis(blackout_ms)));
         }
@@ -688,7 +695,8 @@ mod tests {
 
     #[test]
     fn link_monitor_emits_first_ack_publish_blackout_recovered() {
-        let mut monitor = LinkMonitor::with_timeout(Duration::from_millis(100));
+        let mut monitor =
+            LinkMonitor::with_timeout(Duration::from_millis(100), LINK_BLACKOUT_AFTER);
         let blackout_after_ms = LINK_BLACKOUT_AFTER.as_millis() as u64;
 
         let first_probe = monitor.next_probe(1_000);

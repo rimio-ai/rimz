@@ -1,6 +1,6 @@
 //! SSH remote attach: the `[user@]host:<session-or-path>` target grammar, the
 //! guarded `ssh` command it compiles to, and the autossh-style reconnect
-//! policy.
+//! policy with reachability-accelerated retry waits.
 //!
 //! `rimz remote connect` makes the local rimz a thin SSH launcher and link
 //! supervisor: everything room-shaped — workspace resolution, session birth,
@@ -12,6 +12,7 @@
 pub mod aliases;
 pub mod bandwidth;
 pub mod link;
+pub mod reachability;
 pub mod setup;
 pub mod web;
 
@@ -591,6 +592,18 @@ impl ReconnectState {
 
     pub fn consecutive_failures(&self) -> u32 {
         self.consecutive_failures
+    }
+
+    /// Start a fresh backoff ladder after a confirmed network transition.
+    pub fn network_restored(&mut self) {
+        self.consecutive_failures = 0;
+    }
+
+    /// Settle an intentional zombie-transport kill without classifying its
+    /// signal exit as fatal.
+    pub fn settle_zombie_kill(&mut self) {
+        self.established = true;
+        self.consecutive_failures = 0;
     }
 }
 

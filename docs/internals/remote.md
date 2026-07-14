@@ -20,7 +20,7 @@ The prep command is the fail-fast boundary. Remote RimZ without `rimz web`, Zell
 
 A prep exit of `127` uses the same missing-binary sentinel as terminal attach and points at `rimz remote setup <original-input>`.
 
-The tunnel is a separate SSH child with its own reconnect loop using the same gatetime and backoff as the attach supervisor. `--no-reconnect` applies to that tunnel and exits on a lost established link instead of retrying. `--web-port <port>` pins the local browser origin; without it RimZ hashes the session name into `8300..8399` and scans to the next free port on collision. Ctrl-C stops the foreground RimZ process and the tunnel child.
+The tunnel is a separate SSH child with its own reconnect loop using the same gatetime, backoff, and network-return accelerator as the attach supervisor. `--no-reconnect` applies to that tunnel and exits on a lost established link instead of retrying. `--web-port <port>` pins the local browser origin; without it RimZ hashes the session name into `8300..8399` and scans to the next free port on collision. Ctrl-C stops the foreground RimZ process and the tunnel child.
 
 Remote web uses three SSH connections: prep, token provisioning, and tunnel. The prep connection carries recovery stdin/stderr; token provisioning prints the cached plaintext token from the serving machine or mints and caches one there. Key or agent authentication gives the intended no-prompt flow; password authentication prompts per connection.
 
@@ -29,6 +29,14 @@ Remote web uses three SSH connections: prep, token provisioning, and tunnel. The
 OpenSSH keepalives stay at `ServerAliveInterval=5` and `ServerAliveCountMax=3`, with `Compression=yes` on the same attach transport, so a hard transport loss reaches exit `255` in about fifteen seconds. A session counts as established once the link probe receives its first ack over the same ControlMaster transport, or once it lives past the gatetime fallback (`30s` by default, `RIMZ_REMOTE_GATETIME_MS` in tests); an early exit `255` after that ack reconnects, while an initial auth, host-key, or connect failure stays fatal and does not loop a password prompt.
 
 Established transport drops reconnect with capped exponential backoff (`1s` to `30s`, with `RIMZ_REMOTE_BACKOFF_MS` as the test seam). Clean exit `0` returns to the caller. Missing remote `rimz`, remote room failures, and signal death are fatal.
+
+At supervisor startup, RimZ runs `ssh -G -- <destination>` once and reads the effective `hostname` and `port`. A configured `ProxyJump` or `ProxyCommand` opts out because a direct dial would not test the path SSH uses; a failed query or unparseable output also keeps the timed reconnect policy unchanged. DNS resolution stays per-dial so a network change can supply a fresh address.
+
+During each retry wait, RimZ quietly dials the effective SSH endpoint every second with a two-second TCP timeout. A wait accelerates only when its first dial was unreachable and a later dial succeeds; an endpoint reachable from the first dial honors the full backoff, and failed dials never lengthen it. A confirmed unreachable-to-reachable transition resets the consecutive-failure counter before the next attach.
+
+An established terminal attach also watches a latched probe blackout. The supervisor kills the SSH child and reconnects immediately only when the session established, its probe has stayed silent past the blackout threshold, and a fresh endpoint dial succeeds; these three guards distinguish a suspend/resume or NAT-rebind zombie from an ordinary slow link. Plain-SSH fallback, disabled probes, probe version skew, and proxied SSH configurations retain OpenSSH keepalive death detection. The web tunnel has no probe stream, so it uses accelerated retry waits without zombie detection.
+
+Hidden seams keep this behavior deterministic in tests: `RIMZ_REMOTE_DIAL_MS` changes the dial cadence and `0` disables both endpoint discovery and dialing; `RIMZ_REMOTE_BLACKOUT_MS` changes the probe blackout threshold. `RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_MS`, `RIMZ_REMOTE_PROBE_MS`, and `RIMZ_REMOTE_PROBE_TIMEOUT_MS` tune the existing establishment, retry, and probe clocks.
 
 ## Link Probe
 
@@ -42,7 +50,7 @@ The local probe writes one JSON line every two seconds and the remote ingest com
 
 The schema is versioned as `rimz.link.v1`. The remote ingest writes `<runtime>/<workspace>/link-stats.json` with temp-file-plus-rename cache semantics, including the remote `received_at_ms`, the SSH client identity, and the latest stats. The sidebar reads that file on every enrichment fold. When the probe stream ends, its ingest removes the sidecar if the client identity still names it as the last writer; the 120-second expiry covers hard drops. Stats are fresh for 10 seconds, stale until 120 seconds, and ignored after that. Local rooms never have the file, so their footer is unchanged.
 
-`RIMZ_REMOTE_PROBE_MS=0` disables probing. Probe spawn failures are best-effort; a missing or schema-skewed remote subcommand stops probing without changing the room. The main SSH session is never killed by the probe.
+`RIMZ_REMOTE_PROBE_MS=0` disables probing. Probe spawn failures are best-effort; a missing or schema-skewed remote subcommand stops probing without changing the room. A blackout is only one guard in the zombie decision; the supervisor requires independent endpoint reachability before replacing the main SSH session.
 
 ## Bandwidth Attribution
 

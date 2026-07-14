@@ -38,7 +38,7 @@ rimz remote rm devbox                             # forget one
 
 ## A link that heals itself
 
-A plain `ssh` ends the moment the connection drops. `rimz remote connect` supervises the SSH link instead: when the train wifi cuts out or a laptop sleeps, it reconnects on its own and reattaches to the untouched room on the host, so a flaky connection never costs you your place. Your terminal beeps when the link drops and again when it comes back, and any notification handler fires on the same edges, because a dead link cannot count on the remote sidebar to reach you.
+A plain `ssh` ends the moment the connection drops. `rimz remote connect` supervises the SSH link instead: when the train wifi cuts out or a laptop sleeps, it reconnects on its own and reattaches to the untouched room on the host, so a flaky connection never costs you your place. The link watches for the network's return and normally reattaches within a couple of seconds after the host becomes reachable again. Your terminal beeps when the link drops and again when it comes back, and any notification handler fires on the same edges, because a dead link cannot count on the remote sidebar to reach you.
 
 Two flags tune the posture:
 
