@@ -121,7 +121,14 @@ fn discovery_validates_layout_and_folds_ordered_records() {
     assert_eq!(observation.phase, crate::agents::TurnPhase::Idle);
     assert_eq!(observation.latest_prompt.as_deref(), Some("ping"));
     assert_eq!(observation.context_pct, Some(13));
-    assert!(observation.first_event_at.is_some());
+    assert_eq!(
+        observation.first_event_at,
+        Some("2025-01-01T00:00:01Z".parse().unwrap())
+    );
+    assert_eq!(
+        observation.last_activity,
+        "2025-01-01T00:00:04.300Z".parse().unwrap()
+    );
 
     for (field, invalid) in [
         ("schemaVersion", serde_json::json!("2.0.0")),
@@ -147,13 +154,18 @@ fn discovery_validates_layout_and_folds_ordered_records() {
         );
     }
 
-    metadata["status"] = serde_json::Value::Null;
+    metadata["status"] = serde_json::json!("active");
     std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
     std::fs::write(session_dir.join("messages.jsonl"), b"").unwrap();
-    assert_eq!(
-        session::discover_under(dir.path(), &workspace)[0].status,
-        crate::agents::AgentStatus::Idle
-    );
+    let observation = &session::discover_under(dir.path(), &workspace)[0];
+    assert_eq!(observation.status, crate::agents::AgentStatus::Running);
+    assert_eq!(observation.phase, crate::agents::TurnPhase::Reasoning);
+
+    metadata["status"] = serde_json::Value::Null;
+    std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
+    let observation = &session::discover_under(dir.path(), &workspace)[0];
+    assert_eq!(observation.status, crate::agents::AgentStatus::Idle);
+    assert_eq!(observation.phase, crate::agents::TurnPhase::Idle);
 }
 
 #[cfg(unix)]
@@ -214,6 +226,55 @@ fn invalid_context_metadata_preserves_the_latest_valid_percentage() {
     );
 
     assert_eq!(session::fold_for_test(lines).3, Some(42));
+}
+
+#[test]
+fn approval_resolution_restores_the_latest_remaining_wait() {
+    let lines = concat!(
+        "{\"id\":\"pending-old\",\"timestamp\":\"2025-01-01T00:00:01Z\",\"payload\":{\"type\":\"pending_interaction\",\"interactionType\":\"tool_approval\",\"toolCallId\":\"tool-old\",\"question\":\"Old approval\"}}\n",
+        "{\"id\":\"pending-new\",\"timestamp\":\"2025-01-01T00:00:02Z\",\"payload\":{\"type\":\"pending_interaction\",\"interactionType\":\"tool_approval\",\"toolCallId\":\"tool-new\",\"question\":\"New approval\"}}\n",
+        "{\"id\":\"resolve-new\",\"timestamp\":\"2025-01-01T00:00:03Z\",\"payload\":{\"type\":\"interaction_resolved\",\"toolCallId\":\"tool-new\"}}\n",
+        "{\"id\":\"resolve-unknown\",\"timestamp\":\"2025-01-01T00:00:04Z\",\"payload\":{\"type\":\"interaction_resolved\",\"toolCallId\":\"tool-unknown\"}}\n",
+        "{\"id\":\"resolve-old\",\"timestamp\":\"2025-01-01T00:00:05Z\",\"payload\":{\"type\":\"interaction_resolved\",\"toolCallId\":\"tool-old\"}}\n",
+    );
+
+    let before_new_resolution = lines.find("{\"id\":\"resolve-new\"").unwrap();
+    let newest = session::fold_for_test(&lines[..before_new_resolution]);
+    assert_eq!(newest.0, crate::agents::AgentStatus::Waiting);
+    assert_eq!(newest.2.as_deref(), Some("New approval"));
+    assert_eq!(newest.4, Some("2025-01-01T00:00:02Z".parse().unwrap()));
+
+    let before_unknown_resolution = lines.find("{\"id\":\"resolve-unknown\"").unwrap();
+    let older = session::fold_for_test(&lines[..before_unknown_resolution]);
+    assert_eq!(older.0, crate::agents::AgentStatus::Waiting);
+    assert_eq!(older.2.as_deref(), Some("Old approval"));
+    assert_eq!(older.4, Some("2025-01-01T00:00:01Z".parse().unwrap()));
+
+    let before_old_resolution = lines.find("{\"id\":\"resolve-old\"").unwrap();
+    assert_eq!(
+        session::fold_for_test(&lines[..before_old_resolution]),
+        older
+    );
+
+    let resolved = session::fold_for_test(lines);
+    assert_eq!(resolved.0, crate::agents::AgentStatus::Running);
+    assert_eq!(resolved.1, crate::agents::TurnPhase::Reasoning);
+    assert!(resolved.2.is_none());
+    assert!(resolved.4.is_none());
+}
+
+#[test]
+fn successful_turn_end_retains_unresolved_approval_detail() {
+    let lines = concat!(
+        "{\"id\":\"pending\",\"timestamp\":\"2025-01-01T00:00:01Z\",\"payload\":{\"type\":\"pending_interaction\",\"interactionType\":\"tool_approval\",\"toolCallId\":\"tool\",\"question\":\"Approve tool\"}}\n",
+        "{\"id\":\"turn-end\",\"timestamp\":\"2025-01-01T00:00:02Z\",\"payload\":{\"type\":\"turn_end\",\"executionId\":\"turn\",\"stopReason\":\"end_turn\"}}\n",
+    );
+
+    let folded = session::fold_for_test(lines);
+    assert_eq!(folded.0, crate::agents::AgentStatus::Success);
+    assert_eq!(folded.1, crate::agents::TurnPhase::Idle);
+    assert_eq!(folded.2.as_deref(), Some("Approve tool"));
+    assert_eq!(folded.4, Some("2025-01-01T00:00:01Z".parse().unwrap()));
 }
 
 #[test]

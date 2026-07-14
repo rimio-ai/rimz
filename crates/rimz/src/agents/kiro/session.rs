@@ -526,13 +526,22 @@ fn fold(lines: &str, created_at: Timestamp, metadata_status: Option<&str>) -> Fo
 }
 
 #[cfg(test)]
-pub(super) fn fold_for_test(lines: &str) -> (AgentStatus, TurnPhase, Option<String>, Option<u8>) {
+pub(super) fn fold_for_test(
+    lines: &str,
+) -> (
+    AgentStatus,
+    TurnPhase,
+    Option<String>,
+    Option<u8>,
+    Option<Timestamp>,
+) {
     let folded = fold(lines, Timestamp::UNIX_EPOCH, Some("idle"));
     (
         folded.status,
         folded.phase,
         folded.native_prompt_detail,
         folded.context_pct,
+        folded.waiting_since,
     )
 }
 
