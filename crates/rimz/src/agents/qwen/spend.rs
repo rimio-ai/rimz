@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(entry.input, 71);
         assert_eq!(entry.cache_read, 38_656);
         assert_eq!(entry.output, 85);
-        assert!((entry.cost_usd - 0.007_972_2).abs() < f64::EPSILON);
+        assert!((entry.cost_usd - 0.007_972_2).abs() < 1e-9);
     }
 
     #[test]

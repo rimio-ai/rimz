@@ -814,12 +814,10 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
     };
     let folded = payloads::fold_transcript(&text);
     if let Some(record) = folded.latest_active_assistant_with_usage() {
-        let Some(usage) = record.usage_metadata.as_ref() else {
-            return TranscriptUsage {
-                total_tokens: Some(0),
-                ..TranscriptUsage::default()
-            };
-        };
+        let usage = record
+            .usage_metadata
+            .as_ref()
+            .expect("latest active assistant is filtered to records with usage metadata");
         let prompt_tokens = usage.prompt_token_count;
         return TranscriptUsage {
             total_tokens: usage.live_total().or(Some(0)),

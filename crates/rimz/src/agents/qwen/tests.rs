@@ -202,6 +202,13 @@ fn transcript_tail_and_statusline_supply_context() {
         context.model_display_name.as_deref(),
         Some("DeepSeek V4 Pro")
     );
+    let malformed_context = adapter
+        .observe_context("qwen", &json!({"model":{"display_name":"[DeepSeek]"}}))
+        .unwrap();
+    assert_eq!(
+        malformed_context.model_display_name.as_deref(),
+        Some("[DeepSeek]")
+    );
     assert_eq!(
         context
             .tokens
