@@ -746,6 +746,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
             used_percentage: payload_context_pct(payload, None),
             remaining_percentage: None,
             current_usage,
+            session_usage: None,
         };
         (usage.context_window_size.is_some()
             || usage.used_percentage.is_some()

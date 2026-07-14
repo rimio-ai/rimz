@@ -1,6 +1,6 @@
 {
-  "model": "custom:settings-model",
+  "model": "custom:DeepSeek-V4-Pro-0",
   "reasoningEffort": "medium",
-  "tokenUsage": { "inputTokens": 18007, "outputTokens": 31, "factoryCredits": 0 },
-  "inclusiveTokenUsage": { "inputTokens": 18007, "outputTokens": 31, "factoryCredits": 0 }
+  "tokenUsage": { "inputTokens": 18007, "outputTokens": 31, "cacheCreationTokens": 2400, "cacheReadTokens": 91000, "thinkingTokens": 212, "factoryCredits": 0 },
+  "inclusiveTokenUsage": { "inputTokens": 999999, "outputTokens": 888888, "cacheCreationTokens": 777777, "cacheReadTokens": 666666, "thinkingTokens": 555555, "factoryCredits": 123 }
 }

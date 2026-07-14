@@ -148,13 +148,24 @@ pub(super) fn agent_identity_line(
         .and_then(|cost| cost.total_cost_usd)
         .filter(|usd| *usd >= 0.005)
     {
+        let estimated = ctx(row)
+            .and_then(|context| context.cost.as_ref())
+            .is_some_and(|cost| cost.estimated);
         let usd = cost_rolls.display(&row.id, target, animation_phase);
         let style = if cost_rolls.flashing(&row.id, animation_phase) {
             theme.value_flash()
         } else {
             theme.money_style(Modifier::BOLD)
         };
-        right.push(Span::styled(dollars2(usd), style));
+        let dollars = dollars2(usd);
+        right.push(Span::styled(
+            if estimated {
+                format!("≈{dollars}")
+            } else {
+                dollars
+            },
+            style,
+        ));
     }
 
     // Left cluster: glyph + name + the capability tokens at the dim chrome —

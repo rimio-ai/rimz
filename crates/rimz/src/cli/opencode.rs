@@ -241,6 +241,7 @@ mod tests {
             "sess-1",
             LocalContextRefresh {
                 model_id: Some("gpt-5".to_owned()),
+                model_display_name: None,
                 effort: Some("xhigh".to_owned()),
                 tokens: Some(AgentTokenUsage {
                     context_window_size: Some(1000),
@@ -252,6 +253,7 @@ mod tests {
                         cache_creation_input_tokens: None,
                         cache_read_input_tokens: Some(50),
                     }),
+                    session_usage: None,
                 }),
                 cost: Some(AgentCost {
                     total_cost_usd: Some(0.42),

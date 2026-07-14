@@ -278,6 +278,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
                 state: None,
             },
             unknown_models: BTreeMap::new(),
+            cost_estimated: false,
             replace_entries: false,
         };
     };
@@ -378,6 +379,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             state: None,
         },
         unknown_models,
+        cost_estimated: false,
         replace_entries: false,
     }
 }

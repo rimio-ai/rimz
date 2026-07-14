@@ -262,6 +262,7 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
             used_percentage: Some(82),
             remaining_percentage: Some(18),
             current_usage: None,
+            session_usage: None,
         })),
         ..AgentCard::default()
     };
@@ -276,6 +277,7 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
             used_percentage: Some(40),
             remaining_percentage: Some(60),
             current_usage: None,
+            session_usage: None,
         })),
         ..AgentCard::default()
     };
@@ -311,6 +313,7 @@ fn context_gauge_percent_derives_from_sidecar_usage_when_percentage_is_absent() 
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: Some(56_900),
             }),
+            session_usage: None,
         })),
         ..AgentCard::default()
     };

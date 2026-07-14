@@ -88,6 +88,7 @@ pub(crate) fn parse_qwen_spend(
         origin,
         cursor: SpendCursor::default(),
         unknown_models,
+        cost_estimated: false,
         replace_entries: true,
     }
 }

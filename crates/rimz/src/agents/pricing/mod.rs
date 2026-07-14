@@ -80,6 +80,10 @@ pub struct Pricing {
     /// Multiplier applied when the provider records a fast/priority turn.
     #[serde(default = "one")]
     pub fast_multiplier: f64,
+    /// Maximum accepted input/context tokens when the pricing source publishes
+    /// an exact positive integer capacity.
+    #[serde(default)]
+    pub max_input_tokens: Option<u64>,
 }
 
 impl Pricing {
@@ -96,6 +100,7 @@ impl Pricing {
             cache_read_above_200k: None,
             long_context_threshold: None,
             fast_multiplier: 1.0,
+            max_input_tokens: None,
         }
     }
 
@@ -227,6 +232,13 @@ impl PriceBook {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(key.to_owned(), result);
         result
+    }
+
+    /// Resolve only an exact stored model id. Capacity and locally estimated
+    /// spend use this conservative path so a related model cannot lend another
+    /// selector its limits or rates.
+    pub fn exact_price(&self, model: &str) -> Option<Pricing> {
+        self.entries.get(model.trim()).copied()
     }
 
     /// Longest stored key that is a boundary-prefix of the normalized lookup.
@@ -368,7 +380,7 @@ const RETRY_BACKOFF_SECS: u64 = 60 * 60;
 /// 24-hour cap while the same unknown set persists.
 const UNKNOWN_REFRESH_TTL_SECS: u64 = 30 * 60;
 const UNKNOWN_BACKOFF_CAP_SECS: u64 = 24 * 60 * 60;
-const PRICING_CACHE_SCHEMA: u32 = 2;
+const PRICING_CACHE_SCHEMA: u32 = 3;
 
 /// On-disk pricing cache at persistent shared `pricing-cache.json`. Sorted maps
 /// keep the file diff-stable.
@@ -965,6 +977,20 @@ mod tests {
     }
 
     #[test]
+    fn exact_lookup_does_not_borrow_a_boundary_prefix() {
+        let book = PriceBook::from_litellm_json(
+            r#"{"exact-model":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"max_input_tokens":123456}}"#,
+        );
+
+        assert_eq!(
+            book.exact_price(" exact-model ").unwrap().max_input_tokens,
+            Some(123_456)
+        );
+        assert!(book.price("exact-model-via-gateway").is_some());
+        assert!(book.exact_price("exact-model-via-gateway").is_none());
+    }
+
+    #[test]
     fn assembly_uses_builtins_as_fallback_under_litellm_and_models_dev_fill() {
         let cache = PricingCache {
             litellm: BTreeMap::from([(
@@ -1016,6 +1042,7 @@ mod tests {
                     output: 15e-6,
                     cache_read: 3e-7,
                     cache_create: 3.75e-6,
+                    max_input_tokens: Some(777_000),
                     ..Pricing::empty()
                 },
             )]),
@@ -1028,6 +1055,7 @@ mod tests {
 
         assert!((price.input - 3e-6).abs() < f64::EPSILON);
         assert!((price.output - 15e-6).abs() < f64::EPSILON);
+        assert_eq!(price.max_input_tokens, Some(777_000));
     }
 
     #[test]
@@ -1067,12 +1095,12 @@ mod tests {
     }
 
     #[test]
-    fn stale_pricing_cache_schema_drops_cached_tables() {
+    fn schema_two_pricing_cache_drops_rows_without_runtime_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pricing-cache.json");
         std::fs::write(
             &path,
-            r#"{"schema":1,"litellm":{"rimz-test-stale-model":{"input":999.0,"output":999.0}}}"#,
+            r#"{"schema":2,"litellm":{"rimz-test-stale-model":{"input":999.0,"output":999.0}}}"#,
         )
         .unwrap();
 

@@ -1095,7 +1095,7 @@ fn refresh_transcript_context_prices_model_from_shared_cache() {
     .unwrap();
     std::fs::write(
         &pricing_cache_path,
-        r#"{"schema":2,"litellm":{"gpt-9.9-nova":{"input":0.000001,"output":0.000002,"cache_read":0.0000005}}}"#,
+        r#"{"schema":3,"litellm":{"gpt-9.9-nova":{"input":0.000001,"output":0.000002,"cache_read":0.0000005}}}"#,
     )
     .unwrap();
 

@@ -1,6 +1,6 @@
 use crate::agents::{
-    AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, AgentTurnError,
-    RateLimitWindow, TurnErrorClass,
+    AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage,
+    AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
 use crate::agents::{AgentState, AgentStatus};
 use crate::config::{AnimationSpec, ScrollbarMode};
@@ -240,6 +240,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
         exceeds_200k_tokens: Some(false),
         cost: Some(AgentCost {
             total_cost_usd: Some(1.27),
+            estimated: false,
             total_duration_ms: Some(12 * 60 * 1_000),
             total_api_duration_ms: None,
             total_lines_added: Some(214),
@@ -258,6 +259,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
                 cache_creation_input_tokens: Some(6_600),
                 cache_read_input_tokens: Some(68_200),
             }),
+            session_usage: None,
         }),
         rate_limits: Some(AgentRateLimits {
             windows: vec![

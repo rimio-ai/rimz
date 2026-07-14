@@ -5,6 +5,24 @@ pub fn display_model(id: &str) -> String {
     prettify_model_slug(strip_date_suffix(id.trim()))
 }
 
+/// Structurally render Factory's legacy custom selector
+/// `custom:<display-name-slug>-<zero-based-index>`. The terminal decimal is
+/// protocol bookkeeping, not part of the model name. This is presentation
+/// only: callers must resolve configuration separately before treating the
+/// selector as a canonical pricing identity.
+pub fn display_factory_custom_selector(id: &str) -> Option<String> {
+    let selector = id.trim().strip_prefix("custom:")?;
+    let (display_slug, index) = selector.rsplit_once('-')?;
+    if display_slug.is_empty()
+        || index.is_empty()
+        || !index.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let display = prettify_model_slug(display_slug);
+    (!display.is_empty()).then_some(display)
+}
+
 /// Drop a trailing `-YYYYMMDD` 8-digit date stamp, leaving the base model id.
 fn strip_date_suffix(id: &str) -> &str {
     match id.rsplit_once('-') {
@@ -73,5 +91,19 @@ mod tests {
         assert_eq!(display_model("gpt-5-codex-20260101"), "GPT 5 Codex");
         assert_eq!(display_model("deepseek-v4-pro"), "DeepSeek V4 Pro");
         assert_eq!(display_model("mystery-model"), "Mystery Model");
+    }
+
+    #[test]
+    fn factory_custom_selector_drops_only_the_terminal_index() {
+        assert_eq!(
+            display_factory_custom_selector("custom:DeepSeek-V4-Pro-0").as_deref(),
+            Some("DeepSeek V4 Pro")
+        );
+        assert_eq!(
+            display_factory_custom_selector("custom:Model-2-12").as_deref(),
+            Some("Model 2")
+        );
+        assert!(display_factory_custom_selector("custom:Model-x").is_none());
+        assert!(display_factory_custom_selector("gpt-5").is_none());
     }
 }

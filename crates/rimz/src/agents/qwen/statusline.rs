@@ -78,6 +78,7 @@ impl StatuslinePayload {
             used_percentage: clamp_pct(self.context_window.used_percentage),
             remaining_percentage: clamp_pct(self.context_window.remaining_percentage),
             current_usage: None,
+            session_usage: None,
         });
         let cost = (self.metrics.files.total_lines_added.is_some()
             || self.metrics.files.total_lines_removed.is_some())

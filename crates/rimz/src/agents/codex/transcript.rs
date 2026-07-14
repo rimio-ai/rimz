@@ -63,6 +63,7 @@ pub fn refresh_transcript_context(
     let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint, &prices);
     Some(LocalContextRefresh {
         model_id,
+        model_display_name: None,
         effort: usage.effort,
         tokens,
         cost,
@@ -158,6 +159,7 @@ pub(super) fn transcript_enrichment(
             used_percentage: None,
             remaining_percentage: None,
             current_usage,
+            session_usage: None,
         })
     } else {
         None

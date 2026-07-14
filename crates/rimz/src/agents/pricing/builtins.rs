@@ -12,6 +12,14 @@ use super::{Pricing, overrides};
 
 /// Overlay guaranteed fallback model prices, overwriting the embedded snapshot.
 pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
+    let embedded_capacities = entries
+        .iter()
+        .filter_map(|(model, pricing)| {
+            pricing
+                .max_input_tokens
+                .map(|capacity| (model.clone(), capacity))
+        })
+        .collect::<HashMap<_, _>>();
     entries.insert(
         "claude-opus-4-5".to_owned(),
         p(5e-6, 25e-6, 6.25e-6, 0.5e-6),
@@ -188,6 +196,12 @@ pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
             ..glm_base
         },
     );
+
+    for (model, capacity) in embedded_capacities {
+        if let Some(pricing) = entries.get_mut(&model) {
+            pricing.max_input_tokens.get_or_insert(capacity);
+        }
+    }
 }
 
 fn p(input: f64, output: f64, cache_create: f64, cache_read: f64) -> Pricing {
@@ -222,6 +236,7 @@ mod tests {
                 cache_read: 999.0,
                 cache_create: 999.0,
                 fast_multiplier: 999.0,
+                max_input_tokens: Some(400_000),
                 ..Pricing::empty()
             },
         )]);
@@ -234,6 +249,7 @@ mod tests {
         assert_eq!(entries["cursor-auto"].output, 6e-6);
         assert_eq!(entries["cursor-auto"].cache_create, 1.25e-6);
         assert_eq!(entries["cursor-auto"].cache_read, 0.25e-6);
+        assert_eq!(entries["gpt-5"].max_input_tokens, Some(400_000));
         assert_eq!(entries["gpt-5.6-sol"].input, 5e-6);
         assert_eq!(entries["gpt-5.6-sol"].output, 30e-6);
         assert_eq!(entries["gpt-5.6-sol"].cache_create, 6.25e-6);

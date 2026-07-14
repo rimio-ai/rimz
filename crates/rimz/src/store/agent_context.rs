@@ -27,7 +27,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::{AgentContext, AgentTurnError};
-use crate::agents::{AgentCost, AgentTokenUsage, LocalContextRefresh, TranscriptStat};
+use crate::agents::{
+    AgentCost, AgentSessionUsage, AgentTokenUsage, LocalContextRefresh, TranscriptStat,
+};
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::store::atomic;
 use crate::store::paths::RuntimePaths;
@@ -203,8 +205,8 @@ pub fn new_record(kind: &str, agent_id: &str, context: AgentContext) -> AgentCon
 }
 
 /// Merge transcript-derived local context into a sidecar record. Local refresh
-/// owns tokens, cost, model id, observed reasoning effort, and the transcript
-/// stat gate; a tail that misses effort preserves the prior value.
+/// owns tokens, cost, model identity/display, observed reasoning effort, and
+/// the transcript stat gate; a tail that misses effort preserves the prior value.
 pub fn merge_local_context(
     runtime: &RuntimePaths,
     kind: &str,
@@ -216,6 +218,7 @@ pub fn merge_local_context(
     let mut record = read_one_unlocked(runtime, kind, agent_id)
         .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
     let prior_model_id = record.context.model_id.clone();
+    let prior_model_display_name = record.context.model_display_name.clone();
     let prior_context_window = record
         .context
         .tokens
@@ -223,15 +226,38 @@ pub fn merge_local_context(
         .and_then(|tokens| tokens.context_window_size);
     let prior_tokens = record.context.tokens.clone();
     let refresh_model_id = refresh.model_id.clone();
+    let refresh_model_display_name = refresh.model_display_name.clone();
+    let droid_model_changed = kind == "droid"
+        && (refresh_model_id != prior_model_id
+            || refresh_model_display_name != prior_model_display_name);
     record.context.source = kind.to_owned();
-    if refresh.model_id.is_some() {
+    if kind == "droid" {
+        // A parsed Droid snapshot owns the effective selector mapping. Replacing
+        // with `None` clears stale canonical identity after an unresolved model
+        // switch instead of silently pricing the new selector as the old one.
         record.context.model_id = refresh.model_id;
+        record.context.model_display_name = refresh.model_display_name;
+    } else if refresh.model_id.is_some() {
+        record.context.model_id = refresh.model_id;
+        if refresh.model_display_name.is_some() {
+            record.context.model_display_name = refresh.model_display_name;
+        }
+    } else if refresh.model_display_name.is_some() {
+        record.context.model_display_name = refresh.model_display_name;
     }
     if refresh.effort.is_some() {
         record.context.effort = refresh.effort;
     }
     let mut refresh_tokens = refresh.tokens;
-    preserve_established_tokens(prior_tokens.as_ref(), &mut refresh_tokens);
+    if kind == "droid" {
+        merge_droid_local_tokens(
+            prior_tokens.as_ref(),
+            &mut refresh_tokens,
+            droid_model_changed,
+        );
+    } else {
+        preserve_established_tokens(prior_tokens.as_ref(), &mut refresh_tokens);
+    }
     record.context.tokens = refresh_tokens;
     preserve_cached_context_window(
         kind,
@@ -242,7 +268,11 @@ pub fn merge_local_context(
     );
     // A missing local cost means the latest transcript tail could not be priced,
     // not that the already-spent session returned to zero.
-    if refresh.cost.is_some() {
+    if kind == "droid" {
+        // Exact pricing is re-derived with every parsed snapshot. An unknown or
+        // newly unpriced model clears the earlier local estimate.
+        record.context.cost = refresh.cost;
+    } else if refresh.cost.is_some() {
         record.context.cost = refresh.cost;
         record.estimated_cost.owns_context_cost = false;
     }
@@ -454,6 +484,7 @@ fn merge_observed_tokens(prior: &mut Option<AgentTokenUsage>, incoming: AgentTok
     if let Some(current_usage) = incoming.current_usage {
         target.current_usage = Some(current_usage);
     }
+    merge_session_usage(&mut target.session_usage, incoming.session_usage);
     *target != before
 }
 
@@ -465,6 +496,7 @@ fn merge_observed_cost(
     let target = prior.get_or_insert_with(AgentCost::default);
     let before = target.clone();
     target.total_cost_usd = Some(total_cost_usd);
+    target.estimated = incoming.estimated;
     if incoming.total_duration_ms.is_some() {
         target.total_duration_ms = incoming.total_duration_ms;
     }
@@ -478,6 +510,65 @@ fn merge_observed_cost(
         target.total_lines_removed = incoming.total_lines_removed;
     }
     *target != before
+}
+
+fn merge_droid_local_tokens(
+    prior: Option<&AgentTokenUsage>,
+    incoming: &mut Option<AgentTokenUsage>,
+    model_changed: bool,
+) {
+    let Some(prior) = prior else {
+        return;
+    };
+    let Some(incoming) = incoming.as_mut() else {
+        let mut preserved = prior.clone();
+        if model_changed {
+            preserved.context_window_size = None;
+        }
+        *incoming = Some(preserved);
+        return;
+    };
+    if !model_changed && incoming.context_window_size.is_none() {
+        incoming.context_window_size = prior.context_window_size;
+    }
+    if incoming.used_percentage.is_none() {
+        incoming.used_percentage = prior.used_percentage;
+    }
+    if incoming.remaining_percentage.is_none() {
+        incoming.remaining_percentage = prior.remaining_percentage;
+    }
+    if incoming.current_usage.is_none() {
+        incoming.current_usage = prior.current_usage.clone();
+    }
+    merge_session_usage(&mut incoming.session_usage, prior.session_usage.clone());
+}
+
+fn merge_session_usage(
+    target: &mut Option<AgentSessionUsage>,
+    incoming: Option<AgentSessionUsage>,
+) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    let target = target.get_or_insert_with(AgentSessionUsage::default);
+    target.input_tokens = monotonic_count(target.input_tokens, incoming.input_tokens);
+    target.output_tokens = monotonic_count(target.output_tokens, incoming.output_tokens);
+    target.cache_creation_input_tokens = monotonic_count(
+        target.cache_creation_input_tokens,
+        incoming.cache_creation_input_tokens,
+    );
+    target.cache_read_input_tokens = monotonic_count(
+        target.cache_read_input_tokens,
+        incoming.cache_read_input_tokens,
+    );
+    target.thinking_tokens = monotonic_count(target.thinking_tokens, incoming.thinking_tokens);
+}
+
+fn monotonic_count(prior: Option<u64>, incoming: Option<u64>) -> Option<u64> {
+    match (prior, incoming) {
+        (Some(prior), Some(incoming)) => Some(prior.max(incoming)),
+        (prior, incoming) => prior.or(incoming),
+    }
 }
 
 fn preserve_established_tokens(

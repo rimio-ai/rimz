@@ -60,6 +60,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
             .as_ref()
             .and_then(|usage| usage.model_id.clone())
             .or_else(|| ctx.model_hint.map(ToOwned::to_owned)),
+        model_display_name: None,
         effort: None,
         tokens: usage
             .and_then(|usage| usage.current_usage)

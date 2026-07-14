@@ -355,6 +355,7 @@ mod tests {
             "sess-1",
             LocalContextRefresh {
                 model_id: Some("gpt-5".to_owned()),
+                model_display_name: None,
                 effort: Some("xhigh".to_owned()),
                 tokens: Some(transcript_tokens()),
                 cost: Some(AgentCost {
@@ -388,6 +389,7 @@ mod tests {
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: Some(50),
             }),
+            session_usage: None,
         }
     }
 

@@ -209,11 +209,15 @@ pub struct AgentAccount {
     pub credentials_updated_at_ms: Option<u64>,
 }
 
-/// Cumulative spend for the session, as the agent reports it.
+/// Cumulative spend for the session. Provider-reported totals are exact;
+/// locally priced token counters are marked as estimates so display can retain
+/// them without feeding enforcement or aggregate-spend decisions.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentCost {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub estimated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -224,11 +228,11 @@ pub struct AgentCost {
     pub total_lines_removed: Option<u64>,
 }
 
-/// Context-window token accounting. `used_percentage` is the authoritative
-/// gauge value the statusline reports directly (0..=100). The statusline's
-/// `total_input_tokens` / `total_output_tokens` are not captured: since Claude
-/// Code v2.1.132 they read "tokens in the current context window", which
-/// `current_usage` already carries component by component.
+/// Token accounting from two deliberately separate scopes. `used_percentage`
+/// and `current_usage` describe the current context window; `session_usage`
+/// carries cumulative lifetime counters when a provider exposes those without
+/// exposing context occupancy. Only the current-window fields drive gauges and
+/// compaction decisions.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentTokenUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -243,6 +247,10 @@ pub struct AgentTokenUsage {
     /// went. Absent before the first API call and right after `/compact`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_usage: Option<AgentCurrentUsage>,
+    /// Cumulative session-lifetime counters. These never establish context
+    /// occupancy and stay out of [`Self::used_tokens`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_usage: Option<AgentSessionUsage>,
 }
 
 impl AgentTokenUsage {
@@ -258,6 +266,51 @@ impl AgentTokenUsage {
                 + usage.cache_creation_input_tokens.unwrap_or(0)
                 + usage.cache_read_input_tokens.unwrap_or(0),
         )
+    }
+}
+
+/// Cumulative token counters for one provider session. Cache creation is
+/// billable input and thinking is generated output; cache reads remain a
+/// separate figure and stay outside the headline total, matching the shared
+/// `◇ ↘ ↗ ◌` token grammar.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSessionUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_tokens: Option<u64>,
+}
+
+impl AgentSessionUsage {
+    pub fn displayed_input_tokens(&self) -> u64 {
+        self.input_tokens
+            .unwrap_or(0)
+            .saturating_add(self.cache_creation_input_tokens.unwrap_or(0))
+    }
+
+    pub fn displayed_output_tokens(&self) -> u64 {
+        self.output_tokens
+            .unwrap_or(0)
+            .saturating_add(self.thinking_tokens.unwrap_or(0))
+    }
+
+    pub fn displayed_total_tokens(&self) -> u64 {
+        self.displayed_input_tokens()
+            .saturating_add(self.displayed_output_tokens())
+    }
+
+    pub fn cache_read_tokens(&self) -> u64 {
+        self.cache_read_input_tokens.unwrap_or(0)
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.displayed_total_tokens() == 0 && self.cache_read_tokens() == 0
     }
 }
 

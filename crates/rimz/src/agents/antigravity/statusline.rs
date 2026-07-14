@@ -150,6 +150,7 @@ impl StatuslinePayload {
             used_percentage: clamp_pct(self.context_window.used_percentage),
             remaining_percentage: clamp_pct(self.context_window.remaining_percentage),
             current_usage,
+            session_usage: None,
         });
         let plan = non_empty(self.plan_tier);
         let account_id = non_empty(self.email);

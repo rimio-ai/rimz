@@ -92,6 +92,7 @@ pub(crate) fn live_card_sessions(snapshot: &SidebarSnapshot) -> Vec<LiveCardSpen
                 .as_ref()
                 .or(agent.context.as_ref())
                 .and_then(|context| context.cost.as_ref())
+                .filter(|cost| !cost.estimated)
                 .and_then(|cost| cost.total_cost_usd)?;
             if !usd.is_finite() || usd < 0.0 {
                 return None;
@@ -413,6 +414,36 @@ mod tests {
         };
 
         apply_live_today_spend(&mut snapshot, &workspace);
+        assert_eq!(snapshot.today_spend_live_usd, Some(0.0));
+    }
+
+    #[test]
+    fn estimated_card_cost_is_omitted_from_live_workspace_spend() {
+        let now = Timestamp::from_second(1_750_000_000).unwrap();
+        let project = Path::new("/repo/main");
+        let mut row = cost_row_at("estimated", Some(12.0), Some(now), project, None);
+        row.as_agent_mut()
+            .unwrap()
+            .context
+            .as_mut()
+            .unwrap()
+            .cost
+            .as_mut()
+            .unwrap()
+            .estimated = true;
+        let mut snapshot =
+            SidebarSnapshot::build(WorkspaceId::from_project_root(project), Vec::new(), now)
+                .with_project_root(Some(project.to_path_buf()));
+        snapshot.agents = vec![agent_state(
+            "estimated",
+            project,
+            &transcript("estimated"),
+            now,
+        )];
+        snapshot.worktree_groups = vec![worktree_group(project, vec![row])];
+
+        assert!(live_card_sessions(&snapshot).is_empty());
+        apply_live_today_spend(&mut snapshot, &WorkspaceSpendingCache::default());
         assert_eq!(snapshot.today_spend_live_usd, Some(0.0));
     }
 }

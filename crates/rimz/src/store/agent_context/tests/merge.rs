@@ -1,9 +1,114 @@
 use super::*;
 use crate::agents::context::WindowSource;
 use crate::agents::{
-    AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, AgentTurnError,
-    LocalContextRefresh, RateLimitWindow, TranscriptStat, TurnErrorClass,
+    AgentCost, AgentCurrentUsage, AgentRateLimits, AgentSessionUsage, AgentTokenUsage,
+    AgentTurnError, LocalContextRefresh, RateLimitWindow, TranscriptStat, TurnErrorClass,
 };
+
+#[test]
+fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
+    let (_dir, runtime) = runtime();
+    let observed_at = observed_at();
+    let mut prior = new_record("droid", "sess-1", empty_context("droid", observed_at));
+    prior.context.model_id = Some("deepseek-v4-pro".to_owned());
+    prior.context.model_display_name = Some("DeepSeek V4 Pro".to_owned());
+    prior.context.cost = Some(AgentCost {
+        total_cost_usd: Some(1.25),
+        estimated: true,
+        ..AgentCost::default()
+    });
+    prior.context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(128_000),
+        used_percentage: Some(42),
+        remaining_percentage: Some(58),
+        current_usage: Some(current_usage(10, 2, 3, 40)),
+        session_usage: Some(AgentSessionUsage {
+            input_tokens: Some(100),
+            output_tokens: Some(20),
+            cache_creation_input_tokens: Some(30),
+            cache_read_input_tokens: Some(400),
+            thinking_tokens: Some(5),
+        }),
+    });
+    let refresh = LocalContextRefresh {
+        model_id: Some("deepseek-v4-pro".to_owned()),
+        model_display_name: Some("DeepSeek V4 Pro".to_owned()),
+        effort: Some("high".to_owned()),
+        tokens: Some(AgentTokenUsage {
+            context_window_size: Some(200_000),
+            used_percentage: None,
+            remaining_percentage: None,
+            current_usage: None,
+            session_usage: Some(AgentSessionUsage {
+                input_tokens: Some(90),
+                output_tokens: Some(25),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: Some(390),
+                thinking_tokens: Some(7),
+            }),
+        }),
+        cost: None,
+        turn_error: None,
+        turn_complete: None,
+        plan_proposed: None,
+        turn_interrupted: None,
+        transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
+        transcript_stat: Some(stat()),
+    };
+
+    merge_local_context(
+        &runtime,
+        "droid",
+        "sess-1",
+        Some(prior),
+        refresh,
+        observed_at,
+    )
+    .unwrap();
+    let merged = read_one(&runtime, "droid", "sess-1").unwrap();
+    let tokens = merged.context.tokens.as_ref().unwrap();
+    assert_eq!(tokens.context_window_size, Some(200_000));
+    assert_eq!(tokens.used_percentage, Some(42));
+    assert_eq!(tokens.current_usage, Some(current_usage(10, 2, 3, 40)));
+    let session = tokens.session_usage.as_ref().unwrap();
+    assert_eq!(session.input_tokens, Some(100));
+    assert_eq!(session.output_tokens, Some(25));
+    assert_eq!(session.cache_creation_input_tokens, Some(30));
+    assert_eq!(session.cache_read_input_tokens, Some(400));
+    assert_eq!(session.thinking_tokens, Some(7));
+    assert!(
+        merged.context.cost.is_none(),
+        "missing exact pricing clears an estimate"
+    );
+
+    let unresolved_model = LocalContextRefresh {
+        model_id: None,
+        model_display_name: Some("Other Model".to_owned()),
+        effort: None,
+        tokens: None,
+        cost: None,
+        turn_error: None,
+        turn_complete: None,
+        plan_proposed: None,
+        turn_interrupted: None,
+        transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
+        transcript_stat: Some(stat()),
+    };
+    merge_local_context(
+        &runtime,
+        "droid",
+        "sess-1",
+        Some(merged),
+        unresolved_model,
+        observed_at,
+    )
+    .unwrap();
+    let unresolved = read_one(&runtime, "droid", "sess-1").unwrap();
+    let tokens = unresolved.context.tokens.unwrap();
+    assert_eq!(tokens.context_window_size, None);
+    assert_eq!(tokens.used_percentage, Some(42));
+    assert!(tokens.session_usage.is_some());
+}
 
 struct MergeCase {
     name: &'static str,
@@ -238,6 +343,7 @@ fn observed_context_merge_preserves_fields_and_keeps_cost_monotonic() {
         used_percentage: None,
         remaining_percentage: None,
         current_usage: None,
+        session_usage: None,
     });
     assert!(merge_observed(&runtime, "pi", "sess-1", partial_tokens).unwrap());
     let merged = read_one(&runtime, "pi", "sess-1").unwrap();
@@ -328,6 +434,7 @@ fn prior_exact_codex_window(observed_at: Timestamp) -> AgentContextRecord {
 fn full_local_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         model_id: Some("gpt-5.5".to_owned()),
+        model_display_name: None,
         effort: Some("xhigh".to_owned()),
         tokens: Some(tokens(
             1_000,
@@ -353,6 +460,7 @@ fn full_local_refresh() -> LocalContextRefresh {
 fn unpriced_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         model_id: Some("gpt-5".to_owned()),
+        model_display_name: None,
         effort: Some("high".to_owned()),
         tokens: Some(tokens(1_000, 10, 90, None)),
         cost: None,
@@ -382,6 +490,7 @@ fn unknown_effort_refresh() -> LocalContextRefresh {
 fn fresh_zero_codex_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         model_id: None,
+        model_display_name: None,
         effort: Some("high".to_owned()),
         tokens: Some(codex_tokens(
             codex_default_window(),
@@ -400,6 +509,7 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
 fn fallback_window_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         model_id: None,
+        model_display_name: None,
         effort: Some("high".to_owned()),
         tokens: Some(tokens(codex_default_window(), 10, 90, None)),
         cost: None,
@@ -522,6 +632,7 @@ fn tokens(
         used_percentage: Some(used_percentage),
         remaining_percentage: Some(remaining_percentage),
         current_usage,
+        session_usage: None,
     }
 }
 
@@ -536,6 +647,7 @@ fn codex_tokens(
         used_percentage: None,
         remaining_percentage: None,
         current_usage,
+        session_usage: None,
     }
 }
 
@@ -612,6 +724,7 @@ fn observed_context() -> AgentContext {
                 cache_creation_input_tokens: Some(4),
                 cache_read_input_tokens: Some(30),
             }),
+            session_usage: None,
         }),
         rate_limits: Some(AgentRateLimits {
             windows: vec![RateLimitWindow {

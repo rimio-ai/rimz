@@ -73,6 +73,10 @@ pub(super) fn parse(json: &str) -> HashMap<String, Pricing> {
                 cache_read_above_200k: num("cache_read_input_token_cost_above_200k_tokens"),
                 long_context_threshold: None,
                 fast_multiplier: fast,
+                max_input_tokens: fields
+                    .get("max_input_tokens")
+                    .and_then(Value::as_u64)
+                    .filter(|tokens| *tokens > 0),
             },
         );
     }
@@ -108,6 +112,7 @@ mod tests {
             "gpt-x": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
                        "cache_read_input_token_cost": 1e-7,
                        "input_cost_per_token_above_200k_tokens": 3e-6,
+                       "max_input_tokens": 128000,
                        "provider_specific_entry": {"fast": 2.5}},
             "no-output": {"input_cost_per_token": 1e-6},
             "default-cache": {"input_cost_per_token": 4e-6, "output_cost_per_token": 5e-6},
@@ -121,6 +126,7 @@ mod tests {
         assert!((p.cache_read - 1e-7).abs() < 1e-18);
         assert!((p.cache_create - 1.25e-6).abs() < 1e-18);
         assert_eq!(p.input_above_200k, Some(3e-6));
+        assert_eq!(p.max_input_tokens, Some(128_000));
         assert!(p.cache_read_explicit);
         assert_eq!(p.fast_multiplier, 2.5);
 
@@ -129,6 +135,23 @@ mod tests {
         assert!((p.cache_create - 5e-6).abs() < 1e-18);
         assert!(!p.cache_read_explicit);
         assert_eq!(p.fast_multiplier, 1.0);
+        assert_eq!(p.max_input_tokens, None);
+    }
+
+    #[test]
+    fn parse_ignores_zero_fractional_and_non_numeric_capacity() {
+        let table = parse(
+            r#"{
+              "zero":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"max_input_tokens":0},
+              "fractional":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"max_input_tokens":12.5},
+              "string":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"max_input_tokens":"128000"}
+            }"#,
+        );
+        assert!(
+            table
+                .values()
+                .all(|pricing| pricing.max_input_tokens.is_none())
+        );
     }
 
     #[test]

@@ -234,7 +234,7 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
 
     assert_eq!(
         observation.launch.model.as_deref(),
-        Some("custom:settings-model")
+        Some("custom:DeepSeek-V4-Pro-0")
     );
     assert_eq!(observation.launch.effort.as_deref(), Some("medium"));
     assert_eq!(observation.context_pct, None);
@@ -263,6 +263,85 @@ fn final_answer_and_identity_are_version_gated_and_bounded() {
         Some("custom:fixture-model")
     );
     assert_eq!(fallback.launch.effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn settings_telemetry_keeps_root_cumulative_categories_out_of_context_truth() {
+    let (_dir, path) = transcript_fixture();
+    let refresh = transcript::telemetry(&path, None).unwrap();
+    let usage = refresh.telemetry.session_usage.unwrap();
+
+    assert_eq!(
+        refresh.telemetry.model.as_deref(),
+        Some("custom:DeepSeek-V4-Pro-0")
+    );
+    assert_eq!(usage.input_tokens, Some(18_007));
+    assert_eq!(usage.output_tokens, Some(31));
+    assert_eq!(usage.cache_creation_input_tokens, Some(2_400));
+    assert_eq!(usage.cache_read_input_tokens, Some(91_000));
+    assert_eq!(usage.thinking_tokens, Some(212));
+    assert_eq!(usage.displayed_input_tokens(), 20_407);
+    assert_eq!(usage.displayed_output_tokens(), 243);
+    assert_eq!(usage.displayed_total_tokens(), 20_650);
+    assert_eq!(usage.cache_read_tokens(), 91_000);
+    assert_eq!(
+        transcript::telemetry(&refresh.settings_path, Some(&refresh.stat)),
+        None,
+        "the settings snapshot itself is the stat-gated watched path"
+    );
+}
+
+#[test]
+fn local_refresh_prices_exact_builtins_as_estimates_without_inventing_a_gauge() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript_path = dir.path().join("priced.jsonl");
+    let settings_path = dir.path().join("priced.settings.json");
+    std::fs::write(
+        &transcript_path,
+        format!(
+            "{{\"type\":\"session_start\",\"version\":2,\"cwd\":{}}}\n",
+            serde_json::to_string(&dir.path().to_string_lossy()).unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &settings_path,
+        r#"{"model":"gpt-5","reasoningEffort":"high","tokenUsage":{"inputTokens":100000,"outputTokens":20000,"cacheCreationTokens":10000,"cacheReadTokens":30000,"thinkingTokens":5000}}"#,
+    )
+    .unwrap();
+    let pricing_cache = dir.path().join("pricing-cache.json");
+    std::fs::write(
+        &pricing_cache,
+        r#"{"schema":3,"litellm":{"gpt-5":{"input":0.00000125,"output":0.00001,"cache_read":0.000000125,"cache_create":0.00000125,"cache_read_explicit":true,"fast_multiplier":1.0,"max_input_tokens":400000}}}"#,
+    )
+    .unwrap();
+    let transcript_text = transcript_path.to_string_lossy().into_owned();
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "priced",
+        model_hint: None,
+        current_transcript_path: Some(&transcript_text),
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing_cache,
+    };
+
+    let refresh = DroidAdapter
+        .local_context_refresh(RefreshTrigger::Hook("Stop"), &ctx)
+        .unwrap();
+    let tokens = refresh.tokens.unwrap();
+    assert_eq!(refresh.model_id.as_deref(), Some("gpt-5"));
+    assert_eq!(tokens.context_window_size, Some(400_000));
+    assert!(tokens.used_percentage.is_none());
+    assert!(tokens.remaining_percentage.is_none());
+    assert!(tokens.current_usage.is_none());
+    assert_eq!(tokens.session_usage.unwrap().thinking_tokens, Some(5_000));
+    let cost = refresh.cost.unwrap();
+    assert!(cost.estimated);
+    assert!(cost.total_cost_usd.unwrap() > 0.0);
+    assert_eq!(
+        refresh.transcript_path.as_deref(),
+        Some(settings_path.to_string_lossy().as_ref())
+    );
 }
 
 #[test]

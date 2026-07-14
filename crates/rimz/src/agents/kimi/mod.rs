@@ -864,6 +864,7 @@ fn refresh_wire_path(
                     .as_ref()
                     .and_then(|record| record.usage.input_cache_read),
             }),
+            session_usage: None,
         })
     } else {
         // No usage record in the bounded tail. Emit the shared fresh sentinel —
@@ -876,12 +877,14 @@ fn refresh_wire_path(
             used_percentage: None,
             remaining_percentage: None,
             current_usage: Some(AgentCurrentUsage::default()),
+            session_usage: None,
         })
     };
     let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
     let cost = super::spending::session_cost_usd(&KimiAdapter, session_id, path, &prices);
     Some(LocalContextRefresh {
         model_id,
+        model_display_name: None,
         effort: attribution.thinking_effort,
         tokens,
         cost,

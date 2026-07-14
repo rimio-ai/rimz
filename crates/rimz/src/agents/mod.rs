@@ -66,8 +66,8 @@ use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
-    TurnErrorClass,
+    AgentSessionUsage, AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext,
+    SubagentObservation, TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe, ResetCredits};
@@ -432,6 +432,7 @@ pub struct LocalContextRefreshCtx<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalContextRefresh {
     pub model_id: Option<String>,
+    pub model_display_name: Option<String>,
     pub effort: Option<String>,
     pub tokens: Option<AgentTokenUsage>,
     pub cost: Option<AgentCost>,

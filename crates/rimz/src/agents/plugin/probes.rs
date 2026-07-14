@@ -120,6 +120,7 @@ pub(super) fn spend(
             state: response.cursor,
         },
         unknown_models: Default::default(),
+        cost_estimated: false,
         replace_entries: false,
     }
 }

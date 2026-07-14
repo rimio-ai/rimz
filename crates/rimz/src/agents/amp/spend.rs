@@ -142,6 +142,7 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
         origin: None,
         cursor: SpendCursor::default(),
         unknown_models,
+        cost_estimated: false,
         replace_entries: true,
     }
 }

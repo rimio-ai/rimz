@@ -480,6 +480,12 @@ impl AgentCard {
             || self
                 .context
                 .as_ref()
+                .and_then(|context| context.tokens.as_ref())
+                .and_then(|tokens| tokens.session_usage.as_ref())
+                .is_some_and(|usage| !usage.is_zero())
+            || self
+                .context
+                .as_ref()
                 .and_then(|context| context.cost.as_ref())
                 .and_then(|cost| cost.total_cost_usd)
                 .is_some_and(|cost| cost > 0.0)

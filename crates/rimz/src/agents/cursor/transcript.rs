@@ -51,6 +51,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     let markers = turn_markers_at(&path, stat)?;
     Some(LocalContextRefresh {
         model_id: ctx.model_hint.map(ToOwned::to_owned),
+        model_display_name: None,
         effort: None,
         tokens: None,
         cost: None,

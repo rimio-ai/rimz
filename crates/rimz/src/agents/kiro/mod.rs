@@ -338,6 +338,7 @@ impl AgentAdapter for KiroAdapter {
         }
         Some(LocalContextRefresh {
             model_id: None,
+            model_display_name: None,
             effort: None,
             tokens: None,
             cost: None,

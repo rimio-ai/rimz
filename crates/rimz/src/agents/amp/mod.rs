@@ -429,12 +429,14 @@ impl AgentAdapter for AmpAdapter {
                 cache_creation_input_tokens: Some(usage.cache_write),
                 cache_read_input_tokens: Some(usage.cache_read),
             }),
+            session_usage: None,
         });
         let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
         let (entries, _) = spend::entries_from_thread(&parsed, &prices);
         let cost_usd = entries.iter().map(|entry| entry.cost_usd).sum::<f64>();
         Some(LocalContextRefresh {
             model_id,
+            model_display_name: None,
             effort: None,
             tokens,
             cost: (cost_usd > 0.0).then_some(AgentCost {

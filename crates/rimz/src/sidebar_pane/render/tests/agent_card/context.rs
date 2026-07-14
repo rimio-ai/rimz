@@ -4,6 +4,95 @@ use crate::sidebar_pane::render::theme::Component;
 use ratatui::text::Span;
 
 #[test]
+fn droid_card_renders_resolved_custom_model_session_usage_and_estimated_cost() {
+    let mut droid = agent(
+        "droid-1",
+        "droid",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("build telemetry"),
+    );
+    droid.model = Some("custom:DeepSeek-V4-Pro-0".to_owned());
+    let mut context = claude_context(fixed_now());
+    context.source = "droid".to_owned();
+    context.session_name = None;
+    context.model_id = Some("custom:DeepSeek-V4-Pro-0".to_owned());
+    context.model_display_name = Some("DeepSeek V4 Pro".to_owned());
+    context.effort = Some("high".to_owned());
+    context.cost = Some(AgentCost {
+        total_cost_usd: Some(0.42),
+        estimated: true,
+        ..Default::default()
+    });
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(200_000),
+        session_usage: Some(AgentSessionUsage {
+            input_tokens: Some(12_000),
+            output_tokens: Some(4_000),
+            cache_creation_input_tokens: Some(3_000),
+            cache_read_input_tokens: Some(30_000),
+            thinking_tokens: Some(1_000),
+        }),
+        ..Default::default()
+    });
+    context.rate_limits = None;
+    droid.context = Some(context);
+
+    let rendered = snapshot_to_screen(&snapshot_with(vec![droid]), 58, 17);
+
+    assert!(
+        rendered.contains("DeepSeek V4 Pro · high · 200k"),
+        "the resolved identity and configured capacity render together:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("◇ 20k ↘ 15k ↗ 5k ◌ 30k"),
+        "session-lifetime categories use the shared token grammar:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("≈$0.42"),
+        "locally priced spend stays visibly approximate:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("custom:DeepSeek-V4-Pro-0")
+            && !rendered.contains('▣')
+            && !rendered.contains('▤')
+            && !rendered.contains('%'),
+        "a cumulative-only Droid reading implies neither raw identity nor context fill:\n{rendered}"
+    );
+}
+
+#[test]
+fn unresolved_droid_selector_is_friendly_without_claiming_capacity_or_cost() {
+    let mut droid = agent(
+        "droid-1",
+        "droid",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("build telemetry"),
+    );
+    droid.model = Some("custom:DeepSeek-V4-Pro-0".to_owned());
+
+    let rendered = snapshot_to_screen(&snapshot_with(vec![droid]), 52, 17);
+
+    assert!(rendered.contains("DeepSeek V4 Pro"), "{rendered}");
+    let identity = rendered
+        .lines()
+        .find(|line| line.contains("droid"))
+        .unwrap_or_else(|| panic!("Droid identity line:\n{rendered}"));
+    assert!(
+        !rendered.contains("custom:")
+            && !rendered.contains("-0")
+            && !rendered.contains('▣')
+            && !rendered.contains('%')
+            && !identity.contains('$')
+            && !identity.contains("200k"),
+        "presentation-only fallback establishes neither capacity nor dollars:\n{rendered}"
+    );
+}
+
+#[test]
 fn agent_context_line_renders_compaction_markers() {
     for (count, expected) in [
         (0, None),
@@ -290,6 +379,7 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
             cache_creation_input_tokens: None,
             cache_read_input_tokens: Some(56_900),
         }),
+        session_usage: None,
     });
     codex.context = Some(context);
     let snapshot = snapshot_with(vec![codex]);
@@ -675,6 +765,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
             cache_creation_input_tokens: Some(10_000),
             cache_read_input_tokens: Some(10_000),
         }),
+        session_usage: None,
     });
     claude.context = Some(context);
     let bar_styles = bar_styles_for(claude);

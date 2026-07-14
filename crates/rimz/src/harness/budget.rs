@@ -362,12 +362,11 @@ fn waiver_step(
 }
 
 pub fn total_cost_usd(agent: &AgentState) -> Option<f64> {
-    agent
-        .context
-        .as_ref()?
-        .cost
-        .as_ref()?
-        .total_cost_usd
+    let cost = agent.context.as_ref()?.cost.as_ref()?;
+    if cost.estimated {
+        return None;
+    }
+    cost.total_cost_usd
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
 }
 

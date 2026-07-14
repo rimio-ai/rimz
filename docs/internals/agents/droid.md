@@ -27,7 +27,11 @@ Droid 0.170.0's stock TUI starts an internal `droid exec --input-format stream-j
 
 Every hook's `transcript_path` is authoritative carry-forward metadata. For Droid 0.170.0, RimZ parses only a `session_start.version = 2` JSONL source: complete history follows the physically latest visible message through its `parentId` chain, while incremental streaming emits newly appended visible assistant records in physical order because a suffix lacks its ancestors. Visible user and assistant text blocks reach history; thinking, tool/document content, `llm_only` context, `user_only` hook audit rows, malformed records, and unknown versions stay out. `Stop` tail-reads the latest visible assistant answer for durable transcript, supervised result, streaming, and message-reply capture.
 
-The sibling `<session-id>.settings.json` snapshot supplies raw `model` and `reasoningEffort` at hook cadence, with the newest visible assistant's `modelId` and effort as fallback. Session-wide `tokenUsage`, `inclusiveTokenUsage`, and Factory credits have no current-context denominator or authoritative USD conversion, so context usage, token composition, live cost, smart-compaction state, and spend remain unset. The README's Live grade therefore stays none even though identity enrichment is available.
+The sibling `<session-id>.settings.json` snapshot supplies raw `model`, `reasoningEffort`, and cumulative root-session `tokenUsage` at hook cadence, with the newest visible assistant's `modelId` and effort as identity fallback. RimZ preserves input, output, cache creation, cache read, and thinking as session-lifetime counters; the card folds cache creation into displayed input and thinking into displayed output, leaves cache reads separate, and ignores `inclusiveTokenUsage` and Factory credits. These counters do not establish current-context occupancy, so Droid shows the cumulative `◇ ↘ ↗ ◌` line without a `▣`/`▤` gauge, context percentage, or smart-compaction input.
+
+For a raw `custom:` selector, the sidecar reads only `id`, `displayName`, `model`, and positive `maxContextLimit` from Factory's user, user-local, project, and project-local settings hierarchy. An exact stable `id` resolves at the highest precedence; legacy entries resolve only when the reconstructed `custom:<display-name-with-spaces-as-hyphens>-<zero-based-index>` selector is unique, with the legacy user `config.json` used only when the current catalogue is absent. Malformed, ambiguous, stale, or incomplete mappings abstain. Unresolved selectors still receive a structural friendly display label, but no canonical pricing identity, capacity, or dollars.
+
+The settings snapshot becomes the sidecar's watched telemetry path after its first hook/tick refresh. File-watch refreshes normally surface writes below the producer cadence; later hooks and producer ticks remain the durability backstop when Factory writes just after `Stop` or a wakeup is missed.
 
 ## Account and balance
 
@@ -35,7 +39,9 @@ Droid exposes no machine-readable local auth, plan, quota, or account-usage surf
 
 ## Cost
 
-Droid exposes no authoritative transcript USD billing field. The adapter has no spend parser and declares both live cost and account spend unsupported.
+Droid exposes no authoritative transcript USD billing field. When a non-custom model or proven custom mapping has an exact price-book row, RimZ prices the cumulative root counters locally and renders the session-card value as `≈$`; fuzzy family matches never establish a rate. A positive configured `maxContextLimit` supplies capacity first, then exact price metadata supplies `max_input_tokens` when available.
+
+The settings parser is replace-style and live-session-only. Droid exposes no historical store discovery, so these estimates remain outside provider/workspace aggregates, `rimz stats`, and dollar-budget enforcement; account spend stays unsupported. A missing or changed exact price clears the earlier card estimate.
 
 ## Launch, resume, fork, and permissions
 

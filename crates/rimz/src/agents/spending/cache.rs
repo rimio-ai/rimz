@@ -145,6 +145,9 @@ pub struct SpendParse {
     pub origin: Option<PathBuf>,
     pub cursor: SpendCursor,
     pub unknown_models: BTreeMap<String, u64>,
+    /// The parser locally priced provider token counters rather than reading
+    /// authoritative USD from the provider.
+    pub cost_estimated: bool,
     /// Replace this file's cached entries and unknown-model set instead of
     /// appending. Rewindable transcripts use this after an authoritative cold fold.
     pub replace_entries: bool,

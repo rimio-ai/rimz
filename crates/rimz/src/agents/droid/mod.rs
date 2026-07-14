@@ -1,18 +1,20 @@
 //! Factory Droid native-hook adapter.
 //!
-//! Droid's stock `settings.json` hooks expose basic session, turn, tool, and
-//! compaction lifecycle. The wire carries no structured asks, error outcome,
-//! subagent identity, usage, cost, or account surface, so those capabilities
-//! remain explicitly absent.
+//! Droid's stock hooks expose basic session, turn, tool, and compaction
+//! lifecycle. Its version-pinned private session files add cumulative usage,
+//! model, and effort enrichment; the wire still carries no structured asks,
+//! error outcome, subagent identity, current-context fill, or account surface.
 
+mod config;
 mod install;
 mod payloads;
 mod process;
+mod spend;
 mod transcript;
 
 pub use self::process::{HookProcessDisposition, hook_process_disposition};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -28,10 +30,10 @@ use super::descriptor::{
 use super::hook_types::SessionSource;
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::{
-    AgentAdapter, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, SessionOrigin, TranscriptMessage, TranscriptPage,
-    TranscriptPosition, classify_agent_hook, optional_payload_string, read_transcript_lines,
-    sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, ClassifiedHook, HookInstallPreview,
+    HookInstallReport, HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx,
+    RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
+    classify_agent_hook, optional_payload_string, read_transcript_lines, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
@@ -57,8 +59,8 @@ static DROID_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // structured prompt event RimZ can route or answer.
         native_ask_ui: true,
         rich_context: false,
-        transcript_tail_context: false,
-        context_usage: false,
+        transcript_tail_context: true,
+        context_usage: true,
         account_spend: false,
         subagents: false,
         background_tasks: false,
@@ -149,20 +151,23 @@ const DROID_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::ContextUsage,
-        ConcernCoverage::Unsupported {
-            reason: "v2 settings counters are cumulative and expose no context denominator",
+        ConcernCoverage::Partial {
+            via: "v2 session settings tokenUsage plus exact configured/model capacity",
+            gap: "session-lifetime counters do not expose current-context fill or composition",
         },
     ),
     (
         IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Unsupported {
-            reason: "v2 settings expose Factory credits without authoritative USD conversion",
+        ConcernCoverage::Partial {
+            via: "v2 session tokenUsage priced through an exact canonical model id",
+            gap: "local USD is estimated rather than authoritative provider billing",
         },
     ),
     (
         IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "statusLine is user presentation, not an observation API",
+        ConcernCoverage::Partial {
+            via: "v2 session settings plus typed custom-model configuration",
+            gap: "no current-context fill/composition, authoritative USD, account, or quota metadata",
         },
     ),
     (
@@ -323,6 +328,17 @@ impl AgentAdapter for DroidAdapter {
         ]
     }
 
+    #[cfg(test)]
+    fn spend_fixture(&self) -> Option<super::SpendFixture> {
+        Some(super::SpendFixture {
+            session_id: "droid-conformance",
+            file_name: "droid-conformance.settings.json",
+            body: super::SpendFixtureBody::Jsonl(
+                r#"{"model":"gpt-5","tokenUsage":{"inputTokens":100,"outputTokens":20,"cacheCreationTokens":10,"cacheReadTokens":30,"thinkingTokens":5}}"#,
+            ),
+        })
+    }
+
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         Ok(None)
     }
@@ -430,6 +446,83 @@ impl AgentAdapter for DroidAdapter {
 
     fn moves_on(&self, event_name: &str) -> bool {
         matches!(event_name, "Stop" | "UserPromptSubmit")
+    }
+
+    fn local_context_refresh(
+        &self,
+        _trigger: RefreshTrigger<'_>,
+        ctx: &LocalContextRefreshCtx<'_>,
+    ) -> Option<LocalContextRefresh> {
+        let source = ctx
+            .current_transcript_path
+            .or(ctx.prior_transcript_path)
+            .map(Path::new)?;
+        let refresh = transcript::telemetry(source, ctx.prior_transcript_stat)?;
+        let raw_model = refresh.telemetry.model.as_deref().map(str::trim);
+        let resolved = raw_model
+            .filter(|model| model.starts_with("custom:"))
+            .and_then(|model| {
+                let user_settings = droid_settings_path().ok()?;
+                config::resolve_custom_model(model, &refresh.settings_path, &user_settings)
+            });
+        let model_id = match raw_model {
+            Some(model) if !model.starts_with("custom:") && !model.is_empty() => {
+                Some(model.to_owned())
+            }
+            _ => resolved.as_ref().map(|model| model.model_id.clone()),
+        };
+        let model_display_name = resolved
+            .as_ref()
+            .map(|model| model.display_name.clone())
+            .or_else(|| raw_model.and_then(super::model_display::display_factory_custom_selector));
+        let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
+        let context_window_size = resolved
+            .as_ref()
+            .and_then(|model| model.max_context_limit)
+            .or_else(|| {
+                model_id
+                    .as_deref()
+                    .and_then(|model| prices.exact_price(model))
+                    .and_then(|price| price.max_input_tokens)
+            });
+        let tokens = (context_window_size.is_some() || refresh.telemetry.session_usage.is_some())
+            .then_some(AgentTokenUsage {
+                context_window_size,
+                used_percentage: None,
+                remaining_percentage: None,
+                current_usage: None,
+                session_usage: refresh.telemetry.session_usage,
+            });
+        let cost =
+            super::spending::session_cost_usd(self, ctx.agent_id, &refresh.settings_path, &prices);
+        Some(LocalContextRefresh {
+            model_id,
+            model_display_name,
+            effort: refresh.telemetry.reasoning_effort,
+            tokens,
+            cost,
+            turn_error: None,
+            turn_complete: None,
+            plan_proposed: None,
+            turn_interrupted: None,
+            transcript_path: Some(refresh.settings_path.to_string_lossy().into_owned()),
+            transcript_stat: Some(refresh.stat),
+        })
+    }
+
+    fn session_transcript(&self, _session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        let prior = prior_path?;
+        let settings = transcript::settings_path(prior)?;
+        settings.is_file().then_some(settings)
+    }
+
+    fn parse_spend(
+        &self,
+        path: &Path,
+        _resume: Option<&super::spending::SpendCursor>,
+        prices: &super::PriceBook,
+    ) -> super::spending::SpendParse {
+        spend::parse(path, prices)
     }
 
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {

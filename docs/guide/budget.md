@@ -72,7 +72,7 @@ Adjustments are runtime state under RimZ's own state directory, never edits to y
 
 The enforcement is small enough to hold in your head:
 
-1. The room's sidebar process re-checks every scope on its regular tick, against the same transcript-derived spend that [Token Insight](./insight.md#how-the-numbers-are-calculated) reads, plus each card's live cost.
+1. The room's sidebar process re-checks every scope on its regular tick, against the same transcript-derived spend that [Token Insight](./insight.md#how-the-numbers-are-calculated) reads, plus each card's authoritative live cost. A card value prefixed `≈$` is a local estimate and remains visible without entering any cap or park decision.
 2. When a running turn crosses a cap, RimZ presses Esc in that agent's pane (the same interrupt you would type) and records the park.
 3. The card reads `⏸` with the reason. A crossed room or account cap also turns the cockpit or provider row alarm-red and explains itself as `$50.21 of $50/day`.
 

@@ -196,6 +196,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
                 state: serde_json::to_value(&state).ok(),
             },
             unknown_models: BTreeMap::new(),
+            cost_estimated: false,
             replace_entries: false,
         };
     };
@@ -299,6 +300,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>, prices: &PriceB
             state: serde_json::to_value(&state).ok(),
         },
         unknown_models,
+        cost_estimated: false,
         replace_entries: false,
     }
 }

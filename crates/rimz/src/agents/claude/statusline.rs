@@ -431,6 +431,7 @@ impl StatuslinePayload {
     pub(crate) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
         let cost = non_empty(AgentCost {
             total_cost_usd: self.cost.total_cost_usd,
+            estimated: false,
             total_duration_ms: self.cost.total_duration_ms,
             total_api_duration_ms: self.cost.total_api_duration_ms,
             total_lines_added: self.cost.total_lines_added,
@@ -441,6 +442,7 @@ impl StatuslinePayload {
             used_percentage: clamp_pct(self.context_window.used_percentage),
             remaining_percentage: clamp_pct(self.context_window.remaining_percentage),
             current_usage: current_usage(self.context_window.current_usage),
+            session_usage: None,
         });
         let windows: Vec<RateLimitWindow> = [
             rate_window(self.rate_limits.five_hour, CLAUDE_FIVE_HOUR_MINS),

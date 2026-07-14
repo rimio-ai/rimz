@@ -298,10 +298,12 @@ mod tests {
         let pathless = new_record("codex", "sess-b", context("codex"));
         let mut copilot = new_record("copilot", "sess-g", context("copilot"));
         copilot.transcript_path = Some("/t/g.jsonl".to_owned());
+        let mut droid = new_record("droid", "sess-d", context("droid"));
+        droid.transcript_path = Some("/t/d.settings.json".to_owned());
         let mut claude = new_record("claude", "sess-c", context("claude"));
         claude.transcript_path = Some("/t/c.jsonl".to_owned());
 
-        let targets = transcript_targets(&[with_path, pathless, copilot, claude]);
+        let targets = transcript_targets(&[with_path, pathless, copilot, droid, claude]);
         assert_eq!(
             targets,
             BTreeMap::from([
@@ -311,6 +313,14 @@ mod tests {
                         kind: "codex".to_owned(),
                         session_id: "sess-a".to_owned(),
                         model_hint: Some("gpt-5.5-codex".to_owned()),
+                    }])
+                ),
+                (
+                    PathBuf::from("/t/d.settings.json"),
+                    BTreeSet::from([WatchTarget {
+                        kind: "droid".to_owned(),
+                        session_id: "sess-d".to_owned(),
+                        model_hint: None,
                     }])
                 ),
                 (

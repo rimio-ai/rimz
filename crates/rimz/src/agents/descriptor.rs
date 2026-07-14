@@ -657,8 +657,8 @@ mod tests {
         assert!(!droid.capabilities.blocking_asks);
         assert!(droid.capabilities.native_ask_ui);
         assert!(!droid.capabilities.rich_context);
-        assert!(!droid.capabilities.transcript_tail_context);
-        assert!(!droid.capabilities.context_usage);
+        assert!(droid.capabilities.transcript_tail_context);
+        assert!(droid.capabilities.context_usage);
         assert!(!droid.capabilities.account_spend);
         assert!(!droid.capabilities.subagents);
         assert!(!droid.capabilities.background_tasks);

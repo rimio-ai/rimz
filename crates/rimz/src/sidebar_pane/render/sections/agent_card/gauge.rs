@@ -296,8 +296,8 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
     ])
 }
 
-/// The card's context line — `▤` the filled part of the window (integer
-/// magnitudes) with the last-activity age pinned right. `▤` is
+/// The card's stats line with the last-activity age pinned right. Current-window
+/// truth retains the `▤` form: `▤` is
 /// `input + cache_write + cache_read` of the latest API call — exactly the
 /// numerator the `▣` meter scales — so the bar's percent and this absolute
 /// figure read as one measurement, and the `▤` head wears the bar's severity
@@ -306,8 +306,10 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// from cache, `◍` newly written to it, `↘` fresh input, `↗` output generated
 /// (which joins the window next turn) — each marker in its bar-segment color,
 /// so the line doubles as the bar's legend. The `◇` totals stay the cockpit /
-/// fleet-store / subagent vocabulary — this line answers "what is in the
-/// window", not "what did today burn". The rich statusline blob is preferred;
+/// fleet-store / subagent vocabulary. When current-window composition is
+/// unavailable but the provider exposes cumulative session counters, the line
+/// instead uses that shared `◇ ↘ ↗ ◌` grammar without implying occupancy. The
+/// rich statusline blob is preferred;
 /// the row-level [`SidebarRow::call_split`] stands in when the blob carries no
 /// split. Falls
 /// back to the bare `▤` rollup total when neither source has a split (Claude
@@ -358,6 +360,18 @@ pub(super) fn context_tokens_line(
             cache_write,
             input,
             output,
+            tokens_int,
+        ));
+    } else if let Some(usage) = ctx(row)
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.session_usage.as_ref())
+    {
+        left.extend(token_breakdown_spans(
+            theme,
+            usage.displayed_total_tokens(),
+            usage.displayed_input_tokens(),
+            usage.displayed_output_tokens(),
+            usage.cache_read_tokens(),
             tokens_int,
         ));
     } else if let Some(split) = row.call_split() {

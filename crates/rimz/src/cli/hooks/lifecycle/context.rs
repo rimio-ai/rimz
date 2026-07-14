@@ -302,6 +302,7 @@ pub(super) fn supplement_realtime_cost(
 
     let refresh = refresh.get_or_insert_with(|| rimz::agents::LocalContextRefresh {
         model_id: None,
+        model_display_name: prior.and_then(|record| record.context.model_display_name.clone()),
         effort: prior.and_then(|record| record.context.effort.clone()),
         tokens: prior.and_then(|record| record.context.tokens.clone()),
         cost: None,

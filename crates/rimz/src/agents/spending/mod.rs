@@ -406,6 +406,7 @@ pub fn session_cost_usd(
         .sum::<f64>();
     (total > 0.0).then_some(AgentCost {
         total_cost_usd: Some(total),
+        estimated: parsed.cost_estimated,
         ..AgentCost::default()
     })
 }

@@ -465,8 +465,18 @@ mod tests {
 
         let droid = agent_cells(&matrix, "droid");
         assert_eq!(count(&droid, MatrixCellState::Ok), 5);
-        assert_eq!(count(&droid, MatrixCellState::Partial), 0);
-        assert_eq!(count(&droid, MatrixCellState::Absent), 11);
+        assert_eq!(count(&droid, MatrixCellState::Partial), 3);
+        assert_eq!(count(&droid, MatrixCellState::Absent), 8);
+        assert_eq!(
+            agent_labels(&matrix, "droid", MatrixCellState::Partial),
+            ["usage", "live$", "rich"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "droid", MatrixCellState::Absent),
+            [
+                "perm", "plan", "ask", "answer", "sub", "bg", "spend", "remote"
+            ]
+        );
 
         let kiro = agent_cells(&matrix, "kiro");
         assert_eq!(count(&kiro, MatrixCellState::Ok), 0);

@@ -148,7 +148,9 @@ fn group_thousands(n: u64) -> String {
 /// `Opus 4.8` form whatever the vendor's catalog punctuation.
 pub(super) fn model_label(display: &str) -> String {
     let cleaned = strip_window_qualifier(display);
-    if looks_like_slug(&cleaned) {
+    if let Some(custom) = crate::agents::model_display::display_factory_custom_selector(&cleaned) {
+        custom
+    } else if looks_like_slug(&cleaned) {
         crate::agents::model_display::display_model(&cleaned)
     } else {
         cleaned.replace('-', " ")

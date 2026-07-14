@@ -129,6 +129,7 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
             state: serde_json::to_value(state).ok(),
         },
         unknown_models,
+        cost_estimated: false,
         replace_entries: false,
     }
 }

@@ -35,6 +35,26 @@ fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
 }
 
 #[test]
+fn estimated_card_cost_cannot_trigger_budget_enforcement() {
+    let now = Timestamp::from_second(200).expect("timestamp");
+    let mut estimated = agent(99.0, AgentStatus::Idle, Some(now));
+    estimated
+        .context
+        .as_mut()
+        .and_then(|context| context.cost.as_mut())
+        .unwrap()
+        .estimated = true;
+    let mut ledger = BudgetLedger::new("1".parse().expect("spec"));
+
+    assert_eq!(total_cost_usd(&estimated), None);
+    assert!(matches!(
+        evaluate(&estimated, &mut ledger, now, &TimeZone::UTC, None),
+        BudgetVerdict::Under { spend_usd, .. } if spend_usd == 0.0
+    ));
+    assert!(ledger.parked.is_none());
+}
+
+#[test]
 fn spend_summary_uses_ledger_cap_window_and_park_projection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());
