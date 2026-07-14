@@ -403,6 +403,17 @@ fn pi_rate_limit_wire_is_tolerant_and_compatible() {
         assert_eq!(context.model_id.as_deref(), Some("kept"));
         assert!(context.rate_limits.is_none());
     }
+
+    let context = normalized_context(json!({
+        "total_cost_usd": "malformed sibling",
+        "rate_limits": [{"used_percentage": 50}]
+    }))
+    .unwrap();
+    assert_eq!(
+        context.rate_limits.unwrap().windows[0].used_percentage,
+        Some(50),
+        "a malformed sibling field must not discard independently valid windows"
+    );
 }
 
 #[test]

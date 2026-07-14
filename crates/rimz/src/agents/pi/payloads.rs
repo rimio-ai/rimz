@@ -133,12 +133,16 @@ where
     D: Deserializer<'de>,
 {
     let value = Value::deserialize(deserializer)?;
-    Ok(value
+    Ok(rate_limits_from_value(&value))
+}
+
+fn rate_limits_from_value(value: &Value) -> Vec<PiRateLimitWindow> {
+    value
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(PiRateLimitWindow::from_value)
-        .collect())
+        .collect()
 }
 
 fn field<'a>(
@@ -173,10 +177,18 @@ fn timestamp_from_value(value: &Value) -> Option<Timestamp> {
     }
 }
 
-/// Tolerant parse: any non-conforming payload reads as the empty default —
-/// enrichment, never an error.
+/// Tolerant parse: non-conforming typed fields read as the empty default while
+/// independently valid rate-limit windows survive sibling drift.
 pub(crate) fn parse_payload(payload: &Value) -> PiHookPayload {
-    serde_json::from_value(payload.clone()).unwrap_or_default()
+    let rate_limits = payload
+        .get("rate_limits")
+        .or_else(|| payload.get("rateLimits"))
+        .map(rate_limits_from_value)
+        .unwrap_or_default();
+    serde_json::from_value(payload.clone()).unwrap_or_else(|_| PiHookPayload {
+        rate_limits,
+        ..PiHookPayload::default()
+    })
 }
 
 /// Whether an `agent_end` payload reports a dead turn: an explicit error or
