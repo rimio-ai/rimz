@@ -572,7 +572,7 @@ fn spawn_width_sync(config: &ServeConfig, runtime: &RuntimePaths) {
                     &lock,
                     Duration::from_millis(20),
                     5,
-                    &fresh,
+                    fresh,
                 ) {
                     crate::store::single_flight::Coalesced::Shared(()) => return,
                     crate::store::single_flight::Coalesced::Produce(guard) => {
