@@ -206,7 +206,7 @@ fn consumer_fold_inputs_stamp_ignores_unrelated_runtime_churn() {
 }
 
 #[test]
-fn consumer_fold_inputs_stamp_tracks_filtered_spending_and_budget_files() {
+fn consumer_fold_inputs_stamp_tracks_filtered_dynamic_files() {
     let fixture = StampFixture::new();
     for path in [
         fixture
@@ -216,6 +216,10 @@ fn consumer_fold_inputs_stamp_tracks_filtered_spending_and_budget_files() {
         fixture.runtime.root.join("budget.0123456789abcdef.json"),
         fixture.runtime.root.join("budget.fleet.json"),
         fixture.runtime.root.join("budget.scopes.json"),
+        fixture
+            .runtime
+            .root
+            .join("auto-continue.0123456789abcdef.json"),
         fixture
             .runtime
             .persistent_shared_root

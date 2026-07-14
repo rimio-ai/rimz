@@ -40,7 +40,7 @@ pub fn spawn(
     })
 }
 
-pub fn crosscheck_enabled(role: ObserveRole) -> bool {
+fn crosscheck_enabled(role: ObserveRole) -> bool {
     matches!(role, ObserveRole::Elder)
 }
 

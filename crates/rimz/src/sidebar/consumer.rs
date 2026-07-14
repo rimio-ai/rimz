@@ -151,7 +151,9 @@ pub fn consumer_fold_inputs_stamp(
 
 fn filtered_runtime_inputs(runtime: &RuntimePaths) -> Vec<StampedPath> {
     let mut paths = filtered_paths(&runtime.root, |name| {
-        (name.starts_with("workspace-spending.") || name.starts_with("budget."))
+        (name.starts_with("workspace-spending.")
+            || name.starts_with("budget.")
+            || name.starts_with("auto-continue."))
             && name.ends_with(".json")
     });
     paths.extend(filtered_paths(&runtime.persistent_shared_root, |name| {
