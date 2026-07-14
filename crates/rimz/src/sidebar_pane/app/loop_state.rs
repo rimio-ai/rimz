@@ -738,7 +738,6 @@ impl LoopState {
             {
                 match crate::sidebar::width_override::write(runtime, cols) {
                     Ok(()) => {
-                        clear_width_sync_cooldown(runtime);
                         width_adjusted = true;
                     }
                     Err(err) => warn!(error = %err, "sidebar width override write failed"),

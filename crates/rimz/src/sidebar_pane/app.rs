@@ -12,10 +12,11 @@
 
 use std::cell::Cell;
 use std::io::{self, Write};
+use std::num::NonZeroU16;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::config::NotificationsPrefs;
 use crate::diag::record::DiagEvent;
@@ -523,9 +524,31 @@ fn spawn_width_adjust(pane_id: PaneId, session_name: &str, dir: crate::mux::Widt
 }
 
 const WIDTH_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(1);
+const WIDTH_SYNC_MAX_PASSES: u32 = 8;
+const WIDTH_SYNC_ELECTION_ATTEMPTS: u32 = 3;
 
-fn clear_width_sync_cooldown(runtime: &RuntimePaths) {
-    let _ = std::fs::remove_file(runtime.root.join("width-sync.stamp"));
+#[derive(serde::Deserialize, serde::Serialize)]
+struct WidthSyncStamp {
+    cols: Option<NonZeroU16>,
+}
+
+fn width_sync_stamp_is_fresh(
+    stamp_path: &Path,
+    current_override: Option<NonZeroU16>,
+    now: SystemTime,
+) -> bool {
+    let Ok(file) = std::fs::File::open(stamp_path) else {
+        return false;
+    };
+    let Ok(modified) = file.metadata().and_then(|metadata| metadata.modified()) else {
+        return false;
+    };
+    let Ok(stamp) = serde_json::from_reader::<_, WidthSyncStamp>(file) else {
+        return false;
+    };
+    now.duration_since(modified)
+        .is_ok_and(|age| age < WIDTH_SYNC_MIN_INTERVAL)
+        && stamp.cols == current_override
 }
 
 /// Converge room widths on a detached, room-scoped single flight so every
@@ -539,41 +562,71 @@ fn spawn_width_sync(config: &ServeConfig, runtime: &RuntimePaths) {
         let stamp = runtime.root.join("width-sync.stamp");
         let lock = runtime.root.join("width-sync.lock");
         let fresh = || {
-            stamp
-                .metadata()
-                .ok()?
-                .modified()
-                .ok()?
-                .elapsed()
-                .ok()
-                .filter(|age| *age < WIDTH_SYNC_MIN_INTERVAL)
-                .map(|_| ())
+            width_sync_stamp_is_fresh(
+                &stamp,
+                crate::sidebar::width_override::load(&runtime),
+                SystemTime::now(),
+            )
+            .then_some(())
         };
-        let crate::store::single_flight::Coalesced::Produce(_guard) =
-            crate::store::single_flight::coalesce(&lock, Duration::from_millis(20), 5, fresh)
-        else {
-            return;
+        let guard = 'elect: {
+            for attempt in 0..WIDTH_SYNC_ELECTION_ATTEMPTS {
+                match crate::store::single_flight::coalesce(
+                    &lock,
+                    Duration::from_millis(20),
+                    5,
+                    &fresh,
+                ) {
+                    crate::store::single_flight::Coalesced::Shared(()) => return,
+                    crate::store::single_flight::Coalesced::Produce(guard) => {
+                        break 'elect Some(guard);
+                    }
+                    crate::store::single_flight::Coalesced::ProduceLocal
+                        if attempt + 1 < WIDTH_SYNC_ELECTION_ATTEMPTS => {}
+                    crate::store::single_flight::Coalesced::ProduceLocal => {
+                        break 'elect None;
+                    }
+                }
+            }
+            // The positive attempt bound makes every loop path return or break.
+            unreachable!("the bounded width-sync election always returns or selects a flight")
         };
+        let stamp_owned = guard.is_some();
         let machine = crate::config::MachineConfig::load_lenient();
-        let opts = crate::mux::WidthSyncOptions {
-            session_name,
-            workspace_id,
-            width: crate::mux::SidebarWidth::from_config(&machine.theme.display),
-            width_override: crate::sidebar::width_override::load(&runtime),
-        };
+        let width = crate::mux::SidebarWidth::from_config(&machine.theme.display);
         let backend = crate::mux::backend_for(mux);
-        match backend.converge_sidebar_widths(&opts) {
-            Ok(resized) => {
+        for pass in 0..WIDTH_SYNC_MAX_PASSES {
+            let width_override = crate::sidebar::width_override::load(&runtime);
+            let opts = crate::mux::WidthSyncOptions {
+                session_name: session_name.clone(),
+                workspace_id: workspace_id.clone(),
+                width,
+                width_override,
+            };
+            let resized = match backend.converge_sidebar_widths(&opts) {
+                Ok(resized) => resized,
+                Err(err) => {
+                    debug!(error = %err, "sidebar width sync failed");
+                    break;
+                }
+            };
+            if resized > 0 && stamp_owned {
                 // Disposable latency stamp, not durable truth. Stamp only an
                 // actual resize: a detached Zellij startup returns zero, and
                 // its later attach resize must remain eligible to converge.
-                // The held guard still collapses concurrent no-op probes.
-                if resized > 0 {
-                    let _ = std::fs::write(&stamp, []);
-                }
-                debug!(resized, "sidebar width sync complete");
+                // The held guard still collapses concurrent no-op probes. A
+                // last-resort local flight leaves the producer's stamp alone.
+                let _ = crate::store::atomic::write_temp_then_rename_cache(
+                    &stamp,
+                    &WidthSyncStamp {
+                        cols: width_override,
+                    },
+                );
             }
-            Err(err) => debug!(error = %err, "sidebar width sync failed"),
+            debug!(pass, resized, "sidebar width sync pass complete");
+            if crate::sidebar::width_override::load(&runtime) == width_override {
+                break;
+            }
         }
     });
 }
