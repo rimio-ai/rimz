@@ -362,6 +362,130 @@ fn codex_toggle_uses_symmetric_start_and_stop_commands() {
     assert_eq!(codex_daemon_action(false), "stop");
 }
 
+#[cfg(unix)]
+fn daemon_pid_record(pid: u32) -> CodexDaemonPidRecord {
+    CodexDaemonPidRecord {
+        pid,
+        process_start_time: "Mon Jul 13 02:03:45 2026".to_owned(),
+    }
+}
+
+#[cfg(unix)]
+fn stale_daemon_snapshot(codex_home: &Path) -> CodexDaemonProcessSnapshot {
+    let uid = crate::proc::own_uid().expect("unix uid");
+    let updater = codex_home.join("packages/standalone/releases/0.144.3/bin/codex");
+    CodexDaemonProcessSnapshot {
+        app_state: 'Z',
+        app_parent: 41,
+        app_uid: uid,
+        app_identity_matches: true,
+        updater_state: 'S',
+        updater_uid: uid,
+        updater_identity_matches: true,
+        updater_exe: updater.clone(),
+        updater_argv: [
+            updater.into_os_string(),
+            OsString::from("app-server"),
+            OsString::from("daemon"),
+            OsString::from("pid-update-loop"),
+        ]
+        .into(),
+        updater_children: vec![42],
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_codex_recovery_requires_the_exact_owned_zombie_tree() {
+    let home = Path::new("/home/u/.codex");
+    let app = daemon_pid_record(42);
+    let updater = daemon_pid_record(41);
+    let snapshot = stale_daemon_snapshot(home);
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &snapshot),
+        Some(41),
+    );
+
+    let mut live_app = stale_daemon_snapshot(home);
+    live_app.app_state = 'S';
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &live_app),
+        None,
+    );
+
+    let mut reused_app_pid = stale_daemon_snapshot(home);
+    reused_app_pid.app_identity_matches = false;
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &reused_app_pid),
+        None,
+    );
+
+    let mut wrong_owner = stale_daemon_snapshot(home);
+    wrong_owner.updater_uid = wrong_owner.updater_uid.saturating_add(1);
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &wrong_owner),
+        None,
+    );
+
+    let mut reused_updater_pid = stale_daemon_snapshot(home);
+    reused_updater_pid.updater_identity_matches = false;
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &reused_updater_pid),
+        None,
+    );
+
+    let mut unrelated_parent = stale_daemon_snapshot(home);
+    unrelated_parent.app_parent = 7;
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &unrelated_parent),
+        None,
+    );
+
+    let mut extra_child = stale_daemon_snapshot(home);
+    extra_child.updater_children.push(43);
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &extra_child),
+        None,
+    );
+
+    let mut unrelated_executable = stale_daemon_snapshot(home);
+    unrelated_executable.updater_exe = PathBuf::from("/tmp/codex");
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &unrelated_executable),
+        None,
+    );
+
+    let mut unrelated_argv = stale_daemon_snapshot(home);
+    unrelated_argv.updater_argv[3] = OsString::from("something-else");
+    assert_eq!(
+        stale_codex_updater_pid(home, &app, &updater, &unrelated_argv),
+        None,
+    );
+}
+
+#[test]
+fn codex_daemon_pid_record_requires_the_upstream_identity_fields() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("app-server.pid");
+    std::fs::write(
+        &path,
+        r#"{"pid":42,"processStartTime":"Mon Jul 13 02:08:48 2026"}"#,
+    )
+    .expect("write valid record");
+    let record = read_codex_daemon_pid_record(&path).expect("valid record");
+    assert_eq!(record.pid, 42);
+
+    std::fs::write(&path, r#"{"pid":42}"#).expect("write incomplete record");
+    assert!(read_codex_daemon_pid_record(&path).is_none());
+
+    std::fs::write(
+        &path,
+        r#"{"pid":0,"processStartTime":"Mon Jul 13 02:08:48 2026"}"#,
+    )
+    .expect("write zero pid record");
+    assert!(read_codex_daemon_pid_record(&path).is_none());
+}
+
 #[test]
 fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("valid id");

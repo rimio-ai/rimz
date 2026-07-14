@@ -20,7 +20,9 @@
 //!   singleton** (one control socket), so it is *not* a per-workspace pane:
 //!   [`ensure_codex_daemon`] spawns the (idempotent) start command detached with
 //!   null stdio, and Codex enrichment reaches the daemon over the control socket
-//!   (see [`crate::agents::codex::app_server`]).
+//!   (see [`crate::agents::codex::app_server`]). A missing control socket plus
+//!   Codex PID records that prove the app-server is a zombie child of its
+//!   managed updater triggers one bounded updater recycle before startup.
 //! - **Loops** run an always-present `rimz loop watch` panel in the runtime
 //!   column. Scheduled loop runs split against that pane so transient agents
 //!   stay in the daemon view's loop zone.
@@ -36,8 +38,12 @@
 //! `rimz start`.
 
 use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use serde::Deserialize;
 
 use crate::agents::claude::remote_control as claude_rc;
 use crate::agents::codex::app_server::codex_home;
@@ -59,7 +65,10 @@ use crate::store::{paths::StatePaths, workspace_record};
 /// on the right when they apply.
 pub const VIEW_NAME: &str = "rimzd";
 
-const CODEX_DAEMON_CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CODEX_DAEMON_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+const CODEX_DAEMON_PID_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const CODEX_DAEMON_RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
+const CODEX_DAEMON_RECOVERY_POLL: Duration = Duration::from_millis(25);
 
 /// Inputs that determine the managed panes in one workspace's daemon view.
 pub struct DaemonViewSpecParams<'a> {
@@ -442,14 +451,20 @@ pub fn codex_stop_command(bin: &Path) -> Vec<String> {
 /// than parked in a per-workspace pane; enrichment reaches it over the socket.
 /// Best-effort, gated by [`should_ensure_codex_daemon`].
 pub fn ensure_codex_daemon(config: &RemoteControlConfig) {
-    let standalone = codex_standalone_bin();
+    let home = codex_home();
+    let standalone = home.as_deref().and_then(standalone_bin_under);
     if !should_ensure_codex_daemon(config.codex, standalone.is_some()) {
         return;
     }
-    // The gate above guarantees the standalone resolved.
-    if let Some(bin) = standalone {
-        spawn_codex_daemon(&bin);
+    let (Some(home), Some(bin)) = (home, standalone) else {
+        return;
+    };
+    if recover_stale_codex_daemon(&home) {
+        tracing::warn!(
+            "recovered a stale Codex daemon updater after its app-server became a zombie",
+        );
     }
+    spawn_codex_daemon(&bin);
 }
 
 /// A synchronous Codex remote-control transition requested by `rimz config
@@ -459,7 +474,10 @@ pub fn ensure_codex_daemon(config: &RemoteControlConfig) {
 /// start contract: the enabled host is skipped and `rimz doctor` carries the
 /// install fix.
 pub fn reconcile_codex_daemon(enabled: bool) -> Result<(), CodexDaemonControlError> {
-    let Some(bin) = codex_standalone_bin() else {
+    let Some(home) = codex_home() else {
+        return Ok(());
+    };
+    let Some(bin) = standalone_bin_under(&home) else {
         return Ok(());
     };
     let argv = if enabled {
@@ -467,7 +485,15 @@ pub fn reconcile_codex_daemon(enabled: bool) -> Result<(), CodexDaemonControlErr
     } else {
         codex_stop_command(&bin)
     };
-    run_codex_daemon_command(&argv, enabled)
+    let first = run_codex_daemon_command(&argv, enabled);
+    if first.is_err() && recover_stale_codex_daemon(&home) {
+        tracing::warn!(
+            action = codex_daemon_action(enabled),
+            "recovered a stale Codex daemon updater after its app-server became a zombie",
+        );
+        return run_codex_daemon_command(&argv, enabled);
+    }
+    first
 }
 
 fn run_codex_daemon_command(argv: &[String], enabled: bool) -> Result<(), CodexDaemonControlError> {
@@ -514,6 +540,186 @@ pub enum CodexDaemonControlError {
         status: std::process::ExitStatus,
         stderr: String,
     },
+}
+
+/// Codex's daemon records process identity as a PID plus `ps -o lstart`. Keep
+/// the upstream shape typed: a PID alone is never authority to signal a
+/// process because the kernel may already have reused it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexDaemonPidRecord {
+    pid: u32,
+    process_start_time: String,
+}
+
+/// The exact process evidence required to repair Codex's stale-daemon state.
+/// A current upstream bug treats a zombie app-server as live because
+/// `kill(pid, 0)` succeeds, so `remote-control start` waits for a socket the
+/// dead child cannot create and `stop` waits for signals a zombie cannot
+/// receive. Terminating the verified updater parent lets init reap that child;
+/// the next provider command then discards both stale PID records itself.
+struct CodexDaemonProcessSnapshot {
+    app_state: char,
+    app_parent: u32,
+    app_uid: u32,
+    app_identity_matches: bool,
+    updater_state: char,
+    updater_uid: u32,
+    updater_identity_matches: bool,
+    updater_exe: PathBuf,
+    updater_argv: Vec<OsString>,
+    updater_children: Vec<u32>,
+}
+
+/// Recover only the provider state whose full process tree proves the known
+/// zombie failure. Every unreadable or drifting input abstains, preserving the
+/// original Codex error. A successful signal is followed by bounded identity
+/// polling before the caller retries the provider command once.
+fn recover_stale_codex_daemon(codex_home: &Path) -> bool {
+    if codex_home
+        .join("app-server-control")
+        .join("app-server-control.sock")
+        .exists()
+    {
+        return false;
+    }
+    let state_dir = codex_home.join("app-server-daemon");
+    let Some(app) = read_codex_daemon_pid_record(&state_dir.join("app-server.pid")) else {
+        return false;
+    };
+    let Some(updater) = read_codex_daemon_pid_record(&state_dir.join("app-server-updater.pid"))
+    else {
+        return false;
+    };
+    let Some(snapshot) = codex_daemon_process_snapshot(&app, &updater) else {
+        return false;
+    };
+    let Some(updater_pid) = stale_codex_updater_pid(codex_home, &app, &updater, &snapshot) else {
+        return false;
+    };
+    if !terminate_codex_updater(updater_pid) {
+        return false;
+    }
+
+    let deadline = Instant::now() + CODEX_DAEMON_RECOVERY_TIMEOUT;
+    loop {
+        if !codex_pid_record_matches(&app) && !codex_pid_record_matches(&updater) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            tracing::warn!(
+                app_pid = app.pid,
+                updater_pid,
+                "Codex stale-daemon recovery timed out waiting for provider processes to exit",
+            );
+            return false;
+        }
+        std::thread::sleep(CODEX_DAEMON_RECOVERY_POLL);
+    }
+}
+
+fn read_codex_daemon_pid_record(path: &Path) -> Option<CodexDaemonPidRecord> {
+    let bytes = std::fs::read(path).ok()?;
+    let record = serde_json::from_slice::<CodexDaemonPidRecord>(&bytes).ok()?;
+    (record.pid > 0 && !record.process_start_time.trim().is_empty()).then_some(record)
+}
+
+fn codex_daemon_process_snapshot(
+    app: &CodexDaemonPidRecord,
+    updater: &CodexDaemonPidRecord,
+) -> Option<CodexDaemonProcessSnapshot> {
+    let app_metrics = crate::proc::stat_metrics(app.pid)?;
+    if app_metrics.state != 'Z' {
+        return None;
+    }
+    let (_, app_parent) = crate::proc::comm_and_ppid(app.pid)?;
+    let updater_metrics = crate::proc::stat_metrics(updater.pid)?;
+    Some(CodexDaemonProcessSnapshot {
+        app_state: app_metrics.state,
+        app_parent,
+        app_uid: crate::proc::real_uid(app.pid)?,
+        app_identity_matches: codex_pid_record_matches(app),
+        updater_state: updater_metrics.state,
+        updater_uid: crate::proc::real_uid(updater.pid)?,
+        updater_identity_matches: codex_pid_record_matches(updater),
+        updater_exe: crate::proc::exe_path(updater.pid)?.0,
+        updater_argv: crate::proc::argv(updater.pid)?,
+        updater_children: crate::proc::children(updater.pid),
+    })
+}
+
+fn stale_codex_updater_pid(
+    codex_home: &Path,
+    app: &CodexDaemonPidRecord,
+    updater: &CodexDaemonPidRecord,
+    snapshot: &CodexDaemonProcessSnapshot,
+) -> Option<u32> {
+    let own_uid = crate::proc::own_uid()?;
+    let expected_children = [app.pid];
+    (app.pid != updater.pid
+        && snapshot.app_state == 'Z'
+        && snapshot.app_parent == updater.pid
+        && snapshot.app_uid == own_uid
+        && snapshot.app_identity_matches
+        && !matches!(snapshot.updater_state, 'Z' | 'X')
+        && snapshot.updater_uid == own_uid
+        && snapshot.updater_identity_matches
+        && managed_codex_executable(codex_home, &snapshot.updater_exe)
+        && codex_updater_argv(codex_home, &snapshot.updater_argv)
+        && snapshot.updater_children.as_slice() == expected_children)
+        .then_some(updater.pid)
+}
+
+fn managed_codex_executable(codex_home: &Path, executable: &Path) -> bool {
+    executable.starts_with(codex_home.join("packages").join("standalone"))
+        && executable.file_name() == Some(OsStr::new("codex"))
+}
+
+fn codex_updater_argv(codex_home: &Path, argv: &[OsString]) -> bool {
+    let [program, app_server, daemon, update_loop] = argv else {
+        return false;
+    };
+    managed_codex_executable(codex_home, Path::new(program))
+        && app_server == "app-server"
+        && daemon == "daemon"
+        && update_loop == "pid-update-loop"
+}
+
+fn codex_pid_record_matches(record: &CodexDaemonPidRecord) -> bool {
+    let pid = record.pid.to_string();
+    let output = CommandSpec::new("ps")
+        .args(["-p", &pid, "-o", "lstart="])
+        .output_raw_with_timeout(CODEX_DAEMON_PID_PROBE_TIMEOUT);
+    output.is_ok_and(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).trim() == record.process_start_time
+    })
+}
+
+#[cfg(unix)]
+fn terminate_codex_updater(pid: u32) -> bool {
+    use nix::errno::Errno;
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    match kill(Pid::from_raw(pid), Signal::SIGTERM) {
+        Ok(()) | Err(Errno::ESRCH) => true,
+        Err(err) => {
+            tracing::warn!(pid, error = %err, "failed to terminate stale Codex daemon updater");
+            false
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_codex_updater(_pid: u32) -> bool {
+    false
 }
 
 /// The pure ensure-daemon decision, split from [`ensure_codex_daemon`] so the

@@ -21,6 +21,7 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 | CLI reference (`resume`, `fork`, `login status`) | <https://learn.chatgpt.com/docs/developer-commands?surface=cli> |
 | App-server API (protocol, methods, notifications) | <https://learn.chatgpt.com/docs/app-server> |
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
+| App-server daemon lifecycle + PID backend | <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/lib.rs>, <https://github.com/openai/codex/blob/main/codex-rs/app-server-daemon/src/backend/pid.rs> |
 | App-server control socket WebSocket transport | <https://github.com/openai/codex/pull/21843> |
 | Rollout/session JSONL + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex> |
 | OAuth usage endpoint | Codex credential-file traffic; no public schema page |
@@ -169,6 +170,12 @@ notification_condition = "unfocused"  # unfocused | always
 ## App-server API
 
 Codex has no statusline, so RimZ reads its rich context out of band from the **app-server**: a bidirectional JSON-RPC 2.0 service (the `"jsonrpc":"2.0"` header is omitted on the wire), streamed as JSONL over stdio by default. Transports: `stdio://` (default), experimental unsupported `ws://IP:PORT`, `unix://[PATH]`, or `off`. Start with `codex app-server` (or `--listen …`). The unix-domain control socket speaks standard WebSocket HTTP upgrade over that UDS, then carries the same JSON-RPC payloads as text frames. The server bounds ingress queues and returns retryable JSON-RPC error `-32001` when overloaded. A client must send one `initialize` request per connection, then an `initialized` notification, before any other method.
+
+### Daemon lifecycle and stale-process recovery
+
+`codex remote-control start` enables remote control and starts the persistent per-user app-server from `$CODEX_HOME/packages/standalone/current/codex`; `stop` requests its shutdown. The PID backend records `{ "pid", "processStartTime" }` in `$CODEX_HOME/app-server-daemon/app-server.pid` and `app-server-updater.pid`, where `processStartTime` is the trimmed `ps -p PID -o lstart=` value used as the PID-reuse guard. The updater process runs the exact `codex app-server daemon pid-update-loop` argv, and a remote-enabled child runs `codex app-server --remote-control --listen unix://`.
+
+The 0.144.4 PID backend considers a recorded process active when `kill(pid, 0)` succeeds and its `ps` start time still matches. A zombie therefore remains active: `start` waits ten seconds for the absent control socket, while `stop` signals the zombie, waits a 60-second grace period, attempts `SIGKILL`, and reaches its 70-second timeout because signals cannot settle a dead child that its parent has not reaped. RimZ repairs only this proven state: the socket is absent; both structured PID records still match; the app-server is the updater's sole zombie child; both processes belong to the current user; and the updater executable and argv resolve inside the managed standalone install. It sends `SIGTERM` to that updater, waits up to two seconds for both identities to disappear, then retries the Codex control command once. Every ambiguous observation preserves the native Codex failure.
 
 The protocol is organized around three primitives: an **Item** (atomic input/output unit with a `started` → optional `delta` → `completed` lifecycle), a **Turn** (the items from one unit of agent work), and a **Thread** (the durable session container).
 
