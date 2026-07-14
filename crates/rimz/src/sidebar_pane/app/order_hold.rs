@@ -13,10 +13,11 @@ use crate::ids::PaneId;
 use crate::sidebar::timing::REORDER_HOLD;
 use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, OrderHold, UiState, group_visible_rows};
 
-/// The focused row leaving the attention class is the user answering that
-/// agent in its own pane -- the moment their eyes return to the sidebar.
-/// It arms the same hold a sidebar interaction does.
-pub(super) fn focused_attention_dropped(
+/// The focused row leaving the attention class or entering `Running` is the
+/// user acting on that agent in its own pane -- answering its ask or submitting
+/// a prompt -- the moment their eyes return to the sidebar. It arms the same
+/// hold a sidebar interaction does.
+pub(super) fn focused_interaction(
     prev: &SidebarSnapshot,
     current: &SidebarSnapshot,
     selected: Option<&PaneId>,
@@ -26,8 +27,11 @@ pub(super) fn focused_attention_dropped(
     };
     let prev_status = super::state::row_of_pane(prev, selected).and_then(|row| row.status());
     let next_status = super::state::row_of_pane(current, selected).and_then(|row| row.status());
-    prev_status.is_some_and(AgentStatus::is_attention)
-        && !next_status.is_some_and(AgentStatus::is_attention)
+    let answered = prev_status.is_some_and(AgentStatus::is_attention)
+        && !next_status.is_some_and(AgentStatus::is_attention);
+    let prompted =
+        next_status == Some(AgentStatus::Running) && prev_status != Some(AgentStatus::Running);
+    answered || prompted
 }
 
 pub(super) fn arm_order_hold(ui: &mut UiState, now_ms: i64) {
@@ -295,11 +299,11 @@ mod tests {
             vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
         )]);
 
-        assert!(focused_attention_dropped(&prev, &current, Some(&selected)));
+        assert!(focused_interaction(&prev, &current, Some(&selected)));
     }
 
     #[test]
-    fn focused_running_row_staying_running_does_not_drop_attention() {
+    fn focused_running_row_staying_running_is_not_an_interaction() {
         let selected = pane("terminal_1", "tab_0", false).pane_id;
         let prev = snapshot_with_groups(vec![group(
             "a",
@@ -307,7 +311,7 @@ mod tests {
         )]);
         let current = prev.clone();
 
-        assert!(!focused_attention_dropped(&prev, &current, Some(&selected)));
+        assert!(!focused_interaction(&prev, &current, Some(&selected)));
     }
 
     #[test]
@@ -328,7 +332,7 @@ mod tests {
             ],
         )]);
 
-        assert!(!focused_attention_dropped(&prev, &current, Some(&selected)));
+        assert!(!focused_interaction(&prev, &current, Some(&selected)));
     }
 
     #[test]
@@ -342,7 +346,7 @@ mod tests {
             vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
         )]);
 
-        assert!(!focused_attention_dropped(&prev, &current, None));
+        assert!(!focused_interaction(&prev, &current, None));
     }
 
     #[test]
@@ -354,7 +358,70 @@ mod tests {
         )]);
         let current = snapshot_with_groups(vec![group("a", Vec::new())]);
 
-        assert!(focused_attention_dropped(&prev, &current, Some(&selected)));
+        assert!(focused_interaction(&prev, &current, Some(&selected)));
+    }
+
+    #[test]
+    fn focused_idle_row_becoming_running_is_a_prompt() {
+        let selected = pane("terminal_1", "tab_0", false).pane_id;
+        let prev = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Idle)],
+        )]);
+        let current = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
+        )]);
+
+        assert!(focused_interaction(&prev, &current, Some(&selected)));
+    }
+
+    #[test]
+    fn focused_running_row_materializing_is_a_prompt() {
+        let selected = pane("terminal_1", "tab_0", false).pane_id;
+        let prev = snapshot_with_groups(vec![group("a", Vec::new())]);
+        let current = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
+        )]);
+
+        assert!(focused_interaction(&prev, &current, Some(&selected)));
+    }
+
+    #[test]
+    fn focused_running_row_finishing_is_not_an_interaction() {
+        let selected = pane("terminal_1", "tab_0", false).pane_id;
+        let prev = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Running)],
+        )]);
+        let current = snapshot_with_groups(vec![group(
+            "a",
+            vec![agent_row("selected", "terminal_1", AgentStatus::Success)],
+        )]);
+
+        assert!(!focused_interaction(&prev, &current, Some(&selected)));
+    }
+
+    #[test]
+    fn prompt_on_an_unselected_row_is_ignored() {
+        let selected = pane("terminal_1", "tab_0", false).pane_id;
+        let prev = snapshot_with_groups(vec![group(
+            "a",
+            vec![
+                agent_row("selected", "terminal_1", AgentStatus::Idle),
+                agent_row("other", "terminal_2", AgentStatus::Idle),
+            ],
+        )]);
+        let current = snapshot_with_groups(vec![group(
+            "a",
+            vec![
+                agent_row("selected", "terminal_1", AgentStatus::Idle),
+                agent_row("other", "terminal_2", AgentStatus::Running),
+            ],
+        )]);
+
+        assert!(!focused_interaction(&prev, &current, Some(&selected)));
     }
 
     #[test]

@@ -1460,12 +1460,12 @@ impl LoopState {
         {
             self.ui.focus_group_reveal = true;
         }
-        let answered = order_hold::focused_attention_dropped(
+        let acted = order_hold::focused_interaction(
             prev_good,
             &self.current,
             self.ui.selected_pane.as_ref(),
         );
-        let interacted = cleared || self.ui.selected_pane != prev_selected || answered;
+        let interacted = cleared || self.ui.selected_pane != prev_selected || acted;
         order_hold::apply_order_hold(&mut self.ui, &mut self.current, interacted, now_ms);
         self.ui.last_order = order_hold::capture_order(&self.current, &self.ui);
     }
