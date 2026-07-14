@@ -404,18 +404,24 @@ impl AgentDescriptor {
     }
 
     /// Whether a process `comm`/argv0 basename belongs to this agent: one of
-    /// its declared process names (its own binary plus any launcher), or the
-    /// kind under a target-triple release-binary suffix.
+    /// its declared process names (its own binary plus any launcher), including
+    /// a declared name under a target-triple release-binary suffix.
     pub fn runs_as(&self, name: &str) -> bool {
-        self.process_names.contains(&name) || program_names_kind(name, self.kind)
+        self.process_names
+            .iter()
+            .any(|program| program_names_kind(name, program))
     }
 
     /// Whether a command basename launches this agent. This is distinct from
     /// [`runs_as`](Self::runs_as): a resolved executable may expose a provider-
     /// independent name (`agent` for Cursor) while its kernel `comm` names the
-    /// runtime instead.
+    /// runtime instead. Target-triple suffix matching applies to each declared
+    /// name rather than implicitly accepting the kind, so `antigravity` does
+    /// not shadow the actual `agy` process.
     pub fn launches_as(&self, name: &str) -> bool {
-        self.bin_names.contains(&name) || program_names_kind(name, self.kind)
+        self.bin_names
+            .iter()
+            .any(|program| program_names_kind(name, program))
     }
 
     /// Whether a tool-use payload names a workspace-mutating tool. The tool
@@ -684,11 +690,24 @@ mod tests {
         assert!(!kiro.capabilities.remote_control.pane_sessions);
         assert!(!kiro.capabilities.remote_control.background_sessions);
 
+        let antigravity = crate::agents::registry::descriptor_by_kind("antigravity").unwrap();
+        assert_eq!(antigravity.bin_names, &["agy"]);
+        assert!(!antigravity.capabilities.blocking_asks);
+        assert!(antigravity.capabilities.native_ask_ui);
+        assert!(!antigravity.capabilities.rich_context);
+        assert!(!antigravity.capabilities.transcript_tail_context);
+        assert!(!antigravity.capabilities.context_usage);
+        assert!(!antigravity.capabilities.account_spend);
+        assert!(antigravity.capabilities.registers_lazily);
+        assert!(antigravity.capabilities.local_session_discovery);
+        assert!(!antigravity.capabilities.hook_install);
+        assert!(antigravity.activity_events.is_empty());
+
         for adapter in crate::agents::registry::ADAPTERS {
             assert_eq!(
                 adapter.descriptor().capabilities.local_session_discovery,
-                adapter.descriptor().kind == "kiro",
-                "local session discovery is an explicit Kiro-only capability"
+                matches!(adapter.descriptor().kind, "kiro" | "antigravity"),
+                "local session discovery is an explicit pulled-store capability"
             );
         }
 

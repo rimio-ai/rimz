@@ -1,6 +1,6 @@
 # Antigravity CLI protocol reference
 
-> The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the adapter implementation playbook is [agent-adapters.md](../../contributing/agent-adapters.md), and account, balance, spend, and pricing semantics are in [providers.md](../../internals/agents/providers.md). An Antigravity adapter is not landed yet.
+> The landed adapter mapping is [antigravity.md](../../internals/agents/antigravity.md), the agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the adapter implementation playbook is [agent-adapters.md](../../contributing/agent-adapters.md), and account, balance, spend, and pricing semantics are in [providers.md](../../internals/agents/providers.md).
 
 This is the single home for the official **Antigravity CLI upstream surface** a RimZ adapter can bind to: the `agy` process and launch flags, JSON command hooks, custom statusline state, conversations, local persistence, permission and artifact waits, subagents, headless runs, authentication, models, and quota presentation.
 
@@ -44,15 +44,15 @@ The initial RimZ integration target is **Antigravity CLI**, because it owns a st
 
 ## Adapter feasibility at a glance
 
-Antigravity exposes enough official surface for a useful first adapter, but not enough to implement every RimZ capability without live wire capture.
+Antigravity exposes enough official surface for a useful adapter, but not enough to implement every RimZ capability without live wire capture. The landed safe floor owns process/launch/resume, validated local conversation discovery, basic pulled text-turn state, and transcript history. Command hooks and the custom statusline remain the next promotion boundary because their neutral and callback contracts are not yet verified.
 
 | RimZ need | Antigravity surface | Verdict |
 | --- | --- | --- |
 | Process discovery and launch | `agy`; stable interactive and prompt flags in 1.1.1 help | direct |
-| Session identity | hook `conversationId`; statusline `conversation_id` | direct once either callback fires |
-| Eager registration before work | no `SessionStart` hook; initial statusline callback timing is undocumented | lazy until live verification proves an eager statusline push |
-| Turn start | statusline edge into `thinking`/`working`; `PreInvocation` fires for every model call rather than once per user turn | derived edge, not one-hook direct |
-| Turn completion and error | `Stop.terminationReason`, `Stop.error`, `Stop.fullyIdle` | direct for agent-loop termination |
+| Session identity | exact `--conversation`; workspace-latest cache; hook `conversationId`; statusline `conversation_id` | exact resume and latest-cache discovery landed; callbacks remain future promotion |
+| Eager registration before work | no `SessionStart` hook; initial statusline callback timing is undocumented | lazy from cache/transcript; eager statusline push unverified |
+| Turn start | captured `USER_INPUT`; future statusline edge into `thinking`/`working` | partial pulled edge; realtime edge deferred |
+| Turn completion and error | captured completed `PLANNER_RESPONSE`; future `Stop.terminationReason`, `Stop.error`, `Stop.fullyIdle` | partial pulled success only; direct errors deferred |
 | Session end | no session-end hook | pane/process presence only |
 | Tool activity and acting phase | `PreToolUse.toolCall`; canonical edit tools are published | direct after neutral-output behavior is verified |
 | Native permission wait | statusline `tool_confirmation_pending` | direct boolean; detail comes from the preceding tool call |
@@ -61,7 +61,7 @@ Antigravity exposes enough official surface for a useful first adapter, but not 
 | Model and context | custom statusline `model` and `context_window` | direct live enrichment |
 | Background tasks | statusline `background_tasks` in docs; tagged example reads `task_count` | direct in concept, drifting wire |
 | Subagents | statusline `subagents`; tool calls for define/invoke/manage | visible, but documented child entries omit conversation IDs |
-| Transcript/history | hook-provided `transcriptPath`; official location documented | path direct, record schema unpublished |
+| Transcript/history | official hook path plus captured 1.1.1 text records | basic root user/assistant history landed; all other records remain unknown |
 | Durable conversation store | 1.1.1 changelog says SQLite is the CLI conversation format | format known, schema and authoritative path unpublished |
 | Compaction | no documented hook, command, or marker | unsupported until verified |
 | Account identity | statusline `email` and `plan_tier` | direct while a session is live; treat email as private |
@@ -73,7 +73,7 @@ Antigravity exposes enough official surface for a useful first adapter, but not 
 | Structured answer | native TUI keys and artifact/question panels | pane-send fallback; no out-of-band answer API |
 | Remote control | no CLI remote-control host documented | unsupported |
 
-The first adapter should combine a wrapped custom statusline for identity, live state, waiting, model, and context with command hooks for precise tool and stop events. It should keep transcript history, spend, subagent rows, compaction, fork, and structured answers disabled until their verification items pass.
+The current adapter deliberately starts below the hook/statusline boundary: the workspace conversation cache and exact `--conversation` command line bind provider identity, while validated JSONL text records provide basic turn state and history. A later promotion should combine a wrapped custom statusline for waiting, model, and context with command hooks for precise tool and stop events. Spend, subagent rows, compaction, fork, and structured answers stay disabled until their verification items pass.
 
 ## Launch and process surface
 
@@ -454,7 +454,24 @@ Every hook carries an absolute `transcriptPath`. The official hook page says it 
 
 For CLI, `<app_data_dir>` is `~/.gemini/antigravity-cli`; for Antigravity 2.0 it is `~/.gemini/antigravity`.
 
-Google publishes no JSONL record schema, append/replace guarantee, retention rule, file-locking contract, rewind semantics, or relationship between a root transcript and child transcripts. The path is safe to retain as provider identity evidence, but do not port the removed Gemini parser or advertise transcript history/context/spend from it.
+Google publishes no JSONL record schema, append/replace guarantee, retention rule, file-locking contract, rewind semantics, or relationship between a root transcript and child transcripts. The path is safe to retain as provider identity evidence. Keep context and spend disabled, and derive visible history only from record shapes captured against the one supported release.
+
+### Live 1.1.1 transcript probe
+
+A stock root conversation confirms `transcript.jsonl` and `transcript_full.jsonl` as newline-delimited JSON with these top-level fields:
+
+| Field | Captured shape |
+| --- | --- |
+| `step_index` | integer physical step index |
+| `source` | string source enum |
+| `type` | string record-type enum |
+| `status` | string status enum |
+| `created_at` | RFC 3339 timestamp |
+| `content` | optional string |
+
+The captured simple text turn contains `USER_EXPLICIT` / `USER_INPUT` / `DONE` with visible user content, `MODEL` / `PLANNER_RESPONSE` / `DONE` with visible assistant content, and `SYSTEM` `CONVERSATION_HISTORY`/`CHECKPOINT` records that stay internal. The two transcript files are byte-identical for that turn.
+
+The landed parser accepts only those two visible source/type pairs, ignores system and unknown records, tolerates malformed complete lines, and retains a torn final line for the next incremental read. A completed planner response supplies partial pulled turn completion; it does not prove failure, cancel, tool, wait, compaction, subagent, token, or spend semantics. Re-capture all of those before broadening the parser.
 
 The official CLI changelog adds a second persistence fact:
 
@@ -593,7 +610,7 @@ These official sources disagree as of the refresh. Treat the pinned release as t
 | Plugin location | CLI plugin page shows `~/.gemini/antigravity-cli/plugins/` in places | 1.0.2 moves installed plugins to `~/.gemini/config/`; 1.1.0 fixes global agents to shared config | avoid plugin installation initially |
 | Pre-tool neutral result | hook page requires `decision` and lists only behavioral decisions | 1.0.16 accepts an empty decision string without the former error | live-verify exact neutral bytes |
 | Permission key spelling | permission page shows `permissions.{allow,deny,ask}` | 1.1.1 notes say `permission.allow` in one line | preserve unknown fields and capture the actual settings file |
-| Conversation record | hook page promises per-conversation `transcript.jsonl` | changelog says SQLite is the CLI conversation format | retain hook path; parse neither without schema capture |
+| Conversation record | hook page promises per-conversation `transcript.jsonl` | changelog says SQLite is the CLI conversation format; live capture confirms visible JSONL text records | retain hook path; parse only captured visible shapes and keep SQLite blobs opaque |
 
 ## Adjacent surfaces kept out of the initial adapter
 
@@ -601,9 +618,9 @@ The Antigravity SDK exposes a richer programmatic lifecycle with session start/e
 
 Antigravity 2.0 shares the harness and can import/export conversations, but its desktop process is not the pane child and its app-data root differs. Do not join its background conversations to a local `agy` pane solely because both use a conversation ID namespace.
 
-MCP, skills, rules, custom agents, and plugins affect tool vocabulary, prompts, and executable trust. The initial adapter tolerates unknown tools and reports the live custom-agent name; it does not manage those customizations.
+MCP, skills, rules, custom agents, and plugins affect tool vocabulary, prompts, and executable trust. The current pulled adapter ignores unknown transcript records and does not manage or report those customizations.
 
-## Native-event mapping for a first adapter
+## Native-event mapping for the live-channel promotion
 
 After the neutral-output and statusline probes pass, use this conservative mapping:
 
@@ -676,4 +693,4 @@ Run these probes with a temporary HOME and throwaway Git workspace against the c
 
 ### Conformance target
 
-The first landed descriptor should claim only what those fixtures prove. A reasonable starting posture is lazy registration; interactive launch, exact resume, plain-text supervised runs, model preset, ask/auto/plan/yolo launch mappings, lifecycle stop, tool activity, permission waiting, and live context wired or partial; transcript history, session spend, quota, native fork, compaction, remote control, structured answers, and subagent rows unsupported. Promote each capability in the same commit that adds its typed parser, fixture, mapping, and conformance case.
+The landed descriptor claims only what the current fixtures prove: lazy pulled registration; interactive launch; exact resume; model preset; ask/auto/plan/yolo launch mappings; basic text transcript history and streaming; and partial pulled text-turn state. Supervised runs, hook-driven lifecycle/tool/wait signals, live context, session spend, quota, native fork, compaction, remote control, structured answers, and subagent rows remain unsupported. Promote each capability in the same commit that adds its typed parser, fixture, mapping, and conformance case.

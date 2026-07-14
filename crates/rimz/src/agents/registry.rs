@@ -5,6 +5,7 @@
 //! through this module, so no consumer grows a per-agent match arm.
 
 use super::amp::AmpAdapter;
+use super::antigravity::AntigravityAdapter;
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
 use super::copilot::CopilotAdapter;
@@ -31,6 +32,7 @@ pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &KimiAdapter,
     &PiAdapter,
     &OpencodeAdapter,
+    &AntigravityAdapter,
     &CursorAdapter,
     &DroidAdapter,
     &KiroAdapter,
@@ -107,6 +109,7 @@ fn resumed_session_id_for_root_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::{ConcernCoverage, IntegrationConcern};
 
     #[test]
     fn registry_resolves_kinds_and_sub_providers_without_collisions() {
@@ -136,15 +139,20 @@ mod tests {
         // a new adapter that forgets to opt in fails
         // here rather than silently never compacting.
         for adapter in ADAPTERS {
-            // Amp compacts automatically and exposes no manual compact command;
-            // see docs/externals/agent-adapter/amp-reference.md.
-            if adapter.descriptor().kind == "amp" {
+            if let Some(command) = adapter.compact_command() {
+                assert!(!command.is_empty() && command.starts_with('/'));
                 continue;
             }
-            let command = adapter.compact_command().unwrap_or_else(|| {
-                panic!("missing compact command for {}", adapter.descriptor().kind)
-            });
-            assert!(!command.is_empty() && command.starts_with('/'));
+            assert!(
+                matches!(
+                    adapter
+                        .descriptor()
+                        .concern_coverage(IntegrationConcern::Compaction),
+                    Some(ConcernCoverage::Unsupported { .. })
+                ),
+                "missing compact command for {}",
+                adapter.descriptor().kind
+            );
         }
     }
 

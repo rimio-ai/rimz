@@ -348,8 +348,18 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "amp", "copilot", "kimi", "pi", "opencode", "cursor", "droid",
-                "kiro", "qwen"
+                "claude",
+                "codex",
+                "amp",
+                "copilot",
+                "kimi",
+                "pi",
+                "opencode",
+                "antigravity",
+                "cursor",
+                "droid",
+                "kiro",
+                "qwen"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -479,6 +489,15 @@ mod tests {
             agent_labels(&matrix, "qwen", MatrixCellState::Absent),
             ["answer", "remote"]
         );
+
+        let antigravity = agent_cells(&matrix, "antigravity");
+        assert_eq!(count(&antigravity, MatrixCellState::Ok), 0);
+        assert_eq!(count(&antigravity, MatrixCellState::Partial), 3);
+        assert_eq!(count(&antigravity, MatrixCellState::Absent), 13);
+        assert_eq!(
+            agent_labels(&matrix, "antigravity", MatrixCellState::Partial),
+            ["turn", "end", "idle"]
+        );
     }
 
     #[test]
@@ -499,8 +518,18 @@ mod tests {
         assert_eq!(
             matrix.agents,
             [
-                "claude", "codex", "amp", "copilot", "kimi", "pi", "opencode", "cursor", "droid",
-                "kiro", "qwen"
+                "claude",
+                "codex",
+                "amp",
+                "copilot",
+                "kimi",
+                "pi",
+                "opencode",
+                "antigravity",
+                "cursor",
+                "droid",
+                "kiro",
+                "qwen"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -516,6 +545,7 @@ mod tests {
                 MatrixCellState::Ok,      // kimi
                 MatrixCellState::Ok,      // pi
                 MatrixCellState::Ok,      // opencode
+                MatrixCellState::Partial, // antigravity
                 MatrixCellState::Ok,      // cursor
                 MatrixCellState::Ok,      // droid
                 MatrixCellState::Partial, // kiro
@@ -535,6 +565,7 @@ mod tests {
                 MatrixCellState::Partial, // kimi
                 MatrixCellState::Absent,  // pi
                 MatrixCellState::Ok,      // opencode
+                MatrixCellState::Absent,  // antigravity
                 MatrixCellState::Absent,  // cursor
                 MatrixCellState::Absent,  // droid
                 MatrixCellState::Absent,  // kiro

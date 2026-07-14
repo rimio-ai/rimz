@@ -1,5 +1,3 @@
-use crate::agents::program_names_kind;
-
 /// The base name of the program a command runs, seeing past a `sudo` wrapper
 /// and through known wrappers to the real command: `npm` for `sudo npm install
 /// …`, `codex` for `node /usr/bin/codex`, `opencode` for `bun
@@ -177,7 +175,12 @@ fn command_agent_kind_from_program(program: EffectiveProgram<'_>) -> Option<&'st
 
 fn command_agent_kind_from_comm(comm: &str) -> Option<&'static str> {
     let comm = basename(comm.trim());
-    let mut matches = crate::agents::known_kinds().filter(|kind| program_names_kind(comm, kind));
+    if LAUNCHERS.contains(&comm) {
+        return None;
+    }
+    let mut matches = crate::agents::all_adapters()
+        .filter(|adapter| adapter.descriptor().runs_as(comm))
+        .map(|adapter| adapter.descriptor().kind);
     let kind = matches.next()?;
     matches.next().is_none().then_some(kind)
 }
@@ -220,6 +223,8 @@ mod tests {
             "codex-aarch64-apple-darwin"
         );
         assert_eq!(command_agent_kind("claude"), Some("claude"));
+        assert_eq!(command_agent_kind("agy"), Some("antigravity"));
+        assert_eq!(command_agent_kind("antigravity"), None);
         assert_eq!(command_agent_kind("agent"), Some("cursor"));
         assert_eq!(command_agent_kind("cursor-agent"), Some("cursor"));
         assert_eq!(
@@ -313,6 +318,14 @@ mod tests {
         assert_eq!(
             command_agent_kind_with_comm("", Some("codex-aarch64-a")),
             Some("codex")
+        );
+        assert_eq!(
+            command_agent_kind_with_comm("", Some("agy")),
+            Some("antigravity")
+        );
+        assert_eq!(
+            command_agent_kind_with_comm("", Some("kiro-cli-chat")),
+            Some("kiro")
         );
         assert_eq!(command_agent_kind_with_comm("node", Some("node")), None);
         assert_eq!(command_agent_kind_with_comm("bun", Some("bun")), None);
