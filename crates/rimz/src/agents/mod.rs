@@ -252,6 +252,12 @@ pub struct TurnCostFixture {
     pub payload: Value,
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub struct ContextCostFixture {
+    pub payload: Value,
+}
+
 /// One provider turn priced for a live-session accumulator.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EstimatedTurnCost {
@@ -604,6 +610,13 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Test-only statusline/context payload for adapters whose live cost comes
+    /// from a provider-owned rich-context channel.
+    #[cfg(test)]
+    fn context_cost_fixture(&self) -> Option<ContextCostFixture> {
+        None
+    }
+
     /// Test-only transcript-backed ask fixture for native prompts whose hook
     /// payload remains lifecycle-only. Conformance materializes the transcript
     /// and feeds the event through [`Self::observe_lifecycle`].
@@ -658,6 +671,13 @@ pub trait AgentAdapter: Send + Sync {
         _payload: &Value,
         _prices: &PriceBook,
     ) -> Option<EstimatedTurnCost> {
+        None
+    }
+
+    /// Price current provider-reported context usage. The statusline command
+    /// supplies the local price book and owns persistence; adapters only parse
+    /// their native payload and return the normalized estimate.
+    fn estimate_context_cost(&self, _payload: &Value, _prices: &PriceBook) -> Option<AgentCost> {
         None
     }
 

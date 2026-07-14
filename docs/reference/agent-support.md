@@ -56,7 +56,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Codex | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest`; `Stop` + rollout `Plan` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
 | Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | ✗ | ✗ | ✗ | `session_before_compact` | `session_compact` | `session_shutdown` | ◐ derived |
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`; `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | ◐ derived | ◐ derived |
-| Antigravity | ◐ first `PreInvocation` identity + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
+| Antigravity | ◐ first `PreInvocation` identity + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker + transcript question | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
@@ -69,7 +69,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 
 Kiro CLI 2.12.1 v3 did not execute documented user or project standalone hook configs during authenticated stock-TUI verification. RimZ instead binds validated provider-owned local sessions to live Kiro panes and derives their display lifecycle from physical record order. Hook installation and supervised `-p` remain unsupported because pulled files are not an executable completion channel.
 
-Antigravity CLI 1.1.2 documents observer-neutral `{}` output for invocation and post-tool hooks and a non-`continue` `Stop` decision that permits termination. RimZ installs those events and wraps the custom statusline, while deliberately excluding `PreToolUse`; the provider's UI remains the only permission and question decision surface. `rimz hooks install antigravity --dry-run` shows both `hooks.json` and `settings.json` changes before consent, and uninstall restores the prior statusline command.
+Antigravity CLI 1.1.2 documents observer-neutral `{}` output for invocation and post-tool hooks and a non-`continue` `Stop` decision that permits termination. RimZ installs those events and wraps the custom statusline, while deliberately excluding `PreToolUse`; the provider's UI remains the only permission and question decision surface. Validated transcript questions project native waiting cards, and exact statusline model/current-token values provide a local API-rate estimate for the live card without claiming historical or provider billing. `rimz hooks install antigravity --dry-run` shows both `hooks.json` and `settings.json` changes before consent, and uninstall restores the prior statusline command.
 
 ## Per-agent mappings
 

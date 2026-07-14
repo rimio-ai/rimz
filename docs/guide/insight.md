@@ -2,7 +2,7 @@
 
 You run a fleet now, not a single agent, and the fleet spends. Tokens turn into dollars across every provider you use, and each keeps its own tally on its own billing page: none beside your code, none aware of the others. The one number you actually want, what the fleet cost and how hard it worked, is the one nobody puts in front of you.
 
-Token insight is that number, in the terminal. Every transcript-backed agent turn leaves a local usage store (the model, token counts, timestamps, and for some providers the dollar cost), and RimZ reads those files into one account-global picture across Claude, Codex, Amp, Pi, and OpenCode. If you have run `ccusage` over Claude's transcripts, this is the same trick widened across every provider with a usable local usage store and wired into the room so it updates as the work lands. Cursor contributes a separate live-session estimate from its command statusline and stop hooks; it appears on the card and in the room cockpit but does not enter historical `rimz stats` or claim provider billing. Amp's private cache is explicitly best-effort. Droid's watched session snapshot can show cumulative tokens and an exact-table `≈$` estimate on its live card, but it exposes no supported discoverable history store, so both remain deliberately absent from token insight and aggregate spend.
+Token insight is that number, in the terminal. Every transcript-backed agent turn leaves a local usage store (the model, token counts, timestamps, and for some providers the dollar cost), and RimZ reads those files into one account-global picture across Claude, Codex, Amp, Pi, and OpenCode. If you have run `ccusage` over Claude's transcripts, this is the same trick widened across every provider with a usable local usage store and wired into the room so it updates as the work lands. Cursor contributes a separate live-session estimate from its command statusline and stop hooks; it appears on the card and in the room cockpit but does not enter historical `rimz stats` or claim provider billing. Antigravity and Droid can show exact-table `≈$` estimates on their live cards, but those point-in-time values stay out of token insight, aggregate spend, and budgets. Amp's private cache is explicitly best-effort.
 
 You read it two ways. `rimz stats` prints the whole history on demand, from anywhere. The sidebar keeps a live slice of the same data in front of you while you work.
 
@@ -82,7 +82,7 @@ The top of the sidebar narrows all of this to the room you are standing in. Two 
  ¤ 16 (2)                                      $420.00    ← live agents · unread · spend
 ```
 
-The token breakdown sums every durable session record that ran in the room's spend window, and the dollar figure below it is the room's cost for that same window, counting up in an eased roll the moment any agent's cost moves. A live Cursor session adds its hook-priced cumulative estimate to that dollar figure without pretending it is historical provider spend. Both are scoped to this room: the project root and the worktrees grouped under it, never your whole machine.
+The token breakdown sums every durable session record that ran in the room's spend window, and the dollar figure below it is the room's cost for that same window, counting up in an eased roll the moment any agent's cost moves. A live Cursor session adds its hook-priced cumulative estimate to that dollar figure without pretending it is historical provider spend. Antigravity's point-in-time `≈$` estimate stays on its card and out of this aggregate and budget enforcement. Both are scoped to this room: the project root and the worktrees grouped under it, never your whole machine.
 
 The window is yours to set with `[sidebar] spend_window` ([configuration](./configuration.md#sidebar-rendering)):
 
@@ -94,13 +94,14 @@ To read one agent's cost instead of the room's, [`rimz agents show`](./agents.md
 
 ## How the numbers are calculated
 
-Historical figures come from the transcript and session files your agents already write to disk. Live Cursor context comes from Cursor's structured command-statusline payload and stop hooks. RimZ never scrapes a pane or guesses from the screen; token counts come from provider-owned records and structured wires.
+Historical figures come from the transcript and session files your agents already write to disk. Live Cursor and Antigravity context comes from their structured statusline and lifecycle inputs. RimZ never scrapes a pane or guesses from the screen; token counts come from provider-owned records and structured wires.
 
 Turning tokens into dollars is where the care goes:
 
 - Providers that log a dollar cost per turn (Pi, and older Claude transcripts) are taken at their word.
 - Providers with a supported history store that log token counts (Claude, Codex) are priced with a per-model table. RimZ ships a built-in table and refreshes it weekly from the public LiteLLM price list, so a new model's rate lands without waiting on a RimZ release. Input, output, cache writes, and cache reads each price at their own rate. Marginal 200k tiers price each token class independently; request-selected tiers such as OpenAI's covered GPT flagship models switch the whole request to long-context rates once its input crosses the model's threshold.
 - Cursor's completed, aborted, and errored turns are priced once per generation for the current live session. Auto uses Cursor's published API-equivalent rates; explicit model IDs use the shared table. The cumulative value resets with the live sidecar and stays outside provider billing, account spend, and historical `rimz stats`.
+- Antigravity's reported current input, output, cache-write, and cache-read values are priced as disjoint token classes only when its exact raw model ID resolves in the local table. The card marks the result `≈$`; it stays outside cumulative session/provider billing, cockpit/provider aggregates, budgets, account spend, and historical `rimz stats`.
 - A model RimZ has no price for still contributes its tokens and its session to every total. Only its dollar column reads zero, until a price is found. Token attribution never waits on pricing.
 
 Two scopes and a set of windows keep the surfaces honest:

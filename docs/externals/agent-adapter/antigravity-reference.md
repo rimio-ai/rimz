@@ -44,7 +44,7 @@ The initial RimZ integration target is **Antigravity CLI**, because it owns a st
 
 ## Adapter feasibility at a glance
 
-Antigravity exposes enough official surface for a useful adapter, but not enough to implement every RimZ capability. The landed adapter owns process/launch/resume, validated local conversation discovery, transcript history, safe command hooks, custom-statusline context, background parking, and supervised completion. Policy-changing pre-tool decisions, artifact/question waits, stable child identities, quota, spend, and remote control remain outside the verified boundary.
+Antigravity exposes enough official surface for a useful adapter, but not enough to implement every RimZ capability. The landed adapter owns process/launch/resume, validated local conversation discovery, transcript history and question waits, safe command hooks, custom-statusline context and live API-rate estimates, background parking, and supervised completion. Policy-changing pre-tool decisions, artifact waits, stable child identities, quota, provider-history/account spend, and remote control remain outside the verified boundary.
 
 | RimZ need | Antigravity surface | Verdict |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ Antigravity exposes enough official surface for a useful adapter, but not enough
 | Session end | no session-end hook | pane/process presence only |
 | Tool activity and acting phase | disjoint `PostToolUse` matchers over the published tool vocabulary | native after execution, without changing permission policy |
 | Native permission wait | statusline `tool_confirmation_pending` | read-only card attention; native pane owns detail and decision |
-| Question wait | `PreToolUse` for `ask_question` plus its typed questions | direct intent; exact dialog-open timing needs capture |
+| Question wait | completed planner-response transcript record with typed `ask_question` questions | derived native-pane wait; no durable ask or out-of-band answer |
 | Plan/artifact review wait | statusline `artifacts` and artifact-review UI | schema/status enum incomplete; derived after capture |
 | Model and context | custom statusline `model` and `context_window` | direct live enrichment landed |
 | Background tasks | `Stop.fullyIdle`; statusline arrays remain identity-poor | native foreground parking, no task rows |
@@ -66,7 +66,7 @@ Antigravity exposes enough official surface for a useful adapter, but not enough
 | Compaction | no documented hook, command, or marker | unsupported until verified |
 | Account identity | statusline `email` and `plan_tier` | direct live enrichment; treat email as private |
 | Quota and credits | interactive `/usage`/`/quota` and `/credits` panels | no documented machine-readable API |
-| Session spend | no documented dollars or cumulative billing record | unsupported |
+| Session spend | statusline current token split plus exact model ID; no documented cumulative billing record | partial live API-rate estimate only |
 | Supervised `-p` runs | stock interactive prompt, `Stop`, and transcript final response | RimZ supervised hook transport landed; native headless mode remains separate |
 | Native resume | `--conversation <UUID>`; `-c`/`--continue` for workspace latest | direct |
 | Native fork in a new pane | `/fork` clones in the current TUI, but no launch flag forks a supplied source ID | unsupported for RimZ fork |
@@ -465,9 +465,11 @@ A stock root conversation confirms `transcript.jsonl` and `transcript_full.jsonl
 | `created_at` | RFC 3339 timestamp |
 | `content` | optional string |
 
-The captured simple text turn contains `USER_EXPLICIT` / `USER_INPUT` / `DONE` with visible user content, `MODEL` / `PLANNER_RESPONSE` / `DONE` with visible assistant content, and `SYSTEM` `CONVERSATION_HISTORY`/`CHECKPOINT` records that stay internal. The two transcript files are byte-identical for that turn.
+The captured simple text turn contains `USER_EXPLICIT` / `USER_INPUT` / `DONE` with visible user content, `MODEL` / `PLANNER_RESPONSE` / `DONE` with visible assistant content, and `SYSTEM` `CONVERSATION_HISTORY`/`CHECKPOINT` records that stay internal. Provider-authored user content may wrap the request in exact `<USER_REQUEST>...</USER_REQUEST>` tags followed by `<ADDITIONAL_METADATA>` and settings blocks; only the request body is user-visible.
 
-The landed parser accepts only those two visible source/type pairs, ignores system and unknown records, tolerates malformed complete lines, and retains a torn final line for the next incremental read. A completed planner response supplies partial pulled turn completion; it does not prove failure, cancel, tool, wait, compaction, subagent, token, or spend semantics. Re-capture all of those before broadening the parser.
+The captured native question turn adds `tool_calls` to a completed `MODEL` / `PLANNER_RESPONSE` record. `transcript_full.jsonl` carries `ask_question.args.questions` as a JSON array of typed question objects; `transcript.jsonl` carries the same array as a JSON-encoded string. The first nonblank `question` is sufficient to project a native waiting card at the record timestamp; answer state remains inside the TUI.
+
+The landed parser accepts only those two visible source/type pairs, ignores system and unknown records, tolerates malformed complete lines, and retains a torn final line for the next incremental read. Ordinary completed planner responses supply partial pulled turn completion; the validated `ask_question` shape supplies a read-only question wait. These records do not prove failure, cancel, compaction, subagent, or historical spend semantics. Re-capture those before broadening the parser.
 
 The official CLI changelog adds a second persistence fact:
 
@@ -529,9 +531,9 @@ Account quota/credits stay unsupported until Google publishes a machine API or a
 
 ### Spend
 
-The statusline exposes token usage, not dollars. Baseline plan quota and AI-credit overages are not equivalent to API-token billing, and Antigravity can route multiple model providers. No official per-session cost field or cumulative usage ledger is published.
+The statusline exposes current input, output, cache-creation, and cache-read tokens plus the exact raw model ID, but no dollars. Baseline plan quota and AI-credit overages are not equivalent to API-token billing, and Antigravity can route multiple model providers. No official per-session cost field or cumulative usage ledger is published.
 
-Keep Antigravity session spend unsupported. Do not feed current-window statusline tokens into the full-history spend fold and do not price them through RimZ's public API price book unless an upstream billing contract proves those tokens are metered at that rate.
+RimZ may price those four disjoint current-usage classes through its local public API price book when the exact trimmed model ID resolves. Treat the result as a best-effort `≈$` live-card estimate: room/provider aggregates, budgets, full-history spend, provider/account totals, and `rimz stats` exclude it. Never present the estimate as subscription billing or synthesize a price from the display label, plan, or agent kind.
 
 ## Headless and supervised runs
 

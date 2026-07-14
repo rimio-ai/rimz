@@ -249,6 +249,35 @@ fn observations_without_fresh_authorization_are_exact_resume_only() {
 }
 
 #[test]
+fn antigravity_transcript_question_projects_a_pane_only_wait() {
+    let waiting_since = ago(10);
+    let mut pane = pane("%1", "agy", "/repo/main");
+    pane.resumed_session_id = Some(AgentSessionId::from("conversation-a"));
+    let mut observation = observation("conversation-a", 20, Some(10), None);
+    observation.kind = AgentKind::new_unchecked("antigravity");
+    observation.transcript_path =
+        PathBuf::from("/antigravity/conversation-a/transcript_full.jsonl");
+    observation.status = AgentStatus::Waiting;
+    observation.phase = TurnPhase::Idle;
+    observation.native_prompt_detail = Some("Which option?".to_owned());
+    observation.waiting_since = Some(waiting_since);
+
+    let snapshot = room(Vec::new())
+        .with_local_sessions(std::slice::from_ref(&pane), vec![observation])
+        .with_live_panes(vec![pane], None);
+    let agent = rollup_agent(&snapshot, "conversation-a");
+    assert_eq!(agent.status, AgentStatus::Waiting);
+    assert_eq!(agent.phase, TurnPhase::Idle);
+    assert_eq!(agent.task.as_deref(), Some("Which option?"));
+    assert_eq!(agent.waiting_since, Some(waiting_since));
+    assert!(agent.open_ask.is_none());
+    assert_eq!(
+        row(&snapshot, "conversation-a").task(),
+        Some("Which option?")
+    );
+}
+
+#[test]
 fn provider_session_adopts_provisional_launch_identity() {
     let mut provisional = agent("kiro", "launch_abc", AgentStatus::Idle, 1).in_pane("%1");
     provisional.name = Some("writer".to_owned());

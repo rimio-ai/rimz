@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::agents::{
-    AgentStatus, LaunchPreset, StatusLineChange, TranscriptPosition, TranscriptRole, TurnPhase,
+    AgentStatus, LaunchPreset, PriceBook, StatusLineChange, TranscriptPosition, TranscriptRole,
+    TurnPhase,
 };
 
 const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -446,6 +447,63 @@ fn statusline_normalizes_captured_reasoning_qualifiers_and_preserves_model_id() 
 }
 
 #[test]
+fn statusline_prices_only_raw_model_ids_with_current_usage() {
+    let prices = PriceBook::from_litellm_json(
+        r#"{
+            "agy-priced": {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "cache_creation_input_token_cost": 3e-6,
+                "cache_read_input_token_cost": 0.25e-6
+            }
+        }"#,
+    );
+    let payload = json!({
+        "model": {
+            "id": "  agy-priced-via-router  ",
+            "display_name": "unpriceable display label"
+        },
+        "context_window": {
+            "current_usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cache_creation_input_tokens": 30,
+                "cache_read_input_tokens": 40
+            }
+        }
+    });
+    let cost = AntigravityAdapter
+        .estimate_context_cost(&payload, &prices)
+        .unwrap();
+    assert!(cost.estimated);
+    let total_cost_usd = cost.total_cost_usd.unwrap();
+    assert!((total_cost_usd - 150e-6).abs() < 1e-15);
+    assert!(total_cost_usd.is_finite() && total_cost_usd > 0.0);
+
+    for payload in [
+        json!({
+            "model": {"id": "unknown", "display_name": "agy-priced"},
+            "context_window": {"current_usage": {"input_tokens": 10}}
+        }),
+        json!({"model": {"id": "agy-priced"}}),
+        json!({
+            "model": {"id": "agy-priced"},
+            "context_window": {"current_usage": {"input_tokens": 0}}
+        }),
+        json!({
+            "model": {"id": "   ", "display_name": "agy-priced"},
+            "context_window": {"current_usage": {"input_tokens": 10}}
+        }),
+    ] {
+        assert!(
+            AntigravityAdapter
+                .estimate_context_cost(&payload, &prices)
+                .is_none()
+        );
+    }
+}
+
+#[test]
 fn verified_visible_transcript_records_are_normalized_strictly() {
     let transcript = include_str!("tests/fixtures/transcript_full.jsonl");
     let messages = AntigravityAdapter.parse_transcript_messages(transcript);
@@ -479,6 +537,173 @@ fn verified_visible_transcript_records_are_normalized_strictly() {
             )
             .is_empty()
     );
+}
+
+#[test]
+fn transcript_user_envelopes_expose_only_the_request_body() {
+    let wrapped = "  <USER_REQUEST>\nrefine the card\nwithout metadata\n</USER_REQUEST>\n<ADDITIONAL_METADATA>{\"secret\":true}</ADDITIONAL_METADATA>\n<SETTINGS>ignored</SETTINGS>  ";
+    let lines = [
+        user_record(0, "2026-07-13T23:23:09Z", wrapped),
+        user_record(1, "2026-07-13T23:23:10Z", "<USER_REQUEST>missing close"),
+        user_record(
+            2,
+            "2026-07-13T23:23:11Z",
+            "<USER_REQUEST>  \n </USER_REQUEST><ADDITIONAL_METADATA />",
+        ),
+        user_record(3, "2026-07-13T23:23:12Z", "  legacy prompt  "),
+    ]
+    .join("\n");
+    assert_eq!(
+        session::messages(&lines)
+            .into_iter()
+            .map(|message| message.text)
+            .collect::<Vec<_>>(),
+        ["refine the card\nwithout metadata", "legacy prompt"]
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_full.jsonl",
+        &user_record(0, "2026-07-13T23:23:09Z", wrapped),
+    );
+    assert_eq!(
+        session::latest_prompt_under(dir.path(), &path, SESSION_ID).as_deref(),
+        Some("refine the card\nwithout metadata")
+    );
+
+    for (content, expected) in [
+        ("<USER_REQUEST>missing close", None),
+        ("<USER_REQUEST> </USER_REQUEST><SETTINGS />", None),
+        ("  legacy prompt  ", Some("legacy prompt")),
+    ] {
+        std::fs::write(&path, user_record(0, "2026-07-13T23:23:09Z", content)).unwrap();
+        assert_eq!(
+            session::latest_prompt_under(dir.path(), &path, SESSION_ID).as_deref(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn transcript_questions_project_native_waits_and_clear_on_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Path::new("/workspace/project");
+    let path = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_full.jsonl",
+        &[
+            user_record(0, "2026-07-13T23:23:09Z", "start"),
+            planner_record(
+                1,
+                "2026-07-13T23:23:10Z",
+                Some(json!([{
+                    "name": "ask_question",
+                    "args": {
+                        "questions": [
+                            {"question": "  First choice?  ", "options": ["a", "b"], "future": true},
+                            {"question": "Second choice?", "options": []}
+                        ]
+                    },
+                    "future": "ignored"
+                }])),
+            ),
+        ]
+        .join("\n"),
+    );
+    let observation = &session::discover_under(dir.path(), workspace)[0];
+    assert_eq!(observation.status, AgentStatus::Waiting);
+    assert_eq!(observation.phase, TurnPhase::Idle);
+    assert_eq!(
+        observation.native_prompt_detail.as_deref(),
+        Some("First choice?")
+    );
+    assert_eq!(
+        observation.waiting_since,
+        Some("2026-07-13T23:23:10Z".parse().unwrap())
+    );
+
+    let legacy_questions = serde_json::to_string(&json!([
+        {"question": "Replacement?", "options": ["yes", "no"]}
+    ]))
+    .unwrap();
+    let replacement = planner_record(
+        2,
+        "2026-07-13T23:23:11Z",
+        Some(json!([{
+            "name": "ask_question",
+            "args": {"questions": legacy_questions}
+        }])),
+    );
+    let mut lines = std::fs::read_to_string(&path).unwrap();
+    lines.push('\n');
+    lines.push_str(&replacement);
+    std::fs::write(&path, &lines).unwrap();
+    let observation = &session::discover_under(dir.path(), workspace)[0];
+    assert_eq!(
+        observation.native_prompt_detail.as_deref(),
+        Some("Replacement?")
+    );
+    assert_eq!(
+        observation.waiting_since,
+        Some("2026-07-13T23:23:11Z".parse().unwrap())
+    );
+
+    lines.push('\n');
+    lines.push_str(&planner_record(3, "2026-07-13T23:23:12Z", None));
+    std::fs::write(&path, &lines).unwrap();
+    let observation = &session::discover_under(dir.path(), workspace)[0];
+    assert_eq!(observation.status, AgentStatus::Success);
+    assert!(observation.native_prompt_detail.is_none());
+    assert!(observation.waiting_since.is_none());
+
+    lines.push('\n');
+    lines.push_str(&planner_record(
+        4,
+        "2026-07-13T23:23:13Z",
+        Some(json!([{
+            "name": "ask_question",
+            "args": {"questions": [{"question": "One more?"}]}
+        }])),
+    ));
+    lines.push('\n');
+    lines.push_str(&user_record(5, "2026-07-13T23:23:14Z", "continue"));
+    std::fs::write(&path, &lines).unwrap();
+    let observation = &session::discover_under(dir.path(), workspace)[0];
+    assert_eq!(observation.status, AgentStatus::Running);
+    assert_eq!(observation.phase, TurnPhase::Reasoning);
+    assert!(observation.native_prompt_detail.is_none());
+    assert!(observation.waiting_since.is_none());
+}
+
+#[test]
+fn malformed_or_empty_question_calls_settle_as_ordinary_responses() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Path::new("/workspace/project");
+    for tool_calls in [
+        json!("not-an-array"),
+        json!([{"name": "ask_question", "args": {"questions": "not-json"}}]),
+        json!([{"name": "ask_question", "args": {"questions": []}}]),
+        json!([{"name": "ask_question", "args": {"questions": [null, {}, {"question": "  "}]}}]),
+        json!([{"name": "another_tool", "args": {"questions": [{"question": "ignored"}]}}]),
+    ] {
+        write_transcript_named(
+            dir.path(),
+            SESSION_ID,
+            "transcript_full.jsonl",
+            &[
+                user_record(0, "2026-07-13T23:23:09Z", "start"),
+                planner_record(1, "2026-07-13T23:23:10Z", Some(tool_calls)),
+            ]
+            .join("\n"),
+        );
+        let observation = &session::discover_under(dir.path(), workspace)[0];
+        assert_eq!(observation.status, AgentStatus::Success);
+        assert!(observation.native_prompt_detail.is_none());
+        assert!(observation.waiting_since.is_none());
+    }
 }
 
 #[test]
@@ -783,6 +1008,33 @@ fn write_transcript_named(
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, contents).unwrap();
     path
+}
+
+fn user_record(step: u64, at: &str, content: &str) -> String {
+    json!({
+        "step_index": step,
+        "source": "USER_EXPLICIT",
+        "type": "USER_INPUT",
+        "status": "DONE",
+        "created_at": at,
+        "content": content,
+    })
+    .to_string()
+}
+
+fn planner_record(step: u64, at: &str, tool_calls: Option<Value>) -> String {
+    let mut record = json!({
+        "step_index": step,
+        "source": "MODEL",
+        "type": "PLANNER_RESPONSE",
+        "status": "DONE",
+        "created_at": at,
+        "content": "planner response",
+    });
+    if let Some(tool_calls) = tool_calls {
+        record["tool_calls"] = tool_calls;
+    }
+    record.to_string()
 }
 
 fn with<const N: usize>(base: &Value, fields: [(&str, Value); N]) -> Value {

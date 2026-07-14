@@ -141,8 +141,9 @@ const ANTIGRAVITY_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::UserQuestion,
-        ConcernCoverage::Unsupported {
-            reason: "ask_question dialog transitions are absent from the verified transcript records",
+        ConcernCoverage::Partial {
+            via: "validated local transcripts project ask_question records to a native waiting card",
+            gap: "there is no durable RimZ ask or out-of-band answer API",
         },
     ),
     (
@@ -191,8 +192,9 @@ const ANTIGRAVITY_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Unsupported {
-            reason: "no machine-readable session-dollar surface",
+        ConcernCoverage::Partial {
+            via: "current statusline usage is priced through the local model price book",
+            gap: "no cumulative session or provider billing ledger is published",
         },
     ),
     (
@@ -248,7 +250,7 @@ const ANTIGRAVITY_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     (
         LifecycleSignalKind::AwaitingInput,
         HookCoverage::Derived {
-            via: "statusline tool_confirmation_pending display marker",
+            via: "statusline tool_confirmation_pending marker + pulled transcript questions",
             gap: "read-only attention projection, not a durable AwaitingInput lifecycle signal",
         },
     ),
@@ -303,6 +305,23 @@ impl AgentAdapter for AntigravityAdapter {
     #[cfg(test)]
     fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
         Some(session::fixture_observation())
+    }
+
+    #[cfg(test)]
+    fn context_cost_fixture(&self) -> Option<super::ContextCostFixture> {
+        Some(super::ContextCostFixture {
+            payload: serde_json::json!({
+                "model": {"id": "gemini-3-flash-preview"},
+                "context_window": {
+                    "current_usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cache_creation_input_tokens": 30,
+                        "cache_read_input_tokens": 40
+                    }
+                }
+            }),
+        })
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
@@ -369,6 +388,19 @@ impl AgentAdapter for AntigravityAdapter {
         serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
             .ok()
             .map(|payload| payload.into_context(source, Timestamp::now()))
+    }
+
+    fn estimate_context_cost(
+        &self,
+        payload: &Value,
+        prices: &super::PriceBook,
+    ) -> Option<super::AgentCost> {
+        if !payload.is_object() {
+            return None;
+        }
+        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
+            .ok()?
+            .estimate_cost(prices)
     }
 
     fn last_assistant_message(

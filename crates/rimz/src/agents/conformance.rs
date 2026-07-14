@@ -710,6 +710,12 @@ fn assert_compaction_hooks_match_concern(adapter: &dyn AgentAdapter) {
 
 fn realtime_cost_from_fixture(adapter: &dyn AgentAdapter) -> bool {
     let prices = PriceBook::embedded();
+    if let Some(fixture) = adapter.context_cost_fixture() {
+        return adapter
+            .estimate_context_cost(&fixture.payload, &prices)
+            .and_then(|cost| cost.total_cost_usd)
+            .is_some_and(|cost| cost > 0.0);
+    }
     if let Some(fixture) = adapter.turn_cost_fixture() {
         return adapter
             .estimate_turn_cost(fixture.event_name, &fixture.payload, &prices)

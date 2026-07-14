@@ -5,7 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
@@ -27,6 +28,26 @@ struct TranscriptRecord {
     status: String,
     created_at: String,
     content: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_tool_calls")]
+    tool_calls: Vec<ToolCall>,
+}
+
+#[derive(Deserialize)]
+struct ToolCall {
+    name: String,
+    #[serde(default)]
+    args: ToolCallArgs,
+}
+
+#[derive(Default, Deserialize)]
+struct ToolCallArgs {
+    #[serde(default, deserialize_with = "deserialize_questions")]
+    questions: Vec<ToolQuestion>,
+}
+
+#[derive(Deserialize)]
+struct ToolQuestion {
+    question: String,
 }
 
 #[derive(Clone)]
@@ -36,6 +57,8 @@ struct FoldedSession {
     status: AgentStatus,
     phase: TurnPhase,
     latest_prompt: Option<String>,
+    native_prompt_detail: Option<String>,
+    waiting_since: Option<Timestamp>,
 }
 
 pub(super) fn discover(workspace: &Path) -> Vec<LocalSessionObservation> {
@@ -77,7 +100,7 @@ pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
             let role = visible_role(&record)?;
             let content = record.content.as_deref()?;
             let text = match role {
-                TranscriptRole::User => sanitize_user_prompt(Some(content)),
+                TranscriptRole::User => normalize_user_content(Some(content)),
                 TranscriptRole::Assistant => normalized(Some(content)),
             }?;
             Some(TranscriptMessage {
@@ -167,8 +190,8 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         status: folded.status,
         phase: folded.phase,
         latest_prompt: folded.latest_prompt,
-        native_prompt_detail: None,
-        waiting_since: None,
+        native_prompt_detail: folded.native_prompt_detail,
+        waiting_since: folded.waiting_since,
         context_pct: None,
     }
 }
@@ -295,8 +318,8 @@ fn observation(
         status: folded.status,
         phase: folded.phase,
         latest_prompt: folded.latest_prompt,
-        native_prompt_detail: None,
-        waiting_since: None,
+        native_prompt_detail: folded.native_prompt_detail,
+        waiting_since: folded.waiting_since,
         context_pct: None,
     })
 }
@@ -308,6 +331,8 @@ fn fold(lines: &str) -> FoldedSession {
         status: AgentStatus::Idle,
         phase: TurnPhase::Idle,
         latest_prompt: None,
+        native_prompt_detail: None,
+        waiting_since: None,
     };
     for record in parse_records(lines) {
         if record.status != "DONE" {
@@ -323,13 +348,24 @@ fn fold(lines: &str) -> FoldedSession {
         folded.last_activity = Some(at);
         match role {
             TranscriptRole::User => {
+                folded.native_prompt_detail = None;
+                folded.waiting_since = None;
                 folded.status = AgentStatus::Running;
                 folded.phase = TurnPhase::Reasoning;
-                folded.latest_prompt = sanitize_user_prompt(record.content.as_deref());
+                folded.latest_prompt = normalize_user_content(record.content.as_deref());
             }
             TranscriptRole::Assistant => {
-                folded.status = AgentStatus::Success;
-                folded.phase = TurnPhase::Idle;
+                if let Some(question) = native_question(&record) {
+                    folded.status = AgentStatus::Waiting;
+                    folded.phase = TurnPhase::Idle;
+                    folded.native_prompt_detail = Some(question);
+                    folded.waiting_since = Some(at);
+                } else {
+                    folded.status = AgentStatus::Success;
+                    folded.phase = TurnPhase::Idle;
+                    folded.native_prompt_detail = None;
+                    folded.waiting_since = None;
+                }
             }
         }
     }
@@ -348,6 +384,60 @@ fn parse_records(lines: &str) -> impl Iterator<Item = TranscriptRecord> + '_ {
     lines
         .lines()
         .filter_map(|line| serde_json::from_str::<TranscriptRecord>(line).ok())
+}
+
+fn normalize_user_content(value: Option<&str>) -> Option<String> {
+    const OPEN: &str = "<USER_REQUEST>";
+    const CLOSE: &str = "</USER_REQUEST>";
+
+    let value = value?.trim();
+    let request = match value.strip_prefix(OPEN) {
+        Some(wrapped) => wrapped.split_once(CLOSE)?.0,
+        None => value,
+    };
+    sanitize_user_prompt(Some(request))
+}
+
+fn native_question(record: &TranscriptRecord) -> Option<String> {
+    record
+        .tool_calls
+        .iter()
+        .filter(|call| call.name == "ask_question")
+        .flat_map(|call| &call.args.questions)
+        .map(|question| question.question.trim())
+        .find(|question| !question.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn deserialize_tool_calls<'de, D>(deserializer: D) -> Result<Vec<ToolCall>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|call| serde_json::from_value(call.clone()).ok())
+        .collect())
+}
+
+fn deserialize_questions<'de, D>(deserializer: D) -> Result<Vec<ToolQuestion>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    let value = match value {
+        Value::String(encoded) => serde_json::from_str(&encoded).unwrap_or(Value::Null),
+        value => value,
+    };
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|question| serde_json::from_value::<ToolQuestion>(question.clone()).ok())
+        .filter(|question| !question.question.trim().is_empty())
+        .collect())
 }
 
 fn normalized(value: Option<&str>) -> Option<String> {

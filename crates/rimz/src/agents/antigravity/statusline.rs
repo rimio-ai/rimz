@@ -3,7 +3,10 @@
 use jiff::Timestamp;
 use serde::Deserialize;
 
-use crate::agents::context::{AgentAccount, AgentContext, AgentCurrentUsage, AgentTokenUsage};
+use crate::agents::context::{
+    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage,
+};
+use crate::agents::pricing::PriceBook;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -114,6 +117,31 @@ fn normalize_model_display(
 }
 
 impl StatuslinePayload {
+    pub(crate) fn estimate_cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+        let model_id = self.model.id.as_deref()?.trim();
+        (!model_id.is_empty()).then_some(())?;
+        let usage = &self.context_window.current_usage;
+        (usage.input_tokens.is_some()
+            || usage.output_tokens.is_some()
+            || usage.cache_creation_input_tokens.is_some()
+            || usage.cache_read_input_tokens.is_some())
+        .then_some(())?;
+        let price = prices.price(model_id)?;
+        let total_cost_usd = price.cost(
+            usage.input_tokens.unwrap_or(0),
+            usage.output_tokens.unwrap_or(0),
+            usage.cache_creation_input_tokens.unwrap_or(0),
+            0,
+            usage.cache_read_input_tokens.unwrap_or(0),
+            false,
+        );
+        (total_cost_usd.is_finite() && total_cost_usd > 0.0).then(|| AgentCost {
+            total_cost_usd: Some(total_cost_usd),
+            estimated: true,
+            ..AgentCost::default()
+        })
+    }
+
     pub(crate) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
         let (model_display_name, effort, thinking_enabled) =
             normalize_model_display(self.model.display_name);

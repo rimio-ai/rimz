@@ -28,7 +28,9 @@ use tracing::warn;
 
 use super::GlobalFlags;
 use rimz::RuntimePaths;
-use rimz::agents::{StatusLineInvocation, adapter_by_kind};
+use rimz::agents::{
+    AgentAdapter, AgentContext, PriceBook, StatusLineInvocation, adapter_by_kind, pricing,
+};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -111,7 +113,7 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     let session_id =
         payload_session_id(&payload).context("statusline payload carries no session id")?;
     let agent = adapter_by_kind(source)?;
-    let Some(context) = agent.observe_context(source, &payload) else {
+    let Some(mut context) = agent.observe_context(source, &payload) else {
         // The adapter has no rich-context source (e.g. codex): nothing to store.
         return Ok(());
     };
@@ -119,6 +121,8 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     let runtime =
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
+    let prices = pricing::cached_book(&runtime.shared_pricing_cache_path());
+    attach_context_cost(agent, &payload, &prices, &mut context);
     rimz::store::agent_context::write(&runtime, agent.descriptor().kind, session_id, &context)
         .context("writing agent-context sidecar")?;
     // Push the update so the `$`/token figure repaints within a wakeup rather
@@ -126,6 +130,17 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     // other wakeup: a send failure never fails the statusline render.
     let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     Ok(())
+}
+
+fn attach_context_cost(
+    agent: &dyn AgentAdapter,
+    payload: &Value,
+    prices: &PriceBook,
+    context: &mut AgentContext,
+) {
+    if let Some(cost) = agent.estimate_context_cost(payload, prices) {
+        context.cost = Some(cost);
+    }
 }
 
 /// Parse a `subagentStatusLine` payload, harvest its `tasks`, and write one
@@ -270,6 +285,7 @@ fn direct_argv(command: &str, home: Option<&std::ffi::OsStr>) -> Result<Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::agents::{AgentCost, AntigravityAdapter};
     use serde_json::json;
 
     #[test]
@@ -282,6 +298,41 @@ mod tests {
             payload_session_id(&json!({"conversationId": "agy-hook-spelling"})),
             Some("agy-hook-spelling")
         );
+    }
+
+    #[test]
+    fn context_cost_estimate_attaches_only_when_the_payload_is_priceable() {
+        let prices = PriceBook::from_litellm_json(
+            r#"{"agy-priced": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}"#,
+        );
+        let priced = json!({
+            "model": {"id": "agy-priced"},
+            "context_window": {"current_usage": {"input_tokens": 10}}
+        });
+        let mut context = AntigravityAdapter
+            .observe_context("antigravity", &priced)
+            .unwrap();
+        attach_context_cost(&AntigravityAdapter, &priced, &prices, &mut context);
+        let cost = context.cost.unwrap();
+        assert!(cost.estimated);
+        assert!((cost.total_cost_usd.unwrap() - 10e-6).abs() < 1e-15);
+        assert_eq!(
+            cost,
+            AgentCost {
+                total_cost_usd: cost.total_cost_usd,
+                ..AgentCost::default()
+            }
+        );
+
+        let unknown = json!({
+            "model": {"id": "unknown"},
+            "context_window": {"current_usage": {"input_tokens": 10}}
+        });
+        let mut context = AntigravityAdapter
+            .observe_context("antigravity", &unknown)
+            .unwrap();
+        attach_context_cost(&AntigravityAdapter, &unknown, &prices, &mut context);
+        assert!(context.cost.is_none());
     }
 
     #[test]
