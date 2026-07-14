@@ -334,7 +334,7 @@ impl AccountBudget {
 
 /// The producer's published per-provider rate-limit windows, account-scoped so
 /// the budgets outlive a session ending or going idle.
-const RATE_LIMITS_CACHE_VERSION: u32 = 2;
+const RATE_LIMITS_CACHE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitsCache {

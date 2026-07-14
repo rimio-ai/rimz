@@ -7,6 +7,18 @@ use crate::agents::{AgentErr, AgentHookClass, AgentStatus, LaunchPreset, PresetE
 use serde_json::json;
 
 #[test]
+fn account_usage_surface_is_unsupported() {
+    assert_eq!(
+        CopilotAdapter.probe_account_usage(),
+        crate::agents::AccountUsageProbe::Unsupported
+    );
+    assert_eq!(
+        CopilotAdapter.account_usage_identity(),
+        crate::agents::AccountUsageIdentity::default()
+    );
+}
+
+#[test]
 fn classifies_native_asks_and_lifecycle_events() {
     let permission = CopilotAdapter.classify_hook(
         "permissionRequest",

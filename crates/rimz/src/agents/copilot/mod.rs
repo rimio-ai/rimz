@@ -7,7 +7,6 @@
 //! metadata-only OTel chat spans provide the live model/token composition.
 
 mod account;
-mod oauth_usage;
 mod otel;
 mod paths;
 pub(crate) mod payloads;
@@ -124,14 +123,14 @@ const COPILOT_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         reason: "OTel chat spans expose token counts but no authoritative session cost",
     },
     rich_context: ConcernCoverage::Partial {
-        via: "optional metadata-only OTel chat spans + environment-backed GitHub plan/quota read",
+        via: "optional metadata-only OTel chat spans",
         gap: "no authoritative context-window denominator or session cost",
     },
     hook_install: ConcernCoverage::Wired {
         via: "$COPILOT_HOME/hooks/rimz.json",
     },
     account_spend: ConcernCoverage::Unsupported {
-        reason: "plan and included quotas expose no dollar ledger",
+        reason: "no authoritative account dollar ledger",
     },
     remote_control: ConcernCoverage::Unsupported {
         reason: "remote-control preflight is not wired",
@@ -624,17 +623,6 @@ impl AgentAdapter for CopilotAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
-    }
-
-    fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
-        oauth_usage::probe()
-    }
-
-    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
-        crate::agents::AccountUsageIdentity {
-            account_key: oauth_usage::account_key(),
-            ..Default::default()
-        }
     }
 }
 

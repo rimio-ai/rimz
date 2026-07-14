@@ -7,8 +7,6 @@ use serde::Deserialize;
 use crate::agents::account::AccountProbe;
 use crate::agents::context::AgentAccount;
 
-use super::oauth_usage::GitHubHost;
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Config {
@@ -24,45 +22,37 @@ struct LoginIdentity {
 }
 
 pub(super) fn probe() -> AccountProbe {
-    probe_home(
-        super::paths::copilot_home().as_deref(),
-        super::oauth_usage::has_environment_token(),
-    )
+    probe_home(super::paths::copilot_home().as_deref())
 }
 
-fn probe_home(home: Option<&Path>, environment_token: bool) -> AccountProbe {
+fn probe_home(home: Option<&Path>) -> AccountProbe {
     let Some(home) = home else {
-        return token_account(environment_token);
+        return AccountProbe::LoggedOut;
     };
-    probe_at(&home.join("config.json"), environment_token)
+    probe_at(&home.join("config.json"))
 }
 
-fn probe_at(path: &Path, environment_token: bool) -> AccountProbe {
+fn probe_at(path: &Path) -> AccountProbe {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return token_account(environment_token);
+            return AccountProbe::LoggedOut;
         }
-        Err(_) if environment_token => return token_account(true),
         Err(_) => return AccountProbe::Unavailable,
     };
     let config = match crate::agents::jsonc::from_slice::<Config>(&bytes) {
         Ok(config) => config,
-        Err(_) if environment_token => return token_account(true),
         Err(_) => return AccountProbe::Unavailable,
     };
-    let account_id = config
+    let Some(account_id) = config
         .last_logged_in_user
         .into_iter()
         .chain(config.logged_in_users)
-        .find_map(normalized_identity);
-    if account_id.is_none() && !environment_token {
+        .find_map(normalized_identity)
+    else {
         return AccountProbe::LoggedOut;
-    }
-    let credentials_updated_at_ms = account_id
-        .as_ref()
-        .and_then(|_| crate::agents::account::file_mtime_ms(path));
-    found_account(account_id, credentials_updated_at_ms)
+    };
+    found_account(account_id, crate::agents::account::file_mtime_ms(path))
 }
 
 fn normalized_identity(identity: LoginIdentity) -> Option<String> {
@@ -70,32 +60,66 @@ fn normalized_identity(identity: LoginIdentity) -> Option<String> {
     if login.is_empty() {
         return None;
     }
-    let host = match identity.host.as_deref().map(str::trim) {
-        None | Some("") => GitHubHost::public(),
-        Some(host) => GitHubHost::parse(host).ok()?,
-    };
-    if host.as_str() == "github.com" {
+    let host = identity
+        .host
+        .as_deref()
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(normalized_host)
+        .unwrap_or_else(|| Some("github.com".to_owned()))?;
+    if host == "github.com" {
         Some(login)
     } else {
-        Some(format!("{login}@{}", host.as_str()))
+        Some(format!("{login}@{host}"))
     }
 }
 
-fn token_account(present: bool) -> AccountProbe {
-    if !present {
-        return AccountProbe::LoggedOut;
+fn normalized_host(raw: &str) -> Option<String> {
+    let authority_and_path = if let Some((scheme, rest)) = raw.split_once("://") {
+        matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https").then_some(rest)?
+    } else {
+        raw
+    };
+    let authority = authority_and_path
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') || authority.chars().any(char::is_whitespace)
+    {
+        return None;
     }
-    found_account(None, None)
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => {
+            let port = port.parse::<u16>().ok().filter(|port| *port > 0)?;
+            (host, Some(port))
+        }
+        Some(_) => return None,
+        None => (authority, None),
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty()
+        || host.split('.').any(|label| {
+            label.is_empty()
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        })
+    {
+        return None;
+    }
+    Some(match port {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
 }
 
-fn found_account(
-    account_id: Option<String>,
-    credentials_updated_at_ms: Option<u64>,
-) -> AccountProbe {
+fn found_account(account_id: String, credentials_updated_at_ms: Option<u64>) -> AccountProbe {
     AccountProbe::Found(AgentAccount {
         scope: Default::default(),
         plan: None,
-        account_id,
+        account_id: Some(account_id),
         metered: Some(true),
         version: None,
         sub_provider: None,
@@ -128,7 +152,7 @@ mod tests {
         )
         .unwrap();
 
-        let account = found(probe_at(&path, false));
+        let account = found(probe_at(&path));
         assert_eq!(account.account_id.as_deref(), Some("octocat"));
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(true));
@@ -150,7 +174,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            found(probe_at(&path, false)).account_id.as_deref(),
+            found(probe_at(&path)).account_id.as_deref(),
             Some("octocat")
         );
     }
@@ -172,7 +196,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            found(probe_at(&path, false)).account_id.as_deref(),
+            found(probe_at(&path)).account_id.as_deref(),
             Some("enterprise-user@github.example")
         );
     }
@@ -183,12 +207,12 @@ mod tests {
         let path = dir.path().join("config.json");
         std::fs::write(&path, r#"{"loggedInUsers":[]}"#).unwrap();
 
-        assert!(matches!(probe_at(&path, false), AccountProbe::LoggedOut));
+        assert!(matches!(probe_at(&path), AccountProbe::LoggedOut));
         assert!(matches!(
-            probe_at(&dir.path().join("missing.json"), false),
+            probe_at(&dir.path().join("missing.json")),
             AccountProbe::LoggedOut
         ));
-        assert!(matches!(probe_home(None, false), AccountProbe::LoggedOut));
+        assert!(matches!(probe_home(None), AccountProbe::LoggedOut));
     }
 
     #[test]
@@ -196,14 +220,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(&path, "not json").unwrap();
-        assert!(matches!(probe_at(&path, false), AccountProbe::Unavailable));
+        assert!(matches!(probe_at(&path), AccountProbe::Unavailable));
 
         let directory = dir.path().join("config-directory");
         std::fs::create_dir(&directory).unwrap();
-        assert!(matches!(
-            probe_at(&directory, false),
-            AccountProbe::Unavailable
-        ));
+        assert!(matches!(probe_at(&directory), AccountProbe::Unavailable));
     }
 
     #[test]
@@ -213,35 +234,63 @@ mod tests {
         std::fs::write(
             &path,
             r#"{
-                "lastLoggedInUser": {"host":"https://GitHub.Example/path","login":"octocat"},
+                "lastLoggedInUser": {"host":"https://GitHub.Example.:8443/path","login":"octocat"},
                 "loggedInUsers": [{"host":"github.com","login":"octocat"}]
             }"#,
         )
         .unwrap();
 
         assert_eq!(
-            found(probe_at(&path, false)).account_id.as_deref(),
-            Some("octocat@github.example")
+            found(probe_at(&path)).account_id.as_deref(),
+            Some("octocat@github.example:8443")
         );
     }
 
     #[test]
-    fn documented_environment_token_creates_a_metered_identityless_account() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("missing.json");
-        let account = found(probe_at(&missing, true));
-        assert_eq!(account.account_id, None);
-        assert_eq!(account.metered, Some(true));
-        assert_eq!(account.credentials_updated_at_ms, None);
+    fn public_host_forms_are_unqualified() {
+        for host in [
+            None,
+            Some(""),
+            Some("GitHub.COM."),
+            Some("https://github.com/path"),
+        ] {
+            assert_eq!(
+                normalized_identity(LoginIdentity {
+                    host: host.map(str::to_owned),
+                    login: Some("octocat".to_owned()),
+                })
+                .as_deref(),
+                Some("octocat")
+            );
+        }
+    }
 
-        std::fs::write(&missing, "not json").unwrap();
-        let account = found(probe_at(&missing, true));
-        assert_eq!(account.account_id, None);
-        assert_eq!(account.metered, Some(true));
-
-        std::fs::write(&missing, r#"{"loggedInUsers":[]}"#).unwrap();
-        let account = found(probe_at(&missing, true));
-        assert_eq!(account.account_id, None);
-        assert_eq!(account.credentials_updated_at_ms, None);
+    #[test]
+    fn malformed_hosts_and_empty_logins_are_rejected() {
+        for host in [
+            "ssh://github.example",
+            "https://bad host",
+            "user@github.example",
+            ".github.example",
+            "github.example:0",
+            "github.example:not-a-port",
+            "[::1]",
+        ] {
+            assert!(
+                normalized_identity(LoginIdentity {
+                    host: Some(host.to_owned()),
+                    login: Some("octocat".to_owned()),
+                })
+                .is_none(),
+                "accepted malformed host {host}"
+            );
+        }
+        assert!(
+            normalized_identity(LoginIdentity {
+                host: None,
+                login: Some("   ".to_owned()),
+            })
+            .is_none()
+        );
     }
 }

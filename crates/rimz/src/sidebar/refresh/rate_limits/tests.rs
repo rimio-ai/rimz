@@ -105,17 +105,17 @@ fn scoped_windows_fuse_and_round_trip_independently() {
     let mut snapshot = snapshot_with_panels(
         workspace,
         vec![provider_panel(
-            "copilot",
+            "plugin",
             vec![
-                scoped_window("premium_interactions", "prm", 20, reset),
-                scoped_window("chat", "cht", 70, reset),
+                scoped_window("build_minutes", "bld", 20, reset),
+                scoped_window("deployments", "dep", 70, reset),
             ],
         )],
     );
     apply_rate_limit_cache(&mut snapshot, &runtime, true);
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let windows = &cache.entries["copilot"].limits.windows;
+    let windows = &cache.entries["plugin"].limits.windows;
     assert_eq!(windows.len(), 2);
     assert_eq!(
         windows
@@ -123,7 +123,7 @@ fn scoped_windows_fuse_and_round_trip_independently() {
             .find(|window| window
                 .scope
                 .as_ref()
-                .is_some_and(|scope| scope.id == "premium_interactions"))
+                .is_some_and(|scope| scope.id == "build_minutes"))
             .and_then(|window| window.used_percentage),
         Some(20)
     );
@@ -133,14 +133,14 @@ fn scoped_windows_fuse_and_round_trip_independently() {
             .find(|window| window
                 .scope
                 .as_ref()
-                .is_some_and(|scope| scope.id == "chat"))
+                .is_some_and(|scope| scope.id == "deployments"))
             .and_then(|window| window.used_percentage),
         Some(70)
     );
 
     let encoded = serde_json::to_vec(&cache).unwrap();
     let decoded: RateLimitsCache = serde_json::from_slice(&encoded).unwrap();
-    assert_eq!(decoded.entries["copilot"].limits.windows, *windows);
+    assert_eq!(decoded.entries["plugin"].limits.windows, *windows);
 }
 
 #[test]
@@ -156,13 +156,13 @@ fn expired_durationless_scoped_cache_displays_unknown_independently() {
         &RateLimitsCache {
             refreshed_at_ms: 1,
             entries: BTreeMap::from([(
-                "copilot".to_owned(),
+                "plugin".to_owned(),
                 RateLimitCacheEntry {
                     scope: Default::default(),
                     limits: AgentRateLimits {
                         windows: vec![
-                            scoped_window("premium_interactions", "prm", 100, passed),
-                            scoped_window("chat", "cht", 40, future),
+                            scoped_window("build_minutes", "bld", 100, passed),
+                            scoped_window("deployments", "dep", 40, future),
                         ],
                     },
                     pending: Vec::new(),
@@ -171,28 +171,46 @@ fn expired_durationless_scoped_cache_displays_unknown_independently() {
             ..Default::default()
         },
     );
-    let mut snapshot = snapshot_with_panels(workspace, vec![provider_panel("copilot", Vec::new())]);
+    let mut snapshot = snapshot_with_panels(workspace, vec![provider_panel("plugin", Vec::new())]);
     apply_rate_limit_cache(&mut snapshot, &runtime, false);
 
     assert_eq!(snapshot.providers[0].windows.len(), 2);
-    let premium = &snapshot.providers[0].windows[1];
+    let build = snapshot.providers[0]
+        .windows
+        .iter()
+        .find(|window| {
+            window
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope.id == "build_minutes")
+        })
+        .unwrap();
     assert_eq!(
-        premium.scope.as_ref().map(|scope| scope.label.as_str()),
-        Some("prm")
+        build.scope.as_ref().map(|scope| scope.label.as_str()),
+        Some("bld")
     );
-    assert_eq!(premium.used_percentage, None);
-    assert_eq!(premium.resets_at, None);
-    let chat = &snapshot.providers[0].windows[0];
+    assert_eq!(build.used_percentage, None);
+    assert_eq!(build.resets_at, None);
+    let deployment = snapshot.providers[0]
+        .windows
+        .iter()
+        .find(|window| {
+            window
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope.id == "deployments")
+        })
+        .unwrap();
     assert_eq!(
-        chat.scope.as_ref().map(|scope| scope.label.as_str()),
-        Some("cht")
+        deployment.scope.as_ref().map(|scope| scope.label.as_str()),
+        Some("dep")
     );
-    assert_eq!(chat.used_percentage, Some(40));
-    assert_eq!(chat.resets_at, Some(future));
+    assert_eq!(deployment.used_percentage, Some(40));
+    assert_eq!(deployment.resets_at, Some(future));
 }
 
 #[test]
-fn pre_scope_cache_schema_is_cold_dropped() {
+fn retired_rate_limit_cache_schemas_are_cold_dropped() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rate_limits.json");
     std::fs::write(
@@ -200,6 +218,29 @@ fn pre_scope_cache_schema_is_cold_dropped() {
         r#"{"refreshed_at_ms":1,"windows":{"qwen":{"windows":[]}},"pending":{}}"#,
     )
     .unwrap();
+    let cache = read_rate_limits_cache(&path);
+    assert!(cache.entries.is_empty());
+    assert_eq!(cache.version, RateLimitsCache::default().version);
+
+    let version_two = RateLimitsCache {
+        version: 2,
+        entries: BTreeMap::from([(
+            "plugin".to_owned(),
+            RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![scoped_window(
+                        "build_minutes",
+                        "bld",
+                        80,
+                        Timestamp::from_second(4_000_000_000).unwrap(),
+                    )],
+                },
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    std::fs::write(&path, serde_json::to_vec(&version_two).unwrap()).unwrap();
     let cache = read_rate_limits_cache(&path);
     assert!(cache.entries.is_empty());
     assert_eq!(cache.version, RateLimitsCache::default().version);
@@ -785,28 +826,28 @@ fn authoritative_merge_does_not_fabricate_lifted_named_quotas() {
 
     merge_account_rate_limits(
         &runtime,
-        "copilot",
+        "plugin",
         AgentRateLimits {
             windows: vec![
-                scoped_window("premium_interactions", "prm", 20, reset),
-                scoped_window("chat", "cht", 40, reset),
+                scoped_window("build_minutes", "bld", 20, reset),
+                scoped_window("deployments", "dep", 40, reset),
             ],
         },
     );
     merge_account_rate_limits(
         &runtime,
-        "copilot",
+        "plugin",
         AgentRateLimits {
-            windows: vec![scoped_window("chat", "cht", 41, reset)],
+            windows: vec![scoped_window("deployments", "dep", 41, reset)],
         },
     );
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let windows = &cache.entries["copilot"].limits.windows;
+    let windows = &cache.entries["plugin"].limits.windows;
     assert_eq!(windows.len(), 1);
     assert_eq!(
         windows[0].scope.as_ref().map(|scope| scope.id.as_str()),
-        Some("chat")
+        Some("deployments")
     );
     assert!(!windows[0].lifted);
 }
