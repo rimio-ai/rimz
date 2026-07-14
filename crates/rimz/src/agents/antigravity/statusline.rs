@@ -126,7 +126,12 @@ impl StatuslinePayload {
             || usage.cache_creation_input_tokens.is_some()
             || usage.cache_read_input_tokens.is_some())
         .then_some(())?;
-        let price = prices.price(model_id)?;
+        let price = prices.price(model_id).or_else(|| {
+            selector_price_keys(model_id)
+                .into_iter()
+                .flatten()
+                .find_map(|key| prices.exact_price(&key))
+        })?;
         let total_cost_usd = price.cost(
             usage.input_tokens.unwrap_or(0),
             usage.output_tokens.unwrap_or(0),
@@ -213,4 +218,23 @@ impl StatuslinePayload {
             observed_at,
         }
     }
+}
+
+/// Antigravity CLI 1.1.2 publishes the selected human label in `model.id`
+/// (`Gemini 3.5 Flash (Medium)`) while hooks carry a canonical-shaped hint.
+/// Keep that provider identity untouched in `AgentContext`, but let a captured
+/// terminal reasoning qualifier expose conservative exact-table candidates for
+/// this point-in-time estimate. Exact lookup keeps an unknown selector from
+/// borrowing rates from a related model through the global fuzzy resolver.
+fn selector_price_keys(model_id: &str) -> Option<[String; 2]> {
+    let (base, effort, thinking_enabled) = normalize_model_display(Some(model_id.to_owned()));
+    (effort.is_some() || thinking_enabled == Some(true)).then_some(())?;
+    let dotted = base?
+        .split_whitespace()
+        .map(|segment| segment.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("-");
+    (!dotted.is_empty()).then_some(())?;
+    let hyphenated = dotted.replace('.', "-");
+    Some([dotted, hyphenated])
 }

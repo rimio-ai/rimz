@@ -303,11 +303,15 @@ mod tests {
     #[test]
     fn context_cost_estimate_attaches_only_when_the_payload_is_priceable() {
         let prices = PriceBook::from_litellm_json(
-            r#"{"agy-priced": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}"#,
+            r#"{"gemini-3.5-flash": {"input_cost_per_token": 1.5e-6, "output_cost_per_token": 9e-6, "cache_read_input_token_cost": 0.15e-6}}"#,
         );
         let priced = json!({
-            "model": {"id": "agy-priced"},
-            "context_window": {"current_usage": {"input_tokens": 10}}
+            "model": {"id": "Gemini 3.5 Flash (Medium)"},
+            "context_window": {"current_usage": {
+                "input_tokens": 2_971,
+                "output_tokens": 630,
+                "cache_read_input_tokens": 16_270
+            }}
         });
         let mut context = AntigravityAdapter
             .observe_context("antigravity", &priced)
@@ -315,7 +319,7 @@ mod tests {
         attach_context_cost(&AntigravityAdapter, &priced, &prices, &mut context);
         let cost = context.cost.unwrap();
         assert!(cost.estimated);
-        assert!((cost.total_cost_usd.unwrap() - 10e-6).abs() < 1e-15);
+        assert!((cost.total_cost_usd.unwrap() - 0.012_567).abs() < 1e-15);
         assert_eq!(
             cost,
             AgentCost {

@@ -39,6 +39,31 @@ impl SidebarSnapshot {
         let mut bindings = Vec::new();
 
         for (observation_index, observation) in observations.iter().enumerate() {
+            // A hook-bound session already carries stronger identity than a
+            // provider's workspace-latest cache: the durable row stamped this
+            // exact live pane with the same `(kind, session id)`. Use that
+            // authority before command-line resume discovery, then leave the
+            // fresh-cache path below for sessions that registered no hook.
+            let stamped = panes.iter().find_map(|pane| {
+                let agent = stamped_agent_for_pane(pane, &self.agents)?;
+                (agent.kind == observation.kind
+                    && agent.agent_id == observation.session_id
+                    && local_pane_matches(pane, observation)
+                    && !used_panes.contains(&pane.pane_id))
+                .then_some((pane, agent))
+            });
+            if let Some((pane, agent)) = stamped {
+                // A same-session transcript can briefly trail a new hook turn.
+                // Consume that observation without letting the fresh-cache pass
+                // regress the durable row to the prior turn; second precision
+                // admits providers whose transcript timestamps omit fractions.
+                used_sessions.insert(observation_index);
+                if local_observation_is_current(agent, observation) {
+                    used_panes.insert(pane.pane_id.clone());
+                    bindings.push((observation_index, pane.clone()));
+                }
+                continue;
+            }
             let Some(pane) = panes.iter().find(|pane| {
                 pane.resumed_session_id.as_ref() == Some(&observation.session_id)
                     && local_pane_matches(pane, observation)
@@ -322,6 +347,12 @@ fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> 
     crate::store::snapshot::process::pane_agent_kind(pane) == Some(observation.kind.as_str())
         && crate::store::snapshot::process::pane_worktree_path(pane)
             == observation.workspace.to_str()
+}
+
+fn local_observation_is_current(agent: &AgentState, observation: &LocalSessionObservation) -> bool {
+    agent
+        .turn_started_at
+        .is_none_or(|started| observation.last_activity.as_second() >= started.as_second())
 }
 
 fn unique_closest_pane<'a>(viable: &[&'a PaneRef]) -> Option<&'a PaneRef> {

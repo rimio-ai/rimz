@@ -300,7 +300,10 @@ fn statusline_projects_model_account_and_context_usage() {
             &json!({
                 "conversation_id": SESSION_ID,
                 "version": "1.1.2",
-                "model": {"id": "gemini-3.5-flash", "display_name": "Gemini 3.5 Flash"},
+                "model": {
+                    "id": "Gemini 3.5 Flash (Medium)",
+                    "display_name": "Gemini 3.5 Flash (Medium)"
+                },
                 "plan_tier": "ultra",
                 "email": "user@example.com",
                 "tool_confirmation_pending": true,
@@ -319,7 +322,10 @@ fn statusline_projects_model_account_and_context_usage() {
             }),
         )
         .unwrap();
-    assert_eq!(context.model_id.as_deref(), Some("gemini-3.5-flash"));
+    assert_eq!(
+        context.model_id.as_deref(),
+        Some("Gemini 3.5 Flash (Medium)")
+    );
     assert_eq!(
         context.model_display_name.as_deref(),
         Some("Gemini 3.5 Flash")
@@ -447,7 +453,7 @@ fn statusline_normalizes_captured_reasoning_qualifiers_and_preserves_model_id() 
 }
 
 #[test]
-fn statusline_prices_only_raw_model_ids_with_current_usage() {
+fn statusline_prices_canonical_ids_and_observed_selector_labels_with_usage() {
     let prices = PriceBook::from_litellm_json(
         r#"{
             "agy-priced": {
@@ -455,6 +461,12 @@ fn statusline_prices_only_raw_model_ids_with_current_usage() {
                 "output_cost_per_token": 2e-6,
                 "cache_creation_input_token_cost": 3e-6,
                 "cache_read_input_token_cost": 0.25e-6
+            },
+            "gemini-3.5-flash": {
+                "input_cost_per_token": 1.5e-6,
+                "output_cost_per_token": 9e-6,
+                "cache_creation_input_token_cost": 1.875e-6,
+                "cache_read_input_token_cost": 0.15e-6
             }
         }"#,
     );
@@ -480,6 +492,26 @@ fn statusline_prices_only_raw_model_ids_with_current_usage() {
     assert!((total_cost_usd - 150e-6).abs() < 1e-15);
     assert!(total_cost_usd.is_finite() && total_cost_usd > 0.0);
 
+    let captured = json!({
+        "model": {
+            "id": "Gemini 3.5 Flash (Medium)",
+            "display_name": "Gemini 3.5 Flash (Medium)"
+        },
+        "context_window": {
+            "current_usage": {
+                "input_tokens": 2_971,
+                "output_tokens": 630,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 16_270
+            }
+        }
+    });
+    let captured_cost = AntigravityAdapter
+        .estimate_context_cost(&captured, &prices)
+        .unwrap();
+    assert!(captured_cost.estimated);
+    assert!((captured_cost.total_cost_usd.unwrap() - 0.012_567).abs() < 1e-15);
+
     for payload in [
         json!({
             "model": {"id": "unknown", "display_name": "agy-priced"},
@@ -492,6 +524,10 @@ fn statusline_prices_only_raw_model_ids_with_current_usage() {
         }),
         json!({
             "model": {"id": "   ", "display_name": "agy-priced"},
+            "context_window": {"current_usage": {"input_tokens": 10}}
+        }),
+        json!({
+            "model": {"id": "Gemini 3.5 Flash Turbo (Medium)"},
             "context_window": {"current_usage": {"input_tokens": 10}}
         }),
     ] {

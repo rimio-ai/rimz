@@ -278,6 +278,59 @@ fn antigravity_transcript_question_projects_a_pane_only_wait() {
 }
 
 #[test]
+fn hook_bound_antigravity_question_does_not_need_workspace_latest_authorization() {
+    let waiting_since = ago(10);
+    let pane = pane("%1", "agy", "/repo/main");
+    let durable = agent("antigravity", "conversation-a", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let mut observation = observation("conversation-a", 20, Some(10), None);
+    observation.kind = AgentKind::new_unchecked("antigravity");
+    observation.transcript_path =
+        PathBuf::from("/antigravity/conversation-a/transcript_full.jsonl");
+    observation.status = AgentStatus::Waiting;
+    observation.phase = TurnPhase::Idle;
+    observation.native_prompt_detail = Some("Which language?".to_owned());
+    observation.waiting_since = Some(waiting_since);
+
+    let snapshot = room(vec![durable])
+        .with_local_sessions(std::slice::from_ref(&pane), vec![observation])
+        .with_live_panes(vec![pane], None);
+    let agent = rollup_agent(&snapshot, "conversation-a");
+    assert_eq!(agent.status, AgentStatus::Waiting);
+    assert_eq!(agent.phase, TurnPhase::Idle);
+    assert_eq!(agent.task.as_deref(), Some("Which language?"));
+    assert_eq!(agent.waiting_since, Some(waiting_since));
+    assert!(agent.open_ask.is_none());
+    assert_eq!(
+        row(&snapshot, "conversation-a").task(),
+        Some("Which language?")
+    );
+}
+
+#[test]
+fn stale_hook_bound_transcript_does_not_regress_a_newer_turn() {
+    let pane = pane("%1", "agy", "/repo/main");
+    let mut durable = agent("antigravity", "conversation-a", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .turn_started_ago(5);
+    durable.prompt = Some("current turn".to_owned());
+    let mut stale = observation("conversation-a", 20, Some(10), Some(20));
+    stale.kind = AgentKind::new_unchecked("antigravity");
+    stale.status = AgentStatus::Success;
+    stale.phase = TurnPhase::Idle;
+    stale.latest_prompt = Some("prior turn".to_owned());
+
+    let snapshot = room(vec![durable])
+        .with_local_sessions(std::slice::from_ref(&pane), vec![stale])
+        .with_live_panes(vec![pane], None);
+    let agent = rollup_agent(&snapshot, "conversation-a");
+    assert_eq!(agent.status, AgentStatus::Running);
+    assert_eq!(agent.prompt.as_deref(), Some("current turn"));
+}
+
+#[test]
 fn provider_session_adopts_provisional_launch_identity() {
     let mut provisional = agent("kiro", "launch_abc", AgentStatus::Idle, 1).in_pane("%1");
     provisional.name = Some("writer".to_owned());

@@ -163,7 +163,7 @@ agy --conversation <conversation-id>
 agy --conversation=<conversation-id>
 ```
 
-`-c` reads `~/.gemini/antigravity-cli/cache/last_conversations.json`, a documented map from absolute workspace path to latest conversation ID, and verifies the selected conversation with the backend. RimZ restart should retain the exact hook/statusline conversation ID and use `--conversation`; the latest-workspace cache is a fallback that can select the wrong concurrent session.
+`-c` reads `~/.gemini/antigravity-cli/cache/last_conversations.json`, a documented map from absolute workspace path to latest conversation ID, and verifies the selected conversation with the backend. Live 1.1.2 can leave this cache pointing at an older conversation while a newer bare `agy` process is active. RimZ restart retains the exact hook/statusline conversation ID and uses `--conversation`; a matching hook-bound row authorizes local transcript enrichment before this latest-workspace fallback.
 
 `/fork` (alias `/branch`) clones conversation history up to the current turn, allocates a new conversation ID, and switches the current TUI to that clone. It does not clone the Git checkout. Because no `agy --fork <source-id>` launch surface exists, it cannot implement `rimz agents fork`, whose contract opens a provider-native copy beside an untouched source.
 
@@ -322,7 +322,7 @@ The terminal-title command receives the same JSON, but it runs only when title c
 | --- | --- |
 | `cwd` | current working directory |
 | `conversation_id` | current conversation identity |
-| `model` | `{id, display_name}` |
+| `model` | `{id, display_name}`; live 1.1.2 can put the selected human label, such as `Gemini 3.5 Flash (Medium)`, in `id` |
 | `product` | product name, for example `antigravity-cli` |
 | `workspace` | `{current_dir, project_dir}`; the example uses a `file://` URI for `project_dir` |
 | `version` | CLI version string |
@@ -511,7 +511,7 @@ Documented cache files relevant to identity are:
 
 ### Model and context
 
-The statusline is the authoritative live model/context surface. Preserve `model.id` byte-for-byte as provider identity. A terminal case-insensitive `(Low)`, `(Medium)`, or `(High)` display qualifier supplies lowercase effort; `(Thinking)` supplies the thinking flag; unknown parenthetical suffixes remain presentation. Model choice is sticky for the current turn: changing the selector while a turn runs applies after that turn finishes or is canceled.
+The statusline is the authoritative live model/context surface. Preserve `model.id` byte-for-byte as provider identity even when 1.1.2 supplies the human selector label rather than the canonical-shaped hook hint. A terminal case-insensitive `(Low)`, `(Medium)`, or `(High)` display qualifier supplies lowercase effort; `(Thinking)` supplies the thinking flag; unknown parenthetical suffixes remain presentation. Model choice is sticky for the current turn: changing the selector while a turn runs applies after that turn finishes or is canceled.
 
 Antigravity is multi-model. The captured 1.1.2 selector lists `Gemini 3.5 Flash (Medium)`, `Gemini 3.5 Flash (High)`, `Gemini 3.5 Flash (Low)`, `Gemini 3.1 Pro (Low)`, `Gemini 3.1 Pro (High)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, and `GPT-OSS 120B (Medium)`. Current and selected markers are selector UI state rather than part of these labels. Availability changes by plan. Do not infer provider, context window, or pricing from the `antigravity` kind; use the exact live model and upstream-reported context limit.
 
@@ -531,9 +531,9 @@ Account quota/credits stay unsupported until Google publishes a machine API or a
 
 ### Spend
 
-The statusline exposes current input, output, cache-creation, and cache-read tokens plus the exact raw model ID, but no dollars. Baseline plan quota and AI-credit overages are not equivalent to API-token billing, and Antigravity can route multiple model providers. No official per-session cost field or cumulative usage ledger is published.
+The statusline exposes current input, output, cache-creation, and cache-read tokens plus a model value, but no dollars. Live 1.1.2 may express that value as the selected human label. Baseline plan quota and AI-credit overages are not equivalent to API-token billing, and Antigravity can route multiple model providers. No official per-session cost field or cumulative usage ledger is published.
 
-RimZ may price those four disjoint current-usage classes through its local public API price book when the exact trimmed model ID resolves. Treat the result as a best-effort `≈$` live-card estimate: room/provider aggregates, budgets, full-history spend, provider/account totals, and `rimz stats` exclude it. Never present the estimate as subscription billing or synthesize a price from the display label, plan, or agent kind.
+RimZ may price those four disjoint current-usage classes through its local public API price book. A canonical ID uses the shared resolver; a captured selector label must carry a recognized reasoning qualifier, and its qualifier-free normalized candidate must resolve by exact table key. Treat the result as a best-effort `≈$` live-card estimate: room/provider aggregates, budgets, full-history spend, provider/account totals, and `rimz stats` exclude it. Never present the estimate as subscription billing or synthesize a price from the plan or agent kind.
 
 ## Headless and supervised runs
 
