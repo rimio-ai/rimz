@@ -129,8 +129,9 @@ pub struct PaneRef {
     #[serde(default)]
     pub pane_process_start: Option<Timestamp>,
     /// Agent kind whose in-pane CLI process is live under this pane's root
-    /// process. Producer-derived process-tree truth; stamped lazy agents use it
-    /// to hold through child foreground commands and demote after the CLI exits.
+    /// process. Producer-derived process-tree truth; process rows use it to
+    /// disambiguate shared runtimes, while wired rows use it for binding and
+    /// liveness without changing the mux-reported command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosted_agent_kind: Option<AgentKind>,
     /// Start time of [`Self::hosted_agent_kind`]'s in-pane CLI process.

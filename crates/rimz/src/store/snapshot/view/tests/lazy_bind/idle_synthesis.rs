@@ -60,6 +60,49 @@ fn idle_synthesis_gates_leave_unqualified_panes_as_process_rows() {
 }
 
 #[test]
+fn hosted_qwen_identity_promotes_only_when_wired_or_session_stamped() {
+    let mut live = pane("term1", "node", "/repo/main");
+    live.hosted_agent_kind = Some(crate::ids::AgentKind::new_unchecked("qwen"));
+    live.hosted_agent_process_start = Some(ago(60));
+
+    let unwired = room(Vec::new()).with_live_panes(vec![live.clone()], None);
+    let unwired_rows = rows(&unwired);
+    assert_eq!(unwired_rows.len(), 1);
+    assert!(unwired_rows[0].is_process());
+    assert_eq!(unwired_rows[0].name, "qwen");
+    assert!(unwired.agent_panes.is_empty());
+
+    let mut wired = room(Vec::new());
+    wired.wired_kinds = vec!["qwen".to_owned()];
+    let wired = wired.with_live_panes(vec![live.clone()], None);
+    let wired_rows = rows(&wired);
+    assert_eq!(wired_rows.len(), 1);
+    assert!(wired_rows[0].is_agent());
+    assert_eq!(wired_rows[0].name, "qwen");
+    assert_eq!(wired_rows[0].status(), Some(AgentStatus::Idle));
+    assert_eq!(wired.agent_panes.len(), 1);
+    assert_eq!(wired.agent_panes[0].kind.as_str(), "qwen");
+    assert_eq!(wired.agent_panes[0].pane_id.raw(), "term1");
+
+    let qwen = agent("qwen", "sess-qwen", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("term1");
+    let stamped = room(vec![qwen]).with_live_panes(vec![live], None);
+    let stamped_rows = rows(&stamped);
+    assert_eq!(stamped_rows.len(), 1);
+    assert!(stamped_rows[0].is_agent());
+    assert_eq!(stamped_rows[0].id, "sess-qwen");
+    assert_eq!(stamped.agent_panes.len(), 1);
+    assert_eq!(
+        stamped.agent_panes[0]
+            .agent_id
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("sess-qwen")
+    );
+}
+
+#[test]
 fn two_codex_panes_one_agent_yields_one_real_one_idle() {
     // The multi-codex-per-worktree case: one prompted (pane-less) agent plus a
     // second still-unprompted `codex` pane in the same worktree. The agent

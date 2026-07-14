@@ -42,6 +42,12 @@ pub(super) fn row_from_process(pane: &PaneRef, now: Timestamp) -> SidebarRow {
     let elevated = pane.elevated_agent.as_ref();
     let program = elevated
         .map(|agent| agent.kind.as_str().to_owned())
+        .or_else(|| {
+            pane.hosted_agent_kind
+                .as_ref()
+                .and_then(|kind| crate::agents::descriptor_by_kind(kind.as_str()))
+                .map(|descriptor| descriptor.kind.to_owned())
+        })
         .or_else(|| command.map(program_label))
         .unwrap_or_else(|| "process".to_owned());
     let state = if elevated.is_some() {
@@ -277,5 +283,31 @@ mod tests {
             Some("sudo su"),
             "the relabel never rewrites pane.command"
         );
+    }
+
+    #[test]
+    fn hosted_agent_kind_relabels_only_proven_shared_runtime_processes() {
+        let mut hosted = pane("%7", "node", "/repo");
+        hosted.hosted_agent_kind = Some(crate::ids::AgentKind::new_unchecked("qwen"));
+        let hosted = row_from_process(&hosted, Timestamp::now());
+        assert!(hosted.is_process());
+        assert_eq!(hosted.name, "qwen");
+        assert_eq!(hosted.process_state(), Some(ProcessState::Idle));
+        assert_eq!(
+            hosted
+                .pane
+                .as_ref()
+                .and_then(|pane| pane.command.as_deref()),
+            Some("node")
+        );
+
+        let bare = row_from_process(&pane("%8", "node", "/repo"), Timestamp::now());
+        assert_eq!(bare.name, "node");
+
+        let mut display_only = pane("%9", "node", "/repo");
+        display_only.foreground_cmdline =
+            Some("node --expose-gc /home/u/.local/lib/qwen-code/lib/cli.js".to_owned());
+        let display_only = row_from_process(&display_only, Timestamp::now());
+        assert_eq!(display_only.name, "node");
     }
 }

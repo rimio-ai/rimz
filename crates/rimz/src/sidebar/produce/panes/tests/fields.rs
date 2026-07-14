@@ -249,14 +249,17 @@ fn stamp_pane_process_starts_derives_from_command_or_spawn_command() {
 }
 
 #[test]
-fn stamp_hosted_agent_processes_ignores_foreground_command() {
+fn stamp_hosted_qwen_process_ignores_foreground_command_and_probes_once() {
     let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
     let mut frame = frame(vec![pane("terminal_30", Some("git status"), Some("/repo"))]);
     first_mut(&mut frame).current.pid = Some(777);
+    let probes = std::cell::Cell::new(0);
 
-    stamp_hosted_agent_processes(&mut frame, &|kind, pid| {
+    stamp_hosted_agent_processes(&mut frame, &|pid| {
+        probes.set(probes.get() + 1);
         assert_eq!(pid, 777);
-        (kind == "codex").then_some(crate::proc::InPaneAgentProcess {
+        Some(crate::proc::HostedAgentProcess {
+            kind: AgentKind::new_unchecked("qwen"),
             pid: 777,
             started_at: start,
             cwd: None,
@@ -269,12 +272,13 @@ fn stamp_hosted_agent_processes_ignores_foreground_command() {
             .hosted_agent_kind
             .as_ref()
             .map(|kind| kind.as_str()),
-        Some("codex")
+        Some("qwen")
     );
     assert_eq!(
         first(&frame).current.hosted_agent_process_start,
         Some(start)
     );
+    assert_eq!(probes.get(), 1);
 }
 
 #[test]
@@ -285,9 +289,10 @@ fn hosted_agent_process_fills_empty_cwd_for_wrapped_shell_pane() {
     let mut frame = frame(vec![pane("terminal_176", Some("chezmoi cd"), None)]);
     first_mut(&mut frame).current.pid = Some(3153567);
 
-    stamp_hosted_agent_processes(&mut frame, &|kind, pid| {
+    stamp_hosted_agent_processes(&mut frame, &|pid| {
         assert_eq!(pid, 3153567);
-        (kind == "codex").then_some(crate::proc::InPaneAgentProcess {
+        Some(crate::proc::HostedAgentProcess {
+            kind: AgentKind::new_unchecked("codex"),
             pid: 3153567,
             started_at: start,
             cwd: Some(cwd.path().to_path_buf()),
@@ -499,7 +504,7 @@ fn carried_hosted_stamp_survives_tmux_scan_miss_until_ttl() {
     first_mut(&mut fresh).current.pid = Some(100);
     fresh.rotate_against_prior(&prior);
 
-    stamp_hosted_agent_processes(&mut fresh, &|_, _| None);
+    stamp_hosted_agent_processes(&mut fresh, &|_| None);
     let drops = carry_hosted_agent_stamps(&mut fresh, Some(&prior), 10, &|kind, pid| {
         assert_eq!((kind, pid), ("codex", 100));
         false

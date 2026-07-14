@@ -185,7 +185,7 @@ fn repair_pane_frame(
         &crate::proc::comm,
         &crate::proc::children,
     );
-    stamp_hosted_agent_processes(frame, &crate::proc::in_pane_agent_process_for_root);
+    stamp_hosted_agent_processes(frame, &crate::proc::hosted_agent_process_for_root);
     backfill_pane_cwds(frame, &|pid| crate::proc::cwd(pid));
     stamp_pane_resumed_session_ids(frame, &crate::agents::resumed_session_id_for_root);
     stamp_pane_process_starts(

@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 
 pub(crate) use pane_probe::command_starts_with_elevation_wrapper;
 pub use pane_probe::{
-    InPaneAgentProcess, elevated_in_pane_agent, hosted_agent_absent_under_root,
-    in_pane_agent_process_for_root, in_pane_agent_start, in_pane_agent_start_for_root,
-    in_pane_agent_starts,
+    HostedAgentProcess, InPaneAgentProcess, elevated_in_pane_agent, hosted_agent_absent_under_root,
+    hosted_agent_process_for_root, in_pane_agent_process_for_root, in_pane_agent_start,
+    in_pane_agent_start_for_root, in_pane_agent_starts,
 };
 
 #[cfg(target_os = "macos")]

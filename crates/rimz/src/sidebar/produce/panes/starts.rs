@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use super::carry::expired_at;
 use crate::diag::record::HostedCarryDropReason;
 use crate::ids::{AgentKind, PaneId};
-use crate::proc::InPaneAgentProcess;
+use crate::proc::HostedAgentProcess;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
 use crate::sidebar::timing::PROCESS_START_MATCH_TOLERANCE;
 
@@ -129,14 +129,15 @@ pub(super) fn stamp_pane_process_starts(
     }
 }
 
-/// Stamp the lazy agent CLI process currently hosted under each pane root,
+/// Stamp the known agent CLI process currently hosted under each pane root,
 /// independent of the mux-reported foreground command. A live Codex/OpenCode
 /// pane can report `git`, `rg`, or a build while the agent process remains the
-/// root's child; the row binder consumes this signal to keep the session card
-/// stable until the in-pane agent process actually exits.
+/// root's child, while Qwen can report only its shared `node` runtime. The row
+/// binder consumes this signal to keep a wired session card stable until the
+/// in-pane agent process actually exits; unwired panes remain process rows.
 pub(super) fn stamp_hosted_agent_processes(
     frame: &mut PaneFrame,
-    root_process: &dyn Fn(&str, u32) -> Option<InPaneAgentProcess>,
+    root_process: &dyn Fn(u32) -> Option<HostedAgentProcess>,
 ) {
     for pane in frame.pane_states_mut() {
         pane.current.hosted_agent_kind = None;
@@ -145,19 +146,15 @@ pub(super) fn stamp_hosted_agent_processes(
         let Some(pid) = pane.current.pid else {
             continue;
         };
-        let mut hosted = lazy_agent_kinds()
-            .filter_map(|kind| root_process(kind, pid).map(|process| (kind, process)))
-            .collect::<Vec<_>>();
-        hosted.sort_by_key(|(kind, process)| (*kind, process.started_at));
-        hosted.dedup_by(|left, right| left.0 == right.0 && left.1.started_at == right.1.started_at);
-        if let [(kind, process)] = hosted.as_slice() {
-            pane.current.hosted_agent_kind = Some(AgentKind::new_unchecked(*kind));
-            pane.current.hosted_agent_process_start = Some(process.started_at);
-            if pane.current.cwd.as_deref().is_none_or(|cwd| cwd.is_empty())
-                && let Some(cwd) = displayable_cwd(process.cwd.as_ref())
-            {
-                pane.current.cwd = Some(cwd);
-            }
+        let Some(process) = root_process(pid) else {
+            continue;
+        };
+        pane.current.hosted_agent_kind = Some(process.kind);
+        pane.current.hosted_agent_process_start = Some(process.started_at);
+        if pane.current.cwd.as_deref().is_none_or(|cwd| cwd.is_empty())
+            && let Some(cwd) = displayable_cwd(process.cwd.as_ref())
+        {
+            pane.current.cwd = Some(cwd);
         }
     }
 }
@@ -170,7 +167,7 @@ pub(super) struct HostedCarryDrop {
     pub(super) reason: HostedCarryDropReason,
 }
 
-/// Restore a hosted lazy-agent stamp across a transient root-process scan miss.
+/// Restore a hosted agent stamp across a transient root-process scan miss.
 /// The carry is bounded by the same pane-carry TTL and anchored to the first
 /// missed scan, so a real exit demotes once the miss stops being transient.
 pub(super) fn carry_hosted_agent_stamps(
@@ -316,13 +313,6 @@ pub(super) fn drop_reused_pid_bindings(
             pane.metrics = PaneMetrics::default();
         }
     }
-}
-
-fn lazy_agent_kinds() -> impl Iterator<Item = &'static str> {
-    crate::agents::known_kinds().filter(|kind| {
-        crate::agents::descriptor_by_kind(kind)
-            .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
-    })
 }
 
 fn process_start_diff_gt(left: jiff::Timestamp, right: jiff::Timestamp) -> bool {

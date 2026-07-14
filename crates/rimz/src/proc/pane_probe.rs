@@ -6,14 +6,23 @@ use crate::ids::AgentKind;
 use crate::pane::ElevatedAgent;
 
 /// Maximum process-tree depth walked below a pane root when looking for an
-/// elevated agent or lazy-hosted in-pane agent. `sudo su` + login shell + node
-/// launcher + agent is shallow; this cap keeps a pathological pane from turning
-/// a sidebar tick into an unbounded tree walk.
-const ELEVATED_AGENT_DESCENT_DEPTH: usize = 8;
+/// elevated or pane-hosted agent. `sudo su` + login shell + node launcher +
+/// agent is shallow; this cap keeps a pathological pane from turning a sidebar
+/// tick into an unbounded tree walk.
+const PANE_AGENT_DESCENT_DEPTH: usize = 8;
 
-/// A live in-pane lazy-agent CLI found below a pane root.
+/// A live in-pane agent CLI found below a pane root for a requested kind.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InPaneAgentProcess {
+    pub pid: u32,
+    pub started_at: jiff::Timestamp,
+    pub cwd: Option<PathBuf>,
+}
+
+/// A live known agent CLI proven along a pane root's single-child process chain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostedAgentProcess {
+    pub kind: AgentKind,
     pub pid: u32,
     pub started_at: jiff::Timestamp,
     pub cwd: Option<PathBuf>,
@@ -72,7 +81,7 @@ fn elevated_in_pane_agent_with(
                 uid,
             });
         }
-        if depth >= ELEVATED_AGENT_DESCENT_DEPTH {
+        if depth >= PANE_AGENT_DESCENT_DEPTH {
             continue;
         }
         for child in children(pid) {
@@ -122,7 +131,7 @@ pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> 
     starts
 }
 
-/// Start time of the in-pane lazy-agent CLI behind a pane's bound root process —
+/// Start time of the in-pane agent CLI behind a pane's bound root process —
 /// the per-pane exact signal the frame stamp prefers over the cwd scan above.
 /// The root is the CLI itself when its cmdline reads as the agent TUI (a pane
 /// running it directly); shell-hosted and wrapper-hosted CLIs are accepted only
@@ -130,14 +139,14 @@ pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> 
 /// load-bearing twice over: a shell outlives the agents it hosts, so stamping
 /// its older start would re-admit the very sessions `pane_start_allows_bind`
 /// refuses, and a re-run CLI is a fresh child pid even when the hosting shell
-/// survives, so re-tenancy stays visible. `None` for a non-lazy kind, a branchy
+/// survives, so re-tenancy stays visible. `None` for an unknown kind, a branchy
 /// process tree, or when no descendant reads as the CLI, so the caller falls
 /// back rather than guesses.
 pub fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<jiff::Timestamp> {
     in_pane_agent_process_for_root(kind, root_pid).map(|process| process.started_at)
 }
 
-/// The in-pane lazy-agent CLI process backing a live pane, including its cwd
+/// The requested in-pane agent CLI process backing a live pane, including its cwd
 /// when readable. Rimz walks only a single-child chain from the pane root:
 /// direct agent launches, shell-hosted agents, and wrapper-spawned subshells
 /// such as `chezmoi cd -> zsh -> codex` are unambiguous, while a branching
@@ -153,7 +162,20 @@ pub fn in_pane_agent_process_for_root(kind: &str, root_pid: u32) -> Option<InPan
     )
 }
 
-/// Whether a lazy-hosted agent is authoritatively absent below a pane root.
+/// The outermost known agent CLI hosted below a pane root. Rimz classifies the
+/// full command line at each node on one single-child walk, and abstains when
+/// the tree cannot prove one unambiguous live CLI.
+pub fn hosted_agent_process_for_root(root_pid: u32) -> Option<HostedAgentProcess> {
+    hosted_agent_process_for_root_with(
+        root_pid,
+        &crate::proc::cmdline,
+        &crate::proc::children,
+        &crate::proc::process_start,
+        &crate::proc::cwd,
+    )
+}
+
+/// Whether an agent of the requested kind is authoritatively absent below a pane root.
 /// This is stricter than [`in_pane_agent_process_for_root`]: unreadable
 /// cmdlines, branching trees, and depth exhaustion are indeterminate, so they
 /// return `false` and keep callers on their transient-miss path.
@@ -177,13 +199,59 @@ fn in_pane_agent_process_for_root_with(
     if !in_pane_agent_probe_supported(kind) {
         return None;
     }
+    pane_agent_process_for_root_with(
+        root_pid,
+        &|cmdline| {
+            in_pane_agent_cmdline_matches(kind, cmdline)
+                .then(|| AgentKind::new_unchecked(kind.to_owned()))
+        },
+        cmdline,
+        children,
+        process_start,
+        cwd,
+    )
+    .map(|process| InPaneAgentProcess {
+        pid: process.pid,
+        started_at: process.started_at,
+        cwd: process.cwd,
+    })
+}
+
+fn hosted_agent_process_for_root_with(
+    root_pid: u32,
+    cmdline: &dyn Fn(u32) -> Option<String>,
+    children: &dyn Fn(u32) -> Vec<u32>,
+    process_start: &dyn Fn(u32) -> Option<jiff::Timestamp>,
+    cwd: &dyn Fn(u32) -> Option<PathBuf>,
+) -> Option<HostedAgentProcess> {
+    pane_agent_process_for_root_with(
+        root_pid,
+        &|cmdline| {
+            let kind = crate::store::snapshot::command_agent_kind(cmdline)?;
+            (kind != "codex" || crate::agents::codex::is_codex_cli_cmdline(cmdline))
+                .then(|| AgentKind::new_unchecked(kind))
+        },
+        cmdline,
+        children,
+        process_start,
+        cwd,
+    )
+}
+
+fn pane_agent_process_for_root_with(
+    root_pid: u32,
+    classify: &dyn Fn(&str) -> Option<AgentKind>,
+    cmdline: &dyn Fn(u32) -> Option<String>,
+    children: &dyn Fn(u32) -> Vec<u32>,
+    process_start: &dyn Fn(u32) -> Option<jiff::Timestamp>,
+    cwd: &dyn Fn(u32) -> Option<PathBuf>,
+) -> Option<HostedAgentProcess> {
     let mut pid = root_pid;
-    for _ in 0..=ELEVATED_AGENT_DESCENT_DEPTH {
-        if cmdline(pid)
-            .as_deref()
-            .is_some_and(|cmdline| in_pane_agent_cmdline_matches(kind, cmdline))
-        {
-            return Some(InPaneAgentProcess {
+    for _ in 0..=PANE_AGENT_DESCENT_DEPTH {
+        let command = cmdline(pid)?;
+        if let Some(kind) = classify(&command) {
+            return Some(HostedAgentProcess {
+                kind,
                 pid,
                 started_at: process_start(pid)?,
                 cwd: cwd(pid),
@@ -208,7 +276,7 @@ fn hosted_agent_absent_under_root_with(
         return false;
     }
     let mut pid = root_pid;
-    for _ in 0..=ELEVATED_AGENT_DESCENT_DEPTH {
+    for _ in 0..=PANE_AGENT_DESCENT_DEPTH {
         let Some(cmdline) = cmdline(pid) else {
             return false;
         };
@@ -233,8 +301,7 @@ fn in_pane_agent_cmdline_matches(kind: &str, cmdline: &str) -> bool {
 }
 
 fn in_pane_agent_probe_supported(kind: &str) -> bool {
-    crate::agents::descriptor_by_kind(kind)
-        .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
+    crate::agents::descriptor_by_kind(kind).is_some()
 }
 
 #[cfg(test)]
@@ -350,6 +417,138 @@ mod tests {
     }
 
     #[test]
+    fn hosted_agent_process_finds_outer_qwen_cli_in_one_walk() {
+        let start: jiff::Timestamp = "2026-07-01T10:00:00Z".parse().unwrap();
+        let cwd = PathBuf::from("/repo/qwen");
+        let qwen = "node --expose-gc /home/u/.local/lib/qwen-code/lib/cli.js";
+        let fixture = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[20]),
+            ProcNode::new(20, 1_000, qwen, &[30]),
+            ProcNode::new(30, 1_000, qwen, &[]),
+        ]);
+        let cmdline_reads = std::cell::RefCell::new(Vec::new());
+        let child_reads = std::cell::RefCell::new(Vec::new());
+
+        let found = hosted_agent_process_for_root_with(
+            10,
+            &|pid| {
+                cmdline_reads.borrow_mut().push(pid);
+                fixture.cmdline(pid)
+            },
+            &|pid| {
+                child_reads.borrow_mut().push(pid);
+                fixture.children(pid)
+            },
+            &|pid| (pid == 20).then_some(start),
+            &|pid| (pid == 20).then_some(cwd.clone()),
+        );
+
+        assert_eq!(
+            found,
+            Some(HostedAgentProcess {
+                kind: AgentKind::new_unchecked("qwen"),
+                pid: 20,
+                started_at: start,
+                cwd: Some(cwd),
+            })
+        );
+        assert_eq!(*cmdline_reads.borrow(), vec![10, 20]);
+        assert_eq!(*child_reads.borrow(), vec![10]);
+    }
+
+    #[test]
+    fn kind_specific_probe_accepts_eager_qwen() {
+        let start: jiff::Timestamp = "2026-07-01T10:00:00Z".parse().unwrap();
+        let fixture = ProcFixture::new([ProcNode::new(10, 1_000, "qwen", &[])]);
+
+        assert_eq!(
+            in_pane_agent_process_for_root_with(
+                "qwen",
+                10,
+                &|pid| fixture.cmdline(pid),
+                &|pid| fixture.children(pid),
+                &|_| Some(start),
+                &|_| None,
+            ),
+            Some(InPaneAgentProcess {
+                pid: 10,
+                started_at: start,
+                cwd: None,
+            })
+        );
+    }
+
+    #[test]
+    fn hosted_agent_process_abstains_without_complete_linear_proof() {
+        let branch = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[20, 30]),
+            ProcNode::new(20, 1_000, "qwen", &[]),
+            ProcNode::new(30, 1_000, "make", &[]),
+        ]);
+        let deep = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[11]),
+            ProcNode::new(11, 1_000, "zsh", &[12]),
+            ProcNode::new(12, 1_000, "zsh", &[13]),
+            ProcNode::new(13, 1_000, "zsh", &[14]),
+            ProcNode::new(14, 1_000, "zsh", &[15]),
+            ProcNode::new(15, 1_000, "zsh", &[16]),
+            ProcNode::new(16, 1_000, "zsh", &[17]),
+            ProcNode::new(17, 1_000, "zsh", &[18]),
+            ProcNode::new(18, 1_000, "zsh", &[19]),
+            ProcNode::new(19, 1_000, "qwen", &[]),
+        ]);
+        let unreadable = ProcFixture::new([
+            ProcNode::new(10, 1_000, "zsh", &[20]),
+            ProcNode::new(20, 1_000, "qwen", &[]).with_unreadable_cmdline(),
+        ]);
+
+        for fixture in [&branch, &deep, &unreadable] {
+            assert_eq!(
+                hosted_agent_process_for_root_with(
+                    10,
+                    &|pid| fixture.cmdline(pid),
+                    &|pid| fixture.children(pid),
+                    &|_| panic!("indeterminate proof must not read process starts"),
+                    &|_| panic!("indeterminate proof must not read cwds"),
+                ),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn hosted_agent_process_rejects_shared_runtimes_and_codex_daemons() {
+        let start: jiff::Timestamp = "2026-07-01T10:00:00Z".parse().unwrap();
+        for command in ["node", "codex app-server", "codex remote-control start"] {
+            let fixture = ProcFixture::new([ProcNode::new(10, 1_000, command, &[])]);
+            assert_eq!(
+                hosted_agent_process_for_root_with(
+                    10,
+                    &|pid| fixture.cmdline(pid),
+                    &|pid| fixture.children(pid),
+                    &|_| Some(start),
+                    &|_| None,
+                ),
+                None,
+                "{command}"
+            );
+        }
+
+        let qwen = ProcFixture::new([ProcNode::new(10, 1_000, "qwen", &[])]);
+        assert_eq!(
+            hosted_agent_process_for_root_with(
+                10,
+                &|pid| qwen.cmdline(pid),
+                &|pid| qwen.children(pid),
+                &|_| None,
+                &|_| panic!("startless proof must not read cwd"),
+            ),
+            None,
+            "a classified CLI without a process start is not proven live"
+        );
+    }
+
+    #[test]
     fn in_pane_agent_process_abstains_on_branching_tree() {
         let fixture = ProcFixture::new([
             ProcNode::new(10, 1_000, "zsh", &[20, 30]),
@@ -431,8 +630,11 @@ mod tests {
         ]);
         assert!(!deep.hosted_absent("codex", 10));
 
-        let unsupported = ProcFixture::new([ProcNode::new(10, 1_000, "claude", &[])]);
-        assert!(!unsupported.hosted_absent("claude", 10));
+        let eager = ProcFixture::new([ProcNode::new(10, 1_000, "qwen", &[])]);
+        assert!(!eager.hosted_absent("qwen", 10));
+
+        let unknown = ProcFixture::new([ProcNode::new(10, 1_000, "unknown", &[])]);
+        assert!(!unknown.hosted_absent("unknown", 10));
     }
 
     #[test]

@@ -106,6 +106,8 @@ pub struct PaneProcess {
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<Timestamp>,
+    /// Known agent kind proven from a single-child process-tree walk below the
+    /// pane root. This identity stays separate from the mux command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosted_agent_kind: Option<AgentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

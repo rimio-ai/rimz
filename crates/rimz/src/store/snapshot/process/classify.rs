@@ -273,6 +273,18 @@ mod tests {
     }
 
     #[test]
+    fn classifier_identifies_qwen_node_bundle_without_claiming_bare_node() {
+        assert_eq!(
+            command_agent_kind(
+                "/home/u/.local/lib/qwen-code/node/bin/node --expose-gc /home/u/.local/lib/qwen-code/lib/cli.js"
+            ),
+            Some("qwen")
+        );
+        assert_eq!(command_agent_kind("node"), None);
+        assert_eq!(command_agent_kind("node /srv/app/server.js"), None);
+    }
+
+    #[test]
     fn command_program_basename_trims_only_the_program_token() {
         assert_eq!(
             command_program_basename("target/debug/xtask install-dev"),
