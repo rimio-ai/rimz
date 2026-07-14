@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::path::PathBuf;
 
@@ -228,7 +228,7 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
     let mut walker = rimz::agents::spending::SpendingWalker::new();
     if warm {
         let origin_overrides = HashMap::new();
-        let automation_files = HashSet::new();
+        let user_inputs = Vec::new();
         let live_excluded = BTreeSet::new();
         let spec = rimz::agents::spending::HeadlineSpec::default();
         let req = rimz::agents::spending::WalkRequest {
@@ -236,8 +236,7 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
             prices: &prices,
             now_secs: SPENDING_NOW_SECS,
             origin_overrides: &origin_overrides,
-            automation_files: &automation_files,
-            automation_signature: 0,
+            user_inputs: &user_inputs,
             scope: None,
             live_excluded: &live_excluded,
             spec: &spec,
@@ -282,7 +281,7 @@ fn spending_walk_cold(bencher: Bencher) {
         .with_inputs(|| spending_fixture(false))
         .bench_local_values(|mut fixture| {
             let origin_overrides = HashMap::new();
-            let automation_files = HashSet::new();
+            let user_inputs = Vec::new();
             let live_excluded = BTreeSet::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
@@ -290,8 +289,7 @@ fn spending_walk_cold(bencher: Bencher) {
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
                 origin_overrides: &origin_overrides,
-                automation_files: &automation_files,
-                automation_signature: 0,
+                user_inputs: &user_inputs,
                 scope: None,
                 live_excluded: &live_excluded,
                 spec: &spec,
@@ -310,7 +308,7 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
         .with_inputs(|| spending_fixture(true))
         .bench_local_values(|mut fixture| {
             let origin_overrides = HashMap::new();
-            let automation_files = HashSet::new();
+            let user_inputs = Vec::new();
             let live_excluded = BTreeSet::new();
             let spec = rimz::agents::spending::HeadlineSpec::default();
             let req = rimz::agents::spending::WalkRequest {
@@ -318,8 +316,7 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
                 prices: &fixture.prices,
                 now_secs: SPENDING_NOW_SECS,
                 origin_overrides: &origin_overrides,
-                automation_files: &automation_files,
-                automation_signature: 0,
+                user_inputs: &user_inputs,
                 scope: None,
                 live_excluded: &live_excluded,
                 spec: &spec,

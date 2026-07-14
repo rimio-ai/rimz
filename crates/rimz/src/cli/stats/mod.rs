@@ -37,7 +37,8 @@ use rimz::agents::pricing;
 use rimz::agents::spending::{
     DaySpend, ProviderSpendingCache, SilentWalk, SpendProgress, SpendTally, SpendWindow, Spending,
     SpendingWalker, WalkObserver, WalkRequest, discover_spending_files,
-    read_provider_spending_cache, unix_secs_now, utc_date, write_provider_spending_cache_with_day,
+    read_provider_spending_cache, unix_secs_now, user_input, utc_date,
+    write_provider_spending_cache_with_day,
 };
 use rimz::config::{GlyphRole, MachineConfig, Semantic, ThemeConfig};
 use rimz::store::single_flight::{Coalesced, coalesce};
@@ -309,7 +310,7 @@ fn compute_stats_from_files(
         pricing::cached_book(&paths.shared_pricing_cache_path())
     };
     let origin_overrides = HashMap::new();
-    let automation_files = rimz::harness::schedule::run_log::automation_transcripts();
+    let user_inputs = user_input::load();
     let live_excluded = BTreeSet::new();
     let spec = MachineConfig::load_lenient().headline_spec();
     let req = WalkRequest {
@@ -317,8 +318,7 @@ fn compute_stats_from_files(
         prices: &prices,
         now_secs,
         origin_overrides: &origin_overrides,
-        automation_files: &automation_files,
-        automation_signature: rimz::harness::schedule::run_log::automation_signature(),
+        user_inputs: &user_inputs,
         scope: None,
         live_excluded: &live_excluded,
         spec: &spec,

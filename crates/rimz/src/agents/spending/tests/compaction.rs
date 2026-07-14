@@ -40,7 +40,7 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
         (claude_adapter(), other_file.clone()),
     ];
     let scope = SpendScope::from_roots(Some(&project), &[]);
-    let before_counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let before_counted = dedup_cached_entries(&files, &cache).into_counted();
     let before_spending = aggregate_spending(
         &files,
         &cache,
@@ -62,7 +62,7 @@ fn cache_compaction_rolls_old_entries_losslessly_and_is_idempotent() {
 
     assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
 
-    let after_counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let after_counted = dedup_cached_entries(&files, &cache).into_counted();
     assert_eq!(
         aggregate_spending(
             &files,
@@ -149,7 +149,7 @@ fn cache_compaction_handles_sidechain_replay_edges() {
     ];
 
     assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
-    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
 
     assert_eq!(spending.total.year.usd, 1.0);
@@ -195,7 +195,7 @@ fn cache_compaction_handles_sidechain_replay_edges() {
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
 
     assert!(!compact_spending_cache(&mut cache, &files, NOW_SECS));
-    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
 
     assert_eq!(spending.total.year.usd, 1.0);
@@ -296,7 +296,7 @@ fn cache_compaction_preserves_old_native_thread_sessions() {
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(opencode_adapter(), file)];
 
     assert!(compact_spending_cache(&mut cache, &files, NOW_SECS));
-    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
 
     assert_eq!(spending.total.year.sessions, 2);

@@ -17,11 +17,12 @@ mod cache;
 mod publish;
 mod refresh;
 mod time;
+pub mod user_input;
 
 use std::cell::Cell;
 #[cfg(test)]
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -31,7 +32,7 @@ use super::{AgentAdapter, AgentCost, CostBasis};
 pub use crate::sidebar::timing::SPENDING_TTL;
 
 pub(crate) use aggregate::{
-    CountedPayload, OwnedCounted, SESSION_GAP_SECS, WorkspaceRollupScope,
+    CountedPayload, HeadlineContext, OwnedCounted, SESSION_GAP_SECS, WorkspaceRollupScope,
     aggregate_counted_rollups, dedup_cached_entries, dedup_cached_entries_owned, live_session_keys,
     origin_path, spending_files_signature,
 };
@@ -182,7 +183,6 @@ struct SpendingMemo {
 struct SpendingMemoKey {
     generation: u64,
     files_signature: u64,
-    automation_signature: u64,
 }
 
 pub struct WalkRequest<'a> {
@@ -190,8 +190,7 @@ pub struct WalkRequest<'a> {
     pub prices: &'a PriceBook,
     pub now_secs: u64,
     pub origin_overrides: &'a HashMap<PathBuf, PathBuf>,
-    pub automation_files: &'a HashSet<PathBuf>,
-    pub automation_signature: u64,
+    pub user_inputs: &'a [user_input::UserInputRecord],
     pub scope: Option<&'a SpendScope>,
     pub live_excluded: &'a BTreeSet<String>,
     pub spec: &'a HeadlineSpec,
@@ -321,13 +320,11 @@ impl SpendingWalker {
         let key = SpendingMemoKey {
             generation: self.cache.generation,
             files_signature: spending_files_signature(req.files),
-            automation_signature: req.automation_signature,
         };
         if self.memo.as_ref().is_none_or(|memo| memo.key != key) {
             self.memo = Some(SpendingMemo {
                 key,
-                counted: dedup_cached_entries_owned(req.files, &self.cache, req.automation_files)
-                    .into_counted(),
+                counted: dedup_cached_entries_owned(req.files, &self.cache).into_counted(),
             });
             stats.dedup_passes = 1;
         }
@@ -337,12 +334,15 @@ impl SpendingWalker {
             req.files,
             &self.cache,
             counted,
-            req.now_secs,
             req.scope.map(|scope| WorkspaceRollupScope {
                 scope,
                 live_excluded: req.live_excluded,
             }),
-            req.spec,
+            HeadlineContext {
+                user_inputs: req.user_inputs,
+                now_secs: req.now_secs,
+                spec: req.spec,
+            },
             stats,
         )
     }
@@ -474,23 +474,26 @@ pub fn session_entries<'a>(entries: &'a [CachedEntry], session_id: &str) -> Vec<
 pub(crate) fn aggregate_walk_publish(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
-    automation_files: &HashSet<PathBuf>,
+    user_inputs: &[user_input::UserInputRecord],
     now_secs: u64,
     scope: Option<&SpendScope>,
     live_excluded: &BTreeSet<String>,
     spec: &HeadlineSpec,
 ) -> SpendingWalkResult {
-    let counted = dedup_cached_entries(files, cache, automation_files).into_counted();
+    let counted = dedup_cached_entries(files, cache).into_counted();
     aggregate_walk_publish_from_counted(
         files,
         cache,
         &counted,
-        now_secs,
         scope.map(|scope| WorkspaceRollupScope {
             scope,
             live_excluded,
         }),
-        spec,
+        HeadlineContext {
+            user_inputs,
+            now_secs,
+            spec,
+        },
         WalkStats::default(),
     )
 }
@@ -499,13 +502,11 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
     counted: &[C],
-    now_secs: u64,
     workspace: Option<WorkspaceRollupScope<'_>>,
-    spec: &HeadlineSpec,
+    headline: HeadlineContext<'_>,
     stats: WalkStats,
 ) -> SpendingWalkResult {
-    let aggregate =
-        aggregate_counted_rollups(files, cache, counted, workspace, now_secs, spec, true);
+    let aggregate = aggregate_counted_rollups(files, cache, counted, workspace, headline, true);
 
     SpendingWalkResult {
         spending: aggregate.spending,
@@ -533,7 +534,7 @@ pub struct ScopedSpending {
 pub fn compute_scoped_spending(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
-    automation_files: &HashSet<PathBuf>,
+    user_inputs: &[user_input::UserInputRecord],
     scope: &SpendScope,
     live_excluded: &BTreeSet<String>,
     now_secs: u64,
@@ -542,14 +543,24 @@ pub fn compute_scoped_spending(
     if scope.is_empty() {
         return ScopedSpending::default();
     }
-    let deduped = dedup_cached_entries(files, cache, automation_files);
+    let deduped = dedup_cached_entries(files, cache);
     let counted = deduped.into_counted();
     let workspace = Some(WorkspaceRollupScope {
         scope,
         live_excluded,
     });
-    let aggregate =
-        aggregate_counted_rollups(files, cache, &counted, workspace, now_secs, spec, false);
+    let aggregate = aggregate_counted_rollups(
+        files,
+        cache,
+        &counted,
+        workspace,
+        HeadlineContext {
+            user_inputs,
+            now_secs,
+            spec,
+        },
+        false,
+    );
     ScopedSpending {
         tally: aggregate.workspace_tally,
         headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,

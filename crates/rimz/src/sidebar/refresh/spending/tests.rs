@@ -14,7 +14,7 @@ use crate::sidebar::timing::{SPENDING_STALE_GRACE, SPENDING_TTL};
 use crate::store::single_flight::{Coalesced, coalesce};
 
 use jiff::Timestamp;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -246,7 +246,10 @@ fn produce_local_walk_seeds_from_cursor_cache() {
         &mut walker,
         &runtime,
         &snapshot,
-        &HeadlineSpec::default(),
+        &HeadlineSpec {
+            mode: SpendWindowMode::Today,
+            timezone: Some("UTC".to_owned()),
+        },
     );
 
     assert!((caches.provider.spending.total.headline.usd - 2.25).abs() < 1e-9);
@@ -272,7 +275,10 @@ fn walk_local_stays_memory_only_while_publishing_walk_writes_provider_cache() {
         transcript,
     )]);
     let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now());
-    let spec = HeadlineSpec::default();
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Today,
+        timezone: Some("UTC".to_owned()),
+    };
 
     let mut local_walker = SpendingWalker::new();
     let local = super::walk_fleet_spending(&mut local_walker, &runtime, &snapshot, &spec, false);
@@ -393,12 +399,12 @@ fn publishing_walk_observer_checkpoints_workspace_live_exclusions() {
     };
     let live_excluded = BTreeSet::from(["claude:agent".to_owned()]);
     let provider_path = runtime.shared_provider_spending_path();
-    let automation_files = HashSet::new();
+    let user_inputs = Vec::new();
     let mut observer = super::PublishingWalkObserver {
         runtime: &runtime,
         provider_path,
         files: &files,
-        automation_files: &automation_files,
+        user_inputs: &user_inputs,
         now_secs,
         scope: Some(&scope),
         scope_hash: Some(scope_hash.clone()),
@@ -490,7 +496,10 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
         &scope,
         Some(&scope_hash),
         &files,
-        &HeadlineSpec::default(),
+        &HeadlineSpec {
+            mode: SpendWindowMode::Today,
+            timezone: Some("UTC".to_owned()),
+        },
         &BTreeSet::new(),
     )
     .expect("workspace cache derives from the shared cursor cache");
@@ -556,7 +565,7 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
     let scoped = crate::agents::spending::compute_scoped_spending(
         &files,
         &raw,
-        &Default::default(),
+        &[],
         &scope,
         &BTreeSet::from(["claude:agent".to_owned()]),
         now_secs,
@@ -635,7 +644,10 @@ fn derive_workspace_spending_memo_keys_live_exclusions() {
         &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
         transcript.clone(),
     )];
-    let spec = HeadlineSpec::default();
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Today,
+        timezone: Some("UTC".to_owned()),
+    };
 
     let included = super::derive_workspace_spending(
         &runtime,

@@ -7,6 +7,28 @@ use crate::agents::{AgentContext, AgentState, AgentStatus};
 use crate::ids::{AgentKind, MessageId, MuxName, PaneId, WorkspaceId};
 
 #[test]
+fn user_input_requires_plain_human_delivery() {
+    let human = MessageRecord::new(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        &agent("human", None),
+        "prompt".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    assert!(human.is_user_input());
+    assert!(!human.clone().with_automated(true).is_user_input());
+
+    let mut resume = human.clone();
+    resume.gate = DeliveryGate::Resume;
+    assert!(!resume.is_user_input());
+    assert!(
+        !human
+            .with_sender(agent_sender("coder", None))
+            .is_user_input()
+    );
+}
+
+#[test]
 fn delivery_gates_follow_agent_lifecycle() {
     let cases = [
         (AgentStatus::Running, false, false, false),

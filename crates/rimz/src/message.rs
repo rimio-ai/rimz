@@ -377,6 +377,15 @@ pub struct MessageRecord {
 }
 
 impl MessageRecord {
+    /// A delivered prompt that is the human's own input. Agent senders carry
+    /// identity, background orchestration marks records automated, and resume
+    /// gates are auto-continue nudges that intentionally ride a human sender.
+    pub fn is_user_input(&self) -> bool {
+        matches!(self.sender, MessageSender::Human)
+            && !self.automated
+            && self.gate != DeliveryGate::Resume
+    }
+
     pub fn new(
         workspace_id: WorkspaceId,
         agent: &AgentState,

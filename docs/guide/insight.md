@@ -89,7 +89,7 @@ The token breakdown sums every durable session record that ran in the room's spe
 
 The window is yours to set with `[sidebar] spend_window` ([configuration](./configuration.md#sidebar-rendering)):
 
-- `session` (the default): the current burst of work, opened by your latest activity after a five-hour idle gap. Loop-fired turns count inside it but never start it.
+- `session` (the default): the current burst of work, opened by your latest prompt after a five-hour idle gap. Loop-fired turns and agent-to-agent messages count inside it but never start or bridge it.
 - `24h`: a trailing twenty-four hours.
 - `today`: since calendar midnight in your configured `timezone`.
 

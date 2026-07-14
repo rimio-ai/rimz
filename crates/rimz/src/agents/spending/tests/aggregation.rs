@@ -1,6 +1,15 @@
 use super::*;
 use jiff::Timestamp;
 
+fn user_input(second: u64, kind: &str, origin: Option<&Path>) -> user_input::UserInputRecord {
+    user_input::UserInputRecord {
+        at: Timestamp::from_second(i64::try_from(second).expect("timestamp fits i64"))
+            .expect("timestamp"),
+        kind: crate::ids::AgentKind::new_unchecked(kind),
+        origin: origin.map(Path::to_path_buf),
+    }
+}
+
 #[test]
 fn token_windows_and_native_sessions_populate_public_tallies() {
     let dir = TempDir::new().unwrap();
@@ -75,7 +84,7 @@ fn token_windows_and_native_sessions_populate_public_tallies() {
         ..Default::default()
     };
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(opencode_adapter(), native_file)];
-    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
     assert_eq!(spending.total.headline.sessions, 1);
     assert_eq!(spending.total.week.sessions, 2);
@@ -118,7 +127,7 @@ fn headline_cutoffs_are_global_scoped_and_provider_local() {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
     };
-    let counted = dedup_cached_entries(&files, &today_cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(&files, &today_cache).into_counted();
     let global = aggregate_spending(&files, &today_cache, &counted, NOW_SECS, &today_spec);
     let scoped = compute_scoped_tally(
         &files,
@@ -205,7 +214,8 @@ fn local_day_rollups_ignore_headline_mode_and_exclude_live_workspace_usd() {
         )]),
         ..Default::default()
     };
-    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let user_inputs = user_inputs_from_counted(&counted);
     let live_excluded = BTreeSet::from(["claude:live".to_owned()]);
     let scope = SpendScope::from_roots(Some(&project), &[]);
     let spec = HeadlineSpec {
@@ -220,8 +230,11 @@ fn local_day_rollups_ignore_headline_mode_and_exclude_live_workspace_usd() {
             scope: &scope,
             live_excluded: &live_excluded,
         }),
-        now.as_second() as u64,
-        &spec,
+        HeadlineContext {
+            user_inputs: &user_inputs,
+            now_secs: now.as_second() as u64,
+            spec: &spec,
+        },
         false,
     );
 
@@ -256,7 +269,7 @@ fn live_exclusion_suppresses_workspace_headline_usd_only() {
     let scoped = compute_scoped_spending(
         &files,
         &cache,
-        &HashSet::new(),
+        &user_inputs_from_cache(&files, &cache),
         &scope,
         &live_excluded,
         NOW_SECS,
@@ -292,7 +305,7 @@ fn live_exclusion_suppresses_workspace_headline_usd_only() {
     let scoped = compute_scoped_spending(
         &files,
         &cache,
-        &HashSet::new(),
+        &user_inputs_from_cache(&files, &cache),
         &scope,
         &live_excluded,
         NOW_SECS,
@@ -324,7 +337,7 @@ fn live_exclusion_suppresses_workspace_headline_usd_only() {
     let scoped = compute_scoped_spending(
         &files,
         &cache,
-        &HashSet::new(),
+        &user_inputs_from_cache(&files, &cache),
         &scope,
         &live_excluded,
         NOW_SECS,
@@ -337,14 +350,14 @@ fn live_exclusion_suppresses_workspace_headline_usd_only() {
 }
 
 #[test]
-fn automation_entries_do_not_bridge_session_idle_gaps() {
+fn priced_entries_never_open_or_bridge_a_session() {
     const HOUR: u64 = 3_600;
     let first_file = PathBuf::from("/tmp/rimz/first.jsonl");
-    let automation_file = PathBuf::from("/tmp/rimz/automation.jsonl");
+    let chatter_file = PathBuf::from("/tmp/rimz/chatter.jsonl");
     let second_file = PathBuf::from("/tmp/rimz/second.jsonl");
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
         (claude_adapter(), first_file.clone()),
-        (claude_adapter(), automation_file.clone()),
+        (claude_adapter(), chatter_file.clone()),
         (claude_adapter(), second_file.clone()),
     ];
     let cache = SpendingDiskCache {
@@ -354,39 +367,40 @@ fn automation_entries_do_not_bridge_session_idle_gaps() {
                 vec![cached_entry(NOW_SECS - 9 * HOUR, 1.0, "session")],
             ),
             cached_file(
-                &automation_file,
+                &chatter_file,
                 vec![cached_entry(NOW_SECS - 4 * HOUR - HOUR / 2, 0.5, "session")],
             ),
             cached_file(&second_file, vec![cached_entry(NOW_SECS, 2.0, "session")]),
         ]),
         ..Default::default()
     };
-    let automation_files = HashSet::from([automation_file]);
     let spec = HeadlineSpec {
         mode: SpendWindowMode::Session,
         timezone: None,
     };
-    let baseline_counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
-    let tagged_counted = dedup_cached_entries(&files, &cache, &automation_files).into_counted();
-
-    let baseline = aggregate_spending(&files, &cache, &baseline_counted, NOW_SECS, &spec);
-    let tagged = aggregate_spending(&files, &cache, &tagged_counted, NOW_SECS, &spec);
-
-    assert!((baseline.total.headline.usd - 3.5).abs() < 1e-9);
-    assert!((tagged.total.headline.usd - 2.0).abs() < 1e-9);
-    assert_eq!(tagged.total.headline.tokens, 15);
-    assert!((tagged.total.week.usd - 3.5).abs() < 1e-9);
-    assert!((tagged.total.month.usd - 3.5).abs() < 1e-9);
-    assert!((tagged.total.year.usd - 3.5).abs() < 1e-9);
-    assert_eq!(tagged.total.year.tokens, 45);
-    assert_eq!(
-        tagged.total.headline.sessions,
-        baseline.total.headline.sessions
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let empty = aggregate_spending_with_user_inputs(&files, &cache, &counted, &[], NOW_SECS, &spec);
+    let separated_prompts = [
+        user_input(NOW_SECS - 9 * HOUR, "claude", None),
+        user_input(NOW_SECS, "claude", None),
+    ];
+    let bounded = aggregate_spending_with_user_inputs(
+        &files,
+        &cache,
+        &counted,
+        &separated_prompts,
+        NOW_SECS,
+        &spec,
     );
+
+    assert_eq!(empty.total.headline, SpendWindow::default());
+    assert!((bounded.total.headline.usd - 2.0).abs() < 1e-9);
+    assert_eq!(bounded.total.headline.tokens, 15);
+    assert!((bounded.total.week.usd - 3.5).abs() < 1e-9);
 }
 
 #[test]
-fn automation_inside_human_burst_stays_in_session_window() {
+fn autonomous_spend_inside_user_prompt_burst_counts() {
     const HOUR: u64 = 3_600;
     let first_file = PathBuf::from("/tmp/rimz/burst-first.jsonl");
     let automation_file = PathBuf::from("/tmp/rimz/burst-automation.jsonl");
@@ -410,21 +424,112 @@ fn automation_inside_human_burst_stays_in_session_window() {
         ]),
         ..Default::default()
     };
-    let automation_files = HashSet::from([automation_file]);
     let spec = HeadlineSpec {
         mode: SpendWindowMode::Session,
         timezone: None,
     };
-    let baseline_counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
-    let tagged_counted = dedup_cached_entries(&files, &cache, &automation_files).into_counted();
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let prompts = [
+        user_input(NOW_SECS - HOUR, "claude", None),
+        user_input(NOW_SECS, "claude", None),
+    ];
+    let spending =
+        aggregate_spending_with_user_inputs(&files, &cache, &counted, &prompts, NOW_SECS, &spec);
 
-    let baseline = aggregate_spending(&files, &cache, &baseline_counted, NOW_SECS, &spec);
-    let tagged = aggregate_spending(&files, &cache, &tagged_counted, NOW_SECS, &spec);
+    assert!((spending.total.headline.usd - 3.5).abs() < 1e-9);
+    assert_eq!(spending.total.headline.tokens, 45);
+    assert_eq!(spending.total.headline.sessions, 3);
+}
 
-    assert_eq!(tagged.total.headline, baseline.total.headline);
-    assert!((tagged.total.headline.usd - 3.5).abs() < 1e-9);
-    assert_eq!(tagged.total.headline.tokens, 45);
-    assert_eq!(tagged.total.headline.sessions, 3);
+#[test]
+fn provider_session_cutoffs_follow_same_kind_user_inputs() {
+    const HOUR: u64 = 3_600;
+    let claude_file = PathBuf::from("/tmp/rimz/provider-claude.jsonl");
+    let codex_file = PathBuf::from("/tmp/rimz/provider-codex.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+        (claude_adapter(), claude_file.clone()),
+        (codex_adapter(), codex_file.clone()),
+    ];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file(&claude_file, vec![cached_entry(NOW_SECS, 1.0, "claude")]),
+            cached_file(&codex_file, vec![cached_entry(NOW_SECS, 2.0, "codex")]),
+        ]),
+        ..Default::default()
+    };
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let prompts = [
+        user_input(NOW_SECS, "claude", None),
+        user_input(NOW_SECS - 6 * HOUR, "codex", None),
+    ];
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Session,
+        timezone: None,
+    };
+
+    let spending =
+        aggregate_spending_with_user_inputs(&files, &cache, &counted, &prompts, NOW_SECS, &spec);
+
+    assert!((spending.total.headline.usd - 3.0).abs() < 1e-9);
+    assert!((spending.by_provider["claude"].headline.usd - 1.0).abs() < 1e-9);
+    assert_eq!(spending.by_provider["codex"].headline.usd, 0.0);
+}
+
+#[test]
+fn workspace_session_cutoff_uses_only_scoped_user_inputs() {
+    let project = PathBuf::from("/repo/project");
+    let other = PathBuf::from("/repo/other");
+    let project_file = PathBuf::from("/tmp/rimz/scoped-project.jsonl");
+    let other_file = PathBuf::from("/tmp/rimz/scoped-other.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+        (claude_adapter(), project_file.clone()),
+        (claude_adapter(), other_file.clone()),
+    ];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            cached_file_with_origin(
+                &project_file,
+                &project,
+                vec![cached_entry(NOW_SECS, 1.0, "project")],
+            ),
+            cached_file_with_origin(
+                &other_file,
+                &other,
+                vec![cached_entry(NOW_SECS, 2.0, "other")],
+            ),
+        ]),
+        ..Default::default()
+    };
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let spec = HeadlineSpec {
+        mode: SpendWindowMode::Session,
+        timezone: None,
+    };
+    let project_prompt = [user_input(NOW_SECS, "claude", Some(&project))];
+    let outside_prompt = [user_input(NOW_SECS, "claude", Some(&other))];
+
+    let included = compute_scoped_spending(
+        &files,
+        &cache,
+        &project_prompt,
+        &scope,
+        &BTreeSet::new(),
+        NOW_SECS,
+        &spec,
+    );
+    let empty = compute_scoped_spending(
+        &files,
+        &cache,
+        &outside_prompt,
+        &scope,
+        &BTreeSet::new(),
+        NOW_SECS,
+        &spec,
+    );
+
+    assert!((included.tally.headline.usd - 1.0).abs() < 1e-9);
+    assert_eq!(empty.tally.headline, SpendWindow::default());
+    assert_eq!(empty.headline_cutoff_secs, NOW_SECS + 1);
 }
 
 #[test]
@@ -598,7 +703,7 @@ fn claude_duplicate_dedup_keeps_the_richest_main_thread_record() {
         .map(|path| (claude_adapter(), path))
         .collect::<Vec<_>>();
 
-    let counted = dedup_cached_entries(&files, &cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
     assert_eq!(counted.len(), 1);
     let spending = aggregate_spending(&files, &cache, &counted, NOW_SECS, &HeadlineSpec::default());
     assert_eq!(spending.total.headline.input, 20);

@@ -37,6 +37,39 @@ pub(super) fn confirm_sent_message_for_lifecycle(
     }
 }
 
+pub(super) fn record_user_input_for_lifecycle(
+    workspace: &ResolvedWorkspace,
+    agent: &dyn AgentAdapter,
+    recorded: &RecordedLifecycle,
+    delivered: &[rimz::message::MessageRecord],
+    supervised: bool,
+    state_root: Option<&std::path::Path>,
+) {
+    if recorded.observation.signal != LifecycleSignal::TurnStarted
+        || supervised
+        || (!delivered.is_empty() && !delivered.iter().any(|record| record.is_user_input()))
+    {
+        return;
+    }
+    let record = rimz::agents::spending::user_input::UserInputRecord {
+        at: jiff::Timestamp::now(),
+        kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        origin: Some(
+            recorded
+                .observation
+                .worktree_path
+                .as_deref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| workspace.project_root.clone()),
+        ),
+    };
+    if let Some(state_root) = state_root {
+        rimz::agents::spending::user_input::append_in(state_root, &record);
+    } else {
+        rimz::agents::spending::user_input::append(&record);
+    }
+}
+
 pub(super) fn spawn_queue_delivery_if_checkpoint(
     workspace: &ResolvedWorkspace,
     store: &Store,

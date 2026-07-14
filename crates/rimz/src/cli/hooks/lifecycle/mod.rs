@@ -105,6 +105,14 @@ pub(crate) fn handle_lifecycle_hook(
         record_run_lifecycle(store, agent, event_name, payload, recorded);
         let delivered =
             confirm_sent_message_for_lifecycle(store, agent, recorded, &workspace.session_name);
+        record_user_input_for_lifecycle(
+            workspace,
+            agent,
+            recorded,
+            &delivered,
+            env_run_id().is_some(),
+            user_input_state_root(store),
+        );
         if let Err(err) = record_conversation(
             workspace, store, agent, event_name, payload, recorded, &delivered,
         ) {
@@ -153,6 +161,15 @@ pub(crate) fn handle_lifecycle_hook(
         }
     }
     Ok(())
+}
+
+fn user_input_state_root(_store: &Store) -> Option<&std::path::Path> {
+    #[cfg(test)]
+    {
+        _store.paths().root.ancestors().nth(3)
+    }
+    #[cfg(not(test))]
+    None
 }
 
 struct RecordedLifecycle {
@@ -353,6 +370,32 @@ mod tests {
         rimz::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/hooks-test"))
     }
 
+    fn test_workspace() -> ResolvedWorkspace {
+        ResolvedWorkspace {
+            workspace_id: workspace_id(),
+            project_root: std::path::PathBuf::from("/tmp/hooks-test"),
+            root_class: rimz::workspace::RootClass::Directory,
+            worktree_root: std::path::PathBuf::from("/tmp/hooks-test"),
+            worktree_branch: None,
+            session_name: "hooks-test".to_owned(),
+            mux_hint: None,
+        }
+    }
+
+    fn turn_started_recorded() -> RecordedLifecycle {
+        let mut observation = AgentLifecycleObservation::new(
+            Some(rimz::ids::AgentSessionId::from("sess-1")),
+            LifecycleSignal::TurnStarted,
+        );
+        observation.worktree_path = Some("/tmp/hooks-test/worktree".to_owned());
+        RecordedLifecycle {
+            model_hint: None,
+            observation,
+            appended_lifecycle: false,
+            waiting_cleared: false,
+        }
+    }
+
     #[test]
     fn lifecycle_event_observation_trims_carry_forward_fields_after_identity() {
         let mut observation = AgentLifecycleObservation::new(
@@ -509,6 +552,73 @@ mod tests {
                 .any(|event| event.method == "message.delivered"),
             "terminal delivery event is logged"
         );
+    }
+
+    #[test]
+    fn turn_started_records_only_unsupervised_user_inputs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = test_workspace();
+        let agent_state = test_agent();
+        let human = rimz::message::MessageRecord::new(
+            workspace_id(),
+            &agent_state,
+            "human prompt".to_owned(),
+            true,
+            rimz::message::DeliveryGate::Done,
+        );
+        let agent_message = human
+            .clone()
+            .with_sender(rimz::message::MessageSender::Agent {
+                kind: rimz::ids::AgentKind::new_unchecked("codex"),
+                name: None,
+                profile: None,
+                role: Some("coder".to_owned()),
+                channel: None,
+            });
+
+        record_user_input_for_lifecycle(
+            &workspace,
+            &rimz::agents::ClaudeAdapter,
+            &turn_started_recorded(),
+            &[],
+            false,
+            Some(dir.path()),
+        );
+        record_user_input_for_lifecycle(
+            &workspace,
+            &rimz::agents::ClaudeAdapter,
+            &turn_started_recorded(),
+            std::slice::from_ref(&human),
+            false,
+            Some(dir.path()),
+        );
+        record_user_input_for_lifecycle(
+            &workspace,
+            &rimz::agents::ClaudeAdapter,
+            &turn_started_recorded(),
+            &[agent_message],
+            false,
+            Some(dir.path()),
+        );
+        record_user_input_for_lifecycle(
+            &workspace,
+            &rimz::agents::ClaudeAdapter,
+            &turn_started_recorded(),
+            &[human],
+            true,
+            Some(dir.path()),
+        );
+
+        let records = rimz::agents::spending::user_input::load_in(dir.path());
+        assert_eq!(records.len(), 2);
+        assert!(
+            records
+                .iter()
+                .all(|record| record.kind.as_str() == "claude")
+        );
+        assert!(records.iter().all(|record| {
+            record.origin.as_deref() == Some(std::path::Path::new("/tmp/hooks-test/worktree"))
+        }));
     }
 
     #[test]

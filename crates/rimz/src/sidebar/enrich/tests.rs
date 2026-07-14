@@ -1332,13 +1332,18 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
             &project,
         )],
     )];
+    let mut config = crate::config::MachineConfig::default();
+    config.sidebar.spend_window = crate::agents::spending::SpendWindowMode::Today;
     let snapshot = enrich(
         snapshot,
         None,
         &runtime,
         None,
         None,
-        cached_opts(),
+        FoldOpts {
+            config: Some(std::sync::Arc::new(config)),
+            ..cached_opts()
+        },
         &crate::diag::DiagSink::disabled(),
     );
 

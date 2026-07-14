@@ -72,14 +72,25 @@ fn compute_spending_with_origins_and_scope(
             tick: &mut tick,
         },
     );
-    let counted = dedup_cached_entries(files, cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    let user_inputs = user_inputs_from_counted(&counted);
     let live_excluded = BTreeSet::new();
     let workspace = scope.map(|scope| WorkspaceRollupScope {
         scope,
         live_excluded: &live_excluded,
     });
-    let aggregate =
-        aggregate_counted_rollups(files, cache, &counted, workspace, now_secs, spec, false);
+    let aggregate = aggregate_counted_rollups(
+        files,
+        cache,
+        &counted,
+        workspace,
+        HeadlineContext {
+            user_inputs: &user_inputs,
+            now_secs,
+            spec,
+        },
+        false,
+    );
     (aggregate.spending, aggregate.workspace_tally)
 }
 
@@ -90,21 +101,71 @@ fn aggregate_spending(
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> Spending {
-    aggregate_counted_rollups(files, cache, counted, None, now_secs, spec, false).spending
+    let user_inputs = user_inputs_from_counted(counted);
+    aggregate_spending_with_user_inputs(files, cache, counted, &user_inputs, now_secs, spec)
+}
+
+fn aggregate_spending_with_user_inputs(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    counted: &[impl CountedPayload],
+    user_inputs: &[user_input::UserInputRecord],
+    now_secs: u64,
+    spec: &HeadlineSpec,
+) -> Spending {
+    aggregate_counted_rollups(
+        files,
+        cache,
+        counted,
+        None,
+        HeadlineContext {
+            user_inputs,
+            now_secs,
+            spec,
+        },
+        false,
+    )
+    .spending
+}
+
+fn user_inputs_from_counted(counted: &[impl CountedPayload]) -> Vec<user_input::UserInputRecord> {
+    counted
+        .iter()
+        .filter_map(|counted| {
+            Some(user_input::UserInputRecord {
+                at: jiff::Timestamp::from_second(i64::try_from(counted.entry().ts_secs).ok()?)
+                    .ok()?,
+                kind: crate::ids::AgentKind::new_unchecked(counted.kind()),
+                origin: counted.origin().map(Path::to_path_buf),
+            })
+        })
+        .collect()
+}
+
+fn user_inputs_from_cache(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+) -> Vec<user_input::UserInputRecord> {
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    user_inputs_from_counted(&counted)
 }
 
 fn compute_daily_spend(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
 ) -> BTreeMap<i64, DaySpend> {
-    let counted = dedup_cached_entries(files, cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    let user_inputs = user_inputs_from_counted(&counted);
     aggregate_counted_rollups(
         files,
         cache,
         &counted,
         None,
-        NOW_SECS,
-        &HeadlineSpec::default(),
+        HeadlineContext {
+            user_inputs: &user_inputs,
+            now_secs: NOW_SECS,
+            spec: &HeadlineSpec::default(),
+        },
         true,
     )
     .days
@@ -115,14 +176,18 @@ fn compute_model_breakdown(
     cache: &SpendingDiskCache,
     now_secs: u64,
 ) -> BTreeMap<String, SpendTally> {
-    let counted = dedup_cached_entries(files, cache, &HashSet::new()).into_counted();
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    let user_inputs = user_inputs_from_counted(&counted);
     aggregate_counted_rollups(
         files,
         cache,
         &counted,
         None,
-        now_secs,
-        &HeadlineSpec::default(),
+        HeadlineContext {
+            user_inputs: &user_inputs,
+            now_secs,
+            spec: &HeadlineSpec::default(),
+        },
         true,
     )
     .models
@@ -135,10 +200,12 @@ fn compute_scoped_tally(
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> SpendTally {
+    let counted = dedup_cached_entries(files, cache).into_counted();
+    let user_inputs = user_inputs_from_counted(&counted);
     compute_scoped_spending(
         files,
         cache,
-        &HashSet::new(),
+        &user_inputs,
         scope,
         &BTreeSet::new(),
         now_secs,
@@ -151,7 +218,7 @@ macro_rules! walk_spending {
     ($walker:expr, $cache_path:expr, $files:expr, $prices:expr, $now_secs:expr, $observer:expr) => {{
         let prices = $prices;
         let origin_overrides = HashMap::new();
-        let automation_files = HashSet::new();
+        let user_inputs = Vec::new();
         let live_excluded = BTreeSet::new();
         let spec = HeadlineSpec::default();
         let req = WalkRequest {
@@ -159,8 +226,7 @@ macro_rules! walk_spending {
             prices: &prices,
             now_secs: $now_secs,
             origin_overrides: &origin_overrides,
-            automation_files: &automation_files,
-            automation_signature: 0,
+            user_inputs: &user_inputs,
             scope: None,
             live_excluded: &live_excluded,
             spec: &spec,

@@ -338,6 +338,13 @@ fn canonical_droid_prompt_and_worker_stop_record_one_conversation() {
         rimz::transcript::TranscriptKind::Assistant
     );
     assert_eq!(entries[1].text, "pong");
+    let user_inputs = rimz::agents::spending::user_input::load_in(dir.path());
+    assert_eq!(user_inputs.len(), 1);
+    assert_eq!(user_inputs[0].kind.as_str(), "droid");
+    assert_eq!(
+        user_inputs[0].origin.as_deref(),
+        Some(std::path::Path::new("/tmp/hooks-test"))
+    );
 }
 
 #[test]
