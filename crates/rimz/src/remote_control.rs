@@ -125,15 +125,18 @@ pub fn repair_daemon_view(
             return;
         }
     };
-    let Some(anchor) = find_daemon_view_anchor(&listing.panes) else {
-        tracing::debug!(
-            session = %session_name,
-            "daemon view repair skipped; no surviving daemon pane found",
-        );
-        return;
-    };
     let reconciliation = managed_pane_reconciliation(view, &listing.panes);
     for pane in reconciliation.spawn {
+        let Some(marker) = host_marker(&pane) else {
+            continue;
+        };
+        let Some((anchor, direction)) = repair_anchor(&listing.panes, marker.column()) else {
+            tracing::debug!(
+                session = %session_name,
+                "daemon view repair skipped; no surviving daemon pane found",
+            );
+            return;
+        };
         let title = pane.argv.join(" ");
         if let Err(err) = backend.split_pane(SplitPaneOptions {
             session_name: Some(session_name.to_owned()),
@@ -144,7 +147,7 @@ pub fn repair_daemon_view(
             title: Some(title),
             env: Default::default(),
             stacked: false,
-            direction: SplitDirection::Down,
+            direction,
             focus: false,
         }) {
             tracing::warn!(
@@ -1075,10 +1078,41 @@ pub fn find_loop_panel(panes: &[PaneRef]) -> Option<&PaneRef> {
     })
 }
 
-pub fn find_daemon_view_anchor(panes: &[PaneRef]) -> Option<&PaneRef> {
-    panes
-        .iter()
-        .find(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
+/// A structural column in the managed daemon view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DaemonColumn {
+    Content,
+    Runtime,
+}
+
+/// Pick the surviving pane and split direction that preserve a managed pane's
+/// daemon-view column. Splits against another column always go right; only a
+/// pane already in the requested column may be split down.
+pub fn repair_anchor(
+    panes: &[PaneRef],
+    column: DaemonColumn,
+) -> Option<(&PaneRef, SplitDirection)> {
+    let daemon_panes = || {
+        panes
+            .iter()
+            .filter(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
+    };
+    let in_column = |pane: &&PaneRef, candidate| {
+        pane_marker(pane).is_some_and(|marker| marker.column() == candidate)
+    };
+
+    if let Some(anchor) = daemon_panes().find(|pane| in_column(pane, column)) {
+        return Some((anchor, SplitDirection::Down));
+    }
+
+    let anchor = match column {
+        DaemonColumn::Content => daemon_panes().find(|pane| pane.is_rimz_sidebar()),
+        DaemonColumn::Runtime => daemon_panes()
+            .find(|pane| in_column(pane, DaemonColumn::Content))
+            .or_else(|| daemon_panes().find(|pane| pane.is_rimz_sidebar())),
+    }
+    .or_else(|| daemon_panes().next())?;
+    Some((anchor, SplitDirection::Right))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1087,6 +1121,17 @@ enum ManagedPaneMarker {
     CodexAppServer,
     ClaudeRemoteControl,
     LoopPanel,
+}
+
+impl ManagedPaneMarker {
+    fn column(&self) -> DaemonColumn {
+        match self {
+            Self::ContentSlot(_) => DaemonColumn::Content,
+            Self::CodexAppServer | Self::ClaudeRemoteControl | Self::LoopPanel => {
+                DaemonColumn::Runtime
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -1153,13 +1198,27 @@ fn matching_managed_panes<'a>(
 }
 
 fn host_marker(host: &HostPane) -> Option<ManagedPaneMarker> {
-    content_slot_from_args(&host.argv)
+    command_marker(&host.argv.join(" "))
+}
+
+fn pane_marker(pane: &PaneRef) -> Option<ManagedPaneMarker> {
+    [
+        pane.spawn_command.as_deref(),
+        pane.command.as_deref(),
+        pane.title.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(command_marker)
+}
+
+fn command_marker(command: &str) -> Option<ManagedPaneMarker> {
+    content_slot_from_command(command)
         .map(ManagedPaneMarker::ContentSlot)
         .or_else(|| {
-            let command = host.argv.join(" ");
             if command.contains(APP_SERVER_MARKER) {
                 Some(ManagedPaneMarker::CodexAppServer)
-            } else if command_is_claude_host(&command) {
+            } else if command_is_claude_host(command) {
                 Some(ManagedPaneMarker::ClaudeRemoteControl)
             } else if command.contains(LOOP_PANEL_MARKER) {
                 Some(ManagedPaneMarker::LoopPanel)

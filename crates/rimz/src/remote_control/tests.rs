@@ -608,6 +608,87 @@ fn daemon_view() -> DaemonView {
 }
 
 #[test]
+fn runtime_repair_anchor_prefers_its_column_then_content_then_sidebar() {
+    let mut broker = pane(Some("node"), Some(VIEW_NAME));
+    broker.title = Some("rimz codex app-server serve".to_owned());
+    let panes = [
+        pane(Some(crate::pane::SIDEBAR_CHROME_TITLE), Some(VIEW_NAME)),
+        spawned_pane(
+            "rimz",
+            "rimz daemon content --slot 0 --worktree-root /repo",
+            Some(VIEW_NAME),
+        ),
+        broker,
+        spawned_pane("rimz", "rimz loop watch --hold", Some(VIEW_NAME)),
+    ];
+
+    assert_eq!(
+        repair_anchor(&panes, DaemonColumn::Runtime),
+        Some((&panes[2], SplitDirection::Down))
+    );
+    assert_eq!(
+        repair_anchor(&panes[3..], DaemonColumn::Runtime),
+        Some((&panes[3], SplitDirection::Down))
+    );
+    assert_eq!(
+        repair_anchor(&panes[..2], DaemonColumn::Runtime),
+        Some((&panes[1], SplitDirection::Right))
+    );
+    assert_eq!(
+        repair_anchor(&panes[..1], DaemonColumn::Runtime),
+        Some((&panes[0], SplitDirection::Right))
+    );
+}
+
+#[test]
+fn content_repair_anchor_prefers_its_column_then_sidebar() {
+    let content = spawned_pane(
+        "rimz",
+        "rimz daemon content --slot 1 --worktree-root /repo",
+        Some(VIEW_NAME),
+    );
+    assert_eq!(
+        repair_anchor(std::slice::from_ref(&content), DaemonColumn::Content),
+        Some((&content, SplitDirection::Down))
+    );
+
+    let panes = [
+        spawned_pane("rimz", "rimz codex app-server serve", Some(VIEW_NAME)),
+        pane(Some(crate::pane::SIDEBAR_CHROME_TITLE), Some(VIEW_NAME)),
+    ];
+    assert_eq!(
+        repair_anchor(&panes, DaemonColumn::Content),
+        Some((&panes[1], SplitDirection::Right))
+    );
+}
+
+#[test]
+fn repair_anchor_ignores_panes_outside_the_daemon_view() {
+    let panes = [
+        spawned_pane("rimz", "rimz codex app-server serve", Some("work")),
+        pane(Some(crate::pane::SIDEBAR_CHROME_TITLE), Some("work")),
+    ];
+
+    assert_eq!(repair_anchor(&[], DaemonColumn::Runtime), None);
+    assert_eq!(repair_anchor(&panes, DaemonColumn::Runtime), None);
+    assert_eq!(repair_anchor(&panes, DaemonColumn::Content), None);
+}
+
+#[test]
+fn repair_anchor_uses_a_right_split_for_an_unclassified_daemon_pane() {
+    let pane = pane(Some("zsh"), Some(VIEW_NAME));
+
+    assert_eq!(
+        repair_anchor(std::slice::from_ref(&pane), DaemonColumn::Runtime),
+        Some((&pane, SplitDirection::Right))
+    );
+    assert_eq!(
+        repair_anchor(std::slice::from_ref(&pane), DaemonColumn::Content),
+        Some((&pane, SplitDirection::Right))
+    );
+}
+
+#[test]
 fn managed_pane_reconciliation_diffs_the_daemon_view_spec() {
     let present = [
         spawned_pane(

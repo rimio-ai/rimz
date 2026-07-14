@@ -34,10 +34,13 @@ pub(crate) fn split_into_loop_zone(
     let panel = match rimz::remote_control::find_loop_panel(&listing.panes) {
         Some(panel) => panel.clone(),
         None => {
-            let Some(anchor) = rimz::remote_control::find_daemon_view_anchor(&listing.panes) else {
+            let Some((anchor, direction)) = rimz::remote_control::repair_anchor(
+                &listing.panes,
+                rimz::remote_control::DaemonColumn::Runtime,
+            ) else {
                 return Ok(false);
             };
-            match repair_loop_panel(backend, workspace, anchor) {
+            match repair_loop_panel(backend, workspace, anchor, direction) {
                 Some(panel) => panel,
                 None => return Ok(false),
             }
@@ -95,6 +98,7 @@ fn repair_loop_panel(
     backend: &dyn rimz::mux::MuxBackend,
     workspace: &rimz::ResolvedWorkspace,
     anchor: &PaneRef,
+    direction: SplitDirection,
 ) -> Option<PaneRef> {
     let rimz_bin = rimz::proc::rimz_exe().to_string_lossy().into_owned();
     if let Err(err) = backend.split_pane(SplitPaneOptions {
@@ -111,7 +115,7 @@ fn repair_loop_panel(
         ]),
         env: Default::default(),
         stacked: false,
-        direction: SplitDirection::Down,
+        direction,
         focus: false,
     }) {
         tracing::debug!(
