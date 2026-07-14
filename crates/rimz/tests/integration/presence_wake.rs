@@ -25,13 +25,14 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
-use rimz::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+use rimz::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyWriter};
 use rimz::pane::PaneRef;
 use rimz::sidebar::cache::{
     PresenceStamp, presence_stamp_path, read_pane_topology_cache, read_snapshot_cache,
 };
 use rimz::sidebar::frame::assemble_frame;
 use rimz::sidebar::heartbeat::SidebarHeartbeat;
+use rimz::sidebar::presence::read_topology_writer_conflict;
 use rimz::sidebar::timing::unix_now_ms;
 use rimz::store::RuntimePaths;
 use tempfile::TempDir;
@@ -161,6 +162,36 @@ impl WakeEnv {
             .to_owned()
     }
 
+    fn topology_diag_log(&self) -> PathBuf {
+        let state = rimz::StatePaths::under(self.workspace_id.clone(), &self.state_root)
+            .expect("state paths");
+        rimz::diag::DiagSink::under(
+            state.root.clone(),
+            self.workspace_id.clone(),
+            SESSION_NAME,
+            None,
+        )
+        .log_path()
+        .expect("diagnostic log path")
+    }
+
+    fn topology_diag_kinds(&self) -> Vec<String> {
+        std::fs::read_to_string(self.topology_diag_log())
+            .map(|contents| {
+                contents
+                    .lines()
+                    .map(|line| {
+                        serde_json::from_str::<serde_json::Value>(line)
+                            .expect("diagnostic line is JSON")["event"]["kind"]
+                            .as_str()
+                            .expect("diagnostic event kind")
+                            .to_owned()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Seed the shared pane cache with a publishable shell frame produced
     /// `age` ago — fresh under the event-mode TTL, stale under the default TTL.
     fn seed_pane_cache(&self, age: Duration) {
@@ -249,6 +280,20 @@ impl WakeEnv {
                 },
             ],
         }
+    }
+
+    fn topology_cache_with_writer(
+        &self,
+        produced_at_ms: u64,
+        plugin_id: u32,
+        loaded_at_ms: u64,
+    ) -> PaneTopologyCache {
+        let mut cache = self.topology_cache(produced_at_ms);
+        cache.writer = Some(TopologyWriter {
+            plugin_id,
+            loaded_at_ms,
+        });
+        cache
     }
 
     fn topology_cache_for_tabs(
@@ -547,6 +592,169 @@ fn wake_alive_without_telemetry_writes_no_sample() {
     assert!(
         !env.plugin_presence_log().exists(),
         "older plugins that omit telemetry args must not create a presence log"
+    );
+    env.assert_no_mux_fork();
+}
+
+#[test]
+fn stale_topology_writer_rejects_the_whole_poke_and_throttles_diagnostics() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let recv = env.bind_socket("sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+
+    let accepted = env.topology_cache_with_writer(unix_now_ms(), 2, 200);
+    let accepted_json = serde_json::to_string(&accepted).expect("serialize accepted topology");
+    let output = env.wake_with(
+        "alive",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--topology",
+            accepted_json.as_str(),
+        ],
+    );
+    assert!(output.status.success(), "accepted writer wake must succeed");
+    std::fs::remove_file(presence_stamp_path(&env.runtime)).expect("remove accepted wake stamp");
+
+    let stale = env.topology_cache_with_writer(unix_now_ms(), 1, 100);
+    let stale_json = serde_json::to_string(&stale).expect("serialize stale topology");
+    let stale_args = [
+        "--session-name",
+        SESSION_NAME,
+        "--topology",
+        stale_json.as_str(),
+        "--plugin-mem-pages",
+        "42",
+    ];
+    let output = env.wake_with("panes-changed", true, &stale_args);
+    assert!(
+        output.status.success(),
+        "stale writer wake must return success"
+    );
+
+    assert_eq!(
+        read_pane_topology_cache(&env.runtime, SESSION_NAME),
+        Some(accepted.clone()),
+        "stale writer must not replace accepted topology",
+    );
+    assert!(env.read_stamp().is_none(), "stale writer must not stamp");
+    assert!(
+        !env.plugin_presence_log().exists(),
+        "stale writer must not append plugin telemetry",
+    );
+    assert_no_datagram(&recv, "a stale writer poke");
+    let conflict = read_topology_writer_conflict(&env.runtime).expect("writer conflict sidecar");
+    assert_eq!(conflict.stale_writer, stale.writer);
+    assert_eq!(conflict.accepted_writer, accepted.writer);
+    assert_eq!(conflict.rejected_count, 1);
+
+    let output = env.wake_with("panes-changed", true, &stale_args);
+    assert!(
+        output.status.success(),
+        "repeated stale writer wake succeeds"
+    );
+    assert_no_datagram(&recv, "a repeated stale writer poke");
+    let conflict = read_topology_writer_conflict(&env.runtime).expect("updated conflict sidecar");
+    assert_eq!(conflict.rejected_count, 2);
+    assert_eq!(
+        env.topology_diag_kinds()
+            .iter()
+            .filter(|kind| kind.as_str() == "topology_write_rejected")
+            .count(),
+        1,
+        "repeated conflict inside the throttle window emits one diagnostic",
+    );
+    env.assert_no_mux_fork();
+}
+
+#[test]
+fn stale_topology_cache_accepts_an_older_writer_takeover() {
+    let env = WakeEnv::new();
+    let stale_at = unix_now_ms()
+        .saturating_sub(rimz::sidebar::timing::PRESENCE_STAMP_FRESH.as_millis() as u64 + 1);
+    let prior = env.topology_cache_with_writer(stale_at, 2, 200);
+    let prior_json = serde_json::to_string(&prior).expect("serialize prior topology");
+    let output = env.wake_with(
+        "alive",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--topology",
+            prior_json.as_str(),
+        ],
+    );
+    assert!(output.status.success(), "prior writer wake must succeed");
+    std::fs::remove_file(presence_stamp_path(&env.runtime)).expect("remove prior wake stamp");
+
+    let takeover = env.topology_cache_with_writer(unix_now_ms(), 1, 100);
+    let takeover_json = serde_json::to_string(&takeover).expect("serialize takeover topology");
+    let output = env.wake_with(
+        "alive",
+        true,
+        &[
+            "--session-name",
+            SESSION_NAME,
+            "--topology",
+            takeover_json.as_str(),
+        ],
+    );
+    assert!(output.status.success(), "stale-cache takeover must succeed");
+
+    assert_eq!(
+        read_pane_topology_cache(&env.runtime, SESSION_NAME),
+        Some(takeover),
+        "older writer becomes accepted cache writer after staleness",
+    );
+    assert!(
+        env.read_stamp().is_some(),
+        "accepted takeover refreshes presence"
+    );
+    assert!(
+        env.topology_diag_kinds()
+            .iter()
+            .any(|kind| kind == "topology_writer_changed"),
+        "stale-cache takeover emits a writer-change diagnostic",
+    );
+    env.assert_no_mux_fork();
+}
+
+#[test]
+fn malformed_topology_is_best_effort_while_wake_stamps_and_broadcasts() {
+    let env = WakeEnv::new();
+    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
+        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
+        return;
+    }
+    let recv = env.bind_socket("sidebar.eldest.sock");
+    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
+
+    let output = env.wake_with(
+        "panes-changed",
+        true,
+        &["--session-name", SESSION_NAME, "--topology", "{not-json"],
+    );
+    assert!(
+        output.status.success(),
+        "malformed topology wake failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let event = recv_sidebar_event(&recv, "eldest");
+    assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
+    assert_eq!(event["event"]["kind"], "panes_changed");
+    assert!(
+        env.read_stamp().is_some(),
+        "accepted wake refreshes presence"
+    );
+    assert!(
+        read_pane_topology_cache(&env.runtime, SESSION_NAME).is_none(),
+        "malformed topology publishes no cache",
     );
     env.assert_no_mux_fork();
 }

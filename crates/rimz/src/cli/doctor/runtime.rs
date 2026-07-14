@@ -560,7 +560,7 @@ fn collect_topology_writer(ws: &rimz::ResolvedWorkspace) -> Option<model::Topolo
             let cache_writer =
                 rimz::sidebar::cache::read_pane_topology_cache(&runtime, &ws.session_name)
                     .and_then(|cache| cache.writer);
-            rimz::sidebar::cache::read_topology_writer_conflict(&runtime).and_then(|conflict| {
+            rimz::sidebar::presence::read_topology_writer_conflict(&runtime).and_then(|conflict| {
                 let age_ms = now_ms.saturating_sub(conflict.last_ms);
                 (age_ms <= CONFLICT_FRESH_MS).then(|| model::TopologyWriterConflict {
                     stale: conflict.stale_writer.map(topology_writer_id),

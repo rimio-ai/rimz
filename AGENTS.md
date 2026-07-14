@@ -89,7 +89,7 @@ RimZ ships as one Rust binary: the `rimz` crate is CLI, domain library, and nati
 - `message/` — durable per-agent message queue: park-vs-live dispatch, live-pane send, scheduled wakeups.
 - `store/` — durable state engine: framed event log, message/run stores, snapshot rebuild, wakeups, GC.
 - `mux/` — Zellij/tmux seam: `MuxBackend`, subprocess engine, reconcile planner, recovery.
-- `sidebar/` — data plane: producer election, pulled-truth/event fusion, projection fold, heavy-lane refresh.
+- `sidebar/` — data plane: Zellij presence ingestion, producer election, pulled-truth/event fusion, projection fold, heavy-lane refresh.
 - `sidebar_pane/` — native renderer process: serve loop, pets, the `render/theme/` color pipeline.
 - `remote/` — SSH grammar, reconnect policy, link health, `remote.toml`.
 - `diag/` — diagnostic-only JSONL append surfaces.

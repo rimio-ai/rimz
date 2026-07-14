@@ -16,25 +16,24 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+use rimz::sidebar::consumer::RollupCursor;
 use rimz::sidebar::consumer::read_published_snapshot;
 use rimz::sidebar::events::SidebarEvent;
 use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
+use rimz::sidebar::presence::{
+    ZellijPluginTelemetry, ZellijWake, ZellijWakeOutcome, ZellijWakeReason, ingest_zellij_wake,
+};
 use rimz::sidebar::produce::{
     ProduceOptions, pane_fixture_active, produce_rollup_snapshot_with_refresh,
     produce_snapshot_with_refresh,
 };
-use rimz::sidebar::{cache::write_presence_stamp, consumer::RollupCursor};
 use rimz::store::workspace_record;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{PaneAgent, RuntimePaths, SidebarRow, SidebarSnapshot, StatePaths};
 
 mod fixture;
-mod wake;
-
-pub(crate) use wake::rimz_cli_program;
 
 use fixture::sidebar_fixture_snapshot;
-use wake::{TopologyWriteVerdict, session_name_from_record, wake_event, write_topology_cache};
 #[derive(Debug, Args)]
 pub struct SidebarArgs {
     #[command(subcommand)]
@@ -207,6 +206,20 @@ enum WakeReason {
     Alive,
 }
 
+impl From<WakeReason> for ZellijWakeReason {
+    fn from(reason: WakeReason) -> Self {
+        match reason {
+            WakeReason::PanesChanged => Self::PanesChanged,
+            WakeReason::PaneOpened => Self::PaneOpened,
+            WakeReason::PaneClosed => Self::PaneClosed,
+            WakeReason::FocusStranded => Self::FocusStranded,
+            WakeReason::CommandChanged => Self::CommandChanged,
+            WakeReason::FocusChanged => Self::FocusChanged,
+            WakeReason::Alive => Self::Alive,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum SidebarFixtureState {
     Empty,
@@ -300,20 +313,44 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             plugin_zellij_version,
         } => wake(
             globals,
-            WakeCommand {
-                workspace_id,
-                reason,
+            workspace_id,
+            ZellijWake {
+                reason: reason.into(),
                 session_name,
-                pane_id,
-                command_args,
-                focused_pane_ids,
-                unfocused_pane_ids,
-                topology,
-                plugin_mem_pages,
-                plugin_uptime_ms,
-                plugin_commands,
-                plugin_commands_failed,
-                plugin_zellij_version,
+                pane_id: pane_id.map(|raw| PaneId::from_parts(MuxName::Zellij, raw)),
+                command: {
+                    let command = command_args
+                        .iter()
+                        .filter(|arg| !arg.is_empty())
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    (!command.is_empty()).then_some(command)
+                },
+                focused_pane_ids: focused_pane_ids
+                    .iter()
+                    .filter(|raw| !raw.is_empty())
+                    .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
+                    .collect(),
+                unfocused_pane_ids: unfocused_pane_ids
+                    .iter()
+                    .filter(|raw| !raw.is_empty())
+                    .map(|raw| PaneId::from_parts(MuxName::Zellij, raw))
+                    .collect(),
+                topology: topology.and_then(|raw| match serde_json::from_str(&raw) {
+                    Ok(cache) => Some(cache),
+                    Err(err) => {
+                        tracing::debug!(error = %err, "presence poke: topology payload parse failed");
+                        None
+                    }
+                }),
+                telemetry: plugin_mem_pages.map(|pages| ZellijPluginTelemetry {
+                    pages,
+                    uptime_ms: plugin_uptime_ms.unwrap_or_default(),
+                    commands: plugin_commands.unwrap_or_default(),
+                    commands_failed: plugin_commands_failed.unwrap_or_default(),
+                    zellij_version: plugin_zellij_version,
+                }),
             },
         ),
         SidebarSubcmd::MarkRead { target, worktree } => mark_read(globals, target, worktree),
@@ -391,7 +428,11 @@ fn resolve_snapshot_context(
         .session_name
         .clone()
         .or(resolved_session)
-        .or_else(|| session_name_from_record(&state));
+        .or_else(|| {
+            workspace_record::read(&state.workspace_record)
+                .ok()
+                .map(|record| record.session_name)
+        });
     let exclude = command
         .exclude_pane_id
         .as_deref()
@@ -647,7 +688,7 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
         detected_size,
         refresh_ms: None,
     };
-    let rimz_bin = rimz_cli_program().to_string_lossy().into_owned();
+    let rimz_bin = rimz::proc::rimz_exe().to_string_lossy().into_owned();
     let mut argv = vec![rimz_bin, "sidebar".to_owned(), "gallery-render".to_owned()];
     if pets {
         argv.push("--pets".to_owned());
@@ -743,73 +784,21 @@ fn parse_fixture_theme_mode(value: &str) -> Result<rimz::config::ThemeMode> {
     }
 }
 
-struct WakeCommand {
-    workspace_id: Option<String>,
-    reason: WakeReason,
-    session_name: Option<String>,
-    pane_id: Option<String>,
-    command_args: Vec<String>,
-    focused_pane_ids: Vec<String>,
-    unfocused_pane_ids: Vec<String>,
-    topology: Option<String>,
-    plugin_mem_pages: Option<u64>,
-    plugin_uptime_ms: Option<u64>,
-    plugin_commands: Option<u64>,
-    plugin_commands_failed: Option<u64>,
-    plugin_zellij_version: Option<String>,
-}
-
-fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
-    let workspace_id = match command.workspace_id.as_deref() {
+fn wake(globals: &GlobalFlags, workspace_id: Option<String>, wake: ZellijWake) -> Result<()> {
+    let workspace_id = match workspace_id.as_deref() {
         Some(raw) => raw.parse::<WorkspaceId>()?,
         None => WorkspaceResolver::resolve_participant(".", globals.root.clone())?.workspace_id,
     };
     let runtime =
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
-    wake_with_paths(&state, &runtime, &command)
-}
-
-fn wake_with_paths(
-    state: &StatePaths,
-    runtime: &RuntimePaths,
-    command: &WakeCommand,
-) -> Result<()> {
-    if write_topology_cache(state, runtime, command.topology.as_deref())
-        == TopologyWriteVerdict::RejectedStaleWriter
-    {
-        return Ok(());
+    match ingest_zellij_wake(&state, &runtime, &wake) {
+        ZellijWakeOutcome::RejectedStaleWriter => return Ok(()),
+        ZellijWakeOutcome::Accepted(Some(event)) => {
+            broadcast_wake_event(&runtime, wake.session_name.as_deref(), event);
+        }
+        ZellijWakeOutcome::Accepted(None) => {}
     }
-    write_presence_stamp(runtime);
-    write_plugin_presence_sample(state, command)?;
-    let Some(event) = wake_event(
-        command.reason,
-        command.pane_id.as_deref(),
-        &command.command_args,
-        &command.focused_pane_ids,
-        &command.unfocused_pane_ids,
-    ) else {
-        return Ok(());
-    };
-    broadcast_wake_event(runtime, command.session_name.as_deref(), event);
-    Ok(())
-}
-
-fn write_plugin_presence_sample(state: &StatePaths, command: &WakeCommand) -> Result<()> {
-    let Some(pages) = command.plugin_mem_pages else {
-        return Ok(());
-    };
-    rimz::diag::plugin_presence::log(&state.root).append(
-        &rimz::diag::plugin_presence::PluginPresenceSample::new(
-            rimz::sidebar::timing::unix_now_ms(),
-            command.session_name.clone(),
-            pages,
-            command.plugin_uptime_ms.unwrap_or_default(),
-            command.plugin_commands.unwrap_or_default(),
-            command.plugin_commands_failed.unwrap_or_default(),
-            command.plugin_zellij_version.clone(),
-        ),
-    );
     Ok(())
 }
 

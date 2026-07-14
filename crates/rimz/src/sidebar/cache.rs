@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::mux::zellij::pane_topology::{PaneTopologyCache, TopologyWriter};
+use crate::mux::zellij::pane_topology::PaneTopologyCache;
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
     EVENT_PANE_TTL, PRESENCE_STAMP_FRESH, SNAPSHOT_CACHE_TTL, unix_now_ms,
@@ -197,39 +197,6 @@ pub fn effective_pane_ttl(stamp_age_ms: Option<u64>, unwatched: bool) -> Duratio
 /// normal producer frame still carries the rendered view-model.
 pub fn pane_topology_cache_path(runtime: &RuntimePaths) -> PathBuf {
     runtime.root.join("pane-topology.json")
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TopologyWriterConflict {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stale_writer: Option<TopologyWriter>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub accepted_writer: Option<TopologyWriter>,
-    #[serde(default)]
-    pub rejected_count: u64,
-    #[serde(default)]
-    pub last_ms: u64,
-    #[serde(default)]
-    pub last_diag_ms: u64,
-}
-
-pub fn topology_writer_conflict_path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join("topology-writer-conflict.json")
-}
-
-pub fn read_topology_writer_conflict(runtime: &RuntimePaths) -> Option<TopologyWriterConflict> {
-    let bytes = std::fs::read(topology_writer_conflict_path(runtime)).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-pub fn write_topology_writer_conflict(
-    runtime: &RuntimePaths,
-    conflict: &TopologyWriterConflict,
-) -> crate::store::atomic::Result<()> {
-    crate::store::atomic::write_temp_then_rename_cache(
-        &topology_writer_conflict_path(runtime),
-        conflict,
-    )
 }
 
 /// Publish the plugin-provided pane topology. Cache-class: rename atomic, no

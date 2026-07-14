@@ -25,7 +25,7 @@ use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
 
 use crate::cli::{
     AttachArgs, GlobalFlags, StartArgs, confirm_with_default, first_run, machine_config,
-    open_store, render, setup, sidebar,
+    open_store, render, setup,
 };
 
 use attach_exec::{
@@ -974,7 +974,7 @@ pub(crate) fn register_focus_key(
     let Some(label) = machine_config.sidebar.focus_key_label() else {
         return;
     };
-    let rimz_bin = sidebar::rimz_cli_program();
+    let rimz_bin = rimz::proc::rimz_exe();
     let Some(binding) = rimz::mux::FocusKeyBinding::resolve(label, &rimz_bin) else {
         tracing::warn!(
             focus_key = label,

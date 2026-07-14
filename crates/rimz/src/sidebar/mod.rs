@@ -1,4 +1,4 @@
-//! Sidebar process liveness helpers.
+//! Sidebar process liveness and presence-ingestion helpers.
 //!
 //! The sidebar heartbeat remains a latency hint. A stale, unreadable, or
 //! protocol-mismatched heartbeat never blocks a fresh launch.
@@ -22,6 +22,7 @@ pub mod heartbeat;
 pub mod meter;
 pub mod notify;
 pub mod observe;
+pub mod presence;
 pub mod produce;
 #[cfg(test)]
 mod producer_election_tests;
