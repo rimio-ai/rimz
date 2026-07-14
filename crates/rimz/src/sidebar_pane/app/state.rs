@@ -301,15 +301,11 @@ pub(super) fn row_of_pane<'a>(
     snapshot: &'a SidebarSnapshot,
     pane_id: &crate::ids::PaneId,
 ) -> Option<&'a crate::SidebarRow> {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-        .find(|row| {
-            row.pane
-                .as_ref()
-                .is_some_and(|pane| pane.pane_id == *pane_id)
-        })
+    snapshot.rows().find(|row| {
+        row.pane
+            .as_ref()
+            .is_some_and(|pane| pane.pane_id == *pane_id)
+    })
 }
 
 #[derive(Clone, Debug, Default)]
@@ -343,12 +339,7 @@ pub(super) fn read_receipt_for_row(
     let Some(row_id) = row_id else {
         return ReadClear::default();
     };
-    let Some(row) = snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-        .find(|row| row.id == row_id)
-    else {
+    let Some(row) = snapshot.rows().find(|row| row.id == row_id) else {
         return ReadClear::default();
     };
     read_receipt_for_row_ref(row, cause, marks, now)
@@ -387,11 +378,7 @@ pub(super) fn read_receipts_for_tab(
     now: Timestamp,
 ) -> ReadClear {
     let mut clear = ReadClear::default();
-    for row in snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-    {
+    for row in snapshot.rows() {
         if Some(row.id.as_str()) == focused_row_id {
             continue;
         }
@@ -419,11 +406,7 @@ pub(super) fn read_receipts_for_all(
     now: Timestamp,
 ) -> ReadClear {
     let mut clear = ReadClear::default();
-    for row in snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-    {
+    for row in snapshot.rows() {
         clear.merge(read_receipt_for_row_ref(row, cause, marks, now));
     }
     clear
@@ -436,11 +419,7 @@ pub(super) fn set_rows_unread(snapshot: &mut SidebarSnapshot, ids: &[String], un
     if ids.is_empty() {
         return;
     }
-    for row in snapshot
-        .worktree_groups
-        .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
-    {
+    for row in snapshot.rows_mut() {
         if ids.iter().any(|id| id == &row.id) {
             row.unread = unread;
         }

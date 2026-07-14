@@ -239,11 +239,7 @@ impl LoopState {
 
     pub(super) fn frame_timing(&self, tick: Duration, anim_start: Instant) -> (bool, Duration) {
         let phase = wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
-        let alert_active = self
-            .health
-            .alert
-            .as_ref()
-            .is_some_and(render::Alert::is_active);
+        let alert_active = self.alert_active();
         let watched = self.watched();
         let animating = is_animating(&self.current, &self.ui, phase, alert_active);
         let active = !self.self_close.confirming_empty()
@@ -285,6 +281,13 @@ impl LoopState {
             );
         }
         (active, timeout)
+    }
+
+    fn alert_active(&self) -> bool {
+        self.health
+            .alert
+            .as_ref()
+            .is_some_and(render::Alert::is_active)
     }
 
     /// Whether an attached client's focus currently lands in this sidebar's tab.
@@ -863,14 +866,9 @@ impl LoopState {
             // mid-spin never rewinds the animation to a stale frame.
             self.ui.animation_phase =
                 wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
-            self.paint.refresh_view(
-                &mut self.ui,
-                &self.current,
-                self.health
-                    .alert
-                    .as_ref()
-                    .is_some_and(render::Alert::is_active),
-            );
+            let alert_active = self.alert_active();
+            self.paint
+                .refresh_view(&mut self.ui, &self.current, alert_active);
             self.paint.draw_and_paint(
                 terminal,
                 &self.current,
@@ -926,10 +924,7 @@ impl LoopState {
         }
         set_rows_unread(&mut self.current, &clear.ids, false);
         emit_unread_cleared_trace(diag, &clear.trace);
-        wake_room(runtime);
-        self.dirty = true;
-        self.next_frame = Instant::now();
-        self.request_now_merging_pending(fetch, FetchRequest::default(), true);
+        self.commit_local_mark(runtime, fetch);
     }
 
     /// Mark every readable row read without jumping (`M`): write manual receipts
@@ -955,14 +950,7 @@ impl LoopState {
         diag: &crate::diag::DiagSink,
     ) {
         let runtime = self.read_marks.runtime().clone();
-        let Some(row) = self
-            .current
-            .worktree_groups
-            .iter()
-            .flat_map(|group| group.rows.iter())
-            .find(|row| row.id == row_id)
-            .cloned()
-        else {
+        let Some(row) = self.current.rows().find(|row| row.id == row_id).cloned() else {
             return;
         };
         let now_ms = jiff::Timestamp::now().as_millisecond();
@@ -978,7 +966,11 @@ impl LoopState {
         for item in &opened {
             diag.trace_notify(item.trace_event());
         }
-        wake_room(&runtime);
+        self.commit_local_mark(&runtime, fetch);
+    }
+
+    fn commit_local_mark(&mut self, runtime: &RuntimePaths, fetch: &mut FetchDispatcher) {
+        wake_room(runtime);
         self.dirty = true;
         self.next_frame = Instant::now();
         self.request_now_merging_pending(fetch, FetchRequest::default(), true);
@@ -1152,11 +1144,7 @@ impl LoopState {
     ) -> Result<()> {
         self.ui.animation_phase =
             wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
-        let alert_active = self
-            .health
-            .alert
-            .as_ref()
-            .is_some_and(render::Alert::is_active);
+        let alert_active = self.alert_active();
         let animating = is_animating(
             &self.current,
             &self.ui,
@@ -1364,13 +1352,7 @@ impl LoopState {
             .filter(|_| viewing_register_pane)
             .and_then(|pane| row_id_of_pane(&self.current, pane));
         let marks = self.read_marks.load_merged();
-        let live: HashSet<String> = self
-            .current
-            .worktree_groups
-            .iter()
-            .flat_map(|group| group.rows.iter())
-            .map(|row| row.id.clone())
-            .collect();
+        let live: HashSet<String> = self.current.rows().map(|row| row.id.clone()).collect();
         let mut clear = read_receipt_for_row(
             &self.current,
             focused_row_id.as_deref(),
@@ -1498,17 +1480,13 @@ impl LoopState {
         // A row without the cost enrichment is simply not observed; when its first
         // cost lands, the first observation snaps — never a `0 → cost` boot roll.
         self.ui.cost_rolls.observe(
-            self.current
-                .worktree_groups
-                .iter()
-                .flat_map(|group| group.rows.iter())
-                .filter_map(|row| {
-                    row.as_agent()
-                        .and_then(|agent| agent.context.as_ref())
-                        .and_then(|context| context.cost.as_ref())
-                        .and_then(|cost| cost.total_cost_usd)
-                        .map(|usd| (row.id.clone(), usd))
-                }),
+            self.current.rows().filter_map(|row| {
+                row.as_agent()
+                    .and_then(|agent| agent.context.as_ref())
+                    .and_then(|context| context.cost.as_ref())
+                    .and_then(|cost| cost.total_cost_usd)
+                    .map(|usd| (row.id.clone(), usd))
+            }),
             self.ui.animation_phase,
         );
     }

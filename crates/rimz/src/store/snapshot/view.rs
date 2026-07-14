@@ -12,7 +12,7 @@ use super::fold::ResumeOutcome;
 #[cfg(test)]
 use super::fold::agent_rollup_with_carryover;
 use super::panes::SidebarOwnView;
-use super::row::PaneAgent;
+use super::row::{PaneAgent, SidebarRow};
 use crate::agents::AgentState;
 use crate::agents::SpendTally;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
@@ -352,6 +352,20 @@ impl SidebarSnapshot {
         self.agents
             .iter()
             .filter(|agent| agent.parent_agent_id.is_none())
+    }
+
+    /// Every row across every worktree group, in group order.
+    pub fn rows(&self) -> impl Iterator<Item = &SidebarRow> {
+        self.worktree_groups
+            .iter()
+            .flat_map(|group| group.rows.iter())
+    }
+
+    /// Every mutable row across every worktree group, in group order.
+    pub fn rows_mut(&mut self) -> impl Iterator<Item = &mut SidebarRow> {
+        self.worktree_groups
+            .iter_mut()
+            .flat_map(|group| group.rows.iter_mut())
     }
 
     /// Record the project root so a frame-admitted row whose cwd is neither
