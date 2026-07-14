@@ -129,6 +129,65 @@ fn reply_target_anchors_transcript_before_dispatch() {
 }
 
 #[test]
+fn parked_reply_reanchors_when_delivery_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    runtime.ensure_dirs().unwrap();
+    let store = Store::open(paths, runtime).unwrap();
+    let transcript = dir.path().join("transcript.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"old answer\"}]}}\n",
+    )
+    .unwrap();
+    let mut agent = crate::testkit::agent_state("claude", "sess-reply", Timestamp::UNIX_EPOCH);
+    agent.status = AgentStatus::Running;
+    agent.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    let adapter = crate::agents::find_adapter("claude").unwrap();
+    let target = ReplyTarget::new(&agent, "@claude".to_owned(), adapter);
+    let outcome = DispatchOutcome::Queued {
+        label: "@claude".to_owned(),
+        message_id: MessageId::new(),
+    };
+    let mut leg = Leg::new(target, &outcome, 0);
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    writeln!(
+        file,
+        "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"intervening answer\"}}]}}}}"
+    )
+    .unwrap();
+    let mut message = MessageRecord::new(
+        workspace_id.clone(),
+        &agent,
+        "queued request".to_owned(),
+        true,
+        DeliveryGate::Any,
+    );
+    message.message_id = leg.message_id.clone();
+    message.status = MessageStatus::Delivered;
+    let running = SidebarSnapshot::build_with_agents(
+        workspace_id.clone(),
+        vec![agent.clone()],
+        Timestamp::now(),
+    );
+
+    assert!(!advance_leg(&mut leg, &store, &[message.clone()], &running, false).unwrap());
+    assert_eq!(leg.last_message, None);
+
+    agent.status = AgentStatus::Idle;
+    let idle = SidebarSnapshot::build_with_agents(workspace_id, vec![agent], Timestamp::now());
+    assert!(advance_leg(&mut leg, &store, &[message], &idle, false).unwrap());
+    assert_eq!(leg.result().final_message, None);
+}
+
+#[test]
 fn terminal_delivery_failures_win_over_missing_card() {
     for status in [
         MessageStatus::TimedOut,

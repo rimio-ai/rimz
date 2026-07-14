@@ -445,6 +445,7 @@ impl Leg {
         let cursor = (message_status == MessageStatus::Sent)
             .then(|| target.cursor.take())
             .flatten();
+        target.cursor = None;
         let transcript_path = target.transcript_path.clone();
         Self {
             target,
@@ -579,13 +580,11 @@ fn advance_leg(
             MessageStatus::Sent | MessageStatus::Delivered
         )
     {
-        leg.cursor = leg.target.cursor.take().or_else(|| {
-            Some(anchored_cursor(
-                agent.and_then(|agent| agent.transcript_path.as_deref()),
-                agent.map(|agent| &agent.agent_id),
-                adapter,
-            ))
-        });
+        leg.cursor = Some(anchored_cursor(
+            agent.and_then(|agent| agent.transcript_path.as_deref()),
+            agent.map(|agent| &agent.agent_id),
+            adapter,
+        ));
     } else if let (Some(cursor), Some(agent)) = (&mut leg.cursor, agent) {
         for message in cursor.messages(
             agent.transcript_path.as_deref(),

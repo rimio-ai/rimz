@@ -781,30 +781,26 @@ fn dispatch_targets(
         .iter()
         .map(|target| should_park(state, target, mode, now))
         .collect::<Vec<_>>();
-    let mut kinds = BTreeSet::new();
-    for (target, park) in targets.iter().zip(&parks) {
-        if !park {
-            continue;
-        }
-        let agent = target
-            .agent
-            .as_ref()
-            .ok_or_else(|| DispatchErr::NoDurableSession {
-                label: target.label(state.snapshot),
-            })?;
-        if kinds.insert(agent.kind.clone()) {
-            preflight_queue_hooks(agent)?;
-        }
-    }
-
     let mut live_send = send::LiveSend {
         force: mode.force,
         steer: mode.steer,
         pacer: send::Pacer::new(message_interval_from_env()),
     };
+    let mut preflighted_kinds = BTreeSet::new();
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut compacted = Vec::new();
     for (target, park) in targets.iter().zip(parks) {
+        if park {
+            let agent = target
+                .agent
+                .as_ref()
+                .ok_or_else(|| DispatchErr::NoDurableSession {
+                    label: target.label(state.snapshot),
+                })?;
+            if preflighted_kinds.insert(agent.kind.clone()) {
+                preflight_queue_hooks(agent)?;
+            }
+        }
         outcomes.push(dispatch_one(
             state,
             &mut live_send,
