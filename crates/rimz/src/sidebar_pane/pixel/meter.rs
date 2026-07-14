@@ -198,21 +198,21 @@ pub(crate) fn rasterize(raster: &MeterRaster) -> RgbaImage {
         height: CELL_H,
         data: vec![0; width as usize * CELL_H as usize * 4],
     };
-    paint_rect(&mut image, 0, 7, width, 2, raster.track);
+    paint_rect(&mut image, 0, 7, width, 1, raster.track);
     if raster.fill_px == 0 {
         return image;
     }
 
     if raster.runs.is_empty() {
-        paint_rect(&mut image, 0, 6, raster.fill_px, 4, raster.health);
+        paint_rect(&mut image, 0, 6, raster.fill_px, 3, raster.health);
         return image;
     }
 
     let mut x = 0;
     for (index, (run_width, color)) in raster.runs.iter().copied().enumerate() {
-        paint_rect(&mut image, x, 6, run_width, 4, color);
+        paint_rect(&mut image, x, 6, run_width, 3, color);
         if index > 0 {
-            clear_rect(&mut image, x, 6, run_width.min(2), 4);
+            clear_rect(&mut image, x, 6, run_width.min(2), 3);
         }
         x += run_width;
     }
