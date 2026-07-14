@@ -400,7 +400,7 @@ pub fn enrich(
     let daemon_inputs = read_codex_daemon_reap(runtime);
     let remote_control_health = RemoteControlServerHealth {
         claude_host_present: frame
-            .map(|frame| crate::remote_control::claude_host_present(&frame.to_pane_refs())),
+            .map(|frame| crate::daemon_view::claude_host_present(&frame.to_pane_refs())),
         codex_daemon_alive: daemon_inputs
             .as_ref()
             .map(|inputs| !inputs.daemon_pids.is_empty()),

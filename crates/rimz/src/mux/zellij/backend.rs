@@ -459,7 +459,8 @@ impl MuxBackend for ZellijBackend {
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
         let session_name = opts.session_name.unwrap_or_default();
-        let raws = if opts.authoritative && !session_name.is_empty() {
+        let raws = if (opts.authoritative || opts.require_authoritative) && !session_name.is_empty()
+        {
             match self.authoritative_pane_listing(
                 &session_name,
                 opts.runtime_paths.as_ref(),
@@ -467,6 +468,7 @@ impl MuxBackend for ZellijBackend {
                 timeout,
             ) {
                 Ok(listing) => listing,
+                Err(err) if opts.require_authoritative => return Err(err),
                 Err(err) => {
                     tracing::debug!(session = %session_name, error = %err, "authoritative Zellij pane listing failed; falling back to topology cache");
                     self.topology_listing(

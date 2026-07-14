@@ -304,9 +304,9 @@ impl SidebarOwnView {
             .map(|pane| pane.pane_id.clone())
             .collect::<Vec<_>>();
         let own_view_is_daemon = !non_sidebar_siblings.is_empty()
-            && non_sidebar_siblings.iter().all(|pane| {
-                crate::remote_control::pane_is_host(&frame.pane_ref_for_state(tab, pane))
-            });
+            && non_sidebar_siblings
+                .iter()
+                .all(|pane| crate::daemon_view::pane_is_host(&frame.pane_ref_for_state(tab, pane)));
         Some(Self {
             sibling_count: siblings.len(),
             working_pane_ids,

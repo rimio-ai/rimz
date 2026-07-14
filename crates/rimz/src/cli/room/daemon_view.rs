@@ -44,7 +44,7 @@ fn build_daemon_view_options(
     // useful even with no daemon host.
     let width_override = room.width_override();
     BackgroundViewOptions {
-        view: rimz::remote_control::daemon_view_spec(rimz::remote_control::DaemonViewSpecParams {
+        view: rimz::daemon_view::daemon_view_spec(rimz::daemon_view::DaemonViewSpecParams {
             remote_control,
             daemon,
             rimz_bin: &rimz_bin,
@@ -97,7 +97,7 @@ pub(super) fn maybe_launch_remote_control(
     match backend.open_background_view(opts) {
         Ok(BackgroundViewLaunch::Launched) => tracing::info!(
             session = %workspace.session_name,
-            view = rimz::remote_control::VIEW_NAME,
+            view = rimz::daemon_view::VIEW_NAME,
             "launched the daemon view",
         ),
         Ok(BackgroundViewLaunch::AlreadyRunning) => {
@@ -105,7 +105,7 @@ pub(super) fn maybe_launch_remote_control(
                 session = %workspace.session_name,
                 "daemon view already present; repairing missing managed panes",
             );
-            rimz::remote_control::repair_daemon_view(
+            rimz::daemon_view::repair_daemon_view(
                 backend,
                 &workspace.session_name,
                 &workspace.workspace_id,

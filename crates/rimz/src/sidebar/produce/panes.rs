@@ -87,6 +87,7 @@ fn list_session_panes(
         workspace_id: Some(workspace_id),
         min_topology_produced_at_ms,
         authoritative,
+        require_authoritative: false,
         command_timeout,
     })?)
 }

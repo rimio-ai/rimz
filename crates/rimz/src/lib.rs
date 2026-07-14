@@ -14,6 +14,7 @@ pub mod channel;
 pub mod child_process;
 pub mod config;
 pub mod daemon_content;
+pub mod daemon_view;
 pub mod diag;
 pub mod disk_usage;
 pub mod forge;

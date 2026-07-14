@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn daemon_content_wrapper_is_not_a_managed_host_marker() {
-        assert!(!crate::remote_control::command_is_host(
+        assert!(!crate::daemon_view::command_is_host(
             "/usr/bin/rimz daemon content --slot 0 --worktree-root /proj/wt"
         ));
     }

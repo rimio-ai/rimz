@@ -423,6 +423,17 @@ exit 1
 
     assert_eq!(listing.panes.len(), 1);
     assert_eq!(listing.panes[0].pane_id.raw(), "terminal_8");
+
+    let err = backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-test".to_owned()),
+            workspace_id: Some(WorkspaceId::from_project_root(&project_root)),
+            authoritative: true,
+            require_authoritative: true,
+            ..Default::default()
+        })
+        .expect_err("required authoritative listing must reject cache fallback");
+    assert!(matches!(err, crate::mux::MuxErr::Command { .. }));
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
     assert!(log.contains("action list-panes --all --json"), "{log}");
 }

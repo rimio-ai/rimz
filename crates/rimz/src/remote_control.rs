@@ -1,19 +1,20 @@
-//! Remote-control hosts, daemon-view assembly and repair, and dashboard-pane
-//! classification.
+//! Remote-control hosts, preflight, runtime toggles, and Codex daemon lifecycle.
 //!
 //! When a [`crate::config::RemoteControlConfig`] toggle is set and that agent
 //! can start, `rimz start` brings its host up — but the two have different
 //! lifecycles, so they launch differently:
 //!
 //! - **Claude** runs `claude remote-control --spawn worktree`, a long-lived
-//!   foreground host, in the workspace session's one named [`VIEW_NAME`]
+//!   foreground host, in the workspace session's one named
+//!   [`crate::daemon_view::VIEW_NAME`]
 //!   background view (a tmux window / Zellij tab). It runs from the project root
 //!   so `--spawn=worktree` carves new on-demand sessions off the canonical repo,
 //!   not the current worktree. The host and its remote-session descendants are
 //!   infrastructure rather than coding agents, so their hooks are suppressed
-//!   and they never stamp a pane. [`pane_is_host`] identifies the host pane and
-//!   the snapshot reducer filters it out, surfacing remote control as a
-//!   health-colored `⇅ rc` flag on the Claude provider dashboard block instead.
+//!   and they never stamp a pane. [`crate::daemon_view::pane_is_host`]
+//!   identifies the host pane and the snapshot reducer filters it out,
+//!   surfacing remote control as a health-colored `⇅ rc` flag on the Claude
+//!   provider dashboard block instead.
 //! - **Codex** runs `remote-control start` from the *managed standalone install*
 //!   ([`codex_standalone_bin`]), which brings up the Codex app-server daemon
 //!   with remote control enabled and returns. That daemon is a **per-user
@@ -25,14 +26,6 @@
 //!   that requested startup is removed. A missing control socket plus Codex PID
 //!   records that prove the app-server is a zombie child of its managed updater
 //!   triggers one bounded updater recycle before startup.
-//! - **Loops** run an always-present `rimz loop watch` panel in the runtime
-//!   column. Scheduled loop runs split against that pane so transient agents
-//!   stay in the daemon view's loop zone.
-//!
-//! Daemon-view repair identifies each managed pane by its explicit pane
-//! title/name on Zellij and its start command on tmux, with the foreground
-//! command as a fallback. Every repair pass retains the oldest match and closes
-//! duplicates, so foreground child churn cannot accumulate host panes.
 //!
 //! `remote-control start` boots and updates its daemon from the standalone's
 //! fixed path, so a `codex` merely on PATH (a different binary) is not enough.
@@ -55,196 +48,14 @@ use serde::Deserialize;
 use crate::agents::claude::remote_control as claude_rc;
 use crate::agents::codex::app_server::codex_home;
 use crate::agents::version::CliVersion;
-use crate::config::{DaemonConfig, RemoteControlConfig};
-use crate::ids::WorkspaceId;
-use crate::mux::{
-    CommandSpec, DaemonView, HostPane, MuxBackend, PaneListOptions, SplitDirection,
-    SplitPaneOptions,
-};
-use crate::pane::PaneRef;
+use crate::config::RemoteControlConfig;
+use crate::mux::CommandSpec;
 use crate::store::{paths::StatePaths, workspace_record};
-
-/// View name for the managed daemon tab. Shared by the launcher (the idempotency
-/// key for the tmux window / Zellij tab) and the sidebar classifier
-/// ([`pane_is_host`]), so both speak the same name. The tab hosts configurable
-/// content in the middle (live stats by default) and stacks the per-session
-/// Codex app-server broker, the Claude remote-control host, and the loop panel
-/// on the right when they apply.
-pub const VIEW_NAME: &str = "rimzd";
 
 const CODEX_DAEMON_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_DAEMON_PID_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CODEX_DAEMON_RECOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const CODEX_DAEMON_RECOVERY_POLL: Duration = Duration::from_millis(25);
-
-/// Inputs that determine the managed panes in one workspace's daemon view.
-pub struct DaemonViewSpecParams<'a> {
-    pub remote_control: &'a RemoteControlConfig,
-    pub daemon: &'a DaemonConfig,
-    pub rimz_bin: &'a Path,
-    pub workspace_id: &'a WorkspaceId,
-    pub session_name: &'a str,
-    pub project_root: &'a Path,
-    pub worktree_root: &'a Path,
-    pub claude_present: bool,
-    pub codex_present: bool,
-}
-
-/// Build the authoritative managed-pane specification for the `rimzd` view.
-pub fn daemon_view_spec(params: DaemonViewSpecParams<'_>) -> DaemonView {
-    DaemonView {
-        name: VIEW_NAME.to_owned(),
-        content: content_panes(params.daemon, params.rimz_bin, params.worktree_root),
-        hosts: daemon_hosts(&params),
-        loop_panel: loop_panel(params.rimz_bin, params.worktree_root),
-    }
-}
-
-/// Recreate every missing managed pane while any pane in `rimzd` survives.
-/// Closing the whole view leaves no anchor and is treated as deliberate.
-pub fn repair_daemon_view(
-    backend: &dyn MuxBackend,
-    session_name: &str,
-    workspace_id: &WorkspaceId,
-    view: &DaemonView,
-) {
-    let listing = match backend.list_panes(PaneListOptions {
-        session_name: Some(session_name.to_owned()),
-        workspace_id: Some(workspace_id.clone()),
-        command_timeout: Some(std::time::Duration::from_millis(500)),
-        authoritative: true,
-        ..Default::default()
-    }) {
-        Ok(listing) => listing,
-        Err(err) => {
-            tracing::debug!(
-                session = %session_name,
-                error = &err as &dyn std::error::Error,
-                "daemon view repair skipped; pane listing failed",
-            );
-            return;
-        }
-    };
-    let reconciliation = managed_pane_reconciliation(view, &listing.panes);
-    for pane in reconciliation.spawn {
-        let Some(marker) = host_marker(&pane) else {
-            continue;
-        };
-        let Some((anchor, direction)) = repair_anchor(&listing.panes, marker.column()) else {
-            tracing::debug!(
-                session = %session_name,
-                "daemon view repair skipped; no surviving daemon pane found",
-            );
-            return;
-        };
-        let title = pane.argv.join(" ");
-        if let Err(err) = backend.split_pane(SplitPaneOptions {
-            session_name: Some(session_name.to_owned()),
-            target_view_id: anchor.view_id.clone(),
-            target_pane_id: Some(anchor.pane_id.clone()),
-            cwd: Some(pane.cwd.to_string_lossy().into_owned()),
-            command: Some(pane.argv.clone()),
-            title: Some(title),
-            env: Default::default(),
-            stacked: false,
-            direction,
-            focus: false,
-        }) {
-            tracing::warn!(
-                session = %session_name,
-                view = VIEW_NAME,
-                argv = ?pane.argv,
-                error = &err as &dyn std::error::Error,
-                "daemon view repair could not recreate managed pane",
-            );
-        }
-    }
-    for pane_id in reconciliation.close {
-        if let Err(err) = backend.close_pane(session_name, &pane_id) {
-            tracing::warn!(
-                session = %session_name,
-                view = VIEW_NAME,
-                pane = %pane_id,
-                error = &err as &dyn std::error::Error,
-                "daemon view repair could not close a surplus managed pane",
-            );
-        }
-    }
-}
-
-/// Best-effort elder duty that reconstructs the daemon-view spec from durable
-/// workspace metadata and current machine configuration, then repairs it.
-pub fn ensure_daemon_view(
-    backend: &dyn MuxBackend,
-    workspace_id: &WorkspaceId,
-    session_name: &str,
-) {
-    let paths = match StatePaths::for_workspace(workspace_id.clone()) {
-        Ok(paths) => paths,
-        Err(err) => {
-            tracing::debug!(
-                workspace = %workspace_id,
-                error = &err as &dyn std::error::Error,
-                "daemon view repair skipped; state paths unavailable",
-            );
-            return;
-        }
-    };
-    let record = match workspace_record::read(&paths.workspace_record) {
-        Ok(record) => record,
-        Err(err) => {
-            tracing::debug!(
-                workspace = %workspace_id,
-                error = &err as &dyn std::error::Error,
-                "daemon view repair skipped; workspace record unavailable",
-            );
-            return;
-        }
-    };
-    let machine = crate::config::MachineConfig::load_lenient();
-    ensure_daemon_view_with_config(
-        backend,
-        workspace_id,
-        session_name,
-        &record,
-        machine.as_ref(),
-    );
-}
-
-fn ensure_daemon_view_with_config(
-    backend: &dyn MuxBackend,
-    workspace_id: &WorkspaceId,
-    session_name: &str,
-    record: &workspace_record::WorkspaceRecord,
-    machine: &crate::config::MachineConfig,
-) {
-    let rimz_bin = crate::proc::rimz_exe();
-    let worktree_root = record
-        .worktree_root
-        .as_deref()
-        .unwrap_or(&record.project_root);
-    let mut remote_control = machine.remote_control.clone();
-    if let Err(err) = preflight_claude(&remote_control) {
-        tracing::debug!(
-            workspace = %workspace_id,
-            error = &err as &dyn std::error::Error,
-            "Claude remote-control runtime toggle refused",
-        );
-        remote_control.claude = false;
-    }
-    let view = daemon_view_spec(DaemonViewSpecParams {
-        remote_control: &remote_control,
-        daemon: &machine.daemon,
-        rimz_bin: &rimz_bin,
-        workspace_id,
-        session_name,
-        project_root: &record.project_root,
-        worktree_root,
-        claude_present: which::which("claude").is_ok(),
-        codex_present: which::which("codex").is_ok(),
-    });
-    repair_daemon_view(backend, session_name, workspace_id, &view);
-}
 
 /// A provider whose per-machine remote-control toggle changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -311,7 +122,7 @@ pub fn apply_runtime_toggle(
                 }
             };
             let backend = crate::mux::backend_for(mux);
-            ensure_daemon_view_with_config(
+            crate::daemon_view::ensure_daemon_view_with_config(
                 backend.as_ref(),
                 &workspace.workspace_id,
                 &workspace.session_name,
@@ -343,78 +154,6 @@ fn live_sessions(mux: crate::ids::MuxName) -> HashSet<String> {
         .into_iter()
         .collect()
 }
-
-fn daemon_hosts(params: &DaemonViewSpecParams<'_>) -> Vec<HostPane> {
-    let mut hosts = Vec::new();
-    if params.codex_present {
-        hosts.push(HostPane {
-            argv: vec![
-                params.rimz_bin.to_string_lossy().into_owned(),
-                "codex".to_owned(),
-                "app-server".to_owned(),
-                "serve".to_owned(),
-                "--workspace-id".to_owned(),
-                params.workspace_id.as_str().to_owned(),
-                "--session-name".to_owned(),
-                params.session_name.to_owned(),
-            ],
-            cwd: params.worktree_root.to_path_buf(),
-        });
-    }
-    if params.remote_control.claude && params.claude_present {
-        hosts.push(HostPane {
-            argv: claude_host_argv(),
-            cwd: params.project_root.to_path_buf(),
-        });
-    }
-    hosts
-}
-
-fn loop_panel(rimz_bin: &Path, worktree_root: &Path) -> HostPane {
-    HostPane {
-        argv: vec![
-            rimz_bin.to_string_lossy().into_owned(),
-            "loop".to_owned(),
-            "watch".to_owned(),
-            "--hold".to_owned(),
-        ],
-        cwd: worktree_root.to_path_buf(),
-    }
-}
-
-fn content_panes(daemon: &DaemonConfig, rimz_bin: &Path, worktree_root: &Path) -> Vec<HostPane> {
-    (0..crate::daemon_content::resolve_content(daemon, rimz_bin, worktree_root).len())
-        .map(|slot| content_supervisor_pane(slot, rimz_bin, worktree_root))
-        .collect()
-}
-
-fn content_supervisor_pane(slot: usize, rimz_bin: &Path, worktree_root: &Path) -> HostPane {
-    HostPane {
-        argv: vec![
-            rimz_bin.to_string_lossy().into_owned(),
-            "daemon".to_owned(),
-            "content".to_owned(),
-            "--slot".to_owned(),
-            slot.to_string(),
-            "--worktree-root".to_owned(),
-            worktree_root.to_string_lossy().into_owned(),
-        ],
-        cwd: worktree_root.to_path_buf(),
-    }
-}
-
-/// Substring marking the Claude remote-control host in a pane's command line —
-/// the subcommand it spells (`claude remote-control …`).
-pub(crate) const COMMAND_MARKER: &str = "remote-control";
-
-/// Substring marking the Codex app-server broker in a pane's command line
-/// (`rimz codex app-server serve …`). The broker is a per-session host pane in
-/// the same view, distinct from the per-user daemon [`ensure_codex_daemon`] runs.
-pub(crate) const APP_SERVER_MARKER: &str = "app-server";
-
-/// Substring marking the always-present loop panel command
-/// (`rimz loop watch --hold`).
-pub(crate) const LOOP_PANEL_MARKER: &str = "loop watch";
 
 /// The Claude Remote Control argv (program first). `--spawn worktree` isolates
 /// each on-demand remote session in its own git worktree — the worktree mode.
@@ -1056,236 +795,6 @@ pub(crate) fn claude_preflight_decision(
 
 fn env_var_present(key: &str) -> bool {
     std::env::var_os(key).is_some_and(|value| !value.is_empty())
-}
-
-/// Whether a command line is one of Rimz's managed daemon hosts.
-pub fn command_is_host(command: &str) -> bool {
-    command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
-}
-
-pub fn command_is_loop_panel(command: &str) -> bool {
-    command.contains(LOOP_PANEL_MARKER)
-}
-
-pub fn find_loop_panel(panes: &[PaneRef]) -> Option<&PaneRef> {
-    panes.iter().find(|pane| {
-        pane.view_name.as_deref() == Some(VIEW_NAME)
-            && (pane
-                .spawn_command
-                .as_deref()
-                .is_some_and(command_is_loop_panel)
-                || pane.command.as_deref().is_some_and(command_is_loop_panel))
-    })
-}
-
-/// A structural column in the managed daemon view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DaemonColumn {
-    Content,
-    Runtime,
-}
-
-/// Pick the surviving pane and split direction that preserve a managed pane's
-/// daemon-view column. Splits against another column always go right; only a
-/// pane already in the requested column may be split down.
-pub fn repair_anchor(
-    panes: &[PaneRef],
-    column: DaemonColumn,
-) -> Option<(&PaneRef, SplitDirection)> {
-    let daemon_panes = || {
-        panes
-            .iter()
-            .filter(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
-    };
-    let in_column = |pane: &&PaneRef, candidate| {
-        pane_marker(pane).is_some_and(|marker| marker.column() == candidate)
-    };
-
-    if let Some(anchor) = daemon_panes().find(|pane| in_column(pane, column)) {
-        return Some((anchor, SplitDirection::Down));
-    }
-
-    let anchor = match column {
-        DaemonColumn::Content => daemon_panes().find(|pane| pane.is_rimz_sidebar()),
-        DaemonColumn::Runtime => daemon_panes()
-            .find(|pane| in_column(pane, DaemonColumn::Content))
-            .or_else(|| daemon_panes().find(|pane| pane.is_rimz_sidebar())),
-    }
-    .or_else(|| daemon_panes().next())?;
-    Some((anchor, SplitDirection::Right))
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ManagedPaneMarker {
-    ContentSlot(usize),
-    CodexAppServer,
-    ClaudeRemoteControl,
-    LoopPanel,
-}
-
-impl ManagedPaneMarker {
-    fn column(&self) -> DaemonColumn {
-        match self {
-            Self::ContentSlot(_) => DaemonColumn::Content,
-            Self::CodexAppServer | Self::ClaudeRemoteControl | Self::LoopPanel => {
-                DaemonColumn::Runtime
-            }
-        }
-    }
-}
-
-#[derive(Debug, Default, PartialEq, Eq)]
-struct ManagedPaneReconciliation {
-    spawn: Vec<HostPane>,
-    close: Vec<crate::ids::PaneId>,
-}
-
-/// Plan one daemon-view repair without touching unmatched user panes.
-fn managed_pane_reconciliation(view: &DaemonView, panes: &[PaneRef]) -> ManagedPaneReconciliation {
-    let managed = view
-        .content
-        .iter()
-        .chain(view.hosts.iter())
-        .chain(std::iter::once(&view.loop_panel))
-        .filter_map(|host| host_marker(host).map(|marker| (marker, host)));
-    let mut reconciliation = ManagedPaneReconciliation::default();
-    let mut claude_enabled = false;
-    for (marker, host) in managed {
-        claude_enabled |= marker == ManagedPaneMarker::ClaudeRemoteControl;
-        let mut matches = matching_managed_panes(panes, &marker);
-        matches.sort_by(|left, right| {
-            left.pane_id
-                .creation_ordinal()
-                .cmp(&right.pane_id.creation_ordinal())
-                .then_with(|| left.pane_id.raw().cmp(right.pane_id.raw()))
-        });
-        if matches.is_empty() {
-            reconciliation.spawn.push(host.clone());
-        } else {
-            reconciliation
-                .close
-                .extend(matches.into_iter().skip(1).map(|pane| pane.pane_id.clone()));
-        }
-    }
-    if !claude_enabled {
-        reconciliation.close.extend(
-            matching_managed_panes(panes, &ManagedPaneMarker::ClaudeRemoteControl)
-                .into_iter()
-                .map(|pane| pane.pane_id.clone()),
-        );
-    }
-    reconciliation
-}
-
-fn matching_managed_panes<'a>(
-    panes: &'a [PaneRef],
-    marker: &ManagedPaneMarker,
-) -> Vec<&'a PaneRef> {
-    panes
-        .iter()
-        .filter(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
-        .filter(|pane| {
-            [
-                pane.spawn_command.as_deref(),
-                pane.command.as_deref(),
-                pane.title.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            .any(|command| command_matches_marker(command, marker))
-        })
-        .collect()
-}
-
-fn host_marker(host: &HostPane) -> Option<ManagedPaneMarker> {
-    command_marker(&host.argv.join(" "))
-}
-
-fn pane_marker(pane: &PaneRef) -> Option<ManagedPaneMarker> {
-    [
-        pane.spawn_command.as_deref(),
-        pane.command.as_deref(),
-        pane.title.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .find_map(command_marker)
-}
-
-fn command_marker(command: &str) -> Option<ManagedPaneMarker> {
-    content_slot_from_command(command)
-        .map(ManagedPaneMarker::ContentSlot)
-        .or_else(|| {
-            if command.contains(APP_SERVER_MARKER) {
-                Some(ManagedPaneMarker::CodexAppServer)
-            } else if command_is_claude_host(command) {
-                Some(ManagedPaneMarker::ClaudeRemoteControl)
-            } else if command.contains(LOOP_PANEL_MARKER) {
-                Some(ManagedPaneMarker::LoopPanel)
-            } else {
-                None
-            }
-        })
-}
-
-fn command_matches_marker(command: &str, marker: &ManagedPaneMarker) -> bool {
-    match marker {
-        ManagedPaneMarker::ContentSlot(slot) => content_slot_from_command(command) == Some(*slot),
-        ManagedPaneMarker::CodexAppServer => command.contains(APP_SERVER_MARKER),
-        ManagedPaneMarker::ClaudeRemoteControl => command_is_claude_host(command),
-        ManagedPaneMarker::LoopPanel => command.contains(LOOP_PANEL_MARKER),
-    }
-}
-
-pub(crate) fn command_is_claude_host(command: &str) -> bool {
-    let mut tokens = command.split_whitespace();
-    while let Some(token) = tokens.next() {
-        let is_claude = Path::new(token)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "claude");
-        if is_claude {
-            return tokens.next() == Some(COMMAND_MARKER);
-        }
-    }
-    false
-}
-
-fn content_slot_from_args(args: &[String]) -> Option<usize> {
-    if !args
-        .windows(2)
-        .any(|pair| pair[0] == "daemon" && pair[1] == "content")
-    {
-        return None;
-    }
-    args.windows(2).find_map(|pair| {
-        (pair[0] == "--slot")
-            .then(|| pair[1].parse().ok())
-            .flatten()
-    })
-}
-
-fn content_slot_from_command(command: &str) -> Option<usize> {
-    let args = command
-        .split_whitespace()
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    content_slot_from_args(&args)
-}
-
-/// Whether `pane` belongs to the daemon dashboard. Command markers catch daemon
-/// hosts wherever they are reported; the `rimzd` view name catches the full
-/// dashboard, including content panes on backends that report only a foreground
-/// binary basename.
-pub fn pane_is_host(pane: &PaneRef) -> bool {
-    pane.spawn_command.as_deref().is_some_and(command_is_host)
-        || pane.command.as_deref().is_some_and(command_is_host)
-        || pane.view_name.as_deref() == Some(VIEW_NAME)
-}
-
-/// Whether the managed Claude remote-control host pane is present in `panes`.
-pub fn claude_host_present(panes: &[PaneRef]) -> bool {
-    !matching_managed_panes(panes, &ManagedPaneMarker::ClaudeRemoteControl).is_empty()
 }
 
 #[cfg(test)]

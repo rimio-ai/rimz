@@ -83,13 +83,13 @@ pub(super) fn leftmost_live_work_pane(panes: &[RawPane], tab_position: u64) -> O
 /// foreground command carries a host marker. The spawn command is the
 /// authoritative Zellij signal for hosts that re-exec after launch.
 fn is_daemon_host_pane(pane: &RawPane) -> bool {
-    pane.tab_name.as_deref() == Some(crate::remote_control::VIEW_NAME)
+    pane.tab_name.as_deref() == Some(crate::daemon_view::VIEW_NAME)
         || pane
             .spawn_command()
-            .is_some_and(crate::remote_control::command_is_host)
+            .is_some_and(crate::daemon_view::command_is_host)
         || pane
             .foreground_command()
-            .is_some_and(crate::remote_control::command_is_host)
+            .is_some_and(crate::daemon_view::command_is_host)
 }
 
 pub(super) fn classify_session_panes(panes: &[RawPane]) -> SessionCleanliness {

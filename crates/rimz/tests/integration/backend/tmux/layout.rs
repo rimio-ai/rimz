@@ -2,16 +2,28 @@
 
 use super::support::*;
 
-fn held_loop_host() -> rimz::mux::HostPane {
+fn held_managed_pane(marker: &[&str]) -> rimz::mux::HostPane {
+    let mut argv = vec![
+        "sh".to_owned(),
+        "-c".to_owned(),
+        "exec sleep 120".to_owned(),
+    ];
+    argv.extend(marker.iter().map(|arg| (*arg).to_owned()));
     rimz::mux::HostPane {
-        argv: vec![
-            "sh".to_owned(),
-            "-c".to_owned(),
-            "exec sleep 120".to_owned(),
-            "rimz loop watch --hold".to_owned(),
-        ],
+        argv,
         cwd: std::env::temp_dir(),
     }
+}
+
+fn pane_has_marker(pane: &PaneRef, marker: &str) -> bool {
+    [
+        pane.spawn_command.as_deref(),
+        pane.command.as_deref(),
+        pane.title.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|command| command.contains(marker))
 }
 
 #[test]
@@ -219,7 +231,7 @@ fn open_background_view_births_columns_and_is_idempotent() {
 }
 
 #[test]
-fn repair_daemon_view_recreates_a_closed_loop_panel() {
+fn repair_daemon_view_recreates_missing_runtime_panes_in_one_column() {
     require_tmux!();
     let server = TmuxServer::new();
     server.ensure_with_shell("rimz-bg-repair");
@@ -230,10 +242,12 @@ fn repair_daemon_view_recreates_a_closed_loop_panel() {
         .open_sidebar(&sidebar, None)
         .expect("open_sidebar");
     let view = rimz::mux::DaemonView {
-        name: rimz::remote_control::VIEW_NAME.to_owned(),
-        content: vec![sleep_host()],
-        hosts: Vec::new(),
-        loop_panel: held_loop_host(),
+        name: rimz::daemon_view::VIEW_NAME.to_owned(),
+        content: vec![held_managed_pane(&[
+            "rimz", "daemon", "content", "--slot", "0",
+        ])],
+        hosts: vec![held_managed_pane(&["rimz", "codex", "app-server", "serve"])],
+        loop_panel: held_managed_pane(&["rimz", "loop", "watch", "--hold"]),
     };
     server
         .backend
@@ -250,21 +264,33 @@ fn repair_daemon_view_recreates_a_closed_loop_panel() {
             ..Default::default()
         })
         .expect("list panes");
-    let panel = rimz::remote_control::find_loop_panel(&listing.panes)
+    let panel = rimz::daemon_view::find_loop_panel(&listing.panes)
         .expect("loop panel")
         .pane_id
         .clone();
+    let broker = listing
+        .panes
+        .iter()
+        .find(|pane| pane_has_marker(pane, "app-server"))
+        .expect("Codex broker")
+        .pane_id
+        .clone();
     server.tmux(&["kill-pane", "-t", panel.raw()]);
+    server.tmux(&["kill-pane", "-t", broker.raw()]);
 
-    rimz::remote_control::repair_daemon_view(
+    rimz::daemon_view::repair_daemon_view(
         &server.backend,
         "rimz-bg-repair",
         &sidebar.workspace_id,
         &view,
     );
 
-    let panes = server.wait_for_panes("rimz-bg-repair:rimzd", 3);
-    assert_eq!(panes.len(), 3, "repair should restore the panel: {panes:?}");
+    let panes = server.wait_for_panes("rimz-bg-repair:rimzd", 4);
+    assert_eq!(
+        panes.len(),
+        4,
+        "repair should restore both runtime panes: {panes:?}"
+    );
     let listing = server
         .backend
         .list_panes(PaneListOptions {
@@ -273,10 +299,39 @@ fn repair_daemon_view_recreates_a_closed_loop_panel() {
             ..Default::default()
         })
         .expect("list repaired panes");
+    let panel = rimz::daemon_view::find_loop_panel(&listing.panes).expect("repaired loop panel");
+    let broker = listing
+        .panes
+        .iter()
+        .find(|pane| pane_has_marker(pane, "app-server"))
+        .expect("repaired Codex broker");
+    let content = listing
+        .panes
+        .iter()
+        .find(|pane| pane_has_marker(pane, "daemon content --slot 0"))
+        .expect("content pane");
+    let panel_left = panes
+        .iter()
+        .find(|pane| pane.id == panel.pane_id.raw())
+        .expect("loop panel geometry")
+        .left;
+    let broker_left = panes
+        .iter()
+        .find(|pane| pane.id == broker.pane_id.raw())
+        .expect("broker geometry")
+        .left;
+    let content_left = panes
+        .iter()
+        .find(|pane| pane.id == content.pane_id.raw())
+        .expect("content geometry")
+        .left;
+    assert_eq!(
+        broker_left, panel_left,
+        "repaired runtime panes must share one column: {panes:?}"
+    );
     assert!(
-        rimz::remote_control::find_loop_panel(&listing.panes).is_some(),
-        "repaired pane should carry the loop-watch marker: {:?}",
-        listing.panes,
+        content_left < broker_left,
+        "runtime column must stay to the right of content: {panes:?}"
     );
 }
 

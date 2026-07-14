@@ -77,7 +77,7 @@ fn refresh_loop(
         fire_elder_timers(&runtime, &now);
         if daemon_view_repaired_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
             daemon_view_repaired_at = Instant::now();
-            crate::remote_control::ensure_daemon_view(
+            crate::daemon_view::ensure_daemon_view(
                 daemon_backend.as_ref(),
                 &config.workspace_id,
                 &config.session_name,

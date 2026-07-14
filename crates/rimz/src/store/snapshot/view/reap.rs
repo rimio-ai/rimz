@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::agents::AgentState;
+use crate::daemon_view;
 use crate::ids::{AgentSessionId, PaneId};
 use crate::pane::PaneRef;
-use crate::remote_control;
 use crate::store::session_death;
 use crate::store::snapshot::panes::is_daemon_owned;
 use crate::store::snapshot::process::command_is_sidebar_chrome;
@@ -91,7 +91,7 @@ impl SidebarSnapshot {
     fn drop_host_pane_agents(&mut self, frame_panes: &[PaneRef]) {
         let host_pane_ids = frame_panes
             .iter()
-            .filter(|pane| remote_control::pane_is_host(pane))
+            .filter(|pane| daemon_view::pane_is_host(pane))
             .map(|pane| pane.pane_id.clone())
             .collect::<Vec<_>>();
         if host_pane_ids.is_empty() {
@@ -163,7 +163,7 @@ impl SidebarSnapshot {
     /// view — i.e. the user has nothing left but the managed daemon dashboard. A
     /// view is a *daemon* view iff, after dropping its sidebar pane, it is
     /// non-empty and every remaining pane is daemon-dashboard infrastructure
-    /// ([`crate::remote_control::pane_is_host`]); a *working* view iff it holds
+    /// ([`crate::daemon_view::pane_is_host`]); a *working* view iff it holds
     /// any non-sidebar, non-dashboard pane. A sidebar-only view (a working tab
     /// mid-self-close) counts as neither, so it neither trips nor blocks the
     /// signal. Returns `false` for an empty or not-yet-born session.
@@ -188,7 +188,7 @@ impl SidebarSnapshot {
             if is_sidebar {
                 continue;
             }
-            if remote_control::pane_is_host(pane) {
+            if daemon_view::pane_is_host(pane) {
                 entry.0 += 1;
             } else {
                 entry.1 += 1;

@@ -13,7 +13,6 @@ use crate::cli::room::{MissingSessionReport, pick_mux_for_session};
 use rimz::harness::run::RunRecord;
 use rimz::ids::PaneId;
 use rimz::mux::{PaneCmd, PaneListOptions, SplitDirection, SplitPaneOptions};
-use rimz::pane::PaneRef;
 
 pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
@@ -31,16 +30,29 @@ pub(crate) fn split_into_loop_zone(
         Some(listing) => listing,
         None => return Ok(false),
     };
-    let panel = match rimz::remote_control::find_loop_panel(&listing.panes) {
+    let panel = match rimz::daemon_view::find_loop_panel(&listing.panes) {
         Some(panel) => panel.clone(),
         None => {
-            let Some((anchor, direction)) = rimz::remote_control::repair_anchor(
-                &listing.panes,
-                rimz::remote_control::DaemonColumn::Runtime,
-            ) else {
-                return Ok(false);
-            };
-            match repair_loop_panel(backend, workspace, anchor, direction) {
+            let machine = rimz::config::MachineConfig::load_lenient();
+            let rimz_bin = rimz::proc::rimz_exe();
+            let view =
+                rimz::daemon_view::daemon_view_spec(rimz::daemon_view::DaemonViewSpecParams {
+                    remote_control: &machine.remote_control,
+                    daemon: &machine.daemon,
+                    rimz_bin: &rimz_bin,
+                    workspace_id: &workspace.workspace_id,
+                    session_name: &workspace.session_name,
+                    project_root: &workspace.project_root,
+                    worktree_root: &workspace.worktree_root,
+                    claude_present: which::which("claude").is_ok(),
+                    codex_present: which::which("codex").is_ok(),
+                });
+            match rimz::daemon_view::ensure_loop_panel(
+                backend,
+                &workspace.session_name,
+                &workspace.workspace_id,
+                &view,
+            ) {
                 Some(panel) => panel,
                 None => return Ok(false),
             }
@@ -92,55 +104,6 @@ fn list_loop_zone_panes(
             None
         }
     }
-}
-
-fn repair_loop_panel(
-    backend: &dyn rimz::mux::MuxBackend,
-    workspace: &rimz::ResolvedWorkspace,
-    anchor: &PaneRef,
-    direction: SplitDirection,
-) -> Option<PaneRef> {
-    let rimz_bin = rimz::proc::rimz_exe().to_string_lossy().into_owned();
-    if let Err(err) = backend.split_pane(SplitPaneOptions {
-        session_name: Some(workspace.session_name.clone()),
-        target_view_id: anchor.view_id.clone(),
-        target_pane_id: Some(anchor.pane_id.clone()),
-        cwd: Some(workspace.worktree_root.to_string_lossy().into_owned()),
-        title: Some(format!("{rimz_bin} loop watch --hold")),
-        command: Some(vec![
-            rimz_bin,
-            "loop".to_owned(),
-            "watch".to_owned(),
-            "--hold".to_owned(),
-        ]),
-        env: Default::default(),
-        stacked: false,
-        direction,
-        focus: false,
-    }) {
-        tracing::debug!(
-            session = %workspace.session_name,
-            pane = %anchor.pane_id,
-            error = &err as &dyn std::error::Error,
-            "loop panel repair failed; falling back to a run tab",
-        );
-        return None;
-    }
-
-    for attempt in 0..5 {
-        let listing = list_loop_zone_panes(backend, workspace)?;
-        if let Some(panel) = rimz::remote_control::find_loop_panel(&listing.panes) {
-            return Some(panel.clone());
-        }
-        if attempt < 4 {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
-    tracing::debug!(
-        session = %workspace.session_name,
-        "loop panel repair did not appear in pane listing; falling back to a run tab",
-    );
-    None
 }
 
 pub(crate) fn backend_for_workspace_session(

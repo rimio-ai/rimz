@@ -566,6 +566,7 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         workspace_id: Some(ws.workspace_id.clone()),
         min_topology_produced_at_ms: Some(floor_ms),
         authoritative: false,
+        require_authoritative: false,
         command_timeout: Some(RECONCILE_LIST_TIMEOUT),
     }) {
         Ok(listing) => listing.panes.into_iter().map(|pane| pane.pane_id).collect(),

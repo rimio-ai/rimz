@@ -33,7 +33,7 @@ pub struct SidebarOwnView {
     pub working_pane_ids: Vec<PaneId>,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
     /// after dropping any sidebar pane, are non-empty and all daemon-dashboard
-    /// infrastructure panes ([`crate::remote_control::pane_is_host`]).
+    /// infrastructure panes ([`crate::daemon_view::pane_is_host`]).
     /// `#[serde(default)]` keeps the wire shape stable for older producers.
     #[serde(default)]
     pub own_view_is_daemon: bool,
@@ -85,7 +85,7 @@ pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> Card
     {
         return CardAdmission::SidebarChrome;
     }
-    if crate::remote_control::pane_is_host(pane) {
+    if crate::daemon_view::pane_is_host(pane) {
         return CardAdmission::RemoteControlOrAppServerHost;
     }
     CardAdmission::Admitted

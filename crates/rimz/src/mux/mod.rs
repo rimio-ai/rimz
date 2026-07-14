@@ -193,6 +193,10 @@ pub struct PaneListOptions {
     /// Bypass backend topology caches and query the server directly. Backends
     /// whose primary listing is already authoritative ignore it.
     pub authoritative: bool,
+    /// Require server truth and return the authoritative query error instead of
+    /// falling back to a cache. Callers use this when stale topology could
+    /// trigger a destructive or duplicating mutation.
+    pub require_authoritative: bool,
     /// Override the backend's default subprocess timeout. `None` uses the
     /// backend's default (30s). Set to a shorter value for latency-sensitive
     /// probes (e.g. the self-close watchdog) where a hung Zellij should not

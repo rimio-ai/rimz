@@ -145,7 +145,7 @@ pub(super) fn tmux_views_with_sidebars(panes: &[PaneRef], session: &str) -> Vec<
         });
         if is_tmux_sidebar(pane) {
             views[slot].sidebar_panes.push(pane.pane_id.clone());
-        } else if crate::remote_control::pane_is_host(pane) {
+        } else if crate::daemon_view::pane_is_host(pane) {
             views[slot].has_daemon_host = true;
         } else {
             views[slot].has_working = true;
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn views_with_sidebars_classifies_working_orphan_and_daemon_windows() {
         let mut host = tmux_pane("%5", "@2", "rimz");
-        host.view_name = Some(crate::remote_control::VIEW_NAME.to_owned());
+        host.view_name = Some(crate::daemon_view::VIEW_NAME.to_owned());
         let mut foreign = tmux_pane("%6", "@9", SIDEBAR_CHROME_TITLE);
         foreign.session_name = "other-room".to_owned();
         let panes = vec![
