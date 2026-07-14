@@ -112,7 +112,9 @@ fn collect_workspace_runtime(
 }
 
 /// Reap stale per-session sidecar files — activity heartbeats, statusline
-/// context sidecars, and per-subagent context sidecars.
+/// context sidecars, and per-subagent context sidecars. A paired advisory lock
+/// keeps its stable inode while the JSON record exists; orphaned locks become
+/// ordinary stale sidecars on a later sweep.
 fn collect_stale_sidecars(
     dir: &Path,
     older_than: Duration,
@@ -136,6 +138,11 @@ fn collect_stale_sidecars(
             source,
         })?;
         let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) == Some("lock")
+            && path.with_extension("json").exists()
+        {
+            continue;
+        }
         if !is_older_than(&path, older_than)? {
             continue;
         }
@@ -589,6 +596,30 @@ mod tests {
             !rt.agent_activity_dir.parent().unwrap().exists(),
             "with no runtime files left, the workspace root is reaped too"
         );
+    }
+
+    #[test]
+    fn runtime_gc_keeps_an_old_lock_while_its_sidecar_is_live() {
+        let temp = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(temp.path());
+        let rt = RuntimePaths::under(workspace_id, temp.path()).unwrap();
+        rt.ensure_dirs().unwrap();
+        let context = rt.agent_context_dir.join("ctx.live.json");
+        let lock = rt.agent_context_dir.join("ctx.live.lock");
+        fs::write(&context, b"{}").unwrap();
+        fs::write(&lock, b"").unwrap();
+        fs::File::open(&lock)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+
+        let report =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
+                .unwrap();
+
+        assert_eq!(report.sidecar_files_removed, 0);
+        assert!(context.exists(), "fresh sidecar is kept");
+        assert!(lock.exists(), "its advisory lock keeps a stable inode");
     }
 
     #[test]
