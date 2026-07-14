@@ -405,6 +405,8 @@ class SyncRepo:
 
         log("code changed; running cargo xtask install-dev")
         run(["cargo", "xtask", "install-dev"])
+        log("development binary installed; running rimz reload")
+        run([self.config.rimz_bin, "reload"])
 
     def current_branch(self) -> str:
         return git_output("rev-parse", "--abbrev-ref", "HEAD")
