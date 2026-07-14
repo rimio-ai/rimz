@@ -355,19 +355,24 @@ fn statusline_normalizes_captured_reasoning_qualifiers_and_preserves_model_id() 
             None,
         ),
         (
+            "Gemini 3.5 Flash (High)",
+            "Gemini 3.5 Flash",
+            Some("high"),
+            None,
+        ),
+        (
+            "Gemini 3.5 Flash (Low)",
+            "Gemini 3.5 Flash",
+            Some("low"),
+            None,
+        ),
+        ("Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro", Some("low"), None),
+        (
             "Gemini 3.1 Pro (High)",
             "Gemini 3.1 Pro",
             Some("high"),
             None,
         ),
-        ("Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro", Some("low"), None),
-        (
-            "Gemini 3 Flash (High)",
-            "Gemini 3 Flash",
-            Some("high"),
-            None,
-        ),
-        ("Gemini 3 Flash (Low)", "Gemini 3 Flash", Some("low"), None),
         (
             "Claude Sonnet 4.6 (Thinking)",
             "Claude Sonnet 4.6",

@@ -511,7 +511,7 @@ Documented cache files relevant to identity are:
 
 The statusline is the authoritative live model/context surface. Preserve `model.id` byte-for-byte as provider identity. A terminal case-insensitive `(Low)`, `(Medium)`, or `(High)` display qualifier supplies lowercase effort; `(Thinking)` supplies the thinking flag; unknown parenthetical suffixes remain presentation. Model choice is sticky for the current turn: changing the selector while a turn runs applies after that turn finishes or is canceled.
 
-Antigravity is multi-model. The captured 1.1.2 selector lists `Gemini 3.5 Flash (Medium)`, `Gemini 3.1 Pro (High)`, `Gemini 3.1 Pro (Low)`, `Gemini 3 Flash (High)`, `Gemini 3 Flash (Low)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, and `GPT-OSS 120B (Medium)`. Availability changes by plan. Do not infer provider, context window, or pricing from the `antigravity` kind; use the exact live model and upstream-reported context limit.
+Antigravity is multi-model. The captured 1.1.2 selector lists `Gemini 3.5 Flash (Medium)`, `Gemini 3.5 Flash (High)`, `Gemini 3.5 Flash (Low)`, `Gemini 3.1 Pro (Low)`, `Gemini 3.1 Pro (High)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, and `GPT-OSS 120B (Medium)`. Current and selected markers are selector UI state rather than part of these labels. Availability changes by plan. Do not infer provider, context window, or pricing from the `antigravity` kind; use the exact live model and upstream-reported context limit.
 
 ### Account and authentication
 
