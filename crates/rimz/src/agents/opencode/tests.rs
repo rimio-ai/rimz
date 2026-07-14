@@ -44,6 +44,22 @@ fn opencode_activity_filter_and_launch_commands_build() {
             "review this".to_owned(),
         ])
     );
+    assert_eq!(
+        OpencodeAdapter.permission_args(PermissionMode::Ask),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        OpencodeAdapter.permission_args(PermissionMode::Auto),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        OpencodeAdapter.permission_args(PermissionMode::Plan),
+        vec!["--agent", "plan"]
+    );
+    assert_eq!(
+        OpencodeAdapter.permission_args(PermissionMode::Yolo),
+        vec!["--auto"]
+    );
 }
 
 #[test]
@@ -180,6 +196,20 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
         LifecycleSignal::TurnEnded {
             errored: false,
             parked_on_background: false,
+        }
+    );
+    let proposed_plan = OpencodeAdapter
+        .observe_lifecycle(
+            "session_idle",
+            &json!({ "session_id": "ses_1", "plan_proposed": true }),
+        )
+        .expect("plan observation");
+    assert_eq!(
+        proposed_plan.signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::PlanApproval,
+            ask_id: None,
+            detail: None,
         }
     );
     let error = OpencodeAdapter
@@ -593,6 +623,8 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("question.replied"));
     assert!(PLUGIN_SOURCE.contains("question.rejected"));
     assert!(PLUGIN_SOURCE.contains("session.deleted"));
+    assert!(PLUGIN_SOURCE.contains("plan_proposed"));
+    assert!(PLUGIN_SOURCE.contains("agents.get(sessionID) === \"plan\""));
     assert!(PLUGIN_SOURCE.contains("Promise.allSettled"));
     assert!(PLUGIN_SOURCE.contains("endRoot(sessionID, \"dispose\")"));
     assert!(PLUGIN_SOURCE.contains("{\"status\":\"deny\"}"));

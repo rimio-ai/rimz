@@ -278,7 +278,7 @@ Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and
 | Claude Code | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
 | Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
 | Pi          | 🧪 Experimental |   ●   |  ●   |    ●    |  ✗  |  ✗   |     ✗     |
-| OpenCode    | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ✗   |     ●     |
+| OpenCode    | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
 | Antigravity | 🧪 Experimental |   ◐   |  ◐   |    ◐    |  ✗  |  ✗   |     ✗     |
 | Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |  ✗   |     ✗     |
 | Droid       | 🧪 Experimental |   ●   |  ✗   |    ◐    |  ✗  |  ✗   |     ✗     |

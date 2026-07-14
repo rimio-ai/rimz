@@ -36,6 +36,7 @@ pub(crate) struct OpencodeHookPayload {
     pub questions: Option<Vec<OpencodeQuestion>>,
     pub reply: Option<String>,
     pub answers: Option<Vec<Vec<String>>>,
+    pub plan_proposed: Option<bool>,
     pub is_error: Option<bool>,
     pub error_message: Option<String>,
     pub error_class: Option<String>,

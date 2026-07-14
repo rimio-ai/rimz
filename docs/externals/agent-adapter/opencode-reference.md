@@ -235,6 +235,8 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 | `opencode run [message…]` | headless one-shot; `--format json`, `--attach`, `--dir`, `--variant`, and `--thinking` cover structured/remote/reasoning modes |
 | `opencode -m/--model <provider/model>` | select the provider model; the adapter passes this flag on interactive launches |
 | `opencode run --variant <level>`, `opencode run --thinking` | headless-run-only reasoning/display flags; unavailable to the interactive pane launch |
+| `opencode --agent <name>` | select the primary agent for the interactive session; `--agent plan` starts in the built-in plan agent (live-verified on 1.17.20) |
+| `opencode --auto` | auto-approve permissions that are not explicitly denied (live-verified on 1.17.20) |
 | `opencode serve` / `web` / `attach <url>` | detached server / browser UI / point a TUI at a running server; server modes expose mDNS domain and CORS flags |
 | `opencode session list` / `session delete <id>` | list sessions (`--format json`, `--max-count`) / delete one |
 | `opencode agent create` / `agent list`; `opencode models [provider]` | manage agents / inspect the model catalog |
@@ -262,6 +264,7 @@ The adapter verdict has landed in [opencode.md](../../internals/agents/opencode.
 | --- | --- | --- |
 | `session.created` (no `parentID`) | lifecycle | `Registered` — worktree from `Session.directory` |
 | `chat.message` hook (or a user `message.updated`) | lifecycle | `TurnStarted` — sanitized prompt labels the row; `variant` ↔ the `effort` carry-forward |
+| root `session.idle` while the `plan` agent rests | awaiting-user | derived `PlanApproval` waiting row; the next prompt clears it after native review and mode switching |
 | `session.idle` | lifecycle | `TurnEnded { errored: false }` |
 | `session.error` | lifecycle | the error bit for the enclosing turn — a typed, in-band death certificate (`ApiError`, `MessageAbortedError`, …), Pi-grade: no transcript forensics needed |
 | `tool.execute.after` (mutating tool) | lifecycle | `ToolUsed { mutates: true, edits }` — `edit` / `write` / `apply_patch` edit files; `bash` mutates only; read-only tools stay silent |

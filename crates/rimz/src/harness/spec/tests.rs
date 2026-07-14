@@ -814,6 +814,33 @@ fn virtual_agent_modes_and_ping_work_without_config() {
 }
 
 #[test]
+fn opencode_virtual_modes_render_provider_flags() {
+    for (raw, mode, expected) in [
+        (
+            "opencode-plan",
+            PermissionMode::Plan,
+            vec!["--agent".to_owned(), "plan".to_owned()],
+        ),
+        (
+            "opencode-yolo",
+            PermissionMode::Yolo,
+            vec!["--auto".to_owned()],
+        ),
+    ] {
+        let Cell::Agent {
+            args,
+            mode: actual_mode,
+            ..
+        } = agent_cell(raw, &no_profiles(), &no_commands())
+        else {
+            unreachable!();
+        };
+        assert_eq!(actual_mode, Some(mode), "{raw}");
+        assert_eq!(args, expected, "{raw}");
+    }
+}
+
+#[test]
 fn kind_override_does_not_make_unsupported_virtual_cells_valid() {
     let profiles = profiles([(
         "pi",

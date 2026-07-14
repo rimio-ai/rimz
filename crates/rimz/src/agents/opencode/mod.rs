@@ -8,6 +8,8 @@
 //! `permission.ask` hook reads stdout on older releases and leaves OpenCode's
 //! `output.status` at `ask` on the neutral path. Native reply bus events record
 //! answers and clear waiting after the user responds in OpenCode's own TUI.
+//! A root `session_idle` after a plan-agent turn derives a native plan-approval
+//! wait that the next prompt clears after the user switches modes in the TUI.
 //! `session.deleted` and the server-scoped `dispose` sweep normalize to one
 //! per-session `session_ended` event, with pane liveness as the crash backstop.
 
@@ -37,6 +39,7 @@ use super::{
     HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, RefreshTrigger,
     Result, SubagentIdentity, classify_agent_hook, resolve_subagent_identity, sanitize_user_prompt,
 };
+use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
@@ -113,8 +116,8 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::PlanApproval,
-        ConcernCoverage::Unsupported {
-            reason: "no plan-approval gate",
+        ConcernCoverage::Wired {
+            via: "session_idle + resting plan-agent turn",
         },
     ),
     (
@@ -325,10 +328,13 @@ impl AgentAdapter for OpencodeAdapter {
         &OPENCODE_DESCRIPTOR
     }
 
-    fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
+    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let ask_kind = match event_name {
             "permission_ask" => Some(AskKind::Permission),
             "question_ask" => Some(AskKind::Question),
+            "session_idle" if payloads::parse_payload(payload).plan_proposed == Some(true) => {
+                Some(AskKind::PlanApproval)
+            }
             _ => None,
         };
         classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
@@ -373,6 +379,12 @@ impl AgentAdapter for OpencodeAdapter {
                 json!({ "session_id": "ses_1" }),
                 AgentHookClass::Lifecycle,
                 None,
+            ),
+            ClassificationSample::new(
+                "session_idle",
+                json!({ "session_id": "ses_1", "plan_proposed": true }),
+                AgentHookClass::AwaitingUser,
+                Some(AskKind::PlanApproval),
             ),
             ClassificationSample::new(
                 "session_error",
@@ -478,6 +490,13 @@ impl AgentAdapter for OpencodeAdapter {
                 detail: parsed.title.clone(),
             },
             "chat_message" => LifecycleSignal::TurnStarted,
+            "session_idle" if parsed.plan_proposed == Some(true) => {
+                LifecycleSignal::AwaitingInput {
+                    kind: AskKind::PlanApproval,
+                    ask_id: None,
+                    detail: None,
+                }
+            }
             "session_idle" => LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
@@ -726,6 +745,14 @@ impl AgentAdapter for OpencodeAdapter {
         prices: &PriceBook,
     ) -> crate::agents::spending::SpendParse {
         spend::parse_opencode_spend(path, resume, prices)
+    }
+
+    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
+        match mode {
+            PermissionMode::Ask | PermissionMode::Auto => Vec::new(),
+            PermissionMode::Plan => vec!["--agent".to_owned(), "plan".to_owned()],
+            PermissionMode::Yolo => vec!["--auto".to_owned()],
+        }
     }
 
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {

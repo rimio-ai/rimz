@@ -26,6 +26,7 @@ const RIMZ_ARGS = ["hooks", "feed", "--source", "opencode"];
 export const RimzPlugin: Plugin = async (input) => {
   const children = new Map<string, string>();
   const gauge = new Map<string, Gauge>();
+  const agents = new Map<string, string>();
   const roots = new Set<string>();
 
   function cwd(sessionDirectory?: unknown): string {
@@ -92,6 +93,7 @@ export const RimzPlugin: Plugin = async (input) => {
     const payload = base("session_ended", sessionID, { reason });
     roots.delete(sessionID);
     gauge.delete(sessionID);
+    agents.delete(sessionID);
     return spawnRimz(payload, false);
   }
 
@@ -237,6 +239,7 @@ export const RimzPlugin: Plugin = async (input) => {
         if (!parentID) roots.add(sessionID);
         send(base(parentID ? "SubagentStop" : "session_idle", sessionID, {
           parent_session_id: parentID,
+          plan_proposed: !parentID && agents.get(sessionID) === "plan" ? true : undefined,
         }));
         return;
       }
@@ -351,6 +354,7 @@ export const RimzPlugin: Plugin = async (input) => {
         if (children.has(sessionID) || (typeof info.parentID === "string" && info.parentID.length > 0)) {
           children.delete(sessionID);
           gauge.delete(sessionID);
+          agents.delete(sessionID);
           return;
         }
         void endRoot(sessionID, "deleted");
@@ -358,7 +362,13 @@ export const RimzPlugin: Plugin = async (input) => {
       }
 
       if (type === "message.updated") {
-        updateGauge(properties.info);
+        const info = properties.info;
+        const sessionID = info?.sessionID;
+        const agent = info?.mode ?? info?.agent;
+        if (typeof sessionID === "string" && sessionID.length > 0 && typeof agent === "string") {
+          agents.set(sessionID, agent);
+        }
+        updateGauge(info);
         return;
       }
 
@@ -373,6 +383,7 @@ export const RimzPlugin: Plugin = async (input) => {
     "chat.message": async (hookInput, output) => {
       const sessionID = hookInput.sessionID;
       if (!children.has(sessionID)) roots.add(sessionID);
+      if (typeof hookInput.agent === "string") agents.set(sessionID, hookInput.agent);
       if (hookInput.model) {
         const prior = gauge.get(sessionID) || {};
         const modelID = hookInput.model.modelID;
