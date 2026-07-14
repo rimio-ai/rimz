@@ -1,13 +1,14 @@
 //! Loop runner domain: shell checks, run locks, and budget-window gates.
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 
 use crate::agents::{
     WindowSurplus, longest_window_reset_at, longest_window_running, longest_window_surplus,
@@ -34,7 +35,18 @@ impl Drop for RunLockGuard {
     }
 }
 
-pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<Option<RunLockGuard>> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunLockInfo {
+    pub pid: u32,
+    pub started_at: Timestamp,
+}
+
+pub enum RunLockAttempt {
+    Acquired(RunLockGuard),
+    Held(Option<RunLockInfo>),
+}
+
+pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt> {
     let runtime =
         RuntimePaths::for_workspace(WorkspaceId::from_project_root(&entry.resolved_root()))
             .context("locating loop task runtime")?;
@@ -48,9 +60,36 @@ pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<Option<RunLockG
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening loop run lock `{}`", path.display()))?;
+    acquire_run_lock_file(file, &path)
+}
+
+fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> {
     match file.try_lock() {
-        Ok(()) => Ok(Some(RunLockGuard { file })),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Ok(()) => {
+            let info = RunLockInfo {
+                pid: std::process::id(),
+                started_at: Timestamp::now(),
+            };
+            // Runtime scratch needs no fsync and stays on the locked fd:
+            // renaming an atomic replacement would detach the advisory lock.
+            file.set_len(0)
+                .with_context(|| format!("truncating loop run lock `{}`", path.display()))?;
+            file.rewind()
+                .with_context(|| format!("rewinding loop run lock `{}`", path.display()))?;
+            serde_json::to_writer(&mut file, &info)
+                .with_context(|| format!("writing loop run lock `{}`", path.display()))?;
+            file.flush()
+                .with_context(|| format!("flushing loop run lock `{}`", path.display()))?;
+            Ok(RunLockAttempt::Acquired(RunLockGuard { file }))
+        }
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let mut payload = Vec::new();
+            let info = file
+                .read_to_end(&mut payload)
+                .ok()
+                .and_then(|_| serde_json::from_slice(&payload).ok());
+            Ok(RunLockAttempt::Held(info))
+        }
         Err(err) => Err(std::io::Error::from(err))
             .with_context(|| format!("locking loop run lock `{}`", path.display())),
     }
@@ -408,6 +447,59 @@ fn entry_runtime(entry: &TaskEntry) -> Result<RuntimePaths> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("task.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .expect("open lock");
+
+        let guard = match acquire_run_lock_file(file, &path).expect("acquire lock") {
+            RunLockAttempt::Acquired(guard) => guard,
+            RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
+        };
+        let written: RunLockInfo =
+            serde_json::from_slice(&std::fs::read(&path).expect("read lock"))
+                .expect("parse lock info");
+        assert_eq!(written.pid, std::process::id());
+
+        let contender = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open contender");
+        match acquire_run_lock_file(contender, &path).expect("contend for lock") {
+            RunLockAttempt::Held(Some(info)) => assert_eq!(info, written),
+            RunLockAttempt::Held(None) => panic!("holder metadata should be readable"),
+            RunLockAttempt::Acquired(_) => panic!("held lock should reject contender"),
+        }
+        drop(guard);
+
+        let empty_path = dir.path().join("legacy.lock");
+        let empty = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&empty_path)
+            .expect("open empty lock");
+        empty.try_lock().expect("hold empty lock");
+        let contender = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&empty_path)
+            .expect("open empty contender");
+        assert!(matches!(
+            acquire_run_lock_file(contender, &empty_path).expect("contend for empty lock"),
+            RunLockAttempt::Held(None)
+        ));
+    }
 
     fn surplus_entry(surplus: Option<&str>, surplus_after: Option<&str>) -> TaskEntry {
         TaskEntry {

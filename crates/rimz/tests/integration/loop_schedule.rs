@@ -13,6 +13,7 @@ use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::schedule::instances;
 use rimz::harness::schedule::pauses::{self, PauseEntry};
 use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
+use rimz::harness::schedule::runner::RunLockInfo;
 use rimz::harness::schedule::strikes;
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::MessageStatus;
@@ -1605,18 +1606,25 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
     );
     let lock_path = loop_run_lock_path(&env, "busy");
     std::fs::create_dir_all(lock_path.parent().expect("lock parent")).expect("mkdir runtime");
+    let holder = RunLockInfo {
+        pid: 42_424,
+        started_at: Timestamp::now() - SignedDuration::from_secs(25 * 60),
+    };
+    std::fs::write(
+        &lock_path,
+        serde_json::to_vec(&holder).expect("serialize lock holder"),
+    )
+    .expect("write lock holder");
     let lock_file = std::fs::OpenOptions::new()
-        .create(true)
         .read(true)
         .write(true)
-        .truncate(false)
         .open(&lock_path)
         .expect("open lock");
     lock_file.try_lock().expect("hold loop run lock");
 
     let stdout = loop_ok(&env, &["loop", "run", "busy"]);
     assert!(
-        stdout.contains("previous run still active; skipping"),
+        stdout.contains("previous run still active (pid 42424, started 25m ago) — skipped"),
         "overlap should print skip message: {stdout}"
     );
     assert!(
@@ -1628,11 +1636,27 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
         records.last().map(|record| record.result),
         Some(LoopRunResult::Overlapped)
     );
+    assert_eq!(
+        records.last().and_then(|record| record.error.as_deref()),
+        Some("previous run still active (pid 42424, started 25m ago) — skipped")
+    );
+
+    let stdout = loop_ok(&env, &["loop", "fire", "busy"]);
+    assert!(
+        stdout.contains("previous run still active (pid 42424, started 25m ago) — skipped"),
+        "manual overlap should print holder details: {stdout}"
+    );
 
     let stdout = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
-        stdout.contains("overlapped"),
-        "show should display overlapped record: {stdout}"
+        stdout.contains("overlapped")
+            && stdout.lines().any(|line| {
+                line.contains("active:")
+                    && line.contains("run in progress")
+                    && line.contains("pid 42424")
+                    && line.contains("started 25m ago")
+            }),
+        "show should display overlapped record and active holder: {stdout}"
     );
     lock_file.unlock().expect("unlock loop run lock");
 }

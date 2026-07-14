@@ -146,8 +146,10 @@ pub(super) fn run_one(
         );
     }
     let _run_lock = match acquire_run_lock(name, &entry) {
-        Ok(Some(guard)) => guard,
-        Ok(None) => return finish_overlapped(name, &entry, mode, started),
+        Ok(RunLockAttempt::Acquired(guard)) => guard,
+        Ok(RunLockAttempt::Held(info)) => {
+            return finish_overlapped(name, &entry, mode, started, info);
+        }
         Err(err) => {
             append_error_record(name, &entry, mode, started, &err);
             return Err(err);
@@ -197,18 +199,28 @@ fn finish_overlapped(
     entry: &TaskEntry,
     mode: LoopRunMode,
     started: Instant,
+    info: Option<RunLockInfo>,
 ) -> Result<()> {
-    record_run(
-        name,
-        entry,
-        LoopRunRecord::new(name, LoopRunResult::Overlapped, mode, elapsed_ms(started)),
-    );
+    let detail = info.map(|info| {
+        format!(
+            "previous run still active (pid {}, started {}) — skipped",
+            info.pid,
+            ui::rel_age(info.started_at, Timestamp::now())
+        )
+    });
+    let mut record = LoopRunRecord::new(name, LoopRunResult::Overlapped, mode, elapsed_ms(started));
+    record.error = detail.clone();
+    record_run(name, entry, record);
     if mode == LoopRunMode::Manual {
         write_manual_verdict(
             &mut ui::out(),
             LoopRunResult::Overlapped,
-            "previous run still active — skipped",
+            detail
+                .as_deref()
+                .unwrap_or("previous run still active — skipped"),
         )?;
+    } else if let Some(detail) = detail {
+        writeln!(ui::out(), "loop `{name}`: {detail}")?;
     } else {
         writeln!(
             ui::out(),
