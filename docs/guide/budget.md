@@ -54,7 +54,7 @@ rimz config set harness.budget 50/day              # this project's whole fleet
 rimz config set accounts.budget.claude 100/day     # one login, every room on the machine
 ```
 
-Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. The account cap sums one provider login across every room on the machine, but each room parks only the panes it owns, so a cap crossed in one project never reaches into another room's panes.
+Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap is available only for a provider whose adapter exposes durable account-spend history; RimZ rejects unknown or ineligible kinds during config edits, room start, and `rimz budget --account` rather than treating missing history as `$0`. Cursor still supports per-agent and room caps through its live local price, but it has no account-day cap. An eligible account cap sums one provider login across every room on the machine, while each room parks only the panes it owns.
 
 `rimz budget` reads and adjusts what config armed:
 
@@ -72,7 +72,7 @@ Adjustments are runtime state under RimZ's own state directory, never edits to y
 
 The enforcement is small enough to hold in your head:
 
-1. The room's sidebar process re-checks every scope on its regular tick, against the same transcript-derived spend that [Token Insight](./insight.md#how-the-numbers-are-calculated) reads, plus each card's authoritative live cost. A card value prefixed `≈$` is a local estimate and remains visible without entering any cap or park decision.
+1. The room's sidebar process re-checks every scope on its regular tick, against the same transcript-derived spend that [Token Insight](./insight.md#how-the-numbers-are-calculated) reads, plus each eligible live card cost. `≈$` marks a non-provider value rather than deciding enforcement: Cursor's deterministic locally priced cost enters live agent and room caps, while display estimates from Antigravity and Droid remain visible without entering a cap or park decision.
 2. When a running turn crosses a cap, RimZ presses Esc in that agent's pane (the same interrupt you would type) and records the park.
 3. The card reads `⏸` with the reason. A crossed room or account cap also turns the cockpit or provider row alarm-red and explains itself as `$50.21 of $50/day`.
 

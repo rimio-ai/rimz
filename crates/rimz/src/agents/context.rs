@@ -209,15 +209,42 @@ pub struct AgentAccount {
     pub credentials_updated_at_ms: Option<u64>,
 }
 
-/// Cumulative spend for the session. Provider-reported totals are exact;
-/// locally priced token counters are marked as estimates so display can retain
-/// them without feeding enforcement or aggregate-spend decisions.
+/// Provenance for a session-cost total. The basis independently controls
+/// approximate rendering and eligibility for live budget decisions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CostBasis {
+    /// A native provider total.
+    #[default]
+    ProviderReported,
+    /// Provider-owned counters priced through Rimz's pinned price book.
+    LocallyPriced,
+    /// A lower-confidence projection retained for display only.
+    DisplayEstimate,
+}
+
+impl CostBasis {
+    pub const fn is_approximate(self) -> bool {
+        !matches!(self, Self::ProviderReported)
+    }
+
+    pub const fn counts_toward_live_budget(self) -> bool {
+        !matches!(self, Self::DisplayEstimate)
+    }
+
+    fn is_provider_reported(&self) -> bool {
+        matches!(self, Self::ProviderReported)
+    }
+}
+
+/// Cumulative spend for the session, carrying the basis needed by display and
+/// live-budget policy.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentCost {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub estimated: bool,
+    #[serde(default, skip_serializing_if = "CostBasis::is_provider_reported")]
+    pub basis: CostBasis,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -630,6 +657,27 @@ pub struct AgentPullRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cost_basis_separates_rendering_from_live_budget_policy() {
+        for (basis, approximate, counts, wire) in [
+            (
+                CostBasis::ProviderReported,
+                false,
+                true,
+                "provider_reported",
+            ),
+            (CostBasis::LocallyPriced, true, true, "locally_priced"),
+            (CostBasis::DisplayEstimate, true, false, "display_estimate"),
+        ] {
+            assert_eq!(basis.is_approximate(), approximate);
+            assert_eq!(basis.counts_toward_live_budget(), counts);
+            assert_eq!(serde_json::to_value(basis).unwrap(), wire);
+        }
+        let legacy_without_basis: AgentCost =
+            serde_json::from_value(serde_json::json!({"total_cost_usd": 1.0})).unwrap();
+        assert_eq!(legacy_without_basis.basis, CostBasis::ProviderReported);
+    }
 
     fn window(used: Option<u8>) -> RateLimitWindow {
         RateLimitWindow {

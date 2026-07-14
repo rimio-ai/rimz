@@ -66,8 +66,8 @@ use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentSessionUsage, AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext,
-    SubagentObservation, TurnErrorClass,
+    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostBasis, RateLimitWindow,
+    SubagentContext, SubagentObservation, TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe, ResetCredits};
@@ -260,7 +260,7 @@ pub struct ContextCostFixture {
 
 /// One provider turn priced for a live-session accumulator.
 #[derive(Clone, Debug, PartialEq)]
-pub struct EstimatedTurnCost {
+pub struct LocallyPricedTurnCost {
     pub turn_id: String,
     pub cost_usd: f64,
 }
@@ -662,12 +662,12 @@ pub trait AgentAdapter: Send + Sync {
     /// Price one provider turn from a native lifecycle payload. The hook
     /// handler owns accumulation and deduplication; adapters only normalize the
     /// turn identity and token-price calculation.
-    fn estimate_turn_cost(
+    fn price_turn_locally(
         &self,
         _event_name: &str,
         _payload: &Value,
         _prices: &PriceBook,
-    ) -> Option<EstimatedTurnCost> {
+    ) -> Option<LocallyPricedTurnCost> {
         None
     }
 

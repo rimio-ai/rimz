@@ -326,8 +326,8 @@ pub struct Capabilities {
     pub transcript_tail_context: bool,
     /// Surfaces per-session token/context usage into the agent row.
     pub context_usage: bool,
-    /// Surfaces provider spend from transcripts, account usage, or session
-    /// events.
+    /// Aggregates durable provider-history spend and is therefore eligible for
+    /// provider account-day caps.
     pub account_spend: bool,
     /// Routes child tasks through `Subagent{Start,Stop}` lifecycle signals.
     pub subagents: bool,

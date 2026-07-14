@@ -85,24 +85,24 @@ fn turn_openers_replace_and_survive_statusline_refresh() {
 }
 
 #[test]
-fn estimated_cost_deduplicates_accumulates_and_survives_statusline_refresh() {
+fn locally_priced_cost_deduplicates_accumulates_and_survives_statusline_refresh() {
     let (_dir, runtime) = runtime();
-    let first = crate::agents::EstimatedTurnCost {
+    let first = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-1".to_owned(),
         cost_usd: 0.25,
     };
-    assert!(merge_estimated_cost(&runtime, "cursor", "sess-1", &first).unwrap());
-    assert!(!merge_estimated_cost(&runtime, "cursor", "sess-1", &first).unwrap());
+    assert!(merge_locally_priced_cost(&runtime, "cursor", "sess-1", &first).unwrap());
+    assert!(!merge_locally_priced_cost(&runtime, "cursor", "sess-1", &first).unwrap());
 
     let mut context = ctx(Timestamp::now());
     context.source = "cursor".to_owned();
     context.model_id = Some("auto".to_owned());
     write(&runtime, "cursor", "sess-1", &context).unwrap();
-    let second = crate::agents::EstimatedTurnCost {
+    let second = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-2".to_owned(),
         cost_usd: 0.5,
     };
-    assert!(merge_estimated_cost(&runtime, "cursor", "sess-1", &second).unwrap());
+    assert!(merge_locally_priced_cost(&runtime, "cursor", "sess-1", &second).unwrap());
 
     let record = read_one(&runtime, "cursor", "sess-1").unwrap();
     assert_eq!(record.context.model_id.as_deref(), Some("auto"));
@@ -114,16 +114,20 @@ fn estimated_cost_deduplicates_accumulates_and_survives_statusline_refresh() {
             .and_then(|cost| cost.total_cost_usd),
         Some(0.75)
     );
+    assert_eq!(
+        record.context.cost.as_ref().map(|cost| cost.basis),
+        Some(crate::agents::CostBasis::LocallyPriced)
+    );
 }
 
 #[test]
 fn provider_reported_cost_wins_over_later_estimates() {
     let (_dir, runtime) = runtime();
-    let first = crate::agents::EstimatedTurnCost {
+    let first = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-1".to_owned(),
         cost_usd: 0.25,
     };
-    merge_estimated_cost(&runtime, "cursor", "sess-1", &first).unwrap();
+    merge_locally_priced_cost(&runtime, "cursor", "sess-1", &first).unwrap();
 
     let mut context = ctx(Timestamp::now());
     context.source = "cursor".to_owned();
@@ -132,11 +136,11 @@ fn provider_reported_cost_wins_over_later_estimates() {
         ..Default::default()
     });
     write(&runtime, "cursor", "sess-1", &context).unwrap();
-    let second = crate::agents::EstimatedTurnCost {
+    let second = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-2".to_owned(),
         cost_usd: 0.5,
     };
-    assert!(merge_estimated_cost(&runtime, "cursor", "sess-1", &second).unwrap());
+    assert!(merge_locally_priced_cost(&runtime, "cursor", "sess-1", &second).unwrap());
 
     let record = read_one(&runtime, "cursor", "sess-1").unwrap();
     assert_eq!(
@@ -147,10 +151,14 @@ fn provider_reported_cost_wins_over_later_estimates() {
             .and_then(|cost| cost.total_cost_usd),
         Some(10.0)
     );
+    assert_eq!(
+        record.context.cost.as_ref().map(|cost| cost.basis),
+        Some(crate::agents::CostBasis::ProviderReported)
+    );
 }
 
 #[test]
-fn statusline_and_estimated_cost_writers_serialize_without_lost_fields() {
+fn statusline_and_locally_priced_cost_writers_serialize_without_lost_fields() {
     let (_dir, runtime) = runtime();
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
     let statusline_runtime = runtime.clone();
@@ -166,11 +174,11 @@ fn statusline_and_estimated_cost_writers_serialize_without_lost_fields() {
     let cost_barrier = barrier.clone();
     let cost = std::thread::spawn(move || {
         cost_barrier.wait();
-        merge_estimated_cost(
+        merge_locally_priced_cost(
             &cost_runtime,
             "cursor",
             "sess-race",
-            &crate::agents::EstimatedTurnCost {
+            &crate::agents::LocallyPricedTurnCost {
                 turn_id: "gen-1".to_owned(),
                 cost_usd: 0.25,
             },

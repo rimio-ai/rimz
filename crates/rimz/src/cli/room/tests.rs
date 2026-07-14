@@ -1,6 +1,28 @@
-use super::{ResumePromptMode, resume_prompt_mode, write_project_trust_offer_to};
+use std::path::PathBuf;
+
+use super::{
+    ResumePromptMode, preflight_account_budgets, resume_prompt_mode, write_project_trust_offer_to,
+};
 
 use rimz::trust::{BirthPromptOffer, SurfaceSummary};
+
+#[test]
+fn account_budget_preflight_propagates_only_unsupported_caps() {
+    let path = PathBuf::from("/tmp/config.toml");
+    let account_error = rimz::config::ConfigErr::AccountBudget {
+        path: path.clone(),
+        source: rimz::config::AccountBudgetConfigError::Unsupported {
+            kind: "cursor".to_owned(),
+        },
+    };
+    assert!(preflight_account_budgets(Err(account_error)).is_err());
+
+    let unrelated = rimz::config::ConfigErr::Io {
+        path,
+        source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+    };
+    assert!(preflight_account_budgets(Err(unrelated)).is_ok());
+}
 
 #[test]
 fn resume_prompt_mode_uses_tty_or_confirm_flag() {

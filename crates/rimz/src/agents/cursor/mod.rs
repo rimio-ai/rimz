@@ -5,6 +5,7 @@
 //! spend, or post-compaction event, so those gaps remain explicit in the
 //! descriptor rather than inferred from pane text.
 
+mod account;
 mod install;
 mod payloads;
 mod statusline;
@@ -23,8 +24,8 @@ use super::descriptor::{
 };
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::{
-    AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, EstimatedTurnCost,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, PriceBook, Result,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
+    HookInstallReport, HookUninstallReport, LocallyPricedTurnCost, PriceBook, Result,
     classify_agent_hook, locate_binary, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
@@ -157,7 +158,7 @@ const CURSOR_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::RealtimeCost,
         ConcernCoverage::Partial {
-            via: "model-priced stop-hook accumulation",
+            via: "model-priced response/stop-hook accumulation",
             gap: "live session only; no historical Cursor usage ledger",
         },
     ),
@@ -176,7 +177,7 @@ const CURSOR_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::AccountSpend,
         ConcernCoverage::Unsupported {
-            reason: "status/about JSON schemas and usage store are unpublished",
+            reason: "identity/plan/version are wired; no durable provider usage history",
         },
     ),
     (
@@ -382,6 +383,9 @@ impl AgentAdapter for CursorAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         let parsed = payloads::parse_payload(payload);
+        let turn_usage = (event_name == "stop")
+            .then(|| parsed.turn_usage())
+            .flatten();
         let signal = match event_name {
             "sessionStart" => LifecycleSignal::Registered,
             "beforeSubmitPrompt" => LifecycleSignal::TurnStarted,
@@ -424,16 +428,10 @@ impl AgentAdapter for CursorAdapter {
             .map(|value| value.round().clamp(0.0, 100.0) as u8);
         observation.context_window = parsed.context_window_size;
         if event_name == "stop" {
-            let cached = parsed
-                .cache_read_tokens
-                .unwrap_or(0)
-                .saturating_add(parsed.cache_write_tokens.unwrap_or(0));
-            observation.fresh_input_tokens = parsed
-                .input_tokens
-                .map(|input| input.saturating_sub(cached));
-            observation.output_tokens = parsed.output_tokens;
-            observation.cache_read_input_tokens = parsed.cache_read_tokens;
-            observation.cache_write_input_tokens = parsed.cache_write_tokens;
+            observation.fresh_input_tokens = turn_usage.and_then(|usage| usage.fresh_input);
+            observation.output_tokens = turn_usage.and_then(|usage| usage.output);
+            observation.cache_read_input_tokens = turn_usage.and_then(|usage| usage.cache_read);
+            observation.cache_write_input_tokens = turn_usage.and_then(|usage| usage.cache_write);
         }
         Some(observation)
     }
@@ -454,22 +452,25 @@ impl AgentAdapter for CursorAdapter {
         Some(context)
     }
 
-    fn estimate_turn_cost(
+    fn price_turn_locally(
         &self,
         event_name: &str,
         payload: &Value,
         prices: &PriceBook,
-    ) -> Option<EstimatedTurnCost> {
-        if event_name != "stop" {
+    ) -> Option<LocallyPricedTurnCost> {
+        if !matches!(event_name, "afterAgentResponse" | "stop") {
             return None;
         }
         let parsed = payloads::parse_payload(payload);
-        if !matches!(
-            parsed.status.as_deref(),
-            Some("completed" | "aborted" | "error")
-        ) {
+        if event_name == "stop"
+            && !matches!(
+                parsed.status.as_deref(),
+                Some("completed" | "aborted" | "error")
+            )
+        {
             return None;
         }
+        let usage = parsed.turn_usage()?;
         let turn_id = parsed.generation_id?.trim().to_owned();
         if turn_id.is_empty() {
             return None;
@@ -485,28 +486,20 @@ impl AgentAdapter for CursorAdapter {
             model
         };
         let price = prices.price(price_key)?;
-        let has_tokens = parsed.input_tokens.is_some()
-            || parsed.output_tokens.is_some()
-            || parsed.cache_read_tokens.is_some()
-            || parsed.cache_write_tokens.is_some();
-        if !has_tokens {
-            return None;
-        }
-        let cache_read = parsed.cache_read_tokens.unwrap_or(0);
-        let cache_write = parsed.cache_write_tokens.unwrap_or(0);
-        let fresh = parsed
-            .input_tokens
-            .unwrap_or(0)
-            .saturating_sub(cache_read.saturating_add(cache_write));
         let cost_usd = price.cost(
-            fresh,
-            parsed.output_tokens.unwrap_or(0),
-            cache_write,
+            usage.fresh_input.unwrap_or(0),
+            usage.output.unwrap_or(0),
+            usage.cache_write.unwrap_or(0),
             0,
-            cache_read,
+            usage.cache_read.unwrap_or(0),
             model.to_ascii_lowercase().ends_with("-fast"),
         );
-        (cost_usd.is_finite() && cost_usd > 0.0).then_some(EstimatedTurnCost { turn_id, cost_usd })
+        (cost_usd.is_finite() && cost_usd > 0.0)
+            .then_some(LocallyPricedTurnCost { turn_id, cost_usd })
+    }
+
+    fn probe_account(&self) -> super::account::AccountProbe {
+        account::probe(self.descriptor())
     }
 
     fn observe_assistant_message(&self, event_name: &str, payload: &Value) -> Option<String> {

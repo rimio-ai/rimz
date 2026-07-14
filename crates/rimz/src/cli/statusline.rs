@@ -318,13 +318,13 @@ mod tests {
             .unwrap();
         attach_context_cost(&AntigravityAdapter, &priced, &prices, &mut context);
         let cost = context.cost.unwrap();
-        assert!(cost.estimated);
+        assert_eq!(cost.basis, rimz::agents::CostBasis::DisplayEstimate);
         assert!((cost.total_cost_usd.unwrap() - 0.012_567).abs() < 1e-15);
         assert_eq!(
             cost,
             AgentCost {
                 total_cost_usd: cost.total_cost_usd,
-                estimated: true,
+                basis: rimz::agents::CostBasis::DisplayEstimate,
                 ..AgentCost::default()
             }
         );

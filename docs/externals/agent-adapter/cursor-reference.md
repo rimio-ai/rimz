@@ -503,7 +503,7 @@ The same authenticated arm produced this sanitized `about --format json` shape. 
 }
 ```
 
-The unauthenticated, expired, API-key, service-account, proxy, and server-error arms remain unverified. Keep account probing unsupported until those arms establish stable identity, tier, latency, and failure semantics; this one authenticated shape is format evidence, not a complete probe contract.
+The unauthenticated, expired, API-key, service-account, proxy, and server-error arms remain unverified. RimZ therefore recognizes only explicit authenticated and logged-out facts, rejects contradictory or schema-unknown status, requires a successful JSON `about` call after positive authentication, and treats every other arm as retryable unavailable. Matching status/about emails produce account identity; `subscriptionTier` and `cliVersion` remain optional, and a missing tier never implies API-key auth.
 
 Cursor does not document the credential file or secure-store schema. Treat browser credentials as opaque and use the CLI probe; never read or copy secrets directly. The changelog documents `AGENT_CLI_CREDENTIAL_STORE=file` for sandboxed environments, where credentials are stored unencrypted in an owner-only file, but does not publish that file's schema or path.
 
@@ -515,7 +515,7 @@ The installed interactive `stop` hook schema carries `input_tokens`, `output_tok
 
 The CLI changelog mentions a human `/usage` display, while the current slash-command reference does not list a machine-readable usage command or schema. Do not scrape the TUI or undocumented output.
 
-Cursor publishes Auto API-equivalent rates of `$1.25/M` uncached input, `$6.00/M` output, and `$0.25/M` cached input. RimZ prices cache creation at the uncached-input rate, prices explicit model IDs through its shared model table, and accumulates completed, aborted, or errored stop hooks once per `generation_id`. This is a live-session estimate for the card, cockpit, and agent budget; it resets with the local session sidecar and does not claim Cursor billing or historical spend.
+Cursor publishes Auto API-equivalent rates of `$1.25/M` uncached input, `$6.00/M` output, and `$0.25/M` cached input. RimZ prices cache creation at the uncached-input rate, prices explicit model IDs through its shared model table, and accepts the repeated token counters from `afterAgentResponse` or a completed, aborted, or errored `stop` once per `generation_id`. Response delivery advances local pricing early; `stop` remains the lifecycle and per-turn-token authority. This is a locally priced live-session value for the card, cockpit, and live agent/room budgets; it resets with the local session sidecar and does not claim Cursor billing, account-day spend, or historical spend.
 
 Before implementing provider account spend, look for a newly documented JSON command or official account API and capture its account scoping, timezone, reset windows, included usage, on-demand spend, and model prices. The general model catalog and pricing page is an index, not a per-account usage feed.
 

@@ -23,6 +23,14 @@ pub(super) enum StopOutcome {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TurnUsage {
+    pub fresh_input: Option<u64>,
+    pub output: Option<u64>,
+    pub cache_read: Option<u64>,
+    pub cache_write: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[expect(
     dead_code,
@@ -94,6 +102,25 @@ impl CursorHookPayload {
             Some("aborted") => StopOutcome::Aborted,
             _ => StopOutcome::Error,
         }
+    }
+
+    pub(super) fn turn_usage(&self) -> Option<TurnUsage> {
+        (self.input_tokens.is_some()
+            || self.output_tokens.is_some()
+            || self.cache_read_tokens.is_some()
+            || self.cache_write_tokens.is_some())
+        .then(|| {
+            let cache_read = self.cache_read_tokens.unwrap_or(0);
+            let cache_write = self.cache_write_tokens.unwrap_or(0);
+            TurnUsage {
+                fresh_input: self
+                    .input_tokens
+                    .map(|input| input.saturating_sub(cache_read.saturating_add(cache_write))),
+                output: self.output_tokens,
+                cache_read: self.cache_read_tokens,
+                cache_write: self.cache_write_tokens,
+            }
+        })
     }
 }
 

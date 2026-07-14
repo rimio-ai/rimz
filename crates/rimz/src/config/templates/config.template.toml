@@ -24,7 +24,9 @@
 
 [accounts]
 [accounts.budget]
-# Per-login local-calendar-day caps shared by every room. Values require /day.
+# Per-login local-calendar-day caps shared by every room. Values require /day
+# and the provider must expose durable account-spend history; unsupported kinds
+# refuse config edits and room start. Cursor remains available to agent/room caps.
 ## claude = "100/day"
 ## codex = "100/day"
 

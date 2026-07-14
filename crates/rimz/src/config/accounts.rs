@@ -6,6 +6,16 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::harness::DayCap;
 
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum AccountBudgetConfigError {
+    #[error("unknown agent kind `{kind}` in `[accounts.budget]`")]
+    UnknownKind { kind: String },
+    #[error(
+        "`[accounts.budget].{kind}` cannot be enforced because {kind} has no durable account-spend source"
+    )]
+    Unsupported { kind: String },
+}
+
 /// Provider-account enrichment preferences.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -27,6 +37,31 @@ impl AccountsConfig {
     pub fn usage_limit(&self, kind: &str) -> Option<f64> {
         self.usage_limit_usd.get(kind).map(|limit| limit.as_usd())
     }
+
+    pub fn validate_budgets(&self) -> Result<(), AccountBudgetConfigError> {
+        self.budget
+            .keys()
+            .try_for_each(|kind| Self::validate_budget_kind(kind))
+    }
+
+    pub fn validate_budget_kind(kind: &str) -> Result<(), AccountBudgetConfigError> {
+        validate_budget_descriptor(kind, crate::agents::descriptor_by_kind(kind))
+    }
+}
+
+fn validate_budget_descriptor(
+    kind: &str,
+    descriptor: Option<&crate::agents::AgentDescriptor>,
+) -> Result<(), AccountBudgetConfigError> {
+    let descriptor = descriptor.ok_or_else(|| AccountBudgetConfigError::UnknownKind {
+        kind: kind.to_owned(),
+    })?;
+    if !descriptor.capabilities.account_spend {
+        return Err(AccountBudgetConfigError::Unsupported {
+            kind: kind.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 /// A USD amount stored as integer cents so config structs keep `Eq`.
@@ -146,6 +181,61 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("must end in `/day`")
+        );
+    }
+
+    #[test]
+    fn account_day_caps_require_durable_spend_capability() {
+        let supported: AccountsConfig = toml::from_str("[budget]\nclaude = \"100/day\"").unwrap();
+        assert_eq!(supported.validate_budgets(), Ok(()));
+
+        let cursor: AccountsConfig = toml::from_str("[budget]\ncursor = \"100/day\"").unwrap();
+        assert!(matches!(
+            cursor.validate_budgets(),
+            Err(AccountBudgetConfigError::Unsupported { kind }) if kind == "cursor"
+        ));
+
+        let unknown: AccountsConfig = toml::from_str("[budget]\nfuture = \"100/day\"").unwrap();
+        assert!(matches!(
+            unknown.validate_budgets(),
+            Err(AccountBudgetConfigError::UnknownKind { kind }) if kind == "future"
+        ));
+    }
+
+    #[test]
+    fn cursor_usage_limit_remains_display_only_and_valid() {
+        let config: AccountsConfig = toml::from_str("[usage_limit_usd]\ncursor = 20").unwrap();
+        assert_eq!(config.validate_budgets(), Ok(()));
+        assert_eq!(config.usage_limit("cursor"), Some(20.0));
+    }
+
+    #[test]
+    fn plugin_declaring_a_spend_probe_is_account_budget_eligible() {
+        let root = tempfile::tempdir().unwrap();
+        let plugin = root.path().join("spendbot");
+        std::fs::create_dir(&plugin).unwrap();
+        std::fs::write(plugin.join("README.md"), "setup").unwrap();
+        std::fs::write(plugin.join("spend"), "").unwrap();
+        std::fs::write(
+            plugin.join("agent.toml"),
+            r#"protocol = 1
+kind = "spendbot"
+display-name = "Spend Bot"
+process-names = ["spendbot"]
+emits = ["session_start"]
+setup-doc = "README.md"
+[probes]
+spend = ["./spend"]
+"#,
+        )
+        .unwrap();
+        let loaded = crate::agents::plugin::load_from_root(root.path());
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let descriptor = loaded.adapters[0].descriptor();
+        assert!(descriptor.capabilities.account_spend);
+        assert_eq!(
+            validate_budget_descriptor("spendbot", Some(descriptor)),
+            Ok(())
         );
     }
 }

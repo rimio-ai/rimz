@@ -411,6 +411,7 @@ struct ReadyRoom {
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let mut machine_config = machine_config();
     if matches!(entry, RoomEntry::Start { .. } | RoomEntry::StartWeb { .. }) {
+        preflight_account_budgets(rimz::config::MachineConfig::load())?;
         // Fail-fast precondition for installed agents: fixable host misconfiguration
         // aborts the launch here with the fix, before hook-install or session side
         // effects. An enabled host whose agent is not installed is an inert toggle,
@@ -643,6 +644,15 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         mux_config,
         mux,
     })
+}
+
+fn preflight_account_budgets(
+    config: rimz::config::Result<rimz::config::MachineConfig>,
+) -> Result<()> {
+    match config {
+        Err(error @ rimz::config::ConfigErr::AccountBudget { .. }) => Err(error.into()),
+        Ok(_) | Err(_) => Ok(()),
+    }
 }
 
 fn run_room_preflights(entry: &RoomEntry<'_>, mux: MuxName) -> Result<()> {

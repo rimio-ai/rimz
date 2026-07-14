@@ -187,6 +187,45 @@ fn lenient_load_falls_back_only_for_the_broken_file() {
 }
 
 #[test]
+fn account_budget_validation_is_typed_and_lenient_load_drops_invalid_core() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = write(
+        &dir,
+        "[accounts.budget]\nclaude = \"100/day\"\ncursor = \"50/day\"\n",
+    );
+
+    assert!(matches!(
+        load_no_fragments(&config_path),
+        Err(ConfigErr::AccountBudget {
+            source: AccountBudgetConfigError::Unsupported { kind },
+            ..
+        }) if kind == "cursor"
+    ));
+    assert!(
+        load_lenient_no_fragments(&config_path)
+            .accounts
+            .budget
+            .is_empty()
+    );
+}
+
+#[test]
+fn core_parse_accepts_supported_budget_and_cursor_display_limit() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = write(
+        &dir,
+        "[accounts.budget]\nclaude = \"100/day\"\n[accounts.usage_limit_usd]\ncursor = 25\n",
+    );
+
+    let config = load_no_fragments(&config_path).expect("valid account config");
+    assert_eq!(
+        config.accounts.budget("claude").map(DayCap::as_usd),
+        Some(100.0)
+    );
+    assert_eq!(config.accounts.usage_limit("cursor"), Some(25.0));
+}
+
+#[test]
 fn lenient_load_resets_invalid_agents_but_keeps_core_config() {
     let dir = tempdir().expect("tempdir");
     let config_path = write(&dir, "[remote_control]\nclaude = true\n");

@@ -152,16 +152,16 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
     }
 
     let shared_pricing_cache_path = store.runtime_paths().shared_pricing_cache_path();
-    let estimated_cost_updated = {
+    let locally_priced_cost_updated = {
         let prices = rimz::agents::pricing::cached_book(&shared_pricing_cache_path);
         agent
-            .estimate_turn_cost(event_name, payload, &prices)
-            .is_some_and(|estimate| {
-                match rimz::store::agent_context::merge_estimated_cost(
+            .price_turn_locally(event_name, payload, &prices)
+            .is_some_and(|priced| {
+                match rimz::store::agent_context::merge_locally_priced_cost(
                     store.runtime_paths(),
                     agent.descriptor().kind,
                     context_agent_id,
-                    &estimate,
+                    &priced,
                 ) {
                     Ok(changed) => changed,
                     Err(err) => {
@@ -169,7 +169,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
                             agent = agent.descriptor().kind,
                             event = %event_name,
                             error = %err,
-                            "lifecycle: failed to merge estimated turn cost",
+                            "lifecycle: failed to merge locally priced turn cost",
                         );
                         false
                     }
@@ -217,7 +217,7 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         &mut refresh,
     );
     let Some(refresh) = refresh else {
-        if estimated_cost_updated {
+        if locally_priced_cost_updated {
             let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
         }
         return;

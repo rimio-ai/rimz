@@ -13,9 +13,10 @@
 //! A missing file is the default config, and unknown keys are ignored so an
 //! older binary tolerates a newer file. Runtime entry points use
 //! [`MachineConfig::load_lenient`], which degrades a broken file to built-in
-//! defaults with a warning so a bad per-machine config does not block the room;
-//! strict [`MachineConfig::load`] and [`MachineConfig::load_from`] back
-//! `rimz config` and `rimz doctor`, which report the precise error.
+//! defaults with a warning. Room start adds one narrow strict preflight for an
+//! unenforceable account-day cap; strict [`MachineConfig::load`] and
+//! [`MachineConfig::load_from`] otherwise back `rimz config` and `rimz doctor`,
+//! which report the precise error.
 
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
@@ -50,7 +51,7 @@ mod theme;
 mod web;
 mod worktree;
 
-pub use accounts::{AccountsConfig, UsageLimitUsd};
+pub use accounts::{AccountBudgetConfigError, AccountsConfig, UsageLimitUsd};
 pub use agents::{
     AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding, Team,
     TeamsConfig,
@@ -158,6 +159,12 @@ pub enum ConfigErr {
         #[source]
         source: TaskBudgetError,
     },
+    #[error("invalid per-machine account budget at {path}: {source}")]
+    AccountBudget {
+        path: PathBuf,
+        #[source]
+        source: AccountBudgetConfigError,
+    },
     #[error(
         "removed config table in {path}: {detail} (run `rimz config init --print` for the current shape)"
     )]
@@ -173,6 +180,7 @@ impl ConfigErr {
             | Self::Agents { path, .. }
             | Self::Notifications { path, .. }
             | Self::Loop { path, .. }
+            | Self::AccountBudget { path, .. }
             | Self::RemovedTable { path, .. } => path,
         }
     }
@@ -693,10 +701,17 @@ fn recover<T>(result: Result<Option<T>>) -> Option<T> {
 }
 
 fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
-    toml::from_str(text).map_err(|source| ConfigErr::Parse {
+    let core: CoreConfig = toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    core.accounts
+        .validate_budgets()
+        .map_err(|source| ConfigErr::AccountBudget {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    Ok(core)
 }
 
 fn parse_unknown_keys<'de, T>(path: &Path, text: &'de str) -> Result<Vec<String>>

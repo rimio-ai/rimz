@@ -336,7 +336,7 @@ fn local_refresh_prices_exact_builtins_as_estimates_without_inventing_a_gauge() 
     assert!(tokens.current_usage.is_none());
     assert_eq!(tokens.session_usage.unwrap().thinking_tokens, Some(5_000));
     let cost = refresh.cost.unwrap();
-    assert!(cost.estimated);
+    assert_eq!(cost.basis, crate::agents::CostBasis::DisplayEstimate);
     assert!(cost.total_cost_usd.unwrap() > 0.0);
     assert_eq!(
         refresh.transcript_path.as_deref(),

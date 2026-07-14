@@ -150,7 +150,7 @@ pub(super) fn agent_identity_line(
     {
         let estimated = ctx(row)
             .and_then(|context| context.cost.as_ref())
-            .is_some_and(|cost| cost.estimated);
+            .is_some_and(|cost| cost.basis.is_approximate());
         let usd = cost_rolls.display(&row.id, target, animation_phase);
         let style = if cost_rolls.flashing(&row.id, animation_phase) {
             theme.value_flash()

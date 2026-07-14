@@ -245,7 +245,7 @@ fn stop_input_total_subtracts_cache_without_underflow() {
 fn turn_cost_prices_auto_explicit_and_fast_models() {
     let prices = PriceBook::embedded();
     let auto = CursorAdapter
-        .estimate_turn_cost(
+        .price_turn_locally(
             "stop",
             &json!({
                 "generation_id": " gen-1 ",
@@ -261,6 +261,21 @@ fn turn_cost_prices_auto_explicit_and_fast_models() {
         .unwrap();
     assert_eq!(auto.turn_id, "gen-1");
     assert!((auto.cost_usd - 0.019_858_25).abs() < 1e-12);
+    let response = CursorAdapter
+        .price_turn_locally(
+            "afterAgentResponse",
+            &json!({
+                "generation_id": "gen-1",
+                "model_id": "default",
+                "input_tokens": 22_725,
+                "output_tokens": 26,
+                "cache_read_tokens": 8_704,
+                "cache_write_tokens": 0
+            }),
+            &prices,
+        )
+        .unwrap();
+    assert_eq!(response.cost_usd, auto.cost_usd);
 
     let payload = |model: &str| {
         json!({
@@ -274,25 +289,48 @@ fn turn_cost_prices_auto_explicit_and_fast_models() {
         })
     };
     let base = CursorAdapter
-        .estimate_turn_cost("stop", &payload("gpt-5.4"), &prices)
+        .price_turn_locally("stop", &payload("gpt-5.4"), &prices)
         .unwrap();
     let fast = CursorAdapter
-        .estimate_turn_cost("stop", &payload("gpt-5.4-fast"), &prices)
+        .price_turn_locally("stop", &payload("gpt-5.4-fast"), &prices)
         .unwrap();
     assert!((fast.cost_usd - base.cost_usd * 2.0).abs() < 1e-12);
     assert!(
         CursorAdapter
-            .estimate_turn_cost("stop", &payload("unknown-future-model"), &prices)
+            .price_turn_locally("stop", &payload("unknown-future-model"), &prices)
             .is_none()
     );
     assert!(
         CursorAdapter
-            .estimate_turn_cost(
+            .price_turn_locally(
                 "stop",
                 &json!({"generation_id": "", "status": "completed", "model_id": "default", "input_tokens": 1}),
                 &prices,
             )
             .is_none()
+    );
+    assert!(
+        CursorAdapter
+            .price_turn_locally("postToolUse", &payload("gpt-5.4"), &prices)
+            .is_none()
+    );
+    assert!(
+        CursorAdapter
+            .price_turn_locally(
+                "stop",
+                &json!({"generation_id": "gen", "status": "running", "model_id": "default", "input_tokens": 1}),
+                &prices,
+            )
+            .is_none()
+    );
+    assert!(
+        CursorAdapter
+            .observe_lifecycle(
+                "afterAgentResponse",
+                &json!({"conversation_id": "conv-1", "input_tokens": 1}),
+            )
+            .is_none(),
+        "response pricing must not become a lifecycle or token source"
     );
 }
 

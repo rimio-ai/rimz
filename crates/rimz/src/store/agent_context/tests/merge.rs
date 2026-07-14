@@ -14,7 +14,7 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
     prior.context.model_display_name = Some("DeepSeek V4 Pro".to_owned());
     prior.context.cost = Some(AgentCost {
         total_cost_usd: Some(1.25),
-        estimated: true,
+        basis: crate::agents::CostBasis::DisplayEstimate,
         ..AgentCost::default()
     });
     prior.context.tokens = Some(AgentTokenUsage {

@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
-    AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource,
+    AgentTurnError, CostBasis, RateLimitWindow, TurnErrorClass, WindowSource,
 };
 use crate::agents::{
     sanitize_user_prompt,
@@ -431,7 +431,7 @@ impl StatuslinePayload {
     pub(crate) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
         let cost = non_empty(AgentCost {
             total_cost_usd: self.cost.total_cost_usd,
-            estimated: false,
+            basis: CostBasis::ProviderReported,
             total_duration_ms: self.cost.total_duration_ms,
             total_api_duration_ms: self.cost.total_api_duration_ms,
             total_lines_added: self.cost.total_lines_added,

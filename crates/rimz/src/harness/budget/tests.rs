@@ -35,7 +35,7 @@ fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
 }
 
 #[test]
-fn estimated_card_cost_cannot_trigger_budget_enforcement() {
+fn display_estimate_cannot_trigger_budget_enforcement() {
     let now = Timestamp::from_second(200).expect("timestamp");
     let mut estimated = agent(99.0, AgentStatus::Idle, Some(now));
     estimated
@@ -43,7 +43,7 @@ fn estimated_card_cost_cannot_trigger_budget_enforcement() {
         .as_mut()
         .and_then(|context| context.cost.as_mut())
         .unwrap()
-        .estimated = true;
+        .basis = crate::agents::CostBasis::DisplayEstimate;
     let mut ledger = BudgetLedger::new("1".parse().expect("spec"));
 
     assert_eq!(total_cost_usd(&estimated), None);
@@ -52,6 +52,25 @@ fn estimated_card_cost_cannot_trigger_budget_enforcement() {
         BudgetVerdict::Under { spend_usd, .. } if spend_usd == 0.0
     ));
     assert!(ledger.parked.is_none());
+}
+
+#[test]
+fn locally_priced_cost_triggers_budget_enforcement() {
+    let now = Timestamp::from_second(200).expect("timestamp");
+    let mut priced = agent(99.0, AgentStatus::Idle, Some(now));
+    priced
+        .context
+        .as_mut()
+        .and_then(|context| context.cost.as_mut())
+        .unwrap()
+        .basis = crate::agents::CostBasis::LocallyPriced;
+    let mut ledger = BudgetLedger::new("1".parse().expect("spec"));
+
+    assert_eq!(total_cost_usd(&priced), Some(99.0));
+    assert!(matches!(
+        evaluate(&priced, &mut ledger, now, &TimeZone::UTC, None),
+        BudgetVerdict::Park { spend_usd, .. } if spend_usd == 99.0
+    ));
 }
 
 #[test]

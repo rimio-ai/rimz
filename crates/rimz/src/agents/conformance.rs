@@ -718,7 +718,7 @@ fn realtime_cost_from_fixture(adapter: &dyn AgentAdapter) -> bool {
     }
     if let Some(fixture) = adapter.turn_cost_fixture() {
         return adapter
-            .estimate_turn_cost(fixture.event_name, &fixture.payload, &prices)
+            .price_turn_locally(fixture.event_name, &fixture.payload, &prices)
             .is_some_and(|cost| cost.cost_usd > 0.0);
     }
     adapter.spend_fixture().is_some_and(|fixture| {

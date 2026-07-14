@@ -137,9 +137,8 @@ fn live_fleet_spend(
 }
 
 fn validate_kind(raw: &str) -> Result<AgentKind> {
-    rimz::agents::find_adapter(raw)
-        .map(|_| AgentKind::new_unchecked(raw))
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{raw}`"))
+    rimz::config::AccountsConfig::validate_budget_kind(raw)?;
+    Ok(AgentKind::new_unchecked(raw))
 }
 
 fn parse_raise(raw: &str) -> Result<f64> {

@@ -4,7 +4,7 @@ use crate::sidebar_pane::render::theme::Component;
 use ratatui::text::Span;
 
 #[test]
-fn droid_card_renders_resolved_custom_model_session_usage_and_estimated_cost() {
+fn droid_card_renders_resolved_custom_model_session_usage_and_approximate_cost() {
     let mut droid = agent(
         "droid-1",
         "droid",
@@ -22,7 +22,7 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_estimated_cost() {
     context.effort = Some("high".to_owned());
     context.cost = Some(AgentCost {
         total_cost_usd: Some(0.42),
-        estimated: true,
+        basis: crate::agents::CostBasis::DisplayEstimate,
         ..Default::default()
     });
     context.tokens = Some(AgentTokenUsage {
@@ -39,7 +39,7 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_estimated_cost() {
     context.rate_limits = None;
     droid.context = Some(context);
 
-    let rendered = snapshot_to_screen(&snapshot_with(vec![droid]), 58, 17);
+    let rendered = snapshot_to_screen(&snapshot_with(vec![droid.clone()]), 58, 17);
 
     assert!(
         rendered.contains("DeepSeek V4 Pro · high · 200k"),
@@ -51,7 +51,18 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_estimated_cost() {
     );
     assert!(
         rendered.contains("≈$0.42"),
-        "locally priced spend stays visibly approximate:\n{rendered}"
+        "display estimates stay visibly approximate:\n{rendered}"
+    );
+    droid
+        .context
+        .as_mut()
+        .and_then(|context| context.cost.as_mut())
+        .unwrap()
+        .basis = crate::agents::CostBasis::LocallyPriced;
+    let locally_priced = snapshot_to_screen(&snapshot_with(vec![droid]), 58, 17);
+    assert!(
+        locally_priced.contains("≈$0.42"),
+        "locally priced spend stays visibly approximate:\n{locally_priced}"
     );
     assert!(
         !rendered.contains("custom:DeepSeek-V4-Pro-0")

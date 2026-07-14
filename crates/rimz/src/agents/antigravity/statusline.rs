@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::agents::context::{
-    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage,
+    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage, CostBasis,
 };
 use crate::agents::pricing::PriceBook;
 
@@ -142,7 +142,7 @@ impl StatuslinePayload {
         );
         (total_cost_usd.is_finite() && total_cost_usd > 0.0).then(|| AgentCost {
             total_cost_usd: Some(total_cost_usd),
-            estimated: true,
+            basis: CostBasis::DisplayEstimate,
             ..AgentCost::default()
         })
     }

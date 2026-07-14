@@ -252,6 +252,26 @@ fn directory_room_without_git_backed_rows_forks_no_git() {
         return;
     };
     fixture.env.record(&fixture.env.project_root);
+    // This assertion isolates the diff-stats lane. A real provider CLI may
+    // invoke git while answering an account probe, so hold that independent
+    // cache fresh while the PATH-level git witness is armed.
+    let now_ms = unix_now_ms();
+    fixture
+        .env
+        .publish_accounts(&rimz::sidebar::refresh::AccountsCache {
+            providers: rimz::agents::known_kinds()
+                .map(|kind| {
+                    (
+                        kind.to_owned(),
+                        rimz::sidebar::refresh::ProviderRecord {
+                            probed_at_ms: now_ms,
+                            ok: true,
+                            account: None,
+                        },
+                    )
+                })
+                .collect(),
+        });
 
     let cold = fixture.run_snapshot();
     assert!(
