@@ -6,7 +6,7 @@ use crate::agents::{
 };
 
 #[test]
-fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
+fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     let (_dir, runtime) = runtime();
     let observed_at = observed_at();
     let mut prior = new_record("droid", "sess-1", empty_context("droid", observed_at));
@@ -50,6 +50,7 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: Some(Timestamp::from_second(1_700_000_001).unwrap()),
         turn_interrupted: None,
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
         transcript_stat: Some(stat()),
@@ -60,8 +61,12 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
     let merged = read_one(&runtime, "droid", "sess-1").unwrap();
     let tokens = merged.context.tokens.as_ref().unwrap();
     assert_eq!(tokens.context_window_size, Some(200_000));
-    assert_eq!(tokens.used_percentage, Some(42));
-    assert_eq!(tokens.current_usage, Some(current_usage(10, 2, 3, 40)));
+    assert_eq!(tokens.used_percentage, None);
+    assert_eq!(tokens.current_usage, None);
+    assert_eq!(
+        merged.context.native_permission_wait,
+        Some(Timestamp::from_second(1_700_000_001).unwrap())
+    );
     let session = tokens.session_usage.as_ref().unwrap();
     assert_eq!(session.input_tokens, Some(100));
     assert_eq!(session.output_tokens, Some(25));
@@ -82,6 +87,7 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
         transcript_stat: Some(stat()),
@@ -90,8 +96,10 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
     let unresolved = read_one(&runtime, "droid", "sess-1").unwrap();
     let tokens = unresolved.context.tokens.unwrap();
     assert_eq!(tokens.context_window_size, None);
-    assert_eq!(tokens.used_percentage, Some(42));
+    assert_eq!(tokens.used_percentage, None);
+    assert_eq!(tokens.current_usage, None);
     assert!(tokens.session_usage.is_some());
+    assert!(unresolved.context.native_permission_wait.is_none());
 }
 
 struct MergeCase {
@@ -439,6 +447,7 @@ fn full_local_refresh() -> LocalContextRefresh {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -455,6 +464,7 @@ fn unpriced_refresh() -> LocalContextRefresh {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -488,6 +498,7 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -504,6 +515,7 @@ fn fallback_window_refresh() -> LocalContextRefresh {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -665,6 +677,7 @@ fn stat() -> TranscriptStat {
         mtime_secs: 123,
         mtime_nanos: 456,
         len: 789,
+        companion: None,
     }
 }
 

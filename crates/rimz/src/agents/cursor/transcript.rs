@@ -58,6 +58,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         turn_error: markers.turn_error,
         turn_complete: markers.turn_complete,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: markers.turn_interrupted,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
@@ -124,6 +125,7 @@ pub(super) fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
         mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
         mtime_nanos: modified.subsec_nanos(),
         len: metadata.len(),
+        companion: None,
     })
 }
 

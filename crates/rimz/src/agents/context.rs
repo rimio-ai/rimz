@@ -130,12 +130,13 @@ pub struct AgentContext {
     /// marker postdates `last_activity`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_proposed: Option<Timestamp>,
-    /// A provider status channel currently reports a native tool-confirmation
-    /// dialog. The marker time must postdate the latest lifecycle activity to
-    /// project a waiting card; a subsequent tool/turn hook self-clears a stale
-    /// marker even if the provider misses its `false` statusline refresh.
+    /// A provider status channel or validated local transcript currently
+    /// reports a native input dialog. The marker time must postdate the latest
+    /// lifecycle activity to project a waiting card; a subsequent tool/turn
+    /// hook or local-source refresh self-clears a stale marker.
     /// Display-only: it creates no durable ask and the provider pane remains
-    /// the answer surface.
+    /// the answer surface. The field retains its original permission-specific
+    /// wire name for sidecar compatibility while also carrying native questions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_permission_wait: Option<Timestamp>,
     /// A turn that was interrupted with no `Stop` hook, detected from the

@@ -238,7 +238,15 @@ pub(super) fn agent_status_projection(
             rimz::agents::AgentStatus::Failed,
             rimz::agents::TurnPhase::Idle,
         ),
-        None => (agent.status, agent.phase),
+        None => {
+            let status = agent.effective_status();
+            let phase = if status == rimz::agents::AgentStatus::Running {
+                agent.phase
+            } else {
+                rimz::agents::TurnPhase::Idle
+            };
+            (status, phase)
+        }
     }
 }
 

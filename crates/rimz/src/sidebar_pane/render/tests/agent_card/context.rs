@@ -4,6 +4,53 @@ use crate::sidebar_pane::render::theme::Component;
 use ratatui::text::Span;
 
 #[test]
+fn droid_waiting_card_renders_native_ask_and_last_call_context_fill() {
+    let mut droid = agent(
+        "droid-1",
+        "droid",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("ask me a question"),
+    );
+    let mut context = claude_context(fixed_now());
+    context.source = "droid".to_owned();
+    context.session_name = None;
+    context.model_id = Some("deepseek-v4-pro".to_owned());
+    context.model_display_name = Some("DeepSeek V4 Pro".to_owned());
+    context.effort = Some("high".to_owned());
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        used_percentage: None,
+        remaining_percentage: None,
+        current_usage: Some(AgentCurrentUsage {
+            input_tokens: Some(1_166),
+            output_tokens: Some(162),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(17_920),
+        }),
+        session_usage: None,
+    });
+    context.rate_limits = None;
+    droid.context = Some(context);
+
+    let rendered = snapshot_to_screen(&snapshot_with(vec![droid]), 58, 17);
+
+    assert!(
+        rendered.contains("? droid"),
+        "the native ask raises the waiting glyph:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("1.9%"),
+        "the last call fills the context gauge:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("▤ 19k · ◌ 17k ↘ 1k ↗ 162"),
+        "the gauge and composition share Droid's last-call numerator:\n{rendered}"
+    );
+}
+
+#[test]
 fn droid_card_renders_resolved_custom_model_session_usage_and_plain_cost() {
     let mut droid = agent(
         "droid-1",

@@ -1,4 +1,4 @@
-//! Droid 0.170.0 provider-native conversation normalization.
+//! Droid 0.171.0 provider-native conversation normalization.
 //!
 //! Factory's private session format is a parent-linked JSONL tree. RimZ pins
 //! this reader to version 2, follows the active leaf for complete history, and
@@ -18,8 +18,10 @@ use crate::agents::transcript_fs::{
     deserialize_optional_object_lossy, deserialize_optional_u64_lossy,
 };
 use crate::agents::{
-    AgentSessionUsage, TranscriptStat, read_transcript_tail, sanitize_user_prompt,
+    AgentCurrentUsage, AgentSessionUsage, TranscriptCompanionStat, TranscriptStat,
+    read_transcript_tail, sanitize_user_prompt,
 };
+use jiff::Timestamp;
 
 const TRANSCRIPT_VERSION: u64 = 2;
 const MAX_PARENT_DEPTH: usize = 16_384;
@@ -57,6 +59,7 @@ struct ContentBlock {
     #[serde(rename = "type")]
     content_type: Option<String>,
     text: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -76,6 +79,12 @@ struct Settings {
         deserialize_with = "deserialize_optional_object_lossy"
     )]
     token_usage: Option<TokenUsage>,
+    #[serde(
+        rename = "lastCallTokenUsage",
+        default,
+        deserialize_with = "deserialize_optional_object_lossy"
+    )]
+    last_call_token_usage: Option<TokenUsage>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -110,15 +119,18 @@ struct TokenUsage {
     thinking_tokens: Option<u64>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct SessionTelemetry {
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub session_usage: Option<AgentSessionUsage>,
+    pub current_usage: Option<AgentCurrentUsage>,
+    pub native_permission_wait: Option<Timestamp>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct TelemetryRefresh {
+    pub transcript_path: PathBuf,
     pub settings_path: PathBuf,
     pub stat: TranscriptStat,
     pub telemetry: SessionTelemetry,
@@ -229,10 +241,15 @@ pub(super) fn telemetry(
     if !supported_file(&transcript) {
         return None;
     }
-    let mut refresh = settings_snapshot(path, prior_stat)?;
+    let mut refresh = settings_snapshot(path, None)?;
+    refresh.stat.companion = file_stat(&transcript).map(TranscriptCompanionStat::from);
+    if prior_stat == Some(&refresh.stat) {
+        return None;
+    }
     let (tail_model, tail_effort) = latest_assistant_identity(&transcript);
     refresh.telemetry.model = refresh.telemetry.model.or(tail_model);
     refresh.telemetry.reasoning_effort = refresh.telemetry.reasoning_effort.or(tail_effort);
+    refresh.telemetry.native_permission_wait = native_permission_wait(&transcript);
     Some(refresh)
 }
 
@@ -264,13 +281,25 @@ pub(super) fn settings_snapshot(
             || usage.thinking_tokens.is_some())
         .then_some(usage)
     });
+    let current_usage = settings.last_call_token_usage.and_then(|usage| {
+        let usage = AgentCurrentUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_creation_input_tokens: usage.cache_creation_tokens,
+            cache_read_input_tokens: usage.cache_read_tokens,
+        };
+        (!usage.is_zero()).then_some(usage)
+    });
     Some(TelemetryRefresh {
+        transcript_path: transcript_path(path)?,
         settings_path,
         stat,
         telemetry: SessionTelemetry {
             model: non_empty_owned(settings.model),
             reasoning_effort: non_empty_owned(settings.reasoning_effort),
             session_usage: token_usage,
+            current_usage,
+            native_permission_wait: None,
         },
     })
 }
@@ -322,6 +351,27 @@ fn latest_assistant_identity(path: &Path) -> (Option<String>, Option<String>) {
         );
     }
     (None, None)
+}
+
+/// The active conversation leaf is a native AskUser call only while Droid is
+/// displaying its questionnaire. A later user/tool-result or assistant record
+/// becomes the leaf and clears the marker on the next watched refresh.
+fn native_permission_wait(path: &Path) -> Option<Timestamp> {
+    let tail = read_transcript_tail(path)?;
+    tail.lines()
+        .rev()
+        .filter_map(parse_record)
+        .find(|record| visible_role(record).is_some())
+        .filter(|record| {
+            visible_role(record) == Some(TranscriptRole::Assistant)
+                && record.message.as_ref().is_some_and(|message| {
+                    message.content.iter().any(|block| {
+                        block.content_type.as_deref() == Some("tool_use")
+                            && block.name.as_deref() == Some("AskUser")
+                    })
+                })
+        })
+        .and_then(|record| record.timestamp.as_deref()?.parse().ok())
 }
 
 fn normalize_record(record: &Record) -> Option<TranscriptMessage> {
@@ -401,7 +451,18 @@ fn file_stat(path: &Path) -> Option<TranscriptStat> {
         mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
         mtime_nanos: modified.subsec_nanos(),
         len: metadata.len(),
+        companion: None,
     })
+}
+
+impl From<TranscriptStat> for TranscriptCompanionStat {
+    fn from(stat: TranscriptStat) -> Self {
+        Self {
+            mtime_secs: stat.mtime_secs,
+            mtime_nanos: stat.mtime_nanos,
+            len: stat.len,
+        }
+    }
 }
 
 fn non_empty(raw: Option<&str>) -> Option<&str> {

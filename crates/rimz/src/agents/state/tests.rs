@@ -424,6 +424,20 @@ fn effective_status_projects_hookless_turn_settle_markers() {
     assert_eq!(plan.effective_status(), AgentStatus::Waiting);
     assert!(plan.is_awaiting_input());
 
+    let mut native = test_agent(AgentStatus::Running, 1_000);
+    let mut native_context = context_settle(None, None);
+    native_context.native_permission_wait = Some(Timestamp::from_second(1_010).unwrap());
+    native.context = Some(native_context);
+    assert_eq!(native.effective_status(), AgentStatus::Waiting);
+    assert!(native.is_awaiting_input());
+
+    let mut stale_native = test_agent(AgentStatus::Running, 1_000);
+    let mut stale_native_context = context_settle(None, None);
+    stale_native_context.native_permission_wait = Some(Timestamp::from_second(990).unwrap());
+    stale_native.context = Some(stale_native_context);
+    assert_eq!(stale_native.effective_status(), AgentStatus::Running);
+    assert!(!stale_native.is_awaiting_input());
+
     let mut stale_plan = test_agent(AgentStatus::Running, 1_000);
     let mut stale_plan_context = context_settle(None, None);
     stale_plan_context.plan_proposed = Some(Timestamp::from_second(990).unwrap());

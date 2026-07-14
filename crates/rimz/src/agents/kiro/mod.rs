@@ -345,6 +345,7 @@ impl AgentAdapter for KiroAdapter {
             turn_error: None,
             turn_complete: None,
             plan_proposed: None,
+            native_permission_wait: None,
             turn_interrupted: None,
             transcript_path: Some(path.to_string_lossy().into_owned()),
             transcript_stat: Some(stat),
@@ -434,5 +435,6 @@ fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
         mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
         mtime_nanos: modified.subsec_nanos(),
         len: metadata.len(),
+        companion: None,
     })
 }

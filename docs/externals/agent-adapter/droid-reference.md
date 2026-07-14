@@ -8,7 +8,7 @@ Stock-pane coverage targets the installed release named below. Structured `droid
 
 ## Refresh target and product identity
 
-The stock CLI and hook surface were refreshed against an installed **Droid CLI 0.170.0** and Factory's live official documentation. The structured exec sections remain pinned to public TypeScript SDK **0.6.0**, Factory protocol **1.51.0**, at source commit [`d960f18f3a5a3bdbbc867a2177275a794663b175`](https://github.com/Factory-AI/droid-sdk-typescript/tree/d960f18f3a5a3bdbbc867a2177275a794663b175).
+The stock CLI and hook surface were refreshed against an installed **Droid CLI 0.171.0** and Factory's live official documentation. The structured exec sections remain pinned to public TypeScript SDK **0.6.0**, Factory protocol **1.51.0**, at source commit [`d960f18f3a5a3bdbbc867a2177275a794663b175`](https://github.com/Factory-AI/droid-sdk-typescript/tree/d960f18f3a5a3bdbbc867a2177275a794663b175).
 
 The executable is `droid`. `droid -v` or `droid --version` prints its version, and `droid update` installs the latest release. RimZ records the tested release as a fixture-freshness boundary rather than applying a runtime version gate; refresh the hook goldens and protocol research when behavior drifts. This reference intentionally carries no compatibility contract for older Droid releases.
 
@@ -43,9 +43,9 @@ Re-fetch the live pages and compare the pinned SDK source when refreshing this m
 
 Keep the stock interactive `droid` TUI in the pane. Install **command hooks** for session registration, turn boundaries, completed tool work, compaction, and session termination. Retain the hook-provided `transcript_path` as identity/enrichment metadata. RimZ deliberately parses the version-pinned private transcript and sibling settings snapshot with fixtures; unknown transcript versions abstain.
 
-Use the stock TUI and native hooks for RimZ supervised `-p` runs today. Droid 0.170.0 internally starts a stream-JSON-RPC exec worker, so that process does enrich the concurrently running stock pane session through the same global hooks. A future RimZ-authored direct **`droid exec` path** remains a separate transport: its `--output-format json` result is sufficient for a one-shot run, while `stream-jsonrpc` provides typed live state, permission and question requests, token/context data, interruption, compaction, fork, and multi-turn control when the harness needs them.
+Use the stock TUI and native hooks for RimZ supervised `-p` runs today. Droid 0.171.0 internally starts a stream-JSON-RPC exec worker, so that process does enrich the concurrently running stock pane session through the same global hooks. A future RimZ-authored direct **`droid exec` path** remains a separate transport: its `--output-format json` result is sufficient for a one-shot run, while `stream-jsonrpc` provides typed live state, permission and question requests, token/context data, interruption, compaction, fork, and multi-turn control when the harness needs them.
 
-The latest official surfaces do not support a fully faithful stock-pane adapter. Hooks have no permission-request event, question event, subagent-start event, model field, token/context field, or structured turn-error event. `Notification` reports permission attention only as a human message and also fires after 60 seconds of input idleness. The private settings snapshot supplies partial identity and cumulative-usage enrichment, while capabilities that require current context, authoritative billing, or structured interaction stay disabled.
+The latest official surfaces do not support a fully faithful stock-pane adapter. Hooks have no permission-request event, question event, subagent-start event, model field, token/context field, or structured turn-error event. `Notification` reports permission attention only as a human message and also fires after 60 seconds of input idleness. The version-pinned private transcript projects an active `AskUser` tool call to a display-only waiting card, and the sibling settings snapshot supplies current-call composition plus cumulative usage; durable asks, authoritative billing, and structured answers stay disabled.
 
 | RimZ need | Stock interactive pane | Structured `droid exec` path |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ The latest official surfaces do not support a fully faithful stock-pane adapter.
 | Compaction open | `PreCompact.trigger` | working state `compacting_conversation` or explicit compact request |
 | Compaction close | following `SessionStart.source = "compact"` | compact result `newSessionId` then load replacement |
 | Context fill | unavailable | `droid.get_context_stats` |
-| Token usage | cumulative root counters in the version-pinned sibling settings snapshot | `session_token_usage_changed` |
+| Token usage | current-call composition plus cumulative root counters in the version-pinned sibling settings snapshot | `session_token_usage_changed` |
 | Model and effort | sibling settings snapshot, watched after the first hook refresh; no interactive launch flag | init/load `settings`, `settings_updated` |
 | Subagents | only identity-less `SubagentStop` | Task tool progress may carry `subagentSessionId`; missions expose worker session IDs |
 | Auth presence | browser login behavior or `FACTORY_API_KEY`; no machine-readable status command | stored-login fallback or explicit API key |
@@ -88,7 +88,7 @@ Treat all hook and JSON-RPC objects as forward-extensible: require the fields do
 | `--use-spec` | start this interactive session in specification mode |
 | `--cwd <path>` | set the working directory |
 
-Interactive 0.170.0 exposes **no** `-m`/`--model` or `-r`/`--reasoning-effort` flag: verified against the installed binary's `droid --help` and by the fact that `droid --model` does not raise commander's "argument missing" error the way `droid --auto` and `droid --cwd` do (it launches the TUI, treating `--model` as an ignored unknown option). Interactive `-r` is `--resume`. Model and reasoning effort are `droid exec`-only launch flags (below) or in-session controls (`/model`, Tab); a runtime model can also ride `--settings <path>`. The interactive CLI accepts unknown options silently, so an ignored `--model <id>` would fold the id into the positional prompt rather than failing — do not emit exec-only flags on the interactive launch.
+Interactive 0.171.0 exposes **no** `-m`/`--model` or `-r`/`--reasoning-effort` flag: verified against the installed binary's `droid --help` and by the fact that `droid --model` does not raise commander's "argument missing" error the way `droid --auto` and `droid --cwd` do (it launches the TUI, treating `--model` as an ignored unknown option). Interactive `-r` is `--resume`. Model and reasoning effort are `droid exec`-only launch flags (below) or in-session controls (`/model`, Tab); a runtime model can also ride `--settings <path>`. The interactive CLI accepts unknown options silently, so an ignored `--model <id>` would fold the id into the positional prompt rather than failing — do not emit exec-only flags on the interactive launch.
 
 `droid exec` is the non-interactive command. Its adapter-relevant flags are:
 
@@ -272,7 +272,7 @@ All structured outputs may carry:
 
 `PostToolUse` and `UserPromptSubmit` may return top-level `decision: "block"`, `reason`, and `hookSpecificOutput.additionalContext`. Post-tool blocking feeds corrective feedback after the action; prompt blocking erases the prompt and shows the reason only to the user. `Stop` and `SubagentStop` use `decision: "block"` plus a required `reason` to request another agent step. `stop_hook_active` prevents an infinite continuation loop.
 
-RimZ's observation hook emits none of these decisions. Golden-test byte-empty stdout, exit 0, and stderr-only diagnostics against Droid 0.170.0.
+RimZ's observation hook emits none of these decisions. Golden-test byte-empty stdout, exit 0, and stderr-only diagnostics against Droid 0.171.0.
 
 ## Waiting and structured asks
 
@@ -280,13 +280,13 @@ The stock interactive hook API cannot authoritatively emit RimZ `AwaitingInput`.
 
 `Notification` fires when Droid needs permission and when the prompt has been idle for at least 60 seconds. Its only event-specific field is a display `message`; there is no request ID, tool-call ID, question list, plan, or closed notification subtype. `PreToolUse` proves only that Droid proposed a call, since allowed calls proceed without waiting. There is no `PermissionRequest`, `AskUser`, or permission-resolved hook.
 
-Keep structured asks disabled for the first stock-pane adapter. If a later implementation temporarily classifies notification strings, label it version-pinned heuristic enrichment, never durable permission truth, and clear it on newer activity under the shared waiting guard.
+Keep durable structured asks disabled for the stock-pane adapter. Droid 0.171.0's version-2 transcript records a native question as an assistant `tool_use` block named `AskUser`; the active-leaf record and its timestamp project a display-only waiting card, while a later user/tool-result or assistant record clears it. The private record creates no RimZ ask ID or answer path, so the Droid pane remains the decision surface. If a later implementation classifies notification strings for permissions, label it version-pinned heuristic enrichment, never durable permission truth, and clear it on newer activity under the shared waiting guard.
 
 The headless JSON-RPC path supplies authoritative requests, detailed in [Structured permissions and questions](#structured-permissions-and-questions).
 
 ## Session identity, transcripts, resume, and fork
 
-Every hook carries `session_id` and `transcript_path`. Published examples use a project cache, while the captured 0.170.0 session uses:
+Every hook carries `session_id` and `transcript_path`. Published examples use a project cache, while the captured 0.170.0 and 0.171.0 sessions use:
 
 ```text
 ~/.factory/sessions/<cwd-key>/<session-id>.jsonl
@@ -294,17 +294,17 @@ Every hook carries `session_id` and `transcript_path`. Published examples use a 
 
 Factory publishes no record schema, durability rules, directory-key algorithm, rotation contract, or locking semantics. Use the exact hook-provided path and do not derive it from cwd, discovery caches, or session ID.
 
-The official docs suggest processing the transcript to prevent stop-hook loops, but that statement does not define a parser contract. RimZ's private reader is pinned to the captured CLI 0.170.0, transcript version 2 shape below and remains best-effort.
+The official docs suggest processing the transcript to prevent stop-hook loops, but that statement does not define a parser contract. RimZ's private reader is pinned to the captured CLI 0.170.0/0.171.0 transcript version 2 shape below and remains best-effort.
 
-### Captured 0.170.0 private session shape
+### Captured 0.170.0/0.171.0 private session shape
 
-The first JSONL row is `{"type":"session_start","version":2,…}`. Every conversation or hook-audit row is `type: "message"` with a non-empty `id`, optional `parentId`, RFC3339 `timestamp`, and nested `message`. Visible conversation messages have role `user` or `assistant`, no visibility marker, and `content[]`; `content[type = "text"].text` is the visible text. Assistant messages can also carry raw `modelId` and `reasoningEffort`.
+The first JSONL row is `{"type":"session_start","version":2,…}`. Every conversation or hook-audit row is `type: "message"` with a non-empty `id`, optional `parentId`, RFC3339 `timestamp`, and nested `message`. Visible conversation messages have role `user` or `assistant`, no visibility marker, and `content[]`; `content[type = "text"].text` is the visible text. Assistant messages can also carry raw `modelId` and `reasoningEffort`; 0.171.0 records the native question UI as `content[type = "tool_use"]` with `name = "AskUser"`.
 
 The `parentId` links form a tree because rewind and duplicate hook activity can branch. Complete history selects the physically latest visible conversation record, follows its ancestors with missing-parent, cycle, and depth guards, and reverses that chain into source order. It does not replay abandoned visible branches. An appended suffix lacks its ancestors, so streaming instead emits each new visible assistant text record in physical order; output shown before a later rewind cannot be retracted.
 
 `message.visibility = "llm_only"` marks injected model context, while `"user_only"` marks provider/UI records. Hook audit rows are `user_only` messages with `hookEventName` and timing/result fields. Exclude both visibility classes, hook audit rows, thinking, tool, and document blocks. Unknown records and malformed lines are skipped only after the version-2 header is established; a missing or unknown header version makes history, streaming, final-answer, and identity reads abstain.
 
-The sibling `<session-id>.settings.json` is a snapshot with raw `model`, `reasoningEffort`, `tokenUsage`, and `inclusiveTokenUsage`. Model and effort identify the live session at hook cadence, with newest visible assistant metadata as fallback. Root `tokenUsage` contains cumulative `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`, and `thinkingTokens`; `inclusiveTokenUsage` includes child work and stays out of the root card. These counters and Factory credits cannot populate current-context composition, context percentage, smart-compaction state, or authoritative USD. RimZ may present exact-table local pricing as an ordinary card dollar with cumulative session coverage for cockpit and live agent/room budgets, never as provider billing or historical/account spend.
+The sibling `<session-id>.settings.json` is a snapshot with raw `model`, `reasoningEffort`, `tokenUsage`, `inclusiveTokenUsage`, and, on 0.171.0, `lastCallTokenUsage`. Model and effort identify the live session at hook cadence, with newest visible assistant metadata as fallback. Root `tokenUsage` contains cumulative `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`, and `thinkingTokens`; `inclusiveTokenUsage` includes child work and stays out of the root card. `lastCallTokenUsage` contains the most recent response's fresh input, output, cache creation, and cache read counts; its input-side sum is current context occupancy and drives the filled card gauge against a resolved model capacity. Factory credits still cannot establish authoritative USD. RimZ may present exact-table local pricing as an ordinary card dollar with cumulative session coverage for cockpit and live agent/room budgets, never as provider billing or historical/account spend.
 
 The same live capture shows a stock outer TUI plus an internal `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc` worker. Both inherit the global hook config, the worker supplies the complete observed stream including `Stop`, and the payload carries no event nonce or process-role field. Select emitters structurally from exact argv boundaries: suppress recognized outer-TUI hooks, accept the internal worker, and attribute its liveness to the outer TUI PID found by a bounded parent walk. A directly launched exec has no interactive Droid ancestor and stays accepted as self-owned. Unreadable or unrecognized process metadata fails open.
 
@@ -631,12 +631,12 @@ Factory publishes no `droid auth status --json` equivalent, supported credential
 
 Before enabling the adapter:
 
-1. Pin stock-hook fixtures to `droid --version` 0.170.0 and structured exec fixtures to protocol `factoryProtocolVersion` 1.51.0.
+1. Pin stock-hook fixtures to `droid --version` 0.171.0 and structured exec fixtures to protocol `factoryProtocolVersion` 1.51.0.
 2. Install the minimal hook set: `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `PreCompact`, and `SessionEnd`; install `Notification` only for silent enrichment and `SubagentStop` only when a future payload supplies identity.
 3. Add trust-hash fixtures for every settings tier, matcher, command, timeout, and plugin hook that can execute.
 4. Golden-test every hook stdin payload and byte-empty success stdout on the pinned binary.
 5. Verify startup, resume, clear/new, manual compact, automatic compact, normal exit, Ctrl+C interrupt, successful tool, failed tool, and permission wait in a real TUI pane.
-6. Keep structured asks, subagent rows, current-context fill, authoritative spend, quota, and rate windows capability-disabled on the stock interactive adapter; declare file-derived model, cumulative usage, capacity, and locally priced card cost partial.
+6. Keep durable asks, structured answers, subagent rows, authoritative spend, quota, and rate windows capability-disabled on the stock interactive adapter; declare transcript-derived native questions, settings-derived current/cumulative usage and capacity, and locally priced card cost explicitly.
 7. Keep stock-TUI supervised runs on native hooks; if a future direct exec transport replaces them, preserve its native nonzero exit status.
 8. Add `stream-jsonrpc` only behind exact envelope/protocol gates, typed request/notification parsers, request timeouts, serialized stdin writes, and bounded child cleanup.
 9. Test JSON-RPC permission batches, AskUser, plan approval, interrupt, reconnect with pending asks, compact-to-new-session, fork, token usage, context stats, unknown notification types, malformed lines, and unexpected process death.
@@ -650,7 +650,7 @@ The latest official stock-pane surface leaves these implementation gaps:
 - no failed-turn or user-interrupt hook;
 - no `PostCompact` hook and compaction may replace the session ID;
 - no subagent start or child identity in hooks;
-- no model, effort, token, context, cost, quota, or rate-limit hook fields; version-pinned sibling settings supply only model, effort, and cumulative token enrichment;
+- no model, effort, token, context, cost, quota, or rate-limit hook fields; version-pinned sibling settings supply model, effort, and current/cumulative token enrichment while the pricing table supplies local card cost;
 - no published transcript record/durability schema beyond the version-pinned private capture;
 - no machine-readable auth/account status command;
 - no documented way to apply a one-launch interactive autonomy override without touching persistent settings.

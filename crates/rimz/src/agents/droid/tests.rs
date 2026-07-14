@@ -284,15 +284,50 @@ fn settings_telemetry_keeps_root_cumulative_categories_out_of_context_truth() {
     assert_eq!(usage.displayed_output_tokens(), 243);
     assert_eq!(usage.displayed_total_tokens(), 20_650);
     assert_eq!(usage.cache_read_tokens(), 91_000);
+    assert!(refresh.telemetry.current_usage.is_none());
+    assert!(refresh.telemetry.native_permission_wait.is_none());
     assert_eq!(
         transcript::telemetry(&refresh.settings_path, Some(&refresh.stat)),
         None,
-        "the settings snapshot itself is the stat-gated watched path"
+        "the paired transcript/settings source is stat-gated"
     );
 }
 
 #[test]
-fn local_refresh_prices_exact_builtins_with_session_coverage_without_inventing_a_gauge() {
+fn transcript_ask_user_projects_and_clears_a_native_wait() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript_path = dir.path().join("ask.jsonl");
+    let settings_path = dir.path().join("ask.settings.json");
+    std::fs::write(
+        &transcript_path,
+        concat!(
+            "{\"type\":\"session_start\",\"version\":2}\n",
+            "{\"type\":\"message\",\"id\":\"user\",\"timestamp\":\"2026-07-14T15:13:51Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"ask me\"}]}}\n",
+            "{\"type\":\"message\",\"id\":\"ask\",\"parentId\":\"user\",\"timestamp\":\"2026-07-14T15:13:55Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call-1\",\"name\":\"AskUser\",\"input\":{\"questionnaire\":\"1. [question] Language?\"}}]}}\n",
+        ),
+    )
+    .unwrap();
+    std::fs::write(&settings_path, r#"{"model":"gpt-5"}"#).unwrap();
+
+    let asking = transcript::telemetry(&transcript_path, None).unwrap();
+    assert_eq!(
+        asking.telemetry.native_permission_wait,
+        Some("2026-07-14T15:13:55Z".parse().unwrap())
+    );
+    assert!(asking.stat.companion.is_some());
+
+    let mut transcript = std::fs::read_to_string(&transcript_path).unwrap();
+    transcript.push_str(
+        "{\"type\":\"message\",\"id\":\"answer\",\"parentId\":\"ask\",\"timestamp\":\"2026-07-14T15:14:01Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call-1\"}]}}\n",
+    );
+    std::fs::write(&transcript_path, transcript).unwrap();
+
+    let answered = transcript::telemetry(&transcript_path, Some(&asking.stat)).unwrap();
+    assert!(answered.telemetry.native_permission_wait.is_none());
+}
+
+#[test]
+fn local_refresh_prices_exact_builtins_and_fills_gauge_from_last_call() {
     let dir = tempfile::tempdir().unwrap();
     let transcript_path = dir.path().join("priced.jsonl");
     let settings_path = dir.path().join("priced.settings.json");
@@ -306,7 +341,7 @@ fn local_refresh_prices_exact_builtins_with_session_coverage_without_inventing_a
     .unwrap();
     std::fs::write(
         &settings_path,
-        r#"{"model":"gpt-5","reasoningEffort":"high","tokenUsage":{"inputTokens":100000,"outputTokens":20000,"cacheCreationTokens":10000,"cacheReadTokens":30000,"thinkingTokens":5000}}"#,
+        r#"{"model":"gpt-5","reasoningEffort":"high","tokenUsage":{"inputTokens":100000,"outputTokens":20000,"cacheCreationTokens":10000,"cacheReadTokens":30000,"thinkingTokens":5000},"lastCallTokenUsage":{"inputTokens":6700,"outputTokens":825,"cacheCreationTokens":1200,"cacheReadTokens":56900}}"#,
     )
     .unwrap();
     let pricing_cache = dir.path().join("pricing-cache.json");
@@ -333,14 +368,18 @@ fn local_refresh_prices_exact_builtins_with_session_coverage_without_inventing_a
     assert_eq!(tokens.context_window_size, Some(400_000));
     assert!(tokens.used_percentage.is_none());
     assert!(tokens.remaining_percentage.is_none());
-    assert!(tokens.current_usage.is_none());
+    let current = tokens.current_usage.unwrap();
+    assert_eq!(current.input_tokens, Some(6_700));
+    assert_eq!(current.output_tokens, Some(825));
+    assert_eq!(current.cache_creation_input_tokens, Some(1_200));
+    assert_eq!(current.cache_read_input_tokens, Some(56_900));
     assert_eq!(tokens.session_usage.unwrap().thinking_tokens, Some(5_000));
     let cost = refresh.cost.unwrap();
     assert_eq!(cost.coverage, crate::agents::CostCoverage::Session);
     assert!(cost.total_cost_usd.unwrap() > 0.0);
     assert_eq!(
         refresh.transcript_path.as_deref(),
-        Some(settings_path.to_string_lossy().as_ref())
+        Some(transcript_path.to_string_lossy().as_ref())
     );
 }
 
@@ -486,7 +525,7 @@ fn neutral_malformed_pid_and_launch_surfaces_are_explicit() {
             "/tmp/append.md".to_owned()
         ])
     );
-    // Interactive Droid 0.170.0 has no `--model`/`--reasoning-effort`; both are
+    // Interactive Droid 0.171.0 has no `--model`/`--reasoning-effort`; both are
     // exec-only, so a profile that sets either fails fast rather than launching
     // with a silently ignored (and prompt-corrupting) flag.
     assert_eq!(

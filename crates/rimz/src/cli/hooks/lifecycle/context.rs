@@ -309,6 +309,7 @@ pub(super) fn supplement_realtime_cost(
         turn_error: prior.and_then(|record| record.context.turn_error.clone()),
         turn_complete: prior.and_then(|record| record.context.turn_complete),
         plan_proposed: prior.and_then(|record| record.context.plan_proposed),
+        native_permission_wait: prior.and_then(|record| record.context.native_permission_wait),
         turn_interrupted: prior.and_then(|record| record.context.turn_interrupted),
         transcript_path: None,
         transcript_stat: None,
@@ -353,6 +354,7 @@ pub(super) fn local_transcript_stat(path: &Path) -> Option<rimz::agents::Transcr
         mtime_secs: since_epoch.as_secs().try_into().unwrap_or(i64::MAX),
         mtime_nanos: since_epoch.subsec_nanos(),
         len: meta.len(),
+        companion: None,
     })
 }
 

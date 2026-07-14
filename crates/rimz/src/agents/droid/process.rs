@@ -1,6 +1,6 @@
 //! Droid hook-emitter process classification.
 //!
-//! Droid 0.170.0's stock TUI starts an internal stream-JSON-RPC worker and
+//! Droid 0.171.0's stock TUI starts an internal stream-JSON-RPC worker and
 //! both processes inherit global hooks. The worker is the canonical emitter;
 //! its observations stay owned by the outer TUI for pane liveness.
 

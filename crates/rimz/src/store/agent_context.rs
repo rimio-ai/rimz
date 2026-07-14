@@ -291,6 +291,10 @@ pub fn merge_local_context(
     // Plan proposals use the same overwrite/self-clear rule, but settle the
     // row to waiting while Codex displays its client-side selector.
     record.context.plan_proposed = refresh.plan_proposed;
+    // Read-only native prompt detectors overwrite on every refresh: a current
+    // AskUser/permission record stamps the marker and a newer transcript state
+    // clears it without manufacturing durable lifecycle truth.
+    record.context.native_permission_wait = refresh.native_permission_wait;
     // Same latest-refresh semantics as `turn_complete`: an at-rest
     // `turn_aborted` stamps the interrupted marker, and newer live rollout
     // records clear it by returning `None`.
@@ -517,6 +521,9 @@ fn merge_droid_local_tokens(
     };
     let Some(incoming) = incoming.as_mut() else {
         let mut preserved = prior.clone();
+        preserved.used_percentage = None;
+        preserved.remaining_percentage = None;
+        preserved.current_usage = None;
         if model_changed {
             preserved.context_window_size = None;
         }
@@ -525,15 +532,6 @@ fn merge_droid_local_tokens(
     };
     if !model_changed && incoming.context_window_size.is_none() {
         incoming.context_window_size = prior.context_window_size;
-    }
-    if incoming.used_percentage.is_none() {
-        incoming.used_percentage = prior.used_percentage;
-    }
-    if incoming.remaining_percentage.is_none() {
-        incoming.remaining_percentage = prior.remaining_percentage;
-    }
-    if incoming.current_usage.is_none() {
-        incoming.current_usage = prior.current_usage.clone();
     }
     merge_session_usage(&mut incoming.session_usage, prior.session_usage.clone());
 }

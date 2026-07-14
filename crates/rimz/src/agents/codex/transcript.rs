@@ -70,6 +70,7 @@ pub fn refresh_transcript_context(
         turn_error,
         turn_complete,
         plan_proposed,
+        native_permission_wait: None,
         turn_interrupted,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
@@ -205,6 +206,7 @@ pub(super) fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
         mtime_secs: since_epoch.as_secs().try_into().unwrap_or(i64::MAX),
         mtime_nanos: since_epoch.subsec_nanos(),
         len: meta.len(),
+        companion: None,
     })
 }
 

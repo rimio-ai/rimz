@@ -1,9 +1,9 @@
 //! Factory Droid native-hook adapter.
 //!
 //! Droid's stock hooks expose basic session, turn, tool, and compaction
-//! lifecycle. Its version-pinned private session files add cumulative usage,
-//! model, and effort enrichment; the wire still carries no structured asks,
-//! error outcome, subagent identity, current-context fill, or account surface.
+//! lifecycle. Its version-pinned private session files add current/cumulative
+//! usage, model, effort, and native-question enrichment; the wire still carries
+//! no durable asks, error outcome, subagent identity, or account surface.
 
 mod config;
 mod install;
@@ -111,8 +111,9 @@ const DROID_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::UserQuestion,
-        ConcernCoverage::Unsupported {
-            reason: "no question hook",
+        ConcernCoverage::Partial {
+            via: "v2 transcript AskUser tool calls project a native waiting card",
+            gap: "there is no durable RimZ ask or out-of-band answer API",
         },
     ),
     (
@@ -151,9 +152,8 @@ const DROID_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::ContextUsage,
-        ConcernCoverage::Partial {
-            via: "v2 session settings tokenUsage plus exact configured/model capacity",
-            gap: "session-lifetime counters do not expose current-context fill or composition",
+        ConcernCoverage::Wired {
+            via: "v2 session settings lastCallTokenUsage/tokenUsage plus exact configured/model capacity",
         },
     ),
     (
@@ -166,8 +166,8 @@ const DROID_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::RichContext,
         ConcernCoverage::Partial {
-            via: "v2 session settings plus typed custom-model configuration",
-            gap: "no current-context fill/composition, authoritative USD, account, or quota metadata",
+            via: "v2 session settings plus typed custom-model configuration and current-call usage",
+            gap: "no authoritative USD, account, or quota metadata",
         },
     ),
     (
@@ -215,8 +215,9 @@ const DROID_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     ),
     (
         LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Absent {
-            reason: "no permission or question hook",
+        HookCoverage::Derived {
+            via: "v2 transcript AskUser tool call",
+            gap: "no hook or durable ask record",
         },
     ),
     (
@@ -485,14 +486,16 @@ impl AgentAdapter for DroidAdapter {
                     .and_then(|model| prices.exact_price(model))
                     .and_then(|price| price.max_input_tokens)
             });
-        let tokens = (context_window_size.is_some() || refresh.telemetry.session_usage.is_some())
-            .then_some(AgentTokenUsage {
-                context_window_size,
-                used_percentage: None,
-                remaining_percentage: None,
-                current_usage: None,
-                session_usage: refresh.telemetry.session_usage,
-            });
+        let has_tokens = context_window_size.is_some()
+            || refresh.telemetry.current_usage.is_some()
+            || refresh.telemetry.session_usage.is_some();
+        let tokens = has_tokens.then_some(AgentTokenUsage {
+            context_window_size,
+            used_percentage: None,
+            remaining_percentage: None,
+            current_usage: refresh.telemetry.current_usage,
+            session_usage: refresh.telemetry.session_usage,
+        });
         let cost =
             super::spending::session_cost_usd(self, ctx.agent_id, &refresh.settings_path, &prices);
         Some(LocalContextRefresh {
@@ -504,8 +507,9 @@ impl AgentAdapter for DroidAdapter {
             turn_error: None,
             turn_complete: None,
             plan_proposed: None,
+            native_permission_wait: refresh.telemetry.native_permission_wait,
             turn_interrupted: None,
-            transcript_path: Some(refresh.settings_path.to_string_lossy().into_owned()),
+            transcript_path: Some(refresh.transcript_path.to_string_lossy().into_owned()),
             transcript_stat: Some(refresh.stat),
         })
     }
@@ -561,7 +565,7 @@ impl AgentAdapter for DroidAdapter {
         &self,
         preset: &super::LaunchPreset,
     ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        // Interactive Droid 0.170.0 exposes no `--model` or `--reasoning-effort`
+        // Interactive Droid 0.171.0 exposes no `--model` or `--reasoning-effort`
         // flag; both are `droid exec`-only. Reject model and effort so a
         // profile's launch intent fails fast rather than silently defaulting —
         // and, worse, leaking an ignored `--model <id>` value into Droid's

@@ -1244,6 +1244,22 @@ mod render {
         let idle_text = String::from_utf8(idle_out.into_inner()).expect("utf8");
         assert!(idle_text.contains("status:"), "{idle_text}");
         assert!(!idle_text.contains("phase:"), "{idle_text}");
+
+        let mut native_wait = agent_with_status(
+            "droid-wait",
+            rimz::agents::AgentStatus::Running,
+            rimz::agents::TurnPhase::Reasoning,
+            1_000,
+        );
+        let mut context = rimz::store::agent_context::empty_context("droid", now);
+        context.native_permission_wait = Some(jiff::Timestamp::from_second(1_010).unwrap());
+        native_wait.context = Some(context);
+        let mut native_out = anstream::StripStream::new(Vec::new());
+        super::show::render_activity_section(&mut native_out, &native_wait, None, false, now)
+            .expect("render native wait activity");
+        let native_text = String::from_utf8(native_out.into_inner()).expect("utf8");
+        assert!(native_text.contains("waiting"), "{native_text}");
+        assert!(!native_text.contains("phase:"), "{native_text}");
     }
 }
 

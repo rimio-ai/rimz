@@ -715,10 +715,10 @@ pub fn is_plan_proposed(
             .is_some_and(|at| at > last_activity)
 }
 
-/// Whether a provider's live state channel reports a native permission dialog
-/// newer than the last lifecycle heartbeat. This is a display-only attention
-/// edge: it routes the human to the pane without manufacturing a durable ask
-/// or answering through a provider decision hook.
+/// Whether a provider's live state or validated local transcript reports a
+/// native input dialog newer than the last lifecycle heartbeat. This is a
+/// display-only attention edge: it routes the human to the pane without
+/// manufacturing a durable ask or answering through a provider decision hook.
 pub fn is_native_permission_wait(
     status: AgentStatus,
     context: Option<&AgentContext>,
@@ -1204,12 +1204,15 @@ impl AgentState {
 
     /// Status after cheap, context-only projections that every read path can
     /// share. A live turn with an active provider park certificate reads as
-    /// `paused` even when the lifecycle rollup is still `running`; provider
-    /// completion markers settle falsely-running rows to `success`, and
-    /// interruption markers settle falsely-running or waiting rows to `idle`,
-    /// which opens message delivery gates. Budget-aware callers may still
-    /// upgrade a paused projection to `failed`.
+    /// `paused` even when the lifecycle rollup is still `running`; native-input
+    /// markers raise `waiting`, provider completion markers settle falsely-running
+    /// rows to `success`, and interruption markers settle falsely-running or
+    /// waiting rows to `idle`, which opens message delivery gates. Budget-aware
+    /// callers may still upgrade a paused projection to `failed`.
     pub fn effective_status(&self) -> AgentStatus {
+        if is_native_permission_wait(self.status, self.context.as_ref(), self.last_activity) {
+            return AgentStatus::Waiting;
+        }
         if self.budget_park.is_some() && self.status != AgentStatus::Waiting {
             return AgentStatus::Paused;
         }
@@ -1241,11 +1244,12 @@ impl AgentState {
     }
 
     /// True when the row must reserve pane input for a native prompt. Durable
-    /// `Waiting` uses its ask timestamp; a rollout-derived plan marker covers a
-    /// missed `Stop` hook without inventing a durable ask record. Newer agent
-    /// activity self-clears either form.
+    /// `Waiting` uses its ask timestamp; provider-local input and rollout plan
+    /// markers cover native dialogs without inventing a durable ask record.
+    /// Newer agent activity self-clears every derived form.
     pub fn is_awaiting_input(&self) -> bool {
-        is_plan_proposed(self.status, self.context.as_ref(), self.last_activity)
+        is_native_permission_wait(self.status, self.context.as_ref(), self.last_activity)
+            || is_plan_proposed(self.status, self.context.as_ref(), self.last_activity)
             || (self.status == AgentStatus::Waiting
                 && self
                     .waiting_since

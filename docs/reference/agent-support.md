@@ -25,7 +25,7 @@ One row per agent, ordered by support tier — Claude and Codex, then the experi
 | OpenCode | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
 | Antigravity | ✓ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ |
-| Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ◐ | ◐ | ◐ | ✓ | ✗ | ✗ |
+| Droid | ✓ | ✗ | ✗ | ◐ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ◐ | ✗ | ✓ | ◐ | ✗ |
 | Kiro | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ |
@@ -34,7 +34,7 @@ One row per agent, ordered by support tier — Claude and Codex, then the experi
 
 <sub>✓ wired · ◐ partial (derived) · ✗ unsupported. Run `rimz coverage` for the live grid with the exact reason printed on every ◐ and ✗ cell.</sub>
 
-Droid conversation history is partial: version-2 visible turns and final assistant output are available. Its partial `usage`, `live$`, and `rich` cells read the sibling session settings snapshot for cumulative token categories, effort, custom-model identity, known capacity, and an exact-table local session price that enters cockpit spend and live agent/room budgets; no stock-pane source reports current context fill, authoritative provider USD, historical or account spend, or quota.
+Droid conversation history is partial: version-2 visible turns and final assistant output are available. Its `usage` cell reads 0.171.0's current-call composition plus cumulative token categories from the sibling session settings snapshot, while the partial `ask` cell projects an active transcript `AskUser` call to a native waiting card. Effort, custom-model identity, known capacity, and an exact-table local session price also reach the card and live cockpit and agent/room budgets; durable asks and answers, authoritative provider USD, historical or account spend, and quota remain unavailable.
 
 What each concern column drives: `turn` live status (session start and every turn boundary), `perm` permission prompts routed to your keyboard, `plan` a plan-approval gate raising a waiting row, `ask` the agent's ask-the-user tool raising a waiting row, `answer` structured answers driving supported native prompt actions, `compact` context compaction on the card, `sub` the subagent tree as nested rows, `bg` a turn parked on background work, `end` the card tombstoning when the session closes, `idle` an idle nudge when the agent goes quiet, `usage` context-window fill and token counts, `live$` the live dollar figure, `rich` provider extras (official model labels, account windows), `install` RimZ installing the reporting hooks, `spend` account spend for the [token-insight](../guide/insight.md) dashboard, and `remote` driving or spawning a session with no local pane.
 
@@ -58,7 +58,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask`; `session_idle` + plan turn | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | ◐ derived | ◐ derived |
 | Antigravity | ◐ first `PreInvocation` identity + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker + transcript question | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
-| Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
+| Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ◐ transcript `AskUser` | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Amp | `session_start` | `agent_start` | `agent_end` | `tool_result` | `permission_ask` | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Kiro | ◐ local store | ◐ `turn_start` | ◐ `turn_end` | ◐ tool records | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
@@ -90,7 +90,7 @@ The detail for each agent — its full coverage rationale, permission-mode mappi
 | Qwen Code | [qwen.md](../internals/agents/qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
 | Kimi | [kimi.md](../internals/agents/kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
 
-Two agents carry a deliberate absence worth stating here: Cursor and Droid appear and report their work, but their stock local hooks cannot signal that a native question is open, so they have no waiting row or ask routing — answer those prompts in the agent's own pane.
+Cursor carries a deliberate absence worth stating here: it appears and reports its work, but its stock local hooks cannot signal that a native question is open, so it has no waiting row or ask routing. Droid's hook wire has the same absence, but its validated 0.171.0 transcript now derives the waiting row from the active `AskUser` record. Answer either agent's prompt in its own pane; Droid's derived marker creates no structured RimZ answer surface.
 
 Cursor's live context is statusline-backed: the card reads Cursor's display model, window, fill, version, and current token composition, while `preCompact` and `stop` provide fallbacks. The idle account probe reads only the resolved CLI's documented status/about JSON, publishing a reconciled email, raw tier, and CLI version without reading credentials or browser state; quota and paid usage remain unavailable. Response and stop hooks repeat both cache classes, so RimZ subtracts them before calculating fresh input and adds one idempotent API-equivalent local price per generation. The plain-dollar cumulative total participates in live agent and room budgets, while Cursor provider billing, account-day spend, and historical `rimz stats` totals remain unavailable. `afterAgentResponse` supplies safe final text, and a bounded terminal-only transcript tail recovers missed turn ends. Full native assistant history and incremental reply streaming remain unavailable because Cursor's JSONL merges visible assistant output with thinking.
 

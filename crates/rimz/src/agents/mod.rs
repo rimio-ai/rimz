@@ -407,6 +407,20 @@ pub struct TranscriptStat {
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub mtime_nanos: u32,
     pub len: u64,
+    /// A second provider-owned file whose bytes participate in the same local
+    /// context reading. Droid pairs its conversation JSONL with the sibling
+    /// settings snapshot so either an AskUser record or fresh token telemetry
+    /// invalidates one stat gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion: Option<TranscriptCompanionStat>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptCompanionStat {
+    pub mtime_secs: i64,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub mtime_nanos: u32,
+    pub len: u64,
 }
 
 fn is_zero_u32(value: &u32) -> bool {
@@ -450,6 +464,10 @@ pub struct LocalContextRefresh {
     /// Timestamp of a cleanly-completed planning turn whose rollout carries a
     /// `Plan` item. The projection settles a falsely-`running` row to `waiting`.
     pub plan_proposed: Option<Timestamp>,
+    /// Timestamp of a provider-native input dialog derived from a read-only
+    /// local source. It raises a display-only waiting card while the native
+    /// pane remains the answer surface.
+    pub native_permission_wait: Option<Timestamp>,
     /// Timestamp of an interrupted turn read from the rollout tail
     /// (`turn_aborted`), set when the session is at rest after an abort that
     /// fired no `Stop` hook (Codex `/clear` mid-turn or Esc). The projection
