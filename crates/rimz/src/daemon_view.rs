@@ -127,10 +127,6 @@ pub fn command_is_host(command: &str) -> bool {
     command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
 }
 
-pub fn command_is_loop_panel(command: &str) -> bool {
-    command.contains(LOOP_PANEL_MARKER)
-}
-
 /// Return the oldest loop panel in the managed view.
 pub fn find_loop_panel(panes: &[PaneRef]) -> Option<&PaneRef> {
     oldest_matching_managed_pane(panes, &ManagedPaneMarker::LoopPanel)
