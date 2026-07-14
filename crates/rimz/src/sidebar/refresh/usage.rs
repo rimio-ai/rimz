@@ -66,6 +66,15 @@ fn scheduling_identity(
         identity.scope = scope;
         identity.credentials_stamp = identity.credentials_stamp.or(stamp);
     }
+    // ponytail: Antigravity is the only direct source without a cheap owner
+    // preflight; add a typed unknown-owner state if another provider needs it.
+    if kind == "antigravity" && identity.account_key.is_none() {
+        identity.account_key = super::credits::read_credits_cache(&runtime.shared_credits_path())
+            .entries
+            .get(kind)
+            .filter(|entry| entry.scope == identity.scope)
+            .and_then(|entry| entry.account_key.clone());
+    }
     identity
 }
 
@@ -462,6 +471,29 @@ mod tests {
             ));
             assert_eq!(windows(&runtime)[0].used_percentage, Some(88));
         }
+    }
+
+    #[test]
+    fn antigravity_completed_probe_waits_for_the_account_usage_ttl() {
+        let (_dir, runtime) = owned_usage_runtime("owner-a");
+        assert!(complete_direct_account_usage(
+            &runtime,
+            "antigravity",
+            claim(&runtime),
+            crate::agents::AccountUsageProbe::Found {
+                identity: usage_identity(Some("owner-a")),
+                snapshot: AccountUsageSnapshot::default(),
+            },
+            true,
+        ));
+
+        let adapter = crate::agents::find_adapter("antigravity").unwrap();
+        let identity = scheduling_identity(&runtime, "antigravity", adapter);
+        assert_eq!(identity.account_key.as_deref(), Some("owner-a"));
+        assert_eq!(
+            claim_provider_account_usage(&runtime, "antigravity", identity),
+            None
+        );
     }
 
     #[test]
