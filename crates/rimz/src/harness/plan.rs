@@ -73,7 +73,19 @@ pub enum LaunchFinalizeError {
         field: &'static str,
     },
     #[error("{agent} does not support --max-turns")]
-    UnsupportedMaxTurns { agent: &'static str },
+    UnsupportedMaxTurns {
+        agent: &'static str,
+        warnings: Vec<LaunchFinalizeWarning>,
+    },
+}
+
+impl LaunchFinalizeError {
+    pub fn warnings(&self) -> &[LaunchFinalizeWarning] {
+        match self {
+            Self::UnsupportedMaxTurns { warnings, .. } => warnings,
+            Self::UnknownAdapter { .. } | Self::UnsupportedPresetField { .. } => &[],
+        }
+    }
 }
 
 /// Apply launch-wide CLI options and provider preset reconciliation to a
@@ -221,12 +233,12 @@ pub fn finalize_launch_layout(
                     kind: kind.to_string(),
                 }
             })?;
-            let turn_args =
-                adapter
-                    .max_turns_args(limit)
-                    .ok_or(LaunchFinalizeError::UnsupportedMaxTurns {
-                        agent: adapter.descriptor().kind,
-                    })?;
+            let Some(turn_args) = adapter.max_turns_args(limit) else {
+                return Err(LaunchFinalizeError::UnsupportedMaxTurns {
+                    agent: adapter.descriptor().kind,
+                    warnings,
+                });
+            };
             args.extend(turn_args);
         }
     }

@@ -607,7 +607,7 @@ pub(super) fn prepare_launch_layout(
         bail!("--name requires a layout with exactly one agent cell");
     }
     let preset = launch_override_preset(args)?;
-    let warnings = finalize_launch_layout(
+    let warnings = match finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
             permission_mode: mode,
@@ -616,7 +616,15 @@ pub(super) fn prepare_launch_layout(
             budget: args.budget,
             max_turns: args.max_turns,
         },
-    )?;
+    ) {
+        Ok(warnings) => warnings,
+        Err(err) => {
+            for warning in err.warnings() {
+                let _ = writeln!(std::io::stderr(), "{warning}");
+            }
+            return Err(err.into());
+        }
+    };
     for warning in warnings {
         let _ = writeln!(std::io::stderr(), "{warning}");
     }

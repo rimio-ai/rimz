@@ -354,7 +354,12 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     assert!(matches!(&layout.columns[0].rows[0],
         Cell::Agent { args, .. } if args == &["--max-turns", "3"]));
 
-    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    let mut layout = LayoutSpec::single(preset_cell(
+        "codex",
+        &["--model", "first", "--model", "second"],
+        None,
+        None,
+    ));
     let err = finalize_launch_layout(
         &mut layout,
         LaunchFinalizeOptions {
@@ -367,6 +372,13 @@ fn supervised_turn_limit_renders_supported_adapter_and_fails_fast() {
     )
     .expect_err("codex rejects max turns");
     assert_eq!(err.to_string(), "codex does not support --max-turns");
+    assert_eq!(
+        err.warnings()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["warning: profile `codex-coder` args set --model first; later model second wins"]
+    );
 }
 
 #[test]
