@@ -227,6 +227,7 @@ impl MuxBackend for FakeBackend {
                 view_id: Some("@1".to_owned()),
                 view_kind: Some(ViewKind::Window),
                 view_name: None,
+                title: None,
                 is_focused: false,
                 is_floating: false,
                 command: Some("sh".to_owned()),

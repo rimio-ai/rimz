@@ -206,6 +206,7 @@ fn open_attempt_pane(
                 target_pane_id: target,
                 cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
                 command: Some(pane.argv.clone()),
+                title: None,
                 env: crate::cli::agents_launch::launch_identity_env(
                     &prepared.workspace,
                     prepared.room_channel.as_deref(),

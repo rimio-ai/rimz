@@ -297,6 +297,7 @@ mod tests {
             view_id: Some(view.to_owned()),
             view_kind: None,
             view_name: None,
+            title: None,
             is_focused: false,
             is_floating: false,
             command: Some(command.to_owned()),

@@ -8,6 +8,7 @@ fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef 
         view_id: Some(view.to_owned()),
         view_kind: Some(ViewKind::Tab),
         view_name: None,
+        title: None,
         is_focused: focused,
         is_floating: false,
         command: command.map(ToOwned::to_owned),

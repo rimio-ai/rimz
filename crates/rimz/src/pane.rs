@@ -96,6 +96,11 @@ pub struct PaneRef {
     /// views such as the remote-control host. Never a correctness signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_name: Option<String>,
+    /// Pane title/name as reported by the multiplexer. Managed Zellij panes
+    /// use an explicit title as advisory launch identity because their
+    /// foreground command can change after spawning a child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Whether the pane is its mux view's active pane — the mux marks exactly
     /// one per tab/window, defined whether or not a client is viewing it. The
     /// sidebar derives its selection baseline from it. Advisory UI routing
@@ -165,6 +170,7 @@ impl PaneRef {
             view_id: None,
             view_kind: None,
             view_name: None,
+            title: None,
             is_focused: false,
             is_floating: false,
             command: None,

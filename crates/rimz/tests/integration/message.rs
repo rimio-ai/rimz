@@ -3898,6 +3898,7 @@ fn agent_pane(env: &Env, command: &str) -> rimz::pane::PaneRef {
         view_id: Some("tab_1".to_owned()),
         view_kind: Some(rimz::ids::ViewKind::Tab),
         view_name: Some("project".to_owned()),
+        title: None,
         is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),

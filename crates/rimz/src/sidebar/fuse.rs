@@ -153,6 +153,7 @@ mod tests {
             view_id: Some("tab_1".to_owned()),
             view_kind: Some(crate::ids::ViewKind::Tab),
             view_name: None,
+            title: None,
             is_focused: false,
             is_floating: false,
             command: Some(command.to_owned()),

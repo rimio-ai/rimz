@@ -498,6 +498,7 @@ impl MuxBackend for ZellijBackend {
                 view_id: Some(format!("tab_{}", p.view_position())),
                 view_kind: Some(crate::mux::view_kind(MuxName::Zellij)),
                 view_name: p.tab_name.take(),
+                title: p.title.take(),
                 is_focused: p.is_focused,
                 is_floating: p.is_floating,
                 pane_pid: None,
@@ -580,6 +581,9 @@ impl MuxBackend for ZellijBackend {
         }
         if let Some(tab_id) = target_tab_id {
             spec = spec.args(["--tab-id".to_owned(), tab_id.to_string()]);
+        }
+        if let Some(title) = opts.title {
+            spec = spec.args(["--name".to_owned(), title]);
         }
         if let Some(cwd) = opts.cwd {
             spec = spec.args(["--cwd".to_owned(), cwd]);

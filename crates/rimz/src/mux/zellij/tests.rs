@@ -35,6 +35,7 @@ exit 0
             .split_pane(SplitPaneOptions {
                 direction,
                 focus: true,
+                title: Some("rimz managed pane".to_owned()),
                 ..Default::default()
             })
             .expect("split_pane");
@@ -48,6 +49,11 @@ exit 0
     assert!(
         log.contains("action new-pane --direction down"),
         "down split must be explicit:\n{log}",
+    );
+    assert!(
+        log.lines()
+            .all(|line| line.contains("--name rimz managed pane")),
+        "managed pane name must survive in the spawn argv:\n{log}",
     );
 }
 

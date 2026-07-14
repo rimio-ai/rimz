@@ -4,6 +4,7 @@
 //! sidebar badge all read one source.
 
 use serde_json::{Map, Value};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use crate::agents::version::{CliVersion, probe_cli_version};
@@ -23,6 +24,63 @@ const THIRD_PARTY_PROVIDER_VARS: [&str; 3] = [
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
 ];
+const REMOTE_SESSION_ACCESS_TOKEN: &str = "CLAUDE_CODE_SESSION_ACCESS_TOKEN";
+const ENVIRONMENT_KIND: &str = "CLAUDE_CODE_ENVIRONMENT_KIND";
+const REMOTE_ENVIRONMENT_KIND: &str = "bridge";
+const MAX_ANCESTOR_DEPTH: usize = 32;
+
+/// Whether this process was spawned as a Claude remote-control session hook.
+/// Environment markers are the fast path; the bounded ancestry walk covers
+/// upstream versions that omit them.
+pub fn spawned_by_remote_control() -> bool {
+    let access_token = std::env::var_os(REMOTE_SESSION_ACCESS_TOKEN);
+    let environment_kind = std::env::var_os(ENVIRONMENT_KIND);
+    if remote_session_env(access_token.as_deref(), environment_kind.as_deref()) {
+        return true;
+    }
+    remote_control_in_ancestry()
+}
+
+fn remote_session_env(access_token: Option<&OsStr>, environment_kind: Option<&OsStr>) -> bool {
+    access_token.is_some_and(|value| !value.is_empty())
+        || environment_kind.is_some_and(|value| value == OsStr::new(REMOTE_ENVIRONMENT_KIND))
+}
+
+#[cfg(unix)]
+fn remote_control_in_ancestry() -> bool {
+    remote_control_in_ancestry_from(
+        std::os::unix::process::parent_id(),
+        |pid| crate::proc::comm_and_ppid(pid).map(|(_, ppid)| ppid),
+        crate::proc::cmdline,
+    )
+}
+
+#[cfg(not(unix))]
+fn remote_control_in_ancestry() -> bool {
+    false
+}
+
+fn remote_control_in_ancestry_from(
+    mut pid: u32,
+    mut parent_pid: impl FnMut(u32) -> Option<u32>,
+    mut cmdline: impl FnMut(u32) -> Option<String>,
+) -> bool {
+    for _ in 0..MAX_ANCESTOR_DEPTH {
+        if pid <= 1 {
+            return false;
+        }
+        if cmdline(pid)
+            .is_some_and(|command| crate::remote_control::command_is_claude_host(&command))
+        {
+            return true;
+        }
+        let Some(parent) = parent_pid(pid) else {
+            return false;
+        };
+        pid = parent;
+    }
+    false
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ClaudeRcSettings {
@@ -152,12 +210,60 @@ fn endpoint_is_conflicting(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use serde_json::json;
 
     use super::*;
 
     fn settings(value: Value) -> ClaudeRcSettings {
         rc_settings_from(value.as_object().expect("object"))
+    }
+
+    #[test]
+    fn remote_session_env_accepts_each_upstream_marker() {
+        assert!(remote_session_env(Some(OsStr::new("token")), None));
+        assert!(remote_session_env(None, Some(OsStr::new("bridge"))));
+        assert!(!remote_session_env(Some(OsStr::new("")), None));
+        assert!(!remote_session_env(None, Some(OsStr::new("local"))));
+        assert!(!remote_session_env(None, None));
+    }
+
+    #[test]
+    fn remote_session_ancestry_matches_only_a_claude_remote_control_host() {
+        let parent = |pid| match pid {
+            30 => Some(20),
+            20 => Some(10),
+            10 => Some(1),
+            _ => None,
+        };
+        let remote = |pid| match pid {
+            30 => Some("/versions/claude --print --sdk-url wss://example".to_owned()),
+            20 => Some("/usr/local/bin/claude remote-control --spawn worktree".to_owned()),
+            _ => None,
+        };
+        assert!(remote_control_in_ancestry_from(30, parent, remote));
+
+        let normal = |pid| match pid {
+            30 => Some("/usr/local/bin/claude --resume session".to_owned()),
+            20 => Some("zsh".to_owned()),
+            _ => None,
+        };
+        assert!(!remote_control_in_ancestry_from(30, parent, normal));
+    }
+
+    #[test]
+    fn remote_session_ancestry_walk_is_bounded() {
+        let calls = Cell::new(0);
+        assert!(!remote_control_in_ancestry_from(
+            100,
+            |pid| {
+                calls.set(calls.get() + 1);
+                Some(pid + 1)
+            },
+            |_| None,
+        ));
+        assert_eq!(calls.get(), MAX_ANCESTOR_DEPTH);
     }
 
     #[test]

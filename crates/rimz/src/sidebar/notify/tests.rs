@@ -125,6 +125,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
             view_id: Some("view-1".to_owned()),
             view_kind: None,
             view_name: None,
+            title: None,
             is_focused: focused,
             is_floating: false,
             command: Some("claude".to_owned()),

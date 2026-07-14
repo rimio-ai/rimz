@@ -179,6 +179,7 @@ impl WakeEnv {
                 view_id: Some("tab_0".to_owned()),
                 view_kind: Some(rimz::ids::ViewKind::Tab),
                 view_name: None,
+                title: None,
                 is_focused: true,
                 is_floating: false,
                 command: Some("zsh".to_owned()),

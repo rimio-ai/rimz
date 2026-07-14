@@ -142,6 +142,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
             target_pane_id: Some(old_pane.clone()),
             cwd: Some(cwd.display().to_string()),
             command: Some(argv),
+            title: None,
             env,
             stacked: false,
             direction,

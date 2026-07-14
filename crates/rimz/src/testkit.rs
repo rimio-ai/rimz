@@ -236,6 +236,7 @@ pub mod fleet {
             view_id: Some(format!("tab_{}", i % 8)),
             view_kind: Some(ViewKind::Tab),
             view_name: None,
+            title: None,
             is_focused: i == 0,
             is_floating: false,
             command: Some("zsh".to_owned()),

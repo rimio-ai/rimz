@@ -22,7 +22,7 @@ mod ask;
 mod install;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
-pub(crate) mod remote_control;
+pub mod remote_control;
 pub(crate) mod spend;
 mod statusline;
 mod subagent_statusline;

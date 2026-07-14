@@ -2112,6 +2112,7 @@ fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::pane::P
         view_id: Some("tab_0".to_owned()),
         view_kind: Some(rimz::ViewKind::Tab),
         view_name: Some("main".to_owned()),
+        title: None,
         is_focused: focused,
         is_floating: false,
         command: Some(command.to_owned()),

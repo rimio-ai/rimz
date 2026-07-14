@@ -123,6 +123,13 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         );
         return Ok(());
     }
+    if source == "claude" && rimz::agents::claude::remote_control::spawned_by_remote_control() {
+        debug!(
+            source = %source,
+            "hooks feed: suppressed — fired by a Claude remote-control session",
+        );
+        return Ok(());
+    }
     let raw_agent_pid = hook_agent_pid(&source);
     let normalized_owner_pid = if source == "droid" {
         match raw_agent_pid.map(rimz::agents::droid::hook_process_disposition) {

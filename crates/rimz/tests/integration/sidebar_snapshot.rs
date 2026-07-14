@@ -226,6 +226,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
         view_id: Some("@0".to_owned()),
         view_kind: Some(rimz::ids::ViewKind::Window),
         view_name: None,
+        title: None,
         is_focused: false,
         is_floating: false,
         command: Some("kiro-cli-chat".to_owned()),

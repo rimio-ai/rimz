@@ -434,6 +434,10 @@ pub struct SplitPaneOptions {
     pub target_pane_id: Option<PaneId>,
     pub cwd: Option<String>,
     pub command: Option<Vec<String>>,
+    /// Explicit pane name so a managed Zellij pane keeps its launch identity
+    /// while foreground children churn. tmux ignores this because
+    /// `pane_start_command` already preserves launch identity.
+    pub title: Option<String>,
     pub env: BTreeMap<String, String>,
     /// Zellij renders this split into a native stack; tmux has no native pane
     /// stack and degrades to its normal vertical/horizontal tiling.

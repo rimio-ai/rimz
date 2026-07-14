@@ -260,10 +260,19 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
         layout.contains(r#"args "remote-control" "--spawn" "worktree""#),
         "{layout}",
     );
+    assert!(
+        layout.contains(r#"name="claude remote-control --spawn worktree""#),
+        "managed pane carries stable title identity:\n{layout}",
+    );
     assert!(layout.contains(r#"command "/usr/bin/rimz""#), "{layout}");
     assert!(
         layout.contains(r#"args "codex" "app-server" "serve""#),
         "{layout}",
+    );
+    assert!(
+        layout.contains(r#"name="/usr/bin/rimz stats --refresh""#)
+            && layout.contains(r#"name="/usr/bin/rimz loop watch --hold""#),
+        "content and loop panes carry stable title identity:\n{layout}",
     );
     assert!(
         layout.contains(r#"pane size="30%" split_direction="horizontal""#),

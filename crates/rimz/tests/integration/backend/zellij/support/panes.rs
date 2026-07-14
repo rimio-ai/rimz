@@ -81,6 +81,7 @@ impl ListedPane {
             view_id: Some(format!("tab_{tab}")),
             view_kind: Some(ViewKind::Tab),
             view_name: self.tab_name.clone(),
+            title: self.title.clone(),
             is_focused: self.is_focused,
             is_floating: self.is_floating,
             command: self

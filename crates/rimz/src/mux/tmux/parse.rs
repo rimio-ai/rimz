@@ -28,6 +28,7 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         view_id: Some(cols[1].to_owned()),
         view_kind: Some(crate::mux::view_kind(MuxName::Tmux)),
         view_name: trimmed_nonempty(7),
+        title: trimmed_nonempty(8),
         is_focused: cols.get(6).is_some_and(|value| value.trim() == "1"),
         // Added in tmux 3.7. On the supported 3.5/3.6 releases an unknown
         // format expands empty, so the optional trailing column stays false.
@@ -136,12 +137,13 @@ mod tests {
     fn parse_pane_line_handles_full_short_and_invalid_rows() {
         // session, window_id, pane_id, command, cwd, pid, pane_active,
         // window_name, pane_title, pane_floating_flag, pane_start_command.
-        let row = "rimz-qe,@1,%3,rimz,/home/u/qe,4242,1,qe,,0,rimz loop watch --hold";
+        let row = "rimz-qe,@1,%3,rimz,/home/u/qe,4242,1,qe,rimz loop watch --hold,0,rimz loop watch --hold";
         let pane = parse_pane_line(row).expect("full row parses");
         assert_eq!(pane.pane_id.raw(), "%3");
         assert_eq!(pane.session_name, "rimz-qe");
         assert_eq!(pane.view_id.as_deref(), Some("@1"));
         assert_eq!(pane.view_name.as_deref(), Some("qe"));
+        assert_eq!(pane.title.as_deref(), Some("rimz loop watch --hold"));
         assert_eq!(pane.command.as_deref(), Some("rimz"));
         assert_eq!(
             pane.spawn_command.as_deref(),
@@ -174,6 +176,7 @@ mod tests {
         assert_eq!(short.command, None);
         assert_eq!(short.spawn_command, None);
         assert_eq!(short.view_name, None);
+        assert_eq!(short.title, None);
         assert!(!short.is_focused);
 
         for malformed in ["rimz-qe,@1", ""] {

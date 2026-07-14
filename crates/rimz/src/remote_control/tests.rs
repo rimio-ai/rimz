@@ -2,12 +2,17 @@ use super::*;
 use crate::ids::{MuxName, PaneId};
 
 fn pane(command: Option<&str>, view_name: Option<&str>) -> PaneRef {
+    pane_with_id("%1", command, view_name)
+}
+
+fn pane_with_id(raw: &str, command: Option<&str>, view_name: Option<&str>) -> PaneRef {
     PaneRef {
-        pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+        pane_id: PaneId::from_parts(MuxName::Tmux, raw),
         session_name: "rimz-demo".to_owned(),
         view_id: None,
         view_kind: None,
         view_name: view_name.map(ToOwned::to_owned),
+        title: None,
         is_focused: false,
         is_floating: false,
         command: command.map(ToOwned::to_owned),
@@ -620,7 +625,8 @@ fn missing_managed_panes_diffs_the_daemon_view_spec() {
         ),
     ];
 
-    let missing = missing_managed_panes(&daemon_view(), &present)
+    let missing = managed_pane_reconciliation(&daemon_view(), &present)
+        .spawn
         .into_iter()
         .map(|host| host.argv.join(" "))
         .collect::<Vec<_>>();
@@ -656,22 +662,87 @@ fn missing_managed_panes_is_empty_when_every_managed_pane_is_present() {
         spawned_pane("rimz", "rimz loop watch --hold", Some(VIEW_NAME)),
     ];
 
-    assert!(missing_managed_panes(&daemon_view(), &present).is_empty());
+    let reconciliation = managed_pane_reconciliation(&daemon_view(), &present);
+    assert!(reconciliation.spawn.is_empty());
+    assert!(reconciliation.close.is_empty());
 }
 
 #[test]
-fn disabled_claude_host_selection_is_scoped_to_the_daemon_view() {
-    let daemon_host = spawned_pane(
-        "claude",
-        "claude remote-control --spawn worktree",
+fn title_identity_prevents_respawn_after_foreground_command_churn() {
+    let mut daemon_host = pane_with_id(
+        "%9",
+        Some(
+            "/home/u/.local/share/claude/versions/2.1.209 --print --sdk-url wss://example --session-id cse_123",
+        ),
         Some(VIEW_NAME),
     );
-    let daemon_host_id = daemon_host.pane_id.clone();
-    let working_host = spawned_pane(
-        "claude",
-        "claude remote-control --spawn worktree",
-        Some("work"),
+    daemon_host.title = Some("claude remote-control --spawn worktree".to_owned());
+    let reconciliation = managed_pane_reconciliation(&daemon_view(), &[daemon_host]);
+
+    assert!(
+        !reconciliation
+            .spawn
+            .iter()
+            .any(|host| { host_marker(host) == Some(ManagedPaneMarker::ClaudeRemoteControl) })
     );
+}
+
+#[test]
+fn title_identity_matches_content_supervisor_after_child_churn() {
+    let mut content = pane_with_id("%8", Some("rimz stats --refresh --hold"), Some(VIEW_NAME));
+    content.title = Some("rimz daemon content --slot 0".to_owned());
+    let reconciliation = managed_pane_reconciliation(&daemon_view(), &[content]);
+
+    assert!(
+        !reconciliation
+            .spawn
+            .iter()
+            .any(|host| { host_marker(host) == Some(ManagedPaneMarker::ContentSlot(0)) })
+    );
+}
+
+#[test]
+fn reconciliation_closes_surplus_managed_panes_but_keeps_the_oldest() {
+    let panes = [
+        spawned_pane(
+            "claude",
+            "claude remote-control --spawn worktree",
+            Some(VIEW_NAME),
+        ),
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%7"),
+            ..spawned_pane(
+                "claude",
+                "claude remote-control --spawn worktree",
+                Some(VIEW_NAME),
+            )
+        },
+        PaneRef {
+            pane_id: PaneId::from_parts(MuxName::Tmux, "%3"),
+            ..spawned_pane(
+                "claude",
+                "claude remote-control --spawn worktree",
+                Some(VIEW_NAME),
+            )
+        },
+    ];
+
+    assert_eq!(
+        managed_pane_reconciliation(&daemon_view(), &panes).close,
+        vec![
+            PaneId::from_parts(MuxName::Tmux, "%3"),
+            PaneId::from_parts(MuxName::Tmux, "%7"),
+        ]
+    );
+}
+
+#[test]
+fn disabled_claude_host_selection_uses_title_and_stays_in_the_daemon_view() {
+    let mut daemon_host = pane_with_id("%4", Some("claude-sdk"), Some(VIEW_NAME));
+    daemon_host.title = Some("claude remote-control --spawn worktree".to_owned());
+    let daemon_host_id = daemon_host.pane_id.clone();
+    let mut working_host = pane_with_id("%5", Some("claude-sdk"), Some("work"));
+    working_host.title = Some("claude remote-control --spawn worktree".to_owned());
     let user_pane = spawned_pane("nvim", "nvim remote-control.md", Some(VIEW_NAME));
     let panes = [daemon_host, working_host, user_pane];
 
@@ -680,10 +751,14 @@ fn disabled_claude_host_selection_is_scoped_to_the_daemon_view() {
         .hosts
         .retain(|host| host_marker(host) != Some(ManagedPaneMarker::ClaudeRemoteControl));
     assert_eq!(
-        disabled_claude_host_panes(&disabled, &panes),
+        managed_pane_reconciliation(&disabled, &panes).close,
         vec![daemon_host_id]
     );
-    assert!(disabled_claude_host_panes(&daemon_view(), &panes).is_empty());
+    assert!(
+        managed_pane_reconciliation(&daemon_view(), &panes)
+            .close
+            .is_empty()
+    );
 }
 
 #[test]

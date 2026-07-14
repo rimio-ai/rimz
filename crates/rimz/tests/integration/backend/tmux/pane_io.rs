@@ -21,6 +21,7 @@ fn split_pane_injects_env_vars() {
                 "-c".to_owned(),
                 "printf RIMZ_TEST_VAR=$RIMZ_TEST_VAR; sleep 5".to_owned(),
             ]),
+            title: None,
             env,
             stacked: false,
             direction: Default::default(),

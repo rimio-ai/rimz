@@ -14,6 +14,7 @@ pub(crate) fn pane(id: &str, command: &str, cwd: &str) -> PaneRef {
         view_id: Some("@0".to_owned()),
         view_kind: None,
         view_name: None,
+        title: None,
         is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),

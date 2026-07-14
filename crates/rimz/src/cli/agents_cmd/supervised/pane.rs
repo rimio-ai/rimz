@@ -49,6 +49,7 @@ pub(crate) fn split_into_loop_zone(
         target_pane_id: Some(panel.pane_id.clone()),
         cwd: Some(cwd.to_string_lossy().into_owned()),
         command: Some(pane.argv.clone()),
+        title: None,
         env,
         stacked: true,
         direction: SplitDirection::Down,
@@ -101,6 +102,7 @@ fn repair_loop_panel(
         target_view_id: anchor.view_id.clone(),
         target_pane_id: Some(anchor.pane_id.clone()),
         cwd: Some(workspace.worktree_root.to_string_lossy().into_owned()),
+        title: Some(format!("{rimz_bin} loop watch --hold")),
         command: Some(vec![
             rimz_bin,
             "loop".to_owned(),

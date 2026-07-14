@@ -128,6 +128,7 @@ fn split_pane_injects_env_vars() {
                     marker_file.display()
                 ),
             ]),
+            title: None,
             env,
             stacked: false,
             direction: Default::default(),
@@ -232,6 +233,7 @@ fn split_pane_targets_non_focused_tab() {
             target_pane_id: Some(target.pane_id.clone()),
             cwd: Some(cwd.path().to_string_lossy().into_owned()),
             command: Some(vec!["sleep".to_owned(), "5".to_owned()]),
+            title: None,
             env: BTreeMap::new(),
             stacked: true,
             direction: SplitDirection::Down,

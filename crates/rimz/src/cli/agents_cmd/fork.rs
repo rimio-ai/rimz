@@ -194,6 +194,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                     target_pane_id: own_pane_id(mux),
                     cwd: Some(seed.cwd.to_string_lossy().into_owned()),
                     command: Some(argv.clone()),
+                    title: None,
                     env: agents_launch::launch_identity_env(&workspace, channel.as_deref(), false),
                     stacked: false,
                     direction,

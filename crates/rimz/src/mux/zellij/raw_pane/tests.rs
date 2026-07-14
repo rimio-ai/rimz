@@ -229,6 +229,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
             view_id: Some(format!("tab_{}", p.view_position())),
             view_kind: Some(ViewKind::Tab),
             view_name: p.tab_name.take(),
+            title: p.title.take(),
             is_focused: p.is_focused,
             is_floating: p.is_floating,
             pane_pid: None,

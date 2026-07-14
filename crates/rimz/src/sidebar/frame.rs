@@ -188,6 +188,7 @@ impl PaneFrame {
             view_id: Some(tab.view_id.to_string()),
             view_kind: Some(tab.kind),
             view_name: tab.name.clone(),
+            title: None,
             is_focused: self.focused_pane.as_ref() == Some(&pane.pane_id)
                 || self.viewed_panes.contains(&pane.pane_id),
             is_floating: pane.is_floating,

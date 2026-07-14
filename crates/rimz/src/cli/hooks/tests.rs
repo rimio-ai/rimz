@@ -53,6 +53,7 @@ fn pane(raw: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
         view_id: None,
         view_kind: None,
         view_name: None,
+        title: None,
         is_focused: focused,
         is_floating: false,
         command: Some(command.to_owned()),

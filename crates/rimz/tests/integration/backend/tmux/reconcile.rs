@@ -96,6 +96,7 @@ fn reconcile_sidebars_ignores_other_tmux_sessions() {
             target_pane_id: Some(work_pane.pane_id),
             cwd: None,
             command: Some(foreign_command),
+            title: None,
             env: BTreeMap::new(),
             stacked: false,
             direction: Default::default(),

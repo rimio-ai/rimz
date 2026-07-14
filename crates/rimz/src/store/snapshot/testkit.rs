@@ -329,6 +329,7 @@ pub(super) fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
         view_id: Some("@0".to_owned()),
         view_kind: Some(crate::ids::ViewKind::Window),
         view_name: None,
+        title: None,
         is_focused: false,
         is_floating: false,
         command: Some(command.to_owned()),

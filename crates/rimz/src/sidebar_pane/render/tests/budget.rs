@@ -47,6 +47,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
             view_id: Some(format!("tab_{group}")),
             view_kind: Some(crate::ids::ViewKind::Tab),
             view_name: None,
+            title: None,
             is_focused: false,
             is_floating: false,
             command: Some("node".to_owned()),

@@ -9,11 +9,11 @@
 //!   foreground host, in the workspace session's one named [`VIEW_NAME`]
 //!   background view (a tmux window / Zellij tab). It runs from the project root
 //!   so `--spawn=worktree` carves new on-demand sessions off the canonical repo,
-//!   not the current worktree. It is a pane but not a coding agent — no Rimz
-//!   hooks, never stamps a pane — so the sidebar must not render it as an idle
-//!   agent: [`pane_is_host`] identifies the host pane and the snapshot reducer
-//!   filters it out, surfacing remote control as a health-colored `⇅ rc` flag
-//!   on the Claude provider dashboard block instead.
+//!   not the current worktree. The host and its remote-session descendants are
+//!   infrastructure rather than coding agents, so their hooks are suppressed
+//!   and they never stamp a pane. [`pane_is_host`] identifies the host pane and
+//!   the snapshot reducer filters it out, surfacing remote control as a
+//!   health-colored `⇅ rc` flag on the Claude provider dashboard block instead.
 //! - **Codex** runs `remote-control start` from the *managed standalone install*
 //!   ([`codex_standalone_bin`]), which brings up the Codex app-server daemon
 //!   with remote control enabled and returns. That daemon is a **per-user
@@ -28,6 +28,11 @@
 //! - **Loops** run an always-present `rimz loop watch` panel in the runtime
 //!   column. Scheduled loop runs split against that pane so transient agents
 //!   stay in the daemon view's loop zone.
+//!
+//! Daemon-view repair identifies each managed pane by its explicit pane
+//! title/name on Zellij and its start command on tmux, with the foreground
+//! command as a fallback. Every repair pass retains the oldest match and closes
+//! duplicates, so foreground child churn cannot accumulate host panes.
 //!
 //! `remote-control start` boots and updates its daemon from the standalone's
 //! fixed path, so a `codex` merely on PATH (a different binary) is not enough.
@@ -127,14 +132,16 @@ pub fn repair_daemon_view(
         );
         return;
     };
-    let missing = missing_managed_panes(view, &listing.panes);
-    for pane in missing {
+    let reconciliation = managed_pane_reconciliation(view, &listing.panes);
+    for pane in reconciliation.spawn {
+        let title = pane.argv.join(" ");
         if let Err(err) = backend.split_pane(SplitPaneOptions {
             session_name: Some(session_name.to_owned()),
             target_view_id: anchor.view_id.clone(),
             target_pane_id: Some(anchor.pane_id.clone()),
             cwd: Some(pane.cwd.to_string_lossy().into_owned()),
             command: Some(pane.argv.clone()),
+            title: Some(title),
             env: Default::default(),
             stacked: false,
             direction: SplitDirection::Down,
@@ -149,14 +156,14 @@ pub fn repair_daemon_view(
             );
         }
     }
-    for pane_id in disabled_claude_host_panes(view, &listing.panes) {
+    for pane_id in reconciliation.close {
         if let Err(err) = backend.close_pane(session_name, &pane_id) {
             tracing::warn!(
                 session = %session_name,
                 view = VIEW_NAME,
                 pane = %pane_id,
                 error = &err as &dyn std::error::Error,
-                "daemon view repair could not stop disabled Claude remote control",
+                "daemon view repair could not close a surplus managed pane",
             );
         }
     }
@@ -1082,58 +1089,67 @@ enum ManagedPaneMarker {
     LoopPanel,
 }
 
-/// Return managed daemon-view panes absent from the live pane listing.
-///
-/// The repair pass adds missing RimZ-owned panes. Extra user panes inside
-/// `rimzd` are left alone, and geometry is repaired at the next full view birth.
-pub fn missing_managed_panes(view: &DaemonView, panes: &[PaneRef]) -> Vec<HostPane> {
-    view.content
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ManagedPaneReconciliation {
+    spawn: Vec<HostPane>,
+    close: Vec<crate::ids::PaneId>,
+}
+
+/// Plan one daemon-view repair without touching unmatched user panes.
+fn managed_pane_reconciliation(view: &DaemonView, panes: &[PaneRef]) -> ManagedPaneReconciliation {
+    let managed = view
+        .content
         .iter()
         .chain(view.hosts.iter())
         .chain(std::iter::once(&view.loop_panel))
-        .filter(|host| {
-            host_marker(host)
-                .as_ref()
-                .is_some_and(|marker| !pane_listing_contains_marker(panes, marker))
-        })
-        .cloned()
-        .collect()
+        .filter_map(|host| host_marker(host).map(|marker| (marker, host)));
+    let mut reconciliation = ManagedPaneReconciliation::default();
+    let mut claude_enabled = false;
+    for (marker, host) in managed {
+        claude_enabled |= marker == ManagedPaneMarker::ClaudeRemoteControl;
+        let mut matches = matching_managed_panes(panes, &marker);
+        matches.sort_by(|left, right| {
+            left.pane_id
+                .creation_ordinal()
+                .cmp(&right.pane_id.creation_ordinal())
+                .then_with(|| left.pane_id.raw().cmp(right.pane_id.raw()))
+        });
+        if matches.is_empty() {
+            reconciliation.spawn.push(host.clone());
+        } else {
+            reconciliation
+                .close
+                .extend(matches.into_iter().skip(1).map(|pane| pane.pane_id.clone()));
+        }
+    }
+    if !claude_enabled {
+        reconciliation.close.extend(
+            matching_managed_panes(panes, &ManagedPaneMarker::ClaudeRemoteControl)
+                .into_iter()
+                .map(|pane| pane.pane_id.clone()),
+        );
+    }
+    reconciliation
 }
 
-/// Select Claude host panes that remain after the machine toggle turns off.
-/// Only the named daemon view and the managed command marker qualify; a user's
-/// Claude command in a working view stays outside this reconciliation.
-fn disabled_claude_host_panes(view: &DaemonView, panes: &[PaneRef]) -> Vec<crate::ids::PaneId> {
-    let claude_enabled = view
-        .hosts
-        .iter()
-        .filter_map(host_marker)
-        .any(|marker| marker == ManagedPaneMarker::ClaudeRemoteControl);
-    if claude_enabled {
-        return Vec::new();
-    }
+fn matching_managed_panes<'a>(
+    panes: &'a [PaneRef],
+    marker: &ManagedPaneMarker,
+) -> Vec<&'a PaneRef> {
     panes
         .iter()
         .filter(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
         .filter(|pane| {
-            [pane.spawn_command.as_deref(), pane.command.as_deref()]
-                .into_iter()
-                .flatten()
-                .any(|command| {
-                    command_matches_marker(command, &ManagedPaneMarker::ClaudeRemoteControl)
-                })
+            [
+                pane.spawn_command.as_deref(),
+                pane.command.as_deref(),
+                pane.title.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|command| command_matches_marker(command, marker))
         })
-        .map(|pane| pane.pane_id.clone())
         .collect()
-}
-
-fn pane_listing_contains_marker(panes: &[PaneRef], marker: &ManagedPaneMarker) -> bool {
-    panes
-        .iter()
-        .filter(|pane| pane.view_name.as_deref() == Some(VIEW_NAME))
-        .flat_map(|pane| [pane.spawn_command.as_deref(), pane.command.as_deref()])
-        .flatten()
-        .any(|command| command_matches_marker(command, marker))
 }
 
 fn host_marker(host: &HostPane) -> Option<ManagedPaneMarker> {
@@ -1162,7 +1178,7 @@ fn command_matches_marker(command: &str, marker: &ManagedPaneMarker) -> bool {
     }
 }
 
-fn command_is_claude_host(command: &str) -> bool {
+pub(crate) fn command_is_claude_host(command: &str) -> bool {
     let mut tokens = command.split_whitespace();
     while let Some(token) = tokens.next() {
         let is_claude = Path::new(token)

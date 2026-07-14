@@ -335,11 +335,11 @@ fn render_content_column(content: &[HostPane], focus_first: bool, indent: usize)
             program: "zellij".to_owned(),
             reason: "daemon view has no content panes".to_owned(),
         }),
-        [pane] => render_command_pane(&pane.argv, &pane.cwd, focus_first, indent, None),
+        [pane] => render_managed_command_pane(&pane.argv, &pane.cwd, focus_first, indent, None),
         panes => {
             let mut rendered = String::new();
             for (index, pane) in panes.iter().enumerate() {
-                rendered.push_str(&render_command_pane(
+                rendered.push_str(&render_managed_command_pane(
                     &pane.argv,
                     &pane.cwd,
                     focus_first && index == 0,
@@ -365,11 +365,17 @@ fn render_daemon_column(
 ) -> Result<String> {
     let size = format!("{}%", width_percent);
     match daemons {
-        [] => render_command_pane(&loop_panel.argv, &loop_panel.cwd, true, indent, Some(&size)),
+        [] => render_managed_command_pane(
+            &loop_panel.argv,
+            &loop_panel.cwd,
+            true,
+            indent,
+            Some(&size),
+        ),
         daemons => {
             let mut rendered = String::new();
             for (index, daemon) in daemons.iter().enumerate() {
-                rendered.push_str(&render_command_pane(
+                rendered.push_str(&render_managed_command_pane(
                     &daemon.argv,
                     &daemon.cwd,
                     index == 0,
@@ -377,7 +383,7 @@ fn render_daemon_column(
                     None,
                 )?);
             }
-            rendered.push_str(&render_command_pane(
+            rendered.push_str(&render_managed_command_pane(
                 &loop_panel.argv,
                 &loop_panel.cwd,
                 false,
@@ -469,6 +475,27 @@ fn render_command_pane(
     indent: usize,
     size: Option<&str>,
 ) -> Result<String> {
+    render_named_command_pane(argv, cwd, focus, indent, size, None)
+}
+
+fn render_managed_command_pane(
+    argv: &[String],
+    cwd: &Path,
+    focus: bool,
+    indent: usize,
+    size: Option<&str>,
+) -> Result<String> {
+    render_named_command_pane(argv, cwd, focus, indent, size, Some(&argv.join(" ")))
+}
+
+fn render_named_command_pane(
+    argv: &[String],
+    cwd: &Path,
+    focus: bool,
+    indent: usize,
+    size: Option<&str>,
+    name: Option<&str>,
+) -> Result<String> {
     let (program, args) = argv.split_first().ok_or_else(|| MuxErr::Output {
         program: "zellij".to_owned(),
         reason: "command pane has no program".to_owned(),
@@ -477,6 +504,10 @@ fn render_command_pane(
     let cwd = kdl_string(&cwd.to_string_lossy())?;
     let size_attr = match size {
         Some(size) => format!(" size={}", kdl_string(size)?),
+        None => String::new(),
+    };
+    let name_attr = match name {
+        Some(name) => format!(" name={}", kdl_string(name)?),
         None => String::new(),
     };
     let focus_attr = if focus { " focus=true" } else { "" };
@@ -493,7 +524,7 @@ fn render_command_pane(
     let base = " ".repeat(indent);
     let child = " ".repeat(indent + 4);
     Ok(format!(
-        r#"{base}pane{size_attr}{focus_attr} cwd={cwd} {{
+        r#"{base}pane{size_attr}{focus_attr}{name_attr} cwd={cwd} {{
 {child}command {program}{args_line}
 {child}start_suspended false
 {child}close_on_exit true

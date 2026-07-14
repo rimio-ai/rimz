@@ -237,6 +237,7 @@ pub(super) fn launch_layout(
                     target_pane_id: own_pane_id(mux),
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(single_pane_argv(&panes)?),
+                    title: None,
                     env: agents_launch::launch_identity_env(
                         &workspace,
                         room_channel.as_deref(),
@@ -438,6 +439,7 @@ fn launch_resume_layout(
                     target_pane_id: own_pane_id(mux),
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(single_pane_argv(&panes)?),
+                    title: None,
                     env: agents_launch::launch_identity_env(workspace, channel.as_deref(), false),
                     stacked: false,
                     direction,
