@@ -12,10 +12,6 @@ use crate::agents::transcript_fs::{
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-#[expect(
-    dead_code,
-    reason = "session identity is consumed by the statusline transport"
-)]
 pub(super) struct StatuslinePayload {
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     pub session_id: Option<String>,

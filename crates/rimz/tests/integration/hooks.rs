@@ -1408,6 +1408,16 @@ fn cursor_statusline_and_stop_hook_merge_rich_context_and_idempotent_cost() {
     .unwrap();
     env.install_agent_hooks("cursor");
 
+    let transcript = env
+        .home_root
+        .join(".cursor/projects/fixture/agent-transcripts/sess-cursor/sess-cursor.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+    )
+    .unwrap();
+
     let payload = r#"{
         "session_id": "sess-cursor",
         "model": { "id": "default", "display_name": "Auto" },
@@ -1429,6 +1439,22 @@ fn cursor_statusline_and_stop_hook_merge_rich_context_and_idempotent_cost() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout), payload);
+
+    let out = env.run_statusline_feed("cursor", payload);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let settled = env
+        .agent_contexts()
+        .into_iter()
+        .find(|record| record.agent_id.as_str() == "sess-cursor")
+        .expect("Cursor statusline sidecar");
+    assert!(
+        settled.context.turn_complete.is_some(),
+        "continuous statusline refresh re-derives the transcript-tail settle marker"
+    );
 
     let stop = r#"{
         "hook_event_name": "stop",

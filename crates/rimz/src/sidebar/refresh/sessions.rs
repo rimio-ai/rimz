@@ -214,7 +214,6 @@ fn refresh_session_transcript_context_core(
         runtime,
         kind,
         session_id,
-        prior,
         refresh,
         Timestamp::now(),
     )?;

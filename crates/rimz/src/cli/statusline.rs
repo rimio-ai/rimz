@@ -111,16 +111,10 @@ fn persist_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -> Result<
     let session_id =
         payload_session_id(&payload).context("statusline payload carries no session id")?;
     let agent = adapter_by_kind(source)?;
-    let Some(mut context) = agent.observe_context(source, &payload) else {
+    let Some(context) = agent.observe_context(source, &payload) else {
         // The adapter has no rich-context source (e.g. codex): nothing to store.
         return Ok(());
     };
-    // Fold in the transcript-tail resting-turn checks. The payload itself
-    // cannot carry an API-error abort or Esc interruption, so the adapter reads
-    // its own tail off the payload's transcript path. The handler owns the
-    // merge — adapters stay pure mappers.
-    context.turn_error = agent.observe_turn_error(&payload);
-    context.turn_interrupted = agent.observe_turn_interrupted(&payload);
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let runtime =
         RuntimePaths::for_workspace(workspace.workspace_id).context("preparing runtime paths")?;

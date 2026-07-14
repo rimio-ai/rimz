@@ -226,7 +226,6 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         store.runtime_paths(),
         agent.descriptor().kind,
         context_agent_id,
-        prior,
         refresh,
         jiff::Timestamp::now(),
     ) {

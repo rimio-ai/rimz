@@ -439,9 +439,19 @@ impl AgentAdapter for CursorAdapter {
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
-        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
-            .ok()
-            .map(|payload| payload.into_context(source, Timestamp::now()))
+        let payload =
+            serde_json::from_value::<statusline::StatuslinePayload>(payload.clone()).ok()?;
+        let markers = payload
+            .session_id
+            .as_deref()
+            .and_then(transcript::statusline_turn_markers);
+        let mut context = payload.into_context(source, Timestamp::now());
+        if let Some(markers) = markers {
+            context.turn_complete = markers.turn_complete;
+            context.turn_interrupted = markers.turn_interrupted;
+            context.turn_error = markers.turn_error;
+        }
+        Some(context)
     }
 
     fn estimate_turn_cost(

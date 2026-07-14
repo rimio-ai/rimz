@@ -209,7 +209,6 @@ pub fn merge_local_context(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
-    _prior: Option<AgentContextRecord>,
     refresh: LocalContextRefresh,
     observed_at: Timestamp,
 ) -> Result<(), atomic::AtomicErr> {
@@ -247,11 +246,11 @@ pub fn merge_local_context(
         record.context.cost = refresh.cost;
         record.estimated_cost.owns_context_cost = false;
     }
-    // Codex's local transcript detector re-derives turn death from the tail each
+    // Codex and Cursor re-derive turn death from the transcript tail each
     // refresh: a still-present marker re-stamps identically, and a fresh turn
     // clears it by returning `None`. Other local-refresh users do not run that
     // detector, so they must not clear hook/statusline-owned errors.
-    if kind == "codex" {
+    if matches!(kind, "codex" | "cursor") {
         record.context.turn_error = refresh.turn_error;
     }
     // Overwrite each refresh: a clean `task_complete` at the tail sets the

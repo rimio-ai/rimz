@@ -772,7 +772,10 @@ impl AgentAdapter for ClaudeAdapter {
         // Claude's transport is the statusline JSON blob. Tolerant parse: any
         // non-object payload yields `None` rather than an error.
         let parsed: statusline::StatuslinePayload = serde_json::from_value(payload.clone()).ok()?;
-        Some(parsed.into_context(source, Timestamp::now()))
+        let mut context = parsed.into_context(source, Timestamp::now());
+        context.turn_error = self.observe_turn_error(payload);
+        context.turn_interrupted = self.observe_turn_interrupted(payload);
+        Some(context)
     }
 
     fn observe_turn_error(&self, payload: &Value) -> Option<AgentTurnError> {

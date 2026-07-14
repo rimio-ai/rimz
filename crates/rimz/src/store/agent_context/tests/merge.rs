@@ -57,15 +57,7 @@ fn merge_local_context_preserves_prior_fields_by_case() {
         let local_at = Timestamp::from_second(1_700_000_030).unwrap();
         write_record(&runtime, &(case.prior)(prior_at)).unwrap();
 
-        merge_local_context(
-            &runtime,
-            "codex",
-            "sess-1",
-            read_one(&runtime, "codex", "sess-1"),
-            (case.refresh)(),
-            local_at,
-        )
-        .unwrap();
+        merge_local_context(&runtime, "codex", "sess-1", (case.refresh)(), local_at).unwrap();
 
         let merged = read_one(&runtime, "codex", "sess-1").unwrap();
         assert_eq!(merged.agent_id.as_str(), "sess-1", "{}", case.name);
@@ -89,29 +81,13 @@ fn codex_local_refresh_overwrites_turn_error_marker() {
 
     let mut refresh = unpriced_refresh();
     refresh.turn_error = Some(next_marker.clone());
-    merge_local_context(
-        &runtime,
-        "codex",
-        "sess-1",
-        read_one(&runtime, "codex", "sess-1"),
-        refresh,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, "codex", "sess-1", refresh, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.turn_error, Some(next_marker));
 
     let mut clear = unpriced_refresh();
     clear.turn_error = None;
-    merge_local_context(
-        &runtime,
-        "codex",
-        "sess-1",
-        read_one(&runtime, "codex", "sess-1"),
-        clear,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, "codex", "sess-1", clear, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(
         merged.context.turn_error, None,
@@ -133,28 +109,12 @@ fn local_refresh_overwrites_turn_settle_markers() {
     let mut refresh = unpriced_refresh();
     refresh.plan_proposed = Some(new);
     refresh.turn_interrupted = Some(new);
-    merge_local_context(
-        &runtime,
-        "codex",
-        "sess-1",
-        read_one(&runtime, "codex", "sess-1"),
-        refresh,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, "codex", "sess-1", refresh, observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.plan_proposed, Some(new));
     assert_eq!(merged.context.turn_interrupted, Some(new));
 
-    merge_local_context(
-        &runtime,
-        "codex",
-        "sess-1",
-        read_one(&runtime, "codex", "sess-1"),
-        unpriced_refresh(),
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, "codex", "sess-1", unpriced_refresh(), observed_at).unwrap();
     let merged = read_one(&runtime, "codex", "sess-1").unwrap();
     assert_eq!(merged.context.plan_proposed, None);
     assert_eq!(
@@ -177,15 +137,7 @@ fn non_codex_local_refresh_preserves_turn_error_marker() {
     prior.context.turn_error = Some(marker.clone());
     write_record(&runtime, &prior).unwrap();
 
-    merge_local_context(
-        &runtime,
-        "pi",
-        "sess-1",
-        read_one(&runtime, "pi", "sess-1"),
-        unpriced_refresh(),
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, "pi", "sess-1", unpriced_refresh(), observed_at).unwrap();
 
     let merged = read_one(&runtime, "pi", "sess-1").unwrap();
     assert_eq!(merged.context.turn_error, Some(marker));

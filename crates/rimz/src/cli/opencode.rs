@@ -239,7 +239,6 @@ mod tests {
             runtime,
             "opencode",
             "sess-1",
-            None,
             LocalContextRefresh {
                 model_id: Some("gpt-5".to_owned()),
                 effort: Some("xhigh".to_owned()),

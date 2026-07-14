@@ -152,7 +152,6 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
             &runtime,
             "codex",
             session_id,
-            prior,
             refresh,
             Timestamp::now(),
         )
@@ -354,7 +353,6 @@ mod tests {
             runtime,
             "codex",
             "sess-1",
-            None,
             LocalContextRefresh {
                 model_id: Some("gpt-5".to_owned()),
                 effort: Some("xhigh".to_owned()),

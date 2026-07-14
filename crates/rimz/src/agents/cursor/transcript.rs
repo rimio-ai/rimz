@@ -31,6 +31,13 @@ enum TerminalOutcome {
     Error(Option<String>),
 }
 
+#[derive(Debug, Default)]
+pub(super) struct TurnMarkers {
+    pub turn_complete: Option<Timestamp>,
+    pub turn_interrupted: Option<Timestamp>,
+    pub turn_error: Option<AgentTurnError>,
+}
+
 pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {
     let path = resolve_transcript(
         ctx.agent_id,
@@ -41,36 +48,55 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     if ctx.prior_transcript_stat == Some(&stat) {
         return None;
     }
-    let tail = crate::agents::transcript_fs::read_transcript_tail_with_status(&path)?;
-    let outcome = (!tail.torn_suffix)
-        .then(|| latest_terminal(&tail.text))
-        .flatten();
-    let at = timestamp_from_stat(stat)?;
-    let (turn_complete, turn_interrupted, turn_error) = match outcome {
-        Some(TerminalOutcome::Complete) => (Some(at), None, None),
-        Some(TerminalOutcome::Interrupted) => (None, Some(at), None),
-        Some(TerminalOutcome::Error(label)) => (
-            None,
-            None,
-            Some(AgentTurnError {
-                class: TurnErrorClass::classify_label(label.as_deref()),
-                at,
-                label,
-            }),
-        ),
-        None => (None, None, None),
-    };
+    let markers = turn_markers_at(&path, stat)?;
     Some(LocalContextRefresh {
         model_id: ctx.model_hint.map(ToOwned::to_owned),
         effort: None,
         tokens: None,
         cost: None,
-        turn_error,
-        turn_complete,
+        turn_error: markers.turn_error,
+        turn_complete: markers.turn_complete,
         plan_proposed: None,
-        turn_interrupted,
+        turn_interrupted: markers.turn_interrupted,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
+    })
+}
+
+/// Re-read Cursor's terminal transcript row for a statusline refresh. The
+/// statusline payload carries only the session id, so resolve the same public
+/// transcript path as the lifecycle fallback and restamp all three mutually
+/// exclusive settle markers before the whole-context sidecar write.
+pub(super) fn statusline_turn_markers(conversation_id: &str) -> Option<TurnMarkers> {
+    let path = resolve_transcript(conversation_id, None, None)?;
+    let stat = transcript_stat(&path)?;
+    turn_markers_at(&path, stat)
+}
+
+pub(super) fn turn_markers_at(path: &Path, stat: TranscriptStat) -> Option<TurnMarkers> {
+    let tail = crate::agents::transcript_fs::read_transcript_tail_with_status(path)?;
+    let outcome = (!tail.torn_suffix)
+        .then(|| latest_terminal(&tail.text))
+        .flatten();
+    let at = timestamp_from_stat(stat)?;
+    Some(match outcome {
+        Some(TerminalOutcome::Complete) => TurnMarkers {
+            turn_complete: Some(at),
+            ..TurnMarkers::default()
+        },
+        Some(TerminalOutcome::Interrupted) => TurnMarkers {
+            turn_interrupted: Some(at),
+            ..TurnMarkers::default()
+        },
+        Some(TerminalOutcome::Error(label)) => TurnMarkers {
+            turn_error: Some(AgentTurnError {
+                class: TurnErrorClass::classify_label(label.as_deref()),
+                at,
+                label,
+            }),
+            ..TurnMarkers::default()
+        },
+        None => TurnMarkers::default(),
     })
 }
 
