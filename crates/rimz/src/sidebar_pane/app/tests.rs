@@ -39,8 +39,12 @@ fn width_sync_stamp_freshness_requires_a_recent_matching_override() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stamp_path = dir.path().join("width-sync.stamp");
     let cols = NonZeroU16::new(80);
-    crate::store::atomic::write_temp_then_rename_cache(&stamp_path, &WidthSyncStamp { cols })
-        .expect("write stamp");
+    std::fs::write(
+        &stamp_path,
+        serde_json::to_vec(&crate::sidebar::width_override::WidthSyncStamp { cols })
+            .expect("serialize stamp"),
+    )
+    .expect("write stamp");
     let modified = stamp_path
         .metadata()
         .and_then(|metadata| metadata.modified())

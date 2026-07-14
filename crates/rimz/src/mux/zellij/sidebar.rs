@@ -837,9 +837,9 @@ impl ZellijBackend {
                     if !state.no_progress_retry {
                         state.no_progress_retry = true;
                         floor = Some(unix_now_ms());
-                        // `list-panes` can merge background geometry from a
-                        // newly stamped but pre-action cache. Confirm a repeated
-                        // width against topology produced after this floor.
+                        // An authoritative listing can merge background geometry
+                        // from a newly stamped but pre-action cache. Confirm a
+                        // repeated width against topology after this floor.
                         require_fresh_topology = true;
                         continue;
                     }

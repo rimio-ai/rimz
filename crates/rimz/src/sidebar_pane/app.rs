@@ -527,11 +527,6 @@ const WIDTH_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(1);
 const WIDTH_SYNC_MAX_PASSES: u32 = 8;
 const WIDTH_SYNC_ELECTION_ATTEMPTS: u32 = 3;
 
-#[derive(serde::Deserialize, serde::Serialize)]
-struct WidthSyncStamp {
-    cols: Option<NonZeroU16>,
-}
-
 fn width_sync_stamp_is_fresh(
     stamp_path: &Path,
     current_override: Option<NonZeroU16>,
@@ -543,7 +538,9 @@ fn width_sync_stamp_is_fresh(
     let Ok(modified) = file.metadata().and_then(|metadata| metadata.modified()) else {
         return false;
     };
-    let Ok(stamp) = serde_json::from_reader::<_, WidthSyncStamp>(file) else {
+    let Ok(stamp) =
+        serde_json::from_reader::<_, crate::sidebar::width_override::WidthSyncStamp>(file)
+    else {
         return false;
     };
     now.duration_since(modified)
@@ -616,12 +613,7 @@ fn spawn_width_sync(config: &ServeConfig, runtime: &RuntimePaths) {
                 // its later attach resize must remain eligible to converge.
                 // The held guard still collapses concurrent no-op probes. A
                 // last-resort local flight leaves the producer's stamp alone.
-                let _ = crate::store::atomic::write_temp_then_rename_cache(
-                    &stamp,
-                    &WidthSyncStamp {
-                        cols: width_override,
-                    },
-                );
+                let _ = crate::sidebar::width_override::write_sync_stamp(&runtime, width_override);
             }
             debug!(pass, resized, "sidebar width sync pass complete");
             if crate::sidebar::width_override::load(&runtime) == width_override {
