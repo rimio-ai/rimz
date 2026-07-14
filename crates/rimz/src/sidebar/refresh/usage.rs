@@ -80,8 +80,7 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
         .map(|entry| (entry.scope.clone(), entry.account_key.clone()));
     if prior_identity.as_ref().is_some_and(|(scope, key)| {
         scope != &account_scope || account_key_mismatch(key.as_deref(), account_key.as_deref())
-    })
-    {
+    }) {
         tracing::info!(
             target: crate::observability::BREADCRUMB_TARGET,
             kind,
@@ -240,6 +239,7 @@ struct UsageProbeMarker {
     credentials_stamp: Option<u64>,
 }
 
+#[cfg(test)]
 fn usage_probe_due_with_identity(
     runtime: &RuntimePaths,
     kind: &str,
