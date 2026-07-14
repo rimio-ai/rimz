@@ -11,9 +11,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::agents::{
-    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, Result, StatusLineChange, agent_config_path,
-    read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, Result, StatusLineChange, agent_config_path, read_optional_file,
 };
 use crate::store::atomic;
 
