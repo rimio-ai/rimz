@@ -34,7 +34,8 @@ pub mod kimi;
 pub mod kiro;
 pub mod lifecycle;
 pub(crate) mod locate;
-pub(crate) mod managed_source;
+pub(crate) mod managed_json_hooks;
+mod managed_source;
 pub(crate) mod managed_statusline;
 pub mod model_display;
 mod observation;
@@ -88,6 +89,7 @@ pub use lifecycle::{
 };
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
+pub use managed_source::ManagedSource;
 pub use observation::{AgentLifecycleObservation, LaunchParams, SessionOrigin};
 pub(crate) use payload::{
     CONTROL_TAG_PREFIXES, classify_agent_hook, non_empty_trimmed, optional_payload_string,
@@ -508,6 +510,21 @@ pub struct TranscriptStat {
     pub companion: Option<TranscriptCompanionStat>,
 }
 
+impl TranscriptStat {
+    /// Read the durable identity of a transcript-like file.
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        let modified = metadata.modified().ok()?;
+        let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(Self {
+            mtime_secs: i64::try_from(since_epoch.as_secs()).unwrap_or(i64::MAX),
+            mtime_nanos: since_epoch.subsec_nanos(),
+            len: metadata.len(),
+            companion: None,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptCompanionStat {
     pub mtime_secs: i64,
@@ -894,10 +911,12 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
-    /// Whether this event ends an agent session. Defaults to `false`; adapters
-    /// override for their session-exit event.
-    fn ends_session(&self, _event_name: &str) -> bool {
-        false
+    /// Whether this event is the descriptor's native session-end event.
+    fn ends_session(&self, event_name: &str) -> bool {
+        matches!(
+            self.descriptor().lifecycle_hooks.ended,
+            HookCoverage::Native { event } if event == event_name
+        )
     }
 
     /// Structured question/options for a blocking ask hook, parsed from the
@@ -1154,39 +1173,61 @@ pub trait AgentAdapter: Send + Sync {
     /// Render typed launch profile presets into provider-native argv.
     /// Unsupported fields fail at launch so config cannot silently drop intent.
     fn render_preset(&self, preset: &LaunchPreset) -> std::result::Result<Vec<String>, PresetErr> {
-        if preset
-            .model
-            .as_deref()
-            .is_some_and(|model| !model.is_empty())
-        {
-            return Err(PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "model",
-            });
+        let values: [(PresetField, &'static str, Option<String>); 4] = [
+            (
+                PresetField::Model,
+                "model",
+                preset.model.clone().filter(|value| !value.is_empty()),
+            ),
+            (
+                PresetField::Effort,
+                "effort",
+                preset.effort.clone().filter(|value| !value.is_empty()),
+            ),
+            (
+                PresetField::SystemPromptFile,
+                "system-prompt-file",
+                preset
+                    .system_prompt_file
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            ),
+            (
+                PresetField::AppendSystemPromptFile,
+                "append-system-prompt-file",
+                preset
+                    .append_system_prompt_file
+                    .as_deref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            ),
+        ];
+        let mut argv = Vec::new();
+        for (field, field_name, value) in values {
+            let Some(value) = value else { continue };
+            let matcher = self
+                .preset_arg_matcher(field)
+                .ok_or(PresetErr::UnsupportedField {
+                    agent: self.descriptor().kind,
+                    field: field_name,
+                })?;
+            match matcher {
+                PresetArgMatcher::Flag(flags) => {
+                    let flag = flags.first().ok_or(PresetErr::UnsupportedField {
+                        agent: self.descriptor().kind,
+                        field: field_name,
+                    })?;
+                    argv.extend([flag.clone(), value]);
+                }
+                PresetArgMatcher::ConfigKey { flags, key } => {
+                    let flag = flags.first().ok_or(PresetErr::UnsupportedField {
+                        agent: self.descriptor().kind,
+                        field: field_name,
+                    })?;
+                    argv.extend([flag.clone(), format!("{key}={value}")]);
+                }
+            }
         }
-        if preset
-            .effort
-            .as_deref()
-            .is_some_and(|effort| !effort.is_empty())
-        {
-            return Err(PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "effort",
-            });
-        }
-        if preset.system_prompt_file.is_some() {
-            return Err(PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "system-prompt-file",
-            });
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "append-system-prompt-file",
-            });
-        }
-        Ok(Vec::new())
+        Ok(argv)
     }
 
     /// Describe the provider-native argv spelling rendered for a preset field.
@@ -1217,10 +1258,18 @@ pub trait AgentAdapter: Send + Sync {
         BTreeMap::new()
     }
 
+    /// Whole-file integration source managed by this adapter, when applicable.
+    fn managed_source(&self) -> Option<&'static ManagedSource> {
+        None
+    }
+
     /// Write or merge the adapter's hook config into the agent's per-user
     /// config file. Defaults to an explicit "not implemented" error until an
     /// adapter owns installation.
     fn install_hooks(&self) -> Result<HookInstallReport> {
+        if let Some(source) = self.managed_source() {
+            return source.install();
+        }
         Err(AgentErr::Install {
             agent: self.descriptor().kind,
             reason: "install not implemented for this adapter".to_owned(),
@@ -1230,6 +1279,9 @@ pub trait AgentAdapter: Send + Sync {
     /// Preview the exact per-user config write the installer would make,
     /// without touching disk. Used by the first-run consent gate.
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
+        if let Some(source) = self.managed_source() {
+            return source.preview();
+        }
         Err(AgentErr::Install {
             agent: self.descriptor().kind,
             reason: "install preview not implemented for this adapter".to_owned(),
@@ -1239,6 +1291,9 @@ pub trait AgentAdapter: Send + Sync {
     /// Remove the adapter's hook entries from the agent's per-user config
     /// file. Defaults to an explicit "not implemented" error.
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
+        if let Some(source) = self.managed_source() {
+            return source.uninstall();
+        }
         Err(AgentErr::Install {
             agent: self.descriptor().kind,
             reason: "uninstall not implemented for this adapter".to_owned(),
@@ -1284,7 +1339,7 @@ pub trait AgentAdapter: Send + Sync {
     /// ever fires `rimz hooks feed` when this holds, so `rimz doctor` surfaces
     /// it — an un-wired agent is invisible, never silently broken.
     fn hooks_installed(&self) -> bool {
-        false
+        self.managed_source().is_some_and(ManagedSource::installed)
     }
 
     /// Whether interactive setup can safely refresh an installed hook source
@@ -1292,7 +1347,8 @@ pub trait AgentAdapter: Send + Sync {
     /// working older integration remains installed until the user consents to
     /// the upgrade.
     fn hook_upgrade_available(&self) -> bool {
-        false
+        self.managed_source()
+            .is_some_and(ManagedSource::upgrade_available)
     }
 
     /// Rimz-installed hook events this agent will silently skip until the
@@ -1369,6 +1425,20 @@ pub fn hook_trust_fix(kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcript_stat_from_path_preserves_metadata() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("transcript.jsonl");
+        std::fs::write(&path, b"hello").unwrap();
+
+        let stat = TranscriptStat::from_path(&path).unwrap();
+
+        assert_eq!(stat.len, 5);
+        assert!(stat.mtime_secs >= 0);
+        assert!(stat.mtime_nanos < 1_000_000_000);
+        assert_eq!(stat.companion, None);
+    }
 
     #[test]
     fn lifecycle_preflight_preserves_partial_coverage_strictness() {

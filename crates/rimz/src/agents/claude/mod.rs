@@ -358,10 +358,6 @@ const CLAUDE_HOOKS: &[HookRecord] = &[
     ),
 ];
 
-const HOOKS_KEY: &str = "hooks";
-const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
-const RIMZ_SYNC_KEY: &str = "_rimz_sync";
-
 /// The exact command every rimz-managed Claude hook runs. Identical across all
 /// events — the helper reads the event from the stdin payload's
 /// `hook_event_name`, so no `--event` flag is needed.
@@ -390,10 +386,12 @@ const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source claude";
 /// whole conversation.
 const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
     super::managed_statusline::ManagedStatusLineSpec {
-        key: STATUS_LINE_KEY,
+        key_path: &[STATUS_LINE_KEY],
         command: STATUS_LINE_COMMAND,
         command_marker: RIMZ_STATUS_LINE_MARKER,
         rendering_options: super::managed_statusline::RenderingOptions::All,
+        wrap_policy: super::managed_statusline::WrapPolicy::Any,
+        required_for_install: false,
     };
 
 /// The per-child render command Claude `exec`s for each subagent row, carrying
@@ -401,10 +399,12 @@ const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
 /// statusline; its command is the session reader plus `--subagent`.
 const SUBAGENT_STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
     super::managed_statusline::ManagedStatusLineSpec {
-        key: "subagentStatusLine",
+        key_path: &["subagentStatusLine"],
         command: "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude --subagent",
         command_marker: RIMZ_STATUS_LINE_MARKER,
         rendering_options: super::managed_statusline::RenderingOptions::All,
+        wrap_policy: super::managed_statusline::WrapPolicy::Any,
+        required_for_install: false,
     };
 
 #[derive(Clone, Debug, Default)]
@@ -464,32 +464,6 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn compact_command(&self) -> Option<&'static str> {
         Some("/compact")
-    }
-
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        if let Some(effort) = preset.effort.as_deref().filter(|effort| !effort.is_empty()) {
-            argv.extend(["--effort".to_owned(), effort.to_owned()]);
-        }
-        if let Some(path) = preset.system_prompt_file.as_deref() {
-            argv.extend([
-                "--system-prompt-file".to_owned(),
-                path.to_string_lossy().into_owned(),
-            ]);
-        }
-        if let Some(path) = preset.append_system_prompt_file.as_deref() {
-            argv.extend([
-                "--append-system-prompt-file".to_owned(),
-                path.to_string_lossy().into_owned(),
-            ]);
-        }
-        Ok(argv)
     }
 
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
@@ -602,10 +576,6 @@ impl AgentAdapter for ClaudeAdapter {
         // Claude treats stdout as a control/context surface. The safe no-op is
         // exit 0 with no stdout.
         Ok(None)
-    }
-
-    fn ends_session(&self, event_name: &str) -> bool {
-        event_name == "SessionEnd"
     }
 
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {

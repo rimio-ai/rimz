@@ -360,6 +360,52 @@ fn pi_observes_rich_context_from_the_extension_envelope() {
 }
 
 #[test]
+fn pi_rate_limit_wire_is_tolerant_and_compatible() {
+    let context = normalized_context(json!({
+        "model": "gpt-5",
+        "rateLimits": [
+            {
+                "usedPercent": "101.4",
+                "resetsAt": "2023-11-15T03:13:20Z",
+                "durationMins": 300,
+                "observedAt": "1700000000"
+            },
+            {
+                "used_percentage": -2.0,
+                "resets_at": "1700018000"
+            },
+            { "used_percentage": "NaN", "duration_mins": "bad" },
+            { "observed_at": 1700000000 },
+            "invalid"
+        ]
+    }))
+    .unwrap();
+    let windows = context.rate_limits.unwrap().windows;
+    assert_eq!(windows.len(), 2);
+    assert_eq!(windows[0].used_percentage, Some(100));
+    assert_eq!(windows[0].duration_mins, Some(300));
+    assert_eq!(
+        windows[0].resets_at.unwrap().to_string(),
+        "2023-11-15T03:13:20Z"
+    );
+    assert_eq!(windows[1].used_percentage, Some(0));
+    assert_eq!(
+        windows[1].resets_at.unwrap().to_string(),
+        "2023-11-15T03:13:20Z"
+    );
+
+    for rate_limits in [json!([]), json!({"bad": true})] {
+        let context = normalized_context(json!({
+            "model": "kept",
+            "rate_limits": rate_limits
+        }))
+        .unwrap();
+        assert_eq!(context.model_id.as_deref(), Some("kept"));
+        assert!(context.rate_limits.is_none());
+    }
+}
+
+#[test]
 fn model_select_is_enrichment_only() {
     let payload = json!({ "session_id": "s", "model": "gpt-5.5", "effort": "high" });
     assert_eq!(

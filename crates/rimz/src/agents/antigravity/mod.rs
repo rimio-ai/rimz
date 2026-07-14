@@ -26,7 +26,7 @@ use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, LocalSessionObservation,
-    PresetArgMatcher, PresetErr, PresetField, Result, TranscriptMessage,
+    PresetArgMatcher, PresetField, Result, TranscriptMessage,
 };
 use crate::harness::run::PermissionMode;
 
@@ -385,39 +385,6 @@ impl AgentAdapter for AntigravityAdapter {
             PermissionMode::Plan => vec!["--mode".to_owned(), "plan".to_owned()],
             PermissionMode::Yolo => vec!["--dangerously-skip-permissions".to_owned()],
         }
-    }
-
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, PresetErr> {
-        if preset
-            .effort
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
-        {
-            return Err(PresetErr::UnsupportedField {
-                agent: "antigravity",
-                field: "effort",
-            });
-        }
-        if preset.system_prompt_file.is_some() {
-            return Err(PresetErr::UnsupportedField {
-                agent: "antigravity",
-                field: "system-prompt-file",
-            });
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(PresetErr::UnsupportedField {
-                agent: "antigravity",
-                field: "append-system-prompt-file",
-            });
-        }
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|value| !value.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        Ok(argv)
     }
 
     fn preset_arg_matcher(&self, field: PresetField) -> Option<PresetArgMatcher> {

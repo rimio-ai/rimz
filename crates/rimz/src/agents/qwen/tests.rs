@@ -109,6 +109,17 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
             .and_then(Value::as_str),
         Some("preset")
     );
+
+    for original in [
+        json!({"ui": "compact"}),
+        json!({"ui": {"statusLine": "compact"}}),
+    ] {
+        fs::write(&path, serde_json::to_string(&original).unwrap()).unwrap();
+        let preview = install::preview_install_at(&path).unwrap();
+        assert_eq!(preview.status_line_change, None);
+        let candidate: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
+        assert_eq!(candidate.get("ui"), original.get("ui"));
+    }
 }
 
 #[test]

@@ -1,5 +1,6 @@
 use super::*;
 use crate::agents::SessionOrigin;
+use crate::agents::TranscriptStat;
 
 #[test]
 fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
@@ -996,7 +997,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
         "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\",\"effort\":\"xhigh\"}}\n",
     )
     .unwrap();
-    let stat = transcript_stat(&path).unwrap();
+    let stat = TranscriptStat::from_path(&path).unwrap();
     let path_string = path.to_string_lossy().into_owned();
     assert!(
         refresh_transcript_context(
@@ -1045,7 +1046,7 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
     );
     assert_ne!(refresh.transcript_stat, Some(stat));
 
-    let unchanged_stat = transcript_stat(&path).unwrap();
+    let unchanged_stat = TranscriptStat::from_path(&path).unwrap();
     assert!(
         refresh_transcript_context(
             "sess-1",

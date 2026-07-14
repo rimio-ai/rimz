@@ -11,7 +11,6 @@ mod session;
 mod tests;
 
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use serde_json::Value;
 
@@ -241,7 +240,7 @@ impl AgentAdapter for KiroAdapter {
     ) -> Option<LocalContextRefresh> {
         let path =
             self.session_transcript(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
-        let stat = transcript_stat(&path)?;
+        let stat = TranscriptStat::from_path(&path)?;
         if ctx.prior_transcript_stat == Some(&stat) {
             return None;
         }
@@ -263,32 +262,6 @@ impl AgentAdapter for KiroAdapter {
 
     fn compact_command(&self) -> Option<&'static str> {
         Some("/compact")
-    }
-
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        if preset.system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: "kiro",
-                field: "system-prompt-file",
-            });
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: "kiro",
-                field: "append-system-prompt-file",
-            });
-        }
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|value| !value.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        if let Some(effort) = preset.effort.as_deref().filter(|value| !value.is_empty()) {
-            argv.extend(["--effort".to_owned(), effort.to_owned()]);
-        }
-        Ok(argv)
     }
 
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
@@ -335,15 +308,4 @@ impl AgentAdapter for KiroAdapter {
     fn managed_hook_artifacts_present(&self) -> bool {
         install::hooks_path().is_ok_and(|path| install::managed_at(&path))
     }
-}
-
-fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some(TranscriptStat {
-        mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
-        mtime_nanos: modified.subsec_nanos(),
-        len: metadata.len(),
-        companion: None,
-    })
 }

@@ -22,22 +22,25 @@ use self::payloads::{
     QwenStopError, parse_compact, parse_session_start, parse_stop, parse_stop_failure,
     parse_subagent, parse_tool_use, parse_user_prompt_submit,
 };
+#[cfg(test)]
+use super::AgentHookClass;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::{BackgroundTask, SessionSource};
+use super::hook_types::{
+    BackgroundTask, HookRecord, SessionSource, classify_catalog_hook, hook_record,
+};
 use super::lifecycle::{AskKind, LifecycleSignal};
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, PresetErr, Result, RootIdentity,
-    SessionOrigin, SubagentIdentity, TurnErrorClass, classify_agent_hook, non_empty_trimmed,
-    optional_payload_string, resolve_root_identity, resolve_subagent_identity,
-    sanitize_user_prompt, stop_payload_errored,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, RootIdentity,
+    SessionOrigin, SubagentIdentity, TurnErrorClass, non_empty_trimmed, optional_payload_string,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::harness::run::PermissionMode;
 use crate::transcript::AskQuestion;
@@ -189,49 +192,147 @@ const QWEN_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 
 const QWEN_HOOK_TIMEOUT_MS: u64 = 10_000;
 const BLOCKING_TOOL_MATCHER: &str = "exit_plan_mode|ask_user_question";
-const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
-    ("SessionStart", None),
-    ("SessionEnd", None),
-    ("UserPromptSubmit", None),
-    ("Stop", None),
-    ("StopFailure", None),
-    ("Notification", None),
-    ("PermissionRequest", None),
-    ("PreToolUse", Some(BLOCKING_TOOL_MATCHER)),
-    ("PostToolUse", None),
-    ("PostToolUseFailure", None),
-    ("SubagentStart", None),
-    ("SubagentStop", None),
-    ("PreCompact", None),
-    ("PostCompact", None),
+const QWEN_HOOKS: &[HookRecord] = &[
+    hook_record!(
+        "SessionStart",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "SessionEnd",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "UserPromptSubmit",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "Stop",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "StopFailure",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "Notification",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PermissionRequest",
+        None,
+        true,
+        true,
+        r#"{"tool_name":"run_shell_command"}"#,
+        AgentHookClass::AwaitingUser,
+        Some(AskKind::Permission)
+    ),
+    hook_record!(
+        "PreToolUse",
+        Some(BLOCKING_TOOL_MATCHER),
+        true,
+        true,
+        r#"{"tool_name":"ask_user_question"}"#,
+        AgentHookClass::AwaitingUser,
+        Some(AskKind::Question)
+    ),
+    hook_record!(
+        "PostToolUse",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PostToolUseFailure",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "SubagentStart",
+        None,
+        true,
+        false,
+        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "SubagentStop",
+        None,
+        true,
+        false,
+        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PreCompact",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PostCompact",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
 ];
-const LIFECYCLE_EVENTS: &[&str] = &[
-    "SessionStart",
-    "SessionEnd",
-    "UserPromptSubmit",
-    "Stop",
-    "StopFailure",
-    "Notification",
-    "PermissionRequest",
-    "PreToolUse",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "SubagentStart",
-    "SubagentStop",
-    "PreCompact",
-    "PostCompact",
-];
-const BLOCKING_EVENTS: &[(&str, Option<&str>)] = &[
-    ("PermissionRequest", None),
-    ("PreToolUse", Some(BLOCKING_TOOL_MATCHER)),
-];
-const HOOKS_KEY: &str = "hooks";
-const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
-const RIMZ_WRAPPED_KEY: &str = "_rimz_wrapped";
 const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source qwen";
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source qwen";
 const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source qwen";
 const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source qwen";
+const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
+    super::managed_statusline::ManagedStatusLineSpec {
+        key_path: &["ui", "statusLine"],
+        command: STATUS_LINE_COMMAND,
+        command_marker: RIMZ_STATUS_LINE_MARKER,
+        rendering_options: super::managed_statusline::RenderingOptions::All,
+        wrap_policy: super::managed_statusline::WrapPolicy::CommandMode,
+        required_for_install: true,
+    };
 
 #[derive(Clone, Debug, Default)]
 pub struct QwenAdapter;
@@ -253,26 +354,28 @@ impl AgentAdapter for QwenAdapter {
                 .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref()),
             _ => None,
         };
-        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
+        classify_catalog_hook(QWEN_HOOKS, event_name, ask_kind)
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect()
+        QWEN_HOOKS.iter().map(|hook| hook.event).collect()
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
-        let mut samples = INSTALLED_EVENTS.iter().map(|(event, _)| {
-            let (payload, class, kind) = match *event {
-                "PermissionRequest" => (serde_json::json!({"tool_name":"run_shell_command"}), AgentHookClass::AwaitingUser, Some(AskKind::Permission)),
-                "PreToolUse" => (serde_json::json!({"tool_name":"ask_user_question"}), AgentHookClass::AwaitingUser, Some(AskKind::Question)),
-                "SubagentStart" | "SubagentStop" => (serde_json::json!({"session_id":"parent","agent_id":"child","agent_type":"review"}), AgentHookClass::Lifecycle, None),
-                _ => (serde_json::json!({"session_id":"sess-1"}), AgentHookClass::Lifecycle, None),
-            };
-            ClassificationSample::new(event, payload, class, kind)
-        }).collect::<Vec<_>>();
+        let mut samples = QWEN_HOOKS
+            .iter()
+            .map(|hook| {
+                ClassificationSample::new(
+                    hook.event,
+                    serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
+                    hook.test_class,
+                    hook.test_ask,
+                )
+            })
+            .collect::<Vec<_>>();
         samples.push(ClassificationSample::new(
             "PreToolUse",
             serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode"}),
@@ -301,9 +404,6 @@ impl AgentAdapter for QwenAdapter {
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         Ok(None)
-    }
-    fn ends_session(&self, event_name: &str) -> bool {
-        event_name == "SessionEnd"
     }
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
         (event_name == "PreToolUse")
@@ -531,38 +631,6 @@ impl AgentAdapter for QwenAdapter {
         }
         Some(argv)
     }
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|value| !value.is_empty()) {
-            argv.extend(["--model".into(), model.into()]);
-        }
-        for (present, field) in [
-            (
-                preset
-                    .effort
-                    .as_deref()
-                    .is_some_and(|value| !value.is_empty()),
-                "effort",
-            ),
-            (preset.system_prompt_file.is_some(), "system-prompt-file"),
-            (
-                preset.append_system_prompt_file.is_some(),
-                "append-system-prompt-file",
-            ),
-        ] {
-            if present {
-                return Err(PresetErr::UnsupportedField {
-                    agent: "qwen",
-                    field,
-                });
-            }
-        }
-        Ok(argv)
-    }
-
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
         (field == super::PresetField::Model)
             .then(|| super::PresetArgMatcher::Flag(vec!["--model".to_owned()]))

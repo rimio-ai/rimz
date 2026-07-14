@@ -240,7 +240,7 @@ fn usage_records_drive_context_spend_and_additive_scopes() {
     .unwrap();
     let records = wire::records_from_bytes(&std::fs::read(&path).unwrap());
     assert_eq!(wire::usage_records(&records).len(), 3);
-    let stat = transcript_stat(&path).unwrap();
+    let stat = TranscriptStat::from_path(&path).unwrap();
     let cache = dir.path().join("prices.json");
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
@@ -318,7 +318,7 @@ fn wire_without_usage_emits_fresh_sentinel() {
         "{\"type\":\"context.append_loop_event\",\"time\":1,\"event\":{\"type\":\"tool.result\"}}\n",
     )
     .unwrap();
-    let stat = transcript_stat(&path).unwrap();
+    let stat = TranscriptStat::from_path(&path).unwrap();
     let cache = dir.path().join("prices.json");
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",
@@ -435,7 +435,7 @@ fn live_cost_prices_the_full_file_outside_the_bounded_tail() {
         "x".repeat(70_000)
     );
     std::fs::write(&path, format!("{early}{padding}")).unwrap();
-    let stat = transcript_stat(&path).unwrap();
+    let stat = TranscriptStat::from_path(&path).unwrap();
     let cache = dir.path().join("prices.json");
     let ctx = LocalContextRefreshCtx {
         agent_id: "s1",

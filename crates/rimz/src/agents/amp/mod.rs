@@ -11,12 +11,13 @@ mod thread;
 mod transcript;
 
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
+#[cfg(test)]
+use super::PresetErr;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
@@ -26,9 +27,8 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentCost, AgentCurrentUsage, AgentErr, AgentLifecycleObservation,
-    AgentTokenUsage, AskKind, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx, PresetErr, RefreshTrigger,
-    Result, SessionOrigin, TranscriptStat, classify_agent_hook, non_empty_trimmed,
+    AgentTokenUsage, AskKind, ClassifiedHook, LocalContextRefresh, LocalContextRefreshCtx,
+    RefreshTrigger, Result, SessionOrigin, TranscriptStat, classify_agent_hook, non_empty_trimmed,
     sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
@@ -174,12 +174,14 @@ const WIRED_EVENTS: &[&str] = &[
     "permission_ask",
 ];
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
-const AMP_MANAGED_SOURCE: ManagedSource = ManagedSource {
-    agent: "amp",
-    source: PLUGIN_SOURCE,
-    wired_events: WIRED_EVENTS,
-    artifact_noun: "plugin",
-};
+const AMP_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
+    "amp",
+    PLUGIN_SOURCE,
+    WIRED_EVENTS,
+    "plugin",
+    amp_plugin_path,
+    false,
+);
 
 #[derive(Clone, Debug, Default)]
 pub struct AmpAdapter;
@@ -313,7 +315,7 @@ impl AgentAdapter for AmpAdapter {
         }
         let path =
             spend::resolve_session_file(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
-        let stat = transcript_stat(&path)?;
+        let stat = TranscriptStat::from_path(&path)?;
         if ctx.prior_transcript_stat == Some(&stat) {
             return None;
         }
@@ -423,40 +425,6 @@ impl AgentAdapter for AmpAdapter {
         ])
     }
 
-    fn fork_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        None
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        None
-    }
-
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|value| !value.is_empty()) {
-            argv.extend(["--mode".to_owned(), model.to_owned()]);
-        }
-        if let Some(effort) = preset.effort.as_deref().filter(|value| !value.is_empty()) {
-            argv.extend(["--effort".to_owned(), effort.to_owned()]);
-        }
-        if preset.system_prompt_file.is_some() {
-            return Err(PresetErr::UnsupportedField {
-                agent: "amp",
-                field: "system-prompt-file",
-            });
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(PresetErr::UnsupportedField {
-                agent: "amp",
-                field: "append-system-prompt-file",
-            });
-        }
-        Ok(argv)
-    }
-
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
         let flag = match field {
             super::PresetField::Model => "--mode",
@@ -482,24 +450,8 @@ impl AgentAdapter for AmpAdapter {
         Some(argv)
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        AMP_MANAGED_SOURCE.install_into(&amp_plugin_path()?)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        AMP_MANAGED_SOURCE.preview_at(&amp_plugin_path()?)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        AMP_MANAGED_SOURCE.uninstall_from(&amp_plugin_path()?)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        amp_plugin_path().is_ok_and(|path| AMP_MANAGED_SOURCE.installed_at(&path))
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        self.hooks_installed()
+    fn managed_source(&self) -> Option<&'static ManagedSource> {
+        Some(&AMP_MANAGED_SOURCE)
     }
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
@@ -525,17 +477,6 @@ fn amp_plugin_path() -> Result<PathBuf> {
             reason: "$HOME is not set; cannot resolve ~/.config/amp/plugins/rimz.ts".to_owned(),
         })?;
     Ok(config_home.join("amp/plugins/rimz.ts"))
-}
-
-fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some(TranscriptStat {
-        mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
-        mtime_nanos: modified.subsec_nanos(),
-        len: metadata.len(),
-        companion: None,
-    })
 }
 
 fn stamp_transcript_path(

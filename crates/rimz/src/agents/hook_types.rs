@@ -1,4 +1,4 @@
-//! Shared wire types for hook payload parsing across Claude and Codex adapters.
+//! Shared wire types and managed hook catalogs across agent adapters.
 //!
 //! All input enums use `#[serde(other)]` so unknown upstream values never break
 //! parsing. All input structs use `#[serde(default)]` so sparse payloads
@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use super::{AgentHookClass, AskKind, ClassifiedHook};
 
-/// One installed Claude/Codex hook and its classification policy.
+/// One installed managed hook and its classification policy.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HookRecord {
     pub(crate) event: &'static str,

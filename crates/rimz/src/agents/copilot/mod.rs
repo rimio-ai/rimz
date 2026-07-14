@@ -30,9 +30,8 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextRefresh,
-    LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, TranscriptMessage,
-    TurnErrorClass, classify_agent_hook, sanitize_user_prompt,
+    LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin,
+    TranscriptMessage, TurnErrorClass, classify_agent_hook, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
@@ -202,12 +201,14 @@ const WIRED_EVENTS: &[&str] = &[
 // marker into the first hook entry's `env` overlay after live verification.
 const HOOK_SOURCE: &str = include_str!("hooks.json");
 
-const COPILOT_MANAGED_SOURCE: ManagedSource = ManagedSource {
-    agent: "copilot",
-    source: HOOK_SOURCE,
-    wired_events: WIRED_EVENTS,
-    artifact_noun: "hook file",
-};
+const COPILOT_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
+    "copilot",
+    HOOK_SOURCE,
+    WIRED_EVENTS,
+    "hook file",
+    paths::hooks_path,
+    false,
+);
 
 #[derive(Clone, Debug, Default)]
 pub struct CopilotAdapter;
@@ -462,10 +463,6 @@ impl AgentAdapter for CopilotAdapter {
             .map(|question| question.question)
     }
 
-    fn ends_session(&self, event_name: &str) -> bool {
-        event_name == "sessionEnd"
-    }
-
     fn last_assistant_message(
         &self,
         event_name: &str,
@@ -533,32 +530,6 @@ impl AgentAdapter for CopilotAdapter {
         }
     }
 
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|value| !value.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        if let Some(effort) = preset.effort.as_deref().filter(|value| !value.is_empty()) {
-            argv.extend(["--effort".to_owned(), effort.to_owned()]);
-        }
-        if preset.system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: "copilot",
-                field: "system-prompt-file",
-            });
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: "copilot",
-                field: "append-system-prompt-file",
-            });
-        }
-        Ok(argv)
-    }
-
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
         let flag = match field {
             super::PresetField::Model => "--model",
@@ -580,10 +551,6 @@ impl AgentAdapter for CopilotAdapter {
         Some(argv)
     }
 
-    fn ping_args(&self) -> Option<Vec<String>> {
-        None
-    }
-
     fn launch_env(&self) -> Vec<(&'static str, &'static str)> {
         vec![(
             "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
@@ -601,24 +568,8 @@ impl AgentAdapter for CopilotAdapter {
         )
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        COPILOT_MANAGED_SOURCE.install_into(&paths::hooks_path()?)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        COPILOT_MANAGED_SOURCE.preview_at(&paths::hooks_path()?)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        COPILOT_MANAGED_SOURCE.uninstall_from(&paths::hooks_path()?)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        paths::hooks_path().is_ok_and(|path| COPILOT_MANAGED_SOURCE.installed_at(&path))
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        self.hooks_installed()
+    fn managed_source(&self) -> Option<&'static ManagedSource> {
+        Some(&COPILOT_MANAGED_SOURCE)
     }
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {

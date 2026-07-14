@@ -3,7 +3,7 @@
 //! Rimz authors. Install is whole-file ownership: a marked file is reclaimed
 //! byte-for-byte, an unmarked file is the user's and refuses.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::store::atomic;
 
@@ -14,17 +14,61 @@ use super::{
 
 pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
 
-pub(crate) struct ManagedSource {
-    pub agent: &'static str,
+/// Whole-file ownership specification for one Rimz-authored integration source.
+pub struct ManagedSource {
+    agent: &'static str,
     /// The embedded integration source; carries RIMZ_MANAGED_MARKER on line 1.
-    pub source: &'static str,
-    pub wired_events: &'static [&'static str],
+    source: &'static str,
+    wired_events: &'static [&'static str],
     /// The noun in the refuse-unmarked message ("extension" / "plugin"),
     /// keeping each adapter's existing user-facing error text byte-identical.
-    pub artifact_noun: &'static str,
+    artifact_noun: &'static str,
+    path: fn() -> Result<PathBuf>,
+    upgradeable: bool,
 }
 
 impl ManagedSource {
+    pub const fn new(
+        agent: &'static str,
+        source: &'static str,
+        wired_events: &'static [&'static str],
+        artifact_noun: &'static str,
+        path: fn() -> Result<PathBuf>,
+        upgradeable: bool,
+    ) -> Self {
+        Self {
+            agent,
+            source,
+            wired_events,
+            artifact_noun,
+            path,
+            upgradeable,
+        }
+    }
+
+    pub fn install(&self) -> Result<HookInstallReport> {
+        let path = (self.path)()?;
+        self.install_into(&path)
+    }
+
+    pub fn preview(&self) -> Result<HookInstallPreview> {
+        let path = (self.path)()?;
+        self.preview_at(&path)
+    }
+
+    pub fn uninstall(&self) -> Result<HookUninstallReport> {
+        let path = (self.path)()?;
+        self.uninstall_from(&path)
+    }
+
+    pub fn installed(&self) -> bool {
+        (self.path)().is_ok_and(|path| self.installed_at(&path))
+    }
+
+    pub fn upgrade_available(&self) -> bool {
+        self.upgradeable && (self.path)().is_ok_and(|path| self.upgrade_available_at(&path))
+    }
+
     /// Install is whole-file ownership: the embedded source overwrites the path
     /// verbatim - idempotent by construction. A marked file (Rimz wrote it,
     /// however edited since) is reclaimed byte-for-byte; an unmarked file is

@@ -35,9 +35,9 @@ use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, RefreshSpawn, RefreshTrigger,
-    Result, SubagentIdentity, classify_agent_hook, resolve_subagent_identity, sanitize_user_prompt,
+    AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, LifecycleRefreshCtx,
+    RefreshSpawn, RefreshTrigger, Result, SubagentIdentity, classify_agent_hook,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
@@ -222,12 +222,14 @@ const WIRED_EVENTS: &[&str] = &[
 ];
 
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
-const OPENCODE_MANAGED_SOURCE: ManagedSource = ManagedSource {
-    agent: "opencode",
-    source: PLUGIN_SOURCE,
-    wired_events: WIRED_EVENTS,
-    artifact_noun: "plugin",
-};
+const OPENCODE_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
+    "opencode",
+    PLUGIN_SOURCE,
+    WIRED_EVENTS,
+    "plugin",
+    opencode_plugin_path,
+    true,
+);
 
 #[derive(Clone, Debug, Default)]
 pub struct OpencodeAdapter;
@@ -471,10 +473,6 @@ impl AgentAdapter for OpencodeAdapter {
         Some(observation)
     }
 
-    fn ends_session(&self, event_name: &str) -> bool {
-        event_name == "session_ended"
-    }
-
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
         if event_name != "question_ask" {
             return None;
@@ -678,39 +676,6 @@ impl AgentAdapter for OpencodeAdapter {
         Some("/compact")
     }
 
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        if preset
-            .effort
-            .as_deref()
-            .is_some_and(|effort| !effort.is_empty())
-        {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "effort",
-            });
-        }
-        if preset.system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "system-prompt-file",
-            });
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "append-system-prompt-file",
-            });
-        }
-        Ok(argv)
-    }
-
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
         (field == super::PresetField::Model)
             .then(|| super::PresetArgMatcher::Flag(vec!["--model".to_owned(), "-m".to_owned()]))
@@ -722,31 +687,8 @@ impl AgentAdapter for OpencodeAdapter {
         ))
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        let path = opencode_plugin_path()?;
-        OPENCODE_MANAGED_SOURCE.install_into(&path)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        let path = opencode_plugin_path()?;
-        OPENCODE_MANAGED_SOURCE.preview_at(&path)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        let path = opencode_plugin_path()?;
-        OPENCODE_MANAGED_SOURCE.uninstall_from(&path)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        opencode_plugin_path().is_ok_and(|path| OPENCODE_MANAGED_SOURCE.installed_at(&path))
-    }
-
-    fn hook_upgrade_available(&self) -> bool {
-        opencode_plugin_path().is_ok_and(|path| OPENCODE_MANAGED_SOURCE.upgrade_available_at(&path))
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        self.hooks_installed()
+    fn managed_source(&self) -> Option<&'static ManagedSource> {
+        Some(&OPENCODE_MANAGED_SOURCE)
     }
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {

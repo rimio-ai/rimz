@@ -69,8 +69,7 @@ use self::transcript::{
 use self::transcript::{
     configured_model_at, configured_reasoning_effort_at, death_warning_from_frame,
     detect_turn_complete, detect_turn_interrupted, find_session_transcript_under,
-    transcript_enrichment, transcript_stat, usage_from_transcript, with_codex_config_path,
-    with_codex_sessions_root,
+    transcript_enrichment, usage_from_transcript, with_codex_config_path, with_codex_sessions_root,
 };
 pub use self::transcript::{
     refine_turn_death_from_frame, refresh_transcript_context, session_origin,
@@ -477,32 +476,6 @@ impl AgentAdapter for CodexAdapter {
 
     fn compact_command(&self) -> Option<&'static str> {
         Some("/compact")
-    }
-
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        if let Some(effort) = preset.effort.as_deref().filter(|effort| !effort.is_empty()) {
-            argv.extend(["-c".to_owned(), format!("model_reasoning_effort={effort}")]);
-        }
-        if let Some(path) = preset.system_prompt_file.as_deref() {
-            argv.extend([
-                "-c".to_owned(),
-                format!("model_instructions_file={}", path.to_string_lossy()),
-            ]);
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "append-system-prompt-file",
-            });
-        }
-        Ok(argv)
     }
 
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {

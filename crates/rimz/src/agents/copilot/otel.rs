@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -50,7 +49,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         .map(Path::new)
         .filter(|path| paths::validated_transcript_path(path, ctx.agent_id).is_none());
     let path = paths::otel_source(prior_otel_path)?;
-    let stat = transcript_stat(&path)?;
+    let stat = TranscriptStat::from_path(&path)?;
     if ctx.prior_transcript_stat == Some(&stat) {
         return None;
     }
@@ -192,17 +191,6 @@ fn value_u64(value: &Value) -> Option<u64> {
         Value::String(value) => value.trim().parse().ok(),
         _ => None,
     }
-}
-
-fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some(TranscriptStat {
-        mtime_secs: i64::try_from(modified.as_secs()).ok()?,
-        mtime_nanos: modified.subsec_nanos(),
-        len: metadata.len(),
-        companion: None,
-    })
 }
 
 #[cfg(test)]

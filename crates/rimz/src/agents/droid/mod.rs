@@ -23,18 +23,20 @@ use self::install::{
     preview_install_at, uninstall_from,
 };
 use self::payloads::{parse_session_start, parse_user_prompt_submit};
+#[cfg(test)]
+use super::AgentHookClass;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
-use super::hook_types::SessionSource;
+use super::hook_types::{HookRecord, SessionSource, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx,
     RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
-    classify_agent_hook, optional_payload_string, read_transcript_lines, sanitize_user_prompt,
+    optional_payload_string, read_transcript_lines, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
@@ -170,18 +172,71 @@ const DROID_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 };
 
 const DROID_HOOK_TIMEOUT_SECS: u64 = 10;
-const INSTALLED_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PostToolUse",
-    "Notification",
-    "Stop",
-    "PreCompact",
-    "SessionEnd",
+const DROID_HOOKS: &[HookRecord] = &[
+    hook_record!(
+        "SessionStart",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "UserPromptSubmit",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PostToolUse",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "Notification",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "Stop",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "PreCompact",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
+    hook_record!(
+        "SessionEnd",
+        None,
+        true,
+        false,
+        r#"{"session_id":"sess-1"}"#,
+        AgentHookClass::Lifecycle,
+        None
+    ),
 ];
-const LIFECYCLE_EVENTS: &[&str] = INSTALLED_EVENTS;
-const HOOKS_KEY: &str = "hooks";
-const RIMZ_MANAGED_KEY: &str = "_rimz_managed";
 const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source droid";
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source droid";
 
@@ -194,49 +249,34 @@ impl AgentAdapter for DroidAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        classify_agent_hook(event_name, None, LIFECYCLE_EVENTS)
+        classify_catalog_hook(DROID_HOOKS, event_name, None)
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        INSTALLED_EVENTS.to_vec()
+        DROID_HOOKS.iter().map(|hook| hook.event).collect()
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        use super::{AgentHookClass, ClassificationSample};
-
-        let lifecycle = |event_name, payload| {
-            ClassificationSample::new(event_name, payload, AgentHookClass::Lifecycle, None)
-        };
-        vec![
-            lifecycle(
-                "SessionStart",
-                serde_json::json!({"session_id": "sess-1", "source": "startup"}),
-            ),
-            lifecycle(
-                "SessionStart",
-                serde_json::json!({"session_id": "sess-1", "source": "compact"}),
-            ),
-            lifecycle(
-                "UserPromptSubmit",
-                serde_json::json!({"session_id": "sess-1", "prompt": "fix auth"}),
-            ),
-            lifecycle(
-                "PostToolUse",
-                serde_json::json!({"session_id": "sess-1", "tool_name": "Edit"}),
-            ),
-            lifecycle("Notification", serde_json::json!({"session_id": "sess-1"})),
-            lifecycle("Stop", serde_json::json!({"session_id": "sess-1"})),
-            lifecycle(
-                "PreCompact",
-                serde_json::json!({"session_id": "sess-1", "trigger": "manual"}),
-            ),
-            lifecycle(
-                "SessionEnd",
-                serde_json::json!({"session_id": "sess-1", "reason": "logout"}),
-            ),
-        ]
+        let mut samples = DROID_HOOKS
+            .iter()
+            .map(|hook| {
+                super::ClassificationSample::new(
+                    hook.event,
+                    serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
+                    hook.test_class,
+                    hook.test_ask,
+                )
+            })
+            .collect::<Vec<_>>();
+        samples.push(super::ClassificationSample::new(
+            "SessionStart",
+            serde_json::json!({"session_id": "sess-1", "source": "compact"}),
+            AgentHookClass::Lifecycle,
+            None,
+        ));
+        samples
     }
 
     #[cfg(test)]
@@ -351,10 +391,6 @@ impl AgentAdapter for DroidAdapter {
         })
     }
 
-    fn ends_session(&self, event_name: &str) -> bool {
-        event_name == "SessionEnd"
-    }
-
     fn local_context_refresh(
         &self,
         _trigger: RefreshTrigger<'_>,
@@ -465,51 +501,6 @@ impl AgentAdapter for DroidAdapter {
 
     fn compact_command(&self) -> Option<&'static str> {
         Some("/compact")
-    }
-
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        // Interactive Droid 0.171.0 exposes no `--model` or `--reasoning-effort`
-        // flag; both are `droid exec`-only. Reject model and effort so a
-        // profile's launch intent fails fast rather than silently defaulting —
-        // and, worse, leaking an ignored `--model <id>` value into Droid's
-        // positional prompt variadic (its parser allows unknown options).
-        if preset
-            .model
-            .as_deref()
-            .is_some_and(|model| !model.is_empty())
-        {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: "droid",
-                field: "model",
-            });
-        }
-        if preset
-            .effort
-            .as_deref()
-            .is_some_and(|effort| !effort.is_empty())
-        {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: "droid",
-                field: "effort",
-            });
-        }
-        if preset.system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: "droid",
-                field: "system-prompt-file",
-            });
-        }
-        let mut argv = Vec::new();
-        if let Some(path) = preset.append_system_prompt_file.as_deref() {
-            argv.extend([
-                "--append-system-prompt-file".to_owned(),
-                path.to_string_lossy().into_owned(),
-            ]);
-        }
-        Ok(argv)
     }
 
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {

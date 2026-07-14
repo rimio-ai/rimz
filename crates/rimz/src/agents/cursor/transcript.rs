@@ -5,7 +5,6 @@
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -44,7 +43,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
         ctx.current_transcript_path.map(Path::new),
         ctx.prior_transcript_path.map(Path::new),
     )?;
-    let stat = transcript_stat(&path)?;
+    let stat = TranscriptStat::from_path(&path)?;
     if ctx.prior_transcript_stat == Some(&stat) {
         return None;
     }
@@ -71,7 +70,7 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
 /// exclusive settle markers before the whole-context sidecar write.
 pub(super) fn statusline_turn_markers(conversation_id: &str) -> Option<TurnMarkers> {
     let path = resolve_transcript(conversation_id, None, None)?;
-    let stat = transcript_stat(&path)?;
+    let stat = TranscriptStat::from_path(&path)?;
     turn_markers_at(&path, stat)
 }
 
@@ -116,17 +115,6 @@ fn latest_terminal(tail: &str) -> Option<TerminalOutcome> {
         )),
         _ => None,
     }
-}
-
-pub(super) fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
-    let metadata = fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some(TranscriptStat {
-        mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
-        mtime_nanos: modified.subsec_nanos(),
-        len: metadata.len(),
-        companion: None,
-    })
 }
 
 fn timestamp_from_stat(stat: TranscriptStat) -> Option<Timestamp> {

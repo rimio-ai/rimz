@@ -54,10 +54,10 @@ fn assert_managed_settings_json(path: &std::path::Path) {
     let top_keys = parsed.as_object().unwrap().keys().collect::<Vec<_>>();
     assert_eq!(top_keys, vec!["hooks", "statusLine", "subagentStatusLine"]);
     assert_managed_hook_entries(parsed["hooks"].as_object().unwrap());
-    assert_status_command(&parsed, STATUS_LINE.key, STATUS_LINE.command);
+    assert_status_command(&parsed, STATUS_LINE.key_path[0], STATUS_LINE.command);
     assert_status_command(
         &parsed,
-        SUBAGENT_STATUS_LINE.key,
+        SUBAGENT_STATUS_LINE.key_path[0],
         SUBAGENT_STATUS_LINE.command,
     );
 }

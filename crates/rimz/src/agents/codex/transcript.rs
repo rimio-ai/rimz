@@ -8,7 +8,6 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{LazyLock, Mutex};
-use std::time::UNIX_EPOCH;
 
 use jiff::Timestamp;
 use serde_json::Value;
@@ -35,10 +34,10 @@ pub fn refresh_transcript_context(
     pricing_cache_path: &Path,
 ) -> Option<LocalContextRefresh> {
     let mut path = prior_transcript_path.map(PathBuf::from);
-    let mut stat = path.as_deref().and_then(transcript_stat);
+    let mut stat = path.as_deref().and_then(TranscriptStat::from_path);
     if stat.is_none() {
         path = find_session_transcript(session_id);
-        stat = path.as_deref().and_then(transcript_stat);
+        stat = path.as_deref().and_then(TranscriptStat::from_path);
     }
     let path = path?;
     let stat = stat?;
@@ -196,18 +195,6 @@ pub(super) fn transcript_enrichment(
         _ => None,
     };
     (tokens, cost, model_id)
-}
-
-pub(super) fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
-    let meta = fs::metadata(path).ok()?;
-    let modified = meta.modified().ok()?;
-    let since_epoch = modified.duration_since(UNIX_EPOCH).ok()?;
-    Some(TranscriptStat {
-        mtime_secs: since_epoch.as_secs().try_into().unwrap_or(i64::MAX),
-        mtime_nanos: since_epoch.subsec_nanos(),
-        len: meta.len(),
-        companion: None,
-    })
 }
 
 pub(super) fn payload_reasoning_effort(payload: &Value) -> Option<String> {

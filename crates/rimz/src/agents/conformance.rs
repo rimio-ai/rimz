@@ -104,6 +104,139 @@ fn preset_matchers_find_split_joined_and_config_key_occurrences() {
     );
 }
 
+#[test]
+fn render_preset_characterization() {
+    let root = tempfile::TempDir::new().expect("plugin root");
+    let plugin_dir = root.path().join("fixturebot");
+    fs::create_dir(&plugin_dir).expect("plugin dir");
+    fs::write(plugin_dir.join("README.md"), "hook setup").expect("setup doc");
+    fs::write(
+        plugin_dir.join("agent.toml"),
+        r#"protocol = 1
+kind = "fixturebot"
+display-name = "Fixture Bot"
+process-names = ["fixturebot"]
+emits = ["session_start", "turn_start", "turn_end"]
+setup-doc = "README.md"
+
+[launch]
+bin = "fixturebot"
+model-flag = "--model"
+effort-flag = "--effort"
+"#,
+    )
+    .expect("manifest");
+    let loaded = super::plugin::load_from_root(root.path());
+    assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+
+    let mut cases = Vec::new();
+    for adapter in ADAPTERS
+        .iter()
+        .copied()
+        .chain(loaded.adapters.iter().copied())
+    {
+        for (field, value) in [
+            (PresetField::Model, "model-x"),
+            (PresetField::Effort, "high"),
+            (PresetField::SystemPromptFile, "/tmp/system.md"),
+            (PresetField::AppendSystemPromptFile, "/tmp/append-system.md"),
+        ] {
+            cases.push(format!(
+                "{}.{field:?}={:?}",
+                adapter.descriptor().kind,
+                adapter.render_preset(&field.launch_preset(value.to_owned()))
+            ));
+        }
+        for field in [PresetField::Model, PresetField::Effort] {
+            cases.push(format!(
+                "{}.empty-{field:?}={:?}",
+                adapter.descriptor().kind,
+                adapter.render_preset(&field.launch_preset(String::new()))
+            ));
+        }
+    }
+    insta::assert_snapshot!(cases.join("\n"), @r###"
+    claude.Model=Ok(["--model", "model-x"])
+    claude.Effort=Ok(["--effort", "high"])
+    claude.SystemPromptFile=Ok(["--system-prompt-file", "/tmp/system.md"])
+    claude.AppendSystemPromptFile=Ok(["--append-system-prompt-file", "/tmp/append-system.md"])
+    claude.empty-Model=Ok([])
+    claude.empty-Effort=Ok([])
+    codex.Model=Ok(["--model", "model-x"])
+    codex.Effort=Ok(["-c", "model_reasoning_effort=high"])
+    codex.SystemPromptFile=Ok(["-c", "model_instructions_file=/tmp/system.md"])
+    codex.AppendSystemPromptFile=Err(UnsupportedField { agent: "codex", field: "append-system-prompt-file" })
+    codex.empty-Model=Ok([])
+    codex.empty-Effort=Ok([])
+    amp.Model=Ok(["--mode", "model-x"])
+    amp.Effort=Ok(["--effort", "high"])
+    amp.SystemPromptFile=Err(UnsupportedField { agent: "amp", field: "system-prompt-file" })
+    amp.AppendSystemPromptFile=Err(UnsupportedField { agent: "amp", field: "append-system-prompt-file" })
+    amp.empty-Model=Ok([])
+    amp.empty-Effort=Ok([])
+    copilot.Model=Ok(["--model", "model-x"])
+    copilot.Effort=Ok(["--effort", "high"])
+    copilot.SystemPromptFile=Err(UnsupportedField { agent: "copilot", field: "system-prompt-file" })
+    copilot.AppendSystemPromptFile=Err(UnsupportedField { agent: "copilot", field: "append-system-prompt-file" })
+    copilot.empty-Model=Ok([])
+    copilot.empty-Effort=Ok([])
+    kimi.Model=Ok(["--model", "model-x"])
+    kimi.Effort=Err(UnsupportedField { agent: "kimi", field: "effort" })
+    kimi.SystemPromptFile=Err(UnsupportedField { agent: "kimi", field: "system-prompt-file" })
+    kimi.AppendSystemPromptFile=Err(UnsupportedField { agent: "kimi", field: "append-system-prompt-file" })
+    kimi.empty-Model=Ok([])
+    kimi.empty-Effort=Ok([])
+    pi.Model=Ok(["--model", "model-x"])
+    pi.Effort=Ok(["--thinking", "high"])
+    pi.SystemPromptFile=Err(UnsupportedField { agent: "pi", field: "system-prompt-file" })
+    pi.AppendSystemPromptFile=Err(UnsupportedField { agent: "pi", field: "append-system-prompt-file" })
+    pi.empty-Model=Ok([])
+    pi.empty-Effort=Ok([])
+    opencode.Model=Ok(["--model", "model-x"])
+    opencode.Effort=Err(UnsupportedField { agent: "opencode", field: "effort" })
+    opencode.SystemPromptFile=Err(UnsupportedField { agent: "opencode", field: "system-prompt-file" })
+    opencode.AppendSystemPromptFile=Err(UnsupportedField { agent: "opencode", field: "append-system-prompt-file" })
+    opencode.empty-Model=Ok([])
+    opencode.empty-Effort=Ok([])
+    antigravity.Model=Ok(["--model", "model-x"])
+    antigravity.Effort=Err(UnsupportedField { agent: "antigravity", field: "effort" })
+    antigravity.SystemPromptFile=Err(UnsupportedField { agent: "antigravity", field: "system-prompt-file" })
+    antigravity.AppendSystemPromptFile=Err(UnsupportedField { agent: "antigravity", field: "append-system-prompt-file" })
+    antigravity.empty-Model=Ok([])
+    antigravity.empty-Effort=Ok([])
+    cursor.Model=Ok(["--model", "model-x"])
+    cursor.Effort=Err(UnsupportedField { agent: "cursor", field: "effort" })
+    cursor.SystemPromptFile=Err(UnsupportedField { agent: "cursor", field: "system-prompt-file" })
+    cursor.AppendSystemPromptFile=Err(UnsupportedField { agent: "cursor", field: "append-system-prompt-file" })
+    cursor.empty-Model=Ok([])
+    cursor.empty-Effort=Ok([])
+    droid.Model=Err(UnsupportedField { agent: "droid", field: "model" })
+    droid.Effort=Err(UnsupportedField { agent: "droid", field: "effort" })
+    droid.SystemPromptFile=Err(UnsupportedField { agent: "droid", field: "system-prompt-file" })
+    droid.AppendSystemPromptFile=Ok(["--append-system-prompt-file", "/tmp/append-system.md"])
+    droid.empty-Model=Ok([])
+    droid.empty-Effort=Ok([])
+    kiro.Model=Ok(["--model", "model-x"])
+    kiro.Effort=Ok(["--effort", "high"])
+    kiro.SystemPromptFile=Err(UnsupportedField { agent: "kiro", field: "system-prompt-file" })
+    kiro.AppendSystemPromptFile=Err(UnsupportedField { agent: "kiro", field: "append-system-prompt-file" })
+    kiro.empty-Model=Ok([])
+    kiro.empty-Effort=Ok([])
+    qwen.Model=Ok(["--model", "model-x"])
+    qwen.Effort=Err(UnsupportedField { agent: "qwen", field: "effort" })
+    qwen.SystemPromptFile=Err(UnsupportedField { agent: "qwen", field: "system-prompt-file" })
+    qwen.AppendSystemPromptFile=Err(UnsupportedField { agent: "qwen", field: "append-system-prompt-file" })
+    qwen.empty-Model=Ok([])
+    qwen.empty-Effort=Ok([])
+    fixturebot.Model=Ok(["--model", "model-x"])
+    fixturebot.Effort=Ok(["--effort", "high"])
+    fixturebot.SystemPromptFile=Err(UnsupportedField { agent: "fixturebot", field: "system-prompt-file" })
+    fixturebot.AppendSystemPromptFile=Err(UnsupportedField { agent: "fixturebot", field: "append-system-prompt-file" })
+    fixturebot.empty-Model=Ok([])
+    fixturebot.empty-Effort=Ok([])
+    "###);
+}
+
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
@@ -279,6 +412,25 @@ fn lifecycle_hooks_are_complete_and_honest() {
             IntegrationConcern::Subagents,
         );
         assert_compaction_hooks_match_concern(*adapter);
+    }
+}
+
+#[test]
+fn ends_session_follows_native_descriptor_event() {
+    for adapter in ADAPTERS {
+        assert!(!adapter.ends_session("__not_session_end__"));
+        match adapter.descriptor().lifecycle_hooks.ended {
+            HookCoverage::Native { event } => assert!(
+                adapter.ends_session(event),
+                "{} must end on {event}",
+                adapter.descriptor().kind
+            ),
+            HookCoverage::Derived { .. } | HookCoverage::Absent { .. } => assert!(
+                !adapter.ends_session(adapter.descriptor().lifecycle_hooks.ended.detail()),
+                "{} derived/absent end must stay false",
+                adapter.descriptor().kind
+            ),
+        }
     }
 }
 

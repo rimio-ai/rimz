@@ -185,7 +185,7 @@ const RIMZ_STATUS_LINE_COMMAND: &str = "rimz statusline feed --source cursor";
 const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source cursor";
 const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
     super::managed_statusline::ManagedStatusLineSpec {
-        key: "statusLine",
+        key_path: &["statusLine"],
         command: RIMZ_STATUS_LINE_COMMAND,
         command_marker: RIMZ_STATUS_LINE_MARKER,
         rendering_options: super::managed_statusline::RenderingOptions::Only(&[
@@ -193,6 +193,8 @@ const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
             "updateIntervalMs",
             "timeoutMs",
         ]),
+        wrap_policy: super::managed_statusline::WrapPolicy::Any,
+        required_for_install: false,
     };
 
 #[derive(Clone, Debug, Default)]
@@ -444,10 +446,6 @@ impl AgentAdapter for CursorAdapter {
         transcript::resolve_transcript(session_id, None, prior_path)
     }
 
-    fn ends_session(&self, event_name: &str) -> bool {
-        event_name == "sessionEnd"
-    }
-
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
         let bin = locate_binary(self.descriptor())
             .map(|path| path.to_string_lossy().into_owned())
@@ -470,38 +468,6 @@ impl AgentAdapter for CursorAdapter {
 
     fn compact_command(&self) -> Option<&'static str> {
         Some("/summarize")
-    }
-
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        for (present, field) in [
-            (
-                preset
-                    .effort
-                    .as_deref()
-                    .is_some_and(|value| !value.is_empty()),
-                "effort",
-            ),
-            (preset.system_prompt_file.is_some(), "system-prompt-file"),
-            (
-                preset.append_system_prompt_file.is_some(),
-                "append-system-prompt-file",
-            ),
-        ] {
-            if present {
-                return Err(super::PresetErr::UnsupportedField {
-                    agent: "cursor",
-                    field,
-                });
-            }
-        }
-        Ok(argv)
     }
 
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {

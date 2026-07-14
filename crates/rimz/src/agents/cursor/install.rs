@@ -80,7 +80,7 @@ pub(super) fn preview_at(hooks_path: &Path, config_path: &Path) -> Result<HookIn
             },
         ],
         planned_events: events,
-        status_line_change: Some(status_line_change),
+        status_line_change,
         subagent_status_line_change: None,
     })
 }
@@ -158,7 +158,7 @@ pub(super) fn statusline_installed_at(path: &Path) -> bool {
     read_existing_json(path).is_ok_and(|root| {
         super::super::managed_statusline::is_managed(&root, &STATUS_LINE)
             && root
-                .get(STATUS_LINE.key)
+                .get(STATUS_LINE.key_path[0])
                 .and_then(Value::as_object)
                 .and_then(|object| object.get("command"))
                 .and_then(Value::as_str)
@@ -170,7 +170,7 @@ pub(super) fn statusline_artifact_at(path: &Path) -> bool {
     read_existing_json(path).is_ok_and(|root| {
         super::super::managed_statusline::is_managed(&root, &STATUS_LINE)
             || root
-                .get(STATUS_LINE.key)
+                .get(STATUS_LINE.key_path[0])
                 .and_then(Value::as_object)
                 .and_then(|object| object.get("command"))
                 .and_then(Value::as_str)

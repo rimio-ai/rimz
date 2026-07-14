@@ -20,6 +20,8 @@ use self::manifest::{PluginManifest, TranscriptThreadKey};
 use self::protocol::{CanonicalEvent, CompactionTrigger, Envelope};
 #[cfg(test)]
 use super::AskKind;
+#[cfg(test)]
+use super::LaunchPreset;
 use super::account::AccountProbe;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
@@ -31,8 +33,8 @@ use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
-    LaunchPreset, PresetArgMatcher, PresetErr, PresetField, PriceBook, Result, RootIdentity,
-    SubagentIdentity, positional_prompt_argv, resolve_root_identity, resolve_subagent_identity,
+    PresetArgMatcher, PresetField, PriceBook, Result, RootIdentity, SubagentIdentity,
+    positional_prompt_argv, resolve_root_identity, resolve_subagent_identity,
 };
 use crate::harness::run::PermissionMode;
 use crate::transcript::AskQuestion;
@@ -300,10 +302,6 @@ impl AgentAdapter for PluginAdapter {
         }])
     }
 
-    fn ends_session(&self, event_name: &str) -> bool {
-        event_name == "session_end"
-    }
-
     fn transcript_files(&self) -> Vec<PathBuf> {
         let Some(transcripts) = &self.manifest.transcripts else {
             return Vec::new();
@@ -381,38 +379,6 @@ impl AgentAdapter for PluginAdapter {
 
     fn compact_command(&self) -> Option<&'static str> {
         self.manifest.launch.as_ref()?.compact_command.as_deref()
-    }
-
-    fn render_preset(&self, preset: &LaunchPreset) -> std::result::Result<Vec<String>, PresetErr> {
-        let mut args = Vec::new();
-        let launch = self.manifest.launch.as_ref();
-        render_flag(
-            &mut args,
-            self.descriptor.kind,
-            "model",
-            preset.model.as_deref(),
-            launch.and_then(|launch| launch.model_flag.as_deref()),
-        )?;
-        render_flag(
-            &mut args,
-            self.descriptor.kind,
-            "effort",
-            preset.effort.as_deref(),
-            launch.and_then(|launch| launch.effort_flag.as_deref()),
-        )?;
-        if preset.system_prompt_file.is_some() {
-            return Err(PresetErr::UnsupportedField {
-                agent: self.descriptor.kind,
-                field: "system-prompt-file",
-            });
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(PresetErr::UnsupportedField {
-                agent: self.descriptor.kind,
-                field: "append-system-prompt-file",
-            });
-        }
-        Ok(args)
     }
 
     fn preset_arg_matcher(&self, field: PresetField) -> Option<PresetArgMatcher> {
@@ -706,24 +672,6 @@ fn normalize_context(source: &str, payload: &Value, envelope: &Envelope) -> Opti
         context.rate_limits = Some(rate_limits.stamped_at(context.observed_at));
     }
     Some(context)
-}
-
-fn render_flag(
-    args: &mut Vec<String>,
-    agent: &'static str,
-    field: &'static str,
-    value: Option<&str>,
-    flag: Option<&str>,
-) -> std::result::Result<(), PresetErr> {
-    let Some(value) = value.filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-    let Some(flag) = flag else {
-        return Err(PresetErr::UnsupportedField { agent, field });
-    };
-    args.push(flag.to_owned());
-    args.push(value.to_owned());
-    Ok(())
 }
 
 fn expand_pattern(plugin_dir: &Path, pattern: &str) -> String {

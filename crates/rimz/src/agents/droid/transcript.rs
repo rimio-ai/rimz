@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use serde::Deserialize;
 
@@ -242,7 +241,8 @@ pub(super) fn telemetry(
         return None;
     }
     let mut refresh = settings_snapshot(path, None)?;
-    refresh.stat.companion = file_stat(&transcript).map(TranscriptCompanionStat::from);
+    refresh.stat.companion =
+        TranscriptStat::from_path(&transcript).map(TranscriptCompanionStat::from);
     if prior_stat == Some(&refresh.stat) {
         return None;
     }
@@ -261,7 +261,7 @@ pub(super) fn settings_snapshot(
     prior_stat: Option<&TranscriptStat>,
 ) -> Option<TelemetryRefresh> {
     let settings_path = settings_path(path)?;
-    let stat = file_stat(&settings_path)?;
+    let stat = TranscriptStat::from_path(&settings_path)?;
     if prior_stat == Some(&stat) {
         return None;
     }
@@ -442,17 +442,6 @@ fn transcript_path(path: &Path) -> Option<PathBuf> {
 fn read_settings(path: &Path) -> Option<Settings> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
-}
-
-fn file_stat(path: &Path) -> Option<TranscriptStat> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some(TranscriptStat {
-        mtime_secs: modified.as_secs().try_into().unwrap_or(i64::MAX),
-        mtime_nanos: modified.subsec_nanos(),
-        len: metadata.len(),
-        companion: None,
-    })
 }
 
 impl From<TranscriptStat> for TranscriptCompanionStat {

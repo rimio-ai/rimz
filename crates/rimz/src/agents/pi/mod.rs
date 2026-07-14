@@ -40,8 +40,7 @@ use serde_json::json;
 
 use super::AskKind;
 use super::context::{
-    AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, RateLimitWindow,
-    WindowSource,
+    AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage,
 };
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
@@ -53,9 +52,9 @@ use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, TranscriptMessage, agent_config_path, classify_agent_hook,
-    non_empty_trimmed, optional_payload_string, sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, ClassifiedHook, Result, TranscriptMessage,
+    agent_config_path, classify_agent_hook, non_empty_trimmed, optional_payload_string,
+    sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -203,6 +202,8 @@ const PI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     compaction_ended: HookCoverage::Native {
         event: "session_compact",
     },
+    // Extension skips `/reload` shutdown: same session re-registers in place,
+    // so every shutdown reaching Rimz is a real end.
     ended: HookCoverage::Native {
         event: "session_shutdown",
     },
@@ -259,12 +260,14 @@ const WIRED_EVENTS: &[&str] = &[
 /// line.
 const EXTENSION_SOURCE: &str = include_str!("extension.ts");
 
-const PI_MANAGED_SOURCE: ManagedSource = ManagedSource {
-    agent: "pi",
-    source: EXTENSION_SOURCE,
-    wired_events: WIRED_EVENTS,
-    artifact_noun: "extension",
-};
+const PI_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
+    "pi",
+    EXTENSION_SOURCE,
+    WIRED_EVENTS,
+    "extension",
+    pi_extension_path,
+    true,
+);
 
 #[derive(Clone, Debug, Default)]
 pub struct PiAdapter;
@@ -495,31 +498,8 @@ impl AgentAdapter for PiAdapter {
         transcript::parse_messages(lines)
     }
 
-    fn ends_session(&self, event_name: &str) -> bool {
-        // The extension skips the `/reload` shutdown (the same session id
-        // re-registers in place, and a fire-and-forget tombstone would race
-        // it), so every shutdown that arrives here is a real end: quit, or a
-        // new/resume/fork replacing this session.
-        event_name == "session_shutdown"
-    }
-
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::pi_session_files()
-    }
-
-    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
-        if let Some(path) = prior_path.filter(|path| path.is_file()) {
-            return Some(path.to_path_buf());
-        }
-        let session_id = session_id.trim();
-        if session_id.is_empty() {
-            return None;
-        }
-        self.transcript_files().into_iter().find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(session_id))
-        })
     }
 
     /// Pi's present non-negative `costUSD` is authoritative. Token-bearing
@@ -558,32 +538,6 @@ impl AgentAdapter for PiAdapter {
         Some("/compact")
     }
 
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        if let Some(effort) = preset.effort.as_deref().filter(|effort| !effort.is_empty()) {
-            argv.extend(["--thinking".to_owned(), effort.to_owned()]);
-        }
-        if preset.system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "system-prompt-file",
-            });
-        }
-        if preset.append_system_prompt_file.is_some() {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "append-system-prompt-file",
-            });
-        }
-        Ok(argv)
-    }
-
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
         let flag = match field {
             super::PresetField::Model => "--model",
@@ -599,31 +553,8 @@ impl AgentAdapter for PiAdapter {
         Some(super::positional_prompt_argv("pi", extra_args, prompt))
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        let path = pi_extension_path()?;
-        PI_MANAGED_SOURCE.install_into(&path)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        let path = pi_extension_path()?;
-        PI_MANAGED_SOURCE.preview_at(&path)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        let path = pi_extension_path()?;
-        PI_MANAGED_SOURCE.uninstall_from(&path)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        pi_extension_path().is_ok_and(|path| PI_MANAGED_SOURCE.installed_at(&path))
-    }
-
-    fn hook_upgrade_available(&self) -> bool {
-        pi_extension_path().is_ok_and(|path| PI_MANAGED_SOURCE.upgrade_available_at(&path))
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        self.hooks_installed()
+    fn managed_source(&self) -> Option<&'static ManagedSource> {
+        Some(&PI_MANAGED_SOURCE)
     }
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
@@ -662,13 +593,11 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
             total_cost_usd: Some(total_cost_usd),
             ..AgentCost::default()
         });
-    let windows: Vec<RateLimitWindow> = payload
-        .get("rate_limits")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(parse_rate_limit_window)
-        .collect();
+    let windows = parsed
+        .rate_limits
+        .iter()
+        .map(payloads::PiRateLimitWindow::to_domain)
+        .collect::<Vec<_>>();
     let rate_limits = (!windows.is_empty()).then_some(AgentRateLimits { windows });
     if parsed.model.is_none()
         && parsed.session_name.is_none()
@@ -714,61 +643,6 @@ fn pi_current_usage(parsed: &payloads::PiHookPayload) -> Option<AgentCurrentUsag
         cache_read_input_tokens: parsed.cache_read_input_tokens,
     };
     (!usage.is_zero()).then_some(usage)
-}
-
-fn parse_rate_limit_window(value: &Value) -> Option<RateLimitWindow> {
-    let used_percentage = value
-        .get("used_percentage")
-        .or_else(|| value.get("usedPercent"))
-        .and_then(value_f64)
-        .map(|value| value.round().clamp(0.0, 100.0) as u8);
-    let resets_at = value
-        .get("resets_at")
-        .or_else(|| value.get("resetsAt"))
-        .and_then(timestamp_from_value);
-    let duration_mins = value
-        .get("duration_mins")
-        .or_else(|| value.get("durationMins"))
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok());
-    let observed_at = value
-        .get("observed_at")
-        .or_else(|| value.get("observedAt"))
-        .and_then(timestamp_from_value);
-    (used_percentage.is_some() || resets_at.is_some() || duration_mins.is_some()).then_some(
-        RateLimitWindow {
-            used_percentage,
-            resets_at,
-            duration_mins,
-            observed_at,
-            source: WindowSource::BestEffort,
-            ..Default::default()
-        },
-    )
-}
-
-fn value_f64(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(number) => number.as_f64(),
-        Value::String(raw) => raw.trim().parse::<f64>().ok(),
-        _ => None,
-    }
-    .filter(|value| value.is_finite())
-}
-
-fn timestamp_from_value(value: &Value) -> Option<Timestamp> {
-    match value {
-        Value::Number(number) => number
-            .as_i64()
-            .and_then(|secs| Timestamp::from_second(secs).ok()),
-        Value::String(raw) => raw.parse::<Timestamp>().ok().or_else(|| {
-            raw.trim()
-                .parse::<i64>()
-                .ok()
-                .and_then(|secs| Timestamp::from_second(secs).ok())
-        }),
-        _ => None,
-    }
 }
 
 fn pi_extension_path() -> Result<PathBuf> {

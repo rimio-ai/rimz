@@ -527,10 +527,6 @@ impl AgentAdapter for KimiAdapter {
         transcript::parse_messages(lines)
     }
 
-    fn ends_session(&self, event_name: &str) -> bool {
-        event_name == "SessionEnd"
-    }
-
     fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
         match mode {
             PermissionMode::Ask => Vec::new(),
@@ -546,38 +542,6 @@ impl AgentAdapter for KimiAdapter {
 
     fn compact_command(&self) -> Option<&'static str> {
         Some("/compact")
-    }
-
-    fn render_preset(
-        &self,
-        preset: &super::LaunchPreset,
-    ) -> std::result::Result<Vec<String>, super::PresetErr> {
-        let mut argv = Vec::new();
-        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
-            argv.extend(["--model".to_owned(), model.to_owned()]);
-        }
-        for (present, field) in [
-            (
-                preset
-                    .effort
-                    .as_deref()
-                    .is_some_and(|value| !value.is_empty()),
-                "effort",
-            ),
-            (preset.system_prompt_file.is_some(), "system-prompt-file"),
-            (
-                preset.append_system_prompt_file.is_some(),
-                "append-system-prompt-file",
-            ),
-        ] {
-            if present {
-                return Err(super::PresetErr::UnsupportedField {
-                    agent: "kimi",
-                    field,
-                });
-            }
-        }
-        Ok(argv)
     }
 
     fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
@@ -733,7 +697,7 @@ fn parse_questions(input: &Value) -> Option<Vec<AskQuestion>> {
 fn refresh_wire_context(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRefresh> {
     let path =
         KimiAdapter.session_transcript(ctx.agent_id, ctx.prior_transcript_path.map(Path::new))?;
-    let stat = transcript_stat(&path)?;
+    let stat = TranscriptStat::from_path(&path)?;
     refresh_wire_path(&path, ctx.agent_id, stat, ctx)
 }
 
@@ -861,21 +825,6 @@ fn configured_context_window_at(path: &Path, model_hint: Option<&str>) -> Option
         .or_else(|| model.get("max_context_size"))
         .and_then(toml::Value::as_integer)
         .and_then(|value| u64::try_from(value).ok())
-}
-
-fn transcript_stat(path: &Path) -> Option<TranscriptStat> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
-    Some(TranscriptStat {
-        mtime_secs: i64::try_from(modified.as_secs()).ok()?,
-        mtime_nanos: modified.subsec_nanos(),
-        len: metadata.len(),
-        companion: None,
-    })
 }
 
 #[cfg(test)]

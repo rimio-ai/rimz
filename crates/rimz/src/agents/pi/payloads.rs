@@ -7,8 +7,11 @@
 //! not an upstream one; the upstream shapes are mirrored in
 //! `docs/externals/agent-adapter/pi-reference.md`.
 
-use serde::Deserialize;
+use jiff::Timestamp;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+
+use super::super::context::{RateLimitWindow, WindowSource};
 
 /// Pi's compaction cause, added to extension events in 0.79.10.
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -75,6 +78,99 @@ pub(crate) struct PiHookPayload {
     /// Compaction events: manual `/compact`, threshold compaction, or overflow
     /// recovery. Older Pi releases omit this field.
     pub compaction_reason: Option<PiCompactionReason>,
+    /// Best-effort provider windows reported by extension integrations.
+    #[serde(
+        default,
+        alias = "rateLimits",
+        deserialize_with = "deserialize_rate_limits"
+    )]
+    pub rate_limits: Vec<PiRateLimitWindow>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PiRateLimitWindow {
+    used_percentage: Option<u8>,
+    resets_at: Option<Timestamp>,
+    duration_mins: Option<u32>,
+    observed_at: Option<Timestamp>,
+}
+
+impl PiRateLimitWindow {
+    pub(crate) fn to_domain(&self) -> RateLimitWindow {
+        RateLimitWindow {
+            used_percentage: self.used_percentage,
+            resets_at: self.resets_at,
+            duration_mins: self.duration_mins,
+            observed_at: self.observed_at,
+            source: WindowSource::BestEffort,
+            ..Default::default()
+        }
+    }
+
+    fn from_value(value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let used_percentage = field(object, "used_percentage", "usedPercent")
+            .and_then(value_f64)
+            .map(|value| value.round().clamp(0.0, 100.0) as u8);
+        let resets_at = field(object, "resets_at", "resetsAt").and_then(timestamp_from_value);
+        let duration_mins = field(object, "duration_mins", "durationMins")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok());
+        let observed_at = field(object, "observed_at", "observedAt").and_then(timestamp_from_value);
+        (used_percentage.is_some() || resets_at.is_some() || duration_mins.is_some()).then_some(
+            Self {
+                used_percentage,
+                resets_at,
+                duration_mins,
+                observed_at,
+            },
+        )
+    }
+}
+
+fn deserialize_rate_limits<'de, D>(deserializer: D) -> Result<Vec<PiRateLimitWindow>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(PiRateLimitWindow::from_value)
+        .collect())
+}
+
+fn field<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    canonical: &str,
+    alias: &str,
+) -> Option<&'a Value> {
+    object.get(canonical).or_else(|| object.get(alias))
+}
+
+fn value_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(raw) => raw.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|value| value.is_finite())
+}
+
+fn timestamp_from_value(value: &Value) -> Option<Timestamp> {
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .and_then(|seconds| Timestamp::from_second(seconds).ok()),
+        Value::String(raw) => raw.parse::<Timestamp>().ok().or_else(|| {
+            raw.trim()
+                .parse::<i64>()
+                .ok()
+                .and_then(|seconds| Timestamp::from_second(seconds).ok())
+        }),
+        _ => None,
+    }
 }
 
 /// Tolerant parse: any non-conforming payload reads as the empty default —
