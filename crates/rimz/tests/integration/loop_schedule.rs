@@ -10,7 +10,6 @@ use serde_json::json;
 use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
-use rimz::harness::schedule::instances;
 use rimz::harness::schedule::pauses::{self, PauseEntry};
 use rimz::harness::schedule::run_log::{self, LoopRunRecord, LoopRunResult};
 use rimz::harness::schedule::runner::RunLockInfo;
@@ -2126,7 +2125,7 @@ fn write_loop_run_records(env: &Env, records: &[LoopRunRecord]) {
 }
 
 fn read_loop_instances(env: &Env) -> Tasks {
-    let path = instances::path(&env.state_root());
+    let path = rimz::harness::schedule::catalog::instances_path(&env.state_root());
     let Ok(text) = std::fs::read_to_string(path) else {
         return Tasks::default();
     };
@@ -2150,7 +2149,7 @@ fn read_loop_strikes(env: &Env) -> BTreeMap<String, u32> {
 }
 
 fn write_loop_instances(env: &Env, tasks: Tasks) {
-    let path = instances::path(&env.state_root());
+    let path = rimz::harness::schedule::catalog::instances_path(&env.state_root());
     std::fs::create_dir_all(path.parent().expect("instances parent")).expect("mkdir state");
     std::fs::write(path, serde_json::to_vec_pretty(&tasks).expect("json"))
         .expect("write loop instances");

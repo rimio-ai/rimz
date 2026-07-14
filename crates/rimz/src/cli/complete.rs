@@ -8,8 +8,6 @@ use rimz::config::MachineConfig;
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 use rimz::{RuntimePaths, StatePaths, Store};
 
-use super::{ColorWhen, GlobalFlags};
-
 struct RoomContext {
     workspace: ResolvedWorkspace,
     store: Store,
@@ -142,18 +140,14 @@ fn text_snippet(text: &str) -> String {
 }
 
 pub(crate) fn loop_tasks() -> Vec<CompletionCandidate> {
-    let globals = GlobalFlags {
-        mux: None,
-        zellij: false,
-        tmux: false,
-        root: None,
-        color: ColorWhen::Auto,
-    };
-    super::loop_cmd::load_all_tasks(&globals)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(name, (entry, _))| {
-            let help = rimz::harness::schedule::parse_schedule(&name, &entry)
+    let project_root = WorkspaceResolver::resolve(".", None)
+        .ok()
+        .map(|workspace| workspace.project_root);
+    rimz::harness::schedule::catalog::TaskCatalog::load_lenient(project_root.as_deref())
+        .visible()
+        .iter()
+        .map(|(name, task)| {
+            let help = rimz::harness::schedule::parse_schedule(name, &task.entry)
                 .map(|schedule| schedule.describe())
                 .unwrap_or_else(|error| format!("invalid: {error}"));
             candidate(name, help)

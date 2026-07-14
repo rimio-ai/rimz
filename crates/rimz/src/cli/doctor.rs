@@ -88,24 +88,21 @@ fn collect_machine_config() -> model::MachineConfigHealth {
 /// workspace-independent: it surfaces the scheduled-execution surface this box
 /// carries; `rimz loop list` reports whether each task's room is open.
 fn collect_loop() -> model::LoopTasks {
-    let mut tasks = rimz::harness::schedule::instances::load().0;
-    tasks.extend(
-        rimz::config::MachineConfig::load()
-            .map(|config| config.r#loop.tasks.0)
-            .unwrap_or_default(),
-    );
-    let rows = tasks
-        .into_iter()
-        .map(|(name, entry)| {
-            let (when, valid) = match rimz::harness::schedule::parse_schedule(&name, &entry) {
+    let rows = rimz::harness::schedule::catalog::TaskCatalog::load_lenient(None)
+        .visible()
+        .iter()
+        .map(|(name, task)| {
+            let entry = &task.entry;
+            let (when, valid) = match rimz::harness::schedule::parse_schedule(name, entry) {
                 Ok(schedule) => (schedule.describe(), true),
                 Err(err) => (format!("invalid: {err}"), false),
             };
             model::LoopTaskRow {
-                name,
+                name: name.clone(),
                 spec: entry
                     .agent
-                    .or_else(|| entry.wake.map(|target| target.handle))
+                    .clone()
+                    .or_else(|| entry.wake.as_ref().map(|target| target.handle.clone()))
                     .unwrap_or_else(|| "<invalid>".to_owned()),
                 when,
                 root: entry.root.display().to_string(),

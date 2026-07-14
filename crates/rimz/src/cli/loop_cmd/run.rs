@@ -3,31 +3,14 @@
 use super::*;
 
 const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
-pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
-pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 
 // ---- run --------------------------------------------------------------------
 
-struct RunOutcome {
-    result: LoopRunResult,
-    check: Option<CheckRecord>,
-    check_duration_ms: Option<u64>,
-    run_id: Option<String>,
-    transcript_path: Option<String>,
-    failure_tail: Option<String>,
-    last_message: Option<String>,
-    target: Option<String>,
-    exit_code: Option<i32>,
-    cost_usd: Option<f64>,
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    skip_reason: Option<String>,
-    streamed: bool,
-}
+type RunOutcome = LoopRunOutcome;
 
 #[derive(Clone, Copy)]
 struct RunExecution<'a> {
-    source: TaskSource,
+    catalog: &'a TaskCatalog,
     mode: LoopRunMode,
     keep: bool,
     globals: &'a GlobalFlags,
@@ -54,37 +37,21 @@ fn project_trust_decision(
     }
 }
 
-impl RunOutcome {
-    fn new(result: LoopRunResult) -> Self {
-        Self {
-            result,
-            check: None,
-            check_duration_ms: None,
-            run_id: None,
-            transcript_path: None,
-            failure_tail: None,
-            last_message: None,
-            target: None,
-            exit_code: None,
-            cost_usd: None,
-            input_tokens: None,
-            output_tokens: None,
-            skip_reason: None,
-            streamed: false,
-        }
-    }
-}
-
 pub(super) fn run_one(
     name: &str,
     mode: LoopRunMode,
     keep: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    let (entry, source) = load_runnable_task(name, globals)?
+    let catalog = task_catalog(globals)?;
+    let loaded = catalog
+        .for_run(name)
+        .cloned()
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
+    let entry = loaded.entry;
+    let source = loaded.source;
     gate_project_trust(name, &entry, source, mode)?;
-    task_action(name, &entry)?;
+    TaskAction::from_entry(name, &entry)?;
     let started = Instant::now();
     if mode == LoopRunMode::Manual {
         write_manual_header(&mut ui::out(), name, &entry)?;
@@ -115,7 +82,7 @@ pub(super) fn run_one(
         );
     }
     let config = MachineConfig::load_lenient();
-    let scope = task_scope_target(&entry)?;
+    let scope = task_scope_target(name, &entry)?;
     if let Some((kind, workspace_id)) = &scope
         && let Some(reason) = rimz::harness::budget::scope_gate(
             &RuntimePaths::for_workspace(workspace_id.clone())?,
@@ -157,13 +124,13 @@ pub(super) fn run_one(
             return Err(err);
         }
     };
-    match execute_task(name, &entry, source, mode, keep, globals) {
+    match execute_task(name, &entry, &catalog, mode, keep, globals) {
         Ok(outcome) => {
             let duration_ms = elapsed_ms(started);
-            let record = loop_record(name, mode, duration_ms, &outcome);
+            let record = outcome.record(name, mode, duration_ms);
             record_run(name, &entry, record);
             print_run_summary(name, &entry, duration_ms, mode, keep, &outcome)?;
-            if let Some(code) = outcome.exit_code {
+            if let Some(code) = outcome.exit_code() {
                 std::process::exit(code);
             }
             Ok(())
@@ -210,8 +177,7 @@ fn finish_overlapped(
             ui::rel_age(info.started_at, Timestamp::now())
         )
     });
-    let mut record = LoopRunRecord::new(name, LoopRunResult::Overlapped, mode, elapsed_ms(started));
-    record.error = record_detail.clone();
+    let record = RunOutcome::overlap(record_detail.clone()).record(name, mode, elapsed_ms(started));
     record_run(name, entry, record);
     let stop_hint = format!("stop it with `rimz loop stop {name}`");
     if mode == LoopRunMode::Manual {
@@ -230,23 +196,6 @@ fn finish_overlapped(
     Ok(())
 }
 
-fn task_scope_target(
-    entry: &TaskEntry,
-) -> Result<Option<(rimz::ids::AgentKind, rimz::ids::WorkspaceId)>> {
-    let workspace = WorkspaceResolver::resolve(entry.resolved_root(), None)?;
-    match task_action("budget gate", entry)? {
-        TaskAction::Spawn(spec) => Ok(Some((
-            rimz::ids::AgentKind::new_unchecked(resolve_task_spec(spec, &workspace)?.kind),
-            workspace.workspace_id,
-        ))),
-        TaskAction::Deliver(target) => Ok(Some((
-            rimz::ids::AgentKind::new_unchecked(target.kind.clone()),
-            workspace.workspace_id,
-        ))),
-        TaskAction::CheckOnly => Ok(None),
-    }
-}
-
 fn finish_gate_skip(
     name: &str,
     entry: &TaskEntry,
@@ -256,9 +205,9 @@ fn finish_gate_skip(
     result: LoopRunResult,
     reason: String,
 ) -> Result<()> {
-    let mut record = LoopRunRecord::new(name, result, mode, elapsed_ms(started));
+    let mut record =
+        RunOutcome::gate_skip(result, reason.clone()).record(name, mode, elapsed_ms(started));
     record.at = at;
-    record.error = Some(reason.clone());
     record_run(name, entry, record);
     if mode == LoopRunMode::Manual {
         write_manual_verdict(
@@ -281,50 +230,19 @@ fn append_error_record(
 ) {
     let duration_ms = elapsed_ms(started);
     let error = format!("{err:#}");
-    let mut record = LoopRunRecord::new(name, LoopRunResult::Errored, mode, duration_ms);
-    record.error = Some(error.clone());
+    let record = RunOutcome::error(error.clone()).record(name, mode, duration_ms);
     record_run(name, entry, record);
     tracing::warn!(task = name, error = %error, "loop task run failed");
 }
 
 fn record_run(name: &str, entry: &TaskEntry, record: LoopRunRecord) {
-    run_log::append(&record);
-    let signal = strikes::classify(&record);
-    let count = match strikes::note(name, signal) {
-        Ok(count) => count,
-        Err(err) => {
-            tracing::warn!(task = name, error = %err, "loop strike state update failed");
-            return;
-        }
-    };
-    let Some(max) = strikes::threshold(entry) else {
-        return;
-    };
-    if signal != strikes::Signal::Strike || count < max {
-        return;
+    if let RunTransition::AutoPaused { strikes } = run_log::record_transition(name, entry, record) {
+        let _ = writeln!(
+            ui::out(),
+            "loop `{name}`: paused after {strikes} consecutive failed fires; resume with `rimz loop resume {name}`"
+        );
+        notify_loop_paused(name, entry, strikes);
     }
-    let now = Timestamp::now();
-    match pauses::set_if_inactive(
-        name,
-        PauseEntry {
-            until: None,
-            strikes: Some(count),
-        },
-        now,
-    ) {
-        Ok(true) => {}
-        Ok(false) => return,
-        Err(err) => {
-            tracing::warn!(task = name, error = %err, "loop auto-pause state update failed");
-            return;
-        }
-    }
-
-    let _ = writeln!(
-        ui::out(),
-        "loop `{name}`: paused after {count} consecutive failed fires; resume with `rimz loop resume {name}`"
-    );
-    notify_loop_paused(name, entry, count);
 }
 
 fn notify_loop_paused(name: &str, entry: &TaskEntry, count: u32) {
@@ -392,7 +310,7 @@ fn write_manual_verdict(
 }
 
 enum CheckPhase {
-    Done(RunOutcome),
+    Done(Box<RunOutcome>),
     Fire {
         check: Option<CheckRecord>,
         prompt_override: Option<String>,
@@ -402,27 +320,27 @@ enum CheckPhase {
 fn execute_task(
     name: &str,
     entry: &TaskEntry,
-    source: TaskSource,
+    catalog: &TaskCatalog,
     mode: LoopRunMode,
     keep: bool,
     globals: &GlobalFlags,
 ) -> Result<RunOutcome> {
-    let action = task_action(name, entry)?;
+    let action = TaskAction::from_entry(name, entry)?;
     if deadline_expired(entry) {
         if mode == LoopRunMode::Scheduled {
-            let _ = remove_loaded_task(name, entry, source)?;
+            let _ = catalog.consume_scheduled(name)?;
         }
-        return Ok(RunOutcome::new(LoopRunResult::Expired));
+        return Ok(RunOutcome::expiry());
     }
-    let (check, prompt_override) = match run_check_phase(name, entry, action, source, mode)? {
-        CheckPhase::Done(outcome) => return Ok(outcome),
+    let (check, prompt_override) = match run_check_phase(name, entry, action, catalog, mode)? {
+        CheckPhase::Done(outcome) => return Ok(*outcome),
         CheckPhase::Fire {
             check,
             prompt_override,
         } => (check, prompt_override),
     };
     let execution = RunExecution {
-        source,
+        catalog,
         mode,
         keep,
         globals,
@@ -444,7 +362,7 @@ fn run_check_phase(
     name: &str,
     entry: &TaskEntry,
     action: TaskAction<'_>,
-    source: TaskSource,
+    catalog: &TaskCatalog,
     mode: LoopRunMode,
 ) -> Result<CheckPhase> {
     let Some(cmd) = entry.check.as_deref() else {
@@ -477,19 +395,21 @@ fn run_check_phase(
     let check_duration_ms = elapsed_ms(check_started);
     let record = check_record(&outcome);
     if action == TaskAction::CheckOnly {
-        if mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
-            let _ = remove_loaded_task(name, entry, source)?;
+        if mode == LoopRunMode::Scheduled && schedule::catalog::is_ephemeral(entry) {
+            let _ = catalog.consume_scheduled(name)?;
         }
-        let mut run = RunOutcome::new(check_only_result(&outcome));
-        run.check = Some(record);
-        run.check_duration_ms = Some(check_duration_ms);
-        return Ok(CheckPhase::Done(run));
+        return Ok(CheckPhase::Done(Box::new(RunOutcome::check_result(
+            check_only_result(&outcome),
+            record,
+            check_duration_ms,
+        ))));
     }
     if !polarity_fires(entry.on, &outcome) {
-        let mut run = RunOutcome::new(LoopRunResult::CheckSkipped);
-        run.check = Some(record);
-        run.check_duration_ms = Some(check_duration_ms);
-        return Ok(CheckPhase::Done(run));
+        return Ok(CheckPhase::Done(Box::new(RunOutcome::check_result(
+            LoopRunResult::CheckSkipped,
+            record,
+            check_duration_ms,
+        ))));
     }
     if mode == LoopRunMode::Manual {
         write_check_trip_line(&mut ui::out(), entry, &record, check_duration_ms)?;
@@ -518,25 +438,22 @@ fn execute_spawn_task(
     // one already counting down buys nothing. A cold reading falls through.
     if is_ping {
         let window_running = if entry.every.as_deref() == Some("reset") {
-            reset_window_already_running(entry, &resolved.kind)?
+            reset_window_already_running(entry, resolved.kind())?
         } else {
-            window_already_running(entry, &resolved.kind)?
+            window_already_running(entry, resolved.kind())?
         };
         if window_running {
             if execution.mode == LoopRunMode::Scheduled {
                 writeln!(
                     ui::out(),
                     "loop `{name}`: {} budget window already active; skipping ping",
-                    resolved.kind
+                    resolved.kind()
                 )?;
             }
-            let mut run = RunOutcome::new(LoopRunResult::SkippedWindow);
-            run.check = check_detail;
-            run.skip_reason = Some(format!(
-                "{} budget window already counting down",
-                resolved.kind
+            return Ok(RunOutcome::skipped_window(
+                format!("{} budget window already counting down", resolved.kind()),
+                check_detail,
             ));
-            return Ok(run);
         }
     }
     let prompt = match prompt_override {
@@ -570,10 +487,10 @@ fn execute_spawn_task(
     let timeout = effective_spawn_timeout(execution.mode, task_timeout, configured_timeout);
     let mut run_globals = execution.globals.clone();
     run_globals.root = Some(entry.resolved_root());
-    if execution.mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
+    if execution.mode == LoopRunMode::Scheduled && schedule::catalog::is_ephemeral(entry) {
         // One-shot cleanup happens before the terminal run. A one-shot removed
         // pre-fire that then fails to launch is not retried.
-        let _ = remove_loaded_task(name, entry, execution.source)?;
+        let _ = execution.catalog.consume_scheduled(name)?;
     }
     let effort = entry
         .effort
@@ -601,39 +518,10 @@ fn execute_spawn_task(
         loop_task: Some(name.to_owned()),
     });
     match crate::cli::agents_cmd::run_blocking_task(args, &run_globals) {
-        Ok(Some(record)) => {
-            let status = record.status;
-            let mut run = RunOutcome::new(status.into());
-            run.check = check_detail;
-            run.run_id = Some(record.run_id.to_string());
-            run.transcript_path = record.transcript_path;
-            run.failure_tail = record.failure_tail;
-            run.last_message = record.last_message;
-            run.cost_usd = record.cost_usd;
-            run.input_tokens = record.input_tokens;
-            run.output_tokens = record.output_tokens;
-            run.exit_code = Some(status.exit_code());
-            run.streamed = stream;
-            Ok(run)
-        }
-        Ok(None) => {
-            let mut run = RunOutcome::new(LoopRunResult::Completed);
-            run.check = check_detail;
-            Ok(run)
-        }
+        Ok(Some(record)) => Ok(RunOutcome::from_run_record(record, check_detail, stream)),
+        Ok(None) => Ok(RunOutcome::completed(check_detail)),
         Err(err) => Err(err),
     }
-}
-
-fn effective_spawn_timeout(
-    mode: LoopRunMode,
-    task_timeout: Option<Duration>,
-    configured_timeout: Option<Duration>,
-) -> Option<Duration> {
-    task_timeout.or_else(|| {
-        (mode == LoopRunMode::Scheduled)
-            .then_some(configured_timeout.unwrap_or(SCHEDULED_RUN_DEFAULT_TIMEOUT))
-    })
 }
 
 fn execute_delivery_task(
@@ -651,7 +539,7 @@ fn execute_delivery_task(
                 "loop `{name}`: target {} not alive; removing schedule",
                 target.handle
             )?;
-            let _ = remove_loaded_task(name, entry, execution.source)?;
+            let _ = execution.catalog.consume_scheduled(name)?;
         }
         return Ok(target_gone_outcome(target, check_record));
     }
@@ -659,8 +547,8 @@ fn execute_delivery_task(
         Some(prompt) => prompt,
         None => resolve_task_prompt(name, entry)?,
     };
-    if execution.mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
-        let _ = remove_loaded_task(name, entry, execution.source)?;
+    if execution.mode == LoopRunMode::Scheduled && schedule::catalog::is_ephemeral(entry) {
+        let _ = execution.catalog.consume_scheduled(name)?;
     }
     let root = entry.resolved_root();
     let workspace = WorkspaceResolver::resolve_participant(".", Some(root.clone()))?;
@@ -704,10 +592,7 @@ fn execute_delivery_task(
                 &result.outcomes,
                 &result.compacted,
             )?;
-            let mut run = RunOutcome::new(LoopRunResult::Delivered);
-            run.check = check_record;
-            run.target = Some(target.handle.clone());
-            Ok(run)
+            Ok(RunOutcome::delivery(target.handle.clone(), check_record))
         }
         Err(rimz::message::dispatch::DispatchErr::Recipient(
             rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. },
@@ -718,7 +603,7 @@ fn execute_delivery_task(
                     "loop `{name}`: target {} not alive; removing schedule",
                     target.handle
                 )?;
-                let _ = remove_loaded_task(name, entry, execution.source)?;
+                let _ = execution.catalog.consume_scheduled(name)?;
             }
             Ok(target_gone_outcome(target, check_record))
         }
@@ -727,34 +612,7 @@ fn execute_delivery_task(
 }
 
 fn target_gone_outcome(target: &TaskTarget, check: Option<CheckRecord>) -> RunOutcome {
-    let mut run = RunOutcome::new(LoopRunResult::TargetGone);
-    run.check = check;
-    run.target = Some(target.handle.clone());
-    run
-}
-
-fn loop_record(
-    task: &str,
-    mode: LoopRunMode,
-    duration_ms: u64,
-    outcome: &RunOutcome,
-) -> LoopRunRecord {
-    LoopRunRecord {
-        task: task.to_owned(),
-        at: Timestamp::now(),
-        result: outcome.result,
-        mode: Some(mode),
-        duration_ms: Some(duration_ms),
-        error: None,
-        check: outcome.check.clone(),
-        run_id: outcome.run_id.clone(),
-        transcript_path: outcome.transcript_path.clone(),
-        last_message: outcome.last_message.clone(),
-        target: outcome.target.clone(),
-        cost_usd: outcome.cost_usd,
-        input_tokens: outcome.input_tokens,
-        output_tokens: outcome.output_tokens,
-    }
+    RunOutcome::target_gone(target.handle.clone(), check)
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
@@ -801,7 +659,7 @@ fn write_manual_run_summary(
     keep: bool,
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
-    if outcome.result == LoopRunResult::CheckSkipped {
+    if outcome.result() == LoopRunResult::CheckSkipped {
         return write_check_skipped_summary(
             out,
             name,
@@ -815,7 +673,7 @@ fn write_manual_run_summary(
         return write_manual_verdict(out, result, &label);
     }
 
-    let result_style = render::loop_result_style(outcome.result);
+    let result_style = render::loop_result_style(outcome.result());
     let result_label = manual_result_label(entry, outcome);
     write!(
         out,
@@ -824,26 +682,26 @@ fn write_manual_run_summary(
             result_style,
             &format!(
                 "{} {result_label}",
-                render::loop_result_glyph(outcome.result)
+                render::loop_result_glyph(outcome.result())
             )
         )
     )?;
     write!(out, " in {}", render::format_duration_ms(duration_ms))?;
     if let Some(spend) = render::spend_segments(
-        outcome.cost_usd,
-        outcome.input_tokens,
-        outcome.output_tokens,
+        outcome.cost_usd(),
+        outcome.input_tokens(),
+        outcome.output_tokens(),
     ) {
         write!(out, " · {spend}")?;
     }
     writeln!(out)?;
 
-    if is_spawn_failure(outcome.result) && !is_check_only(entry) {
+    if is_spawn_failure(outcome.result()) && !is_check_only(entry) {
         write_failure_forensics(out, name, outcome)?;
-    } else if outcome.result == LoopRunResult::Completed && outcome.run_id.is_some() {
+    } else if outcome.result() == LoopRunResult::Completed && outcome.run_id().is_some() {
         write_completion_detail(out, name, outcome)?;
     }
-    if !is_spawn_failure(outcome.result) && !keep && outcome.run_id.is_some() {
+    if !is_spawn_failure(outcome.result()) && !keep && outcome.run_id().is_some() {
         writeln!(
             out,
             "{}",
@@ -857,15 +715,15 @@ fn write_manual_run_summary(
 }
 
 fn manual_early_verdict(outcome: &RunOutcome, duration_ms: u64) -> Option<(LoopRunResult, String)> {
-    let label = match outcome.result {
+    let label = match outcome.result() {
         LoopRunResult::Expired => "deadline expired — task left in place".to_owned(),
         LoopRunResult::TargetGone => format!(
             "{} not alive — schedule left in place",
-            outcome.target.as_deref().unwrap_or("target")
+            outcome.target().unwrap_or("target")
         ),
         LoopRunResult::SkippedWindow => {
             let mut label = format!("skipped in {}", render::format_duration_ms(duration_ms));
-            if let Some(reason) = outcome.skip_reason.as_deref() {
+            if let Some(reason) = outcome.skip_reason() {
                 label.push_str(" — ");
                 label.push_str(reason);
             }
@@ -873,7 +731,7 @@ fn manual_early_verdict(outcome: &RunOutcome, duration_ms: u64) -> Option<(LoopR
         }
         _ => return None,
     };
-    Some((outcome.result, label))
+    Some((outcome.result(), label))
 }
 
 fn is_spawn_failure(result: LoopRunResult) -> bool {
@@ -893,7 +751,7 @@ fn write_scheduled_run_summary(
     duration_ms: u64,
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
-    if outcome.result == LoopRunResult::CheckSkipped {
+    if outcome.result() == LoopRunResult::CheckSkipped {
         return write_check_skipped_summary(
             out,
             name,
@@ -903,10 +761,10 @@ fn write_scheduled_run_summary(
             outcome,
         );
     }
-    let result_style = render::loop_result_style(outcome.result);
+    let result_style = render::loop_result_style(outcome.result());
     let exit_label = outcome_exit_label(outcome);
-    if is_spawn_failure(outcome.result) {
-        let mut label = outcome.result.label().to_owned();
+    if is_spawn_failure(outcome.result()) {
+        let mut label = outcome.result().label().to_owned();
         if let Some(exit_label) = exit_label.as_deref() {
             label.push(' ');
             label.push_str(exit_label);
@@ -918,9 +776,9 @@ fn write_scheduled_run_summary(
         )?;
         write!(out, " in {}", render::format_duration_ms(duration_ms))?;
         if let Some(spend) = render::spend_segments(
-            outcome.cost_usd,
-            outcome.input_tokens,
-            outcome.output_tokens,
+            outcome.cost_usd(),
+            outcome.input_tokens(),
+            outcome.output_tokens(),
         ) {
             write!(out, " · {spend}")?;
         }
@@ -938,14 +796,14 @@ fn write_scheduled_run_summary(
         }
         write!(out, " in {}", render::format_duration_ms(duration_ms))?;
         if let Some(spend) = render::spend_segments(
-            outcome.cost_usd,
-            outcome.input_tokens,
-            outcome.output_tokens,
+            outcome.cost_usd(),
+            outcome.input_tokens(),
+            outcome.output_tokens(),
         ) {
             write!(out, " · {spend}")?;
         }
         writeln!(out)?;
-        if outcome.result == LoopRunResult::Completed && outcome.run_id.is_some() {
+        if outcome.result() == LoopRunResult::Completed && outcome.run_id().is_some() {
             write_completion_detail(out, name, outcome)?;
         }
     }
@@ -953,15 +811,15 @@ fn write_scheduled_run_summary(
 }
 
 fn success_result_label(outcome: &RunOutcome) -> String {
-    match (outcome.result, outcome.target.as_deref()) {
+    match (outcome.result(), outcome.target()) {
         (LoopRunResult::Delivered, Some(target)) => format!("delivered to {target}"),
-        _ => outcome.result.label().to_owned(),
+        _ => outcome.result().label().to_owned(),
     }
 }
 
 fn manual_result_label(entry: &TaskEntry, outcome: &RunOutcome) -> String {
     if is_check_only(entry)
-        && let Some(check) = outcome.check.as_ref()
+        && let Some(check) = outcome.check()
     {
         return check_result_label(check);
     }
@@ -1036,13 +894,12 @@ fn write_check_skipped_summary(
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
     let label = outcome
-        .check
-        .as_ref()
+        .check()
         .map(check_result_label)
         .unwrap_or_else(|| "check skipped".to_owned());
-    let check_duration_ms = outcome.check_duration_ms.unwrap_or(duration_ms);
+    let check_duration_ms = outcome.check_duration_ms().unwrap_or(duration_ms);
     let duration = render::format_duration_ms(check_duration_ms);
-    let (glyph, style) = render::check_skip_display(outcome.check.as_ref());
+    let (glyph, style) = render::check_skip_display(outcome.check());
     if mode == LoopRunMode::Manual {
         write!(
             out,
@@ -1084,14 +941,14 @@ fn write_failure_forensics(
 }
 
 fn write_run_links(out: &mut impl Write, outcome: &RunOutcome) -> std::io::Result<()> {
-    if let Some(run_id) = outcome.run_id.as_deref() {
+    if let Some(run_id) = outcome.run_id() {
         writeln!(
             out,
             "{}",
             ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
         )?;
     }
-    if let Some(transcript) = outcome.transcript_path.as_deref() {
+    if let Some(transcript) = outcome.transcript_path() {
         writeln!(
             out,
             "{}",
@@ -1106,12 +963,8 @@ fn write_completion_detail(
     name: &str,
     outcome: &RunOutcome,
 ) -> std::io::Result<()> {
-    if !outcome.streamed {
-        if let Some(message) = outcome
-            .last_message
-            .as_deref()
-            .filter(|msg| !msg.trim().is_empty())
-        {
+    if !outcome.streamed() {
+        if let Some(message) = outcome.last_message().filter(|msg| !msg.trim().is_empty()) {
             render::write_gutter_block(out, None, message)?;
         } else {
             writeln!(
@@ -1128,14 +981,14 @@ fn write_completion_detail(
 }
 
 fn outcome_exit_label(outcome: &RunOutcome) -> Option<String> {
-    if let Some(exit) = outcome.exit_code {
+    if let Some(exit) = outcome.exit_code() {
         if exit == 0 {
             return None;
         }
         Some(format!("(exit {exit})"))
-    } else if let Some(exit) = outcome.check.as_ref().and_then(|check| check.code) {
+    } else if let Some(exit) = outcome.check().and_then(|check| check.code) {
         Some(format!("(exit {exit})"))
-    } else if outcome.check.as_ref().is_some_and(|check| check.timed_out) {
+    } else if outcome.check().is_some_and(|check| check.timed_out) {
         Some("(timeout)".to_owned())
     } else {
         None
@@ -1144,13 +997,12 @@ fn outcome_exit_label(outcome: &RunOutcome) -> Option<String> {
 
 fn outcome_failure_tail(outcome: &RunOutcome) -> Option<String> {
     if let Some(tail) = outcome
-        .failure_tail
-        .as_deref()
+        .failure_tail()
         .filter(|tail| !tail.trim().is_empty())
     {
         return Some(tail.trim_end().to_owned());
     }
-    let check = outcome.check.as_ref()?;
+    let check = outcome.check()?;
     if !check.timed_out && check.code == Some(0) {
         return None;
     }
@@ -1176,31 +1028,6 @@ fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool>
     }))
 }
 
-pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
-    let mut reaped = 0;
-    for (name, (entry, source)) in instances::load_all() {
-        let target = match task_action(&name, &entry) {
-            Ok(TaskAction::Deliver(target)) => target,
-            Ok(TaskAction::Spawn(_) | TaskAction::CheckOnly) => continue,
-            Err(err) => {
-                tracing::debug!(task = %name, error = %err, "invalid loop task skipped by schedule gc");
-                continue;
-            }
-        };
-        match delivery_target_alive(&entry, target) {
-            Ok(true) => {}
-            Ok(false) => {
-                let _ = remove_loaded_task(&name, &entry, source)?;
-                reaped += 1;
-            }
-            Err(err) => {
-                tracing::debug!(task = %name, error = %err, "loop schedule gc skipped task");
-            }
-        }
-    }
-    Ok(reaped)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1219,7 +1046,7 @@ mod tests {
         );
         assert_eq!(
             effective_spawn_timeout(LoopRunMode::Scheduled, None, None),
-            Some(SCHEDULED_RUN_DEFAULT_TIMEOUT)
+            Some(rimz::harness::schedule::runner::SCHEDULED_RUN_DEFAULT_TIMEOUT)
         );
         assert_eq!(
             effective_spawn_timeout(LoopRunMode::Manual, None, Some(configured)),
@@ -1306,11 +1133,13 @@ mod tests {
     #[test]
     fn failed_summary_links_run_transcript_and_loop_show() {
         let entry = spawn_entry(false, CheckOn::Fail);
-        let mut outcome = RunOutcome::new(LoopRunResult::Failed);
-        outcome.exit_code = Some(1);
-        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
-        outcome.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
-        outcome.failure_tail = Some("error: boom\nUsage: codex [OPTIONS] [PROMPT]".to_owned());
+        let outcome = RunOutcome::terminal(LoopRunResult::Failed)
+            .with_exit_code(Some(1))
+            .with_run_id(Some("run_0123456789abcdef01234567".to_owned()))
+            .with_transcript_path(Some("/tmp/transcript.jsonl".to_owned()))
+            .with_failure_tail(Some(
+                "error: boom\nUsage: codex [OPTIONS] [PROMPT]".to_owned(),
+            ));
 
         let out = summary(
             "watchdog",
@@ -1330,13 +1159,15 @@ mod tests {
 
     #[test]
     fn skipped_check_summary_uses_check_time_and_action_verbs() {
-        let mut spawn = RunOutcome::new(LoopRunResult::CheckSkipped);
-        spawn.check = Some(CheckRecord {
-            code: Some(0),
-            timed_out: false,
-            output: "ok".to_owned(),
-        });
-        spawn.check_duration_ms = Some(4_400);
+        let spawn = RunOutcome::check_result(
+            LoopRunResult::CheckSkipped,
+            CheckRecord {
+                code: Some(0),
+                timed_out: false,
+                output: "ok".to_owned(),
+            },
+            4_400,
+        );
         let entry = spawn_entry(true, CheckOn::Fail);
         assert_eq!(
             summary(
@@ -1366,13 +1197,15 @@ mod tests {
             " — codex not started; fires when the check fails"
         )));
 
-        let mut wake = RunOutcome::new(LoopRunResult::CheckSkipped);
-        wake.check = Some(CheckRecord {
-            code: Some(1),
-            timed_out: false,
-            output: "no".to_owned(),
-        });
-        wake.check_duration_ms = Some(2_000);
+        let wake = RunOutcome::check_result(
+            LoopRunResult::CheckSkipped,
+            CheckRecord {
+                code: Some(1),
+                timed_out: false,
+                output: "no".to_owned(),
+            },
+            2_000,
+        );
         let entry = wake_entry(true, CheckOn::Success);
         assert_eq!(
             summary("nudge", &entry, 8_000, LoopRunMode::Manual, false, &wake,),
@@ -1383,13 +1216,15 @@ mod tests {
     #[test]
     fn scheduled_check_skip_keeps_compact_task_prefix() {
         let entry = spawn_entry(true, CheckOn::Fail);
-        let mut outcome = RunOutcome::new(LoopRunResult::CheckSkipped);
-        outcome.check = Some(CheckRecord {
-            code: Some(0),
-            timed_out: false,
-            output: "ok".to_owned(),
-        });
-        outcome.check_duration_ms = Some(700);
+        let outcome = RunOutcome::check_result(
+            LoopRunResult::CheckSkipped,
+            CheckRecord {
+                code: Some(0),
+                timed_out: false,
+                output: "ok".to_owned(),
+            },
+            700,
+        );
 
         assert_eq!(
             summary(
@@ -1423,14 +1258,12 @@ mod tests {
 
     #[test]
     fn completed_spawn_summary_prints_cost_message_and_keep_hint() {
-        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
-        outcome.exit_code = Some(0);
-        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
-        outcome.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
-        outcome.last_message = Some("pong\n".to_owned());
-        outcome.cost_usd = Some(0.42);
-        outcome.input_tokens = Some(12_000);
-        outcome.output_tokens = Some(3_400);
+        let outcome = RunOutcome::completed(None)
+            .with_exit_code(Some(0))
+            .with_run_id(Some("run_0123456789abcdef01234567".to_owned()))
+            .with_transcript_path(Some("/tmp/transcript.jsonl".to_owned()))
+            .with_last_message(Some("pong\n".to_owned()))
+            .with_cost(Some(0.42), Some(12_000), Some(3_400));
 
         assert_eq!(
             summary(
@@ -1447,11 +1280,11 @@ mod tests {
 
     #[test]
     fn streamed_spawn_summary_skips_repeated_message_and_links_run() {
-        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
-        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
-        outcome.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
-        outcome.last_message = Some("already streamed".to_owned());
-        outcome.streamed = true;
+        let outcome = RunOutcome::completed(None)
+            .with_run_id(Some("run_0123456789abcdef01234567".to_owned()))
+            .with_transcript_path(Some("/tmp/transcript.jsonl".to_owned()))
+            .with_last_message(Some("already streamed".to_owned()))
+            .with_streamed(true);
 
         assert_eq!(
             summary(
@@ -1468,10 +1301,7 @@ mod tests {
 
     #[test]
     fn scheduled_summary_prints_run_spend() {
-        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
-        outcome.cost_usd = Some(0.09);
-        outcome.input_tokens = Some(14_000);
-        outcome.output_tokens = Some(269);
+        let outcome = RunOutcome::completed(None).with_cost(Some(0.09), Some(14_000), Some(269));
 
         assert_eq!(
             summary(
@@ -1485,8 +1315,9 @@ mod tests {
             "loop `watchdog`: completed in 2m · $0.09 · ↘ 14k ↗ 269\n"
         );
 
-        outcome.result = LoopRunResult::Failed;
-        outcome.exit_code = Some(1);
+        let outcome = RunOutcome::terminal(LoopRunResult::Failed)
+            .with_exit_code(Some(1))
+            .with_cost(Some(0.09), Some(14_000), Some(269));
         assert_eq!(
             summary(
                 "watchdog",
@@ -1502,10 +1333,10 @@ mod tests {
 
     #[test]
     fn completed_spawn_summary_falls_back_when_last_message_is_blank() {
-        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
-        outcome.exit_code = Some(0);
-        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
-        outcome.last_message = Some(" \n".to_owned());
+        let outcome = RunOutcome::completed(None)
+            .with_exit_code(Some(0))
+            .with_run_id(Some("run_0123456789abcdef01234567".to_owned()))
+            .with_last_message(Some(" \n".to_owned()));
         assert_eq!(
             summary(
                 "watchdog",
@@ -1521,8 +1352,7 @@ mod tests {
 
     #[test]
     fn delivered_summary_names_target_handle() {
-        let mut outcome = RunOutcome::new(LoopRunResult::Delivered);
-        outcome.target = Some("@planner".to_owned());
+        let outcome = RunOutcome::delivery("@planner", None);
 
         assert_eq!(
             summary(
@@ -1559,12 +1389,11 @@ mod tests {
                 "✗ check timed out in 1.2s\n",
             ),
         ] {
-            let mut outcome = RunOutcome::new(result);
-            outcome.check = Some(CheckRecord {
+            let outcome = RunOutcome::terminal(result).with_check(Some(CheckRecord {
                 code,
                 timed_out,
                 output: "detail".to_owned(),
-            });
+            }));
             assert_eq!(
                 summary(
                     "certs",
@@ -1581,10 +1410,10 @@ mod tests {
 
     #[test]
     fn keep_hint_only_prints_for_manual_spawn_without_keep() {
-        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
-        outcome.exit_code = Some(0);
-        outcome.run_id = Some("run_0123456789abcdef01234567".to_owned());
-        outcome.last_message = Some("done".to_owned());
+        let outcome = RunOutcome::completed(None)
+            .with_exit_code(Some(0))
+            .with_run_id(Some("run_0123456789abcdef01234567".to_owned()))
+            .with_last_message(Some("done".to_owned()));
         let entry = spawn_entry(false, CheckOn::Fail);
 
         for (mode, keep, should_hint) in [
@@ -1604,14 +1433,13 @@ mod tests {
     #[test]
     fn manual_early_exits_explain_what_stays_in_place() {
         let entry = wake_entry(false, CheckOn::Fail);
-        let mut gone = RunOutcome::new(LoopRunResult::TargetGone);
-        gone.target = Some("@planner".to_owned());
+        let gone = RunOutcome::target_gone("@planner", None);
         assert_eq!(
             summary("nudge", &entry, 100, LoopRunMode::Manual, false, &gone,),
             "○ @planner not alive — schedule left in place\n"
         );
 
-        let expired = RunOutcome::new(LoopRunResult::Expired);
+        let expired = RunOutcome::expiry();
         assert_eq!(
             summary("nudge", &entry, 100, LoopRunMode::Manual, false, &expired,),
             "○ deadline expired — task left in place\n"
@@ -1619,11 +1447,11 @@ mod tests {
     }
 
     #[test]
-    fn loop_record_copies_transcript_path() {
-        let mut outcome = RunOutcome::new(LoopRunResult::Completed);
-        outcome.transcript_path = Some("/tmp/rimz/session.jsonl".to_owned());
+    fn outcome_record_copies_transcript_path() {
+        let outcome = RunOutcome::completed(None)
+            .with_transcript_path(Some("/tmp/rimz/session.jsonl".to_owned()));
 
-        let record = loop_record("wake", LoopRunMode::Manual, 123, &outcome);
+        let record = outcome.record("wake", LoopRunMode::Manual, 123);
 
         assert_eq!(
             record.transcript_path.as_deref(),

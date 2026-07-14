@@ -11,17 +11,15 @@ use std::path::{Path, PathBuf};
 use jiff::{Timestamp, Zoned};
 
 use super::pauses::PauseEntry;
-use super::{instances, pauses};
+use super::{catalog::TaskCatalog, pauses};
 use crate::RuntimePaths;
 use crate::agents::longest_window_reset_at;
-use crate::config::effective;
-use crate::config::{TaskEntry, Tasks};
+use crate::config::TaskEntry;
 use crate::harness::schedule;
 use crate::ids::WorkspaceId;
 use crate::store::atomic::write_temp_then_rename_cache;
-use crate::store::paths::{StatePaths, config_home};
+use crate::store::paths::StatePaths;
 use crate::store::workspace_record;
-use crate::trust::TrustState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
@@ -31,13 +29,18 @@ enum Action {
 
 pub(crate) fn fire_due_tasks(runtime: &RuntimePaths, now: &Zoned) {
     let project_root = workspace_project_root(runtime);
-    let project_tasks = project_root
-        .as_deref()
-        .and_then(|root| trusted_project_tasks(root, runtime));
     let tasks = workspace_tasks(
-        instances::load_all_with_project(project_tasks.map(|tasks| (tasks, TrustState::Trusted)))
-            .into_iter()
-            .map(|(name, (entry, _))| (name, entry))
+        TaskCatalog::load_lenient(project_root.as_deref())
+            .runnable()
+            .iter()
+            .filter(|(_, task)| {
+                !matches!(
+                    task.source,
+                    super::catalog::TaskSource::Project { state }
+                        if state != crate::trust::TrustState::Trusted
+                )
+            })
+            .map(|(name, task)| (name.clone(), task.entry.clone()))
             .collect(),
         &runtime.workspace_id,
     );
@@ -73,31 +76,6 @@ fn workspace_project_root(runtime: &RuntimePaths) -> Option<PathBuf> {
                 workspace = %runtime.workspace_id,
                 error = &err as &dyn std::error::Error,
                 "loop elder skipped project tasks without workspace record"
-            );
-            None
-        }
-    }
-}
-
-fn trusted_project_tasks(project_root: &Path, runtime: &RuntimePaths) -> Option<Tasks> {
-    match effective::project_tasks(project_root, &config_home()) {
-        Ok(Some(project)) if project.state == TrustState::Trusted => Some(project.tasks),
-        Ok(Some(project)) => {
-            tracing::debug!(
-                workspace = %runtime.workspace_id,
-                root = %project_root.display(),
-                state = project.state.as_str(),
-                "loop elder skipped untrusted project tasks"
-            );
-            None
-        }
-        Ok(None) => None,
-        Err(err) => {
-            tracing::debug!(
-                workspace = %runtime.workspace_id,
-                root = %project_root.display(),
-                error = &err as &dyn std::error::Error,
-                "loop elder skipped invalid project tasks"
             );
             None
         }

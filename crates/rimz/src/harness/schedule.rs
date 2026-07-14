@@ -12,9 +12,10 @@
 
 use std::time::Duration;
 
-use crate::config::TaskEntry;
+use crate::config::{TaskEntry, TaskTarget};
 use jiff::{SignedDuration, Timestamp, Zoned};
 
+pub mod catalog;
 pub mod config_edit;
 pub(crate) mod fire;
 pub mod instances;
@@ -24,6 +25,74 @@ pub mod runner;
 pub mod strikes;
 
 pub use fire::last_stamps;
+
+/// Executable action encoded by one loop task entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskAction<'a> {
+    Spawn(&'a str),
+    Deliver(&'a TaskTarget),
+    CheckOnly,
+}
+
+/// Invalid combinations of loop task action fields.
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
+pub enum TaskActionErr {
+    #[error(
+        "loop task `{name}` sets `verify` without `agent`; verification needs a supervised agent run"
+    )]
+    VerifyWithoutAgent { name: String },
+    #[error("loop task `{name}` sets `max-attempts` without `verify`")]
+    AttemptsWithoutVerify { name: String },
+    #[error("loop task `{name}` sets `max-attempts` to 0; use at least 1")]
+    ZeroAttempts { name: String },
+    #[error("loop task `{name}` sets both `agent` and `wake`; keep exactly one")]
+    ConflictingActions { name: String },
+    #[error("loop task `{name}` needs `agent`, `wake`, or `check`")]
+    MissingAction { name: String },
+}
+
+impl<'a> TaskAction<'a> {
+    pub fn from_entry(name: &str, entry: &'a TaskEntry) -> Result<Self, TaskActionErr> {
+        if entry.verify.is_some() && entry.agent.is_none() {
+            return Err(TaskActionErr::VerifyWithoutAgent {
+                name: name.to_owned(),
+            });
+        }
+        if entry.max_attempts.is_some() && entry.verify.is_none() {
+            return Err(TaskActionErr::AttemptsWithoutVerify {
+                name: name.to_owned(),
+            });
+        }
+        if entry.max_attempts == Some(0) {
+            return Err(TaskActionErr::ZeroAttempts {
+                name: name.to_owned(),
+            });
+        }
+        match (entry.agent.as_deref(), entry.wake.as_ref()) {
+            (Some(agent), None) if !agent.trim().is_empty() => Ok(Self::Spawn(agent)),
+            (None, Some(target)) => Ok(Self::Deliver(target)),
+            (None, None) if entry.check.is_some() => Ok(Self::CheckOnly),
+            (Some(_), Some(_)) => Err(TaskActionErr::ConflictingActions {
+                name: name.to_owned(),
+            }),
+            _ => Err(TaskActionErr::MissingAction {
+                name: name.to_owned(),
+            }),
+        }
+    }
+
+    pub fn subject(self) -> &'a str {
+        match self {
+            Self::Spawn(spec) => spec,
+            Self::Deliver(target) => &target.handle,
+            Self::CheckOnly => "check",
+        }
+    }
+
+    pub const fn is_check_only(self) -> bool {
+        matches!(self, Self::CheckOnly)
+    }
+}
 
 /// Errors from parsing or validating a schedule entry.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

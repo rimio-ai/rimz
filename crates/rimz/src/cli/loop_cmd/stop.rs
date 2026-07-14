@@ -5,7 +5,9 @@ use super::*;
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
 pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
-    let (entry, _) = load_runnable_task(name, globals)?
+    let entry = task_catalog(globals)?
+        .for_run(name)
+        .map(|task| task.entry.clone())
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))?;
     let lock_state = probe_run_lock(name, &entry)?;
     if next_stop_action(&lock_state, false, false, false) == StopAction::Done {
@@ -44,7 +46,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
         && let Some(info) = holder
         && wait_for_run_lock_release(name, &entry, STOP_GRACE)?
     {
-        append_stopped_record(name, info, run.as_ref());
+        append_stopped_record(name, &entry, info, run.as_ref());
         write_stopped(name, run.as_ref(), true)?;
         return Ok(());
     }
@@ -88,21 +90,20 @@ fn lock_info(state: &RunLockState) -> Option<RunLockInfo> {
     }
 }
 
-fn append_stopped_record(name: &str, info: RunLockInfo, run: Option<&RunRecord>) {
+fn append_stopped_record(
+    name: &str,
+    entry: &TaskEntry,
+    info: RunLockInfo,
+    run: Option<&RunRecord>,
+) {
     let elapsed = Timestamp::now()
         .as_millisecond()
         .saturating_sub(info.started_at.as_millisecond());
     let duration_ms = u64::try_from(elapsed).unwrap_or(0);
-    let mut record = LoopRunRecord::new(
-        name,
-        LoopRunResult::Canceled,
-        LoopRunMode::Scheduled,
-        duration_ms,
-    );
+    let mut record = LoopRunOutcome::cancellation(run.map(|record| record.run_id.to_string()))
+        .record(name, LoopRunMode::Scheduled, duration_ms);
     record.mode = None;
-    record.error = Some("stopped by rimz loop stop".to_owned());
-    record.run_id = run.map(|record| record.run_id.to_string());
-    run_log::append(&record);
+    run_log::record_transition(name, entry, record);
 }
 
 fn write_stopped(name: &str, run: Option<&RunRecord>, signaled: bool) -> std::io::Result<()> {

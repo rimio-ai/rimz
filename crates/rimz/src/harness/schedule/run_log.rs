@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
-use crate::harness::run::RunStatus;
+use crate::config::TaskEntry;
+use crate::harness::run::{RunRecord, RunStatus};
+use crate::harness::schedule::{pauses, strikes};
 use crate::store::paths::state_home;
 
 const NAME: &str = "loop-runs.log.jsonl";
@@ -22,6 +24,299 @@ const CHECK_OUTPUT_CAP: usize = 4 * 1024;
 const ERROR_CAP: usize = 2 * 1024;
 const LAST_MESSAGE_CAP: usize = 2 * 1024;
 pub const COST_WINDOW: usize = 10;
+
+/// Terminal loop execution facts. Rendering-only detail stays alongside the
+/// durable fields so every exit path converts through one record builder.
+#[derive(Clone, Debug)]
+pub struct LoopRunOutcome {
+    result: LoopRunResult,
+    record_error: Option<String>,
+    check: Option<CheckRecord>,
+    check_duration_ms: Option<u64>,
+    run_id: Option<String>,
+    transcript_path: Option<String>,
+    failure_tail: Option<String>,
+    last_message: Option<String>,
+    target: Option<String>,
+    exit_code: Option<i32>,
+    cost_usd: Option<f64>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    skip_reason: Option<String>,
+    streamed: bool,
+}
+
+impl LoopRunOutcome {
+    fn new(result: LoopRunResult) -> Self {
+        Self {
+            result,
+            record_error: None,
+            check: None,
+            check_duration_ms: None,
+            run_id: None,
+            transcript_path: None,
+            failure_tail: None,
+            last_message: None,
+            target: None,
+            exit_code: None,
+            cost_usd: None,
+            input_tokens: None,
+            output_tokens: None,
+            skip_reason: None,
+            streamed: false,
+        }
+    }
+
+    pub fn completed(check: Option<CheckRecord>) -> Self {
+        Self::new(LoopRunResult::Completed).with_check(check)
+    }
+
+    pub fn terminal(result: LoopRunResult) -> Self {
+        Self::new(result)
+    }
+
+    pub fn check_result(result: LoopRunResult, check: CheckRecord, duration_ms: u64) -> Self {
+        Self::new(result)
+            .with_check(Some(check))
+            .with_check_duration(duration_ms)
+    }
+
+    pub fn from_run_record(record: RunRecord, check: Option<CheckRecord>, streamed: bool) -> Self {
+        let status = record.status;
+        Self::new(status.into())
+            .with_check(check)
+            .with_run_id(Some(record.run_id.to_string()))
+            .with_transcript_path(record.transcript_path)
+            .with_failure_tail(record.failure_tail)
+            .with_last_message(record.last_message)
+            .with_cost(record.cost_usd, record.input_tokens, record.output_tokens)
+            .with_exit_code(Some(status.exit_code()))
+            .with_streamed(streamed)
+    }
+
+    pub fn delivery(target: impl Into<String>, check: Option<CheckRecord>) -> Self {
+        Self::new(LoopRunResult::Delivered)
+            .with_target(Some(target.into()))
+            .with_check(check)
+    }
+
+    pub fn target_gone(target: impl Into<String>, check: Option<CheckRecord>) -> Self {
+        Self::new(LoopRunResult::TargetGone)
+            .with_target(Some(target.into()))
+            .with_check(check)
+    }
+
+    pub fn expiry() -> Self {
+        Self::new(LoopRunResult::Expired)
+    }
+
+    pub fn skipped_window(reason: impl Into<String>, check: Option<CheckRecord>) -> Self {
+        Self::new(LoopRunResult::SkippedWindow)
+            .with_skip_reason(Some(reason.into()))
+            .with_check(check)
+    }
+
+    pub fn gate_skip(result: LoopRunResult, reason: impl Into<String>) -> Self {
+        Self::new(result).with_record_error(Some(reason.into()))
+    }
+
+    pub fn overlap(reason: Option<String>) -> Self {
+        Self::new(LoopRunResult::Overlapped).with_record_error(reason)
+    }
+
+    pub fn cancellation(run_id: Option<String>) -> Self {
+        Self::new(LoopRunResult::Canceled)
+            .with_record_error(Some("stopped by rimz loop stop".to_owned()))
+            .with_run_id(run_id)
+    }
+
+    pub fn error(error: impl Into<String>) -> Self {
+        Self::new(LoopRunResult::Errored).with_record_error(Some(error.into()))
+    }
+
+    pub fn with_check(mut self, check: Option<CheckRecord>) -> Self {
+        self.check = check;
+        self
+    }
+
+    fn with_record_error(mut self, error: Option<String>) -> Self {
+        self.record_error = error;
+        self
+    }
+
+    pub fn with_check_duration(mut self, duration_ms: u64) -> Self {
+        self.check_duration_ms = Some(duration_ms);
+        self
+    }
+
+    pub fn with_run_id(mut self, run_id: Option<String>) -> Self {
+        self.run_id = run_id;
+        self
+    }
+
+    pub fn with_transcript_path(mut self, path: Option<String>) -> Self {
+        self.transcript_path = path;
+        self
+    }
+
+    pub fn with_failure_tail(mut self, tail: Option<String>) -> Self {
+        self.failure_tail = tail;
+        self
+    }
+
+    pub fn with_last_message(mut self, message: Option<String>) -> Self {
+        self.last_message = message;
+        self
+    }
+
+    pub fn with_target(mut self, target: Option<String>) -> Self {
+        self.target = target;
+        self
+    }
+
+    pub fn with_exit_code(mut self, exit_code: Option<i32>) -> Self {
+        self.exit_code = exit_code;
+        self
+    }
+
+    pub fn with_cost(
+        mut self,
+        cost_usd: Option<f64>,
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+    ) -> Self {
+        self.cost_usd = cost_usd;
+        self.input_tokens = input_tokens;
+        self.output_tokens = output_tokens;
+        self
+    }
+
+    pub fn with_skip_reason(mut self, reason: Option<String>) -> Self {
+        self.skip_reason = reason;
+        self
+    }
+
+    pub fn with_streamed(mut self, streamed: bool) -> Self {
+        self.streamed = streamed;
+        self
+    }
+
+    pub const fn result(&self) -> LoopRunResult {
+        self.result
+    }
+
+    pub fn check(&self) -> Option<&CheckRecord> {
+        self.check.as_ref()
+    }
+
+    pub const fn check_duration_ms(&self) -> Option<u64> {
+        self.check_duration_ms
+    }
+
+    pub fn run_id(&self) -> Option<&str> {
+        self.run_id.as_deref()
+    }
+
+    pub fn transcript_path(&self) -> Option<&str> {
+        self.transcript_path.as_deref()
+    }
+
+    pub fn failure_tail(&self) -> Option<&str> {
+        self.failure_tail.as_deref()
+    }
+
+    pub fn last_message(&self) -> Option<&str> {
+        self.last_message.as_deref()
+    }
+
+    pub fn target(&self) -> Option<&str> {
+        self.target.as_deref()
+    }
+
+    pub const fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
+
+    pub const fn cost_usd(&self) -> Option<f64> {
+        self.cost_usd
+    }
+
+    pub const fn input_tokens(&self) -> Option<u64> {
+        self.input_tokens
+    }
+
+    pub const fn output_tokens(&self) -> Option<u64> {
+        self.output_tokens
+    }
+
+    pub fn skip_reason(&self) -> Option<&str> {
+        self.skip_reason.as_deref()
+    }
+
+    pub const fn streamed(&self) -> bool {
+        self.streamed
+    }
+
+    pub fn record(&self, task: &str, mode: LoopRunMode, duration_ms: u64) -> LoopRunRecord {
+        LoopRunRecord {
+            task: task.to_owned(),
+            at: Timestamp::now(),
+            result: self.result,
+            mode: Some(mode),
+            duration_ms: Some(duration_ms),
+            error: self.record_error.clone(),
+            check: self.check.clone(),
+            run_id: self.run_id.clone(),
+            transcript_path: self.transcript_path.clone(),
+            last_message: self.last_message.clone(),
+            target: self.target.clone(),
+            cost_usd: self.cost_usd,
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunTransition {
+    Recorded,
+    AutoPaused { strikes: u32 },
+}
+
+/// Append first, then update strike and pause overlays. Overlay failures stay
+/// best-effort because the terminal history row is durable truth.
+pub fn record_transition(name: &str, entry: &TaskEntry, record: LoopRunRecord) -> RunTransition {
+    append(&record);
+    let signal = strikes::classify(&record);
+    let count = match strikes::note(name, signal) {
+        Ok(count) => count,
+        Err(err) => {
+            tracing::warn!(task = name, error = %err, "loop strike state update failed");
+            return RunTransition::Recorded;
+        }
+    };
+    let Some(max) = strikes::threshold(entry) else {
+        return RunTransition::Recorded;
+    };
+    if signal != strikes::Signal::Strike || count < max {
+        return RunTransition::Recorded;
+    }
+    match pauses::set_if_inactive(
+        name,
+        pauses::PauseEntry {
+            until: None,
+            strikes: Some(count),
+        },
+        Timestamp::now(),
+    ) {
+        Ok(true) => RunTransition::AutoPaused { strikes: count },
+        Ok(false) => RunTransition::Recorded,
+        Err(err) => {
+            tracing::warn!(task = name, error = %err, "loop auto-pause state update failed");
+            RunTransition::Recorded
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LoopRunRecord {

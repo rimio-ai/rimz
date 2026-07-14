@@ -931,11 +931,7 @@ fn source_detail(source: TaskSource, entry: &TaskEntry) -> String {
 }
 
 fn source_path(source: TaskSource, entry: &TaskEntry) -> PathBuf {
-    match source {
-        TaskSource::Config => MachineConfig::loop_path(),
-        TaskSource::Project { .. } => project_config_path(&entry.root),
-        TaskSource::Instance => instances::path(&state_home()),
-    }
+    source.path(entry)
 }
 
 fn display_path(path: &Path) -> String {
@@ -1240,9 +1236,7 @@ fn write_show_facts(
                     .r#loop
                     .default_timeout
                     .clone()
-                    .unwrap_or_else(|| {
-                        run_tasks::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned()
-                    })
+                    .unwrap_or_else(|| { SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned() })
             )
         })
     });

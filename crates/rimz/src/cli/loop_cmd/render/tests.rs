@@ -455,7 +455,11 @@ fn source_detail_names_definition_path() {
         source_detail(TaskSource::Instance, &entry),
         format!(
             "state — {}",
-            ui::home_relative(instances::path(&state_home()).to_string_lossy().as_ref())
+            ui::home_relative(
+                schedule::catalog::instances_path(&state_home())
+                    .to_string_lossy()
+                    .as_ref(),
+            )
         )
     );
 }

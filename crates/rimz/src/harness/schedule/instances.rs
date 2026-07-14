@@ -6,141 +6,55 @@
 //! edits. Readers merge both backings here; durable config wins when both
 //! stores contain a name.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::{MachineConfig, TaskEntry, Tasks};
+use crate::config::{TaskEntry, Tasks};
 use crate::store::atomic::{Result, write_temp_then_rename_cache};
 use crate::store::paths::state_home;
-use crate::trust::TrustState;
+use anyhow::Context;
 
 const NAME: &str = "loop-instances.json";
 
-pub fn path(state_root: &Path) -> PathBuf {
+pub(super) fn path(state_root: &Path) -> PathBuf {
     state_root.join("rimz").join(NAME)
 }
 
-pub fn load() -> Tasks {
+pub(super) fn load() -> Tasks {
     load_from(&state_home())
 }
 
-pub fn load_all() -> BTreeMap<String, (TaskEntry, TaskSource)> {
-    load_all_with_project(None)
-}
-
-pub fn load_entry(name: &str) -> Option<(TaskEntry, TaskSource)> {
-    load_all().remove(name)
-}
-
-pub fn load_all_with_project(
-    project: Option<(Tasks, TrustState)>,
-) -> BTreeMap<String, (TaskEntry, TaskSource)> {
-    load_all_from_layers(
-        load(),
-        MachineConfig::load_lenient().r#loop.tasks.clone(),
-        trusted_project(project),
-    )
-}
-
-pub fn load_entry_with_project(
-    name: &str,
-    project: Option<(Tasks, TrustState)>,
-) -> Option<(TaskEntry, TaskSource)> {
-    load_all_with_project(project).remove(name)
-}
-
-pub fn load_all_visible_with_project(
-    project: Option<(Tasks, TrustState)>,
-) -> BTreeMap<String, (TaskEntry, TaskSource)> {
-    load_all_from_layers(
-        load(),
-        MachineConfig::load_lenient().r#loop.tasks.clone(),
-        project,
-    )
-}
-
-pub fn load_entry_visible_with_project(
-    name: &str,
-    project: Option<(Tasks, TrustState)>,
-) -> Option<(TaskEntry, TaskSource)> {
-    load_all_visible_with_project(project).remove(name)
-}
-
-pub fn is_ephemeral(entry: &TaskEntry) -> bool {
+pub(super) fn is_ephemeral(entry: &TaskEntry) -> bool {
     (entry.every.is_none() && entry.cron.is_none()) || entry.deadline.is_some()
 }
 
-pub fn insert(name: &str, entry: &TaskEntry) -> Result<()> {
+pub(super) fn insert(name: &str, entry: &TaskEntry) -> Result<()> {
     insert_into(&state_home(), name, entry)
 }
 
-pub fn remove(name: &str) -> Result<bool> {
+pub(super) fn remove(name: &str) -> Result<bool> {
     remove_from(&state_home(), name)
 }
 
-pub fn rename(old: &str, new: &str) -> Result<bool> {
+pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
     rename_from(&state_home(), old, new)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TaskSource {
-    Config,
-    Instance,
-    Project { state: TrustState },
-}
-
-impl TaskSource {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Config => "machine",
-            Self::Instance => "state",
-            Self::Project { .. } => "project",
-        }
-    }
-}
-
-fn load_from(state_root: &Path) -> Tasks {
+pub(super) fn load_from(state_root: &Path) -> Tasks {
     let Ok(bytes) = std::fs::read(path(state_root)) else {
         return Tasks::default();
     };
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
-#[cfg(test)]
-fn load_all_from(instances: Tasks, config: Tasks) -> BTreeMap<String, (TaskEntry, TaskSource)> {
-    load_all_from_layers(instances, config, None)
-}
-
-fn load_all_from_layers(
-    instances: Tasks,
-    config: Tasks,
-    project: Option<(Tasks, TrustState)>,
-) -> BTreeMap<String, (TaskEntry, TaskSource)> {
-    let mut tasks: BTreeMap<_, _> = instances
-        .0
-        .into_iter()
-        .map(|(name, entry)| (name, (entry, TaskSource::Instance)))
-        .collect();
-    tasks.extend(
-        config
-            .0
-            .into_iter()
-            .map(|(name, entry)| (name, (entry, TaskSource::Config))),
-    );
-    if let Some((project, state)) = project {
-        tasks.extend(
-            project
-                .0
-                .into_iter()
-                .map(|(name, entry)| (name, (entry, TaskSource::Project { state }))),
-        );
+pub(super) fn load_strict_from(state_root: &Path) -> anyhow::Result<Tasks> {
+    let path = path(state_root);
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("reading {}", path.display())),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Tasks::default()),
+        Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
     }
-    tasks
-}
-
-fn trusted_project(project: Option<(Tasks, TrustState)>) -> Option<(Tasks, TrustState)> {
-    let (tasks, state) = project?;
-    (state == TrustState::Trusted).then_some((tasks, state))
 }
 
 fn insert_into(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
@@ -220,98 +134,6 @@ mod tests {
             Some(Some("wake"))
         );
         assert!(!rename_from(dir.path(), "wake", "later").expect("rename absent"));
-    }
-
-    #[test]
-    fn merged_reads_prefer_config_over_instance() {
-        let mut instance = task();
-        instance.prompt = Some("state".to_owned());
-        let mut config = task();
-        config.prompt = Some("config".to_owned());
-
-        let tasks = load_all_from(
-            Tasks(BTreeMap::from([("wake".to_owned(), instance)])),
-            Tasks(BTreeMap::from([("wake".to_owned(), config)])),
-        );
-
-        let (entry, source) = tasks.get("wake").expect("wake task");
-        assert_eq!(source, &TaskSource::Config);
-        assert_eq!(entry.prompt.as_deref(), Some("config"));
-    }
-
-    #[test]
-    fn merged_reads_prefer_project_over_config_over_instance() {
-        let mut instance = task();
-        instance.prompt = Some("state".to_owned());
-        let mut config = task();
-        config.prompt = Some("config".to_owned());
-        let mut project = task();
-        project.prompt = Some("project".to_owned());
-
-        let tasks = load_all_from_layers(
-            Tasks(BTreeMap::from([("wake".to_owned(), instance)])),
-            Tasks(BTreeMap::from([("wake".to_owned(), config)])),
-            Some((
-                Tasks(BTreeMap::from([("wake".to_owned(), project)])),
-                TrustState::Trusted,
-            )),
-        );
-
-        let (entry, source) = tasks.get("wake").expect("wake task");
-        assert_eq!(
-            source,
-            &TaskSource::Project {
-                state: TrustState::Trusted
-            }
-        );
-        assert_eq!(entry.prompt.as_deref(), Some("project"));
-    }
-
-    #[test]
-    fn untrusted_project_tasks_do_not_enter_effective_merge() {
-        let mut config = task();
-        config.prompt = Some("config".to_owned());
-        let mut project = task();
-        project.prompt = Some("project".to_owned());
-
-        let tasks = load_all_from_layers(
-            Tasks::default(),
-            Tasks(BTreeMap::from([("wake".to_owned(), config)])),
-            trusted_project(Some((
-                Tasks(BTreeMap::from([("wake".to_owned(), project)])),
-                TrustState::Untrusted,
-            ))),
-        );
-
-        let (entry, source) = tasks.get("wake").expect("wake task");
-        assert_eq!(source, &TaskSource::Config);
-        assert_eq!(entry.prompt.as_deref(), Some("config"));
-    }
-
-    #[test]
-    fn visible_reads_show_untrusted_project_tasks() {
-        let mut config = task();
-        config.prompt = Some("config".to_owned());
-        let mut project = task();
-        project.prompt = Some("project".to_owned());
-
-        let tasks = load_all_from_layers(
-            Tasks::default(),
-            Tasks(BTreeMap::from([("wake".to_owned(), config)])),
-            Some((
-                Tasks(BTreeMap::from([("wake".to_owned(), project)])),
-                TrustState::Untrusted,
-            )),
-        );
-
-        let (entry, source) = tasks.get("wake").expect("wake task");
-        assert_eq!(
-            source,
-            &TaskSource::Project {
-                state: TrustState::Untrusted
-            }
-        );
-        assert_eq!(entry.prompt.as_deref(), Some("project"));
     }
 
     #[test]

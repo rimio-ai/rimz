@@ -23,7 +23,7 @@ enum AddTaskAction {
 impl AddTaskAction {
     fn kind(&self) -> Option<&str> {
         match self {
-            Self::Spawn { resolved, .. } => Some(&resolved.kind),
+            Self::Spawn { resolved, .. } => Some(resolved.kind()),
             Self::Deliver { target, .. } => Some(&target.kind),
             Self::CheckOnly => None,
         }
@@ -44,13 +44,16 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     if entry.agent.is_some() || entry.wake.is_some() {
         preflight_entry(&args.name, &entry, resolved_for_preflight.as_ref())?;
     }
-    persist_entry(&args, &entry, &project_root)?;
-    let cleared_pause = pauses::remove(&args.name)?;
-    let cleared_strikes = strikes::clear(&args.name)?;
+    let catalog = TaskCatalog::load(Some(&project_root))?;
+    let mutation = if args.project {
+        catalog.replace_project(&args.name, &project_root, &entry)?
+    } else {
+        catalog.replace_machine(&args.name, &entry)?
+    };
 
     let mut out = ui::out();
     writeln!(out, "added loop task `{}`", args.name)?;
-    if cleared_pause || cleared_strikes {
+    if mutation.cleared_overlays() {
         writeln!(out, "pause: cleared")?;
     }
     if args.project {
@@ -157,7 +160,7 @@ fn resolve_add_action(
                 .as_deref()
                 .is_some_and(agents_spec::virtual_ping_shape);
             if is_ping {
-                ping_kind_supported(&resolved.kind)?;
+                ping_kind_supported(resolved.kind())?;
             }
             AddTaskAction::Spawn {
                 resolved,
@@ -277,61 +280,14 @@ fn build_task_entry(
     Ok((entry, resolved_for_preflight))
 }
 
-fn persist_entry(args: &AddArgs, entry: &TaskEntry, project_root: &Path) -> Result<()> {
-    if args.project {
-        schedule::config_edit::set_entry(
-            schedule::config_edit::TaskStore::Project(project_root),
-            &args.name,
-            entry,
-        )?;
-    } else if matches!(
-        instances::load_entry_visible_with_project(
-            &args.name,
-            project_visible_merge(&project_tasks_for_root(project_root)?)
-        ),
-        Some((_, TaskSource::Project { .. }))
-    ) {
-        bail!(
-            "loop task `{}` is project-owned in {}; use `rimz loop add --project` or choose another name",
-            args.name,
-            project_config_path(project_root).display()
-        );
-    } else if instances::is_ephemeral(entry) {
-        schedule::config_edit::remove(schedule::config_edit::TaskStore::Machine, &args.name)?;
-        instances::insert(&args.name, entry)?;
-    } else {
-        instances::remove(&args.name)?;
-        schedule::config_edit::set_entry(
-            schedule::config_edit::TaskStore::Machine,
-            &args.name,
-            entry,
-        )?;
-    }
-    Ok(())
-}
-
 pub(super) fn remove(name: &str, globals: &GlobalFlags) -> Result<()> {
-    let loaded = load_task(name, globals)?;
-    let removed = match loaded {
-        Some((entry, source)) => {
-            let removed = remove_loaded_task(name, &entry, source)?;
-            if removed && matches!(source, TaskSource::Project { .. }) {
-                pauses::remove(name)?;
-                strikes::clear(name)?;
-                let mut out = ui::out();
-                writeln!(out, "removed loop task `{name}`")?;
-                finish_project_mutation(&mut out, &entry.root, false)?;
-                return Ok(());
-            }
-            removed
-        }
-        None => false,
-    };
+    let mutation = task_catalog(globals)?.remove(name)?;
     let mut out = ui::out();
-    if removed {
-        pauses::remove(name)?;
-        strikes::clear(name)?;
+    if mutation.changed() {
         writeln!(out, "removed loop task `{name}`")?;
+        if let Some(root) = mutation.project_root() {
+            finish_project_mutation(&mut out, root, false)?;
+        }
     } else {
         writeln!(out, "no loop task named `{name}`")?;
     }
@@ -343,43 +299,13 @@ pub(super) fn rename(name: &str, new_name: &str, globals: &GlobalFlags) -> Resul
     if name == new_name {
         bail!("new loop task name must differ from `{name}`");
     }
-    if load_all_tasks(globals)?.contains_key(new_name) {
-        bail!("loop task `{new_name}` already exists");
-    }
-
-    let loaded = load_task(name, globals)?;
-    let renamed = match loaded {
-        Some((entry, source)) => match source {
-            TaskSource::Config => schedule::config_edit::rename(
-                schedule::config_edit::TaskStore::Machine,
-                name,
-                new_name,
-            )?,
-            TaskSource::Instance => instances::rename(name, new_name)?,
-            TaskSource::Project { .. } => {
-                let renamed = schedule::config_edit::rename(
-                    schedule::config_edit::TaskStore::Project(&entry.root),
-                    name,
-                    new_name,
-                )?;
-                if renamed {
-                    pauses::rename(name, new_name)?;
-                    strikes::rename(name, new_name)?;
-                    let mut out = ui::out();
-                    writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
-                    finish_project_mutation(&mut out, &entry.root, false)?;
-                    return Ok(());
-                }
-                false
-            }
-        },
-        None => false,
-    };
+    let mutation = task_catalog(globals)?.rename(name, new_name)?;
     let mut out = ui::out();
-    if renamed {
-        pauses::rename(name, new_name)?;
-        strikes::rename(name, new_name)?;
+    if mutation.changed() {
         writeln!(out, "renamed loop task `{name}` to `{new_name}`")?;
+        if let Some(root) = mutation.project_root() {
+            finish_project_mutation(&mut out, root, false)?;
+        }
     } else {
         writeln!(out, "no loop task named `{name}`")?;
     }
@@ -581,7 +507,7 @@ fn write_add_feedback(
     parsed: &schedule::ParsedSchedule,
     action_kind: Option<&str>,
 ) -> Result<()> {
-    match task_action(name, entry)? {
+    match TaskAction::from_entry(name, entry)? {
         TaskAction::Spawn(agent) => {
             writeln!(
                 out,

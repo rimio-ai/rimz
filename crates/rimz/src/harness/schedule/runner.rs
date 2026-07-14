@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -14,20 +15,249 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{
-    WindowSurplus, longest_window_reset_at, longest_window_running, longest_window_surplus,
-    shortest_window_running,
+    HookPreflightErr, TurnLifecycleNeed, WindowSurplus, find_adapter, longest_window_reset_at,
+    longest_window_running, longest_window_surplus, preflight_hooks, shortest_window_running,
 };
-use crate::config::{CheckOn, TaskEntry};
+use crate::config::{CheckOn, MachineConfig, TaskEntry};
+use crate::harness::run::PermissionMode;
+use crate::harness::schedule::TaskAction;
 use crate::harness::schedule::run_log::{CheckRecord, LoopRunResult};
+use crate::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use crate::ids::WorkspaceId;
-use crate::store::paths::{RuntimePaths, runtime_home};
+use crate::store::paths::{RuntimePaths, config_home, runtime_home};
 use crate::workspace::WorkspaceResolver;
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
+pub const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
 const TASK_TIMEOUT_UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedTaskSpec {
+    kind: String,
+}
+
+impl ResolvedTaskSpec {
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+}
+
+pub fn resolve_task_spec(
+    spec: &str,
+    workspace: &crate::workspace::ResolvedWorkspace,
+) -> Result<ResolvedTaskSpec> {
+    let machine_config = MachineConfig::load_lenient();
+    let launch = crate::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &config_home(),
+    )?;
+    let layout = match agents_spec::resolve_spec(
+        Some(spec),
+        &launch.profiles,
+        &machine_config.agents.commands,
+        &launch.teams,
+    ) {
+        Ok(layout) => layout,
+        Err(err @ agents_spec::LayoutErr::UnknownTeam { .. })
+        | Err(err @ agents_spec::LayoutErr::UnknownCell { .. }) => {
+            launch.block_untrusted_reference(Some(spec), &machine_config.agents.commands)?;
+            return Err(err.into());
+        }
+        Err(err) => return Err(err.into()),
+    };
+    single_agent_cell(spec, &layout)
+}
+
+fn single_agent_cell(spec: &str, layout: &LayoutSpec) -> Result<ResolvedTaskSpec> {
+    let cell_count: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
+    if cell_count != 1 {
+        anyhow::bail!(
+            "loop task `{spec}` must resolve to one agent; use a kind, profile, or virtual cell"
+        );
+    }
+    let cell = &layout.columns[0].rows[0];
+    let Cell::Agent { kind, .. } = cell else {
+        anyhow::bail!(
+            "loop task `{spec}` must resolve to one agent; command cells are not supported"
+        );
+    };
+    Ok(ResolvedTaskSpec {
+        kind: kind.as_str().to_owned(),
+    })
+}
+
+pub fn ping_kind_supported(kind: &str) -> Result<()> {
+    let adapter =
+        find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+    if adapter.ping_args().is_none() {
+        anyhow::bail!("agent kind `{kind}` does not support a ping turn; use `claude` or `codex`");
+    }
+    Ok(())
+}
+
+pub fn preflight_entry(
+    name: &str,
+    entry: &TaskEntry,
+    resolved: Option<&ResolvedTaskSpec>,
+) -> Result<()> {
+    match TaskAction::from_entry(name, entry)? {
+        TaskAction::Spawn(spec) => {
+            let resolved = resolved
+                .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
+            preflight_resolved_task(spec, resolved)?;
+        }
+        TaskAction::Deliver(target) => preflight_kind(&target.kind)?,
+        TaskAction::CheckOnly => {}
+    }
+    Ok(())
+}
+
+pub fn preflight_task(entry: &TaskEntry) -> Result<ResolvedTaskSpec> {
+    let root = entry.resolved_root();
+    let workspace = WorkspaceResolver::resolve(&root, None)
+        .with_context(|| format!("resolving project root at {}", root.display()))?;
+    let spec = entry
+        .agent
+        .as_deref()
+        .context("loop task is missing `agent`")?;
+    let resolved = resolve_task_spec(spec, &workspace)?;
+    preflight_resolved_task(spec, &resolved)?;
+    Ok(resolved)
+}
+
+fn preflight_resolved_task(spec: &str, resolved: &ResolvedTaskSpec) -> Result<()> {
+    if agents_spec::virtual_ping_shape(spec) {
+        ping_kind_supported(&resolved.kind)?;
+    }
+    preflight_kind(&resolved.kind)
+}
+
+fn preflight_kind(kind: &str) -> Result<()> {
+    let adapter =
+        find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+    match preflight_hooks(adapter, TurnLifecycleNeed::NotUnsupported) {
+        Ok(()) => Ok(()),
+        Err(HookPreflightErr::TurnLifecycleUnsupported { reason }) => anyhow::bail!(
+            "{kind} cannot run as a scheduled turn: a verified executable turn-lifecycle signal is required; {reason}"
+        ),
+        Err(HookPreflightErr::HooksMissing) => anyhow::bail!(
+            "{kind} hooks are not installed, so a scheduled turn cannot report completion\ninstall them with `rimz hooks install {kind}`"
+        ),
+        Err(HookPreflightErr::HooksUntrusted { hooks, fix }) => anyhow::bail!(
+            "{kind} hooks are installed but not trusted ({}), so a scheduled turn cannot report completion\n{}",
+            hooks,
+            fix
+        ),
+    }
+}
+
+pub fn parse_mode(raw: &str) -> Result<String> {
+    Ok(mode_name(parse_mode_value(raw)?).to_owned())
+}
+
+pub fn parse_mode_value(raw: &str) -> Result<PermissionMode> {
+    let trimmed = raw.trim();
+    match PermissionMode::from_str(trimmed) {
+        Ok(PermissionMode::Plan) | Err(_) => {
+            anyhow::bail!("unknown loop mode `{trimmed}`; use auto, ask, or yolo")
+        }
+        Ok(mode) => Ok(mode),
+    }
+}
+
+fn mode_name(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Auto => "auto",
+        PermissionMode::Ask => "ask",
+        PermissionMode::Yolo => "yolo",
+        PermissionMode::Plan => unreachable!("loop mode parser rejects plan"),
+    }
+}
+
+pub fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
+    super::parse_duration_units(raw, TASK_TIMEOUT_UNITS)
+}
+
+pub fn resolve_task_prompt(name: &str, entry: &TaskEntry) -> Result<String> {
+    if let Some(prompt) = entry
+        .prompt
+        .as_deref()
+        .filter(|prompt| !prompt.trim().is_empty())
+    {
+        return Ok(prompt.to_owned());
+    }
+    let Some(path) = entry.prompt_file.as_deref() else {
+        anyhow::bail!("loop task `{name}` has no prompt; set `prompt` or `prompt-file`");
+    };
+    let path = resolve_config_path(path)?;
+    let prompt = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading prompt-file `{}`", path.display()))?;
+    if prompt.trim().is_empty() {
+        anyhow::bail!("prompt-file `{}` is empty", path.display());
+    }
+    Ok(prompt)
+}
+
+pub fn resolve_config_path(path: &Path) -> Result<PathBuf> {
+    let expanded = expand_tilde(path);
+    if expanded.is_absolute() {
+        return Ok(expanded);
+    }
+    let loop_path = MachineConfig::loop_path();
+    let config_dir = loop_path.parent().unwrap_or_else(|| Path::new("."));
+    Ok(config_dir.join(expanded))
+}
+
+fn expand_tilde(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if raw == "~" {
+        return home_dir();
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return home_dir().join(rest);
+    }
+    path.to_path_buf()
+}
+
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+pub fn task_scope_target(
+    name: &str,
+    entry: &TaskEntry,
+) -> Result<Option<(crate::ids::AgentKind, WorkspaceId)>> {
+    let workspace = WorkspaceResolver::resolve(entry.resolved_root(), None)?;
+    match TaskAction::from_entry(name, entry)? {
+        TaskAction::Spawn(spec) => Ok(Some((
+            crate::ids::AgentKind::new_unchecked(resolve_task_spec(spec, &workspace)?.kind),
+            workspace.workspace_id,
+        ))),
+        TaskAction::Deliver(target) => Ok(Some((
+            crate::ids::AgentKind::new_unchecked(target.kind.clone()),
+            workspace.workspace_id,
+        ))),
+        TaskAction::CheckOnly => Ok(None),
+    }
+}
+
+pub fn effective_spawn_timeout(
+    mode: crate::harness::schedule::run_log::LoopRunMode,
+    task_timeout: Option<Duration>,
+    configured_timeout: Option<Duration>,
+) -> Option<Duration> {
+    task_timeout.or_else(|| {
+        (mode == crate::harness::schedule::run_log::LoopRunMode::Scheduled)
+            .then_some(configured_timeout.unwrap_or(SCHEDULED_RUN_DEFAULT_TIMEOUT))
+    })
+}
 
 pub struct RunLockGuard {
     file: File,

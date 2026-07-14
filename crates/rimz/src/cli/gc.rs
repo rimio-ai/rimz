@@ -89,9 +89,14 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     let schedules_reaped = if args.dry_run {
         0
     } else {
-        let reaped = super::loop_cmd::reap_dead_delivery_schedules()
+        let reaped = rimz::harness::schedule::catalog::TaskCatalog::reap_dead_deliveries()
             .context("reaping dead loop schedules")?;
-        super::loop_cmd::prune_orphan_pauses(globals).context("pruning orphan loop pauses")?;
+        let project_root = WorkspaceResolver::resolve(".", globals.root.clone())
+            .ok()
+            .map(|workspace| workspace.project_root);
+        rimz::harness::schedule::catalog::TaskCatalog::load(project_root.as_deref())?
+            .prune_orphan_overlays()
+            .context("pruning orphan loop pauses")?;
         reaped
     };
     spinner.set("pruning dead workspaces…");
