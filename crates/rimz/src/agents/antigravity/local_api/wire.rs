@@ -229,6 +229,7 @@ pub(in crate::agents::antigravity) fn parse_rate_limits(
             (Some(used_percentage(bucket.remaining)), Some(bucket.reset))
         });
         windows.push(RateLimitWindow {
+            scope: None,
             used_percentage,
             resets_at,
             duration_mins: Some(period.duration_mins()),
