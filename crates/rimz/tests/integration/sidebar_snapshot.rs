@@ -296,7 +296,7 @@ fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
     assert_eq!(row["row_kind"], "agent");
     assert_eq!(row["status"], "idle");
     assert!(row.get("prompt").is_none());
-    assert_eq!(row["context_pct"], 0);
+    assert!(row["context_pct"].is_null());
     assert!(row.get("total_tokens").is_none());
     assert!(row["context"].get("model_id").is_none());
     assert!(row["context"].get("tokens").is_none());

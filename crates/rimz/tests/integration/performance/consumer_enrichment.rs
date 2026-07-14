@@ -107,7 +107,7 @@ fn warm_sidecar_read_is_one_stat_per_file() {
     let one = std::fs::read_dir(&runtime.agent_context_dir)
         .unwrap()
         .flatten()
-        .next()
+        .find(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
         .unwrap()
         .path();
     let f = std::fs::OpenOptions::new().write(true).open(&one).unwrap();
