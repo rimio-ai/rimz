@@ -1,5 +1,5 @@
-//! Statusline datasource. Claude's `statusLine` command `exec`s into
-//! `rimz statusline feed`: it captures the rich JSON Claude pipes on stdin,
+//! Statusline datasource. A provider's `statusLine` command `exec`s into
+//! `rimz statusline feed`: it captures the rich JSON the agent pipes on stdin,
 //! persists the per-session agent-context sidecar, then passes the JSON
 //! unchanged to any wrapped user command and forwards its stdout + exit code so
 //! the user's statusline renders exactly as before.
@@ -15,8 +15,8 @@
 //! invariant) — so its stderr can't leak onto the statusline and the parent
 //! stays in control.
 //!
-//! No pane stamping: the sidecar keys on the payload `session_id`, and the
-//! lifecycle-event `AgentState` already owns the pane binding.
+//! No pane stamping: the sidecar keys on the provider's session/conversation
+//! id, and the lifecycle-event `AgentState` already owns the pane binding.
 
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
@@ -45,7 +45,7 @@ enum StatuslineSubcmd {
     /// the payload's `tasks` array is harvested into one per-child sidecar.
     #[command(hide = true)]
     Feed {
-        /// Agent the statusline belongs to (`claude`).
+        /// Agent the statusline belongs to (`claude`, `qwen`, `antigravity`).
         #[arg(long)]
         source: String,
         /// Treat the payload as a `subagentStatusLine` render (a `tasks` array)
@@ -91,8 +91,8 @@ fn run_feed(source: String, subagent: bool, globals: &GlobalFlags) -> Result<()>
     }
 
     // Pass-through. Always emit something so the statusline never blanks. With
-    // no wrapped command we print nothing, so Claude renders its built-in line
-    // (or, for `--subagent`, its own child rows).
+    // no wrapped command we print nothing, so an agent configured to stack its
+    // built-in line keeps that line (or, for `--subagent`, its own child rows).
     match wrapped {
         Some(command) => forward_to_wrapped(&command, &buf),
         None => Ok(()),
@@ -164,10 +164,18 @@ fn persist_subagent_context(source: &str, stdin: &[u8], globals: &GlobalFlags) -
     Ok(())
 }
 
-/// Session id from the statusline payload (`session_id`, then `agent_id`),
-/// matching the lifecycle key so the sidecar files under the same session.
+/// Session id from the statusline payload, matching the lifecycle key so the
+/// sidecar files under the same session. Antigravity spells it
+/// `conversation_id`; hook payloads use a distinct camel-case spelling.
 fn payload_session_id(payload: &Value) -> Option<&str> {
-    ["session_id", "agent_id"].into_iter().find_map(|key| {
+    [
+        "session_id",
+        "agent_id",
+        "conversation_id",
+        "conversationId",
+    ]
+    .into_iter()
+    .find_map(|key| {
         payload
             .get(key)
             .and_then(Value::as_str)
@@ -223,4 +231,23 @@ fn forward_to_wrapped(command: &str, payload: &[u8]) -> Result<()> {
         std::process::exit(code);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::payload_session_id;
+
+    #[test]
+    fn statusline_session_identity_accepts_antigravity_conversations() {
+        assert_eq!(
+            payload_session_id(&json!({"conversation_id": "agy-session"})),
+            Some("agy-session")
+        );
+        assert_eq!(
+            payload_session_id(&json!({"conversationId": "agy-hook-spelling"})),
+            Some("agy-hook-spelling")
+        );
+    }
 }

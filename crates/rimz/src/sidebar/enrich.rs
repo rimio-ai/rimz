@@ -204,29 +204,32 @@ pub(crate) fn classify_trunk_sync(
     Some(WorktreeTrunkSync::Diverged)
 }
 
-/// The hook-wired agent kinds eligible for sessionless idle synthesis. Local-
-/// store adapters join as agent cards only after strict session binding, so an
-/// ambiguous provider session remains a process row instead of a forever-idle
-/// card Rimz can report no identity for. Environment, not store.
+/// Agent kinds with an active observation path, eligible for sessionless idle
+/// synthesis. Hook adapters require their hooks to be installed. Local-session
+/// adapters already have a provider-store observation path, so their recognized
+/// panes render as identity-less idle agent cards until strict session binding
+/// supplies the provider identity. Environment, not store.
 pub fn wired_kinds() -> Vec<String> {
     crate::agents::ADAPTERS
         .iter()
         .filter(|agent| {
             let capabilities = agent.descriptor().capabilities;
-            capabilities.hook_install && agent.hooks_installed()
+            capabilities.local_session_discovery
+                || (capabilities.hook_install && agent.hooks_installed())
         })
         .map(|agent| agent.descriptor().kind.to_owned())
         .collect()
 }
 
-/// Launch-model defaults for wired agents, used only for synthesized idle rows
-/// before a real session reports its model.
+/// Launch-model defaults for agent-card-eligible adapters, used only for
+/// synthesized idle rows before a real session reports its model.
 pub fn wired_default_models() -> BTreeMap<String, String> {
     crate::agents::ADAPTERS
         .iter()
         .filter(|agent| {
             let capabilities = agent.descriptor().capabilities;
-            capabilities.hook_install && agent.hooks_installed()
+            capabilities.local_session_discovery
+                || (capabilities.hook_install && agent.hooks_installed())
         })
         .filter_map(|agent| {
             agent

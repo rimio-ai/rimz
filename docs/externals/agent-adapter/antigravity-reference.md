@@ -8,17 +8,17 @@ Coverage is **depth on viable RimZ inputs, breadth as an index**. Google publish
 
 ## Refresh target and upstream sources
 
-This reference was refreshed on 2026-07-13 against Antigravity CLI [`1.1.1`](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.1), the latest release at that time, at tag commit [`b5578c4bbeae95fd9be14d14ac61563bd9f20363`](https://github.com/google-antigravity/antigravity-cli/tree/b5578c4bbeae95fd9be14d14ac61563bd9f20363). The tagged repository publishes documentation, release notes, and examples rather than the CLI source. Re-run `agy --version`, `agy --help`, and the [implementation probes](#implementation-verification-checklist) against the then-current latest release before implementation.
+This reference was refreshed on 2026-07-13 against an installed Antigravity CLI `1.1.2`, its embedded hook/statusline documentation, and Google's living documentation. The [`1.1.1`](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.1) tag at commit [`b5578c4bbeae95fd9be14d14ac61563bd9f20363`](https://github.com/google-antigravity/antigravity-cli/tree/b5578c4bbeae95fd9be14d14ac61563bd9f20363) remains the latest public source snapshot used for repository examples; the distributed CLI implementation is not published there.
 
-RimZ supports the latest Antigravity CLI release only. The adapter carries no compatibility branches for older releases: each RimZ release pins the one latest version its fixtures validate, and preflight requires that exact version. An older install fails with `agy update`; a newer, unvalidated install fails with a refresh requirement. When Google publishes a new release, refresh this reference and its fixtures before advancing RimZ's supported version.
+RimZ's typed fixtures target Antigravity CLI 1.1.2. The adapter keeps tolerant readers for additive fields and `rimz doctor` reports detected version drift; refresh this reference and its fixtures when Google changes hook decisions, config locations, or payload semantics.
 
-Google's website documentation is a living surface without versioned snapshots. The fixed 1.1.1 release and its tagged examples win when they conflict with a living page; every conflict known at this refresh is recorded in [Documentation drift](#documentation-drift).
+Google's website documentation is a living surface without versioned snapshots. The installed 1.1.2 embedded documentation wins for executable hook behavior, while the 1.1.1 tagged examples remain provenance for unchanged examples; every known conflict stays visible in [Documentation drift](#documentation-drift).
 
 | Surface | Official source |
 | --- | --- |
-| CLI release, fixed version evidence | [`1.1.1` release](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.1), pinned [`CHANGELOG.md`](https://github.com/google-antigravity/antigravity-cli/blob/b5578c4bbeae95fd9be14d14ac61563bd9f20363/CHANGELOG.md) |
+| CLI release and version evidence | installed `agy 1.1.2`, [`1.1.1` source release](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.1), pinned [`CHANGELOG.md`](https://github.com/google-antigravity/antigravity-cli/blob/b5578c4bbeae95fd9be14d14ac61563bd9f20363/CHANGELOG.md) |
 | Product boundary and installation | [CLI overview](https://antigravity.google/docs/cli-overview), [installation and auth](https://antigravity.google/docs/cli-install), pinned [README](https://github.com/google-antigravity/antigravity-cli/blob/b5578c4bbeae95fd9be14d14ac61563bd9f20363/README.md) |
-| Launch flags and TUI commands | [CLI reference](https://antigravity.google/docs/cli-reference), the installed `agy 1.1.1 --help` output summarized below |
+| Launch flags and TUI commands | [CLI reference](https://antigravity.google/docs/cli-reference), the installed `agy 1.1.2 --help` output summarized below |
 | Settings and keybindings | [settings](https://antigravity.google/docs/cli-settings) |
 | Command hooks and tool vocabulary | [hooks](https://antigravity.google/docs/hooks) |
 | Custom statusline payload | [statusline](https://antigravity.google/docs/cli-statusline), pinned [example script](https://github.com/google-antigravity/antigravity-cli/blob/b5578c4bbeae95fd9be14d14ac61563bd9f20363/examples/statusline/statusline.sh) |
@@ -44,36 +44,36 @@ The initial RimZ integration target is **Antigravity CLI**, because it owns a st
 
 ## Adapter feasibility at a glance
 
-Antigravity exposes enough official surface for a useful adapter, but not enough to implement every RimZ capability without live wire capture. The landed safe floor owns process/launch/resume, validated local conversation discovery, basic pulled text-turn state, and transcript history. Command hooks and the custom statusline remain the next promotion boundary because their neutral and callback contracts are not yet verified.
+Antigravity exposes enough official surface for a useful adapter, but not enough to implement every RimZ capability. The landed adapter owns process/launch/resume, validated local conversation discovery, transcript history, safe command hooks, custom-statusline context, background parking, and supervised completion. Policy-changing pre-tool decisions, artifact/question waits, stable child identities, quota, spend, and remote control remain outside the verified boundary.
 
 | RimZ need | Antigravity surface | Verdict |
 | --- | --- | --- |
-| Process discovery and launch | `agy`; stable interactive and prompt flags in 1.1.1 help | direct |
-| Session identity | exact `--conversation`; workspace-latest cache; hook `conversationId`; statusline `conversation_id` | exact resume and latest-cache discovery landed; callbacks remain future promotion |
-| Eager registration before work | no `SessionStart` hook; initial statusline callback timing is undocumented | lazy from cache/transcript; eager statusline push unverified |
-| Turn start | captured `USER_INPUT`; future statusline edge into `thinking`/`working` | partial pulled edge; realtime edge deferred |
-| Turn completion and error | captured completed `PLANNER_RESPONSE`; future `Stop.terminationReason`, `Stop.error`, `Stop.fullyIdle` | partial pulled success only; direct errors deferred |
+| Process discovery and launch | `agy`; stable interactive and prompt flags in 1.1.2 help | direct |
+| Session identity | exact `--conversation`; workspace-latest cache; hook `conversationId`; statusline `conversation_id` | direct hook binding with validated local fallback |
+| Registration before work | first `PreInvocation` identity plus local discovery | create-on-miss/derived; no session-only event |
+| Turn start | first `PreInvocation` plus captured `USER_INPUT` fallback | native realtime edge |
+| Turn completion and error | `Stop.terminationReason`, `Stop.error`, `Stop.fullyIdle` | native success/failure/background edge |
 | Session end | no session-end hook | pane/process presence only |
-| Tool activity and acting phase | `PreToolUse.toolCall`; canonical edit tools are published | direct after neutral-output behavior is verified |
-| Native permission wait | statusline `tool_confirmation_pending` | direct boolean; detail comes from the preceding tool call |
+| Tool activity and acting phase | disjoint `PostToolUse` matchers over the published tool vocabulary | native after execution, without changing permission policy |
+| Native permission wait | statusline `tool_confirmation_pending` | read-only card attention; native pane owns detail and decision |
 | Question wait | `PreToolUse` for `ask_question` plus its typed questions | direct intent; exact dialog-open timing needs capture |
 | Plan/artifact review wait | statusline `artifacts` and artifact-review UI | schema/status enum incomplete; derived after capture |
-| Model and context | custom statusline `model` and `context_window` | direct live enrichment |
-| Background tasks | statusline `background_tasks` in docs; tagged example reads `task_count` | direct in concept, drifting wire |
+| Model and context | custom statusline `model` and `context_window` | direct live enrichment landed |
+| Background tasks | `Stop.fullyIdle`; statusline arrays remain identity-poor | native foreground parking, no task rows |
 | Subagents | statusline `subagents`; tool calls for define/invoke/manage | visible, but documented child entries omit conversation IDs |
 | Transcript/history | official hook path plus captured 1.1.1 text records | basic root user/assistant history landed; all other records remain unknown |
 | Durable conversation store | 1.1.1 changelog says SQLite is the CLI conversation format | format known, schema and authoritative path unpublished |
 | Compaction | no documented hook, command, or marker | unsupported until verified |
-| Account identity | statusline `email` and `plan_tier` | direct while a session is live; treat email as private |
+| Account identity | statusline `email` and `plan_tier` | direct live enrichment; treat email as private |
 | Quota and credits | interactive `/usage`/`/quota` and `/credits` panels | no documented machine-readable API |
 | Session spend | no documented dollars or cumulative billing record | unsupported |
-| Supervised `-p` runs | `--print`/`-p`, response stdout, nonzero failure exit from 1.1.1 | direct text mode; no structured stream |
+| Supervised `-p` runs | stock interactive prompt, `Stop`, and transcript final response | RimZ supervised hook transport landed; native headless mode remains separate |
 | Native resume | `--conversation <UUID>`; `-c`/`--continue` for workspace latest | direct |
 | Native fork in a new pane | `/fork` clones in the current TUI, but no launch flag forks a supplied source ID | unsupported for RimZ fork |
 | Structured answer | native TUI keys and artifact/question panels | pane-send fallback; no out-of-band answer API |
 | Remote control | no CLI remote-control host documented | unsupported |
 
-The current adapter deliberately starts below the hook/statusline boundary: the workspace conversation cache and exact `--conversation` command line bind provider identity, while validated JSONL text records provide basic turn state and history. A later promotion should combine a wrapped custom statusline for waiting, model, and context with command hooks for precise tool and stop events. Spend, subagent rows, compaction, fork, and structured answers stay disabled until their verification items pass.
+The current adapter combines installed command hooks and a wrapped custom statusline with the workspace conversation cache and validated JSONL history. Spend, permission/question/artifact waits, subagent rows, compaction, fork, and structured answers stay disabled until their verification items pass.
 
 ## Launch and process surface
 
@@ -94,7 +94,7 @@ curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.
 
 Use `agy update` as the stale-version fix. `agy install` configures shell paths and aliases for an existing installation; its shipped flags are `--dir`, `--skip-path`, and `--skip-aliases`, so it is not the binary downloader RimZ should prescribe for a missing install.
 
-The pinned 1.1.1 binary reports `1.1.1` from `agy --version` and this top-level surface from `agy --help`:
+The installed binary reports `1.1.2` from `agy --version` and this top-level surface from `agy --help`:
 
 | Flag/subcommand | Shipped meaning | RimZ use |
 | --- | --- | --- |
@@ -102,19 +102,19 @@ The pinned 1.1.1 binary reports `1.1.1` from `agy --version` and this top-level 
 | `--agent <name>` | choose a custom agent for this session | provider-native agent profile, not a RimZ kind |
 | `-c`, `--continue` | continue the most recent conversation | convenience only; prefer an exact ID for restart |
 | `--conversation <id>` | resume a conversation by ID | native resume |
-| `--dangerously-skip-permissions` | auto-approve tool permission requests | RimZ `yolo` candidate |
+| `--dangerously-skip-permissions` | auto-approve tool permission requests | RimZ `yolo` |
 | `-i`, `--prompt-interactive <prompt>` | send an initial prompt, then stay interactive | fresh pane with startup prompt |
 | `--log-file <path>` | override the CLI log path | diagnostics only |
-| `--mode <accept-edits\|plan>` | select execution mode | RimZ `auto`/`plan` candidates; see below |
+| `--mode <accept-edits\|plan>` | select execution mode | RimZ `auto`/`plan`; see below |
 | `--model <name>` | choose the session model | launch preset model |
 | `--new-project` | create a project for the session | leave user-controlled by default |
-| `-p`, `--print`, `--prompt <prompt>` | run one prompt non-interactively and print the response | supervised run |
-| `--print-timeout <duration>` | bound print-mode wait; default `5m0s` | map from the supervised-run timeout only if RimZ wants a provider-local inner bound |
+| `-p`, `--print`, `--prompt <prompt>` | run one prompt non-interactively and print the response | provider-native alternative; RimZ keeps the pane/UI hook transport |
+| `--print-timeout <duration>` | bound print-mode wait; default `5m0s` | unused by the interactive hook transport |
 | `--project <id>` | select a project | raw profile arg until project semantics are implemented |
 | `--sandbox` | enable terminal restrictions | optional launch hardening; orthogonal to approval mode |
 | `agent`, `agents` | list available custom agents | optional discovery, not lifecycle |
 | `models` | list available models | optional model discovery |
-| `plugin`, `plugins` | manage plugins | hook-install alternative only after precedence is verified |
+| `plugin`, `plugins` | manage plugins | unused by direct named-hook installation |
 | `changelog`, `update`, `install` | release notes and client maintenance | outside ordinary adapter launches |
 
 A bare interactive launch is:
@@ -129,13 +129,13 @@ An interactive launch with an initial task is:
 agy --prompt-interactive "task"
 ```
 
-The provider owns the current working directory, so RimZ launches `agy` with the pane/worktree directory as the child cwd. The living best-practices page shows `--cwd`, but 1.1.1 help exposes no such flag; do not emit it for 1.1.1.
+The provider owns the current working directory, so RimZ launches `agy` with the pane/worktree directory as the child cwd. The living best-practices page shows `--cwd`, but 1.1.2 help exposes no such flag; do not emit it.
 
-### Permission-mode candidates
+### Permission-mode mapping
 
 The shipped native modes support this closest mapping:
 
-| RimZ mode | Candidate argv | Boundary |
+| RimZ mode | Provider argv | Boundary |
 | --- | --- | --- |
 | `ask` | no flag | keeps native default review and permission policy |
 | `auto` | `--mode accept-edits` | accepts edits; it does not promise approval of every command, URL, or MCP action |
@@ -146,7 +146,7 @@ The shipped native modes support this closest mapping:
 
 ### Presets and prompts
 
-`--model` is the direct model preset. The official launch surface has no reasoning-effort flag and no flag that replaces or appends the system prompt. `--agent` chooses an Antigravity custom agent, which can carry its own instructions, and rules/skills/plugins provide other instruction surfaces; a future adapter should declare unsupported preset fields rather than translating system prompts into unrelated flags.
+`--model` is the direct model preset. The official launch surface has no reasoning-effort flag and no flag that replaces or appends the system prompt. `--agent` chooses an Antigravity custom agent, which can carry its own instructions, and rules/skills/plugins provide other instruction surfaces; the adapter rejects unsupported preset fields rather than translating system prompts into unrelated flags.
 
 The CLI supports multiple workspaces with repeated `--add-dir`. Ordinary RimZ worktree isolation remains a process-cwd concern; Antigravity's separate project and desktop worktree concepts do not replace RimZ worktrees.
 
@@ -189,29 +189,24 @@ The workspace hook file is:
 <workspace>/.agents/hooks.json
 ```
 
-The official hook page describes `hooks.json` as a map from stable hook names to definitions. CLI 1.1.1 fixed workspace hook loading after a folder becomes trusted. Google's feature announcement says workspace hooks take precedence when present, but neither the hook page nor the tagged repository defines whether that precedence replaces a same-named global hook, replaces the whole global file, or merges event arrays. Test this before choosing a global named entry or plugin as the installer mechanism.
+The official 1.1.2 hook documentation describes `hooks.json` as a map from stable hook names to definitions and runs multiple named hooks sequentially. CLI 1.1.1 fixed workspace hook loading after a folder becomes trusted. RimZ installs one global named hook, `rimz`, preserves every other name, and refuses to replace a user-owned `rimz` definition.
 
-A RimZ-owned shape is structurally possible:
+A shortened RimZ-owned shape is:
 
 ```jsonc
 {
   "rimz": {
-    "PreToolUse": [
+    "PreInvocation": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "rimz hooks feed --source antigravity --event PreToolUse",
-            "timeout": 5
-          }
-        ]
+        "type": "command",
+        "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PreInvocation",
+        "timeout": 5
       }
     ],
     "Stop": [
       {
         "type": "command",
-        "command": "rimz hooks feed --source antigravity --event Stop",
+        "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event Stop",
         "timeout": 5
       }
     ]
@@ -219,9 +214,9 @@ A RimZ-owned shape is structurally possible:
 }
 ```
 
-This is an installer sketch, not a verified final config. The implementer must confirm event-name delivery, the CLI's event-name transport convention, merge precedence, and the neutral results before landing it. The published handler object has `type` (only `command`, optional), `command` (required), and `timeout` in seconds (optional, default 30).
+The complete installer also adds three disjoint `PostToolUse` matcher entries and one `PostInvocation` entry. Synthetic `--event` labels preserve the matcher class because `PostToolUse` input omits the tool name. The published handler object has `type` (only `command`, optional), `command` (required), and `timeout` in seconds (optional, default 30); RimZ uses five seconds.
 
-Plugins may also carry `hooks.json`. CLI 1.1.1's changelog establishes `~/.gemini/config/` as the active shared global customization directory even though older/living plugin prose still shows some assets under `~/.gemini/antigravity-cli/`. A plugin adds packaging and precedence questions without improving the hook wire, so a direct named global hook entry is the simpler first candidate.
+Plugins may also carry `hooks.json`. CLI 1.1.1's changelog establishes `~/.gemini/config/` as the active shared global customization directory even though older/living plugin prose still shows some assets under `~/.gemini/antigravity-cli/`. RimZ uses the direct named global entry because a plugin adds packaging without improving the wire.
 
 Workspace trust is a launch precondition for workspace-local hooks. RimZ's project trust preview must show the exact command and every config file it will edit; the trust hash includes the hook command, the custom statusline command, and any wrapped prior command.
 
@@ -265,9 +260,9 @@ An injected step has exactly one of `toolCall`, `userMessage`, or `ephemeralMess
 
 None of those four values is documented as a behavior-preserving observer result. `allow` can bypass the provider's native policy, while `ask` can introduce a prompt that policy would have skipped. The 1.0.16 release notes say the permission manager now handles an empty decision string safely, but they do not define whether `{}`, `{"decision":""}`, and absent stdout are equivalent, nor how exit codes and malformed JSON behave.
 
-This is the critical implementation gate: capture the provider's decision with no hook, then with each candidate neutral result under allow, ask, deny, and sandbox policies. Wire `PreToolUse` only after one exact output is proven behavior-preserving and golden it byte-for-byte.
+This remains the permission-integration gate. RimZ leaves `PreToolUse` uninstalled and returns no output if it is fed manually; native policy and the provider UI retain the decision.
 
-`Stop` documents `decision = "continue"` as the only value that prevents stopping and injects `reason`; any other value allows the stop. Even so, verify the exact neutral JSON and nonzero/malformed behavior rather than inferring a sentinel.
+`Stop` documents `decision = "continue"` as the only value that prevents stopping and injects `reason`; any other value allows the stop. RimZ returns the golden `{"decision":""}` shape.
 
 ### Canonical tool vocabulary
 
@@ -365,23 +360,22 @@ Treat every field as optional, validate finite nonnegative numbers, and prefer u
 
 ### Release-example drift
 
-The pinned official 1.1.1 statusline example reads `artifact_count` and `task_count`, while the living schema documents `artifacts[]` and `background_tasks[]`. The script reads `subagents[]` as documented. The live parser should tolerate both count and array forms, but capability claims that need task/artifact identity wait for an actual 1.1.1 payload capture.
+The pinned official 1.1.1 statusline example reads `artifact_count` and `task_count`, while the living schema documents `artifacts[]` and `background_tasks[]`. The script reads `subagents[]` as documented. RimZ's landed context parser ignores those drifting identity-poor fields and tolerates additive keys; task, artifact, and child-row claims wait for stable identities and enums.
 
 ### Lifecycle projection
 
-The statusline is a state feed, not a durable event log. A future ingestion path should edge-detect per `(conversation_id, pane)` rather than converting every refresh into lifecycle churn:
+The statusline is a sidecar state feed, not a durable event log. RimZ persists model, version, plan/account identity, and context usage without converting refreshes into lifecycle churn:
 
-| Statusline observation | Candidate RimZ projection | Constraint |
+| Statusline observation | RimZ projection | Constraint |
 | --- | --- | --- |
-| first usable payload | `registered` | lazy until initial-callback timing is proven |
-| resting/initial state → `thinking` or `working` | `turn_started` | no prompt text is published |
-| `tool_use` | running/progress | the cached `PreToolUse` name decides acting vs reasoning |
-| `tool_confirmation_pending: false → true` | `awaiting_input(Permission)` | attach cached tool detail when available |
-| pending true → false | clear waiting through the next progress observation | never manufacture a turn end |
-| `idle` | no terminal verdict by itself | initial idle, clean finish, interrupt, and failure all converge here |
-| model/context changes | context enrichment | sidecar only |
+| `model`, `version` | model and CLI identity | sidecar only |
+| `plan_tier`, `email` | provider account identity | private sidecar; no diagnostic logging |
+| `context_window` | live context gauge and token composition | sidecar only |
+| `agent_state` | ignored for lifecycle | command hooks own durable edges |
+| `tool_confirmation_pending` | timestamped display-only permission wait | raises the card while newer than hook activity; no durable ask or detail |
+| `subagents`, `artifacts`, `background_tasks` | ignored for row identity | published entries lack the stable IDs RimZ requires |
 
-`PreInvocation` fires for every model call inside a turn. Mapping it unconditionally to `turn_started` would reset acting back to reasoning after each tool and create false prompt boundaries. Use the status edge, or emit from `PreInvocation` only when a session-local state machine proves no turn is open.
+`PreInvocation` fires for every model call inside an execution. RimZ emits `registered` and `turn_started` only when `invocationNum = 0`; later model calls do not reset acting to reasoning or create false prompt boundaries.
 
 ## Turn completion, errors, and background work
 
@@ -407,10 +401,10 @@ The initial mapping is:
 | `terminationReason = model_stop`, empty error, `fullyIdle = true` | `turn_ended { errored: false }` |
 | `terminationReason = error` or non-empty error, `fullyIdle = true` | `turn_ended { errored: true }`; additionally classify a provider-limit/backoff marker only from verified labels |
 | clean stop with `fullyIdle = false` | clean `turn_ended` with background work in flight, leaving the row running/parked |
-| error with `fullyIdle = false` | live-capture before choosing whether background work or the foreground error wins |
-| `max_steps_exceeded` | failed unless live behavior proves a resumable park |
+| error with `fullyIdle = false` | foreground failure wins; do not paint a success-shaped park |
+| `max_steps_exceeded` | failed |
 
-The stop hook can itself force another loop, so RimZ must return the verified neutral result. Do not emit success before the hook decision is accepted.
+The stop hook can itself force another loop. RimZ returns the documented non-`continue` empty decision, so observation does not extend the execution.
 
 Antigravity documents no process/session-end hook. Pane process presence, shell reversion, and ordinary RimZ reaping remove the row. `Stop` ends an execution loop, not the conversation.
 
@@ -622,31 +616,30 @@ MCP, skills, rules, custom agents, and plugins affect tool vocabulary, prompts, 
 
 ## Native-event mapping for the live-channel promotion
 
-After the neutral-output and statusline probes pass, use this conservative mapping:
+The landed adapter uses this conservative mapping:
 
 | Antigravity observation | RimZ signal/enrichment | Notes |
 | --- | --- | --- |
-| first statusline or hook for `conversationId` | `registered` | lazy; carry transcript and workspace paths when present |
-| statusline resting → `thinking`/`working` | `turn_started` | no native prompt text; leave task absent unless transcript schema is later validated |
-| `PreToolUse` for an ordinary tool | progress cache only | exact neutral result required; preserve name/args for the following wait |
-| `PreToolUse` for `write_to_file`, `replace_file_content`, `multi_replace_file_content` | cache edit intent only | a pre-hook alone does not prove completion if denied |
-| `PostToolUse` after a cached edit step with empty error | `tool_used { edits: true }` | `PostToolUse` lacks the name, so correlate by `(conversationId, stepIdx)` |
-| statusline `tool_confirmation_pending = true` | `awaiting_input(Permission)` | attach cached tool detail; clear on false/progress |
-| `PreToolUse.ask_question` plus native dialog evidence | `awaiting_input(Question)` | retain typed question/options after real schema capture |
-| pending plan artifact | `awaiting_input(PlanApproval)` | only after artifact type/status enums are captured |
+| first `PreInvocation`, `invocationNum = 0` | `turn_started` | create-on-miss establishes identity and carries transcript/workspace/model enrichment |
+| later `PreInvocation` | activity only | do not reopen the turn after tool use |
+| successful edit-matcher `PostToolUse` | `tool_used { mutates: true, edits: true }` | acting begins only after execution succeeds |
+| successful `run_command` matcher `PostToolUse` | `tool_used { mutates: true, edits: false }` | durable proof of generic mutation |
+| remaining documented-tool matcher `PostToolUse` | `tool_used { mutates: false, edits: false }` | progress without durable churn unless it changes state |
+| failed `PostToolUse` | `tool_used { mutates: false, edits: false }` | failure does not claim a completed edit |
+| statusline `tool_confirmation_pending = true` | display card as waiting | read-only marker; native pane remains the answer surface |
 | `Stop`, clean and fully idle | `turn_ended { errored: false }` | terminal success |
 | `Stop`, error | `turn_ended { errored: true }` | classify provider-limit parks only from verified error labels |
 | `Stop`, clean and not fully idle | `turn_ended { errored: false, background work }` | shared fold leaves running/parked |
 | pane process exits/reverts | `ended` through presence reconciliation | no native session-end event |
 | statusline model/context/account | `AgentContext` sidecar | no event-log churn |
 
-An edit should not move to acting until execution is proven. Cache `PreToolUse` by step, use `PostToolUse` success to emit the completed edit, and expire the cache on stop/process death. If live capture proves statusline `tool_use` occurs only after permission resolution and includes the tool name, that may simplify the edge, but the published schema does not promise it.
+An edit moves to acting only after successful execution. The installer selects the tool class through disjoint `PostToolUse` matchers, so no pre-tool cache or policy callback is required. Newly added upstream tool names remain unclassified until the vocabulary fixture advances.
 
 Compaction stays unsupported. `/clear`, `/rewind`, and implicit context management are not substitutes for an opener/closer signal.
 
 ## Implementation verification checklist
 
-Run these probes with a temporary HOME and throwaway Git workspace against the current latest `agy` release. Record sanitized payloads as typed test fixtures before writing the adapter; older-release fixtures and compatibility fallbacks stay out of the implementation.
+Run the remaining probes with a temporary HOME and throwaway Git workspace against the current latest `agy` release. Record sanitized payloads as typed test fixtures before expanding the adapter; older-release fixtures and speculative compatibility fallbacks stay out of the implementation.
 
 ### Process and launch
 
@@ -659,10 +652,9 @@ Run these probes with a temporary HOME and throwaway Git workspace against the c
 ### Hook installation and decisions
 
 - Create global-only, workspace-only, same-name global/workspace, different-name global/workspace, and plugin hook configurations; capture merge and order behavior after workspace trust.
-- Verify whether hook commands receive an event-name environment variable or require one command per configured event.
-- For every event, capture cwd, environment, stdout/stderr handling, timeout behavior, signal behavior, nonzero exit behavior, empty stdout, `{}`, malformed JSON, and unknown output fields.
-- For `PreToolUse`, compare no hook, absent/empty decision, `allow`, `ask`, `force_ask`, and `deny` under each native policy. Select one behavior-preserving result or defer the event.
-- For `Stop`, prove the neutral decision allows termination and a RimZ store-write failure cannot accidentally force continuation.
+- Re-check command cwd, environment, timeout, signal, and malformed-output behavior when a release changes the hook executor.
+- For `PreToolUse`, compare no hook, absent/empty decision, `allow`, `ask`, `force_ask`, and `deny` under each native policy before ever expanding into permission observation; defer the event unless one result is behavior-preserving.
+- Re-probe the non-`continue` `Stop` decision whenever the documented decision contract changes.
 - Verify hooks in root agents, nested subagents, resumed sessions, forked sessions, print mode, and after `/clear`.
 - Install/uninstall/preview must preserve unrelated named hooks and unknown fields and write with temp-file plus rename.
 
@@ -670,14 +662,14 @@ Run these probes with a temporary HOME and throwaway Git workspace against the c
 
 - Capture the first payload before any prompt and every transition through initializing, idle, thinking, working, tool use, root permission, root question, artifact review, background task, subagent wait, stop, error, cancel, resume, rewind, clear, and fork.
 - Record absent vs null fields and exact nested schemas/enums for `agent`, `subagents`, `artifacts`, `background_tasks`, `sandbox`, `vcs`, and `context_window`.
-- Check whether 1.1.1 emits array fields, count fields, or both; verify whether `tool_confirmation_pending` covers subagent, question, and artifact waits.
+- Check whether 1.1.2 emits array fields, count fields, or both; verify whether `tool_confirmation_pending` covers subagent, question, and artifact waits.
 - Verify callback coalescing, maximum payload size, concurrent invocation, timeout, stdout forwarding, and whether a custom command runs in print mode.
-- Wrap a real prior statusline command, preserve its ANSI output, and prove uninstall restoration.
+- Re-test a real prior statusline command's ANSI output across CLI releases; fixture tests prove structural preservation and uninstall restoration.
 - Confirm whether `email` disappears when account-info hiding is enabled and keep raw identity out of logs.
 
 ### Lifecycle and transcripts
 
-- Correlate `PreToolUse.stepIdx` with `PostToolUse.stepIdx`, including parallel tools, denial, failure, retries, and nested agents.
+- Expand the post-tool matcher fixture when Google publishes new tool names; retain non-overlap among edit, generic-mutation, and observed-only sets.
 - Capture every `Stop.terminationReason`, provider-limit/network error text, `fullyIdle` combination, and statusline state before/after Stop.
 - Inspect the hook-provided transcript with append, tool use, question, artifact, error, cancel, resume, rewind, clear, fork, and subagent activity; define a parser only from stable fixtures.
 - Re-capture the observed SQLite `user_version`, tables, columns, indexes, `.db-wal` behavior, and blob encodings; map conversation IDs to rows and test concurrent writes, rewind, fork/import, and retention before claiming history, parentage, or spend.

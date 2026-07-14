@@ -94,6 +94,11 @@ pub(super) fn project_display_status(
                 (AgentStatus::Running, false)
             }
         };
+        if crate::agents::is_native_permission_wait(status, agent.context.as_ref(), last_activity) {
+            agent.status = AgentStatus::Waiting;
+            agent.phase = TurnPhase::Idle;
+            continue;
+        }
         // Keep the source agent's own activity clock for this fallback; the
         // row clock above is child-folded and drives the other ladder rungs.
         let effective_status = source_agent

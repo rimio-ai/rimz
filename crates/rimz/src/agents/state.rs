@@ -676,6 +676,21 @@ pub fn is_plan_proposed(
             .is_some_and(|at| at > last_activity)
 }
 
+/// Whether a provider's live state channel reports a native permission dialog
+/// newer than the last lifecycle heartbeat. This is a display-only attention
+/// edge: it routes the human to the pane without manufacturing a durable ask
+/// or answering through a provider decision hook.
+pub fn is_native_permission_wait(
+    status: AgentStatus,
+    context: Option<&AgentContext>,
+    last_activity: Timestamp,
+) -> bool {
+    status == AgentStatus::Running
+        && context
+            .and_then(|context| context.native_permission_wait)
+            .is_some_and(|at| at > last_activity)
+}
+
 /// Whether a `running` or `waiting` agent's latest turn was interrupted with no
 /// `Stop` hook to record it — the provider marker
 /// (`AgentContext::turn_interrupted`, folded in via the context sidecar)

@@ -131,6 +131,7 @@ pub(super) fn install(path: &Path) -> Result<HookInstallReport> {
         config_path: path.to_path_buf(),
         installed_events,
         merged: existed,
+        additional_config_paths: Vec::new(),
     })
 }
 
@@ -147,6 +148,7 @@ pub(super) fn preview(path: &Path) -> Result<HookInstallPreview> {
         merged: existed,
         status_line_change: None,
         subagent_status_line_change: None,
+        additional_configs: Vec::new(),
     })
 }
 
@@ -157,6 +159,7 @@ pub(super) fn uninstall(path: &Path) -> Result<HookUninstallReport> {
             config_path: path.to_path_buf(),
             removed_events: Vec::new(),
             existed: false,
+            additional_config_paths: Vec::new(),
         });
     }
     let mut table = read_table(path)?;
@@ -169,6 +172,7 @@ pub(super) fn uninstall(path: &Path) -> Result<HookUninstallReport> {
         config_path: path.to_path_buf(),
         removed_events,
         existed: true,
+        additional_config_paths: Vec::new(),
     })
 }
 

@@ -9,7 +9,7 @@ rimz hooks install [--dry-run] [AGENT]
 rimz hooks uninstall [AGENT]
 ```
 
-`hooks install` writes RimZ-managed hook entries into the agent's per-user config so the agent reports its lifecycle and blocking prompts back to RimZ. With no `AGENT` it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit kind (`claude`, `codex`, `pi`, …) it prints the single report. The install is additive — your existing hooks stay — and `--dry-run` prints the same per-agent summary plus a unified diff to stderr and writes no files, so you see the exact edit before it happens.
+`hooks install` writes RimZ-managed hook entries into the agent's per-user config so the agent reports its lifecycle and blocking prompts back to RimZ. With no `AGENT` it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit kind (`claude`, `codex`, `pi`, …) it prints the single report. The install is additive — your existing hooks stay — and `--dry-run` prints the same per-agent summary plus a unified diff to stderr and writes no files, so you see the exact edit before it happens. A provider that splits hooks and statusline settings across files lists `additional_config_paths` in the install report and shows every file in the dry-run diff; Antigravity edits `~/.gemini/config/hooks.json` and wraps `statusLine` in `~/.gemini/antigravity-cli/settings.json`.
 
 `hooks uninstall` removes only RimZ-managed hook blocks, leaving everything else in the file untouched. With no `AGENT` it removes every installed set, prints `[]` when nothing is installed, and exits successfully without needing the binary on PATH. This is the clean undo for `hooks install`.
 

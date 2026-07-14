@@ -1045,6 +1045,7 @@ fn settle_context(complete: Option<Timestamp>, interrupted: Option<Timestamp>) -
         turn_error: None,
         turn_complete: complete.map(|at| at + jiff::SignedDuration::from_secs(1)),
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: interrupted.map(|at| at + jiff::SignedDuration::from_secs(1)),
         observed_at: Timestamp::now(),
     }

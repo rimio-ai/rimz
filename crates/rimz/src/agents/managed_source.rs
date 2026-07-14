@@ -38,6 +38,7 @@ impl ManagedSource {
             config_path: path.to_path_buf(),
             installed_events: self.installed_event_names(),
             merged: original.is_some(),
+            additional_config_paths: Vec::new(),
         })
     }
 
@@ -55,6 +56,7 @@ impl ManagedSource {
             candidate_config: self.source.to_owned(),
             status_line_change: None,
             subagent_status_line_change: None,
+            additional_configs: Vec::new(),
         })
     }
 
@@ -76,6 +78,7 @@ impl ManagedSource {
             config_path: path.to_path_buf(),
             removed_events,
             existed,
+            additional_config_paths: Vec::new(),
         })
     }
 

@@ -104,6 +104,7 @@ struct DetectedAgent {
     binary: Option<PathBuf>,
     hook_install: bool,
     hooks_installed: bool,
+    local_session_discovery: bool,
 }
 
 impl SetupReport {
@@ -144,6 +145,7 @@ impl SetupReport {
                     binary: rimz::agents::locate_binary(descriptor),
                     hook_install: descriptor.capabilities.hook_install,
                     hooks_installed: agent.hooks_installed(),
+                    local_session_discovery: descriptor.capabilities.local_session_discovery,
                 }
             })
             .collect();
@@ -266,13 +268,11 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
             (Some(path), false) => format!("found at {}", path.display()),
             (None, _) => "not found".to_string(),
         };
-        let hook_state = if !agent.hook_install {
-            "hook install unsupported"
-        } else if agent.hooks_installed {
-            "hooks installed"
-        } else {
-            "hooks not installed"
-        };
+        let hook_state = integration_state(
+            agent.hook_install,
+            agent.hooks_installed,
+            agent.local_session_discovery,
+        );
         let style = if agent.binary.is_none() {
             render::palette::ALARM
         } else if agent.hook_install && !agent.hooks_installed {
@@ -291,4 +291,39 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
 fn print_line(line: &str) -> std::io::Result<()> {
     use std::io::Write;
     writeln!(render::out(), "{line}")
+}
+
+fn integration_state(
+    hook_install: bool,
+    hooks_installed: bool,
+    local_session_discovery: bool,
+) -> &'static str {
+    if !hook_install && local_session_discovery {
+        "local-session discovery; hook install unavailable"
+    } else if !hook_install {
+        "hook install unsupported"
+    } else if hooks_installed {
+        "hooks installed"
+    } else {
+        "hooks not installed"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::integration_state;
+
+    #[test]
+    fn setup_leads_with_the_hookless_adapters_observation_path() {
+        assert_eq!(
+            integration_state(false, false, true),
+            "local-session discovery; hook install unavailable"
+        );
+        assert_eq!(
+            integration_state(false, false, false),
+            "hook install unsupported"
+        );
+        assert_eq!(integration_state(true, true, false), "hooks installed");
+        assert_eq!(integration_state(true, false, false), "hooks not installed");
+    }
 }

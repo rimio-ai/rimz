@@ -694,14 +694,29 @@ mod tests {
         assert_eq!(antigravity.bin_names, &["agy"]);
         assert!(!antigravity.capabilities.blocking_asks);
         assert!(antigravity.capabilities.native_ask_ui);
-        assert!(!antigravity.capabilities.rich_context);
+        assert!(antigravity.capabilities.rich_context);
         assert!(!antigravity.capabilities.transcript_tail_context);
-        assert!(!antigravity.capabilities.context_usage);
+        assert!(antigravity.capabilities.context_usage);
         assert!(!antigravity.capabilities.account_spend);
+        assert!(!antigravity.capabilities.subagents);
+        assert!(antigravity.capabilities.background_tasks);
         assert!(antigravity.capabilities.registers_lazily);
         assert!(antigravity.capabilities.local_session_discovery);
-        assert!(!antigravity.capabilities.hook_install);
-        assert!(antigravity.activity_events.is_empty());
+        assert!(!antigravity.capabilities.daemon_hooked_sessions);
+        assert!(antigravity.capabilities.hook_install);
+        assert_eq!(
+            antigravity.activity_events,
+            &[
+                "PreInvocation",
+                "PostToolUse:edit",
+                "PostToolUse:mutating",
+                "PostToolUse:observed",
+                "PostInvocation",
+                "Stop",
+            ]
+        );
+        assert!(!antigravity.capabilities.remote_control.pane_sessions);
+        assert!(!antigravity.capabilities.remote_control.background_sessions);
 
         for adapter in crate::agents::registry::ADAPTERS {
             assert_eq!(

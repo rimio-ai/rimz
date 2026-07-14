@@ -221,6 +221,25 @@ fn write_agent_table_entry(
             render::paint(render::palette::MUTED, &format!("+ {summary}"))
         )?;
     }
+    for config in &preview.additional_configs {
+        let annotation = if config.merged {
+            "existing kept"
+        } else {
+            "new file"
+        };
+        writeln!(
+            out,
+            "{}{}",
+            " ".repeat(layout.continuation_indent()),
+            render::paint(
+                render::palette::MUTED,
+                &format!(
+                    "+ config → {} ({annotation})",
+                    home_relative_path(&config.config_path)
+                )
+            )
+        )?;
+    }
     Ok(())
 }
 
@@ -271,6 +290,14 @@ fn write_install_result(out: &mut dyn Write, report: &HookInstallReport) -> Resu
         report.installed_events.len(),
         home_relative_path(&report.config_path)
     )?;
+    for path in &report.additional_config_paths {
+        writeln!(
+            out,
+            "  {} {}",
+            render::paint(render::palette::MUTED, "+ config"),
+            home_relative_path(path)
+        )?;
+    }
     Ok(())
 }
 
@@ -293,10 +320,29 @@ fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPrevi
 }
 
 fn preview_diff(preview: &HookInstallPreview) -> String {
-    let path = preview.config_path.display().to_string();
-    match preview.original_config.as_deref() {
+    let mut rendered = config_diff(
+        &preview.config_path,
+        preview.original_config.as_deref(),
+        &preview.candidate_config,
+    );
+    for config in &preview.additional_configs {
+        if !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        rendered.push_str(&config_diff(
+            &config.config_path,
+            config.original_config.as_deref(),
+            &config.candidate_config,
+        ));
+    }
+    rendered
+}
+
+fn config_diff(path: &std::path::Path, original: Option<&str>, candidate: &str) -> String {
+    let path = path.display().to_string();
+    match original {
         Some(original) => {
-            let diff = TextDiff::from_lines(original, &preview.candidate_config);
+            let diff = TextDiff::from_lines(original, candidate);
             let rendered = diff
                 .unified_diff()
                 .context_radius(DIFF_CONTEXT_LINES)
@@ -310,7 +356,7 @@ fn preview_diff(preview: &HookInstallPreview) -> String {
         }
         None => {
             let mut out = format!("--- /dev/null\n+++ {path}\n@@ new file @@\n");
-            for line in preview.candidate_config.lines() {
+            for line in candidate.lines() {
                 out.push('+');
                 out.push_str(line);
                 out.push('\n');
@@ -365,11 +411,15 @@ impl AgentTableLayout {
 }
 
 fn agent_hook_cell(preview: &HookInstallPreview) -> String {
-    format!(
+    let mut cell = format!(
         "{} hooks → {}",
         preview.planned_events.len(),
         home_relative_path(&preview.config_path)
-    )
+    );
+    if !preview.additional_configs.is_empty() {
+        cell.push_str(&format!(" +{} config", preview.additional_configs.len()));
+    }
+    cell
 }
 
 fn status_line_summary(preview: &HookInstallPreview) -> Option<&'static str> {
@@ -403,6 +453,8 @@ mod tests {
     use std::io::Cursor;
     use std::path::PathBuf;
 
+    use rimz::agents::HookConfigPreview;
+
     use super::*;
 
     fn preview(agent: &'static str, original: Option<&str>, candidate: &str) -> HookInstallPreview {
@@ -415,6 +467,7 @@ mod tests {
             merged: original.is_some(),
             status_line_change: None,
             subagent_status_line_change: None,
+            additional_configs: Vec::new(),
         }
     }
 
@@ -497,14 +550,18 @@ mod tests {
 
     #[test]
     fn dry_run_renders_existing_and_new_unified_diffs_without_prompt() {
-        let previews = [
-            preview(
-                "claude",
-                Some("alpha\nkeep\nold\nomega\n"),
-                "alpha\nkeep\nnew\nomega\n",
-            ),
-            preview("codex", None, "one\ntwo\n"),
-        ];
+        let mut claude = preview(
+            "claude",
+            Some("alpha\nkeep\nold\nomega\n"),
+            "alpha\nkeep\nnew\nomega\n",
+        );
+        claude.additional_configs.push(HookConfigPreview {
+            config_path: home_config_path("claude-statusline"),
+            original_config: Some("old-status\n".to_owned()),
+            candidate_config: "new-status\n".to_owned(),
+            merged: true,
+        });
+        let previews = [claude, preview("codex", None, "one\ntwo\n")];
 
         let rendered = strip(|w| render_dry_run(w, &previews));
 
@@ -515,6 +572,9 @@ mod tests {
         assert!(rendered.contains("@@ new file @@"));
         assert!(rendered.contains("-old"));
         assert!(rendered.contains("+new"));
+        assert!(rendered.contains(".claude-statusline/settings.json"));
+        assert!(rendered.contains("-old-status"));
+        assert!(rendered.contains("+new-status"));
         assert!(rendered.contains("+one"));
         assert!(!rendered.contains("Add reporting hooks?"));
     }

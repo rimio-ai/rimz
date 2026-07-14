@@ -491,12 +491,18 @@ mod tests {
         );
 
         let antigravity = agent_cells(&matrix, "antigravity");
-        assert_eq!(count(&antigravity, MatrixCellState::Ok), 0);
+        assert_eq!(count(&antigravity, MatrixCellState::Ok), 5);
         assert_eq!(count(&antigravity, MatrixCellState::Partial), 3);
-        assert_eq!(count(&antigravity, MatrixCellState::Absent), 13);
+        assert_eq!(count(&antigravity, MatrixCellState::Absent), 8);
         assert_eq!(
             agent_labels(&matrix, "antigravity", MatrixCellState::Partial),
-            ["turn", "end", "idle"]
+            ["perm", "end", "idle"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "antigravity", MatrixCellState::Absent),
+            [
+                "plan", "ask", "answer", "compact", "sub", "live$", "spend", "remote"
+            ]
         );
     }
 

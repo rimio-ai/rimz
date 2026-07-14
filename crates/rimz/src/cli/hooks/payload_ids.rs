@@ -18,30 +18,44 @@ pub(super) fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
 }
 
 /// The agent session id from a hook payload (`agent_id`, snake/camel session
-/// id, then Cursor's `conversation_id`). Empty ids are filtered out.
+/// id, then Cursor's `conversation_id` and Antigravity's `conversationId`).
+/// Empty ids are filtered out.
 pub(super) fn payload_agent_id(payload: &Value) -> Option<&str> {
-    ["agent_id", "session_id", "sessionId", "conversation_id"]
-        .into_iter()
-        .find_map(|key| {
-            payload
-                .get(key)
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-        })
+    [
+        "agent_id",
+        "session_id",
+        "sessionId",
+        "conversation_id",
+        "conversationId",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    })
 }
 
 /// The sidecar key for local context enrichment. Root sessions file context
-/// under the snake/camel session id (or Cursor's `conversation_id`); child-specific
-/// `agent_id`s are lifecycle identities, not Codex rollout files.
+/// under the snake/camel session id (or Cursor's `conversation_id` and
+/// Antigravity's `conversationId`); child-specific `agent_id`s are lifecycle
+/// identities, not Codex rollout files.
 pub(super) fn payload_context_agent_id(payload: &Value) -> Option<&str> {
-    ["session_id", "sessionId", "agent_id", "conversation_id"]
-        .into_iter()
-        .find_map(|key| {
-            payload
-                .get(key)
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-        })
+    [
+        "session_id",
+        "sessionId",
+        "agent_id",
+        "conversation_id",
+        "conversationId",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    })
 }
 
 #[cfg(test)]
@@ -55,6 +69,16 @@ mod tests {
         let payload = json!({"sessionId": "copilot-session"});
         assert_eq!(payload_agent_id(&payload), Some("copilot-session"));
         assert_eq!(payload_context_agent_id(&payload), Some("copilot-session"));
+    }
+
+    #[test]
+    fn antigravity_conversation_id_reaches_both_follow_on_selectors() {
+        let payload = json!({"conversationId": "antigravity-session"});
+        assert_eq!(payload_agent_id(&payload), Some("antigravity-session"));
+        assert_eq!(
+            payload_context_agent_id(&payload),
+            Some("antigravity-session")
+        );
     }
 
     #[test]

@@ -45,6 +45,13 @@ fn producing_opts() -> FoldOpts<'static> {
     }
 }
 
+#[test]
+fn provider_store_adapters_are_wired_for_identityless_idle_cards() {
+    let wired = wired_kinds();
+    assert!(wired.iter().any(|kind| kind == "antigravity"));
+    assert!(wired.iter().any(|kind| kind == "kiro"));
+}
+
 fn diff_entry(
     clean: bool,
     landed: bool,
@@ -1135,6 +1142,7 @@ fn cost_row_at(
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         observed_at: Timestamp::from_second(1_750_000_000).unwrap(),
     });

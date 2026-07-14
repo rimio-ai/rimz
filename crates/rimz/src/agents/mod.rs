@@ -99,8 +99,9 @@ pub(crate) use state::WindowSurplus;
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
     ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS,
-    DEFAULT_STALL_AFTER_SECS, OpenAsk, is_stalled, is_turn_complete, is_turn_dead,
-    is_turn_interrupted, looks_like_control_text, single_line_description, usable_description,
+    DEFAULT_STALL_AFTER_SECS, OpenAsk, is_native_permission_wait, is_stalled, is_turn_complete,
+    is_turn_dead, is_turn_interrupted, looks_like_control_text, single_line_description,
+    usable_description,
 };
 pub(crate) use state::{
     AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,
@@ -292,6 +293,21 @@ pub struct HookInstallReport {
     /// True when the installer wrote into an existing config (merge), false
     /// when the file was created fresh.
     pub merged: bool,
+    /// Additional provider config files written by the same install. Most
+    /// adapters keep hooks and statusline settings in one file; providers that
+    /// split those surfaces list every secondary path here so the security
+    /// surface stays visible in JSON and human output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_config_paths: Vec<PathBuf>,
+}
+
+/// One additional config-file change in a hook-install preview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HookConfigPreview {
+    pub config_path: PathBuf,
+    pub original_config: Option<String>,
+    pub candidate_config: String,
+    pub merged: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -304,8 +320,8 @@ pub struct HookInstallPreview {
     pub merged: bool,
     /// How the install changes the agent's statusline, for the one-line consent
     /// summary that keeps the wrap a visible security surface. The full change
-    /// is also in `candidate_config`'s diff. `None` for agents that manage no
-    /// statusline (Codex).
+    /// is in `candidate_config` or the owning `additional_configs` diff. `None`
+    /// for agents that manage no statusline (Codex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_line_change: Option<StatusLineChange>,
     /// How the install changes the agent's `subagentStatusLine` (the per-child
@@ -313,6 +329,10 @@ pub struct HookInstallPreview {
     /// `None` for agents that manage no subagent statusline (Codex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_status_line_change: Option<StatusLineChange>,
+    /// Additional provider files changed by this install. Their complete diffs
+    /// render under the primary hook file before consent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_configs: Vec<HookConfigPreview>,
 }
 
 /// What `rimz hooks install` does to the agent's statusline command, surfaced
@@ -336,6 +356,10 @@ pub struct HookUninstallReport {
     pub removed_events: Vec<String>,
     /// True when the config file existed before uninstall.
     pub existed: bool,
+    /// Additional provider config files inspected and, when Rimz-owned state
+    /// existed, restored by this uninstall.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_config_paths: Vec<PathBuf>,
 }
 
 /// Trigger path for adapter-owned enrichment refreshes.

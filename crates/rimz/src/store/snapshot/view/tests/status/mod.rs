@@ -3,6 +3,7 @@ use super::*;
 mod api_errors;
 mod auto_continue;
 mod compaction;
+mod native_permission;
 mod stall;
 mod turn_complete;
 mod turn_interrupted;

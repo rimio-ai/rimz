@@ -67,6 +67,7 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
         config_path: path.to_path_buf(),
         removed_events,
         existed,
+        additional_config_paths: Vec::new(),
     })
 }
 

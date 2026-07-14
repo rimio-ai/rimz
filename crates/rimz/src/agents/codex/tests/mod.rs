@@ -116,8 +116,8 @@ fn codex_render_preset_maps_effort_and_system_prompt_file_to_config_overrides() 
 fn codex_descriptor_declares_lazy_registration() {
     // Codex's instances can be present before a session binds (lazy
     // `SessionStart`, daemon-routed unstamped hooks), so it opts into cwd
-    // session binding. Idle synthesis is gated on wired hooks for every kind;
-    // Claude stays out of cwd binding because it stamps every session.
+    // session binding. The idle-synthesis observation gate is separate; Claude
+    // stays out of cwd binding because it stamps every session.
     assert!(CodexAdapter.descriptor().capabilities.registers_lazily);
     assert!(
         !crate::agents::ClaudeAdapter

@@ -1,31 +1,64 @@
-//! Antigravity CLI 1.1.1 launch, local-session, transcript, and live-state adapter.
+//! Antigravity CLI 1.1.2 launch, hook, statusline, local-session, and transcript adapter.
 //!
-//! Antigravity's command-hook decision channel has no verified observer-neutral
-//! pre-tool result yet. Keep hook installation unsupported; the provider-owned
-//! conversation cache and JSONL transcript supply validated pulled truth for
-//! process identity, basic turn state, and visible main-thread history.
+//! Rimz installs only hooks with documented observer-neutral output. The
+//! policy-changing `PreToolUse` decision channel stays untouched; disjoint
+//! `PostToolUse` matchers recover tool phase after execution instead.
 
+mod install;
+mod payloads;
 mod session;
+mod statusline;
 #[cfg(test)]
 mod tests;
 
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde_json::Value;
 
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
     PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
 };
-use super::lifecycle::LifecycleSignalKind;
+use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::{
-    AgentAdapter, AgentErr, AgentHookClass, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    LocalSessionObservation, PresetArgMatcher, PresetErr, PresetField, Result, TranscriptMessage,
+    AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalSessionObservation,
+    PresetArgMatcher, PresetErr, PresetField, Result, TranscriptMessage,
 };
 use crate::harness::run::PermissionMode;
 
-pub const SUPPORTED_VERSION: &str = "1.1.1";
-const HOOK_INSTALL_UNAVAILABLE: &str = "Antigravity CLI 1.1.1 observer hooks are deferred until a behavior-preserving PreToolUse/Stop neutral result and statusline callback lifecycle are verified";
+pub const SUPPORTED_VERSION: &str = "1.1.2";
+const HOOK_TIMEOUT_SECS: u64 = 5;
+const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source antigravity";
+const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source antigravity";
+const STATUS_LINE_COMMAND: &str =
+    "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source antigravity";
+const PRE_INVOCATION_COMMAND: &str =
+    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PreInvocation";
+const POST_TOOL_EDIT_COMMAND: &str =
+    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:edit";
+const POST_TOOL_MUTATING_COMMAND: &str =
+    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:mutating";
+const POST_TOOL_OBSERVED_COMMAND: &str =
+    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:observed";
+const POST_INVOCATION_COMMAND: &str =
+    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostInvocation";
+const STOP_COMMAND: &str =
+    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event Stop";
+const POST_TOOL_EDIT_MATCHER: &str =
+    "^(write_to_file|replace_file_content|multi_replace_file_content)$";
+const POST_TOOL_MUTATING_MATCHER: &str = "^run_command$";
+const POST_TOOL_OBSERVED_MATCHER: &str = "^(view_file|list_dir|find_by_name|grep_search|search_web|read_url_content|manage_task|schedule|list_permissions|ask_permission|invoke_subagent|define_subagent|send_message|manage_subagents|ask_question|generate_image)$";
+const INSTALLED_EVENT_LABELS: &[&str] = &[
+    "PreInvocation",
+    "PostToolUse:edit",
+    "PostToolUse:mutating",
+    "PostToolUse:observed",
+    "PostInvocation",
+    "Stop",
+];
+const LIFECYCLE_EVENTS: &[&str] = INSTALLED_EVENT_LABELS;
 
 static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "antigravity",
@@ -54,16 +87,16 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capabilities: Capabilities {
         blocking_asks: false,
         native_ask_ui: true,
-        rich_context: false,
+        rich_context: true,
         transcript_tail_context: false,
-        context_usage: false,
+        context_usage: true,
         account_spend: false,
         subagents: false,
-        background_tasks: false,
+        background_tasks: true,
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
-        hook_install: false,
+        hook_install: true,
         implicit_unlimited_window_mins: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
@@ -81,23 +114,23 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["agy"],
     bin_names: &["agy"],
     extra_bin_dirs: &[".local/bin"],
-    activity_events: &[],
-    hook_install_unavailable: Some(HOOK_INSTALL_UNAVAILABLE),
+    activity_events: INSTALLED_EVENT_LABELS,
+    hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
 
 const ANTIGRAVITY_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::TurnLifecycle,
-        ConcernCoverage::Partial {
-            via: "provider-owned USER_INPUT and completed PLANNER_RESPONSE transcript records",
-            gap: "pulled text-turn boundaries only; failures, waits, and tool activity remain uncaptured",
+        ConcernCoverage::Wired {
+            via: "neutral PreInvocation, PostToolUse, and Stop hooks",
         },
     ),
     (
         IntegrationConcern::Permission,
-        ConcernCoverage::Unsupported {
-            reason: "observer-neutral PreToolUse result is unverified and the transcript omits native prompts",
+        ConcernCoverage::Partial {
+            via: "statusline tool_confirmation_pending routes the card to the native pane",
+            gap: "PreToolUse has no behavior-preserving observer decision, so there is no durable ask or permission detail",
         },
     ),
     (
@@ -132,8 +165,8 @@ const ANTIGRAVITY_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::BackgroundParking,
-        ConcernCoverage::Unsupported {
-            reason: "fullyIdle and background-task status require the deferred live channels",
+        ConcernCoverage::Wired {
+            via: "Stop.fullyIdle parks a clean foreground stop while background work remains",
         },
     ),
     (
@@ -146,14 +179,14 @@ const ANTIGRAVITY_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::IdleNotification,
         ConcernCoverage::Partial {
-            via: "completed PLANNER_RESPONSE records + pane liveness",
-            gap: "pulled state has no native notification wakeup or failure verdict",
+            via: "native Stop wakeup + pane liveness",
+            gap: "Antigravity publishes no separate idle-notification event",
         },
     ),
     (
         IntegrationConcern::ContextUsage,
-        ConcernCoverage::Unsupported {
-            reason: "context usage exists only on the deferred custom-statusline channel",
+        ConcernCoverage::Wired {
+            via: "custom statusline context_window payload",
         },
     ),
     (
@@ -164,14 +197,14 @@ const ANTIGRAVITY_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "custom-statusline install and callback lifecycle remain unverified",
+        ConcernCoverage::Wired {
+            via: "custom statusline model, version, plan, account, and token context",
         },
     ),
     (
         IntegrationConcern::HookInstall,
-        ConcernCoverage::Unsupported {
-            reason: HOOK_INSTALL_UNAVAILABLE,
+        ConcernCoverage::Wired {
+            via: "idempotent global hooks.json merge plus reversible statusLine wrap",
         },
     ),
     (
@@ -192,34 +225,31 @@ const ANTIGRAVITY_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     (
         LifecycleSignalKind::Registered,
         HookCoverage::Derived {
-            via: "workspace conversation cache + validated brain transcript",
-            gap: "fresh registration waits for the workspace cache; exact resume binds immediately",
+            via: "first PreInvocation create-on-miss + validated local conversation discovery",
+            gap: "Antigravity publishes no session-only registration event",
         },
     ),
     (
         LifecycleSignalKind::TurnStarted,
-        HookCoverage::Derived {
-            via: "USER_EXPLICIT/USER_INPUT transcript record",
-            gap: "pulled provider state, not a realtime callback",
+        HookCoverage::Native {
+            event: "PreInvocation",
         },
     ),
     (
         LifecycleSignalKind::TurnEnded,
-        HookCoverage::Derived {
-            via: "completed MODEL/PLANNER_RESPONSE transcript record",
-            gap: "failure, cancellation, and background-work endings remain uncaptured",
-        },
+        HookCoverage::Native { event: "Stop" },
     ),
     (
         LifecycleSignalKind::ToolUsed,
-        HookCoverage::Absent {
-            reason: "verified visible transcript records expose no completed tool envelope",
+        HookCoverage::Native {
+            event: "PostToolUse:edit",
         },
     ),
     (
         LifecycleSignalKind::AwaitingInput,
-        HookCoverage::Absent {
-            reason: "native prompts require deferred hook/statusline verification",
+        HookCoverage::Derived {
+            via: "statusline tool_confirmation_pending display marker",
+            gap: "read-only attention projection, not a durable AwaitingInput lifecycle signal",
         },
     ),
     (
@@ -277,16 +307,119 @@ impl AgentAdapter for AntigravityAdapter {
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
         ClassifiedHook {
-            class: AgentHookClass::Unknown,
+            class: if LIFECYCLE_EVENTS.contains(&event_name) {
+                AgentHookClass::Lifecycle
+            } else {
+                AgentHookClass::Unknown
+            },
             ask_kind: None,
             event_name: event_name.to_owned(),
         }
     }
 
-    fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // Hook stdout is Antigravity's decision channel. Stay silent until the
-        // exact observer-neutral bytes are proven for the pinned release.
-        Ok(None)
+    #[cfg(test)]
+    fn installed_hook_events(&self) -> Vec<&'static str> {
+        INSTALLED_EVENT_LABELS.to_vec()
+    }
+
+    #[cfg(test)]
+    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+        use super::ClassificationSample;
+        let common = serde_json::json!({
+            "conversationId": "11111111-1111-4111-8111-111111111111",
+            "workspacePaths": ["/workspace/project"],
+            "transcriptPath": "/tmp/transcript.jsonl",
+        });
+        INSTALLED_EVENT_LABELS
+            .iter()
+            .map(|event| {
+                let mut payload = common.clone();
+                if event.starts_with("PreInvocation") {
+                    payload["invocationNum"] = Value::from(0);
+                }
+                if *event == "Stop" {
+                    payload["fullyIdle"] = Value::Bool(true);
+                    payload["terminationReason"] = Value::String("model_stop".to_owned());
+                }
+                ClassificationSample::new(event, payload, AgentHookClass::Lifecycle, None)
+            })
+            .collect()
+    }
+
+    fn render_neutral(&self, event_name: &str) -> Result<Option<Value>> {
+        Ok(match event_name {
+            "Stop" => Some(serde_json::json!({ "decision": "" })),
+            event if LIFECYCLE_EVENTS.contains(&event) => Some(serde_json::json!({})),
+            _ => None,
+        })
+    }
+
+    fn observe_lifecycle(
+        &self,
+        event_name: &str,
+        payload: &Value,
+    ) -> Option<AgentLifecycleObservation> {
+        let (common, signal) = match event_name {
+            "PreInvocation" => {
+                let invocation = payloads::parse_invocation(payload)?;
+                (invocation.invocation_num == Some(0))
+                    .then_some((invocation.common, LifecycleSignal::TurnStarted))?
+            }
+            "PostToolUse:edit" | "PostToolUse:mutating" | "PostToolUse:observed" => {
+                let tool = payloads::parse_post_tool(payload)?;
+                let failed = tool.failed();
+                let (mutates, edits) = match event_name {
+                    "PostToolUse:edit" if !failed => (true, true),
+                    "PostToolUse:mutating" if !failed => (true, false),
+                    _ => (false, false),
+                };
+                (tool.common, LifecycleSignal::ToolUsed { mutates, edits })
+            }
+            "Stop" => {
+                let stop = payloads::parse_stop(payload)?;
+                let fully_idle = stop.fully_idle?;
+                let failed = stop.failed();
+                (
+                    stop.common,
+                    LifecycleSignal::TurnEnded {
+                        errored: failed,
+                        parked_on_background: !fully_idle && !failed,
+                    },
+                )
+            }
+            _ => return None,
+        };
+        observation(common, signal)
+    }
+
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+        if !payload.is_object() {
+            return None;
+        }
+        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
+            .ok()
+            .map(|payload| payload.into_context(source, Timestamp::now()))
+    }
+
+    fn last_assistant_message(
+        &self,
+        event_name: &str,
+        _payload: &Value,
+        observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        if event_name != "Stop" {
+            return None;
+        }
+        let transcript = std::fs::read_to_string(observation.transcript_path.as_deref()?).ok()?;
+        self.parse_transcript_messages(&transcript)
+            .into_iter()
+            .rev()
+            .find(|message| message.role == super::TranscriptRole::Assistant)
+            .map(|message| message.text)
+    }
+
+    fn moves_on(&self, event_name: &str) -> bool {
+        matches!(event_name, "PreInvocation" | "Stop")
     }
 
     fn discover_local_sessions(&self, workspace: &Path) -> Vec<LocalSessionObservation> {
@@ -374,20 +507,57 @@ impl AgentAdapter for AntigravityAdapter {
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
-        Err(AgentErr::Install {
-            agent: self.descriptor().kind,
-            reason: HOOK_INSTALL_UNAVAILABLE.to_owned(),
-        })
+        install::install(&install::hooks_path()?, &install::settings_path()?)
     }
 
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        Err(AgentErr::Install {
-            agent: self.descriptor().kind,
-            reason: HOOK_INSTALL_UNAVAILABLE.to_owned(),
-        })
+        install::preview(&install::hooks_path()?, &install::settings_path()?)
+    }
+
+    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
+        install::uninstall(&install::hooks_path()?, &install::settings_path()?)
     }
 
     fn hooks_installed(&self) -> bool {
-        false
+        install::hooks_path()
+            .and_then(|hooks| {
+                install::settings_path().map(|settings| install::installed(&hooks, &settings))
+            })
+            .unwrap_or(false)
     }
+
+    fn managed_hook_artifacts_present(&self) -> bool {
+        install::hooks_path()
+            .and_then(|hooks| {
+                install::settings_path().map(|settings| install::managed(&hooks, &settings))
+            })
+            .unwrap_or(false)
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        install::settings_path()
+            .ok()
+            .and_then(|path| install::wrapped_statusline_command(&path))
+    }
+}
+
+fn observation(
+    common: payloads::CommonPayload,
+    signal: LifecycleSignal,
+) -> Option<AgentLifecycleObservation> {
+    let agent_id = common
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())?;
+    let mut observation = AgentLifecycleObservation::new(Some(agent_id.into()), signal);
+    observation.worktree_path = common
+        .workspace_paths
+        .into_iter()
+        .find(|path| !path.trim().is_empty());
+    observation.transcript_path = common
+        .transcript_path
+        .filter(|path| !path.trim().is_empty());
+    observation.launch.model = common.model_name.filter(|model| !model.trim().is_empty());
+    Some(observation)
 }

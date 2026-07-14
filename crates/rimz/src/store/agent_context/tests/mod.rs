@@ -31,6 +31,7 @@ fn ctx(observed_at: Timestamp) -> AgentContext {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         observed_at,
     }

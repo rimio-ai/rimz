@@ -117,13 +117,13 @@ pub struct SidebarSnapshot {
     pub now: Timestamp,
     pub worktree_groups: Vec<SidebarWorktreeGroup>,
     pub agents: Vec<AgentState>,
-    /// The wired agent kinds whose Rimz hooks are installed. Gates the idle
-    /// synthesis in `rows_from_panes`: a launched-but-unbound pane for a wired
-    /// agent has a row Rimz can later enrich, while an unwired pane stays a
-    /// process row. Cwd binding for an existing paneless session is separate
-    /// pairing logic and does not read this idle-synthesis set. Environment,
-    /// not store — the pure reducer leaves it empty; the `rimz sidebar
-    /// snapshot` CLI and consumer enrichment fill it before folding live panes.
+    /// The agent kinds with an active observation path: installed hooks or
+    /// declared local-session discovery. Gates the idle synthesis in
+    /// `rows_from_panes`: a launched-but-unbound pane for an observable agent
+    /// has a row Rimz can later enrich, while a pane with no active integration
+    /// stays a process row. Cwd binding for an existing paneless session is
+    /// separate pairing logic and does not read this idle-synthesis set.
+    /// Environment, not store — the pure reducer leaves it empty; the `rimz sidebar snapshot` CLI and consumer enrichment fill it before folding live panes.
     /// The placeholder/persisted snapshot keeps it empty (a process row).
     #[serde(default)]
     pub wired_kinds: Vec<String>,
@@ -402,9 +402,10 @@ impl SidebarSnapshot {
     }
 
     /// Attach each session's rich context sidecar to its `AgentState` by
-    /// `(kind, agent_id)`. Context is display-only — it never changes ranking,
-    /// since `last_activity` is untouched — and reaches rows only through the
-    /// live-pane fold. A context whose session is absent from the (already
+    /// `(kind, agent_id)`. Context is display-only and never changes durable
+    /// lifecycle truth or `last_activity`; explicit context markers may refine
+    /// a displayed status and its attention rank. Context reaches rows only
+    /// through the live-pane fold. A context whose session is absent from the (already
     /// reaped) rollup is dropped — the session is gone, so its context is just
     /// history. Records carry no identity of their own; the key they're filed
     /// under is authority.

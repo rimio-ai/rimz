@@ -4,14 +4,14 @@
 //! per-session data an agent publishes out of band — Claude's statusline,
 //! Codex's rollout tail plus app-server metadata, and future provider surfaces.
 //! It is sidecar enrichment, not durable store truth. Most fields are
-//! render-only; turn-error and turn-settle markers also feed the shared status
-//! projection so read paths agree about hookless turn ends. Each agent
+//! render-only; turn-error, turn-settle, and native-attention markers also feed
+//! the shared status projection so read paths agree about hookless state. Each agent
 //! integration produces it from its own transport or local refresh via
 //! [`super::AgentAdapter`]; lifecycle hooks also keep the current turn's
 //! confirmed message openers here so an agent-authored send can retain exact
-//! reply causality. Storage ([`crate::store::agent_context`]) and the snapshot fold-in are
-//! transport-agnostic, so a new agent slots in with only a new producer — no
-//! change to this type, the sidecar, or the fold-in.
+//! reply causality. Storage ([`crate::store::agent_context`]) and the snapshot
+//! fold-in stay transport-agnostic; provider-specific wire fields normalize
+//! into these shared slots before either layer sees them.
 
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -101,6 +101,14 @@ pub struct AgentContext {
     /// marker postdates `last_activity`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_proposed: Option<Timestamp>,
+    /// A provider status channel currently reports a native tool-confirmation
+    /// dialog. The marker time must postdate the latest lifecycle activity to
+    /// project a waiting card; a subsequent tool/turn hook self-clears a stale
+    /// marker even if the provider misses its `false` statusline refresh.
+    /// Display-only: it creates no durable ask and the provider pane remains
+    /// the answer surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_permission_wait: Option<Timestamp>,
     /// A turn that was interrupted with no `Stop` hook, detected from the
     /// rollout tail — Codex writes `turn_aborted` for `/clear` mid-turn and
     /// Esc. Status-projection marker like

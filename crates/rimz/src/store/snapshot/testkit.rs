@@ -174,6 +174,9 @@ pub(super) trait AgentStateFx: Sized {
     /// Attach an interrupted-turn marker stamped `secs_ago` before the
     /// [`epoch`] — the idle sibling of [`turn_complete`](Self::turn_complete).
     fn turn_interrupted(self, secs_ago: i64) -> Self;
+    /// Attach a display-only native permission marker stamped `secs_ago`
+    /// before the [`epoch`].
+    fn native_permission_wait(self, secs_ago: i64) -> Self;
     /// Stamp the compaction head `secs` before the [`epoch`].
     fn compacting_ago(self, secs: i64) -> Self;
 }
@@ -263,6 +266,14 @@ impl AgentStateFx for AgentState {
         self
     }
 
+    fn native_permission_wait(mut self, secs_ago: i64) -> Self {
+        self.context
+            .get_or_insert_with(bare_context)
+            .native_permission_wait =
+            Some(epoch() - std::time::Duration::from_secs(secs_ago as u64));
+        self
+    }
+
     fn compacting_ago(mut self, secs: i64) -> Self {
         self.compacting_since = Some(epoch() - std::time::Duration::from_secs(secs as u64));
         self
@@ -293,6 +304,7 @@ pub(super) fn bare_context() -> AgentContext {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         observed_at: epoch(),
     }

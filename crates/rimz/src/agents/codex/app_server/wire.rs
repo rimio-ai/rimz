@@ -261,6 +261,7 @@ pub(super) fn into_context(
         // refresh path stamps `turn_complete`, never this fold.
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         observed_at,
     }

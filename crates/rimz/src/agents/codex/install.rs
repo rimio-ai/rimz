@@ -35,6 +35,7 @@ pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {
         config_path: path.to_path_buf(),
         installed_events: installed,
         merged: existed,
+        additional_config_paths: Vec::new(),
     })
 }
 
@@ -52,6 +53,7 @@ pub(super) fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
         // Codex has no statusline; it inherits the no-op `wrapped_status_line_command`.
         status_line_change: None,
         subagent_status_line_change: None,
+        additional_configs: Vec::new(),
     })
 }
 
@@ -80,6 +82,7 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
             config_path: path.to_path_buf(),
             removed_events: Vec::new(),
             existed: false,
+            additional_config_paths: Vec::new(),
         });
     }
 
@@ -95,6 +98,7 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
         config_path: path.to_path_buf(),
         removed_events: removed,
         existed: true,
+        additional_config_paths: Vec::new(),
     })
 }
 

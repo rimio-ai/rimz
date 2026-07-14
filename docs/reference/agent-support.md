@@ -23,7 +23,7 @@ One row per agent, ordered by support tier — Claude and Codex, then the experi
 | Codex | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Pi | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
-| Antigravity | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Antigravity | ✓ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ |
 | Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
@@ -44,7 +44,7 @@ Copilot history and supervised final output read its per-session `events.jsonl`.
 
 Kiro history and live state are pulled from the stock v3 `session.json`/`messages.jsonl` store. An unresolved native tool approval marks the card waiting, but Kiro has no RimZ-installed hook or mapped prompt choreography, so `rimz asks` and `rimz answer` do not claim that interaction. Context is percentage-only; credits remain provider evidence rather than tokens or dollars.
 
-Antigravity 1.1.1 history and basic text-turn state are pulled from the stock workspace conversation cache and `brain/<conversation-id>/.system_generated/logs/transcript.jsonl`. Exact `agy --conversation <id>` resumes bind independently of the latest cache. Command-hook installation remains off because `PreToolUse` has no verified observer-neutral result, so waits, tools, errors, context, spend, and supervised `-p` stay unsupported rather than changing native policy.
+Antigravity 1.1.2 combines safe native `PreInvocation`, `PostToolUse`, and `Stop` hooks with the stock workspace conversation cache and `brain/<conversation-id>/.system_generated/logs/transcript.jsonl`. Its wrapped custom statusline supplies model, version, plan/account identity, context usage, and a read-only permission-wait marker that raises the card and routes focus to the pane. Exact `agy --conversation <id>` resumes bind independently of the latest cache. RimZ leaves `PreToolUse` uninstalled because every documented response changes native permission policy, so the permission decision and all question/artifact waits remain in Antigravity's own pane.
 
 ## The lifecycle hook surface
 
@@ -56,7 +56,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Codex | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest`; `Stop` + rollout `Plan` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | ◐ derived | ◐ derived |
 | Pi | `session_start` | `before_agent_start` | `agent_settled` (`agent_end` before Pi 0.80.4) | `tool_execution_end` | ✗ | ✗ | ✗ | `session_before_compact` | `session_compact` | `session_shutdown` | ◐ derived |
 | OpenCode | `session_created` | `chat_message` | `session_idle` | `tool_after` | `permission_ask` | `SubagentStart` | `SubagentStop` | `session_compacting` | `session_compacted` | ◐ derived | ◐ derived |
-| Antigravity | ◐ local cache/transcript | ◐ `USER_INPUT` | ◐ `PLANNER_RESPONSE:DONE` | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
+| Antigravity | ◐ first `PreInvocation` identity + local discovery | `PreInvocation` | `Stop` | `PostToolUse` | ◐ statusline permission marker | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Copilot | `sessionStart` | `userPromptSubmitted` | `agentStop` | `postToolUse` | `permissionRequest` | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
 | Droid | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | ✗ | ✗ | ✗ | `PreCompact` | `SessionStart:compact` | `SessionEnd` | ◐ derived |
 | Cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `postToolUse` | ✗ | ✗ | ✗ | `preCompact` | ◐ derived | `sessionEnd` | ◐ derived |
@@ -69,7 +69,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 
 Kiro CLI 2.12.1 v3 did not execute documented user or project standalone hook configs during authenticated stock-TUI verification. RimZ instead binds validated provider-owned local sessions to live Kiro panes and derives their display lifecycle from physical record order. Hook installation and supervised `-p` remain unsupported because pulled files are not an executable completion channel.
 
-Antigravity CLI 1.1.1 publishes command hooks, but every documented `PreToolUse` response changes permission policy. RimZ binds validated provider-owned local conversations instead and derives only captured text-turn edges. Hook installation, statusline enrichment, and supervised `-p` remain gated on live fixtures that prove neutral decisions and executable completion.
+Antigravity CLI 1.1.2 documents observer-neutral `{}` output for invocation and post-tool hooks and a non-`continue` `Stop` decision that permits termination. RimZ installs those events and wraps the custom statusline, while deliberately excluding `PreToolUse`; the provider's UI remains the only permission and question decision surface. `rimz hooks install antigravity --dry-run` shows both `hooks.json` and `settings.json` changes before consent, and uninstall restores the prior statusline command.
 
 ## Per-agent mappings
 

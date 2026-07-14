@@ -2,51 +2,349 @@ use std::ffi::OsStr;
 use std::io::Write as _;
 use std::path::Path;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::agents::{
-    AgentErr, AgentStatus, LaunchPreset, TranscriptPosition, TranscriptRole, TurnPhase,
+    AgentStatus, LaunchPreset, StatusLineChange, TranscriptPosition, TranscriptRole, TurnPhase,
 };
 
 const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 #[test]
-fn native_observer_hooks_are_explicitly_unsupported() {
+fn safe_native_hooks_map_lifecycle_and_keep_pre_tool_policy_untouched() {
     let descriptor = AntigravityAdapter.descriptor();
-    assert!(!descriptor.capabilities.hook_install);
+    assert!(descriptor.capabilities.hook_install);
     assert!(!descriptor.capabilities.blocking_asks);
-    assert!(descriptor.activity_events.is_empty());
-    assert!(AntigravityAdapter.installed_hook_events().is_empty());
+    assert_eq!(
+        AntigravityAdapter.installed_hook_events(),
+        INSTALLED_EVENT_LABELS
+    );
 
-    for event in [
-        "PreToolUse",
-        "PostToolUse",
-        "PreInvocation",
-        "PostInvocation",
-        "Stop",
-    ] {
-        let payload = json!({ "conversationId": SESSION_ID });
+    let common = json!({
+        "conversationId": SESSION_ID,
+        "workspacePaths": ["/workspace/project"],
+        "transcriptPath": "/tmp/transcript.jsonl",
+        "modelName": "Gemini 3.5 Flash",
+    });
+    for event in INSTALLED_EVENT_LABELS {
         assert_eq!(
-            AntigravityAdapter.classify_hook(event, &payload).class,
-            AgentHookClass::Unknown
+            AntigravityAdapter.classify_hook(event, &common).class,
+            AgentHookClass::Lifecycle
         );
-        assert!(
-            AntigravityAdapter
-                .observe_lifecycle(event, &payload)
-                .is_none()
-        );
-        assert_eq!(AntigravityAdapter.render_neutral(event).unwrap(), None);
     }
 
-    for result in [
-        AntigravityAdapter.install_hooks().map(|_| ()),
-        AntigravityAdapter.preview_hook_install().map(|_| ()),
+    let started = AntigravityAdapter
+        .observe_lifecycle(
+            "PreInvocation",
+            &with(&common, [("invocationNum", json!(0))]),
+        )
+        .unwrap();
+    assert_eq!(started.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(started.agent_id.as_deref(), Some(SESSION_ID));
+    assert_eq!(started.worktree_path.as_deref(), Some("/workspace/project"));
+    assert_eq!(
+        started.transcript_path.as_deref(),
+        Some("/tmp/transcript.jsonl")
+    );
+    assert_eq!(started.launch.model.as_deref(), Some("Gemini 3.5 Flash"));
+    assert!(
+        AntigravityAdapter
+            .observe_lifecycle(
+                "PreInvocation",
+                &with(&common, [("invocationNum", json!(1))])
+            )
+            .is_none(),
+        "later model calls in the same turn do not reopen its boundary"
+    );
+
+    for (event, error, expected) in [
+        (
+            "PostToolUse:edit",
+            json!(""),
+            LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: true,
+            },
+        ),
+        (
+            "PostToolUse:mutating",
+            json!(null),
+            LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: false,
+            },
+        ),
+        (
+            "PostToolUse:edit",
+            json!("write failed"),
+            LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+            },
+        ),
     ] {
-        let error = result.unwrap_err();
-        assert!(matches!(error, AgentErr::Install { .. }));
-        assert!(error.to_string().contains("observer hooks are deferred"));
+        let observed = AntigravityAdapter
+            .observe_lifecycle(event, &with(&common, [("error", error)]))
+            .unwrap();
+        assert_eq!(observed.signal, expected);
     }
+
+    let stopped = AntigravityAdapter
+        .observe_lifecycle(
+            "Stop",
+            &with(
+                &common,
+                [
+                    ("terminationReason", json!("model_stop")),
+                    ("error", json!("")),
+                    ("fullyIdle", json!(false)),
+                ],
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        stopped.signal,
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: true,
+        }
+    );
+    let failed = AntigravityAdapter
+        .observe_lifecycle(
+            "Stop",
+            &with(
+                &common,
+                [
+                    ("terminationReason", json!("max_steps_exceeded")),
+                    ("fullyIdle", json!(true)),
+                ],
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        failed.signal,
+        LifecycleSignal::TurnEnded {
+            errored: true,
+            parked_on_background: false,
+        }
+    );
+
+    let neutrals = [
+        (
+            "PreInvocation",
+            AntigravityAdapter.render_neutral("PreInvocation").unwrap(),
+        ),
+        ("Stop", AntigravityAdapter.render_neutral("Stop").unwrap()),
+    ];
+    insta::assert_json_snapshot!(neutrals, @r###"
+    [
+      [
+        "PreInvocation",
+        {}
+      ],
+      [
+        "Stop",
+        {
+          "decision": ""
+        }
+      ]
+    ]
+    "###);
+    assert_eq!(
+        AntigravityAdapter
+            .classify_hook("PreToolUse", &common)
+            .class,
+        AgentHookClass::Unknown
+    );
+    assert_eq!(
+        AntigravityAdapter.render_neutral("PreToolUse").unwrap(),
+        None
+    );
+    insta::assert_debug_snapshot!(
+        AntigravityAdapter.observe_lifecycle("Stop", &json!({"conversationId": SESSION_ID})),
+        @"None"
+    );
+}
+
+#[test]
+fn hook_install_merges_both_files_and_uninstall_restores_the_statusline() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("config/hooks.json");
+    let settings_path = dir.path().join("antigravity-cli/settings.json");
+    std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hooks_path,
+        r#"{
+  "mine": {
+    "Stop": [{"type":"command","command":"my-stop","timeout":9}]
+  }
+}
+"#,
+    )
+    .unwrap();
+    let original_statusline = json!({
+        "colorScheme": "tokyo night",
+        "statusLine": {
+            "type": "command",
+            "command": "my-statusline --compact",
+            "stack_with_default": false,
+            "custom": "kept"
+        }
+    });
+    std::fs::write(
+        &settings_path,
+        serde_json::to_string_pretty(&original_statusline).unwrap(),
+    )
+    .unwrap();
+
+    let preview = install::preview(&hooks_path, &settings_path).unwrap();
+    assert_eq!(preview.planned_events, INSTALLED_EVENT_LABELS);
+    assert_eq!(preview.additional_configs.len(), 1);
+    assert_eq!(preview.additional_configs[0].config_path, settings_path);
+    assert_eq!(
+        preview.status_line_change,
+        Some(StatusLineChange::Wrapping {
+            original: "my-statusline --compact".to_owned()
+        })
+    );
+    assert!(!preview.candidate_config.contains("PreToolUse"));
+
+    let report = install::install(&hooks_path, &settings_path).unwrap();
+    assert_eq!(
+        report.additional_config_paths,
+        std::slice::from_ref(&settings_path)
+    );
+    assert!(install::installed(&hooks_path, &settings_path));
+    assert_eq!(
+        install::wrapped_statusline_command(&settings_path).as_deref(),
+        Some("my-statusline --compact")
+    );
+
+    let mut hooks: Value =
+        serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+    assert_eq!(
+        hooks["mine"]["Stop"][0]["command"],
+        Value::String("my-stop".to_owned())
+    );
+    assert!(hooks["rimz"].get("PreToolUse").is_none());
+    assert_eq!(hooks["rimz"]["PreInvocation"].as_array().unwrap().len(), 1);
+    assert_eq!(hooks["rimz"]["PostToolUse"].as_array().unwrap().len(), 3);
+
+    hooks["rimz"]["Stop"][0]["timeout"] = json!(1);
+    std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks).unwrap()).unwrap();
+    assert!(!install::installed(&hooks_path, &settings_path));
+    install::install(&hooks_path, &settings_path).unwrap();
+    assert!(install::installed(&hooks_path, &settings_path));
+
+    let once_hooks = std::fs::read_to_string(&hooks_path).unwrap();
+    let once_settings = std::fs::read_to_string(&settings_path).unwrap();
+    install::install(&hooks_path, &settings_path).unwrap();
+    assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), once_hooks);
+    assert_eq!(
+        std::fs::read_to_string(&settings_path).unwrap(),
+        once_settings
+    );
+
+    let removed = install::uninstall(&hooks_path, &settings_path).unwrap();
+    assert_eq!(removed.removed_events, INSTALLED_EVENT_LABELS);
+    assert!(!install::managed(&hooks_path, &settings_path));
+    let hooks: Value =
+        serde_json::from_str(&std::fs::read_to_string(&hooks_path).unwrap()).unwrap();
+    assert!(hooks.get("rimz").is_none());
+    assert_eq!(hooks["mine"]["Stop"][0]["command"], "my-stop");
+    let restored: Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(restored, original_statusline);
+}
+
+#[test]
+fn hook_install_refuses_a_user_owned_rimz_hook_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let settings_path = dir.path().join("settings.json");
+    std::fs::write(
+        &hooks_path,
+        r#"{"rimz":{"Stop":[{"type":"command","command":"user-command"}]}}"#,
+    )
+    .unwrap();
+    let error = install::preview(&hooks_path, &settings_path).unwrap_err();
+    assert!(error.to_string().contains("hook name `rimz`"));
+    assert!(error.to_string().contains("user-owned"));
+}
+
+#[test]
+fn added_statusline_stacks_with_default_and_uninstall_removes_only_its_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks_path = dir.path().join("hooks.json");
+    let settings_path = dir.path().join("settings.json");
+    std::fs::write(&settings_path, r#"{"colorScheme":"tokyo night"}"#).unwrap();
+
+    install::install(&hooks_path, &settings_path).unwrap();
+    let installed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(installed["statusLine"]["stack_with_default"], true);
+    assert_eq!(installed["statusLine"]["command"], STATUS_LINE_COMMAND);
+
+    install::uninstall(&hooks_path, &settings_path).unwrap();
+    let restored: Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(restored, json!({"colorScheme": "tokyo night"}));
+}
+
+#[test]
+fn statusline_projects_model_account_and_context_usage() {
+    let context = AntigravityAdapter
+        .observe_context(
+            "antigravity",
+            &json!({
+                "conversation_id": SESSION_ID,
+                "version": "1.1.2",
+                "model": {"id": "gemini-3.5-flash", "display_name": "Gemini 3.5 Flash"},
+                "plan_tier": "ultra",
+                "email": "user@example.com",
+                "tool_confirmation_pending": true,
+                "context_window": {
+                    "context_window_size": 1_048_576,
+                    "used_percentage": 8.4156,
+                    "remaining_percentage": 91.5844,
+                    "current_usage": {
+                        "input_tokens": 63_382,
+                        "output_tokens": 346,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 20_857
+                    }
+                },
+                "future_field": {"ignored": true}
+            }),
+        )
+        .unwrap();
+    assert_eq!(context.model_id.as_deref(), Some("gemini-3.5-flash"));
+    assert_eq!(
+        context.model_display_name.as_deref(),
+        Some("Gemini 3.5 Flash")
+    );
+    assert_eq!(context.agent_version.as_deref(), Some("1.1.2"));
+    assert!(context.native_permission_wait.is_some());
+    let account = context.account.unwrap();
+    assert_eq!(account.plan.as_deref(), Some("ultra"));
+    assert_eq!(account.account_id.as_deref(), Some("user@example.com"));
+    let tokens = context.tokens.unwrap();
+    assert_eq!(tokens.context_window_size, Some(1_048_576));
+    assert_eq!(tokens.used_percentage, Some(8));
+    assert_eq!(tokens.remaining_percentage, Some(92));
+    assert_eq!(
+        tokens.current_usage.unwrap().cache_read_input_tokens,
+        Some(20_857)
+    );
+    assert!(
+        AntigravityAdapter
+            .observe_context("antigravity", &json!({"tool_confirmation_pending": false}))
+            .unwrap()
+            .native_permission_wait
+            .is_none()
+    );
 }
 
 #[test]
@@ -168,8 +466,8 @@ fn discovery_rejects_symlinked_conversation_directories() {
 }
 
 #[test]
-fn launch_resume_permissions_and_model_preset_match_agy_1_1_1() {
-    assert_eq!(SUPPORTED_VERSION, "1.1.1");
+fn launch_resume_permissions_and_model_preset_match_agy_1_1_2() {
+    assert_eq!(SUPPORTED_VERSION, "1.1.2");
     assert_eq!(
         AntigravityAdapter.launch_command(&["--sandbox".to_owned()], Some("review")),
         Some(vec![
@@ -275,4 +573,13 @@ fn write_transcript(home: &Path, session_id: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, include_str!("tests/fixtures/transcript.jsonl")).unwrap();
     path
+}
+
+fn with<const N: usize>(base: &Value, fields: [(&str, Value); N]) -> Value {
+    let mut value = base.clone();
+    let object = value.as_object_mut().unwrap();
+    for (key, field) in fields {
+        object.insert(key.to_owned(), field);
+    }
+    value
 }

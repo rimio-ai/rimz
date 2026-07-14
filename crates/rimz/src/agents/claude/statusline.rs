@@ -484,6 +484,7 @@ impl StatuslinePayload {
             // marker stays a Codex-only concern (review mode fires no `Stop`).
             turn_complete: None,
             plan_proposed: None,
+            native_permission_wait: None,
             turn_interrupted: None,
             observed_at,
         }

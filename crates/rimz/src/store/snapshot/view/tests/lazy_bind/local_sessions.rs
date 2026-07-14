@@ -61,22 +61,30 @@ fn exact_resume_wins_before_fresh_one_to_one_pairing() {
 }
 
 #[test]
-fn ambiguous_fresh_candidates_stay_process_rows() {
+fn ambiguous_fresh_candidates_stay_identityless_idle_agent_rows() {
     let first = pane("%1", "kiro-cli chat --v3", "/repo/main");
     let second = pane("%2", "kiro-cli chat --v3", "/repo/main");
-    let snapshot = room(Vec::new())
+    let mut snapshot = room(Vec::new());
+    snapshot.wired_kinds = vec!["kiro".to_owned()];
+    let snapshot = snapshot
         .with_local_sessions(
             &[first.clone(), second.clone()],
             vec![observation("sess-a", 20, 10)],
         )
         .with_live_panes(vec![first, second], None);
     assert!(snapshot.agents.is_empty());
+    assert!(rows(&snapshot).iter().all(|row| row.is_agent()));
+    assert!(
+        rows(&snapshot)
+            .iter()
+            .all(|row| row.status() == Some(AgentStatus::Idle))
+    );
     assert_eq!(
         rows(&snapshot)
             .iter()
-            .filter(|row| row.is_process())
-            .count(),
-        2
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["tmux:%1", "tmux:%2"]
     );
 }
 

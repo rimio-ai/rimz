@@ -151,6 +151,7 @@ fn activity_description_prefers_rich_context_then_fallbacks() {
         turn_error: None,
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         observed_at: Timestamp::from_second(1_000).unwrap(),
     });
@@ -268,6 +269,7 @@ fn context_error(class: TurnErrorClass, at: i64) -> AgentContext {
         }),
         turn_complete: None,
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: None,
         observed_at: Timestamp::from_second(at).unwrap(),
     }
@@ -295,6 +297,7 @@ fn context_settle(complete: Option<i64>, interrupted: Option<i64>) -> AgentConte
         turn_error: None,
         turn_complete: complete.map(|at| Timestamp::from_second(at).unwrap()),
         plan_proposed: None,
+        native_permission_wait: None,
         turn_interrupted: interrupted.map(|at| Timestamp::from_second(at).unwrap()),
         observed_at: Timestamp::from_second(1_000).unwrap(),
     }
