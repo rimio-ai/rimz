@@ -4,7 +4,7 @@
 
 This is the single home for the **Cursor CLI upstream protocol surface** relevant to RimZ — local hooks and their decision channel, conversation identity, context and subagent payloads, interactive and headless launch modes, stream JSON, ACP, authentication, configuration, permissions, and the documented local-state boundary. It is an implementation research record, not a claim that RimZ currently supports Cursor.
 
-Refresh baseline: the official Cursor documentation and CLI changelog available on **2026-07-10**, whose latest listed CLI release is **2026-07-06**. Cursor auto-updates by default and identifies installed builds with `agent --version`; re-capture the exact supported binary before implementation because the public docs are rolling rather than versioned.
+Refresh baseline: the official Cursor documentation and CLI changelog available on **2026-07-10**, plus the installed **2026.07.09-a3815c0** build used to capture the command-statusline wire. Cursor auto-updates by default and identifies installed builds with `agent --version`; re-capture the exact supported binary when this record is refreshed because the public docs are rolling rather than versioned.
 
 Coverage is **depth on surfaces an adapter should wire, breadth as an index**. Hook inputs and outputs are recorded in implementation detail because they are the strongest stock-UI seam. The `2026.07.09-a3815c0` transcript capture pins only file identity and terminal rows; assistant text, authentication JSON, local chat storage, historical cost accounting, and native permission prompts remain opaque where Cursor publishes no safe schema.
 
@@ -64,14 +64,14 @@ The candidate transport matrix is:
 | permission ask | none for stock local CLI | ACP `session/request_permission` only in hosted mode |
 | user question | none for stock local CLI | ACP `cursor/ask_question` only in hosted mode |
 | plan approval | none for stock local CLI | ACP `cursor/create_plan` only in hosted mode |
-| compaction start and live context | `preCompact` | no documented post-compaction hook or continuous context read API |
+| compaction start and live context | command `statusLine` payload; `preCompact` | no documented post-compaction hook |
 | subagent start | `subagentStart.subagent_id` | strong unique child identity |
 | subagent stop | `subagentStop` | published stop payload omits `subagent_id`; capture correlation before wiring |
 | model and effort | common hook `model_id` and `model_params` | `model` is the legacy slug |
 | transcript | common `transcript_path`, exact per-conversation JSONL | captured `turn_ended` tail only; assistant text is privacy-unsafe |
 | supervised streaming | `-p --output-format stream-json` | failures may end without a terminal JSON event |
 | auth/account | `status --format json`, `about --format json` | official docs publish no JSON response schema or credential path |
-| tokens, cost, quota | stop-hook input/output/cache split | per-turn composition only; dollars, historical spend, and quota remain absent |
+| tokens, cost, quota | statusline and stop-hook input/output/cache split | API-equivalent live-session estimate only; historical spend, billing, and quota remain absent |
 
 ## Session identity, resume, fork, and clear
 
@@ -237,7 +237,20 @@ Map `context_usage_percent`, `context_tokens`, and `context_window_size` directl
 
 Cursor publishes no `postCompact` event. Do not close the RimZ compaction bracket merely because the `preCompact` command returned: the hook is called before summarization. Before implementation, capture whether the next `beforeSubmitPrompt`, response, or tool event proves compaction completion and define one provider-specific close rule with tests. Until then, capability reporting must mark compaction completion unsupported rather than leaving a permanent pulsing head.
 
-No official statusline command, context-query command, or continuous token feed is documented. The terminal UI may display token counts, but pane reads stay out of producer enrichment. Outside `preCompact`, carry forward the last known context or leave it absent.
+Cursor CLI `2026.07.09-a3815c0` supports a command statusline in `~/.cursor/cli-config.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "rimz statusline feed --source cursor"
+  }
+}
+```
+
+The command receives structured JSON on stdin with `session_id`, `session_name`, `model.{id,display_name,param_summary,max_mode}`, `version`, `output_style`, `vim`, and `context_window.{context_window_size,used_percentage,remaining_percentage,current_usage}`. Current usage separates input, output, cache-create, and cache-read tokens. Treat every nested field as optional and field-locally lossy because the rolling CLI schema is not versioned.
+
+Cursor invokes the configured command as direct argv. Split shell-style quotes, expand a leading `~` in the program, and preserve shell metacharacters as literal arguments; do not insert `sh -c`. The statusline is the live context authority, while `preCompact` remains the compaction signal and a fallback source for window occupancy. Pane reads stay out of producer enrichment.
 
 ### Subagents
 
@@ -496,11 +509,13 @@ The common hook field `user_email` can enrich a known logged-in account but is n
 
 ## Usage, tokens, pricing, and quota
 
-The installed interactive `stop` hook schema carries `input_tokens`, `output_tokens`, `cache_read_tokens`, and `cache_write_tokens`, and the bundle repeats them on `afterAgentResponse`. RimZ treats the stop values as per-turn composition, preserves explicit zeroes, and keeps them out of cumulative totals. Deterministic hook fixtures pin this mapping; the authenticated native `--print` capture emitted neither event and therefore supplied no live token values. The headless terminal result still has durations but no usage, and `preCompact.context_tokens` remains occupancy rather than billable fresh input.
+The installed interactive `stop` hook schema carries `input_tokens`, `output_tokens`, `cache_read_tokens`, and `cache_write_tokens`, and the bundle repeats them on `afterAgentResponse`. `input_tokens` includes both cache classes, so fresh input is `input_tokens - cache_read_tokens - cache_write_tokens` with saturating subtraction; RimZ preserves the other three classes independently and keeps the per-turn counters out of cumulative token totals. Deterministic hook fixtures pin the regression shape `22,725 - 8,704 = 14,021` fresh tokens. The authenticated native `--print` capture emitted neither event and therefore supplied no live token values. The headless terminal result still has durations but no usage, and `preCompact.context_tokens` remains occupancy rather than billable fresh input.
 
 The CLI changelog mentions a human `/usage` display, while the current slash-command reference does not list a machine-readable usage command or schema. Do not scrape the TUI or undocumented output.
 
-Before implementing provider spend, look for a newly documented JSON command or official account API and capture its account scoping, timezone, reset windows, included usage, on-demand spend, and model prices. Until then a Cursor adapter reports context only and leaves spend, budget windows, and live cost unsupported. The general model catalog and pricing page is an index, not a per-account usage feed.
+Cursor publishes Auto API-equivalent rates of `$1.25/M` uncached input, `$6.00/M` output, and `$0.25/M` cached input. RimZ prices cache creation at the uncached-input rate, prices explicit model IDs through its shared model table, and accumulates completed, aborted, or errored stop hooks once per `generation_id`. This is a live-session estimate for the card, cockpit, and agent budget; it resets with the local session sidecar and does not claim Cursor billing or historical spend.
+
+Before implementing provider account spend, look for a newly documented JSON command or official account API and capture its account scoping, timezone, reset windows, included usage, on-demand spend, and model prices. The general model catalog and pricing page is an index, not a per-account usage feed.
 
 Two adjacent surfaces exist but do not fill the stock per-user CLI gap. The team [Admin API](https://cursor.com/docs/account/teams/admin-api) exposes usage events with `inputTokens`, `outputTokens`, `cacheWriteTokens`, and `cacheReadTokens`, but it is team-admin-scoped behind an admin token rather than a per-user CLI credential. Including token counts in `--output-format stream-json` remains an open upstream feature request as of the 2026-07 refresh, so the headless transport still carries no usage.
 
@@ -518,7 +533,7 @@ Two adjacent surfaces exist but do not fill the stock per-user CLI gap. The team
 
 The schema version is `1`, pure JSON. Cursor self-repairs missing fields and backs corrupted configs up as `.bad`. Some fields are CLI-managed and may be overwritten. Concurrent writes use temp-file plus atomic rename in current releases.
 
-Relevant global fields include `model`, `maxMode`, `approvalMode` (`allowlist`, `auto-review`, or `unrestricted`), `sandbox.mode`, `sandbox.networkAccess`, notifications, display controls, release channel, and network/proxy settings. Read config as launch-policy enrichment, not lifecycle truth: slash commands and flags can change the effective session state.
+Relevant global fields include `model`, `maxMode`, `approvalMode` (`allowlist`, `auto-review`, or `unrestricted`), `sandbox.mode`, `sandbox.networkAccess`, `statusLine`, notifications, display controls, release channel, and network/proxy settings. A statusline object accepts `type`, `command`, `padding`, `updateIntervalMs`, and `timeoutMs`; RimZ carries those rendering siblings when wrapping a user command. Read the remaining config as launch-policy enrichment, not lifecycle truth: slash commands and flags can change the effective session state.
 
 ### Modes and launch mapping inputs
 

@@ -42,7 +42,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             team: agent.team.clone(),
             launch_group: agent.launch_group.clone(),
             launch_ordinal: agent.launch_ordinal,
-            context_pct: Some(agent.context_pct.unwrap_or(0)),
+            context_pct: agent.context_pct,
             context_window: agent_context_window(agent),
             total_tokens: agent.total_tokens,
             cache_read_input_tokens: agent.cache_read_input_tokens,

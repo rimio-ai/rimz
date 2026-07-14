@@ -289,7 +289,7 @@ fn hook_install_refuses_but_legacy_owned_files_can_be_removed() {
     .unwrap();
     assert!(install::managed_at(&path));
     let removed = install::uninstall_from(&path).unwrap();
-    assert!(removed.existed);
+    assert!(removed.files[0].existed);
     assert_eq!(
         removed.removed_events,
         ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]
@@ -307,7 +307,7 @@ fn legacy_cleanup_preserves_unowned_files() {
 
     assert!(!install::managed_at(&path));
     let report = install::uninstall_from(&path).unwrap();
-    assert!(report.existed);
+    assert!(report.files[0].existed);
     assert!(report.removed_events.is_empty());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), user_config);
 }

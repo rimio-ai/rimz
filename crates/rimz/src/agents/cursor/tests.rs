@@ -208,6 +208,95 @@ fn malformed_fields_preserve_identity_response_and_token_composition() {
 }
 
 #[test]
+fn stop_input_total_subtracts_cache_without_underflow() {
+    let observed = CursorAdapter
+        .observe_lifecycle(
+            "stop",
+            &json!({
+                "conversation_id": "conv-1",
+                "status": "completed",
+                "input_tokens": 22_725,
+                "output_tokens": 26,
+                "cache_read_tokens": 8_704,
+                "cache_write_tokens": 0
+            }),
+        )
+        .unwrap();
+    assert_eq!(observed.fresh_input_tokens, Some(14_021));
+    assert_eq!(observed.cache_read_input_tokens, Some(8_704));
+    assert_eq!(observed.output_tokens, Some(26));
+
+    let malformed = CursorAdapter
+        .observe_lifecycle(
+            "stop",
+            &json!({
+                "conversation_id": "conv-1",
+                "status": "completed",
+                "input_tokens": 3,
+                "cache_read_tokens": 4,
+                "cache_write_tokens": 5
+            }),
+        )
+        .unwrap();
+    assert_eq!(malformed.fresh_input_tokens, Some(0));
+}
+
+#[test]
+fn turn_cost_prices_auto_explicit_and_fast_models() {
+    let prices = PriceBook::embedded();
+    let auto = CursorAdapter
+        .estimate_turn_cost(
+            "stop",
+            &json!({
+                "generation_id": " gen-1 ",
+                "status": "completed",
+                "model_id": "default",
+                "input_tokens": 22_725,
+                "output_tokens": 26,
+                "cache_read_tokens": 8_704,
+                "cache_write_tokens": 0
+            }),
+            &prices,
+        )
+        .unwrap();
+    assert_eq!(auto.turn_id, "gen-1");
+    assert!((auto.cost_usd - 0.019_858_25).abs() < 1e-12);
+
+    let payload = |model: &str| {
+        json!({
+            "generation_id": "gen-2",
+            "status": "completed",
+            "model_id": model,
+            "input_tokens": 1_000,
+            "output_tokens": 100,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0
+        })
+    };
+    let base = CursorAdapter
+        .estimate_turn_cost("stop", &payload("gpt-5.4"), &prices)
+        .unwrap();
+    let fast = CursorAdapter
+        .estimate_turn_cost("stop", &payload("gpt-5.4-fast"), &prices)
+        .unwrap();
+    assert!((fast.cost_usd - base.cost_usd * 2.0).abs() < 1e-12);
+    assert!(
+        CursorAdapter
+            .estimate_turn_cost("stop", &payload("unknown-future-model"), &prices)
+            .is_none()
+    );
+    assert!(
+        CursorAdapter
+            .estimate_turn_cost(
+                "stop",
+                &json!({"generation_id": "", "status": "completed", "model_id": "default", "input_tokens": 1}),
+                &prices,
+            )
+            .is_none()
+    );
+}
+
+#[test]
 fn transcript_tail_reads_only_terminal_rows_and_resolves_exact_paths() {
     const SENTINEL: &str = "THINKING_SENTINEL_DO_NOT_INGEST";
     let fixture = include_str!("tests/fixtures/transcript.jsonl");
@@ -530,6 +619,7 @@ fn launch_modes_presets_resume_and_compaction_are_cursor_native() {
 fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("cli-config.json");
     std::fs::write(
         &path,
         serde_json::to_vec_pretty(&json!({
@@ -543,14 +633,20 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
         .unwrap(),
     )
     .unwrap();
+    let original_config = r#"{ "statusLine": { "type": "command", "command": "'/tmp/my status' --plain '$HOME'", "padding": 2, "updateIntervalMs": 500, "timeoutMs": 1000, "future": true }, "theme": "dark" }
+"#;
+    std::fs::write(&config_path, original_config).unwrap();
 
-    let report = install::install_into(&path).expect("install");
-    assert!(report.merged);
+    let report = install::install_into(&path, &config_path).expect("install");
+    assert!(report.files.iter().all(|file| file.existed));
     assert_eq!(report.installed_events.len(), WIRED_EVENTS.len());
     assert!(install::hooks_installed_at(&path));
+    assert!(install::statusline_installed_at(&config_path));
     let once = std::fs::read_to_string(&path).unwrap();
-    install::install_into(&path).expect("second install");
+    let config_once = std::fs::read_to_string(&config_path).unwrap();
+    install::install_into(&path, &config_path).expect("second install");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), once);
+    assert_eq!(std::fs::read_to_string(&config_path).unwrap(), config_once);
 
     let installed: Value = serde_json::from_str(&once).unwrap();
     assert_eq!(installed["version"], 1);
@@ -564,10 +660,24 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
         "future-hook"
     );
     assert!(install::managed_artifacts_at(&path));
+    assert!(install::statusline_artifact_at(&config_path));
+    let installed_config: Value = serde_json::from_str(&config_once).unwrap();
+    assert_eq!(installed_config["statusLine"]["padding"], 2);
+    assert_eq!(installed_config["statusLine"]["updateIntervalMs"], 500);
+    assert!(installed_config["statusLine"].get("future").is_none());
+    assert_eq!(
+        crate::agents::managed_statusline::wrapped_command(
+            installed_config.as_object().unwrap(),
+            &STATUS_LINE,
+        )
+        .as_deref(),
+        Some("'/tmp/my status' --plain '$HOME'")
+    );
 
-    let preview = install::preview_at(&path).expect("preview");
-    assert_eq!(preview.candidate_config, once);
-    let uninstall = install::uninstall_from(&path).expect("uninstall");
+    let preview = install::preview_at(&path, &config_path).expect("preview");
+    assert_eq!(preview.files[0].candidate, once);
+    assert_eq!(preview.files[1].candidate, config_once);
+    let uninstall = install::uninstall_from(&path, &config_path).expect("uninstall");
     assert_eq!(uninstall.removed_events.len(), WIRED_EVENTS.len());
     assert!(!install::managed_artifacts_at(&path));
     let uninstalled: Value =
@@ -580,12 +690,17 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
         uninstalled["hooks"]["futureEvent"][0]["command"],
         "future-hook"
     );
+    assert_eq!(
+        serde_json::from_str::<Value>(&std::fs::read_to_string(config_path).unwrap()).unwrap(),
+        serde_json::from_str::<Value>(original_config).unwrap()
+    );
 }
 
 #[test]
 fn legacy_hook_install_is_detected_and_repaired_additively() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.json");
+    let config_path = dir.path().join("cli-config.json");
     let legacy_events: Vec<_> = WIRED_EVENTS
         .iter()
         .copied()
@@ -617,8 +732,8 @@ fn legacy_hook_install_is_detected_and_repaired_additively() {
     .unwrap();
 
     assert!(!install::hooks_installed_at(&path));
-    let preview = install::preview_at(&path).expect("legacy repair preview");
-    let candidate: Value = serde_json::from_str(&preview.candidate_config).unwrap();
+    let preview = install::preview_at(&path, &config_path).expect("legacy repair preview");
+    let candidate: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
     assert_eq!(candidate["future"]["kept"], true);
     assert_eq!(
         candidate["hooks"]["futureEvent"][0]["command"],
@@ -643,10 +758,11 @@ fn legacy_hook_install_is_detected_and_repaired_additively() {
         }
     }
 
-    install::install_into(&path).expect("repair legacy install");
+    install::install_into(&path, &config_path).expect("repair legacy install");
     assert!(install::hooks_installed_at(&path));
+    assert!(install::statusline_installed_at(&config_path));
     let once = std::fs::read(&path).unwrap();
-    install::install_into(&path).expect("second repair install");
+    install::install_into(&path, &config_path).expect("second repair install");
     assert_eq!(std::fs::read(&path).unwrap(), once);
 }
 
@@ -654,7 +770,8 @@ fn legacy_hook_install_is_detected_and_repaired_additively() {
 fn incomplete_and_malformed_hook_configs_are_detected() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks.json");
-    install::install_into(&path).expect("install");
+    let config_path = dir.path().join("cli-config.json");
+    install::install_into(&path, &config_path).expect("install");
     let mut root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     root["hooks"].as_object_mut().unwrap().remove("stop");
     std::fs::write(&path, serde_json::to_vec_pretty(&root).unwrap()).unwrap();
@@ -662,7 +779,7 @@ fn incomplete_and_malformed_hook_configs_are_detected() {
 
     std::fs::write(&path, "{").unwrap();
     assert!(matches!(
-        install::install_into(&path),
+        install::install_into(&path, &config_path),
         Err(AgentErr::InstallParse {
             agent: "cursor",
             ..

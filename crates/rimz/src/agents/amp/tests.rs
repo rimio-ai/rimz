@@ -214,15 +214,15 @@ fn install_preview_drift_and_uninstall_only_touch_managed_source() {
     };
 
     let installed = AMP_MANAGED_SOURCE.install_into(&path).unwrap();
-    assert!(!installed.merged);
+    assert!(!installed.files[0].existed);
     assert_eq!(installed.installed_events, events());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), PLUGIN_SOURCE);
     assert!(AMP_MANAGED_SOURCE.installed_at(&path));
 
     std::fs::write(&path, "// stale _rimz_managed plugin\n").unwrap();
     let preview = AMP_MANAGED_SOURCE.preview_at(&path).unwrap();
-    assert!(preview.merged);
-    assert_eq!(preview.candidate_config, PLUGIN_SOURCE);
+    assert!(preview.files[0].existed);
+    assert_eq!(preview.files[0].candidate, PLUGIN_SOURCE);
     AMP_MANAGED_SOURCE.install_into(&path).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), PLUGIN_SOURCE);
 

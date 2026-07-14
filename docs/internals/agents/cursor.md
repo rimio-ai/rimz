@@ -2,7 +2,7 @@
 
 > The agent-agnostic boundary and state machine are in [model.md](./model.md). The verified upstream hook and CLI surface is in [cursor-reference.md](../../externals/agent-adapter/cursor-reference.md).
 
-Cursor runs as `agent` or its `cursor-agent` alias; `cursor` names the IDE and is intentionally outside binary discovery. RimZ installs additive user hooks in `~/.cursor/hooks.json`, launches the resolved CLI path, and keys every session on `conversation_id`.
+Cursor runs as `agent` or its `cursor-agent` alias; `cursor` names the IDE and is intentionally outside binary discovery. RimZ installs additive user hooks in `~/.cursor/hooks.json` and a managed command statusline in `~/.cursor/cli-config.json`, launches the resolved CLI path, and keys every session on `conversation_id`.
 
 ## Hooks and lifecycle
 
@@ -25,13 +25,15 @@ These lifecycle, response, and token claims apply to ordinary interactive Cursor
 
 ## Context and transcript
 
-`preCompact.context_usage_percent` supplies the rounded, clamped context gauge, and `context_window_size` supplies the window. `context_tokens` is occupancy rather than cumulative usage, so it does not populate `total_tokens`. Interactive `stop` supplies per-turn fresh input, output, cache-read, and cache-write counts; explicit zeroes remain visible and these counters never populate cumulative `total_tokens`. A missed-stop transcript recovery restores only terminal state because the JSONL terminal row carries no tokens. `model_id` labels the row, with legacy `model` as fallback; the common `model_params` entry named `effort` supplies the displayed effort and malformed or unknown parameters remain field-locally ignorable.
+The command statusline is the rich-context authority. Its structured payload supplies the display model, model parameters, agent version, output style, vim mode, context window and fill, and current input/output/cache composition. RimZ normalizes Cursor's internal `default` model sentinel to `auto` and retains `model.display_name`, so a stock session renders as `Auto`; every optional field is parsed independently so one malformed value does not discard the rest.
+
+`preCompact.context_usage_percent` and `context_window_size` remain fallbacks and open the compaction bracket. `context_tokens` is occupancy rather than cumulative usage, so it does not populate `total_tokens`. Interactive `stop.input_tokens` includes cache-read and cache-write tokens; RimZ derives fresh input with saturating subtraction and retains output, cache-read, and cache-write independently. Explicit zeroes remain visible and these per-turn counters never populate cumulative `total_tokens`. A missed-stop transcript recovery restores only terminal state because the JSONL terminal row carries no tokens. Hook `model_id` labels the row when no statusline context is available, with legacy `model` as fallback; the common `model_params` entry named `effort` supplies the displayed effort.
 
 Cursor CLI `2026.07.09-a3815c0` writes one JSONL file at `~/.cursor/projects/<workspace>/agent-transcripts/<conversation_id>/<conversation_id>.jsonl`. An authenticated native resume rewrote that same path as a full conversation snapshot, replacing the prior terminal placement rather than appending a new suffix. RimZ stats the file, reads its bounded whole tail, and recovers a missed success, interruption, or error boundary only when a complete recognized `turn_ended` row is the last meaningful record and no torn suffix follows it. A later nonterminal, unknown, malformed, or partial record keeps the active turn running until a new complete terminal row or full snapshot arrives. RimZ never models or consumes assistant, thinking, user, tool, or message content from this file. Resolution prefers the current hook path, then the persisted path, then one unambiguous exact conversation match beneath the immediate project directories. Workspace ownership continues to come from the stamped pane/session relationship; `postToolUse.cwd` is enrichment only.
 
 `afterAgentResponse.text` is Cursor's sole safe final-text source. Hook ingestion appends that trimmed response to RimZ's durable transcript and seeds an active supervised run without ending it; the later `stop` remains the delivery checkpoint and terminal status transition. Cursor's native JSONL merges visible assistant commentary with model thinking into indistinguishable text blocks, so native history paging and reply streaming deliberately remain empty.
 
-Cursor hook sets installed before `afterAgentResponse` are incomplete because they cannot capture safe final text. Incomplete-hook detection reports the gap; run `rimz hooks install cursor` once after upgrading to add the RimZ-owned response hook while preserving user-owned and unknown entries.
+Cursor installation manages two files as one operation. RimZ builds both JSON candidates before writing, writes each by temp-file plus rename, rolls the hook file back byte-for-byte if the statusline write fails, and reports both diffs at consent. The statusline wrapper retains the user's exact prior value under a managed marker, forwards its JSON stdin to that command by direct argv, and restores the value on uninstall. Existing rendering keys remain in place. Incomplete-hook detection requires both the canonical hook set and the managed statusline, so `rimz hooks install cursor` repairs either half while preserving user-owned and unknown entries.
 
 ## Account and balance
 
@@ -39,7 +41,9 @@ Cursor documents `status --format json` and `about --format json` without publis
 
 ## Cost
 
-The stop hook exposes per-turn token composition but no dollars or trustworthy historical model-priced totals. Realtime cost and historical account spend remain unsupported, and the adapter has no spend parser.
+The stop hook exposes per-turn token composition but no dollars. RimZ calculates an API-equivalent estimate for completed, aborted, and errored stops with a non-empty `generation_id`: Cursor Auto uses `$1.25/M` input and cache-create, `$6.00/M` output, and `$0.25/M` cache-read, while explicit model IDs use the shared price book and its fast-variant multiplier. Unknown models and incomplete pricing stay absent rather than publishing a known zero.
+
+The agent-context sidecar stores the last priced generation and cumulative estimate under a per-session lock. A duplicate stop is ignored, later generations add exactly once, and statusline refreshes preserve the total. The value drives the live card, cockpit add-back, and agent budget, then resets when that live session sidecar ends. Cursor still has no per-user historical usage ledger, provider-billing total, account spend, or quota parser.
 
 ## Launch and permission modes
 
@@ -49,12 +53,12 @@ The shared command classifier now reads adapter `bin_names`, so both stock entry
 
 ## Wired now
 
-Interactive session identity, turn boundaries including native interruption, safe final responses, per-turn token composition, bounded transcript-tail recovery, mutating-tool activity and the acting phase, the compaction-open bracket, the context gauge and window, session end, hook install/uninstall, resume, the four permission modes, and manual `/summarize` compaction. The launch-flag surface (`--mode=plan`, `--auto-review`, `--force`, `--sandbox disabled`, `--resume`) is verified against the installed `2026.07.09-a3815c0` build; the runtime *interaction* of those flags with neutral `{}` output still needs a live interactive session.
+Interactive session identity, turn boundaries including native interruption, safe final responses, normalized per-turn token composition, bounded transcript-tail recovery, mutating-tool activity and the acting phase, the compaction-open bracket, statusline-backed model/window/fill context, cumulative live-session cost estimation, two-file hook/statusline install and uninstall, session end, resume, the four permission modes, and manual `/summarize` compaction. The launch-flag and statusline surfaces are verified against the installed `2026.07.09-a3815c0` build; the runtime *interaction* of the permission flags with neutral `{}` output still needs a live interactive session.
 
 ## Deferred to a later round
 
 - **Subagents.** `subagentStop` omits the child id `subagentStart` supplies, so neither signal is wired until a live capture proves a stable stop-side correlation key.
-- **Account and cost.** One authenticated browser-login status/about arm is captured, but the other auth and failure arms remain unverified; spend is also blocked on a machine-readable per-user usage feed Cursor does not yet ship.
+- **Account and historical spend.** One authenticated browser-login status/about arm is captured, but the other auth and failure arms remain unverified; account billing, quota windows, and historical spend remain blocked on a machine-readable per-user usage feed Cursor does not yet ship.
 - **Full native history and streaming.** Safe final responses reach RimZ's transcript and supervised output, but native assistant-history replay and incremental reply streaming remain empty because Cursor's JSONL text merges visible output with thinking.
 - **Native headless transport.** One authenticated `--mode=ask --print --resume` turn returned its requested text but emitted two byte-identical `sessionEnd` hooks and no prompt, response, stop, or token hooks. RimZ does not parse its native result or claim hook coverage for this transport.
 - **Live verification** remains required for interactive hook command shell and `$PPID` semantics on each platform, the `--` prompt terminator, neutral `{}` under every approval mode, `conversation_id` stability across resume and clear, and Claude-compatible third-party-hook cross-fire.

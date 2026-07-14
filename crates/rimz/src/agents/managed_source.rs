@@ -8,8 +8,8 @@ use std::path::Path;
 use crate::store::atomic;
 
 use super::{
-    AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, Result, read_optional_file,
 };
 
 pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
@@ -35,10 +35,11 @@ impl ManagedSource {
         atomic::write_bytes_atomically(path, self.source.as_bytes())?;
         Ok(HookInstallReport {
             agent: self.agent,
-            config_path: path.to_path_buf(),
+            files: vec![HookInstallFileReport {
+                path: path.to_path_buf(),
+                existed: original.is_some(),
+            }],
             installed_events: self.installed_event_names(),
-            merged: original.is_some(),
-            additional_config_paths: Vec::new(),
         })
     }
 
@@ -49,14 +50,15 @@ impl ManagedSource {
         self.refuse_unmarked(path, original.as_deref())?;
         Ok(HookInstallPreview {
             agent: self.agent,
-            config_path: path.to_path_buf(),
+            files: vec![HookInstallFilePreview {
+                path: path.to_path_buf(),
+                existed: original.is_some(),
+                original,
+                candidate: self.source.to_owned(),
+            }],
             planned_events: self.installed_event_names(),
-            merged: original.is_some(),
-            original_config: original,
-            candidate_config: self.source.to_owned(),
             status_line_change: None,
             subagent_status_line_change: None,
-            additional_configs: Vec::new(),
         })
     }
 
@@ -75,10 +77,11 @@ impl ManagedSource {
         // An unmarked file is user-owned: left in place, nothing removed.
         Ok(HookUninstallReport {
             agent: self.agent,
-            config_path: path.to_path_buf(),
+            files: vec![HookInstallFileReport {
+                path: path.to_path_buf(),
+                existed,
+            }],
             removed_events,
-            existed,
-            additional_config_paths: Vec::new(),
         })
     }
 

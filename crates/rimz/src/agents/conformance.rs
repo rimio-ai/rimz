@@ -709,14 +709,19 @@ fn assert_compaction_hooks_match_concern(adapter: &dyn AgentAdapter) {
 }
 
 fn realtime_cost_from_fixture(adapter: &dyn AgentAdapter) -> bool {
-    let Some(fixture) = adapter.spend_fixture() else {
-        return false;
-    };
-    let dir = tempfile::TempDir::new().expect("spend fixture tempdir");
-    let path = materialize_spend_fixture(dir.path(), &fixture);
-    super::spending::session_cost_usd(adapter, fixture.session_id, &path, &PriceBook::embedded())
-        .and_then(|cost| cost.total_cost_usd)
-        .is_some_and(|cost| cost > 0.0)
+    let prices = PriceBook::embedded();
+    if let Some(fixture) = adapter.turn_cost_fixture() {
+        return adapter
+            .estimate_turn_cost(fixture.event_name, &fixture.payload, &prices)
+            .is_some_and(|cost| cost.cost_usd > 0.0);
+    }
+    adapter.spend_fixture().is_some_and(|fixture| {
+        let dir = tempfile::TempDir::new().expect("spend fixture tempdir");
+        let path = materialize_spend_fixture(dir.path(), &fixture);
+        super::spending::session_cost_usd(adapter, fixture.session_id, &path, &prices)
+            .and_then(|cost| cost.total_cost_usd)
+            .is_some_and(|cost| cost > 0.0)
+    })
 }
 
 fn materialize_spend_fixture(dir: &Path, fixture: &SpendFixture) -> PathBuf {

@@ -44,14 +44,14 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
     let preview = preview_install_at(&path).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     let report = install_into(&path).unwrap();
-    assert!(report.merged);
+    assert!(report.files[0].existed);
     assert_eq!(
-        preview.candidate_config,
+        preview.files[0].candidate,
         std::fs::read_to_string(&path).unwrap()
     );
     assert!(hooks_installed_at(&path));
 
-    let mut root: Value = serde_json::from_str(&preview.candidate_config).unwrap();
+    let mut root: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
     let notification = root["hooks"]["Notification"].as_array().unwrap();
     assert_eq!(notification.len(), 2, "one user hook plus one managed hook");
     assert_eq!(root["model"], "custom");
@@ -72,7 +72,7 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
     assert!(hooks_installed_at(&path));
 
     let uninstall = uninstall_from(&path).unwrap();
-    assert!(uninstall.existed);
+    assert!(uninstall.files[0].existed);
     let root: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(root["model"], "custom");
     assert_eq!(root["hooks"]["Notification"].as_array().unwrap().len(), 1);

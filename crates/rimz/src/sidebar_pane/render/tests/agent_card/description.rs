@@ -247,9 +247,9 @@ fn parked_background_marker_falls_back_to_unicode() {
         .join("\n");
 
     // `card.parked_bg` sits outside the curated Nerd Font overlay, so the parked
-    // descriptor keeps its Unicode ellipsis even while the set is active — proven
-    // by the empty-context tile, which the overlay does iconify, rendering here.
-    assert!(rendered.contains("\u{f11d9}"), "{rendered}");
+    // descriptor keeps its Unicode ellipsis even while the set is active. Unknown
+    // context remains absent rather than adding the overlay's empty-context tile.
+    assert!(!rendered.contains("\u{f11d9}"), "{rendered}");
     assert!(rendered.contains("⋯ bg"), "{rendered}");
 }
 

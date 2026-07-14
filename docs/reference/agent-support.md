@@ -26,7 +26,7 @@ One row per agent, ordered by support tier — Claude and Codex, then the experi
 | Antigravity | ✓ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ | ✗ |
 | Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ |
 | Droid | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✗ | ✗ | ✗ | ✓ | ✗ | ✗ |
-| Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✗ | ✓ | ✗ | ✗ |
+| Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ◐ | ✗ | ✓ | ◐ | ✗ |
 | Kiro | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ |
@@ -92,9 +92,9 @@ The detail for each agent — its full coverage rationale, permission-mode mappi
 
 Two agents carry a deliberate absence worth stating here: Cursor and Droid appear and report their work, but their stock local hooks cannot signal that a native question is open, so they have no waiting row or ask routing — answer those prompts in the agent's own pane.
 
-Cursor's Live coverage is partial rather than absent: `preCompact` reports occupancy, `stop` reports per-turn fresh/cache/output composition, `afterAgentResponse` supplies safe final text, and a bounded terminal-only transcript tail recovers missed turn ends. Full native assistant history and incremental reply streaming remain unavailable because Cursor's JSONL merges visible assistant output with thinking.
+Cursor's live context is statusline-backed: the card reads Cursor's display model, window, fill, version, and current token composition, while `preCompact` and `stop` provide fallbacks. Stop-hook input includes both cache classes, so RimZ subtracts them before displaying fresh input. Completed, aborted, and errored turns add an idempotent API-equivalent dollar estimate to the live session; Cursor's provider billing, account spend, and historical `rimz stats` totals remain unavailable. `afterAgentResponse` supplies safe final text, and a bounded terminal-only transcript tail recovers missed turn ends. Full native assistant history and incremental reply streaming remain unavailable because Cursor's JSONL merges visible assistant output with thinking.
 
-Cursor hook sets installed before `afterAgentResponse` need a one-time repair after upgrade: run `rimz hooks install cursor`. Incomplete-hook detection and `rimz doctor` report the same command instead of claiming safe replies are wired.
+Cursor hook installation owns both `~/.cursor/hooks.json` and the managed statusline in `~/.cursor/cli-config.json`. Run `rimz hooks install cursor` to repair either an incomplete hook set or a missing wrapper; dry-run and consent show both diffs, and uninstall restores the prior statusline value.
 
 ## Versions
 

@@ -7,10 +7,12 @@
 
 mod install;
 mod payloads;
+mod statusline;
 mod transcript;
 
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 #[cfg(test)]
 use serde_json::json as test_json;
 use serde_json::{Value, json};
@@ -21,8 +23,9 @@ use super::descriptor::{
 };
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::{
-    AgentAdapter, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview, HookInstallReport,
-    HookUninstallReport, Result, classify_agent_hook, locate_binary, sanitize_user_prompt,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, EstimatedTurnCost,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, PriceBook, Result,
+    classify_agent_hook, locate_binary, sanitize_user_prompt,
 };
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
@@ -45,7 +48,7 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capabilities: Capabilities {
         blocking_asks: false,
         native_ask_ui: false,
-        rich_context: false,
+        rich_context: true,
         transcript_tail_context: true,
         context_usage: true,
         account_spend: false,
@@ -148,25 +151,26 @@ const CURSOR_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::ContextUsage,
         ConcernCoverage::Wired {
-            via: "preCompact occupancy plus stop token composition",
+            via: "statusline window/fill/token composition; preCompact and stop fallback",
         },
     ),
     (
         IntegrationConcern::RealtimeCost,
-        ConcernCoverage::Unsupported {
-            reason: "stop reports per-turn tokens but no model-priced dollar feed",
+        ConcernCoverage::Partial {
+            via: "model-priced stop-hook accumulation",
+            gap: "live session only; no historical Cursor usage ledger",
         },
     ),
     (
         IntegrationConcern::RichContext,
-        ConcernCoverage::Unsupported {
-            reason: "no out-of-band transport with a published schema",
+        ConcernCoverage::Wired {
+            via: "command statusline payload",
         },
     ),
     (
         IntegrationConcern::HookInstall,
         ConcernCoverage::Wired {
-            via: "~/.cursor/hooks.json merge",
+            via: "managed ~/.cursor/hooks.json + cli-config.json transaction",
         },
     ),
     (
@@ -266,6 +270,19 @@ const WIRED_EVENTS: &[&str] = LIFECYCLE_EVENTS;
 pub(super) const RIMZ_HOOK_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cursor";
 pub(super) const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source cursor";
+const RIMZ_STATUS_LINE_COMMAND: &str = "rimz statusline feed --source cursor";
+const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source cursor";
+const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
+    super::managed_statusline::ManagedStatusLineSpec {
+        key: "statusLine",
+        command: RIMZ_STATUS_LINE_COMMAND,
+        command_marker: RIMZ_STATUS_LINE_MARKER,
+        rendering_options: super::managed_statusline::RenderingOptions::Only(&[
+            "padding",
+            "updateIntervalMs",
+            "timeoutMs",
+        ]),
+    };
 
 #[derive(Clone, Debug, Default)]
 pub struct CursorAdapter;
@@ -339,6 +356,22 @@ impl AgentAdapter for CursorAdapter {
         ]
     }
 
+    #[cfg(test)]
+    fn turn_cost_fixture(&self) -> Option<super::TurnCostFixture> {
+        Some(super::TurnCostFixture {
+            event_name: "stop",
+            payload: test_json!({
+                "generation_id": "gen-1",
+                "status": "completed",
+                "model_id": "default",
+                "input_tokens": 22_725,
+                "output_tokens": 26,
+                "cache_read_tokens": 8_704,
+                "cache_write_tokens": 0
+            }),
+        })
+    }
+
     fn render_neutral(&self, event_name: &str) -> Result<Option<Value>> {
         Ok(LIFECYCLE_EVENTS.contains(&event_name).then(|| json!({})))
     }
@@ -380,7 +413,10 @@ impl AgentAdapter for CursorAdapter {
         observation.prompt = prompt;
         let effort = parsed.model_param("effort").map(ToOwned::to_owned);
         observation.transcript_path = parsed.transcript_path;
-        observation.launch.model = parsed.model_id.or(parsed.model);
+        observation.launch.model = parsed
+            .model_id
+            .or(parsed.model)
+            .map(statusline::normalize_model);
         observation.launch.effort = effort;
         observation.context_pct = parsed
             .context_usage_percent
@@ -388,12 +424,79 @@ impl AgentAdapter for CursorAdapter {
             .map(|value| value.round().clamp(0.0, 100.0) as u8);
         observation.context_window = parsed.context_window_size;
         if event_name == "stop" {
-            observation.fresh_input_tokens = parsed.input_tokens;
+            let cached = parsed
+                .cache_read_tokens
+                .unwrap_or(0)
+                .saturating_add(parsed.cache_write_tokens.unwrap_or(0));
+            observation.fresh_input_tokens = parsed
+                .input_tokens
+                .map(|input| input.saturating_sub(cached));
             observation.output_tokens = parsed.output_tokens;
             observation.cache_read_input_tokens = parsed.cache_read_tokens;
             observation.cache_write_input_tokens = parsed.cache_write_tokens;
         }
         Some(observation)
+    }
+
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
+            .ok()
+            .map(|payload| payload.into_context(source, Timestamp::now()))
+    }
+
+    fn estimate_turn_cost(
+        &self,
+        event_name: &str,
+        payload: &Value,
+        prices: &PriceBook,
+    ) -> Option<EstimatedTurnCost> {
+        if event_name != "stop" {
+            return None;
+        }
+        let parsed = payloads::parse_payload(payload);
+        if !matches!(
+            parsed.status.as_deref(),
+            Some("completed" | "aborted" | "error")
+        ) {
+            return None;
+        }
+        let turn_id = parsed.generation_id?.trim().to_owned();
+        if turn_id.is_empty() {
+            return None;
+        }
+        let model = parsed.model_id.or(parsed.model)?;
+        let model = model.trim();
+        if model.is_empty() {
+            return None;
+        }
+        let price_key = if model.eq_ignore_ascii_case("default") {
+            "cursor-auto"
+        } else {
+            model
+        };
+        let price = prices.price(price_key)?;
+        let has_tokens = parsed.input_tokens.is_some()
+            || parsed.output_tokens.is_some()
+            || parsed.cache_read_tokens.is_some()
+            || parsed.cache_write_tokens.is_some();
+        if !has_tokens {
+            return None;
+        }
+        let cache_read = parsed.cache_read_tokens.unwrap_or(0);
+        let cache_write = parsed.cache_write_tokens.unwrap_or(0);
+        let fresh = parsed
+            .input_tokens
+            .unwrap_or(0)
+            .saturating_sub(cache_read.saturating_add(cache_write));
+        let cost_usd = price.cost(
+            fresh,
+            parsed.output_tokens.unwrap_or(0),
+            cache_write,
+            0,
+            cache_read,
+            model.to_ascii_lowercase().ends_with("-fast"),
+        );
+        (cost_usd.is_finite() && cost_usd > 0.0).then_some(EstimatedTurnCost { turn_id, cost_usd })
     }
 
     fn observe_assistant_message(&self, event_name: &str, payload: &Value) -> Option<String> {
@@ -505,23 +608,49 @@ impl AgentAdapter for CursorAdapter {
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
-        install::install_into(&install::cursor_hooks_path()?)
+        install::install_into(
+            &install::cursor_hooks_path()?,
+            &install::cursor_cli_config_path()?,
+        )
     }
 
     fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        install::preview_at(&install::cursor_hooks_path()?)
+        install::preview_at(
+            &install::cursor_hooks_path()?,
+            &install::cursor_cli_config_path()?,
+        )
     }
 
     fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        install::uninstall_from(&install::cursor_hooks_path()?)
+        install::uninstall_from(
+            &install::cursor_hooks_path()?,
+            &install::cursor_cli_config_path()?,
+        )
     }
 
     fn hooks_installed(&self) -> bool {
-        install::cursor_hooks_path().is_ok_and(|path| install::hooks_installed_at(&path))
+        let Ok(hooks_path) = install::cursor_hooks_path() else {
+            return false;
+        };
+        let Ok(config_path) = install::cursor_cli_config_path() else {
+            return false;
+        };
+        install::hooks_installed_at(&hooks_path) && install::statusline_installed_at(&config_path)
     }
 
     fn managed_hook_artifacts_present(&self) -> bool {
         install::cursor_hooks_path().is_ok_and(|path| install::managed_artifacts_at(&path))
+            || install::cursor_cli_config_path()
+                .is_ok_and(|path| install::statusline_artifact_at(&path))
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        let root = install::read_existing_json(&install::cursor_cli_config_path().ok()?).ok()?;
+        super::managed_statusline::wrapped_command(&root, &STATUS_LINE)
+    }
+
+    fn status_line_invocation(&self) -> super::StatusLineInvocation {
+        super::StatusLineInvocation::DirectArgv
     }
 }
 

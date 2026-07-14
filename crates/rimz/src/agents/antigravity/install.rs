@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::agents::{
-    AgentErr, HookConfigPreview, HookInstallPreview, HookInstallReport, HookUninstallReport,
-    Result, StatusLineChange, agent_config_path, read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview,
+    HookInstallReport, HookUninstallReport, Result, StatusLineChange, agent_config_path,
+    read_optional_file,
 };
 use crate::store::atomic;
 
@@ -46,6 +47,7 @@ pub(super) fn settings_path() -> Result<PathBuf> {
 pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookInstallReport> {
     let hooks_existed = hooks_path.exists();
     let settings_original = read_optional_file(AGENT, settings_path)?;
+    let settings_existed = settings_original.is_some();
     let hooks = hook_candidate(hooks_path)?;
     let settings = statusline_candidate(settings_path)?.0;
     write_json(settings_path, &settings)?;
@@ -58,10 +60,17 @@ pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookIns
     }
     Ok(HookInstallReport {
         agent: AGENT,
-        config_path: hooks_path.to_path_buf(),
+        files: vec![
+            HookInstallFileReport {
+                path: hooks_path.to_path_buf(),
+                existed: hooks_existed,
+            },
+            HookInstallFileReport {
+                path: settings_path.to_path_buf(),
+                existed: settings_existed,
+            },
+        ],
         installed_events: installed_event_names(),
-        merged: hooks_existed,
-        additional_config_paths: vec![settings_path.to_path_buf()],
     })
 }
 
@@ -87,24 +96,29 @@ pub(super) fn preview(hooks_path: &Path, settings_path: &Path) -> Result<HookIns
     let (settings, status_line_change) = statusline_candidate(settings_path)?;
     Ok(HookInstallPreview {
         agent: AGENT,
-        config_path: hooks_path.to_path_buf(),
+        files: vec![
+            HookInstallFilePreview {
+                path: hooks_path.to_path_buf(),
+                existed: hooks_original.is_some(),
+                original: hooks_original,
+                candidate: render_json(&hooks)?,
+            },
+            HookInstallFilePreview {
+                path: settings_path.to_path_buf(),
+                existed: settings_original.is_some(),
+                original: settings_original,
+                candidate: render_json(&settings)?,
+            },
+        ],
         planned_events: installed_event_names(),
-        original_config: hooks_original,
-        candidate_config: render_json(&hooks)?,
-        merged: hooks_path.exists(),
         status_line_change: Some(status_line_change),
         subagent_status_line_change: None,
-        additional_configs: vec![HookConfigPreview {
-            config_path: settings_path.to_path_buf(),
-            original_config: settings_original,
-            candidate_config: render_json(&settings)?,
-            merged: settings_path.exists(),
-        }],
     })
 }
 
 pub(super) fn uninstall(hooks_path: &Path, settings_path: &Path) -> Result<HookUninstallReport> {
     let existed = hooks_path.exists();
+    let settings_existed = settings_path.exists();
     let mut removed_events = Vec::new();
     if existed {
         let mut root = read_json_object(hooks_path)?;
@@ -116,10 +130,17 @@ pub(super) fn uninstall(hooks_path: &Path, settings_path: &Path) -> Result<HookU
     uninstall_statusline_file(settings_path)?;
     Ok(HookUninstallReport {
         agent: AGENT,
-        config_path: hooks_path.to_path_buf(),
+        files: vec![
+            HookInstallFileReport {
+                path: hooks_path.to_path_buf(),
+                existed,
+            },
+            HookInstallFileReport {
+                path: settings_path.to_path_buf(),
+                existed: settings_existed,
+            },
+        ],
         removed_events,
-        existed,
-        additional_config_paths: vec![settings_path.to_path_buf()],
     })
 }
 

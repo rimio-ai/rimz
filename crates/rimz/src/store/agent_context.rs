@@ -20,6 +20,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 
 use jiff::Timestamp;
@@ -58,6 +59,30 @@ pub struct AgentContextRecord {
     /// an unchanged tail without parsing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_stat: Option<TranscriptStat>,
+    /// Hook-priced live-session state. Private so only the idempotent merge can
+    /// advance the accumulator.
+    #[serde(default, skip_serializing_if = "EstimatedCostState::is_empty")]
+    estimated_cost: EstimatedCostState,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+struct EstimatedCostState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    cumulative_usd: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    owns_context_cost: bool,
+}
+
+impl EstimatedCostState {
+    fn is_empty(&self) -> bool {
+        self.last_turn_id.is_none() && self.cumulative_usd == 0.0 && !self.owns_context_cost
+    }
+}
+
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
 }
 
 impl sidecar::SidecarRecord for AgentContextRecord {
@@ -81,14 +106,29 @@ pub fn write(
     agent_id: &str,
     context: &AgentContext,
 ) -> Result<(), atomic::AtomicErr> {
+    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let mut context = context.clone();
+    let provider_cost = context.cost.is_some();
     // Statusline producers own their observed provider fields, while lifecycle
     // confirmation owns turn causality. Preserve that independently-written
     // field across whole-context statusline refreshes.
-    context.turn_opened_by = read_one(runtime, kind, agent_id)
-        .map(|record| record.context.turn_opened_by)
+    let prior = read_one_unlocked(runtime, kind, agent_id);
+    context.turn_opened_by = prior
+        .as_ref()
+        .map(|record| record.context.turn_opened_by.clone())
         .unwrap_or_default();
-    write_record(
+    if context.cost.is_none() {
+        context.cost = prior
+            .as_ref()
+            .and_then(|record| record.context.cost.clone());
+    }
+    let mut estimated_cost = prior
+        .map(|record| record.estimated_cost)
+        .unwrap_or_default();
+    if provider_cost {
+        estimated_cost.owns_context_cost = false;
+    }
+    write_record_unlocked(
         runtime,
         &AgentContextRecord {
             kind: AgentKind::new_unchecked(kind),
@@ -98,6 +138,7 @@ pub fn write(
             rich_observed_at: None,
             transcript_path: None,
             transcript_stat: None,
+            estimated_cost,
         },
     )
 }
@@ -108,6 +149,28 @@ pub fn write_record(
     runtime: &RuntimePaths,
     record: &AgentContextRecord,
 ) -> Result<(), atomic::AtomicErr> {
+    let _lock = RecordLock::acquire(runtime, record.kind.as_str(), record.agent_id.as_str())?;
+    let mut record = record.clone();
+    let provider_cost = record.context.cost.is_some() && !record.estimated_cost.owns_context_cost;
+    if let Some(prior) = read_one_unlocked(runtime, record.kind.as_str(), record.agent_id.as_str())
+    {
+        if record.context.cost.is_none() {
+            record.context.cost = prior.context.cost;
+        }
+        if record.estimated_cost.is_empty() {
+            record.estimated_cost = prior.estimated_cost;
+        }
+    }
+    if provider_cost {
+        record.estimated_cost.owns_context_cost = false;
+    }
+    write_record_unlocked(runtime, &record)
+}
+
+fn write_record_unlocked(
+    runtime: &RuntimePaths,
+    record: &AgentContextRecord,
+) -> Result<(), atomic::AtomicErr> {
     sidecar::write_record(&runtime.agent_context_dir, record)
 }
 
@@ -115,6 +178,14 @@ pub fn write_record(
 /// Writers use this before a read-modify-write so they merge against the latest
 /// published bytes, not the last value a sidebar consumer happened to parse.
 pub fn read_one(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> Option<AgentContextRecord> {
+    read_one_unlocked(runtime, kind, agent_id)
+}
+
+fn read_one_unlocked(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+) -> Option<AgentContextRecord> {
     sidecar::read_one(&runtime.agent_context_dir, kind, agent_id)
 }
 
@@ -127,6 +198,7 @@ pub fn new_record(kind: &str, agent_id: &str, context: AgentContext) -> AgentCon
         rich_observed_at: None,
         transcript_path: None,
         transcript_stat: None,
+        estimated_cost: EstimatedCostState::default(),
     }
 }
 
@@ -137,12 +209,13 @@ pub fn merge_local_context(
     runtime: &RuntimePaths,
     kind: &str,
     agent_id: &str,
-    prior: Option<AgentContextRecord>,
+    _prior: Option<AgentContextRecord>,
     refresh: LocalContextRefresh,
     observed_at: Timestamp,
 ) -> Result<(), atomic::AtomicErr> {
-    let mut record =
-        prior.unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
+    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
+    let mut record = read_one_unlocked(runtime, kind, agent_id)
+        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
     let prior_model_id = record.context.model_id.clone();
     let prior_context_window = record
         .context
@@ -172,6 +245,7 @@ pub fn merge_local_context(
     // not that the already-spent session returned to zero.
     if refresh.cost.is_some() {
         record.context.cost = refresh.cost;
+        record.estimated_cost.owns_context_cost = false;
     }
     // Codex's local transcript detector re-derives turn death from the tail each
     // refresh: a still-present marker re-stamps identically, and a fresh turn
@@ -194,7 +268,7 @@ pub fn merge_local_context(
     record.context.observed_at = observed_at;
     record.transcript_path = refresh.transcript_path;
     record.transcript_stat = refresh.transcript_stat;
-    write_record(runtime, &record)
+    write_record_unlocked(runtime, &record)
 }
 
 /// Merge a sparse hook-observed context (Pi/OpenCode envelope fields) onto the
@@ -207,8 +281,9 @@ pub fn merge_observed(
     agent_id: &str,
     context: AgentContext,
 ) -> Result<bool, atomic::AtomicErr> {
+    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let observed_at = context.observed_at;
-    let mut record = read_one(runtime, kind, agent_id)
+    let mut record = read_one_unlocked(runtime, kind, agent_id)
         .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
     let mut changed = false;
     macro_rules! merge_optional {
@@ -266,6 +341,7 @@ pub fn merge_observed(
             .and_then(|cost| cost.total_cost_usd);
         if prior_total_cost.is_none_or(|prior| total_cost_usd >= prior) {
             changed |= merge_observed_cost(&mut record.context.cost, cost, total_cost_usd);
+            record.estimated_cost.owns_context_cost = false;
         }
     }
     if !changed {
@@ -273,7 +349,7 @@ pub fn merge_observed(
     }
     record.context.source = kind.to_owned();
     record.context.observed_at = observed_at;
-    write_record(runtime, &record)?;
+    write_record_unlocked(runtime, &record)?;
     Ok(true)
 }
 
@@ -287,8 +363,9 @@ pub fn merge_turn_error(
     agent_id: &str,
     marker: AgentTurnError,
 ) -> Result<bool, atomic::AtomicErr> {
+    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let observed_at = Timestamp::now();
-    let mut record = read_one(runtime, kind, agent_id)
+    let mut record = read_one_unlocked(runtime, kind, agent_id)
         .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
     if record.context.turn_error.as_ref() == Some(&marker) {
         return Ok(false);
@@ -296,7 +373,7 @@ pub fn merge_turn_error(
     record.context.source = kind.to_owned();
     record.context.turn_error = Some(marker);
     record.context.observed_at = observed_at;
-    write_record(runtime, &record)?;
+    write_record_unlocked(runtime, &record)?;
     Ok(true)
 }
 
@@ -308,8 +385,9 @@ pub fn merge_turn_opened_by(
     agent_id: &str,
     message_ids: Vec<MessageId>,
 ) -> Result<bool, atomic::AtomicErr> {
+    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let observed_at = Timestamp::now();
-    let mut record = read_one(runtime, kind, agent_id)
+    let mut record = read_one_unlocked(runtime, kind, agent_id)
         .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
     if record.context.turn_opened_by == message_ids {
         return Ok(false);
@@ -317,7 +395,48 @@ pub fn merge_turn_opened_by(
     record.context.source = kind.to_owned();
     record.context.turn_opened_by = message_ids;
     record.context.observed_at = observed_at;
-    write_record(runtime, &record)?;
+    write_record_unlocked(runtime, &record)?;
+    Ok(true)
+}
+
+/// Add one hook-priced turn to the session accumulator. Consecutive duplicate
+/// turn ids are ignored because provider hook delivery is ordered per session.
+pub fn merge_estimated_cost(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    estimate: &crate::agents::EstimatedTurnCost,
+) -> Result<bool, atomic::AtomicErr> {
+    if estimate.turn_id.trim().is_empty()
+        || !estimate.cost_usd.is_finite()
+        || estimate.cost_usd <= 0.0
+    {
+        return Ok(false);
+    }
+    let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
+    let observed_at = Timestamp::now();
+    let mut record = read_one_unlocked(runtime, kind, agent_id)
+        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
+    if record.estimated_cost.last_turn_id.as_deref() == Some(estimate.turn_id.as_str()) {
+        return Ok(false);
+    }
+    let cumulative = record.estimated_cost.cumulative_usd + estimate.cost_usd;
+    if !cumulative.is_finite() || cumulative < 0.0 {
+        return Ok(false);
+    }
+    record.estimated_cost.last_turn_id = Some(estimate.turn_id.clone());
+    record.estimated_cost.cumulative_usd = cumulative;
+    record.context.source = kind.to_owned();
+    record.context.observed_at = observed_at;
+    if record.estimated_cost.owns_context_cost || record.context.cost.is_none() {
+        record.estimated_cost.owns_context_cost = true;
+        record
+            .context
+            .cost
+            .get_or_insert_with(AgentCost::default)
+            .total_cost_usd = Some(cumulative);
+    }
+    write_record_unlocked(runtime, &record)?;
     Ok(true)
 }
 
@@ -459,6 +578,50 @@ pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {
     }
 }
 
+struct RecordLock {
+    file: File,
+}
+
+impl RecordLock {
+    fn acquire(
+        runtime: &RuntimePaths,
+        kind: &str,
+        agent_id: &str,
+    ) -> Result<Self, atomic::AtomicErr> {
+        std::fs::create_dir_all(&runtime.agent_context_dir).map_err(|source| {
+            atomic::AtomicErr::Io {
+                path: runtime.agent_context_dir.clone(),
+                source,
+            }
+        })?;
+        let path = sidecar::lock_path(
+            &runtime.agent_context_dir,
+            <AgentContextRecord as sidecar::SidecarRecord>::FILE_PREFIX,
+            kind,
+            agent_id,
+        );
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|source| atomic::AtomicErr::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.lock()
+            .map_err(|source| atomic::AtomicErr::Io { path, source })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for RecordLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
 thread_local! {
     /// Per-thread parse cache. Every update lands via atomic rename of a
     /// freshly-written temp file, so `(mtime, len)` validates content; the
@@ -480,6 +643,10 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
 /// Remove a session's sidecar (a `SessionEnd` tombstone, or reap). Best-effort:
 /// a missing file is success.
 pub fn remove(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> std::io::Result<()> {
+    let _lock = RecordLock::acquire(runtime, kind, agent_id).map_err(|error| match error {
+        atomic::AtomicErr::Io { source, .. } => source,
+        atomic::AtomicErr::Json(source) => std::io::Error::other(source),
+    })?;
     sidecar::remove::<AgentContextRecord>(&runtime.agent_context_dir, kind, agent_id)
 }
 

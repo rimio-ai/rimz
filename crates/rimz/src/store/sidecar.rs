@@ -42,6 +42,10 @@ pub(crate) fn path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> Path
     dir.join(format!("{prefix}.{}.json", &digest[..32]))
 }
 
+pub(crate) fn lock_path(dir: &Path, prefix: &str, kind: &str, agent_id: &str) -> PathBuf {
+    path(dir, prefix, kind, agent_id).with_extension("lock")
+}
+
 pub(crate) fn write_record<R: SidecarRecord>(
     dir: &Path,
     record: &R,

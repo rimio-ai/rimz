@@ -249,6 +249,7 @@ impl Env {
         match source {
             "codex" => self.home_root.join(".codex").join("config.toml"),
             "claude" => self.home_root.join(".claude").join("settings.json"),
+            "cursor" => self.home_root.join(".cursor").join("hooks.json"),
             "copilot" => self.home_root.join(".copilot/hooks/rimz.json"),
             "pi" => self
                 .home_root
@@ -259,6 +260,10 @@ impl Env {
             "qwen" => self.home_root.join(".qwen").join("settings.json"),
             other => panic!("unknown agent `{other}`"),
         }
+    }
+
+    pub fn cursor_cli_config_path(&self) -> PathBuf {
+        self.home_root.join(".cursor").join("cli-config.json")
     }
 
     /// Wire an agent the way the user does: `rimz hooks install <source>`. The
@@ -288,6 +293,11 @@ impl Env {
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
             "claude" | "copilot" | "pi" | "qwen" => text.contains("_rimz_managed"),
+            "cursor" => {
+                text.contains("rimz hooks feed --source cursor")
+                    && std::fs::read_to_string(self.cursor_cli_config_path())
+                        .is_ok_and(|config| config.contains("rimz statusline feed --source cursor"))
+            }
             _ => false,
         }
     }

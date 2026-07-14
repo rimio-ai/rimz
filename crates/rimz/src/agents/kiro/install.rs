@@ -3,7 +3,9 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use crate::agents::{AgentErr, HookUninstallReport, Result, read_optional_file};
+use crate::agents::{
+    AgentErr, HookInstallFileReport, HookUninstallReport, Result, read_optional_file,
+};
 
 const AGENT: &str = "kiro";
 const RECLAIM_KEY: &str = "hooks feed --source kiro";
@@ -64,10 +66,11 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     }
     Ok(HookUninstallReport {
         agent: AGENT,
-        config_path: path.to_path_buf(),
+        files: vec![HookInstallFileReport {
+            path: path.to_path_buf(),
+            existed,
+        }],
         removed_events,
-        existed,
-        additional_config_paths: Vec::new(),
     })
 }
 

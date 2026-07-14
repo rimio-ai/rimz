@@ -151,6 +151,32 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         }
     }
 
+    let shared_pricing_cache_path = store.runtime_paths().shared_pricing_cache_path();
+    let estimated_cost_updated = {
+        let prices = rimz::agents::pricing::cached_book(&shared_pricing_cache_path);
+        agent
+            .estimate_turn_cost(event_name, payload, &prices)
+            .is_some_and(|estimate| {
+                match rimz::store::agent_context::merge_estimated_cost(
+                    store.runtime_paths(),
+                    agent.descriptor().kind,
+                    context_agent_id,
+                    &estimate,
+                ) {
+                    Ok(changed) => changed,
+                    Err(err) => {
+                        warn!(
+                            agent = agent.descriptor().kind,
+                            event = %event_name,
+                            error = %err,
+                            "lifecycle: failed to merge estimated turn cost",
+                        );
+                        false
+                    }
+                }
+            })
+    };
+
     let prior = rimz::store::agent_context::read_one(
         store.runtime_paths(),
         agent.descriptor().kind,
@@ -161,7 +187,6 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
             .as_ref()
             .and_then(|record| record.context.model_id.as_deref())
     });
-    let shared_pricing_cache_path = store.runtime_paths().shared_pricing_cache_path();
     let prior_transcript_path = prior
         .as_ref()
         .and_then(|record| record.transcript_path.as_deref());
@@ -192,6 +217,9 @@ pub(super) fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
         &mut refresh,
     );
     let Some(refresh) = refresh else {
+        if estimated_cost_updated {
+            let _ = rimz::store::wakeup::wake_sidebars(store.runtime_paths());
+        }
         return;
     };
     if let Err(err) = rimz::store::agent_context::merge_local_context(

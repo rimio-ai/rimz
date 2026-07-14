@@ -128,10 +128,11 @@ pub(super) fn install(path: &Path) -> Result<HookInstallReport> {
     write(path, &table)?;
     Ok(HookInstallReport {
         agent: "kimi",
-        config_path: path.to_path_buf(),
+        files: vec![crate::agents::HookInstallFileReport {
+            path: path.to_path_buf(),
+            existed,
+        }],
         installed_events,
-        merged: existed,
-        additional_config_paths: Vec::new(),
     })
 }
 
@@ -141,14 +142,15 @@ pub(super) fn preview(path: &Path) -> Result<HookInstallPreview> {
     let (table, planned_events) = candidate(path)?;
     Ok(HookInstallPreview {
         agent: "kimi",
-        config_path: path.to_path_buf(),
+        files: vec![crate::agents::HookInstallFilePreview {
+            path: path.to_path_buf(),
+            original: original_config,
+            candidate: render(&table)?,
+            existed,
+        }],
         planned_events,
-        original_config,
-        candidate_config: render(&table)?,
-        merged: existed,
         status_line_change: None,
         subagent_status_line_change: None,
-        additional_configs: Vec::new(),
     })
 }
 
@@ -156,10 +158,11 @@ pub(super) fn uninstall(path: &Path) -> Result<HookUninstallReport> {
     if !path.exists() {
         return Ok(HookUninstallReport {
             agent: "kimi",
-            config_path: path.to_path_buf(),
+            files: vec![crate::agents::HookInstallFileReport {
+                path: path.to_path_buf(),
+                existed: false,
+            }],
             removed_events: Vec::new(),
-            existed: false,
-            additional_config_paths: Vec::new(),
         });
     }
     let mut table = read_table(path)?;
@@ -169,10 +172,11 @@ pub(super) fn uninstall(path: &Path) -> Result<HookUninstallReport> {
     write(path, &table)?;
     Ok(HookUninstallReport {
         agent: "kimi",
-        config_path: path.to_path_buf(),
+        files: vec![crate::agents::HookInstallFileReport {
+            path: path.to_path_buf(),
+            existed: true,
+        }],
         removed_events,
-        existed: true,
-        additional_config_paths: Vec::new(),
     })
 }
 

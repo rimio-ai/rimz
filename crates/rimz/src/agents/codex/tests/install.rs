@@ -5,7 +5,7 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     let report = install_into(&path).unwrap();
-    assert!(!report.merged);
+    assert!(!report.files[0].existed);
     assert_eq!(report.agent, "codex");
     let expected: Vec<&str> = INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect();
     assert_eq!(report.installed_events, expected);
@@ -124,7 +124,7 @@ command = "echo user"
     .unwrap();
 
     let report = install_into(&path).unwrap();
-    assert!(report.merged);
+    assert!(report.files[0].existed);
     for per_tool_event in ["PreToolUse", "PostToolUse"] {
         assert!(report.installed_events.iter().any(|e| e == per_tool_event));
     }
@@ -171,7 +171,7 @@ fn uninstall_removes_legacy_block_and_rimz_commands_but_preserves_user_config() 
     // A path that was never written is a no-op, not an error.
     let missing = dir.path().join("missing-config.toml");
     let missing_report = uninstall_from(&missing).unwrap();
-    assert!(!missing_report.existed);
+    assert!(!missing_report.files[0].existed);
     assert!(missing_report.removed_events.is_empty());
 
     // The legacy `[hooks.rimz]` block is removed and its declared events
@@ -183,7 +183,7 @@ fn uninstall_removes_legacy_block_and_rimz_commands_but_preserves_user_config() 
         )
         .unwrap();
     let report = uninstall_from(&legacy).unwrap();
-    assert!(report.existed);
+    assert!(report.files[0].existed);
     assert_eq!(
         report.removed_events,
         vec!["PermissionRequest".to_owned(), "SessionStart".to_owned()]
@@ -210,7 +210,7 @@ fn uninstall_removes_legacy_block_and_rimz_commands_but_preserves_user_config() 
         )
         .unwrap();
     let report = uninstall_from(&path).unwrap();
-    assert!(report.existed);
+    assert!(report.files[0].existed);
     assert!(report.removed_events.contains(&"SessionStart".to_owned()));
     assert!(
         report

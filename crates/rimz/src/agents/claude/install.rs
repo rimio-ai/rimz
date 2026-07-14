@@ -7,16 +7,16 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use crate::agents::{
-    AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, Result, StatusLineChange,
-    agent_config_path, read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, Result, StatusLineChange, agent_config_path, read_optional_file,
 };
 use crate::store::atomic;
 
 use super::{
     BLOCKING_EVENTS, CLAUDE_HOOK_TIMEOUT_SECS, HOOKS_KEY, INSTALLED_EVENTS, RIMZ_HOOK_COMMAND,
-    RIMZ_HOOK_MARKER, RIMZ_MANAGED_KEY, RIMZ_STATUS_LINE_MARKER, RIMZ_SYNC_KEY, RIMZ_WRAPPED_KEY,
-    STATUS_LINE, SUBAGENT_STATUS_LINE, StatusLineSpec,
+    RIMZ_HOOK_MARKER, RIMZ_MANAGED_KEY, RIMZ_SYNC_KEY, STATUS_LINE, SUBAGENT_STATUS_LINE,
 };
+use crate::agents::managed_statusline::ManagedStatusLineSpec;
 
 pub(super) fn claude_settings_path() -> Result<PathBuf> {
     // Honour an explicit override (`RIMZ_CLAUDE_SETTINGS`) so tests and tooling
@@ -35,10 +35,11 @@ pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {
 
     Ok(HookInstallReport {
         agent: "claude",
-        config_path: path.to_path_buf(),
+        files: vec![HookInstallFileReport {
+            path: path.to_path_buf(),
+            existed,
+        }],
         installed_events: installed,
-        merged: existed,
-        additional_config_paths: Vec::new(),
     })
 }
 
@@ -51,14 +52,15 @@ pub(super) fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
     let (root, installed) = install_candidate(path)?;
     Ok(HookInstallPreview {
         agent: "claude",
-        config_path: path.to_path_buf(),
+        files: vec![HookInstallFilePreview {
+            path: path.to_path_buf(),
+            original: original_config,
+            candidate: render_json(&root)?,
+            existed,
+        }],
         planned_events: installed,
-        original_config,
-        candidate_config: render_json(&root)?,
-        merged: existed,
         status_line_change: Some(status_line_change),
         subagent_status_line_change: Some(subagent_status_line_change),
-        additional_configs: Vec::new(),
     })
 }
 
@@ -95,10 +97,11 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     if !existed {
         return Ok(HookUninstallReport {
             agent: "claude",
-            config_path: path.to_path_buf(),
+            files: vec![HookInstallFileReport {
+                path: path.to_path_buf(),
+                existed: false,
+            }],
             removed_events: Vec::new(),
-            existed: false,
-            additional_config_paths: Vec::new(),
         });
     }
     let mut root = read_existing_json(path)?;
@@ -109,10 +112,11 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     write_json(path, &root)?;
     Ok(HookUninstallReport {
         agent: "claude",
-        config_path: path.to_path_buf(),
+        files: vec![HookInstallFileReport {
+            path: path.to_path_buf(),
+            existed: true,
+        }],
         removed_events: removed,
-        existed: true,
-        additional_config_paths: Vec::new(),
     })
 }
 
@@ -438,11 +442,8 @@ fn is_rimz_managed_object(obj: &Map<String, Value>) -> bool {
         .unwrap_or(false)
 }
 
-fn status_line_is_rimz_managed(root: &Map<String, Value>, spec: &StatusLineSpec) -> bool {
-    matches!(
-        root.get(spec.key),
-        Some(Value::Object(obj)) if is_rimz_managed_object(obj)
-    )
+fn status_line_is_rimz_managed(root: &Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
+    crate::agents::managed_statusline::is_managed(root, spec)
 }
 
 /// Insert or refresh Rimz's `statusLine` wrapper. Idempotent: a prior
@@ -456,85 +457,24 @@ fn status_line_is_rimz_managed(root: &Map<String, Value>, spec: &StatusLineSpec)
 /// wrap stays visually faithful while installed — Claude reads them off the
 /// top-level object, which would otherwise lose them until uninstall. The whole
 /// original is still stored under `_rimz_wrapped` for exact restoration.
-pub(super) fn upsert_rimz_status_line(root: &mut Map<String, Value>, spec: &StatusLineSpec) {
-    let existing = root.remove(spec.key);
-    let original = match &existing {
-        Some(Value::Object(obj)) if is_rimz_managed_object(obj) => obj
-            .get(RIMZ_WRAPPED_KEY)
-            .cloned()
-            .and_then(non_recursive_status_line_value),
-        Some(other) => non_recursive_status_line_value(other.clone()),
-        None => None,
-    };
-    let mut entry = Map::new();
-    // Carry rendering options forward (everything but the command we're
-    // replacing and our own markers). Prefer the currently effective object so
-    // a repaired managed statusline keeps its visual settings even when its
-    // wrapped command is discarded as recursive.
-    if let Some(Value::Object(orig)) = existing.as_ref().or(original.as_ref()) {
-        for (key, value) in orig {
-            if key == "command" || key == RIMZ_MANAGED_KEY || key == RIMZ_WRAPPED_KEY {
-                continue;
-            }
-            entry.insert(key.clone(), value.clone());
-        }
-    }
-    entry.insert("type".to_owned(), Value::String("command".to_owned()));
-    entry.insert("command".to_owned(), Value::String(spec.command.to_owned()));
-    entry.insert(RIMZ_MANAGED_KEY.to_owned(), Value::Bool(true));
-    if let Some(original) = original {
-        entry.insert(RIMZ_WRAPPED_KEY.to_owned(), original);
-    }
-    root.insert(spec.key.to_owned(), Value::Object(entry));
+pub(super) fn upsert_rimz_status_line(root: &mut Map<String, Value>, spec: &ManagedStatusLineSpec) {
+    crate::agents::managed_statusline::upsert(root, spec);
 }
 
 /// Restore the user's original command under `spec.key`. When the current one is
 /// Rimz-managed, replace it with the captured `_rimz_wrapped` value, or remove
 /// the key entirely when nothing was wrapped. A non-Rimz value is left
 /// untouched. Returns whether a Rimz-managed value was found.
-fn strip_rimz_status_line(root: &mut Map<String, Value>, spec: &StatusLineSpec) -> bool {
-    let managed = status_line_is_rimz_managed(root, spec);
-    if !managed {
-        return false;
-    }
-    let original = match root.remove(spec.key) {
-        Some(Value::Object(mut obj)) => obj
-            .remove(RIMZ_WRAPPED_KEY)
-            .and_then(non_recursive_status_line_value),
-        _ => None,
-    };
-    if let Some(original) = original {
-        root.insert(spec.key.to_owned(), original);
-    }
-    true
+fn strip_rimz_status_line(root: &mut Map<String, Value>, spec: &ManagedStatusLineSpec) -> bool {
+    crate::agents::managed_statusline::strip(root, spec)
 }
 
 /// Classify how an install would change `spec.key`, for the consent summary.
 pub(super) fn classify_status_line_change(
     root: &Map<String, Value>,
-    spec: &StatusLineSpec,
+    spec: &ManagedStatusLineSpec,
 ) -> StatusLineChange {
-    match root.get(spec.key) {
-        None => StatusLineChange::Added,
-        Some(Value::Object(obj)) if is_rimz_managed_object(obj) => StatusLineChange::Unchanged,
-        Some(other) => StatusLineChange::Wrapping {
-            original: status_line_display(other),
-        },
-    }
-}
-
-/// A readable one-line form of a statusline value for the consent summary: the
-/// inner `command` of an object, a bare string verbatim, else compact JSON.
-fn status_line_display(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Object(obj) => obj
-            .get("command")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| value.to_string()),
-        other => other.to_string(),
-    }
+    crate::agents::managed_statusline::classify(root, spec)
 }
 
 /// The user's original command that a Rimz-managed value under `spec.key`
@@ -543,42 +483,7 @@ fn status_line_display(value: &Value) -> String {
 /// is absent, not Rimz-managed, or wraps nothing runnable.
 pub(super) fn wrapped_status_line_command_from(
     root: &Map<String, Value>,
-    spec: &StatusLineSpec,
+    spec: &ManagedStatusLineSpec,
 ) -> Option<String> {
-    let Some(Value::Object(obj)) = root.get(spec.key) else {
-        return None;
-    };
-    if !is_rimz_managed_object(obj) {
-        return None;
-    }
-    extract_status_line_command(obj.get(RIMZ_WRAPPED_KEY)?)
-}
-
-fn extract_status_line_command(value: &Value) -> Option<String> {
-    status_line_command(value)
-        .filter(|command| !is_rimz_status_line_command(command))
-        .map(ToOwned::to_owned)
-}
-
-fn non_recursive_status_line_value(value: Value) -> Option<Value> {
-    if status_line_command(&value).is_some_and(is_rimz_status_line_command) {
-        None
-    } else {
-        Some(value)
-    }
-}
-
-fn status_line_command(value: &Value) -> Option<&str> {
-    match value {
-        Value::String(s) if !s.is_empty() => Some(s),
-        Value::Object(obj) => obj
-            .get("command")
-            .and_then(Value::as_str)
-            .filter(|command| !command.is_empty()),
-        _ => None,
-    }
-}
-
-fn is_rimz_status_line_command(command: &str) -> bool {
-    command.contains(RIMZ_STATUS_LINE_MARKER)
+    crate::agents::managed_statusline::wrapped_command(root, spec)
 }

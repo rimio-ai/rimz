@@ -3,7 +3,9 @@
 use std::io::{BufRead, IsTerminal, Write};
 
 use anyhow::Result;
-use rimz::agents::{HookInstallPreview, HookInstallReport, StatusLineChange};
+use rimz::agents::{
+    HookInstallFilePreview, HookInstallPreview, HookInstallReport, StatusLineChange,
+};
 use similar::TextDiff;
 use unicode_width::UnicodeWidthStr;
 
@@ -195,23 +197,26 @@ fn write_agent_table_entry(
     preview: &HookInstallPreview,
     layout: &AgentTableLayout,
 ) -> Result<()> {
-    let cell = agent_hook_cell(preview);
-    let annotation = if preview.merged {
-        "existing kept"
-    } else {
-        "new file"
-    };
-    writeln!(
-        out,
-        "  {}{:name_pad$}  {}{:cell_pad$}  {}",
-        render::paint(render::palette::ACCENT.bold(), preview.agent),
-        "",
-        cell,
-        "",
-        render::paint(render::palette::MUTED, annotation),
-        name_pad = layout.name_width.saturating_sub(preview.agent.width()),
-        cell_pad = layout.cell_width.saturating_sub(cell.width())
-    )?;
+    for (index, file) in preview.files.iter().enumerate() {
+        let name = if index == 0 { preview.agent } else { "" };
+        let cell = agent_file_cell(preview, file, index);
+        let annotation = if file.existed {
+            "existing kept"
+        } else {
+            "new file"
+        };
+        writeln!(
+            out,
+            "  {}{:name_pad$}  {}{:cell_pad$}  {}",
+            render::paint(render::palette::ACCENT.bold(), name),
+            "",
+            cell,
+            "",
+            render::paint(render::palette::MUTED, annotation),
+            name_pad = layout.name_width.saturating_sub(name.width()),
+            cell_pad = layout.cell_width.saturating_sub(cell.width())
+        )?;
+    }
 
     if let Some(summary) = status_line_summary(preview) {
         writeln!(
@@ -219,25 +224,6 @@ fn write_agent_table_entry(
             "{}{}",
             " ".repeat(layout.continuation_indent()),
             render::paint(render::palette::MUTED, &format!("+ {summary}"))
-        )?;
-    }
-    for config in &preview.additional_configs {
-        let annotation = if config.merged {
-            "existing kept"
-        } else {
-            "new file"
-        };
-        writeln!(
-            out,
-            "{}{}",
-            " ".repeat(layout.continuation_indent()),
-            render::paint(
-                render::palette::MUTED,
-                &format!(
-                    "+ config → {} ({annotation})",
-                    home_relative_path(&config.config_path)
-                )
-            )
         )?;
     }
     Ok(())
@@ -260,8 +246,10 @@ pub(crate) fn render_dry_run(out: &mut dyn Write, previews: &[HookInstallPreview
             writeln!(out)?;
         }
         write_agent_table_entry(out, preview, &layout)?;
-        for line in preview_diff(preview).lines() {
-            writeln!(out, "    {}", color_diff_line(line))?;
+        for file in &preview.files {
+            for line in preview_file_diff(file).lines() {
+                writeln!(out, "    {}", color_diff_line(line))?;
+            }
         }
     }
     Ok(())
@@ -282,21 +270,19 @@ fn color_diff_line(line: &str) -> String {
 }
 
 fn write_install_result(out: &mut dyn Write, report: &HookInstallReport) -> Result<()> {
-    writeln!(
-        out,
-        "{} {}  {} hooks → {}",
-        render::paint(render::palette::GOOD.bold(), "✓"),
-        report.agent,
-        report.installed_events.len(),
-        home_relative_path(&report.config_path)
-    )?;
-    for path in &report.additional_config_paths {
-        writeln!(
-            out,
-            "  {} {}",
-            render::paint(render::palette::MUTED, "+ config"),
-            home_relative_path(path)
-        )?;
+    for (index, file) in report.files.iter().enumerate() {
+        if index == 0 {
+            writeln!(
+                out,
+                "{} {}  {} hooks → {}",
+                render::paint(render::palette::GOOD.bold(), "✓"),
+                report.agent,
+                report.installed_events.len(),
+                home_relative_path(&file.path)
+            )?;
+        } else {
+            writeln!(out, "       config → {}", home_relative_path(&file.path))?;
+        }
     }
     Ok(())
 }
@@ -319,30 +305,11 @@ fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPrevi
     Ok(())
 }
 
-fn preview_diff(preview: &HookInstallPreview) -> String {
-    let mut rendered = config_diff(
-        &preview.config_path,
-        preview.original_config.as_deref(),
-        &preview.candidate_config,
-    );
-    for config in &preview.additional_configs {
-        if !rendered.ends_with('\n') {
-            rendered.push('\n');
-        }
-        rendered.push_str(&config_diff(
-            &config.config_path,
-            config.original_config.as_deref(),
-            &config.candidate_config,
-        ));
-    }
-    rendered
-}
-
-fn config_diff(path: &std::path::Path, original: Option<&str>, candidate: &str) -> String {
-    let path = path.display().to_string();
-    match original {
+fn preview_file_diff(file: &HookInstallFilePreview) -> String {
+    let path = file.path.display().to_string();
+    match file.original.as_deref() {
         Some(original) => {
-            let diff = TextDiff::from_lines(original, candidate);
+            let diff = TextDiff::from_lines(original, &file.candidate);
             let rendered = diff
                 .unified_diff()
                 .context_radius(DIFF_CONTEXT_LINES)
@@ -356,7 +323,7 @@ fn config_diff(path: &std::path::Path, original: Option<&str>, candidate: &str) 
         }
         None => {
             let mut out = format!("--- /dev/null\n+++ {path}\n@@ new file @@\n");
-            for line in candidate.lines() {
+            for line in file.candidate.lines() {
                 out.push('+');
                 out.push_str(line);
                 out.push('\n');
@@ -399,7 +366,13 @@ impl AgentTableLayout {
                 .unwrap_or_default(),
             cell_width: previews
                 .iter()
-                .map(|preview| agent_hook_cell(preview).width())
+                .flat_map(|preview| {
+                    preview
+                        .files
+                        .iter()
+                        .enumerate()
+                        .map(|(index, file)| agent_file_cell(preview, file, index).width())
+                })
                 .max()
                 .unwrap_or_default(),
         }
@@ -410,16 +383,17 @@ impl AgentTableLayout {
     }
 }
 
-fn agent_hook_cell(preview: &HookInstallPreview) -> String {
-    let mut cell = format!(
-        "{} hooks → {}",
-        preview.planned_events.len(),
-        home_relative_path(&preview.config_path)
-    );
-    if !preview.additional_configs.is_empty() {
-        cell.push_str(&format!(" +{} config", preview.additional_configs.len()));
-    }
-    cell
+fn agent_file_cell(
+    preview: &HookInstallPreview,
+    file: &HookInstallFilePreview,
+    index: usize,
+) -> String {
+    let label = if index == 0 {
+        format!("{} hooks", preview.planned_events.len())
+    } else {
+        "config".to_owned()
+    };
+    format!("{label} → {}", home_relative_path(&file.path))
 }
 
 fn status_line_summary(preview: &HookInstallPreview) -> Option<&'static str> {
@@ -453,21 +427,21 @@ mod tests {
     use std::io::Cursor;
     use std::path::PathBuf;
 
-    use rimz::agents::HookConfigPreview;
-
     use super::*;
 
     fn preview(agent: &'static str, original: Option<&str>, candidate: &str) -> HookInstallPreview {
+        let path = home_config_path(agent);
         HookInstallPreview {
             agent,
-            config_path: home_config_path(agent),
+            files: vec![HookInstallFilePreview {
+                path,
+                original: original.map(str::to_owned),
+                candidate: candidate.to_owned(),
+                existed: original.is_some(),
+            }],
             planned_events: vec!["SessionStart".to_owned(), "PreToolUse".to_owned()],
-            original_config: original.map(str::to_owned),
-            candidate_config: candidate.to_owned(),
-            merged: original.is_some(),
             status_line_change: None,
             subagent_status_line_change: None,
-            additional_configs: Vec::new(),
         }
     }
 
@@ -555,11 +529,11 @@ mod tests {
             Some("alpha\nkeep\nold\nomega\n"),
             "alpha\nkeep\nnew\nomega\n",
         );
-        claude.additional_configs.push(HookConfigPreview {
-            config_path: home_config_path("claude-statusline"),
-            original_config: Some("old-status\n".to_owned()),
-            candidate_config: "new-status\n".to_owned(),
-            merged: true,
+        claude.files.push(HookInstallFilePreview {
+            path: home_config_path("claude-statusline"),
+            original: Some("old-status\n".to_owned()),
+            candidate: "new-status\n".to_owned(),
+            existed: true,
         });
         let previews = [claude, preview("codex", None, "one\ntwo\n")];
 
@@ -577,5 +551,39 @@ mod tests {
         assert!(rendered.contains("+new-status"));
         assert!(rendered.contains("+one"));
         assert!(!rendered.contains("Add reporting hooks?"));
+    }
+
+    #[test]
+    fn dry_run_and_json_reports_name_every_cursor_config_file() {
+        let mut cursor = preview("cursor", Some("{}\n"), "{\"hooks\": {}}\n");
+        cursor.files[0].path = cursor.files[0].path.with_file_name("hooks.json");
+        let cli_config = home_config_path("cursor").with_file_name("cli-config.json");
+        cursor.files.push(HookInstallFilePreview {
+            path: cli_config.clone(),
+            original: None,
+            candidate: "{\"statusLine\": {}}\n".to_owned(),
+            existed: false,
+        });
+        let rendered = strip(|out| render_dry_run(out, &[cursor]));
+        assert!(rendered.contains("~/.cursor/hooks.json"));
+        assert!(rendered.contains("~/.cursor/cli-config.json"));
+        assert_eq!(rendered.matches("@@").count(), 4);
+
+        let report = HookInstallReport {
+            agent: "cursor",
+            files: vec![
+                rimz::agents::HookInstallFileReport {
+                    path: home_config_path("cursor").with_file_name("hooks.json"),
+                    existed: true,
+                },
+                rimz::agents::HookInstallFileReport {
+                    path: cli_config,
+                    existed: false,
+                },
+            ],
+            installed_events: vec!["stop".to_owned()],
+        };
+        let json = serde_json::to_value(report).unwrap();
+        assert_eq!(json["files"].as_array().unwrap().len(), 2);
     }
 }

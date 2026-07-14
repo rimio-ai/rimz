@@ -11,7 +11,7 @@ fn install_into_empty_dir_creates_managed_entries() {
         "a missing settings file reads as not installed"
     );
     let report = install_into(&path).unwrap();
-    assert!(!report.merged);
+    assert!(!report.files[0].existed);
     assert_eq!(report.agent, "claude");
     assert!(report.installed_events.contains(&"SessionStart".to_owned()));
     assert!(report.installed_events.contains(&"PreToolUse".to_owned()));
@@ -110,7 +110,7 @@ fn install_preserves_user_hooks() {
     )
     .unwrap();
     let report = install_into(&path).unwrap();
-    assert!(report.merged);
+    assert!(report.files[0].existed);
 
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(parsed["model"], "claude-opus-4-7");
@@ -204,7 +204,7 @@ fn uninstall_removes_managed_entries_only() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing-settings.json");
     let missing_report = uninstall_from(&missing).unwrap();
-    assert!(!missing_report.existed);
+    assert!(!missing_report.files[0].existed);
     assert!(missing_report.removed_events.is_empty());
 
     let path = dir.path().join("settings.json");
@@ -222,7 +222,7 @@ fn uninstall_removes_managed_entries_only() {
     .unwrap();
     install_into(&path).unwrap();
     let report = uninstall_from(&path).unwrap();
-    assert!(report.existed);
+    assert!(report.files[0].existed);
     assert!(!report.removed_events.is_empty());
     assert!(!hooks_installed_at(&path));
 

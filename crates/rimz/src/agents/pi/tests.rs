@@ -507,26 +507,26 @@ fn install_preview_and_uninstall_only_own_managed_files() {
 
     let report = PI_MANAGED_SOURCE.install_into(&path).unwrap();
     assert_eq!(report.agent, "pi");
-    assert!(!report.merged);
+    assert!(!report.files[0].existed);
     assert_eq!(report.installed_events, managed_event_names());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
     assert!(PI_MANAGED_SOURCE.installed_at(&path));
 
     std::fs::write(&path, "// still _rimz_managed\n// user tweak\n").unwrap();
-    assert!(PI_MANAGED_SOURCE.install_into(&path).unwrap().merged);
+    assert!(PI_MANAGED_SOURCE.install_into(&path).unwrap().files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
 
     let preview = PI_MANAGED_SOURCE.preview_at(&path).unwrap();
     assert_eq!(preview.agent, "pi");
-    assert!(preview.merged);
-    assert_eq!(preview.candidate_config, EXTENSION_SOURCE);
+    assert!(preview.files[0].existed);
+    assert_eq!(preview.files[0].candidate, EXTENSION_SOURCE);
 
     let removed = PI_MANAGED_SOURCE.uninstall_from(&path).unwrap();
-    assert!(removed.existed);
+    assert!(removed.files[0].existed);
     assert_eq!(removed.removed_events, managed_event_names());
     assert!(!path.exists());
     assert!(!PI_MANAGED_SOURCE.installed_at(&path));
-    assert!(!PI_MANAGED_SOURCE.uninstall_from(&path).unwrap().existed);
+    assert!(!PI_MANAGED_SOURCE.uninstall_from(&path).unwrap().files[0].existed);
 
     let user_path = dir.path().join("user.ts");
     std::fs::write(&user_path, "// the user's own extension\n").unwrap();
@@ -539,7 +539,7 @@ fn install_preview_and_uninstall_only_own_managed_files() {
         AgentErr::Install { agent: "pi", .. }
     ));
     let report = PI_MANAGED_SOURCE.uninstall_from(&user_path).unwrap();
-    assert!(report.existed);
+    assert!(report.files[0].existed);
     assert!(report.removed_events.is_empty());
     assert_eq!(
         std::fs::read_to_string(&user_path).unwrap(),

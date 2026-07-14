@@ -76,7 +76,10 @@ fn warm_sidecar_read_is_one_stat_per_file() {
     // the byte length; a re-parse would surface the poisoned ids.)
     for dir in [&runtime.agent_context_dir, &runtime.agent_activity_dir] {
         for entry in std::fs::read_dir(dir).unwrap().flatten() {
-            swap_in_place(&entry.path(), "sess-", "boom-");
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+                swap_in_place(&path, "sess-", "boom-");
+            }
         }
     }
 

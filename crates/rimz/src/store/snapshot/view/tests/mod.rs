@@ -77,3 +77,12 @@ fn row_handle_prefers_role_then_explicit_name_then_profile() {
         None
     );
 }
+
+#[test]
+fn row_preserves_unknown_context_percentage() {
+    let cursor = agent("cursor", "sess-1", AgentStatus::Running, 0);
+    let row = row_from_agent(&cursor, epoch());
+    let card = row.as_agent().expect("agent card");
+    assert_eq!(card.context_pct, None);
+    assert_eq!(card.context_gauge_percent(), None);
+}

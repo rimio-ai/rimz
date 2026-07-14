@@ -449,17 +449,17 @@ mod tests {
         );
 
         let cursor = agent_cells(&matrix, "cursor");
-        assert_eq!(count(&cursor, MatrixCellState::Ok), 4);
-        assert_eq!(count(&cursor, MatrixCellState::Partial), 2);
-        assert_eq!(count(&cursor, MatrixCellState::Absent), 10);
+        assert_eq!(count(&cursor, MatrixCellState::Ok), 5);
+        assert_eq!(count(&cursor, MatrixCellState::Partial), 3);
+        assert_eq!(count(&cursor, MatrixCellState::Absent), 8);
         assert_eq!(
             agent_labels(&matrix, "cursor", MatrixCellState::Partial),
-            ["compact", "idle"]
+            ["compact", "idle", "live$"]
         );
         assert_eq!(
             agent_labels(&matrix, "cursor", MatrixCellState::Absent),
             [
-                "perm", "plan", "ask", "answer", "sub", "bg", "live$", "rich", "spend", "remote"
+                "perm", "plan", "ask", "answer", "sub", "bg", "spend", "remote"
             ]
         );
 

@@ -92,7 +92,7 @@ fn compact_density_trims_resting_cards_by_status() {
 }
 
 #[test]
-fn compact_density_running_waiting_without_context_use_baseline_gauge() {
+fn compact_density_running_waiting_preserve_absent_context() {
     let mut running = density_agent(
         "run-1",
         "runner",
@@ -145,8 +145,8 @@ fn compact_density_running_waiting_without_context_use_baseline_gauge() {
     );
     assert_eq!(
         rendered.matches('▢').count(),
-        2,
-        "missing source context is projected to a 0% baseline gauge for running/waiting agent cards:\n{rendered}"
+        0,
+        "missing source context stays absent for running/waiting agent cards:\n{rendered}"
     );
     assert!(
         !rendered.contains('▤'),

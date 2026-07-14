@@ -201,21 +201,19 @@ fn hook_install_merges_both_files_and_uninstall_restores_the_statusline() {
 
     let preview = install::preview(&hooks_path, &settings_path).unwrap();
     assert_eq!(preview.planned_events, INSTALLED_EVENT_LABELS);
-    assert_eq!(preview.additional_configs.len(), 1);
-    assert_eq!(preview.additional_configs[0].config_path, settings_path);
+    assert_eq!(preview.files.len(), 2);
+    assert_eq!(preview.files[1].path, settings_path);
     assert_eq!(
         preview.status_line_change,
         Some(StatusLineChange::Wrapping {
             original: "my-statusline --compact".to_owned()
         })
     );
-    assert!(!preview.candidate_config.contains("PreToolUse"));
+    assert!(!preview.files[0].candidate.contains("PreToolUse"));
 
     let report = install::install(&hooks_path, &settings_path).unwrap();
-    assert_eq!(
-        report.additional_config_paths,
-        std::slice::from_ref(&settings_path)
-    );
+    assert_eq!(report.files.len(), 2);
+    assert_eq!(report.files[1].path, settings_path);
     assert!(install::installed(&hooks_path, &settings_path));
     assert_eq!(
         install::wrapped_statusline_command(&settings_path).as_deref(),

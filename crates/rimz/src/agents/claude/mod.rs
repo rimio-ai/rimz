@@ -381,12 +381,9 @@ const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source claude";
 /// `settings.json` key holding the statusline command Claude `exec`s on every
 /// render. Rimz wraps it so it can capture the rich JSON Claude pipes there.
 const STATUS_LINE_KEY: &str = "statusLine";
-/// Marker key, on a Rimz-managed `statusLine` object, holding the user's
-/// original `statusLine` value verbatim so uninstall restores it exactly.
-const RIMZ_WRAPPED_KEY: &str = "_rimz_wrapped";
 /// The statusline command Rimz installs. Fixed (no per-user content) so the
 /// install stays idempotent and snapshot-stable; the wrapped original lives
-/// under [`RIMZ_WRAPPED_KEY`], not embedded in this string.
+/// under the shared managed wrapper marker, not embedded in this string.
 const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude";
 /// Stable substring identifying Rimz's own statusline reader across command
 /// variants — and across both render commands, since the `subagentStatusLine`
@@ -394,30 +391,26 @@ const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline fee
 /// is never a user command to wrap or pass through.
 const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source claude";
 
-/// A statusline-style `settings.json` command Rimz wraps: the key it lives under
-/// and the fixed reader command Rimz installs there. The wrap markers
-/// ([`RIMZ_WRAPPED_KEY`], [`RIMZ_MANAGED_KEY`]) and the recursion guard
-/// ([`RIMZ_STATUS_LINE_MARKER`], a substring of every Rimz reader command) are
-/// shared, so one set of upsert/strip/classify logic serves every spec.
-struct StatusLineSpec {
-    key: &'static str,
-    command: &'static str,
-}
-
 /// The session statusline: the rich per-render JSON blob Claude pipes for the
 /// whole conversation.
-const STATUS_LINE: StatusLineSpec = StatusLineSpec {
-    key: STATUS_LINE_KEY,
-    command: STATUS_LINE_COMMAND,
-};
+const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
+    super::managed_statusline::ManagedStatusLineSpec {
+        key: STATUS_LINE_KEY,
+        command: STATUS_LINE_COMMAND,
+        command_marker: RIMZ_STATUS_LINE_MARKER,
+        rendering_options: super::managed_statusline::RenderingOptions::All,
+    };
 
 /// The per-child render command Claude `exec`s for each subagent row, carrying
 /// the `tasks` array Rimz harvests. Wrapped the same way as the session
 /// statusline; its command is the session reader plus `--subagent`.
-const SUBAGENT_STATUS_LINE: StatusLineSpec = StatusLineSpec {
-    key: "subagentStatusLine",
-    command: "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude --subagent",
-};
+const SUBAGENT_STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
+    super::managed_statusline::ManagedStatusLineSpec {
+        key: "subagentStatusLine",
+        command: "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude --subagent",
+        command_marker: RIMZ_STATUS_LINE_MARKER,
+        rendering_options: super::managed_statusline::RenderingOptions::All,
+    };
 
 #[derive(Clone, Debug, Default)]
 pub struct ClaudeAdapter;

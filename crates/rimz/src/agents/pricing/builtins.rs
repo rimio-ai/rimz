@@ -68,6 +68,7 @@ pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
     );
 
     entries.insert("gpt-5".to_owned(), p(1.25e-6, 10e-6, 1.25e-6, 0.125e-6));
+    entries.insert("cursor-auto".to_owned(), p(1.25e-6, 6e-6, 1.25e-6, 0.25e-6));
     entries.insert(
         "gpt-5.5".to_owned(),
         with_fast("gpt-5.5", p(5e-6, 30e-6, 5e-6, 0.5e-6)),
@@ -229,6 +230,10 @@ mod tests {
         assert!((entries["gpt-5"].input - 1.25e-6).abs() < 1e-18);
         assert!((entries["gpt-5"].cache_create - 1.25e-6).abs() < 1e-18);
         assert_eq!(entries["gpt-5.5"].fast_multiplier, 2.5);
+        assert_eq!(entries["cursor-auto"].input, 1.25e-6);
+        assert_eq!(entries["cursor-auto"].output, 6e-6);
+        assert_eq!(entries["cursor-auto"].cache_create, 1.25e-6);
+        assert_eq!(entries["cursor-auto"].cache_read, 0.25e-6);
         assert_eq!(entries["gpt-5.6-sol"].input, 5e-6);
         assert_eq!(entries["gpt-5.6-sol"].output, 30e-6);
         assert_eq!(entries["gpt-5.6-sol"].cache_create, 6.25e-6);

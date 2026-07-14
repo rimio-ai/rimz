@@ -1396,6 +1396,68 @@ fn statusline_feed_passes_json_through_to_wrapped_command() {
     );
 }
 
+#[test]
+fn cursor_statusline_and_stop_hook_merge_rich_context_and_idempotent_cost() {
+    let env = Env::new();
+    let config = env.cursor_cli_config_path();
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config,
+        r#"{ "statusLine": { "type": "command", "command": "cat", "padding": 2 } }"#,
+    )
+    .unwrap();
+    env.install_agent_hooks("cursor");
+
+    let payload = r#"{
+        "session_id": "sess-cursor",
+        "model": { "id": "default", "display_name": "Auto" },
+        "context_window": {
+            "context_window_size": 256000,
+            "used_percentage": 8.9,
+            "current_usage": {
+                "input_tokens": 14021,
+                "output_tokens": 26,
+                "cache_read_input_tokens": 8704,
+                "cache_creation_input_tokens": 0
+            }
+        }
+    }"#;
+    let out = env.run_statusline_feed("cursor", payload);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), payload);
+
+    let stop = r#"{
+        "hook_event_name": "stop",
+        "conversation_id": "sess-cursor",
+        "generation_id": "gen-1",
+        "status": "completed",
+        "model_id": "default",
+        "input_tokens": 22725,
+        "output_tokens": 26,
+        "cache_read_tokens": 8704,
+        "cache_write_tokens": 0
+    }"#;
+    assert!(env.run_installed_hook("cursor", stop).status.success());
+    assert!(env.run_installed_hook("cursor", stop).status.success());
+
+    let record = env
+        .agent_contexts()
+        .into_iter()
+        .find(|record| record.agent_id.as_str() == "sess-cursor")
+        .expect("Cursor sidecar");
+    assert_eq!(record.context.model_display_name.as_deref(), Some("Auto"));
+    let tokens = record.context.tokens.unwrap();
+    assert_eq!(tokens.context_window_size, Some(256_000));
+    assert_eq!(tokens.used_percentage, Some(9));
+    assert_eq!(tokens.current_usage.unwrap().input_tokens, Some(14_021));
+    let cost = record.context.cost.unwrap().total_cost_usd.unwrap();
+    assert!((cost - 0.019_858_25).abs() < 1e-12, "{cost}");
+}
+
 /// With no wrapped command, the feed prints nothing (Claude falls back to its
 /// built-in statusline), captures the per-session context sidecar, and folds it
 /// onto the session row once lifecycle creates that row.

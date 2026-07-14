@@ -34,6 +34,7 @@ pub mod kiro;
 pub mod lifecycle;
 pub(crate) mod locate;
 pub(crate) mod managed_source;
+pub(crate) mod managed_statusline;
 pub mod model_display;
 mod observation;
 pub mod opencode;
@@ -246,6 +247,20 @@ pub struct SpendFixture {
 
 #[cfg(test)]
 #[derive(Clone, Debug)]
+pub struct TurnCostFixture {
+    pub event_name: &'static str,
+    pub payload: Value,
+}
+
+/// One provider turn priced for a live-session accumulator.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EstimatedTurnCost {
+    pub turn_id: String,
+    pub cost_usd: f64,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
 pub struct DerivedAskFixture {
     pub event_name: &'static str,
     pub payload: Value,
@@ -287,42 +302,29 @@ impl ClassificationSample {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HookInstallReport {
     pub agent: &'static str,
-    /// Absolute path of the config file the installer wrote.
-    pub config_path: PathBuf,
+    /// Config files the installer wrote.
+    pub files: Vec<HookInstallFileReport>,
     /// Event names installed (e.g. `SessionStart`, `PermissionRequest`).
     pub installed_events: Vec<String>,
-    /// True when the installer wrote into an existing config (merge), false
-    /// when the file was created fresh.
-    pub merged: bool,
-    /// Additional provider config files written by the same install. Most
-    /// adapters keep hooks and statusline settings in one file; providers that
-    /// split those surfaces list every secondary path here so the security
-    /// surface stays visible in JSON and human output.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_config_paths: Vec<PathBuf>,
 }
 
-/// One additional config-file change in a hook-install preview.
+/// One config file written by a completed hook install or uninstall.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct HookConfigPreview {
-    pub config_path: PathBuf,
-    pub original_config: Option<String>,
-    pub candidate_config: String,
-    pub merged: bool,
+pub struct HookInstallFileReport {
+    pub path: PathBuf,
+    /// True when the file existed before the operation.
+    pub existed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HookInstallPreview {
     pub agent: &'static str,
-    pub config_path: PathBuf,
+    pub files: Vec<HookInstallFilePreview>,
     pub planned_events: Vec<String>,
-    pub original_config: Option<String>,
-    pub candidate_config: String,
-    pub merged: bool,
     /// How the install changes the agent's statusline, for the one-line consent
     /// summary that keeps the wrap a visible security surface. The full change
-    /// is in `candidate_config` or the owning `additional_configs` diff. `None`
-    /// for agents that manage no statusline (Codex).
+    /// is also in the matching file artifact's diff. `None` for agents that manage no
+    /// statusline (Codex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_line_change: Option<StatusLineChange>,
     /// How the install changes the agent's `subagentStatusLine` (the per-child
@@ -330,10 +332,15 @@ pub struct HookInstallPreview {
     /// `None` for agents that manage no subagent statusline (Codex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_status_line_change: Option<StatusLineChange>,
-    /// Additional provider files changed by this install. Their complete diffs
-    /// render under the primary hook file before consent.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_configs: Vec<HookConfigPreview>,
+}
+
+/// One exact config-file change in a hook-install preview.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HookInstallFilePreview {
+    pub path: PathBuf,
+    pub original: Option<String>,
+    pub candidate: String,
+    pub existed: bool,
 }
 
 /// What `rimz hooks install` does to the agent's statusline command, surfaced
@@ -350,17 +357,21 @@ pub enum StatusLineChange {
     Unchanged,
 }
 
+/// How an agent invokes a configured statusline command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StatusLineInvocation {
+    /// The provider evaluates the configured command as shell text.
+    #[default]
+    Shell,
+    /// The provider splits the configured command into argv and spawns it directly.
+    DirectArgv,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HookUninstallReport {
     pub agent: &'static str,
-    pub config_path: PathBuf,
+    pub files: Vec<HookInstallFileReport>,
     pub removed_events: Vec<String>,
-    /// True when the config file existed before uninstall.
-    pub existed: bool,
-    /// Additional provider config files inspected and, when Rimz-owned state
-    /// existed, restored by this uninstall.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_config_paths: Vec<PathBuf>,
 }
 
 /// Trigger path for adapter-owned enrichment refreshes.
@@ -585,6 +596,13 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Test-only token-bearing event for adapters whose live cost comes from
+    /// hooks rather than a provider transcript.
+    #[cfg(test)]
+    fn turn_cost_fixture(&self) -> Option<TurnCostFixture> {
+        None
+    }
+
     /// Test-only transcript-backed ask fixture for native prompts whose hook
     /// payload remains lifecycle-only. Conformance materializes the transcript
     /// and feeds the event through [`Self::observe_lifecycle`].
@@ -627,6 +645,18 @@ pub trait AgentAdapter: Send + Sync {
     /// tag, stamped onto the record so downstream knows the provenance.
     /// Display-only enrichment — it never reaches the event log or a decision.
     fn observe_context(&self, _source: &str, _payload: &Value) -> Option<AgentContext> {
+        None
+    }
+
+    /// Price one provider turn from a native lifecycle payload. The hook
+    /// handler owns accumulation and deduplication; adapters only normalize the
+    /// turn identity and token-price calculation.
+    fn estimate_turn_cost(
+        &self,
+        _event_name: &str,
+        _payload: &Value,
+        _prices: &PriceBook,
+    ) -> Option<EstimatedTurnCost> {
         None
     }
 
@@ -1136,6 +1166,13 @@ pub trait AgentAdapter: Send + Sync {
     /// `None`.
     fn wrapped_status_line_command(&self) -> Option<String> {
         None
+    }
+
+    /// Match the provider's invocation contract when forwarding a wrapped
+    /// statusline command. Claude and Qwen evaluate shell text; Cursor uses
+    /// direct argv.
+    fn status_line_invocation(&self) -> StatusLineInvocation {
+        StatusLineInvocation::Shell
     }
 
     /// The user's original `subagentStatusLine` command this agent currently

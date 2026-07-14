@@ -470,26 +470,18 @@ fn install_preview_reclaim_and_uninstall_own_only_marked_files() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hooks/rimz.json");
     let report = COPILOT_MANAGED_SOURCE.install_into(&path).unwrap();
-    assert!(!report.merged);
+    assert!(!report.files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
     assert!(COPILOT_MANAGED_SOURCE.installed_at(&path));
 
     std::fs::write(&path, "{\"_rimz_managed\":\"drifted\"}\n").unwrap();
-    assert!(COPILOT_MANAGED_SOURCE.install_into(&path).unwrap().merged);
+    assert!(COPILOT_MANAGED_SOURCE.install_into(&path).unwrap().files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), HOOK_SOURCE);
     assert_eq!(
-        COPILOT_MANAGED_SOURCE
-            .preview_at(&path)
-            .unwrap()
-            .candidate_config,
+        COPILOT_MANAGED_SOURCE.preview_at(&path).unwrap().files[0].candidate,
         HOOK_SOURCE
     );
-    assert!(
-        COPILOT_MANAGED_SOURCE
-            .uninstall_from(&path)
-            .unwrap()
-            .existed
-    );
+    assert!(COPILOT_MANAGED_SOURCE.uninstall_from(&path).unwrap().files[0].existed);
     assert!(!path.exists());
 
     let user_path = dir.path().join("user.json");

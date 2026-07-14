@@ -102,7 +102,7 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
     .unwrap();
     let preview = install::preview_install_at(&path).unwrap();
     assert_eq!(preview.status_line_change, None);
-    let candidate: Value = serde_json::from_str(&preview.candidate_config).unwrap();
+    let candidate: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
     assert_eq!(
         candidate
             .pointer("/ui/statusLine/type")

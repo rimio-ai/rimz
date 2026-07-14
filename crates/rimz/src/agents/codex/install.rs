@@ -5,8 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    AgentErr, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    agent_config_path, read_optional_file,
+    AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, Result, agent_config_path, read_optional_file,
 };
 use crate::store::atomic;
 
@@ -32,10 +32,11 @@ pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {
 
     Ok(HookInstallReport {
         agent: "codex",
-        config_path: path.to_path_buf(),
+        files: vec![HookInstallFileReport {
+            path: path.to_path_buf(),
+            existed,
+        }],
         installed_events: installed,
-        merged: existed,
-        additional_config_paths: Vec::new(),
     })
 }
 
@@ -45,15 +46,16 @@ pub(super) fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
     let (root, installed) = install_candidate(path)?;
     Ok(HookInstallPreview {
         agent: "codex",
-        config_path: path.to_path_buf(),
+        files: vec![HookInstallFilePreview {
+            path: path.to_path_buf(),
+            original: original_config,
+            candidate: render_table(&root)?,
+            existed,
+        }],
         planned_events: installed,
-        original_config,
-        candidate_config: render_table(&root)?,
-        merged: existed,
         // Codex has no statusline; it inherits the no-op `wrapped_status_line_command`.
         status_line_change: None,
         subagent_status_line_change: None,
-        additional_configs: Vec::new(),
     })
 }
 
@@ -79,10 +81,11 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     if !existed {
         return Ok(HookUninstallReport {
             agent: "codex",
-            config_path: path.to_path_buf(),
+            files: vec![HookInstallFileReport {
+                path: path.to_path_buf(),
+                existed: false,
+            }],
             removed_events: Vec::new(),
-            existed: false,
-            additional_config_paths: Vec::new(),
         });
     }
 
@@ -95,10 +98,11 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
 
     Ok(HookUninstallReport {
         agent: "codex",
-        config_path: path.to_path_buf(),
+        files: vec![HookInstallFileReport {
+            path: path.to_path_buf(),
+            existed: true,
+        }],
         removed_events: removed,
-        existed: true,
-        additional_config_paths: Vec::new(),
     })
 }
 
