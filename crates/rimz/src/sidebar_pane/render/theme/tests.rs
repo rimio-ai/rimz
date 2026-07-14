@@ -309,7 +309,7 @@ fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
         version: None,
         plan: None,
         metered: false,
-        remote_control: false,
+        remote_control: Default::default(),
         spending: None,
         day_budget: None,
         extra_credits: None,
@@ -485,11 +485,12 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 LaneSpine => p.selection,
                 WorktreeHeader | BranchDelta => p.body,
                 WorktreePristine | WindowSmall => p.faint,
-                WorktreeMerged | ProcMem | CacheRead => p.good,
+                WorktreeMerged | ProcMem | CacheRead | RemoteControl => p.good,
                 WorktreeReconciling | Compaction => p.warn,
                 WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu
                 | WindowLarge => p.cool,
-                SubagentHeader | RemoteControl | ProcIo | CacheWrite => p.meta,
+                SubagentHeader | ProcIo | CacheWrite => p.meta,
+                RemoteControlDown => p.alarm,
                 Input => p.expense,
                 WorktreePrClosed | WindowMedium | UnknownBrand => p.muted,
             };

@@ -715,3 +715,16 @@ fn a_plain_agent_is_not_the_host() {
     assert!(!pane_is_host(&pane(Some("codex"), Some("3"))));
     assert!(!pane_is_host(&pane(Some("zsh"), None)));
 }
+
+#[test]
+fn claude_host_presence_requires_the_managed_pane_marker() {
+    let managed = spawned_pane(
+        "claude",
+        "claude remote-control --spawn worktree",
+        Some(VIEW_NAME),
+    );
+    let user_session = spawned_pane("claude", "claude", Some("work"));
+
+    assert!(claude_host_present(&[managed, user_session.clone()]));
+    assert!(!claude_host_present(&[user_session]));
+}

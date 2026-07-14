@@ -1,8 +1,9 @@
 //! Codex daemon-mode session reap cache.
 //!
-//! The refresh lane probes daemon PIDs and Codex's loaded-thread list on a TTL,
-//! then the fold applies the published inputs without proc scans or app-server
-//! reads.
+//! The refresh lane probes daemon PIDs and Codex's loaded-thread list on a TTL
+//! when daemon-hooked sessions need reaping or the remote-control badge needs a
+//! health signal. The fold applies the published inputs without proc scans or
+//! app-server reads.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -46,21 +47,25 @@ pub(crate) fn daemon_reap_due(cache: &Option<CodexDaemonReap>, now_ms: u64) -> b
     })
 }
 
-fn should_probe_codex_daemon_reap(agents: &[AgentState]) -> bool {
-    agents.iter().any(|agent| {
-        let daemon_hooked = crate::agents::descriptor_by_kind(agent.kind.as_str())
-            .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions);
-        daemon_hooked && agent.parent_agent_id.is_none()
-    })
+fn should_probe_codex_daemon_reap(agents: &[AgentState], codex_rc_enabled: bool) -> bool {
+    codex_rc_enabled
+        || agents.iter().any(|agent| {
+            let daemon_hooked = crate::agents::descriptor_by_kind(agent.kind.as_str())
+                .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions);
+            daemon_hooked && agent.parent_agent_id.is_none()
+        })
 }
 
 pub(crate) fn refresh_codex_daemon_reap_cache(
     agents: &[AgentState],
     runtime: &RuntimePaths,
     now_ms: u64,
+    codex_rc_enabled: bool,
 ) -> CodexDaemonReap {
     let current = read_codex_daemon_reap(runtime);
-    if !should_probe_codex_daemon_reap(agents) || !daemon_reap_due(&current, now_ms) {
+    if !should_probe_codex_daemon_reap(agents, codex_rc_enabled)
+        || !daemon_reap_due(&current, now_ms)
+    {
         return current.unwrap_or_default();
     }
     let daemon_pids = crate::agents::codex::codex_daemon_pids();
@@ -128,8 +133,14 @@ mod tests {
         let mut sub = root_agent("codex", "sub", None);
         sub.parent_agent_id = Some("pane-stamped".into());
 
-        assert!(should_probe_codex_daemon_reap(&[codex]));
-        assert!(!should_probe_codex_daemon_reap(&[sub]));
+        assert!(should_probe_codex_daemon_reap(&[codex], false));
+        assert!(!should_probe_codex_daemon_reap(&[sub], false));
+    }
+
+    #[test]
+    fn daemon_reap_probe_source_includes_remote_control_health() {
+        assert!(should_probe_codex_daemon_reap(&[], true));
+        assert!(!should_probe_codex_daemon_reap(&[], false));
     }
 
     #[test]

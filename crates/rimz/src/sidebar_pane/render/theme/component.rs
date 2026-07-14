@@ -78,6 +78,8 @@ pub(crate) enum Component {
     SubagentHeader,
     /// The `⇅ rc` remote-control flag.
     RemoteControl,
+    /// The `⇅ rc` remote-control flag when its managed server is down.
+    RemoteControlDown,
     /// Which-key chord text inside the help overlay.
     HelpKey,
     /// The unknown-provider fallback for an agent card's name.
@@ -123,6 +125,7 @@ impl Component {
         Component::Compaction,
         Component::SubagentHeader,
         Component::RemoteControl,
+        Component::RemoteControlDown,
         Component::HelpKey,
         Component::UnknownBrand,
         Component::WindowSmall,
@@ -141,12 +144,13 @@ impl Component {
             LaneSpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
             WorktreePristine | WindowSmall => palette.faint,
-            WorktreeMerged | ProcMem | CacheRead => palette.good,
+            WorktreeMerged | ProcMem | CacheRead | RemoteControl => palette.good,
             WorktreeReconciling | Compaction => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }
-            SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
+            SubagentHeader | ProcIo | CacheWrite => palette.meta,
+            RemoteControlDown => palette.alarm,
             Input => palette.expense,
             WorktreePrClosed | WindowMedium | UnknownBrand => palette.muted,
         }

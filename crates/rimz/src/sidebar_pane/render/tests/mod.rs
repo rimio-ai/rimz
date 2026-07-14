@@ -474,7 +474,11 @@ fn provider_panel(
         version: Some("2.1.158".to_owned()),
         plan: Some("Claude Max".to_owned()),
         metered,
-        remote_control,
+        remote_control: if remote_control {
+            crate::RemoteControlBadge::Healthy
+        } else {
+            crate::RemoteControlBadge::Hidden
+        },
         spending: Some(crate::SpendTally {
             headline: crate::SpendWindow {
                 usd: 3.5,

@@ -111,7 +111,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         version: Some("1.2.3".to_owned()),
         plan: Some("Max".to_owned()),
         metered: true,
-        remote_control: false,
+        remote_control: Default::default(),
         spending: Some(SpendTally {
             headline: spend_window(4.2 + index as f64),
             week: spend_window(31.0 + index as f64),

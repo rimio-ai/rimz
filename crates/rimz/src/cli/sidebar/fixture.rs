@@ -2296,7 +2296,11 @@ fn provider_panel(
         version: version.map(ToOwned::to_owned),
         plan: plan.map(ToOwned::to_owned),
         metered,
-        remote_control,
+        remote_control: if remote_control {
+            rimz::RemoteControlBadge::Healthy
+        } else {
+            rimz::RemoteControlBadge::Hidden
+        },
         spending: Some(spending),
         day_budget: None,
         extra_credits: matches!(kind, "pi" | "opencode").then_some(rimz::ExtraCredits::Disabled),

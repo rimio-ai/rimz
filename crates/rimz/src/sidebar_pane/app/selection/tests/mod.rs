@@ -134,7 +134,7 @@ fn provider(kind: &str) -> crate::SidebarProviderPanel {
         version: None,
         plan: None,
         metered: false,
-        remote_control: false,
+        remote_control: Default::default(),
         spending: None,
         day_budget: None,
         extra_credits: None,

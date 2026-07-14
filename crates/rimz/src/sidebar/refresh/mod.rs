@@ -48,7 +48,9 @@ use self::pr::produce_pr_states;
 use self::rate_limits::apply_rate_limit_cache;
 use self::sessions::refresh_live_sessions;
 use self::usage::refresh_account_usage;
-use super::enrich::{fold_machine_config_with, read_auto_continue_resume_messages};
+use super::enrich::{
+    RemoteControlServerHealth, fold_machine_config_with, read_auto_continue_resume_messages,
+};
 use super::timing::unix_now_ms;
 
 #[derive(Clone, Debug)]
@@ -66,7 +68,12 @@ pub fn refresh_heavy_lanes(
     config: &MachineConfig,
     walker: &mut SpendingWalker,
 ) -> RefreshedLanes {
-    refresh_codex_daemon_reap_cache(daemon_probe_agents, runtime, unix_now_ms());
+    refresh_codex_daemon_reap_cache(
+        daemon_probe_agents,
+        runtime,
+        unix_now_ms(),
+        config.remote_control.codex,
+    );
 
     let spending = spending::compute_fleet_spending_with_walker(
         walker,
@@ -90,6 +97,8 @@ pub fn refresh_heavy_lanes(
         config,
         lanes.accounts.clone(),
         &lanes.spending.provider.spending.by_provider,
+        // This throwaway fold only rebuilds rate-limit persistence.
+        RemoteControlServerHealth::default(),
     );
     apply_rate_limit_cache(&mut panels, runtime, true);
 

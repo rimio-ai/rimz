@@ -71,7 +71,7 @@ pub(crate) fn provider_panel(
         version: None,
         plan: None,
         metered: true,
-        remote_control: false,
+        remote_control: Default::default(),
         spending: None,
         day_budget: None,
         extra_credits: None,

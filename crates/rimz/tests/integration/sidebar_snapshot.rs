@@ -75,7 +75,7 @@ fn path_with_stub_first(stub_dir: &Path) -> String {
     format!("{}:{}", stub_dir.display(), current.to_string_lossy())
 }
 
-fn claude_remote_control_value(
+fn claude_remote_control_badge(
     env: &Env,
     settings: &Path,
     path: Option<String>,
@@ -159,7 +159,10 @@ fn sidebar_lights_claude_rc_badge_from_claude_startup_setting() {
     let env = Env::new();
     let settings = write_claude_settings(&env, r#"{ "remoteControlAtStartup": true }"#);
 
-    assert_eq!(claude_remote_control_value(&env, &settings, None), true);
+    assert_eq!(
+        claude_remote_control_badge(&env, &settings, None),
+        "healthy"
+    );
 }
 
 #[test]
@@ -172,8 +175,8 @@ fn sidebar_suppresses_claude_rc_badge_when_auth_blocks_remote_control() {
     let stub_dir = stub_claude_version(&env, "2.1.173 (Claude Code)");
 
     assert_eq!(
-        claude_remote_control_value(&env, &settings, Some(path_with_stub_first(&stub_dir))),
-        false
+        claude_remote_control_badge(&env, &settings, Some(path_with_stub_first(&stub_dir))),
+        "hidden"
     );
 }
 

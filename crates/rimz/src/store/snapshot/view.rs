@@ -36,9 +36,10 @@ pub(crate) use providers::{format_plan_label, sort_windows};
 
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use model::{
-    DailyBudgetView, PresenceSample, SidebarLinkFreshness, SidebarLinkHealth, SidebarPresence,
-    SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
-    WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
+    DailyBudgetView, PresenceSample, RemoteControlBadge, SidebarLinkFreshness, SidebarLinkHealth,
+    SidebarPresence, SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup,
+    SidebarWorktreeKind, WorktreePrState, WorktreeTrunkSync, actionable_unread_count,
+    lead_unread_row, triage_key,
 };
 pub use reap::RuntimeReapInputs;
 
@@ -65,7 +66,7 @@ fn default_root_class() -> RootClass {
 
 /// Bump when [`SidebarSnapshot`]'s persisted shape changes; old
 /// `latest.json` files read as stale instead of accreting one-off guards.
-pub const SNAPSHOT_VERSION: u32 = 8;
+pub const SNAPSHOT_VERSION: u32 = 9;
 
 /// Sidebar view-model. The pane frame admits every rendered card; store,
 /// sidecars, and realtime events only enrich rows admitted from live panes.

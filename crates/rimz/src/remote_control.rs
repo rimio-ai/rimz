@@ -12,8 +12,8 @@
 //!   not the current worktree. It is a pane but not a coding agent — no Rimz
 //!   hooks, never stamps a pane — so the sidebar must not render it as an idle
 //!   agent: [`pane_is_host`] identifies the host pane and the snapshot reducer
-//!   filters it out, surfacing remote control as a `⇅ rc` flag on the Claude
-//!   provider dashboard block instead.
+//!   filters it out, surfacing remote control as a health-colored `⇅ rc` flag
+//!   on the Claude provider dashboard block instead.
 //! - **Codex** runs `remote-control start` from the *managed standalone install*
 //!   ([`codex_standalone_bin`]), which brings up the Codex app-server daemon
 //!   with remote control enabled and returns. That daemon is a **per-user
@@ -1189,6 +1189,11 @@ pub fn pane_is_host(pane: &PaneRef) -> bool {
     pane.spawn_command.as_deref().is_some_and(command_is_host)
         || pane.command.as_deref().is_some_and(command_is_host)
         || pane.view_name.as_deref() == Some(VIEW_NAME)
+}
+
+/// Whether the managed Claude remote-control host pane is present in `panes`.
+pub fn claude_host_present(panes: &[PaneRef]) -> bool {
+    pane_listing_contains_marker(panes, &ManagedPaneMarker::ClaudeRemoteControl)
 }
 
 #[cfg(test)]

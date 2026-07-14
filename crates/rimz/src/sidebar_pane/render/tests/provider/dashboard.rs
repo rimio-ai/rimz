@@ -59,6 +59,30 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
 }
 
 #[test]
+fn render_provider_dashboard_marks_a_down_rc_host_in_alarm_color() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("claude", "Claude", 173, false, true, None);
+    panel.remote_control = crate::RemoteControlBadge::Down;
+
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[panel],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let flag = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .find(|span| span.content.contains("⇅ rc"))
+        .expect("remote-control flag");
+
+    assert_eq!(flag.style, theme.alarm(Modifier::BOLD));
+}
+
+#[test]
 fn provider_healthy_daily_cap_stays_quiet_on_headline_spend() {
     let mut panels = two_provider_panels();
     panels[0].day_budget = Some(crate::DailyBudgetView {

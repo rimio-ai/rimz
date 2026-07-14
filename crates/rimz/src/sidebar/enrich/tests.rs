@@ -46,6 +46,47 @@ fn producing_opts() -> FoldOpts<'static> {
 }
 
 #[test]
+fn remote_control_badge_follows_enablement_and_probe_health() {
+    use crate::RemoteControlBadge::{Down, Healthy, Hidden};
+
+    let cases = [
+        (true, false, Some(true), Healthy, "configured and up"),
+        (true, false, Some(false), Down, "configured and down"),
+        (true, false, None, Healthy, "configured before first probe"),
+        (
+            false,
+            true,
+            Some(true),
+            Healthy,
+            "pane auto with live probe",
+        ),
+        (
+            false,
+            true,
+            Some(false),
+            Healthy,
+            "pane auto ignores server probe",
+        ),
+        (
+            true,
+            true,
+            Some(false),
+            Down,
+            "configured host wins over pane auto",
+        ),
+        (false, false, Some(false), Hidden, "disabled"),
+    ];
+
+    for (config_toggle, pane_auto, server_alive, expected, label) in cases {
+        assert_eq!(
+            remote_control_badge(config_toggle, pane_auto, server_alive),
+            expected,
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn provider_store_adapters_are_wired_for_identityless_idle_cards() {
     let wired = wired_kinds();
     assert!(wired.iter().any(|kind| kind == "antigravity"));

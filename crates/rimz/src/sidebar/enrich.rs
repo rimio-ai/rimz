@@ -17,8 +17,8 @@ use crate::store::snapshot::{
     SidebarPresence,
 };
 use crate::{
-    RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
-    SidebarWorktreeKind, WorktreeTrunkSync,
+    RemoteControlBadge, RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
+    SidebarSnapshot, SidebarWorktreeKind, WorktreeTrunkSync,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -249,6 +249,24 @@ pub struct FoldOpts<'a> {
     pub lanes: Option<&'a crate::sidebar::refresh::RefreshedLanes>,
 }
 
+/// Probed managed-server liveness for the rc badge. `None` means no probe was
+/// available this tick (no pane frame or no reap cache yet).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RemoteControlServerHealth {
+    pub claude_host_present: Option<bool>,
+    pub codex_daemon_alive: Option<bool>,
+}
+
+impl RemoteControlServerHealth {
+    fn for_kind(self, kind: &str) -> Option<bool> {
+        match kind {
+            "claude" => self.claude_host_present,
+            "codex" => self.codex_daemon_alive,
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ProducerBindingFallbackLog<'a> {
     event: &'static str,
@@ -374,11 +392,20 @@ pub fn enrich(
     // Reap daemon-mode Codex ghosts the app-server no longer holds. The cache
     // refresher publishes the live daemon pids plus `thread/loaded/list` on the
     // reap TTL; the fetch and consumer lanes read that file, so they never scan
-    // proc or contact the app-server. The probe itself stays gated on any root
-    // daemon-hooked session, so pane-stamped daemon ghosts still trigger a
-    // refresh. Best-effort and fail-safe: no daemon process, absent cache, or
-    // an untrusted loaded list keeps every session.
-    let daemon_inputs = read_codex_daemon_reap(runtime).unwrap_or_default();
+    // proc or contact the app-server. The probe runs for any root daemon-hooked
+    // session or while the Codex rc toggle needs its health signal, so
+    // pane-stamped daemon ghosts and a session-less rc host both refresh it.
+    // Best-effort and fail-safe: no daemon process, absent cache, or an
+    // untrusted loaded list keeps every session.
+    let daemon_inputs = read_codex_daemon_reap(runtime);
+    let remote_control_health = RemoteControlServerHealth {
+        claude_host_present: frame
+            .map(|frame| crate::remote_control::claude_host_present(&frame.to_pane_refs())),
+        codex_daemon_alive: daemon_inputs
+            .as_ref()
+            .map(|inputs| !inputs.daemon_pids.is_empty()),
+    };
+    let daemon_inputs = daemon_inputs.unwrap_or_default();
     let reap_frame_panes = frame.as_ref().map(|frame| frame.to_pane_refs());
     snapshot.reap_runtime(RuntimeReapInputs {
         daemon_pids: &daemon_inputs.daemon_pids,
@@ -452,8 +479,13 @@ pub fn enrich(
     // refresher refreshes the per-worktree facts (single-flighted), while
     // consumers and the live fetch worker project the cached ones.
     let lanes = opts.lanes;
-    let (mut folded, spending_caches) =
-        fold_machine_config(snapshot, runtime, &machine_config, lanes);
+    let (mut folded, spending_caches) = fold_machine_config(
+        snapshot,
+        runtime,
+        &machine_config,
+        remote_control_health,
+        lanes,
+    );
     project_diff_stats(&mut folded, &diff_cache);
     if let Some(lanes) = lanes {
         project_pr_state_map(&mut folded, &lanes.pr_states);
@@ -633,6 +665,7 @@ fn fold_machine_config(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
     config: &crate::config::MachineConfig,
+    remote_control_health: RemoteControlServerHealth,
     lanes: Option<&crate::sidebar::refresh::RefreshedLanes>,
 ) -> (SidebarSnapshot, SpendingCaches) {
     let accounts_config = config.accounts.clone();
@@ -657,6 +690,7 @@ fn fold_machine_config(
         config,
         accounts,
         &spending.provider.spending.by_provider,
+        remote_control_health,
     );
     // Every fold merges the producer-published account windows read-only. The
     // refresh lane owns writes.
@@ -673,6 +707,7 @@ pub(crate) fn fold_machine_config_with(
     config: &crate::config::MachineConfig,
     accounts: BTreeMap<String, crate::agents::AgentAccount>,
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
+    remote_control_health: RemoteControlServerHealth,
 ) -> SidebarSnapshot {
     snapshot.sidebar = config.sidebar.clone();
     snapshot.theme = config.theme.clone();
@@ -686,7 +721,7 @@ pub(crate) fn fold_machine_config_with(
 
     // The `⇅ rc` flag per provider comes from either Rimz's auto-launch toggle
     // or the provider's own pane-session auto-enable setting.
-    let mut remote_control_flags: BTreeMap<String, bool> = BTreeMap::new();
+    let mut remote_control_flags: BTreeMap<String, RemoteControlBadge> = BTreeMap::new();
     for adapter in crate::agents::ADAPTERS {
         let descriptor = adapter.descriptor();
         let config_toggle = config.remote_control.enabled_for(descriptor.kind);
@@ -694,10 +729,34 @@ pub(crate) fn fold_machine_config_with(
             && adapter
                 .remote_control_status(accounts.get(descriptor.kind))
                 .pane_auto;
-        remote_control_flags.insert(descriptor.kind.to_owned(), config_toggle || pane_auto);
+        remote_control_flags.insert(
+            descriptor.kind.to_owned(),
+            remote_control_badge(
+                config_toggle,
+                pane_auto,
+                remote_control_health.for_kind(descriptor.kind),
+            ),
+        );
     }
 
     snapshot.with_provider_aggregates(&accounts, &remote_control_flags, provider_spending)
+}
+
+/// Derive the rc badge from enablement and the managed-server probe. An absent
+/// probe stays healthy to avoid a false red flash before the first pane frame or
+/// reap-cache publish; only a configured server positively observed down is red.
+fn remote_control_badge(
+    config_toggle: bool,
+    pane_auto: bool,
+    server_alive: Option<bool>,
+) -> RemoteControlBadge {
+    if !config_toggle && !pane_auto {
+        RemoteControlBadge::Hidden
+    } else if config_toggle && server_alive == Some(false) {
+        RemoteControlBadge::Down
+    } else {
+        RemoteControlBadge::Healthy
+    }
 }
 
 /// Stamp [`SidebarRow::context_severity`] on every agent row from the

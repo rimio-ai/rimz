@@ -4,7 +4,7 @@
 use crate::agents::{ExtraCredits, RateLimitWindow};
 use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::{PetBody, PetView};
-use crate::{SidebarProviderPanel, SpendTally, SpendWindow};
+use crate::{RemoteControlBadge, SidebarProviderPanel, SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -861,7 +861,7 @@ fn tab_label(kind: &str) -> String {
     label
 }
 
-/// The block's header line, with the violet `⇅ rc` flag pinned to the
+/// The block's header line, with the health-colored `⇅ rc` flag pinned to the
 /// top-right corner when remote control is on for the provider. Untabbed it
 /// reads `Claude v2.1.158 · Claude Max` — the product name in the brand color,
 /// version and plan dim. Tabbed, the rail already names the account, so the
@@ -878,13 +878,18 @@ fn provider_header_line(
     now: Timestamp,
 ) -> Line<'static> {
     let mut right = reset_header_spans(theme, panel, now);
-    if panel.remote_control {
+    let remote_control = match panel.remote_control {
+        RemoteControlBadge::Hidden => None,
+        RemoteControlBadge::Healthy => Some(Component::RemoteControl),
+        RemoteControlBadge::Down => Some(Component::RemoteControlDown),
+    };
+    if let Some(component) = remote_control {
         if !right.is_empty() {
             right.push(Span::raw("  "));
         }
         right.push(Span::styled(
             format!("{} rc", theme.glyph(GlyphRole::ChromeRemoteControl)),
-            theme.styled(Component::RemoteControl, Modifier::BOLD),
+            theme.styled(component, Modifier::BOLD),
         ));
     }
     let full = provider_header_left(theme, panel, width, tabbed, inline_art, true);

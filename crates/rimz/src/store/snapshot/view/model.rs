@@ -16,6 +16,17 @@ pub struct DailyBudgetView {
     pub parked: bool,
 }
 
+/// Remote-control badge for this provider: hidden, or shown green/red by
+/// managed-server health (the `⇅ rc` flag).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteControlBadge {
+    #[default]
+    Hidden,
+    Healthy,
+    Down,
+}
+
 /// One provider's aggregate dashboard block, pinned to the bottom of the
 /// sidebar. Account-scoped: every session of one agent kind folds into one
 /// block — summed spend and tokens, plus the freshest session's plan, version,
@@ -47,8 +58,9 @@ pub struct SidebarProviderPanel {
     pub plan: Option<String>,
     /// Whether the account is metered by rate-limit windows.
     pub metered: bool,
-    /// Whether remote control is enabled for this provider (the `⇅ rc` flag).
-    pub remote_control: bool,
+    /// Visibility and managed-server health for the `⇅ rc` flag.
+    #[serde(default)]
+    pub remote_control: RemoteControlBadge,
     /// JSONL-computed headline / week / month / trailing-year spend and tokens
     /// for this provider, summed across all of its sessions' transcript history.
     #[serde(default, skip_serializing_if = "Option::is_none")]

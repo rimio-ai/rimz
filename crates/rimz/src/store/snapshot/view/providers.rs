@@ -8,7 +8,7 @@ use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
 use crate::config::{ProviderTabsMode, ThemeColor};
 
-use super::{SidebarProviderPanel, SidebarSnapshot};
+use super::{RemoteControlBadge, SidebarProviderPanel, SidebarSnapshot};
 
 impl SidebarSnapshot {
     /// Fold the agent rollup into per-provider dashboard blocks — one per agent
@@ -22,9 +22,10 @@ impl SidebarSnapshot {
     /// login facts the context cannot (Claude's `auth status`, Codex's
     /// `auth.json`), preferred only when the freshest context has none — and a kind
     /// whose only signal is a qualifying probed account still earns a block;
-    /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
-    /// name) resolves from `self.theme.providers` over the built-in defaults, so
-    /// the renderer gets a ready-to-paint block. With no explicit
+    /// `remote_control` carries the per-kind `⇅ rc` visibility and managed-server
+    /// health. Styling (emblem, color, name) resolves from
+    /// `self.theme.providers` over the built-in defaults, so the renderer gets a
+    /// ready-to-paint block. With no explicit
     /// `provider_list`, providers paint in usage-rank order: live sessions,
     /// then week/month/year session counts, then login and credential recency.
     /// This deliberately ignores intra-day spend shifts. A *stacked* dashboard
@@ -38,7 +39,7 @@ impl SidebarSnapshot {
     pub fn with_provider_aggregates(
         mut self,
         probed_accounts: &BTreeMap<String, AgentAccount>,
-        remote_control: &BTreeMap<String, bool>,
+        remote_control: &BTreeMap<String, RemoteControlBadge>,
         provider_spending: &BTreeMap<String, SpendTally>,
     ) -> Self {
         let kinds = provider_kinds(&self.agents, probed_accounts, provider_spending);
@@ -137,7 +138,7 @@ impl SidebarSnapshot {
                 }
                 None => (defaults.color, defaults.color_rgb, None),
             };
-            let remote_control = remote_control.get(&kind).copied().unwrap_or(false);
+            let remote_control = remote_control.get(&kind).copied().unwrap_or_default();
             let tally = provider_spending.get(&kind);
             let spending = tally.cloned();
             let rank = ProviderRank {

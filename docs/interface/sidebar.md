@@ -32,7 +32,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌      ◇ 3k · Opus 4.8                           ◔  3m    ← running child: tokens · model · elapsed
 
  ─────────────────────────────────────────────────────
-  Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control flag
+  Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control health (green up / red down)
 
   ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M       $188.88    ← headline stats: sessions · tokens · usd value
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 1h47m    ← 5-hour budget left, until reset time
@@ -124,7 +124,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `─`             | a section hairline |
 | `▐` / `▕`       | the cards' scrollbar — thumb / track, shown while the viewport moves and settling away ~1s after it stops (`[theme.display] scrollbar` pins or removes it) |
 | `┤ Tab ├`       | an active tab under `NO_COLOR` — the caps carry the pick by shape when the fill drops; make-up buckets keep their fixed cells and mark the pick with reverse video |
-| `⇅ rc`          | remote control is on for that provider |
+| `⇅ rc`          | remote control is on for that provider — green when its managed server is up (or pane sessions auto-enable), red when a configured server is down |
 | `zᶻ idle` / `zᶻ idle · 17m` / `zᶻ away` | AFK presence in the footer — input has been idle for the configured idle window (`[sidebar] afk_after_secs`, 15 minutes by default) on tmux, with elapsed minutes added after the first minute, or no terminal client is attached |
 | `⇄ remote 210ms` | remote SSH link badge in the footer — RTT EWMA; loss appears only above `10%`, and `⇄ remote ?` means the last stats are stale |
 
@@ -396,7 +396,7 @@ An **unmetered** account (an API key) shows an `api` bar: trailing-month transcr
 
 A **Pi block** names its version and the backing account it runs on — `Pi v0.80.6 · Anthropic OAuth`. Pi keeps its budget readings under the `pi` provider: live sessions publish response-header windows, idle OAuth accounts refresh out-of-band, and an API key gets the `api` paid-usage row instead ([provider.md → Per-provider mapping](../internals/agents/providers.md#per-provider-mapping)).
 
-Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — host infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem resolves from the embedded catalog with a shared fallback, while emblem, color, and name remain configurable through `[theme.providers.<kind>]` (see [theme.md](../guide/theme.md#provider-styling)).
+Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — green when its managed server is up (or pane sessions auto-enable), red when a configured server is down. The host stays infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem resolves from the embedded catalog with a shared fallback, while emblem, color, and name remain configurable through `[theme.providers.<kind>]` (see [theme.md](../guide/theme.md#provider-styling)).
 
 ### The fleet store
 
