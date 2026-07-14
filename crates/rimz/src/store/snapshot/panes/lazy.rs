@@ -370,10 +370,7 @@ fn idle_agent_row(
             team: None,
             launch_group: None,
             launch_ordinal: None,
-
-            // Agent rows draw the started-session gauge at `Some(0)` — matching
-            // a freshly-bound session.
-            context_pct: Some(0),
+            context_pct: None,
             context_window: descriptor.default_context_window,
             total_tokens: None,
             cache_read_input_tokens: None,
