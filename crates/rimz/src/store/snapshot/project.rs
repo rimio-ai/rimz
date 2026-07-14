@@ -293,22 +293,15 @@ fn adopt_provisional(
         .agent_name
         .as_deref()
         .and_then(|name| identity.adoptable_owner_for_name(map, kind, name, key))
+        && let Some(prior) = retire_provisional(map, identity, &provisional_key)
     {
-        let prior = map.remove(&provisional_key);
-        identity.release_key(&provisional_key);
-        identity.consume_launch_key(&provisional_key);
-        if prior.is_some() {
-            return prior;
-        }
+        return Some(prior);
     }
     let provisional_key = observation
         .pane_id
         .as_ref()
         .and_then(|pane_id| identity.adoptable_owner_for_pane(map, kind, pane_id, key))?;
-    let prior = map.remove(&provisional_key);
-    identity.release_key(&provisional_key);
-    identity.consume_launch_key(&provisional_key);
-    prior
+    retire_provisional(map, identity, &provisional_key)
 }
 
 fn release_stamped_provisional_for_existing(
@@ -328,9 +321,18 @@ fn release_stamped_provisional_for_existing(
     else {
         return;
     };
-    map.remove(&provisional_key);
-    identity.release_key(&provisional_key);
-    identity.consume_launch_key(&provisional_key);
+    let _ = retire_provisional(map, identity, &provisional_key);
+}
+
+fn retire_provisional(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    identity: &mut CardIdentityAllocator,
+    key: &(AgentKind, AgentSessionId),
+) -> Option<AgentState> {
+    let prior = map.remove(key);
+    identity.release_key(key);
+    identity.consume_launch_key(key);
+    prior
 }
 
 fn reduce_agent_launch(
