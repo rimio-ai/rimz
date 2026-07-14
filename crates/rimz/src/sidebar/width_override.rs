@@ -13,11 +13,6 @@ struct WidthOverrideFile {
     cols: NonZeroU16,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub(crate) struct WidthSyncStamp {
-    pub(crate) cols: Option<NonZeroU16>,
-}
-
 pub fn load(runtime: &RuntimePaths) -> Option<NonZeroU16> {
     let path = runtime.sidebar_width_path();
     let bytes = match fs::read(&path) {
@@ -39,16 +34,6 @@ pub fn load(runtime: &RuntimePaths) -> Option<NonZeroU16> {
 
 pub fn write(runtime: &RuntimePaths, cols: NonZeroU16) -> atomic::Result<()> {
     atomic::write_temp_then_rename_cache(&runtime.sidebar_width_path(), &WidthOverrideFile { cols })
-}
-
-pub(crate) fn write_sync_stamp(
-    runtime: &RuntimePaths,
-    cols: Option<NonZeroU16>,
-) -> atomic::Result<()> {
-    atomic::write_temp_then_rename_cache(
-        &runtime.root.join("width-sync.stamp"),
-        &WidthSyncStamp { cols },
-    )
 }
 
 /// Drop any room-runtime width override so the next birth starts from config

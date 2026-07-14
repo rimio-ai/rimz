@@ -12,11 +12,10 @@
 
 use std::cell::Cell;
 use std::io::{self, Write};
-use std::num::NonZeroU16;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
 use crate::diag::record::DiagEvent;
@@ -62,6 +61,7 @@ mod state;
 mod timing;
 mod tmux_watch;
 mod transcript_watch;
+mod width_control;
 
 #[cfg(test)]
 use self::loop_state::handle_wakeup;
@@ -191,7 +191,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // own later convergence, avoiding a startup resize that can reflow the
     // sidebar's scrollback before the self-close paint hold is armed.
     if initial_width.is_some() && config.mux == MuxName::Zellij {
-        spawn_width_sync(&config, &runtime);
+        state.run_width_control(&config, &mut terminal);
     }
     // Monotonic base for the animation frame. Deriving the phase from elapsed
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
@@ -303,6 +303,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 tick,
             },
         )?;
+        state.run_width_control_backstop(&config, &mut terminal);
         state.maybe_remind(&config, &mut terminal, &diag);
         state.paint_frame_if_due(&mut terminal, anim_start, active)?;
     }
@@ -523,102 +524,27 @@ fn spawn_width_adjust(pane_id: PaneId, session_name: &str, dir: crate::mux::Widt
     });
 }
 
-const WIDTH_SYNC_MIN_INTERVAL: Duration = Duration::from_secs(1);
-const WIDTH_SYNC_MAX_PASSES: u32 = 8;
-const WIDTH_SYNC_ELECTION_ATTEMPTS: u32 = 3;
-
-fn width_sync_stamp_is_fresh(
-    stamp_path: &Path,
-    current_override: Option<NonZeroU16>,
-    now: SystemTime,
-) -> bool {
-    let Ok(file) = std::fs::File::open(stamp_path) else {
-        return false;
-    };
-    let Ok(modified) = file.metadata().and_then(|metadata| metadata.modified()) else {
-        return false;
-    };
-    let Ok(stamp) =
-        serde_json::from_reader::<_, crate::sidebar::width_override::WidthSyncStamp>(file)
-    else {
-        return false;
-    };
-    now.duration_since(modified)
-        .is_ok_and(|age| age < WIDTH_SYNC_MIN_INTERVAL)
-        && stamp.cols == current_override
+/// Move one pane toward its target on a detached thread so a mux client never
+/// stalls the render loop.
+fn spawn_width_nudge(pane_id: PaneId, session_name: &str, current_cols: u16, target_cols: u16) {
+    let session_name = session_name.to_owned();
+    std::thread::spawn(move || {
+        let backend = crate::mux::backend_for(pane_id.mux());
+        if let Err(err) =
+            backend.nudge_sidebar_width(&session_name, &pane_id, current_cols, target_cols)
+        {
+            debug!(pane = %pane_id, error = %err, "sidebar width nudge failed");
+        }
+    });
 }
 
-/// Converge room widths on a detached, room-scoped single flight so every
-/// renderer may react to the same resize without stampeding the mux server.
-fn spawn_width_sync(config: &ServeConfig, runtime: &RuntimePaths) {
-    let mux = config.mux;
-    let session_name = config.session_name.clone();
-    let workspace_id = config.workspace_id.clone();
-    let runtime = runtime.clone();
+/// Refresh the backend's future-pane width seed off the render thread.
+fn spawn_width_default_record(mux: MuxName, session_name: &str, cols: u16) {
+    let session_name = session_name.to_owned();
     std::thread::spawn(move || {
-        let stamp = runtime.root.join("width-sync.stamp");
-        let lock = runtime.root.join("width-sync.lock");
-        let fresh = || {
-            width_sync_stamp_is_fresh(
-                &stamp,
-                crate::sidebar::width_override::load(&runtime),
-                SystemTime::now(),
-            )
-            .then_some(())
-        };
-        let guard = 'elect: {
-            for attempt in 0..WIDTH_SYNC_ELECTION_ATTEMPTS {
-                match crate::store::single_flight::coalesce(
-                    &lock,
-                    Duration::from_millis(20),
-                    5,
-                    fresh,
-                ) {
-                    crate::store::single_flight::Coalesced::Shared(()) => return,
-                    crate::store::single_flight::Coalesced::Produce(guard) => {
-                        break 'elect Some(guard);
-                    }
-                    crate::store::single_flight::Coalesced::ProduceLocal
-                        if attempt + 1 < WIDTH_SYNC_ELECTION_ATTEMPTS => {}
-                    crate::store::single_flight::Coalesced::ProduceLocal => {
-                        break 'elect None;
-                    }
-                }
-            }
-            // The positive attempt bound makes every loop path return or break.
-            unreachable!("the bounded width-sync election always returns or selects a flight")
-        };
-        let stamp_owned = guard.is_some();
-        let machine = crate::config::MachineConfig::load_lenient();
-        let width = crate::mux::SidebarWidth::from_config(&machine.theme.display);
         let backend = crate::mux::backend_for(mux);
-        for pass in 0..WIDTH_SYNC_MAX_PASSES {
-            let width_override = crate::sidebar::width_override::load(&runtime);
-            let opts = crate::mux::WidthSyncOptions {
-                session_name: session_name.clone(),
-                workspace_id: workspace_id.clone(),
-                width,
-                width_override,
-            };
-            let resized = match backend.converge_sidebar_widths(&opts) {
-                Ok(resized) => resized,
-                Err(err) => {
-                    debug!(error = %err, "sidebar width sync failed");
-                    break;
-                }
-            };
-            if resized > 0 && stamp_owned {
-                // Disposable latency stamp, not durable truth. Stamp only an
-                // actual resize: a detached Zellij startup returns zero, and
-                // its later attach resize must remain eligible to converge.
-                // The held guard still collapses concurrent no-op probes. A
-                // last-resort local flight leaves the producer's stamp alone.
-                let _ = crate::sidebar::width_override::write_sync_stamp(&runtime, width_override);
-            }
-            debug!(pass, resized, "sidebar width sync pass complete");
-            if crate::sidebar::width_override::load(&runtime) == width_override {
-                break;
-            }
+        if let Err(err) = backend.record_sidebar_width_default(&session_name, cols) {
+            debug!(error = %err, "sidebar width default record failed");
         }
     });
 }

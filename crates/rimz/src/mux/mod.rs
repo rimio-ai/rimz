@@ -352,7 +352,7 @@ pub struct SidebarPaneOptions {
     pub refresh_ms: Option<u16>,
 }
 
-/// Minimal room identity and width policy for renderer-triggered convergence.
+/// Minimal room identity and width policy for structural convergence.
 #[derive(Clone, Debug)]
 pub struct WidthSyncOptions {
     pub session_name: String,
@@ -636,11 +636,18 @@ pub trait MuxBackend: Send + Sync {
     fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
     /// Step the sidebar pane width without blocking the renderer loop.
     fn resize_sidebar_width(&self, session: &str, pane: &PaneId, dir: WidthAdjust) -> Result<()>;
-    /// Converge each existing sidebar to its live per-view target and return
-    /// the number of panes resized. Renderer startup and settled resize wakeups
-    /// call this through a room-scoped single flight; attach/reload reconciliation
-    /// remains the structural repair path.
-    fn converge_sidebar_widths(&self, opts: &WidthSyncOptions) -> Result<usize>;
+    /// Move one sidebar pane toward an absolute target. Zellij performs one
+    /// native relative step; tmux can apply the target exactly.
+    fn nudge_sidebar_width(
+        &self,
+        session: &str,
+        pane: &PaneId,
+        current_cols: u16,
+        target_cols: u16,
+    ) -> Result<()>;
+    /// Record the absolute target inherited by sidebars born later in the
+    /// session. Zellij layouts read the room override directly.
+    fn record_sidebar_width_default(&self, session: &str, cols: u16) -> Result<()>;
     /// Register the chord that focuses the sidebar from any pane — the
     /// `[sidebar] focus_key` toggle. tmux binds it as a root-table `bind-key`
     /// whose command resolves the pressing session at keypress, so one

@@ -15,12 +15,15 @@ use super::state::{
     read_receipts_for_all, read_receipts_for_tab, row_id_of_pane, session_focus_baseline,
     set_rows_unread,
 };
+use super::width_control::{WidthControl, WidthTarget};
 use super::*;
 use crate::diag::record::RendererExitCause;
 use crate::observability::SIDEBAR_HEALTH_TARGET;
 use crate::sidebar::read_marks::{ReadMarkStore, ReadMarks, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
 use crate::sidebar_pane::pets::PixelRenderCaps;
+
+const WIDTH_ADJUST_PENDING_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) struct MaintenanceContext<'a> {
     pub(super) config: &'a ServeConfig,
@@ -30,10 +33,6 @@ pub(super) struct MaintenanceContext<'a> {
     pub(super) anim_start: Instant,
     pub(super) diag: &'a crate::diag::DiagSink,
     pub(super) tick: Duration,
-}
-
-fn settled_width_changed(previous: Option<u16>, settled: Option<u16>) -> bool {
-    settled.is_some() && settled != previous
 }
 
 /// Compact projection of the glanceable sidebar content an off-screen pane
@@ -145,6 +144,8 @@ pub(super) struct LoopState {
     last_heartbeat: Option<Instant>,
     prev_width: Option<u16>,
     width_adjust_pending: Option<Instant>,
+    width_cap: std::num::NonZeroU16,
+    width_control: WidthControl,
     pub(super) should_exit: bool,
     pub(super) exit_cause: Option<RendererExitCause>,
     pub(super) tab_emptied: bool,
@@ -200,6 +201,11 @@ impl LoopState {
     ) -> Self {
         let current = placeholder_snapshot(workspace_id);
         let now = Instant::now();
+        let width_cap = crate::config::MachineConfig::load_lenient()
+            .theme
+            .display
+            .max_cols;
+        let width_override = crate::sidebar::width_override::load(read_marks.runtime());
         Self {
             last_snapshot: None,
             last_pulled: current.clone(),
@@ -230,6 +236,8 @@ impl LoopState {
             last_heartbeat: None,
             prev_width: initial_width,
             width_adjust_pending: None,
+            width_cap,
+            width_control: WidthControl::new(WidthTarget::from_override(width_override, width_cap)),
             should_exit: false,
             exit_cause: None,
             tab_emptied: false,
@@ -277,6 +285,20 @@ impl LoopState {
             timeout = timeout.min(
                 until
                     .saturating_duration_since(Instant::now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(deadline) = self.width_control.feedback_deadline() {
+            timeout = timeout.min(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .max(FRAME_MIN_TIMEOUT),
+            );
+        }
+        if let Some(pending) = self.width_adjust_pending {
+            timeout = timeout.min(
+                WIDTH_ADJUST_PENDING_TIMEOUT
+                    .saturating_sub(pending.elapsed())
                     .max(FRAME_MIN_TIMEOUT),
             );
         }
@@ -581,6 +603,17 @@ impl LoopState {
             SidebarEvent::Reload => {
                 return Ok(self.handle_reload(config, fetch));
             }
+            SidebarEvent::WidthTargetChanged => {
+                self.width_control.retarget(WidthTarget::from_override(
+                    crate::sidebar::width_override::load(self.read_marks.runtime()),
+                    self.width_cap,
+                ));
+                if self.width_adjust_pending.is_some() {
+                    self.width_control.set_suspended(true);
+                } else {
+                    self.run_width_control(config, terminal);
+                }
+            }
             // The producer published a fresh shared pane frame: fold it from
             // cache immediately; consumers stay read-only and the producer's
             // own receipt is cheap because the frame is just-published.
@@ -733,20 +766,31 @@ impl LoopState {
         // the sibling count. Before that first sibling observation, the grow is
         // startup sizing and the first frame should paint immediately.
         let settled_width = terminal.size().map(|s| s.width).ok();
-        let width_changed = settled_width_changed(self.prev_width, settled_width);
-        let mut width_adjusted = false;
+        let mut target_recorded = false;
         if let Some(pending) = self.width_adjust_pending {
-            if pending.elapsed() <= Duration::from_secs(3)
+            if pending.elapsed() <= WIDTH_ADJUST_PENDING_TIMEOUT
                 && let Some(cols) = settled_width.and_then(std::num::NonZeroU16::new)
             {
                 match crate::sidebar::width_override::write(runtime, cols) {
                     Ok(()) => {
-                        width_adjusted = true;
+                        target_recorded = true;
+                        self.width_control.retarget(WidthTarget::Override(cols));
+                        spawn_width_default_record(config.mux, &config.session_name, cols.get());
+                        if let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
+                            runtime,
+                            Some(&config.session_name),
+                            SidebarEvent::WidthTargetChanged,
+                        ) {
+                            debug!(error = %err, "sidebar width target broadcast failed");
+                        }
                     }
                     Err(err) => warn!(error = %err, "sidebar width override write failed"),
                 }
             }
             self.width_adjust_pending = None;
+            if !target_recorded {
+                self.width_control.set_suspended(false);
+            }
         }
         let grew = match settled_width {
             Some(width) => {
@@ -756,9 +800,7 @@ impl LoopState {
             }
             None => false,
         };
-        if width_changed || width_adjusted {
-            spawn_width_sync(config, runtime);
-        }
+        self.run_width_control(config, terminal);
         if grew && self.self_close.seen_sibling {
             self.dirty = true;
             self.paint_hold
@@ -780,6 +822,47 @@ impl LoopState {
         // this signal.
         self.request_now_merging_pending(fetch, FetchRequest::producer_fresh_panes(), true);
         Ok(())
+    }
+
+    pub(super) fn run_width_control(
+        &mut self,
+        config: &ServeConfig,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) {
+        let Some(pane) = config.own_pane.clone() else {
+            return;
+        };
+        let Ok(size) = terminal.size() else {
+            return;
+        };
+        if let Some((current_cols, target_cols)) =
+            self.width_control.decide(size.width, Instant::now())
+        {
+            spawn_width_nudge(pane, &config.session_name, current_cols, target_cols);
+        }
+    }
+
+    pub(super) fn run_width_control_backstop(
+        &mut self,
+        config: &ServeConfig,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) {
+        if self
+            .width_adjust_pending
+            .is_some_and(|pending| pending.elapsed() >= WIDTH_ADJUST_PENDING_TIMEOUT)
+        {
+            self.width_adjust_pending = None;
+            self.width_control.set_suspended(false);
+            self.run_width_control(config, terminal);
+            return;
+        }
+        if self
+            .width_control
+            .feedback_deadline()
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            self.run_width_control(config, terminal);
+        }
     }
 
     #[cfg(test)]
@@ -829,6 +912,7 @@ impl LoopState {
             let current_width = terminal.size().map(|size| size.width).ok();
             if width_adjust_allowed(dir, current_width) {
                 self.width_adjust_pending = Some(Instant::now());
+                self.width_control.set_suspended(true);
                 spawn_width_adjust(pane, &config.session_name, dir);
             }
         }

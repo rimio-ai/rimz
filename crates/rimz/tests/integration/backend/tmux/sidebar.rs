@@ -210,21 +210,16 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
         Some(30),
         "the pre-convergence hook still carries the 30-column birth seed",
     );
-    let sync = rimz::mux::WidthSyncOptions {
-        session_name: "verdict".to_owned(),
-        workspace_id: opts.workspace_id.clone(),
-        width: opts.width,
-        width_override: None,
-    };
-    assert_eq!(
-        server
-            .backend
-            .converge_sidebar_widths(&sync)
-            .expect("converge live widths"),
-        1,
-        "only the 340-column window needs to grow from the seed to the cap",
-    );
+    let pane = left_pane_id(&server, "verdict:1").expect("left pane id");
+    server
+        .backend
+        .nudge_sidebar_width("verdict", &pane, 30, 72)
+        .expect("nudge live width");
     assert_eq!(left_pane_width(&server, "verdict:1"), Some(72));
+    server
+        .backend
+        .record_sidebar_width_default("verdict", 72)
+        .expect("record future width");
     server.tmux(&["new-window", "-t", "verdict"]);
     assert_eq!(
         left_pane_width(&server, "verdict:2"),
@@ -232,22 +227,20 @@ fn sidebar_widths_converge_per_window_and_refresh_future_births() {
         "the refreshed hook births the next wide window at the live cap",
     );
 
-    let mut override_sync = sync;
-    override_sync.width_override = std::num::NonZeroU16::new(55);
-    assert_eq!(
+    for window in 0..=2 {
+        let target = format!("verdict:{window}");
+        let pane = left_pane_id(&server, &target).expect("left pane id");
+        let current = left_pane_width(&server, &target).expect("left pane width") as u16;
         server
             .backend
-            .converge_sidebar_widths(&override_sync)
-            .expect("propagate room override"),
-        3,
-        "the override resizes every existing window",
-    );
-    for window in 0..=2 {
-        assert_eq!(
-            left_pane_width(&server, &format!("verdict:{window}")),
-            Some(55)
-        );
+            .nudge_sidebar_width("verdict", &pane, current, 55)
+            .expect("nudge override width");
+        assert_eq!(left_pane_width(&server, &target), Some(55));
     }
+    server
+        .backend
+        .record_sidebar_width_default("verdict", 55)
+        .expect("record override width");
     server.tmux(&["new-window", "-t", "verdict"]);
     assert_eq!(
         left_pane_width(&server, "verdict:3"),
@@ -617,6 +610,14 @@ fn left_pane_width(server: &TmuxServer, target: &str) -> Option<u64> {
         }
         thread::sleep(Duration::from_millis(25));
     }
+}
+
+fn left_pane_id(server: &TmuxServer, target: &str) -> Option<rimz::ids::PaneId> {
+    let stdout = server.stdout(&["list-panes", "-t", target, "-F", "#{pane_left}:#{pane_id}"]);
+    stdout.lines().find_map(|line| {
+        let (left, id) = line.split_once(':')?;
+        (left == "0").then(|| rimz::ids::PaneId::from_parts(rimz::MuxName::Tmux, id))
+    })
 }
 
 #[test]

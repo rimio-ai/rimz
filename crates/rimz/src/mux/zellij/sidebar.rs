@@ -49,32 +49,6 @@ pub(super) enum DockOutcome {
     Misdocked,
 }
 
-struct SidebarWidthStepState {
-    tab_position: u64,
-    raw_id: u64,
-    last_cols: Option<u64>,
-    last_step_grow: Option<bool>,
-    no_progress_retry: bool,
-    transient_retries: u8,
-    resized: bool,
-    done: bool,
-}
-
-impl SidebarWidthStepState {
-    fn new(tab_position: u64, raw_id: u64) -> Self {
-        Self {
-            tab_position,
-            raw_id,
-            last_cols: None,
-            last_step_grow: None,
-            no_progress_retry: false,
-            transient_retries: 0,
-            resized: false,
-            done: false,
-        }
-    }
-}
-
 impl ZellijBackend {
     /// Create the background session from a layout that puts the sidebar chrome
     /// pane on the left and focuses the user's terminal on the right. The
@@ -501,8 +475,7 @@ impl ZellijBackend {
 
     /// Converge one sidebar to the target computed from its current tab width.
     /// Returns the latest topology floor and whether at least one resize action
-    /// succeeded. Structural reconcile and renderer-triggered width sync share
-    /// this primitive so their tolerance and coarse-step behavior cannot drift.
+    /// succeeded. Structural reconcile owns this listing-based repair path.
     pub(super) fn converge_sidebar_width(
         &self,
         opts: &WidthSyncOptions,
@@ -531,10 +504,11 @@ impl ZellijBackend {
         };
         let (width_floor, resized) = self.converge_sidebar_widths_stepwise(
             opts,
-            &[(tab_position, raw_id)],
+            tab_position,
+            raw_id,
             Some((&listing.panes, listing.observed_at_ms)),
         );
-        (width_floor.or(floor), resized > 0)
+        (width_floor.or(floor), resized)
     }
 
     pub(super) fn sidebar_dock_outcome(
@@ -693,13 +667,6 @@ impl ZellijBackend {
         stable_client_present(&probes)
     }
 
-    /// Whether one client probe sees an attached terminal. Renderer-triggered
-    /// width sync already proves a live UI path, and a rare transient-client
-    /// false positive only causes a cosmetic resize that the next pass repairs.
-    pub(super) fn width_sync_has_attached_client(&self, session: &str) -> bool {
-        !self.focused_terminal_client_ids(session).is_empty()
-    }
-
     fn focused_terminal_client_ids(&self, session: &str) -> BTreeSet<u32> {
         self.zellij_action(session)
             .arg("list-clients")
@@ -739,27 +706,26 @@ impl ZellijBackend {
         Ok(parse_new_pane_id(&String::from_utf8_lossy(&output.stdout)))
     }
 
-    /// Converge every tracked sidebar in batched rounds: one geometry listing,
-    /// then one coarse resize step for each off-spec tab. Per-tab progress and
-    /// retry latches keep a pinned or transiently failing pane from stopping
-    /// its siblings. Returns the latest topology floor and the number of tabs
-    /// that received at least one successful resize.
+    /// Converge one sidebar with geometry feedback between native resize steps.
+    /// Returns the latest topology floor and whether a resize succeeded.
     pub(super) fn converge_sidebar_widths_stepwise(
         &self,
         opts: &WidthSyncOptions,
-        tabs: &[(u64, u64)],
+        tab_position: u64,
+        raw_id: u64,
         initial: Option<(&[RawPane], u64)>,
-    ) -> (Option<u64>, usize) {
+    ) -> (Option<u64>, bool) {
         const RESIZE_MAX_STEPS: u32 = 64;
         const TRANSIENT_MAX_RETRIES: u8 = 2;
         let mut floor = initial.as_ref().map(|(_, observed_at_ms)| *observed_at_ms);
         let mut initial = initial;
         let mut listing_retries = 0;
         let mut require_fresh_topology = false;
-        let mut states: Vec<_> = tabs
-            .iter()
-            .map(|&(tab_position, raw_id)| SidebarWidthStepState::new(tab_position, raw_id))
-            .collect();
+        let mut last_cols = None;
+        let mut last_step_grow = None;
+        let mut no_progress_retry = false;
+        let mut transient_retries = 0;
+        let mut resized = false;
 
         for _ in 0..RESIZE_MAX_STEPS {
             let owned_panes;
@@ -798,95 +764,72 @@ impl ZellijBackend {
                 &owned_panes
             };
 
-            let mut pending = Vec::new();
-            for (index, state) in states.iter_mut().enumerate() {
-                if state.done {
-                    continue;
-                }
-                let cols = panes.iter().find_map(|pane| {
-                    (pane.is_terminal()
-                        && pane.tab_position == state.tab_position
-                        && pane.id == state.raw_id)
-                        .then_some(pane.pane_columns)
-                        .flatten()
-                });
-                let Some((cols, view_cols)) = cols.zip(tab_view_cols(panes, state.tab_position))
-                else {
-                    state.done = true;
-                    continue;
-                };
-                let target_cols = live_target_cols(opts.width, opts.width_override, view_cols);
-                if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
-                    state.done = true;
-                    continue;
-                }
-                let grow = cols < target_cols;
-                let no_progress = state.last_cols.zip(state.last_step_grow).is_some_and(
-                    |(last_cols, last_step_grow)| {
+            let cols = panes.iter().find_map(|pane| {
+                (pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id)
+                    .then_some(pane.pane_columns)
+                    .flatten()
+            });
+            let Some((cols, view_cols)) = cols.zip(tab_view_cols(panes, tab_position)) else {
+                break;
+            };
+            let target_cols = live_target_cols(opts.width, opts.width_override, view_cols);
+            if !sidebar_width_off_spec(cols, target_cols, zellij_resize_step_cols(view_cols)) {
+                break;
+            }
+            let grow = cols < target_cols;
+            let no_progress =
+                last_cols
+                    .zip(last_step_grow)
+                    .is_some_and(|(last_cols, last_step_grow)| {
                         if last_step_grow {
                             cols <= last_cols
                         } else {
                             cols >= last_cols
                         }
-                    },
-                );
-                if no_progress {
-                    // A cache produced after action start but before Zellij applies
-                    // the resize can repeat once; require one newer read before
-                    // treating the pane as pinned at a backend minimum.
-                    if !state.no_progress_retry {
-                        state.no_progress_retry = true;
-                        floor = Some(unix_now_ms());
-                        // An authoritative listing can merge background geometry
-                        // from a newly stamped but pre-action cache. Confirm a
-                        // repeated width against topology after this floor.
-                        require_fresh_topology = true;
-                        continue;
-                    }
-                    state.done = true;
+                    });
+            if no_progress {
+                // A cache produced after action start but before Zellij applies
+                // the resize can repeat once; require one newer read before
+                // treating the pane as pinned at a backend minimum.
+                if !no_progress_retry {
+                    no_progress_retry = true;
+                    floor = Some(unix_now_ms());
+                    // An authoritative listing can merge background geometry
+                    // from a newly stamped but pre-action cache. Confirm a
+                    // repeated width against topology after this floor.
+                    require_fresh_topology = true;
                     continue;
                 }
-                state.no_progress_retry = false;
-                state.last_cols = Some(cols);
-                state.last_step_grow = Some(grow);
-                pending.push((index, grow));
-            }
-
-            if states.iter().all(|state| state.done) {
                 break;
             }
-            if pending.is_empty() {
-                continue;
-            }
+            no_progress_retry = false;
+            last_cols = Some(cols);
+            last_step_grow = Some(grow);
 
             let action_floor = unix_now_ms();
             floor = Some(action_floor);
-            for (index, grow) in pending {
-                let state = &mut states[index];
-                if self
-                    .resize_sidebar_step(
-                        &opts.session_name,
-                        &format!("terminal_{}", state.raw_id),
-                        if grow { "increase" } else { "decrease" },
-                    )
-                    .is_err()
-                {
-                    if state.transient_retries < TRANSIENT_MAX_RETRIES {
-                        state.transient_retries += 1;
-                        // The failed CLI may still have reached the server. Read
-                        // post-action geometry before deciding which step remains.
-                        state.last_cols = None;
-                        state.last_step_grow = None;
-                        continue;
-                    }
-                    state.done = true;
+            if self
+                .resize_sidebar_step(
+                    &opts.session_name,
+                    &format!("terminal_{raw_id}"),
+                    if grow { "increase" } else { "decrease" },
+                )
+                .is_err()
+            {
+                if transient_retries < TRANSIENT_MAX_RETRIES {
+                    transient_retries += 1;
+                    // The failed CLI may still have reached the server. Read
+                    // post-action geometry before deciding which step remains.
+                    last_cols = None;
+                    last_step_grow = None;
                     continue;
                 }
-                state.resized = true;
+                break;
             }
+            resized = true;
         }
 
-        (floor, states.iter().filter(|state| state.resized).count())
+        (floor, resized)
     }
 
     pub(super) fn resize_sidebar_step(

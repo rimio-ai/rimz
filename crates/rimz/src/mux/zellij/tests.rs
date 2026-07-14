@@ -619,8 +619,8 @@ exit 0
         width_override: None,
     };
 
-    let (floor, resized) = backend.converge_sidebar_widths_stepwise(&width_sync, &[(1, 8)], None);
-    assert_eq!(resized, 1, "the tab should record a successful resize");
+    let (floor, resized) = backend.converge_sidebar_widths_stepwise(&width_sync, 1, 8, None);
+    assert!(resized, "the tab should record a successful resize");
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
     let resize_calls = log
         .lines()
@@ -798,8 +798,8 @@ exit 0
         width_override: None,
     };
 
-    let (_, resized) = backend.converge_sidebar_widths_stepwise(&width_sync, &[(1, 8)], None);
-    assert_eq!(resized, 1, "the tab should record a successful resize");
+    let (_, resized) = backend.converge_sidebar_widths_stepwise(&width_sync, 1, 8, None);
+    assert!(resized, "the tab should record a successful resize");
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
     let resize_calls = log
         .lines()
@@ -835,99 +835,28 @@ exit 0
 
 #[cfg(unix)]
 #[test]
-fn width_sync_batches_tabs_per_round_and_probes_clients_once() {
-    use crate::ids::WorkspaceId;
-    use crate::mux::{MuxBackend, WidthSyncOptions};
+fn width_nudge_steps_only_the_named_pane_without_a_listing() {
+    use crate::ids::PaneId;
+    use crate::mux::MuxBackend;
 
     let script = r#"#!/bin/sh
 dir=$(dirname "$0")
 log="$dir/zellij.log"
-grow_state="$dir/grow-count"
-shrink_state="$dir/shrink-count"
 printf '%s\n' "$*" >> "$log"
-
-case " $* " in
-  *" action list-clients "*)
-    printf '%s\n' 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND'
-    printf '%s\n' '1 terminal_9 zsh'
-    exit 0
-    ;;
-  *" action list-panes --all --json "*)
-    grow=$(cat "$grow_state" 2>/dev/null || printf '0')
-    shrink=$(cat "$shrink_state" 2>/dev/null || printf '0')
-    left=$((40 + grow * 10))
-    right=$((80 - shrink * 10))
-    printf '[{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s,"terminal_command":"rimz"},{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s,"terminal_command":"zsh"},{"id":18,"is_plugin":false,"tab_position":2,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s,"terminal_command":"rimz"},{"id":19,"is_plugin":false,"tab_position":2,"title":"zsh","pane_x":%s,"pane_columns":%s,"terminal_command":"zsh"}]\n' "$left" "$left" "$((200 - left))" "$right" "$right" "$((200 - right))"
-    exit 0
-    ;;
-  *" action resize increase right --pane-id terminal_8 "*)
-    count=$(cat "$grow_state" 2>/dev/null || printf '0')
-    printf '%s\n' "$((count + 1))" > "$grow_state"
-    exit 0
-    ;;
-  *" action resize decrease right --pane-id terminal_18 "*)
-    count=$(cat "$shrink_state" 2>/dev/null || printf '0')
-    printf '%s\n' "$((count + 1))" > "$shrink_state"
-    exit 0
-    ;;
-esac
-
 exit 0
 "#;
     let (temp, shim) = zellij_shim(script);
     let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let workspace_id = WorkspaceId::from_project_root(&project_root);
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
-    let opts = WidthSyncOptions {
-        session_name: "rimz-test".to_owned(),
-        workspace_id,
-        width: crate::mux::SidebarWidth {
-            percent: crate::mux::WidthPercent::Fixed(30),
-            max_cols: std::num::NonZeroU16::new(72).expect("non-zero cap"),
-        },
-        width_override: None,
-    };
-
-    assert_eq!(
-        backend
-            .converge_sidebar_widths(&opts)
-            .expect("converge widths"),
-        2,
-    );
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_8");
+    backend
+        .nudge_sidebar_width("rimz-test", &pane, 40, 72)
+        .expect("nudge width");
 
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    let lines: Vec<_> = log.lines().collect();
-    let listings: Vec<_> = lines
-        .iter()
-        .enumerate()
-        .filter_map(|(index, line)| {
-            line.contains("action list-panes --all --json")
-                .then_some(index)
-        })
-        .collect();
-    assert_eq!(
-        listings.len(),
-        3,
-        "two resize rounds plus one verifying listing should be shared by both tabs:\n{log}",
-    );
-    let first_round_actions = lines[listings[0] + 1..listings[1]]
-        .iter()
-        .filter(|line| line.contains("action resize"))
-        .count();
-    assert_eq!(
-        first_round_actions, 2,
-        "both tabs must resize before the second listing:\n{log}",
-    );
-    assert_eq!(
-        lines
-            .iter()
-            .filter(|line| line.contains("action list-clients"))
-            .count(),
-        1,
-        "width sync uses one client probe:\n{log}",
-    );
+    assert!(log.contains("action resize increase right --pane-id terminal_8"));
+    assert!(!log.contains("list-panes"));
+    assert!(!log.contains("list-clients"));
 }
 
 #[cfg(unix)]

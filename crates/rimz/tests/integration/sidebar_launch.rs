@@ -265,11 +265,18 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn converge_sidebar_widths(
+    fn nudge_sidebar_width(
         &self,
-        _opts: &rimz::mux::WidthSyncOptions,
-    ) -> rimz::mux::Result<usize> {
-        Ok(0)
+        _session: &str,
+        _pane: &PaneId,
+        _current_cols: u16,
+        _target_cols: u16,
+    ) -> rimz::mux::Result<()> {
+        Ok(())
+    }
+
+    fn record_sidebar_width_default(&self, _session: &str, _cols: u16) -> rimz::mux::Result<()> {
+        Ok(())
     }
 
     fn capture_pane(

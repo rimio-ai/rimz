@@ -1,8 +1,5 @@
 use rimz::ids::{MuxName, PaneId};
-use rimz::mux::{
-    LayoutPanes, MuxBackend, PaneCmd, SidebarWidth, TabOptions, WidthAdjust, WidthSyncOptions,
-    ZellijBackend,
-};
+use rimz::mux::{LayoutPanes, MuxBackend, PaneCmd, TabOptions, WidthAdjust, ZellijBackend};
 use tempfile::TempDir;
 
 use super::support::*;
@@ -112,7 +109,6 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     let cwd = TempDir::new().expect("cwd tempdir");
 
     let (_stub_dir, stub) = sidebar_stub_alive_for(600);
-    let width = SidebarWidth::default();
     let sidebar = sidebar_opts(&name, cwd.path(), stub, 340);
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
@@ -131,16 +127,8 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 
-    let mut sync = WidthSyncOptions {
-        session_name: name.clone(),
-        workspace_id: sidebar.workspace_id.clone(),
-        width,
-        width_override: None,
-    };
     assert_eq!(
-        backend
-            .converge_sidebar_widths(&sync)
-            .expect("converge attached birth"),
+        converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 52, 5),
         1,
     );
     assert!(
@@ -159,9 +147,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         sidebar_columns_by_tab(xdg.path(), &name),
     );
     assert_eq!(
-        backend
-            .converge_sidebar_widths(&sync)
-            .expect("verify new tab target"),
+        converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 52, 5),
         1,
     );
     assert!(
@@ -181,11 +167,8 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
 
     // A room override becomes the target for every existing tab, including
     // the two background tabs, and every future tab.
-    sync.width_override = std::num::NonZeroU16::new(40);
     assert_eq!(
-        backend
-            .converge_sidebar_widths(&sync)
-            .expect("propagate override"),
+        converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 40, 5),
         3,
     );
     assert!(wait_for_sidebar_columns(
@@ -196,9 +179,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 4);
     assert_eq!(
-        backend
-            .converge_sidebar_widths(&sync)
-            .expect("converge overridden new tab"),
+        converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 40, 5),
         1,
     );
     assert!(
@@ -206,4 +187,43 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         "the override propagates to every tab, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
+}
+
+fn converge_each_sidebar_with_nudges(
+    backend: &ZellijBackend,
+    xdg: &std::path::Path,
+    session: &str,
+    target_cols: u16,
+    tolerance: u64,
+) -> usize {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut resized = std::collections::HashSet::new();
+    loop {
+        let snapshot = list_panes(xdg, session).expect("list panes while nudging widths");
+        let sidebars: Vec<_> = snapshot
+            .panes
+            .iter()
+            .filter(|pane| pane.is_sidebar())
+            .collect();
+        let pending: Vec<_> = sidebars
+            .into_iter()
+            .filter(|pane| pane.pane_columns.abs_diff(u64::from(target_cols)) > tolerance)
+            .collect();
+        if pending.is_empty() {
+            return resized.len();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "sidebars did not converge to {target_cols} columns",
+        );
+        for pane in pending {
+            let pane_id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id));
+            let current_cols = u16::try_from(pane.pane_columns).expect("sidebar width fits u16");
+            backend
+                .nudge_sidebar_width(session, &pane_id, current_cols, target_cols)
+                .expect("nudge sidebar width");
+            resized.insert(pane.id);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }

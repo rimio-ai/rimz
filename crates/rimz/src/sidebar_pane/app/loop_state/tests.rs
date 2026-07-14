@@ -768,6 +768,90 @@ fn pane_frame_published_absorbs_deferred_unwatched_fetch() {
 }
 
 #[test]
+fn width_target_event_reloads_the_override_without_a_producer_fetch() {
+    let ws = workspace();
+    let (dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    crate::sidebar::width_override::write(
+        &runtime,
+        std::num::NonZeroU16::new(60).expect("nonzero width"),
+    )
+    .expect("write width override");
+    let mut terminal = fixed_terminal();
+    let (mut fetch, request_rx) = fetch_dispatcher();
+
+    state
+        .on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(&ws, SidebarEvent::WidthTargetChanged),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        )
+        .expect("width target event");
+
+    assert_eq!(
+        state.width_control.decide(50, Instant::now()),
+        Some((50, 60))
+    );
+    assert!(
+        request_rx.try_recv().is_err(),
+        "width propagation stays out of the producer path",
+    );
+}
+
+#[test]
+fn settled_native_width_adjustment_records_retargets_and_broadcasts() {
+    let ws = workspace();
+    let (dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let instance = SidebarInstanceId::new();
+    let socket_path = runtime.sock_dir.join("width-target-test.sock");
+    let socket = UnixDatagram::bind(&socket_path).expect("bind wakeup socket");
+    socket
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .expect("set socket timeout");
+    crate::sidebar::write_heartbeat(
+        &runtime,
+        ws.clone(),
+        &instance,
+        crate::MuxName::Zellij,
+        &config.session_name,
+        &socket_path,
+        None,
+    )
+    .expect("write heartbeat");
+    state.width_adjust_pending = Some(Instant::now());
+    state.width_control.set_suspended(true);
+    let mut terminal = fixed_terminal();
+    let (mut fetch, _request_rx) = fetch_dispatcher();
+
+    state
+        .on_resize(&config, &runtime, &mut fetch, &mut terminal, Instant::now())
+        .expect("settle native width adjustment");
+
+    let recorded = std::num::NonZeroU16::new(80).expect("nonzero width");
+    assert_eq!(
+        crate::sidebar::width_override::load(&runtime),
+        Some(recorded)
+    );
+    assert_eq!(
+        state.width_control.decide(70, Instant::now()),
+        Some((70, 80)),
+        "recording the target also resumes and retargets local control",
+    );
+    let mut payload = [0_u8; 1024];
+    let received = socket.recv(&mut payload).expect("receive target broadcast");
+    let envelope: SidebarEventEnvelope =
+        serde_json::from_slice(&payload[..received]).expect("decode target broadcast");
+    assert_eq!(envelope.event, SidebarEvent::WidthTargetChanged);
+}
+
+#[test]
 fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
     let ws = workspace();
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
@@ -1910,11 +1994,4 @@ fn failed_anomaly_send_preserves_carried_drop_count() {
         state.observer.dropped_msgs, 7,
         "a consecutive full-channel commit keeps accumulating without losing the carried count or pending roster retry"
     );
-}
-#[test]
-fn width_sync_schedules_only_for_a_new_settled_width() {
-    assert!(settled_width_changed(Some(72), Some(63)));
-    assert!(settled_width_changed(None, Some(63)));
-    assert!(!settled_width_changed(Some(63), Some(63)));
-    assert!(!settled_width_changed(Some(63), None));
 }

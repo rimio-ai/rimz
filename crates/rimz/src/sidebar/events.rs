@@ -107,6 +107,9 @@ pub enum SidebarEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_signal: Option<String>,
     },
+    /// The room-runtime absolute width target changed. Renderers re-read the
+    /// atomically replaced override file and converge only their own pane.
+    WidthTargetChanged,
     PaneFramePublished,
     Notify {
         title: String,
@@ -269,6 +272,7 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         | SidebarEvent::FocusIntent { .. }
         | SidebarEvent::PanesChanged
         | SidebarEvent::StoreDelta { .. }
+        | SidebarEvent::WidthTargetChanged
         | SidebarEvent::PaneFramePublished
         | SidebarEvent::Notify { .. }
         | SidebarEvent::Reload => None,
@@ -322,6 +326,7 @@ mod tests {
                 event_method: Some(AGENT_LIFECYCLE_METHOD.to_owned()),
                 agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
             },
+            SidebarEvent::WidthTargetChanged,
             SidebarEvent::PaneFramePublished,
             SidebarEvent::Notify {
                 title: "Rimz: claude needs you".to_owned(),
@@ -347,6 +352,14 @@ mod tests {
         let event = SidebarEvent::FocusStranded {
             pane_id: pane("terminal_2"),
         };
+
+        assert!(!event.is_overlay());
+        assert!(!event.requests_producer_verification());
+    }
+
+    #[test]
+    fn width_target_change_is_a_renderer_action_not_an_overlay_or_verification_request() {
+        let event = SidebarEvent::WidthTargetChanged;
 
         assert!(!event.is_overlay());
         assert!(!event.requests_producer_verification());

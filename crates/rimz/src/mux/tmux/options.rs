@@ -80,8 +80,8 @@ pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<St
 }
 
 /// Set the live absolute-column target consumed by the `after-new-window`
-/// hook. Keeping the mutable width in a session option lets renderer syncs
-/// refresh future births without reconstructing the renderer command.
+/// hook. Keeping the mutable width in a session option lets renderer target
+/// recording refresh future births without reconstructing its command.
 pub(super) fn sidebar_width_option_set_cmd(
     session: &str,
     cols: std::num::NonZeroU16,

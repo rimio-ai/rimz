@@ -35,42 +35,6 @@ fn tick_for_clamps_zero_and_honours_explicit_seconds() {
 }
 
 #[test]
-fn width_sync_stamp_freshness_requires_a_recent_matching_override() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let stamp_path = dir.path().join("width-sync.stamp");
-    let cols = NonZeroU16::new(80);
-    std::fs::write(
-        &stamp_path,
-        serde_json::to_vec(&crate::sidebar::width_override::WidthSyncStamp { cols })
-            .expect("serialize stamp"),
-    )
-    .expect("write stamp");
-    let modified = stamp_path
-        .metadata()
-        .and_then(|metadata| metadata.modified())
-        .expect("stamp mtime");
-
-    assert!(width_sync_stamp_is_fresh(&stamp_path, cols, modified));
-    assert!(
-        !width_sync_stamp_is_fresh(&stamp_path, NonZeroU16::new(81), modified),
-        "a new override invalidates an otherwise recent stamp",
-    );
-    assert!(
-        !width_sync_stamp_is_fresh(&stamp_path, cols, modified + WIDTH_SYNC_MIN_INTERVAL,),
-        "the cooldown interval is exclusive",
-    );
-
-    std::fs::remove_file(&stamp_path).expect("remove stamp");
-    assert!(!width_sync_stamp_is_fresh(&stamp_path, cols, modified));
-    std::fs::write(&stamp_path, b"not json").expect("write garbage stamp");
-    assert!(!width_sync_stamp_is_fresh(
-        &stamp_path,
-        cols,
-        SystemTime::now(),
-    ));
-}
-
-#[test]
 fn frame_grid_advances_one_frame_or_snaps_past_missed_frames() {
     let base = Instant::now();
     let frame = crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS);

@@ -24,11 +24,10 @@ use crate::mux::{
     BackgroundViewOptions, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
     MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth,
     SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitDirection,
-    SplitPaneOptions, TabOptions, WidthAdjust, WidthSyncOptions, ensure_pane_backend, execute_adds,
-    execute_closes, memoized_version,
+    SplitPaneOptions, TabOptions, WidthAdjust, ensure_pane_backend, execute_adds, execute_closes,
+    memoized_version,
 };
 use crate::pane::PaneRef;
-use crate::sidebar::timing::unix_now_ms;
 use crate::store::RuntimePaths;
 use serde::Deserialize;
 
@@ -633,61 +632,31 @@ impl MuxBackend for ZellijBackend {
         self.resize_sidebar_step(session, pane.raw(), direction)
     }
 
-    fn converge_sidebar_widths(&self, opts: &WidthSyncOptions) -> Result<usize> {
-        if !self.width_sync_has_attached_client(&opts.session_name) {
-            return Ok(0);
+    fn nudge_sidebar_width(
+        &self,
+        session: &str,
+        pane: &PaneId,
+        current_cols: u16,
+        target_cols: u16,
+    ) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Zellij)?;
+        if current_cols == target_cols {
+            return Ok(());
         }
-        // Width repair follows local Zellij mutations closely. The
-        // authoritative listing owns pane identity and active-tab geometry;
-        // its cache join fills missing background-tab geometry by pane id.
-        // Cache-only panes stay out of structural truth.
-        let listing = self
-            .authoritative_pane_listing(
-                &opts.session_name,
-                None,
-                Some(&opts.workspace_id),
-                crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
-            )
-            .or_else(|err| {
-                tracing::debug!(
-                    session = %opts.session_name,
-                    error = &err as &dyn std::error::Error,
-                    "authoritative Zellij width listing failed; falling back to topology cache",
-                );
-                self.topology_listing(
-                    Some(&opts.session_name),
-                    None,
-                    Some(&opts.workspace_id),
-                    Some(unix_now_ms()),
-                    crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
-                )
-            })?;
-        let observed_at_ms = listing.observed_at_ms;
-        let panes = listing.panes;
-        let mut sidebars: HashMap<u64, Vec<u64>> = HashMap::new();
-        for pane in panes
-            .iter()
-            .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
-        {
-            sidebars.entry(pane.tab_position).or_default().push(pane.id);
-        }
-        let mut tabs = Vec::new();
-        for (tab_position, pane_ids) in sidebars {
-            let [raw_id] = pane_ids.as_slice() else {
-                continue;
-            };
-            if !panes.iter().any(|pane| {
-                pane.tab_position == tab_position
-                    && pane.is_live_terminal()
-                    && !is_sidebar_pane(pane)
-            }) {
-                continue;
-            }
-            tabs.push((tab_position, *raw_id));
-        }
-        let (_, resized) =
-            self.converge_sidebar_widths_stepwise(opts, &tabs, Some((&panes, observed_at_ms)));
-        Ok(resized)
+        self.resize_sidebar_step(
+            session,
+            pane.raw(),
+            if current_cols < target_cols {
+                "increase"
+            } else {
+                "decrease"
+            },
+        )
+    }
+
+    fn record_sidebar_width_default(&self, _session: &str, _cols: u16) -> Result<()> {
+        // Zellij birth layouts read the room-runtime override when generated.
+        Ok(())
     }
 
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {

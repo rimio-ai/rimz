@@ -47,14 +47,13 @@ fn live_cols_u16(
 }
 
 impl TmuxBackend {
-    /// Resize exactly-one-sidebar windows from one geometry snapshot. The
-    /// optional pane set scopes structural reconcile to panes it elected to
-    /// keep; renderer-triggered sync passes `None` and covers the room.
+    /// Resize exactly-one-sidebar windows from one geometry snapshot, scoped
+    /// to the panes structural reconcile elected to keep.
     fn converge_live_sidebar_geometries(
         &self,
         opts: &WidthSyncOptions,
         geometries: &[TmuxPaneGeometry],
-        only: Option<&HashSet<String>>,
+        only: &HashSet<String>,
     ) -> usize {
         let mut by_window: HashMap<&str, Vec<&TmuxPaneGeometry>> = HashMap::new();
         for geometry in geometries {
@@ -75,7 +74,7 @@ impl TmuxBackend {
             let [geometry] = sidebars.as_slice() else {
                 continue;
             };
-            if only.is_some_and(|only| !only.contains(&geometry.pane_id)) {
+            if !only.contains(&geometry.pane_id) {
                 continue;
             }
             let target = live_target_cols(opts.width, opts.width_override, geometry.window_width);
@@ -339,21 +338,35 @@ impl MuxBackend for TmuxBackend {
             .map(|_| ())
     }
 
-    fn converge_sidebar_widths(&self, opts: &WidthSyncOptions) -> Result<usize> {
-        let geometries = self.session_pane_geometries(&opts.session_name)?;
-        let resized = self.converge_live_sidebar_geometries(opts, &geometries, None);
-        let view_cols = self
-            .window_width(&opts.session_name)
-            .or_else(|| geometries.first().map(|geometry| geometry.window_width));
-        if let Some(view_cols) = view_cols {
-            self.cmd()
-                .args(sidebar_width_option_set_cmd(
-                    &opts.session_name,
-                    live_cols_u16(opts.width, opts.width_override, view_cols),
-                ))
-                .run()?;
-        }
-        Ok(resized)
+    fn nudge_sidebar_width(
+        &self,
+        _session: &str,
+        pane: &PaneId,
+        _current_cols: u16,
+        target_cols: u16,
+    ) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        self.cmd()
+            .args([
+                "resize-pane",
+                "-t",
+                pane.raw(),
+                "-x",
+                &target_cols.to_string(),
+            ])
+            .run()
+            .map(|_| ())
+    }
+
+    fn record_sidebar_width_default(&self, session: &str, cols: u16) -> Result<()> {
+        let cols = std::num::NonZeroU16::new(cols).ok_or_else(|| MuxErr::Output {
+            program: "tmux".to_owned(),
+            reason: "sidebar width must be greater than zero".to_owned(),
+        })?;
+        self.cmd()
+            .args(sidebar_width_option_set_cmd(session, cols))
+            .run()
+            .map(|_| ())
     }
 
     fn register_focus_key(&self, binding: &super::super::FocusKeyBinding) -> Result<()> {
@@ -624,7 +637,7 @@ impl MuxBackend for TmuxBackend {
                         width_override: opts.width_override,
                     };
                     report.redocked +=
-                        self.converge_live_sidebar_geometries(&sync, &geometries, Some(&kept));
+                        self.converge_live_sidebar_geometries(&sync, &geometries, &kept);
                 }
                 Err(err) => tracing::warn!(
                     session = %opts.session_name,

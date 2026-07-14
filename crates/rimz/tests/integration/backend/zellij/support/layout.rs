@@ -377,12 +377,38 @@ pub(in crate::backend::zellij) fn assert_work_panes_reopen_in_survivor_after_clo
         split.iter().all(inside),
         "work panes escaped survivor bounds {bounds:?}: {split:?}"
     );
-    backend
-        .converge_sidebar_widths(width_sync)
-        .expect("converge sidebar after native split/close");
-    let sidebar = wait_for_named_sidebar_pane(xdg, session, tab_name).expect("work tab sidebar");
+    let target = width_sync
+        .width_override
+        .unwrap_or(width_sync.width.max_cols)
+        .get();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let sidebar = loop {
+        let sidebar =
+            wait_for_named_sidebar_pane(xdg, session, tab_name).expect("work tab sidebar");
+        let step = (u64::from(client_columns) / 20).max(1);
+        if sidebar.columns.abs_diff(u64::from(target)) <= (step / 2).max(1) {
+            break sidebar;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sidebar did not converge after native split/close",
+        );
+        let pane = rimz::ids::PaneId::from_parts(
+            rimz::MuxName::Zellij,
+            format!("terminal_{}", sidebar.id),
+        );
+        backend
+            .nudge_sidebar_width(
+                session,
+                &pane,
+                u16::try_from(sidebar.columns).expect("sidebar width fits u16"),
+                target,
+            )
+            .expect("nudge sidebar after native split/close");
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert_eq!(sidebar.x, 0);
-    let target = 72_u64;
+    let target = u64::from(target);
     let step = (u64::from(client_columns) / 20).max(1);
     let tolerance = (step / 2).max(1);
     let lower = target.saturating_sub(tolerance);
