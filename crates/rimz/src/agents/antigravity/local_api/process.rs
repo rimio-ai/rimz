@@ -1,10 +1,13 @@
 //! Exact-process and process-owned loopback socket discovery for `agy`.
 
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
+#[cfg(target_os = "linux")]
 use std::io::Read as _;
 #[cfg(any(target_os = "macos", test))]
 use std::net::SocketAddr;
+#[cfg(any(target_os = "linux", test))]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 #[cfg(target_os = "macos")]
@@ -16,8 +19,11 @@ use std::time::Instant;
 use super::{Candidate, LocalApiError, LoopbackEndpoint};
 
 const MAX_CANDIDATES: usize = 4;
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 const MAX_ENDPOINTS_PER_PROCESS: usize = 12;
+#[cfg(target_os = "linux")]
 const MAX_FDS: usize = 4096;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const MAX_PROC_NET_BYTES: u64 = 1024 * 1024;
 
 pub(super) fn discover(deadline: Instant) -> Result<Vec<Candidate>, LocalApiError> {
@@ -206,6 +212,7 @@ fn read_limited(path: &Path) -> Option<String> {
         .flatten()
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(in crate::agents::antigravity) fn socket_inode(target: &str) -> Option<String> {
     target
         .strip_prefix("socket:[")?
@@ -214,6 +221,7 @@ pub(in crate::agents::antigravity) fn socket_inode(target: &str) -> Option<Strin
         .map(ToOwned::to_owned)
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(in crate::agents::antigravity) fn parse_proc_net(
     table: &str,
     socket_inodes: &BTreeSet<String>,
