@@ -19,7 +19,6 @@ use super::raw_pane::{
 };
 use super::sidebar::DockOutcome;
 use crate::ids::{MuxName, PaneId, WorkspaceId};
-use crate::mux::width::{live_target_cols, sidebar_width_off_spec, zellij_resize_step_cols};
 use crate::mux::{
     AddOutcome, BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch,
     BackgroundViewOptions, ClientFocusOptions, ClientPresence, ClientView, CommandSpec, DaemonView,
@@ -629,7 +628,7 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn converge_sidebar_widths(&self, opts: &WidthSyncOptions) -> Result<usize> {
-        if !self.session_has_attached_client(&opts.session_name) {
+        if !self.width_sync_has_attached_client(&opts.session_name) {
             return Ok(0);
         }
         // Width repair follows local Zellij mutations closely. The
@@ -657,9 +656,7 @@ impl MuxBackend for ZellijBackend {
                     crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
                 )
             })?;
-        // Keep the off-spec verdict and per-pane direction latch on this same
-        // post-trigger snapshot (or newer), never an ambient cache entry.
-        let floor = Some(listing.observed_at_ms);
+        let observed_at_ms = listing.observed_at_ms;
         let panes = listing.panes;
         let mut sidebars: HashMap<u64, Vec<u64>> = HashMap::new();
         for pane in panes
@@ -668,7 +665,7 @@ impl MuxBackend for ZellijBackend {
         {
             sidebars.entry(pane.tab_position).or_default().push(pane.id);
         }
-        let mut resized = 0;
+        let mut tabs = Vec::new();
         for (tab_position, pane_ids) in sidebars {
             let [raw_id] = pane_ids.as_slice() else {
                 continue;
@@ -680,21 +677,10 @@ impl MuxBackend for ZellijBackend {
             }) {
                 continue;
             }
-            let Some(pane) = panes.iter().find(|pane| pane.id == *raw_id) else {
-                continue;
-            };
-            let Some((cols, view_cols)) =
-                pane.pane_columns.zip(tab_view_cols(&panes, tab_position))
-            else {
-                continue;
-            };
-            let target = live_target_cols(opts.width, opts.width_override, view_cols);
-            if !sidebar_width_off_spec(cols, target, zellij_resize_step_cols(view_cols)) {
-                continue;
-            }
-            let (_, changed) = self.converge_sidebar_width(opts, tab_position, *raw_id, floor);
-            resized += usize::from(changed);
+            tabs.push((tab_position, *raw_id));
         }
+        let (_, resized) =
+            self.converge_sidebar_widths_stepwise(opts, &tabs, Some((&panes, observed_at_ms)));
         Ok(resized)
     }
 

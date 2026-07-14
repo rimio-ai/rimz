@@ -470,7 +470,7 @@ exit 0
 }
 
 #[cfg(unix)]
-fn assert_resize_sidebar_toward_scenario(
+fn assert_stepwise_sidebar_width_scenario(
     initial_cols: u64,
     step: i64,
     view_cols: u64,
@@ -496,23 +496,42 @@ fn assert_resize_sidebar_toward_scenario(
             writer: None,
             focused_pane: Some(8),
             clients: None,
-            panes: vec![PaneTopologyPane {
-                id: 8,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: true,
-                tab_position: 1,
-                tab_name: Some("work".to_owned()),
-                pane_columns: Some(initial_cols),
-                pane_x: Some(0),
-                title: Some("rimz-sidebar".to_owned()),
-                pane_command: Some("rimz-sidebar".to_owned()),
-                pane_cwd: None,
-                terminal_command: Some("rimz".to_owned()),
-            }],
+            panes: vec![
+                PaneTopologyPane {
+                    id: 8,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_floating: false,
+                    is_focused: true,
+                    tab_position: 1,
+                    tab_name: Some("work".to_owned()),
+                    pane_columns: Some(initial_cols),
+                    pane_x: Some(0),
+                    title: Some("rimz-sidebar".to_owned()),
+                    pane_command: Some("rimz-sidebar".to_owned()),
+                    pane_cwd: None,
+                    terminal_command: Some("rimz".to_owned()),
+                },
+                PaneTopologyPane {
+                    id: 9,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_floating: false,
+                    is_focused: false,
+                    tab_position: 1,
+                    tab_name: Some("work".to_owned()),
+                    pane_columns: Some(view_cols - initial_cols),
+                    pane_x: Some(initial_cols),
+                    title: Some("zsh".to_owned()),
+                    pane_command: Some("zsh".to_owned()),
+                    pane_cwd: None,
+                    terminal_command: Some("zsh".to_owned()),
+                },
+            ],
         },
     )
     .expect("write ambient topology cache");
@@ -540,9 +559,10 @@ case " $* " in
   *" --name rimz:dump_topology "*)
     count=$(cat "$state" 2>/dev/null || printf '0')
     cols=$(({initial_cols} + count * {step}))
+    work_cols=$(({view_cols} - cols))
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     cat > "$cache" <<JSON
-{{"session_name":"rimz-test","produced_at_ms":$now,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":$cols,"pane_command":"rimz-sidebar","terminal_command":"rimz"}}]}}
+{{"session_name":"rimz-test","produced_at_ms":$now,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":$cols,"pane_command":"rimz-sidebar","terminal_command":"rimz"}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":$cols,"pane_columns":$work_cols,"pane_command":"zsh","terminal_command":"zsh"}}]}}
 JSON
     exit 0
     ;;
@@ -567,6 +587,7 @@ exit 0
         direction = direction,
         initial_cols = initial_cols,
         step = step,
+        view_cols = view_cols,
     );
     let (temp, shim) = zellij_shim(&script);
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
@@ -581,8 +602,8 @@ exit 0
         width_override: None,
     };
 
-    let floor =
-        backend.resize_sidebar_toward(&width_sync, 1, "terminal_8", initial_cols, view_cols, None);
+    let (floor, resized) = backend.converge_sidebar_widths_stepwise(&width_sync, &[(1, 8)], None);
+    assert_eq!(resized, 1, "the tab should record a successful resize");
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
     let resize_calls = log
         .lines()
@@ -598,7 +619,16 @@ exit 0
     );
 
     let final_cols = backend
-        .sidebar_cols("rimz-test", &workspace_id, 1, 8, floor)
+        .topology_panes_for_workspace(
+            "rimz-test",
+            &workspace_id,
+            floor,
+            crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+        )
+        .expect("final topology")
+        .into_iter()
+        .find(|pane| pane.is_terminal() && pane.tab_position == 1 && pane.id == 8)
+        .and_then(|pane| pane.pane_columns)
         .expect("final sidebar columns");
     let target_cols = crate::mux::width::live_target_cols(width_sync.width, None, view_cols);
     assert!(
@@ -613,25 +643,25 @@ exit 0
 
 #[cfg(unix)]
 #[test]
-fn resize_sidebar_toward_retries_shrink_and_stops_in_band() {
-    assert_resize_sidebar_toward_scenario(90, -1, 360, "decrease", 10);
+fn stepwise_sidebar_width_retries_shrink_and_stops_in_band() {
+    assert_stepwise_sidebar_width_scenario(90, -1, 360, "decrease", 10);
 }
 
 #[cfg(unix)]
 #[test]
-fn resize_sidebar_toward_retries_grow_and_stops_in_band() {
-    assert_resize_sidebar_toward_scenario(40, 19, 380, "increase", 3);
+fn stepwise_sidebar_width_retries_grow_and_stops_in_band() {
+    assert_stepwise_sidebar_width_scenario(40, 19, 380, "increase", 3);
 }
 
 #[cfg(unix)]
 #[test]
-fn resize_sidebar_toward_repairs_a_full_step_below_target() {
-    assert_resize_sidebar_toward_scenario(53, 10, 213, "increase", 2);
+fn stepwise_sidebar_width_repairs_a_full_step_below_target() {
+    assert_stepwise_sidebar_width_scenario(53, 10, 213, "increase", 2);
 }
 
 #[cfg(unix)]
 #[test]
-fn resize_sidebar_toward_uses_live_geometry_over_newly_stamped_stale_cache() {
+fn stepwise_sidebar_width_uses_live_geometry_over_newly_stamped_stale_cache() {
     use crate::ids::WorkspaceId;
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
     use crate::sidebar::cache::write_pane_topology_cache;
@@ -651,23 +681,42 @@ fn resize_sidebar_toward_uses_live_geometry_over_newly_stamped_stale_cache() {
             writer: None,
             focused_pane: Some(8),
             clients: None,
-            panes: vec![PaneTopologyPane {
-                id: 8,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: true,
-                tab_position: 1,
-                tab_name: Some("work".to_owned()),
-                pane_columns: Some(171),
-                pane_x: Some(0),
-                title: Some("rimz-sidebar".to_owned()),
-                pane_command: Some("rimz-sidebar".to_owned()),
-                pane_cwd: None,
-                terminal_command: Some("rimz".to_owned()),
-            }],
+            panes: vec![
+                PaneTopologyPane {
+                    id: 8,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_floating: false,
+                    is_focused: true,
+                    tab_position: 1,
+                    tab_name: Some("work".to_owned()),
+                    pane_columns: Some(171),
+                    pane_x: Some(0),
+                    title: Some("rimz-sidebar".to_owned()),
+                    pane_command: Some("rimz-sidebar".to_owned()),
+                    pane_cwd: None,
+                    terminal_command: Some("rimz".to_owned()),
+                },
+                PaneTopologyPane {
+                    id: 9,
+                    is_plugin: false,
+                    is_held: false,
+                    exited: false,
+                    is_suppressed: false,
+                    is_floating: false,
+                    is_focused: false,
+                    tab_position: 1,
+                    tab_name: Some("work".to_owned()),
+                    pane_columns: Some(209),
+                    pane_x: Some(171),
+                    title: Some("zsh".to_owned()),
+                    pane_command: Some("zsh".to_owned()),
+                    pane_cwd: None,
+                    terminal_command: Some("zsh".to_owned()),
+                },
+            ],
         },
     )
     .expect("write ambient topology cache");
@@ -697,13 +746,13 @@ case " $* " in
     if [ "$cols" -lt 71 ]; then
       cols=71
     fi
-    printf '[{{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"work","title":"rimz-sidebar","pane_x":0,"pane_columns":%s,"terminal_command":"rimz"}}]\n' "$cols"
+    printf '[{{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"work","title":"rimz-sidebar","pane_x":0,"pane_columns":%s,"terminal_command":"rimz"}},{{"id":9,"is_plugin":false,"tab_position":1,"tab_name":"work","title":"zsh","pane_x":%s,"pane_columns":%s,"terminal_command":"zsh"}}]\n' "$cols" "$cols" "$((380 - cols))"
     exit 0
     ;;
   *" --name rimz:dump_topology "*)
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
     cat > "$cache" <<JSON
-{{"session_name":"rimz-test","produced_at_ms":$now,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":72,"pane_command":"rimz-sidebar","terminal_command":"rimz"}}]}}
+{{"session_name":"rimz-test","produced_at_ms":$now,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":72,"pane_command":"rimz-sidebar","terminal_command":"rimz"}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":72,"pane_columns":308,"pane_command":"zsh","terminal_command":"zsh"}}]}}
 JSON
     exit 0
     ;;
@@ -732,7 +781,8 @@ exit 0
         width_override: None,
     };
 
-    let floor = backend.resize_sidebar_toward(&width_sync, 1, "terminal_8", 171, 380, None);
+    let (_, resized) = backend.converge_sidebar_widths_stepwise(&width_sync, &[(1, 8)], None);
+    assert_eq!(resized, 1, "the tab should record a successful resize");
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
     let resize_calls = log
         .lines()
@@ -744,7 +794,17 @@ exit 0
     );
 
     let final_cols = backend
-        .sidebar_cols("rimz-test", &workspace_id, 1, 8, floor)
+        .authoritative_pane_listing(
+            "rimz-test",
+            None,
+            Some(&workspace_id),
+            crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
+        )
+        .expect("final authoritative listing")
+        .panes
+        .into_iter()
+        .find(|pane| pane.is_terminal() && pane.id == 8)
+        .and_then(|pane| pane.pane_columns)
         .expect("final sidebar columns");
     assert!(
         !crate::mux::width::sidebar_width_off_spec(
@@ -753,6 +813,103 @@ exit 0
             crate::mux::width::zellij_resize_step_cols(380),
         ),
         "final live geometry should be in-band, got {final_cols}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn width_sync_batches_tabs_per_round_and_probes_clients_once() {
+    use crate::ids::WorkspaceId;
+    use crate::mux::{MuxBackend, WidthSyncOptions};
+
+    let script = r#"#!/bin/sh
+dir=$(dirname "$0")
+log="$dir/zellij.log"
+grow_state="$dir/grow-count"
+shrink_state="$dir/shrink-count"
+printf '%s\n' "$*" >> "$log"
+
+case " $* " in
+  *" action list-clients "*)
+    printf '%s\n' 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND'
+    printf '%s\n' '1 terminal_9 zsh'
+    exit 0
+    ;;
+  *" action list-panes --all --json "*)
+    grow=$(cat "$grow_state" 2>/dev/null || printf '0')
+    shrink=$(cat "$shrink_state" 2>/dev/null || printf '0')
+    left=$((40 + grow * 10))
+    right=$((80 - shrink * 10))
+    printf '[{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s,"terminal_command":"rimz"},{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s,"terminal_command":"zsh"},{"id":18,"is_plugin":false,"tab_position":2,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s,"terminal_command":"rimz"},{"id":19,"is_plugin":false,"tab_position":2,"title":"zsh","pane_x":%s,"pane_columns":%s,"terminal_command":"zsh"}]\n' "$left" "$left" "$((200 - left))" "$right" "$right" "$((200 - right))"
+    exit 0
+    ;;
+  *" action resize increase right --pane-id terminal_8 "*)
+    count=$(cat "$grow_state" 2>/dev/null || printf '0')
+    printf '%s\n' "$((count + 1))" > "$grow_state"
+    exit 0
+    ;;
+  *" action resize decrease right --pane-id terminal_18 "*)
+    count=$(cat "$shrink_state" 2>/dev/null || printf '0')
+    printf '%s\n' "$((count + 1))" > "$shrink_state"
+    exit 0
+    ;;
+esac
+
+exit 0
+"#;
+    let (temp, shim) = zellij_shim(script);
+    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let workspace_id = WorkspaceId::from_project_root(&project_root);
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
+    let opts = WidthSyncOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id,
+        width: crate::mux::SidebarWidth {
+            percent: crate::mux::WidthPercent::Fixed(30),
+            max_cols: std::num::NonZeroU16::new(72).expect("non-zero cap"),
+        },
+        width_override: None,
+    };
+
+    assert_eq!(
+        backend
+            .converge_sidebar_widths(&opts)
+            .expect("converge widths"),
+        2,
+    );
+
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    let lines: Vec<_> = log.lines().collect();
+    let listings: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            line.contains("action list-panes --all --json")
+                .then_some(index)
+        })
+        .collect();
+    assert_eq!(
+        listings.len(),
+        3,
+        "two resize rounds plus one verifying listing should be shared by both tabs:\n{log}",
+    );
+    let first_round_actions = lines[listings[0] + 1..listings[1]]
+        .iter()
+        .filter(|line| line.contains("action resize"))
+        .count();
+    assert_eq!(
+        first_round_actions, 2,
+        "both tabs must resize before the second listing:\n{log}",
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("action list-clients"))
+            .count(),
+        1,
+        "width sync uses one client probe:\n{log}",
     );
 }
 
