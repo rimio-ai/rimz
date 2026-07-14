@@ -32,6 +32,10 @@ pub(crate) use fold::{
     write_carryover,
 };
 pub use fold::{ResumeOutcome, RollupCursor};
+pub use panes::{
+    HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
+    HookPaneRecoveryPhase, HookPaneRecoverySelection,
+};
 pub(crate) use panes::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };

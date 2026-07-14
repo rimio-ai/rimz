@@ -5,6 +5,8 @@ use crate::ids::{MuxName, PaneId};
 use crate::store::snapshot::testkit::{AgentStateFx, agent, ago, pane};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+mod hook_recovery;
+
 fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> PaneRef {
     PaneRef {
         pane_id: PaneId::from_parts(MuxName::Zellij, raw),
@@ -139,4 +141,24 @@ fn lazy_pairing_diagnostics_record_ambiguous_start_proximity_choice() {
     );
     assert_eq!(diagnostics[0].selected_pane.raw(), "terminal_58");
     assert_eq!(diagnostics[0].candidates.len(), 2);
+}
+
+#[test]
+fn lazy_agent_pairing_uses_wrapper_manifest_worktree_fallback() {
+    let session = agent("codex", "sess", AgentStatus::Running, 2_000).worktree("/repo/main");
+    let wrapped = PaneRef {
+        command: Some("/bin/rimz agents exec codex --worktree-path /repo/main".to_owned()),
+        spawn_command: Some("/bin/rimz agents exec codex --worktree-path /repo/main".to_owned()),
+        cwd: None,
+        ..pane("%0", "codex", "/ignored")
+    };
+
+    let result = compute_lazy_agent_pairings(&[wrapped], &[session]);
+
+    assert_eq!(
+        result
+            .pairings
+            .get(&PaneId::from_parts(MuxName::Tmux, "%0")),
+        Some(&0)
+    );
 }

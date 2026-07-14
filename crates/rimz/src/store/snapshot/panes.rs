@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use super::process::pane_agent_kind;
+use super::process::{pane_agent_kind, pane_worktree_path};
 use crate::agents::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwnerKind};
@@ -15,6 +15,10 @@ use crate::store::session_death::agent_owner_pid;
 mod lazy;
 
 pub(super) use lazy::{AgentPaneRow, agent_pane_for_pane, row_from_frame_pane};
+pub use lazy::{
+    HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
+    HookPaneRecoveryPhase, HookPaneRecoverySelection,
+};
 pub(crate) use lazy::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };
@@ -89,6 +93,57 @@ pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> Card
         return CardAdmission::RemoteControlOrAppServerHost;
     }
     CardAdmission::Admitted
+}
+
+/// Facts a pane exposes to binding policies. Raw cwd stays separate from the
+/// projection worktree because hook recovery intentionally requires the mux
+/// cwd while lazy snapshot pairing also accepts supervised-wrapper identity.
+#[derive(Clone, Copy)]
+pub(super) struct PaneBindingEvidence<'a> {
+    pub(super) pane: &'a PaneRef,
+    pub(super) agent_kind: Option<&'static str>,
+    pub(super) raw_cwd: Option<&'a str>,
+    pub(super) projection_worktree: Option<&'a str>,
+    pub(super) process_start: Option<Timestamp>,
+    pub(super) resumed_session_id: Option<&'a AgentSessionId>,
+}
+
+pub(super) fn pane_binding_evidence(pane: &PaneRef) -> PaneBindingEvidence<'_> {
+    PaneBindingEvidence {
+        pane,
+        agent_kind: pane_agent_kind(pane),
+        raw_cwd: pane.cwd.as_deref(),
+        projection_worktree: pane_worktree_path(pane),
+        process_start: pane.pane_process_start,
+        resumed_session_id: pane.resumed_session_id.as_ref(),
+    }
+}
+
+/// Another session whose durable stamp still plausibly owns this process
+/// incarnation. Primary-owner ordering makes the diagnostic stable when a
+/// daemon has several co-resident sessions stamped on one pane.
+pub(super) fn live_foreign_pane_owner<'a>(
+    evidence: PaneBindingEvidence<'_>,
+    kind: &AgentKind,
+    agent_id: &AgentSessionId,
+    agents: &'a [AgentState],
+) -> Option<&'a AgentState> {
+    agents
+        .iter()
+        .filter(|agent| {
+            agent.kind == *kind
+                && agent.agent_id != *agent_id
+                && agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|known| known.pane_id == evidence.pane.pane_id)
+                && pane_start_allows_bind(agent.last_activity, evidence.pane)
+        })
+        .min_by(|a, b| {
+            registered_rank(a)
+                .cmp(&registered_rank(b))
+                .then_with(|| a.agent_id.cmp(&b.agent_id))
+        })
 }
 
 /// The agent that stamped this exact pane id, if one is still unbound. Non-lazy

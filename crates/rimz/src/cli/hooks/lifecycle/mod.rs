@@ -2,6 +2,9 @@ use super::*;
 
 use std::borrow::Cow;
 
+#[cfg(test)]
+use rimz::agents::AgentState;
+
 mod context;
 mod delivery;
 mod identity;

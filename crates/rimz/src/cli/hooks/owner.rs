@@ -1,5 +1,7 @@
 use super::proctree::walk_to_agent_ancestor;
 use super::*;
+use rimz::pane::RuntimeOwnerKind;
+use rimz::store::runtime::process_owner;
 
 pub(super) fn hook_agent_pid(source: &str) -> Option<u32> {
     if let Some(pid) = std::env::var("RIMZ_AGENT_PID")

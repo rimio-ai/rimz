@@ -12,7 +12,6 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use serde::Serialize;
 use serde_json::Value;
 use tracing::{debug, warn};
 
@@ -20,18 +19,11 @@ use super::{GlobalFlags, open_store};
 use rimz::EventEnvelope;
 use rimz::Store;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
-use rimz::agents::{
-    AgentAdapter, AgentHookClass, AgentLifecycleObservation, AgentState, adapter_by_kind,
-};
+use rimz::agents::{AgentAdapter, AgentHookClass, AgentLifecycleObservation, adapter_by_kind};
 use rimz::ids::{MuxName, PaneId};
-use rimz::mux::ClientFocusOptions;
-use rimz::pane::{PaneRef, RuntimeOwnerKind};
-use rimz::store::runtime::process_owner;
-use rimz::store::snapshot::pane_start_allows_bind;
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
 mod binding;
-mod binding_select;
 mod install;
 mod lifecycle;
 mod owner;

@@ -1,8 +1,14 @@
-use super::binding_select::{
-    BindingCandidateRecord, BindingSelectionMethod, BindingSession, prior_agent_panes,
-    select_focused_pane_binding, session_already_stamped,
-};
 use super::*;
+use serde::Serialize;
+
+use rimz::ids::{AgentKind, AgentSessionId, PaneId};
+use rimz::mux::ClientFocusOptions;
+use rimz::pane::{PaneRef, RuntimeOwnerKind};
+use rimz::store::runtime::process_owner;
+use rimz::store::snapshot::{
+    HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
+    HookPaneRecoveryPhase,
+};
 
 pub(super) fn enrich_pane_stamp_from_cache(
     workspace: &ResolvedWorkspace,
@@ -51,7 +57,7 @@ pub(super) fn recover_focused_pane_binding(
         .agent_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .map(ToOwned::to_owned)
+        .map(AgentSessionId::from)
     else {
         return;
     };
@@ -76,29 +82,36 @@ pub(super) fn recover_focused_pane_binding(
             return;
         }
     };
-    let prior = prior_agent_panes(&snapshot.agents);
-    if session_already_stamped(kind, &agent_id, &prior) {
+    let kind_id = AgentKind::new_unchecked(kind);
+    let phase = match observation.signal {
+        LifecycleSignal::Registered => HookPaneRecoveryPhase::Registered,
+        LifecycleSignal::TurnStarted => HookPaneRecoveryPhase::TurnStarted,
+        _ => return,
+    };
+    let recovery = HookPaneRecoveryContext::new(
+        &kind_id,
+        &agent_id,
+        observation.origin,
+        phase,
+        &snapshot.agents,
+    );
+    if recovery.already_stamped() {
         return;
     }
-    let incoming_registered_at = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.kind.as_str() == kind && agent.agent_id.as_str() == agent_id)
-        .and_then(|agent| agent.registered_at);
 
     let inputs = live_binding_inputs(
         mux_hint,
         &workspace.session_name,
         store.runtime_paths(),
         kind,
-        &agent_id,
+        agent_id.as_str(),
     );
     if inputs.panes.is_empty() {
         log_binding_recovery(
             store,
             BindingRecoveryLog::new(
                 kind,
-                &agent_id,
+                agent_id.as_str(),
                 observation,
                 &worktree_path,
                 BindingRecoveryOutcome::NoInputs,
@@ -107,18 +120,10 @@ pub(super) fn recover_focused_pane_binding(
         );
         return;
     }
-    let selection = select_focused_pane_binding(
-        BindingSession {
-            kind,
-            agent_id: &agent_id,
-            origin: observation.origin,
-            registered_at: incoming_registered_at,
-        },
+    let selection = recovery.select(
         &worktree_path,
-        &prior,
         &inputs.panes,
         inputs.client_focus.as_deref(),
-        matches!(observation.signal, LifecycleSignal::TurnStarted),
     );
     let outcome = match &selection.pane_id {
         Some(pane_id) => BindingRecoveryOutcome::Selected {
@@ -131,9 +136,15 @@ pub(super) fn recover_focused_pane_binding(
     };
     log_binding_recovery(
         store,
-        BindingRecoveryLog::new(kind, &agent_id, observation, &worktree_path, outcome)
-            .with_probes(inputs.probes)
-            .with_candidates(selection.candidates.clone()),
+        BindingRecoveryLog::new(
+            kind,
+            agent_id.as_str(),
+            observation,
+            &worktree_path,
+            outcome,
+        )
+        .with_probes(inputs.probes)
+        .with_candidates(selection.candidates.clone()),
     );
     if let Some(pane) = selection.pane {
         let pane_id = pane.pane_id.clone();
@@ -143,7 +154,7 @@ pub(super) fn recover_focused_pane_binding(
             pane = %pane_id,
             "lifecycle: recovered daemon-routed pane binding from live focus",
         );
-        apply_recovered_pane_binding(kind, observation, &agent_id, pane);
+        apply_recovered_pane_binding(kind, observation, agent_id.as_str(), pane);
     } else {
         warn!(
             target: "rimz::agent::binding",
@@ -202,7 +213,7 @@ struct BindingRecoveryLog {
     signal: String,
     cwd: String,
     probes: Vec<BindingProbeRecord>,
-    candidates: Vec<BindingCandidateRecord>,
+    candidates: Vec<HookPaneRecoveryCandidate>,
     outcome: BindingRecoveryOutcome,
 }
 
@@ -232,7 +243,7 @@ impl BindingRecoveryLog {
         self
     }
 
-    fn with_candidates(mut self, candidates: Vec<BindingCandidateRecord>) -> Self {
+    fn with_candidates(mut self, candidates: Vec<HookPaneRecoveryCandidate>) -> Self {
         self.candidates = candidates;
         self
     }
@@ -244,7 +255,7 @@ enum BindingRecoveryOutcome {
     NoInputs,
     Selected {
         pane_id: PaneId,
-        method: BindingSelectionMethod,
+        method: HookPaneRecoveryMethod,
     },
     Unbound {
         candidate_count: usize,
