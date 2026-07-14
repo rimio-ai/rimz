@@ -535,6 +535,7 @@ fn context_severity_honours_custom_and_misordered_bands() {
             percent: 40,
             tokens: 4_000,
         },
+        ..ContextMeterConfig::default()
     };
     assert_eq!(
         ContextSeverity::classify(5, Some(500), &tight),
@@ -572,6 +573,7 @@ fn context_severity_honours_custom_and_misordered_bands() {
             percent: 50,
             tokens: 500_000,
         },
+        ..ContextMeterConfig::default()
     };
     assert_eq!(
         ContextSeverity::classify(60, None, &misordered),

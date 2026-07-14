@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/cli/sidebar/tests.rs
-assertion_line: 89
 expression: strip_sgr(&ansi)
 ---
  ⌘ query-engine                /srv/code/query-engine
@@ -13,11 +12,11 @@ expression: strip_sgr(&ansi)
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47🮇
 ▌? codex · GPT 5.5 · xhigh · 272k               $4.36▐
 ▌  approve pricing cache write                       ▐
-▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━────────────   71%▐
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──────   71%▐
 ▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        ▐
 ▎⢄ claude · Opus 4.8 · xhigh · 1m              $12.40🮇
 ▎  port auth watcher                                 🮇
-▎  ▣ ━━━━━━━━━━━╺━╺╸───────────────────────────   34%🮇
+▎  ▣ ━━━━━━━━━━━━━━━━━━━━╺━━╺──────────────────   34%🮇
 ▎  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 🮇
 ▎⣾ cargo nextest                                     🮇
 ▎  integration::backend::zellij                      🮇

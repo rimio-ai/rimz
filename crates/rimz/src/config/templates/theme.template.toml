@@ -43,7 +43,8 @@
 ## max_provider_blocks = 3            # cap stacked provider blocks when provider_list is empty
 
 [theme.display.context_meter]
-# Agent-card context meter color stops (worse of fill % and absolute tokens).
+# Agent-card context meter geometry and color stops (worse of fill % and absolute tokens).
+## log_scale = true                  # log-warped fill geometry; false for linear
 ## green = { percent = 50, tokens = 128000 }
 ## yellow = { percent = 70, tokens = 192000 }
 ## amber = { percent = 80, tokens = 256000 }

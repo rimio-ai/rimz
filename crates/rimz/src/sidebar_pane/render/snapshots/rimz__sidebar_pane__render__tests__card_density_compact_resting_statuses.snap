@@ -12,7 +12,7 @@ expression: screen
  ⑂ main
  ? waiter · opus · high · 200k
    waiting task
-   ▣ ━━━━━━━━━━━━━╺━━━╸────────────────────────   42%
+   ▣ ━━━━━━━━━━━━━━━━━━━━━╺━━━━━───────────────   42%
  ! failed · opus · high · 200k
    failed task
  ⏸︎ paused · opus · high · 200k
@@ -21,7 +21,7 @@ expression: screen
    done task
  ⣾ runner · opus · high · 200k
    running task
-   ▣ ━━━━━━━━━━━━╺━━━──────────────────────────   38%
+   ▣ ━━━━━━━━━━━━━━━━━━━━╺━━━━╸────────────────   38%
  ○ idlebot · opus · high
 
 ▎⑂ other ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇

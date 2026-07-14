@@ -36,6 +36,7 @@ const LEGACY_SET_KEYS: &[&str] = &[
     "theme.display.max_cols",
     "theme.display.scrollbar",
     "theme.display.card_density",
+    "theme.display.context_meter.log_scale",
     "theme.display.context_meter.green",
     "theme.display.context_meter.yellow",
     "theme.display.context_meter.amber",
@@ -135,6 +136,7 @@ fn validates_config_key_read_and_write_surfaces() {
     for key in [
         "theme.display.max_cols",
         "theme.display.pixel",
+        "theme.display.context_meter.log_scale",
         "theme.display.budget_bar.burn_rate.red",
         "accounts.usage_limit_usd.codex",
         "accounts.budget.claude",
@@ -302,6 +304,31 @@ fn set_top_level_timezone_keeps_core_config_valid() {
         .position(|line| line.starts_with('['))
         .expect("first table");
     assert!(timezone < first_table);
+}
+
+#[test]
+fn set_context_meter_log_scale_round_trips_through_scalar_path() {
+    let mut doc = MachineConfig::template_theme()
+        .parse::<DocumentMut>()
+        .expect("template parses");
+    let agents_home = tempfile::tempdir().expect("agents home");
+    let key = parse_key("theme.display.context_meter.log_scale").expect("key");
+    apply_logical_key(
+        &mut doc,
+        std::path::Path::new("theme.toml"),
+        &key,
+        parse_set_value(&key, "false"),
+        agents_home.path(),
+    )
+    .expect("set log scale");
+
+    let config = MachineConfig::parse_text(
+        std::path::Path::new("theme.toml"),
+        &doc.to_string(),
+        agents_home.path(),
+    )
+    .expect("parse edited theme");
+    assert!(!config.theme.display.context_meter.log_scale);
 }
 
 #[test]

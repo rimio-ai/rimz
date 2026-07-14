@@ -471,6 +471,58 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
 }
 
 #[test]
+fn context_meter_can_restore_linear_fill_geometry() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("use the large window"),
+    );
+    codex.context_pct = Some(40);
+    codex.context_window = Some(1_000_000);
+    codex.total_tokens = Some(400_000);
+    let snapshot = snapshot_with(vec![codex]);
+    let theme = Theme::fixed(false);
+    let meter_geometry = |snapshot: &SidebarSnapshot| {
+        let meter = group_lines(snapshot, &theme, usize::MAX)
+            .into_iter()
+            .find(|line| line.to_string().contains("40%"))
+            .unwrap_or_else(|| panic!("context meter renders"))
+            .to_string();
+        let bar_cells = meter
+            .chars()
+            .filter(|glyph| matches!(glyph, '━' | '╸' | '─'))
+            .count();
+        let ink_halves = meter.chars().fold(0, |halves, glyph| {
+            halves
+                + match glyph {
+                    '━' => 2,
+                    '╸' => 1,
+                    _ => 0,
+                }
+        });
+        (bar_cells, ink_halves)
+    };
+
+    let (_, scaled_halves) = meter_geometry(&snapshot);
+    let mut linear = snapshot;
+    linear.theme.display.context_meter.log_scale = false;
+    let (bar_cells, linear_halves) = meter_geometry(&linear);
+
+    assert_eq!(
+        linear_halves,
+        (0.4 * bar_cells as f64 * 2.0).round() as usize,
+        "disabling log scale restores the raw 40% fill"
+    );
+    assert!(
+        scaled_halves > linear_halves,
+        "the default log curve gives the working range more room"
+    );
+}
+
+#[test]
 fn copilot_token_only_context_shows_model_and_composition_without_a_fake_gauge() {
     let mut copilot = agent(
         "copilot-1",

@@ -86,13 +86,15 @@ pub(super) fn bar_row(
 /// expanded token line), the bar between. The fill amount and its calm-blue →
 /// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
 /// `[theme.display.context_meter]`) come from the used percentage and the
-/// absolute tokens. When the statusline reports the per-message token
-/// breakdown, every severity splits the fill into cache-read / cache-write /
-/// fresh-input segments; each accent starts with a gap-fronted `╺` cap so even
-/// a half-cell fragment stays visible. The `▣` glyph wears the same severity,
-/// so glyph, bar, and the `▤` line below speak one urgency. The value prefers a one-decimal precise fraction
-/// (`78.2%`) over the integer gauge. An empty (0%) window reads the hollow
-/// `▢`; any usage fills it to `▣`.
+/// absolute tokens. Fill geometry is log-scaled by default so large-window
+/// working ranges stay visible; the displayed percentage remains the raw
+/// measurement. When the statusline reports the per-message token breakdown,
+/// every severity splits the fill into cache-read / cache-write / fresh-input
+/// segments; each accent starts with a gap-fronted `╺` cap so even a half-cell
+/// fragment stays visible. The `▣` glyph wears the same severity, so glyph,
+/// bar, and the `▤` line below speak one urgency. The value prefers a
+/// one-decimal precise fraction (`78.2%`) over the integer gauge. An empty (0%)
+/// window reads the hollow `▢`; any usage fills it to `▣`.
 pub(super) fn gauge_line(
     theme: &Theme,
     row: &SidebarRow,
@@ -104,6 +106,11 @@ pub(super) fn gauge_line(
     let precise = precise_context_pct(row);
     let value = pct_label(precise, percent);
     let fill = precise.unwrap_or_else(|| f64::from(percent));
+    let fill = if bands.log_scale {
+        log_scaled_fill(fill)
+    } else {
+        fill
+    };
     let severity = row_severity(row, bands);
     // One health amount drives the whole row: the bar's filled run, the `▣`
     // glyph, and the `▤` line below all use the same tone. The composition
@@ -146,6 +153,14 @@ pub(super) fn gauge_line(
         },
         width,
     ))
+}
+
+/// Log-curve strength for the drawn fill (`ln(1 + K·f) / ln(1 + K)`).
+const LOG_SCALE_K: f64 = 6.0;
+
+fn log_scaled_fill(pct: f64) -> f64 {
+    let fraction = (pct / 100.0).clamp(0.0, 1.0);
+    100.0 * (1.0 + LOG_SCALE_K * fraction).ln() / (1.0 + LOG_SCALE_K).ln()
 }
 
 /// The placeholder context bar for a selected, not-yet-started idle card.
@@ -395,4 +410,32 @@ pub(super) fn context_tokens_line(
         agent(row).map_or(0, |agent| agent.compaction_count),
     ));
     Some(pin_right(left, age, width))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_scaled_fill;
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() <= 0.1,
+            "expected {expected:.1}, got {actual:.3}"
+        );
+    }
+
+    #[test]
+    fn log_scaled_fill_preserves_bounds_and_known_points() {
+        assert_close(log_scaled_fill(0.0), 0.0);
+        assert_close(log_scaled_fill(10.0), 24.1);
+        assert_close(log_scaled_fill(40.0), 62.9);
+        assert_close(log_scaled_fill(80.0), 90.3);
+        assert_close(log_scaled_fill(100.0), 100.0);
+    }
+
+    #[test]
+    fn log_scaled_fill_is_monotonic() {
+        for pct in 0..100 {
+            assert!(log_scaled_fill(f64::from(pct)) < log_scaled_fill(f64::from(pct + 1)));
+        }
+    }
 }

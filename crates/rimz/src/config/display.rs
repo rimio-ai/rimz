@@ -170,15 +170,19 @@ impl DisplayConfig {
     }
 }
 
-/// The context meter's severity bands: `green` is where the meter starts
-/// leaving calm, then `yellow`, `amber`, and `red` name the reached color stops
-/// on both axes - the fill percentage and the absolute tokens in the window.
-/// Severity is the worse of the two axes, so a large-window model calm by
-/// percentage still warms by sheer volume. Below `green` on both axes the meter
-/// rests calm green.
+/// The context meter's display settings and severity bands. `green` is where
+/// the meter starts leaving calm, then `yellow`, `amber`, and `red` name the
+/// reached color stops on both axes - the fill percentage and the absolute
+/// tokens in the window. Severity is the worse of the two axes, so a
+/// large-window model calm by percentage still warms by sheer volume. Below
+/// `green` on both axes the meter rests calm green.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ContextMeterConfig {
+    /// Log-warp the drawn fill (`ln(1 + 6f) / ln(7)`) so the working range of a
+    /// large context window keeps visual space. Display-only; `false` restores
+    /// linear fill geometry.
+    pub log_scale: bool,
     /// Where the meter leaves calm green and starts warming toward yellow.
     pub green: ContextBand,
     /// Where the meter reaches yellow and starts warming toward amber.
@@ -192,6 +196,7 @@ pub struct ContextMeterConfig {
 impl Default for ContextMeterConfig {
     fn default() -> Self {
         Self {
+            log_scale: true,
             green: ContextBand {
                 percent: 50,
                 tokens: 128_000,

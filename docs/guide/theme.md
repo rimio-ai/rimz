@@ -137,10 +137,11 @@ provider_tabs = "auto"
 
 The context meter paints a pixel-precise stripe when `pixel = "auto"`, truecolor is active, and kitty graphics reaches a kitty or Ghostty client directly or through tmux 3.6+ with `allow-passthrough`; Zellij and every unsupported path use the half-cell bar. `NO_COLOR` always uses the shape-only cell bar. Set `pixel = "off"` to opt out of both the pixel meter and pixel pets.
 
-Two nested tables set the meter color stops. The **context meter** (`[theme.display.context_meter]`) warms a card's context read from green: each stop names a fill percentage *and* an absolute token count, and severity is the worse of the two, so a large-window model calm by percentage still warms by sheer volume. The **budget bar** (`[theme.display.budget_bar]`) names the *remaining* budget percent at which the draining bar reaches each warm stop, and its nested `[theme.display.budget_bar.burn_rate]` colors the reset marker by pace (`100` = on-pace, `200` = twice as fast as the window can sustain); `green = 67` starts the cool under-pace tail and `deep_green = 33` saturates it once enough of the window has elapsed. The shipped numbers are in the template.
+Two nested tables set the meter color stops. The **context meter** (`[theme.display.context_meter]`) warms a card's context read from green: each stop names a fill percentage *and* an absolute token count, and severity is the worse of the two, so a large-window model calm by percentage still warms by sheer volume. Its drawn fill is log-scaled so a 1M-window model's working range keeps visual space instead of bunching at the left edge; `log_scale = false` restores linear geometry, while the displayed percentage and color stops always read raw usage. The **budget bar** (`[theme.display.budget_bar]`) names the *remaining* budget percent at which the draining bar reaches each warm stop, and its nested `[theme.display.budget_bar.burn_rate]` colors the reset marker by pace (`100` = on-pace, `200` = twice as fast as the window can sustain); `green = 67` starts the cool under-pace tail and `deep_green = 33` saturates it once enough of the window has elapsed. The shipped numbers are in the template.
 
 ```toml
 [theme.display.context_meter]
+log_scale = true
 amber = { percent = 80, tokens = 256000 }
 
 [theme.display.budget_bar]
