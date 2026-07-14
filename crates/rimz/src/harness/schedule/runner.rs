@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -46,13 +46,18 @@ pub enum RunLockAttempt {
     Held(Option<RunLockInfo>),
 }
 
+pub enum RunLockState {
+    Available,
+    Held(Option<RunLockInfo>),
+}
+
 pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt> {
-    let runtime =
-        RuntimePaths::for_workspace(WorkspaceId::from_project_root(&entry.resolved_root()))
-            .context("locating loop task runtime")?;
-    std::fs::create_dir_all(&runtime.root)
-        .with_context(|| format!("creating loop task runtime `{}`", runtime.root.display()))?;
-    let path = runtime.root.join(format!("loop-run-{name}.lock"));
+    let path = run_lock_path(name, entry)?;
+    let parent = path
+        .parent()
+        .context("loop run lock path has no runtime parent")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("creating loop task runtime for `{}`", path.display()))?;
     let file = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
@@ -61,6 +66,35 @@ pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt>
         .open(&path)
         .with_context(|| format!("opening loop run lock `{}`", path.display()))?;
     acquire_run_lock_file(file, &path)
+}
+
+pub fn probe_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockState> {
+    let path = run_lock_path(name, entry)?;
+    probe_run_lock_path(&path)
+}
+
+fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RunLockState::Available);
+        }
+        Err(err) => {
+            return Err(err).with_context(|| format!("opening loop run lock `{}`", path.display()));
+        }
+    };
+    probe_run_lock_file(file, path)
+}
+
+fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
+    let runtime =
+        RuntimePaths::for_workspace(WorkspaceId::from_project_root(&entry.resolved_root()))
+            .context("locating loop task runtime")?;
+    Ok(runtime.root.join(format!("loop-run-{name}.lock")))
 }
 
 fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> {
@@ -83,16 +117,29 @@ fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> 
             Ok(RunLockAttempt::Acquired(RunLockGuard { file }))
         }
         Err(std::fs::TryLockError::WouldBlock) => {
-            let mut payload = Vec::new();
-            let info = file
-                .read_to_end(&mut payload)
-                .ok()
-                .and_then(|_| serde_json::from_slice(&payload).ok());
-            Ok(RunLockAttempt::Held(info))
+            Ok(RunLockAttempt::Held(read_run_lock_info(&mut file)))
         }
         Err(err) => Err(std::io::Error::from(err))
             .with_context(|| format!("locking loop run lock `{}`", path.display())),
     }
+}
+
+fn probe_run_lock_file(mut file: File, path: &Path) -> Result<RunLockState> {
+    match file.try_lock() {
+        Ok(()) => Ok(RunLockState::Available),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            Ok(RunLockState::Held(read_run_lock_info(&mut file)))
+        }
+        Err(err) => Err(std::io::Error::from(err))
+            .with_context(|| format!("probing loop run lock `{}`", path.display())),
+    }
+}
+
+fn read_run_lock_info(file: &mut File) -> Option<RunLockInfo> {
+    let mut payload = Vec::new();
+    file.read_to_end(&mut payload)
+        .ok()
+        .and_then(|_| serde_json::from_slice(&payload).ok())
 }
 
 pub struct CheckOutcome {
@@ -451,6 +498,15 @@ mod tests {
     #[test]
     fn run_lock_reports_holder_metadata_and_accepts_empty_legacy_file() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let missing_path = dir.path().join("missing.lock");
+        assert!(matches!(
+            probe_run_lock_path(&missing_path).expect("probe missing lock"),
+            RunLockState::Available
+        ));
+        assert!(
+            !missing_path.exists(),
+            "probing should not create a lock file"
+        );
         let path = dir.path().join("task.lock");
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -480,6 +536,21 @@ mod tests {
             RunLockAttempt::Acquired(_) => panic!("held lock should reject contender"),
         }
         drop(guard);
+        let before_probe = std::fs::read(&path).expect("read lock before probe");
+        let probe = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open probe");
+        assert!(matches!(
+            probe_run_lock_file(probe, &path).expect("probe available lock"),
+            RunLockState::Available
+        ));
+        assert_eq!(
+            std::fs::read(&path).expect("read lock after probe"),
+            before_probe,
+            "probing an available lock should not rewrite its metadata"
+        );
 
         let empty_path = dir.path().join("legacy.lock");
         let empty = std::fs::OpenOptions::new()
@@ -496,8 +567,8 @@ mod tests {
             .open(&empty_path)
             .expect("open empty contender");
         assert!(matches!(
-            acquire_run_lock_file(contender, &empty_path).expect("contend for empty lock"),
-            RunLockAttempt::Held(None)
+            probe_run_lock_file(contender, &empty_path).expect("probe empty lock"),
+            RunLockState::Held(None)
         ));
     }
 

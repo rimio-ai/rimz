@@ -349,7 +349,7 @@ fn watch_row_model(
             window_reset_for(entry),
         )
     });
-    let running = matches!(acquire_run_lock(name, entry), Ok(RunLockAttempt::Held(_)));
+    let running = matches!(probe_run_lock(name, entry), Ok(RunLockState::Held(_)));
     let state = if running {
         RowState::Running
     } else if blocked {
@@ -1132,14 +1132,14 @@ fn write_show_facts(
     let room_is_open = room_open(&root);
     let blocked_state = blocked_project_state(source);
     let strike_count = strikes::load().get(name).copied().unwrap_or(0);
-    let active = match acquire_run_lock(name, entry) {
-        Ok(RunLockAttempt::Held(Some(info))) => Some(format!(
+    let active = match probe_run_lock(name, entry) {
+        Ok(RunLockState::Held(Some(info))) => Some(format!(
             "run in progress · pid {} · started {}",
             info.pid,
             ui::rel_age(info.started_at, Timestamp::now())
         )),
-        Ok(RunLockAttempt::Held(None)) => Some("run in progress".to_owned()),
-        Ok(RunLockAttempt::Acquired(_)) | Err(_) => None,
+        Ok(RunLockState::Held(None)) => Some("run in progress".to_owned()),
+        Ok(RunLockState::Available) | Err(_) => None,
     };
     let mut kv = ui::KeyVals::new().indent(2);
     kv.push("task", ui::cell(task_subject(entry)));

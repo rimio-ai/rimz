@@ -34,10 +34,10 @@ use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult,
 };
 use rimz::harness::schedule::runner::{
-    CHECK_DEFAULT_TIMEOUT, CheckEcho, RunLockAttempt, RunLockInfo, acquire_run_lock,
+    CHECK_DEFAULT_TIMEOUT, CheckEcho, RunLockAttempt, RunLockInfo, RunLockState, acquire_run_lock,
     augment_prompt, check_only_result, check_record, check_timeout, deadline_expired,
-    polarity_fires, reset_window_already_running, run_check, surplus_gate, tail_output,
-    window_already_running, window_reset_at,
+    polarity_fires, probe_run_lock, reset_window_already_running, run_check, surplus_gate,
+    tail_output, window_already_running, window_reset_at,
 };
 use rimz::harness::schedule::{
     self,
