@@ -212,7 +212,7 @@ The account probe receives an empty stdin stream and returns either a login or a
 A provider-defined quota can use a stable scope instead of a duration:
 
 ```json
-{"plan":"business","account_id":"account-123","rate_limit_windows":[{"scope":{"id":"premium_interactions","label":"prm"},"used_percentage":42,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"},{"scope":{"id":"chat","label":"cht"},"used_percentage":7,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"}]}
+{"plan":"business","account_id":"account-123","rate_limit_windows":[{"scope":{"id":"build_minutes","label":"bld"},"used_percentage":42,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"},{"scope":{"id":"deployments","label":"dep"},"used_percentage":7,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"}]}
 ```
 
 ```json

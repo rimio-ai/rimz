@@ -65,7 +65,7 @@ These totals are account-global, like `rimz stats`: they count every project on 
 
 #### Budget is not spend
 
-The `5h` and `7d` bars measure a different thing from the dollar figures. They are the included budget of your subscription plan, draining toward the reset printed beside them (`↻ 1h47m`), and they fill with what is left. A provider can instead name independent quotas with a compact label, such as Copilot Premium `prm` and Chat `cht`; these labels identify lanes rather than durations. A plan like Claude Max or ChatGPT Pro refills on its duration windows automatically, so those bars are your read on pace, not a bill. An API-key account has no such window, so its block shows a single `api` row of trailing-month spend instead.
+The `5h` and `7d` bars measure a different thing from the dollar figures. They are the included budget of your subscription plan, draining toward the reset printed beside them (`↻ 1h47m`), and they fill with what is left. A provider or process plugin can instead name independent quotas with compact labels such as `bld` and `dep`; these labels identify lanes rather than durations. A plan like Claude Max or ChatGPT Pro refills on its duration windows automatically, so those bars are your read on pace, not a bill. An API-key account has no such window, so its block shows a single `api` row of trailing-month spend instead.
 
 A named quota with no reported duration still shows the provider's real reset, but RimZ makes no burn-pace, surplus, not-started, priming, or rolling-refill claim from that timestamp. Each expired cached named quota becomes unknown independently until the provider refreshes it. A genuinely exhausted turn can still use a future reported reset as its wake time.
 
