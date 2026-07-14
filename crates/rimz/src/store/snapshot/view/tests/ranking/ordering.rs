@@ -316,6 +316,7 @@ fn inactive_groups_sink_below_process_groups() {
         commits_behind: None,
         trunk: None,
         worktree_backed: false,
+        finished: false,
         clean: None,
         landed: None,
         trunk_sync: None,
@@ -635,6 +636,7 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         commits_behind: None,
         trunk: None,
         worktree_backed: false,
+        finished: false,
         clean: None,
         landed: None,
         trunk_sync: None,
@@ -658,6 +660,26 @@ fn listing_roster_order_matches_row_order_when_rows_have_no_sidebar_state() {
         .collect::<Vec<_>>();
 
     assert_eq!(row_order, listing_order);
+}
+
+#[test]
+fn listing_roster_uses_the_same_group_activity_rung() {
+    let agents = vec![
+        agent_in("success", "/repo/a-success", AgentStatus::Success, 1_000).in_pane("%1"),
+        agent_in("running", "/repo/z-working", AgentStatus::Running, 2_000).in_pane("%2"),
+        agent_in("idle", "/repo/z-working", AgentStatus::Idle, 3_000).in_pane("%3"),
+    ];
+    let snapshot = room(agents);
+    let refs = snapshot.agents.iter().collect::<Vec<_>>();
+    let groups = group_live_agents_by_worktree(&refs, &snapshot);
+
+    assert_eq!(
+        groups
+            .iter()
+            .map(|group| group.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["z-working", "a-success"]
+    );
 }
 
 fn stamp_default_attention(row: &mut SidebarRow) {

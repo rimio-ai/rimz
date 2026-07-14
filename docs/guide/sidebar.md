@@ -59,7 +59,7 @@ A row of zeros with no unread count means nothing needs you, so you can skip the
 
 The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation, so each group reads as one bounded block, and the group header names a linked pull request (`#91`) beside the worktree name while carrying the work's git story on the right: commits ahead and behind the trunk, lines added and removed (uncommitted and untracked work counts too), and a marker for where the work stands, from a plain branch through an open, merged, or closed pull request. Panes outside every project checkout fold into a dim `external` divider at the very bottom.
 
-Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) decides the order), and a busy worktree caps at six rows with a `+K more` line that only ever hides idle agents and quiet shells, never anything that might need you.
+Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) decides the order), and a busy worktree caps at six rows with a `+K more` line that only hides idle agents and quiet shells while work remains active. A finished line of work collapses completely to its header and a `+K done` line, including unread success cards; click the line or apply the `s` status filter to reveal the roster.
 
 ### The provider dashboard
 
@@ -169,13 +169,15 @@ Measured from each card's last activity, in three windows:
 2. **Between one hour and twenty-four, everything cools.** Urgency decays instead of climbing: a stale ask still leads stale calm work, but the whole window sinks beneath anything currently hot, so yesterday's unanswered question stops competing with the agent blocked right now.
 3. **Past twenty-four hours, a card sleeps.** It parks in an archive at the back, keeping only its state order, so an archived ask still reads above an archived idle agent.
 
+A non-dirty merged or closed line of work with no running or attention member skips the clock and enters the archive immediately. A new run, ask, failure, or park revives it into the activity-ranked bands.
+
 ### Teams read as one
 
 A co-launched team is one line of work, so it holds one contiguous block and takes one state derived from its members: any member asking or failed makes the team **blocked**, else a parked member makes it **paused**, else a running member makes it **working**, else a finished member makes it **done**, else it is **idle**. One blocked member lifts the whole block, so a planner waiting on you blocks its coder and reviewer too, whatever they are doing; a team where one member finished while others still run reads as working, because the team is done only when every member is. The block ranks by that derived state on its oldest blocked member's clock and stays contiguous, so teammates sit side by side in their declared role order.
 
-### Git decides among the calm
+### Activity decides among the calm
 
-Attention always outranks git: a git-backed group with a blocked agent leads whatever its diff looks like. Among git-backed groups whose agents are all calm, the git verdict answers *is this work landed?* **Dirty** leads, because uncommitted changes are unfinished business; **clean** follows, committed but still to land; **done** sinks, because content on trunk or a merged or closed PR with every agent resting means the work is finished. A group with no git verdict sits between clean and done: no evidence of pending work, and no proof it landed.
+Attention always outranks git: a git-backed group with a blocked agent leads whatever its diff looks like. Among calm groups, activity answers *is this line moving?* first: **working** groups lead, **semi-finished** groups whose agents all succeeded follow, then **idle** agent groups, then process-only groups. Git refines groups at the same activity rung: **dirty** leads, **clean** follows, an unknown verdict follows clean, and **done** sinks. Done requires a merged or closed pull request or work that the trunk comparison classifies as merged; a pristine fork stays clean rather than reading as landed work.
 
 ### The shape that always holds
 
@@ -184,7 +186,7 @@ Two partitions hold regardless of any score, so the column keeps one stable outl
 - **Agent cards lead their worktree; process rows form the tail.** Shells, builds, and servers are context, so they seat below every agent card.
 - **Project worktrees lead; out-of-project panes tail.** Panes outside every project checkout fold into the dim `external` divider that always sorts last, keeping an attention-only tally (`? n` / `! n`) so an out-of-project ask still surfaces.
 
-The six-row cap trims only a worktree's idle and process tail. Anything active, blocked, parked, finished, unread, or focused stays visible, so a card that might need you never hides behind the count.
+The six-row cap trims only a worktree's idle and process tail while the line of work remains active. Anything active, blocked, parked, finished, unread, or focused stays visible under that ordinary cap. A terminal group is the deliberate exception: its non-dirty merged or closed verdict is acceptance evidence, so every row except a focused or order-held row hides behind `+K done`; click the toggle or apply the `s` filter to reveal it.
 
 ## Tuning
 

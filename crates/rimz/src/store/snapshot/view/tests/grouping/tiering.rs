@@ -1,5 +1,6 @@
 use super::*;
-use crate::agents::ATTENTION_AGE_CEILING_SECS;
+use crate::agents::{ATTENTION_AGE_CEILING_SECS, DEFAULT_INACTIVE_AFTER_SECS};
+use crate::{RowCard, WorktreeTrunkSync};
 
 fn ranked_snapshot(mut agents: Vec<AgentState>) -> SidebarSnapshot {
     let mut panes = Vec::new();
@@ -86,7 +87,7 @@ fn git_rung_orders_calm_worktree_groups() {
             }
             "merged" => {
                 group.clean = Some(true);
-                group.landed = Some(true);
+                group.trunk_sync = Some(WorktreeTrunkSync::Merged);
             }
             "unknown" => {}
             label => panic!("unexpected group {label}"),
@@ -99,6 +100,141 @@ fn git_rung_orders_calm_worktree_groups() {
         vec!["dirty", "clean", "unknown", "merged"],
         "git rung decides among calm groups after band and urgency tie"
     );
+}
+
+#[test]
+fn calm_activity_precedes_git_for_working_and_success_groups() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("success", "/repo/success", AgentStatus::Success, 1_000),
+        agent_in("running", "/repo/working", AgentStatus::Running, 2_000),
+        agent_in("idle", "/repo/working", AgentStatus::Idle, 3_000),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        match group.label.as_str() {
+            "success" => group.clean = Some(false),
+            "working" => {
+                group.clean = Some(true);
+                group.trunk_sync = Some(WorktreeTrunkSync::Merged);
+            }
+            label => panic!("unexpected group {label}"),
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["working", "success"]);
+    assert!(
+        !snapshot.worktree_groups[0].finished,
+        "a running member revives a git-finished line of work"
+    );
+}
+
+#[test]
+fn clean_success_group_leads_merged_success_group() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),
+        agent_in("clean", "/repo/clean", AgentStatus::Success, 2_000),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        group.clean = Some(true);
+        if group.label == "merged" {
+            group.trunk_sync = Some(WorktreeTrunkSync::Merged);
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["clean", "merged"]);
+    assert!(!snapshot.worktree_groups[0].finished);
+    assert!(snapshot.worktree_groups[1].finished);
+}
+
+#[test]
+fn merged_success_archives_immediately_and_attention_revives_it() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("done", "/repo/done", AgentStatus::Success, 1_000).active_ago(5 * 60),
+        agent_in("warm", "/repo/warm", AgentStatus::Idle, 2_000)
+            .active_ago(i64::from(DEFAULT_INACTIVE_AFTER_SECS) + 1),
+    ]);
+    let done = snapshot
+        .worktree_groups
+        .iter_mut()
+        .find(|group| group.label == "done")
+        .expect("done group present");
+    done.clean = Some(true);
+    done.trunk_sync = Some(WorktreeTrunkSync::Merged);
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["warm", "done"]);
+    let done = snapshot
+        .worktree_groups
+        .iter()
+        .find(|group| group.label == "done")
+        .expect("done group present");
+    assert!(done.finished);
+    assert!(
+        done.rows.iter().all(|row| !row.inactive && !row.archived),
+        "the group archives from its terminal verdict, not its activity clock"
+    );
+
+    let done = snapshot
+        .worktree_groups
+        .iter_mut()
+        .find(|group| group.label == "done")
+        .expect("done group present");
+    done.rows[0].as_agent_mut().expect("agent row").status = AgentStatus::Running;
+    snapshot.sort_groups_for_presentation();
+    assert_eq!(labels(&snapshot), vec!["done", "warm"]);
+    assert!(!snapshot.worktree_groups[0].finished);
+
+    snapshot.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .expect("agent row")
+        .status = AgentStatus::Waiting;
+    snapshot.sort_groups_for_presentation();
+    assert_eq!(labels(&snapshot), vec!["done", "warm"]);
+    assert!(
+        !snapshot.worktree_groups[0].finished,
+        "attention keeps a merged group hot"
+    );
+}
+
+#[test]
+fn pristine_landed_fork_stays_clean_until_work_is_finished() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("merged", "/repo/merged", AgentStatus::Success, 1_000),
+        agent_in("pristine", "/repo/pristine", AgentStatus::Success, 2_000),
+    ]);
+    for group in &mut snapshot.worktree_groups {
+        group.clean = Some(true);
+        group.landed = Some(true);
+        match group.label.as_str() {
+            "merged" => group.trunk_sync = Some(WorktreeTrunkSync::Merged),
+            "pristine" => group.trunk_sync = Some(WorktreeTrunkSync::Pristine),
+            label => panic!("unexpected group {label}"),
+        }
+    }
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["pristine", "merged"]);
+    assert!(!snapshot.worktree_groups[0].finished);
+    assert!(snapshot.worktree_groups[1].finished);
+}
+
+#[test]
+fn process_only_group_tails_calm_agent_groups() {
+    let mut snapshot = ranked_snapshot(vec![
+        agent_in("process", "/repo/process", AgentStatus::Idle, 1_000),
+        agent_in("idle", "/repo/idle", AgentStatus::Idle, 2_000),
+    ]);
+    let process = snapshot
+        .worktree_groups
+        .iter_mut()
+        .find(|group| group.label == "process")
+        .expect("process group present");
+    process.rows[0].card = RowCard::Process(crate::ProcessCard::default());
+    process.status_counts.clear();
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(labels(&snapshot), vec!["idle", "process"]);
 }
 
 #[test]
@@ -200,7 +336,7 @@ fn attention_member_overrides_git_rung() {
             "dirty" => group.clean = Some(false),
             "merged" => {
                 group.clean = Some(true);
-                group.landed = Some(true);
+                group.trunk_sync = Some(WorktreeTrunkSync::Merged);
             }
             label => panic!("unexpected group {label}"),
         }
@@ -226,7 +362,7 @@ fn external_group_tails_even_merged_project_work() {
         .find(|group| group.label == "merged")
         .expect("merged group present");
     merged.clean = Some(true);
-    merged.landed = Some(true);
+    merged.trunk_sync = Some(WorktreeTrunkSync::Merged);
     snapshot.sort_groups_for_presentation();
 
     assert_eq!(

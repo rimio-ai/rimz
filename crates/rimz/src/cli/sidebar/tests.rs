@@ -466,8 +466,14 @@ fn gallery_fixture_frames_render_decisive_markers() {
     );
     assert_fixture_frame_contains(
         SidebarFixtureState::Reach,
-        &["remote-link", "edge-cache", "Claude Max", "network-check"],
+        &[
+            "remote-link",
+            "browser-reach",
+            "Claude Max",
+            "network-check",
+        ],
     );
+    assert_fixture_frame_lacks(SidebarFixtureState::Reach, &["edge-cache"]);
 }
 
 fn agent_card_by_id<'a>(snapshot: &'a rimz::SidebarSnapshot, id: &str) -> &'a rimz::AgentCard {

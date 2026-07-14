@@ -674,6 +674,7 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
         commits_behind: None,
         trunk: None,
         worktree_backed: false,
+        finished: false,
         clean: None,
         landed: None,
         trunk_sync: None,

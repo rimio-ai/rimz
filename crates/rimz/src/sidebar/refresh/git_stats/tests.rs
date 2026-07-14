@@ -113,6 +113,7 @@ fn channel_group(label: &str, path: &Path) -> SidebarWorktreeGroup {
         commits_behind: None,
         trunk: None,
         worktree_backed: false,
+        finished: false,
         clean: None,
         landed: None,
         trunk_sync: None,

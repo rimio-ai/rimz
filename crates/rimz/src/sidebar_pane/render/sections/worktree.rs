@@ -178,7 +178,13 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_with_meter(
         });
         lines.push(with_gutter(
             theme,
-            Line::styled(format!("  +{hidden} more"), theme.muted()),
+            Line::styled(
+                format!(
+                    "  +{hidden} {}",
+                    if group.finished { "done" } else { "more" }
+                ),
+                theme.muted(),
+            ),
             lane,
             None,
             width,

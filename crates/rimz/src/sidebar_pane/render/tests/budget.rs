@@ -178,6 +178,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
                 commits_behind: Some(1),
                 trunk: Some("main".to_owned()),
                 worktree_backed: false,
+                finished: false,
                 clean: None,
                 landed: None,
                 trunk_sync: None,

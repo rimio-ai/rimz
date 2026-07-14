@@ -303,8 +303,9 @@ pub const WORKTREE_ROW_CAP: usize = 6;
 ///
 /// With a make-up filter active, every matching row passes: the cockpit bucket
 /// count and the narrowed body stay exact, ignoring any held visibility set.
-/// With an expanded group, the full roster passes. Otherwise the calm
-/// idle/process tail trims to
+/// With an expanded group, the full roster passes. A finished group otherwise
+/// collapses every row except the focused pane and rows held from the previous
+/// order. For active groups the calm idle/process tail trims to
 /// [`WORKTREE_ROW_CAP`], always keeping unread rows, non-idle agent rows, and
 /// the focused pane. Inactive success rows still stay visible so a renderer
 /// never drops an unread stamp before receipts converge; sticky unread idle
@@ -329,6 +330,16 @@ pub(crate) fn group_visible_rows<'a>(
     }
     if expanded {
         return group.rows.iter().collect();
+    }
+    if group.finished {
+        return group
+            .rows
+            .iter()
+            .filter(|row| {
+                row.pane.as_ref().is_some_and(|pane| pane.is_focused)
+                    || held.is_some_and(|ids| ids.contains(&row.id))
+            })
+            .collect();
     }
 
     capped_visible_rows(&group.rows, held)

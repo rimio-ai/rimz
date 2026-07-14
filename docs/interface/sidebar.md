@@ -302,9 +302,9 @@ A [directory room](../../ARCHITECTURE.md) groups git-backed agents by the worktr
  ○ zsh
 ```
 
-**Ranking is automatic: unread, hot, warm, then archived.** Within a worktree, rows first sort by inbox and age band, then by a fixed-point attention score: `waiting`, `failed`, and `paused` heat as their clock approaches the one-hour boundary, warm rows decay until 24 hours, and archived rows park below current work. Calm rows keep stable pane order within equal states, and worktrees sort by their most-urgent member plus git state when attention is tied.
+**Ranking is automatic: unread, hot, warm, then archived.** Within a worktree, rows first sort by inbox and age band, then by a fixed-point attention score: `waiting`, `failed`, and `paused` heat as their clock approaches the one-hour boundary, warm rows decay until 24 hours, and archived rows park below current work. Calm rows keep stable pane order within equal states, and worktrees sort by their most-urgent member, then by calm activity — working, all-success, idle, process-only — before git state refines ties. A non-dirty merged or closed group with no running or attention member enters the archive immediately.
 
-**The cap.** Each worktree shows a capped number of rows with a dim `+K more`. Click `+K more` to expand that group in place; the expanded group shows every row and a dim `− less` line that collapses it. The cap trims only the idle/process tail; active, blocked, paused, finished, unread, and focused rows stay visible:
+**The cap.** Each active worktree shows a capped number of rows with a dim `+K more`. Click `+K more` to expand that group in place; the expanded group shows every row and a dim `− less` line that collapses it. The ordinary cap trims only the idle/process tail; active, blocked, paused, finished, unread, and focused rows stay visible. A finished group collapses to its header and a dim `+K done`, hiding unread success too; the toggle or `s` status filter reveals it:
 
 ```
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
@@ -315,6 +315,11 @@ A [directory room](../../ARCHITECTURE.md) groups git-backed agents by the worktr
 ▎  task-1
 ▎  ▢ ──────────────────────────────────────────    0%
 ▎  +3 more
+```
+
+```
+ ⑂ merged-work ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  merged
+   +3 done
 ```
 
 ### Jump — the row is the link

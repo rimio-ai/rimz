@@ -189,6 +189,82 @@ fn make_up_filter_ignores_held_visible_rows() {
     assert!(visible.is_empty(), "filter wins over held rows");
 }
 
+#[test]
+fn finished_group_collapses_unread_success_until_revealed() {
+    let mut rows = vec![
+        agent_row("success-unread", AgentStatus::Success),
+        agent_row("success", AgentStatus::Success),
+    ];
+    rows[0].unread = true;
+    let mut group = group(rows);
+    group.finished = true;
+
+    assert!(
+        visible_ids(&group, None, false).is_empty(),
+        "terminal acceptance hides even unread success rows"
+    );
+    let held = HashSet::from(["success-unread".to_owned()]);
+    assert_eq!(
+        visible_ids_with_held(&group, None, false, Some(&held)),
+        ["success-unread"],
+        "the order hold keeps a row visible while the terminal collapse settles"
+    );
+    assert_eq!(visible_ids(&group, None, true).len(), 2);
+    assert_eq!(
+        visible_ids(
+            &group,
+            Some(BodyFilter::Status(AgentStatus::Success)),
+            false
+        )
+        .len(),
+        2,
+        "a status filter reveals the terminal roster"
+    );
+
+    group.rows[1].pane.as_mut().expect("pane").is_focused = true;
+    assert_eq!(visible_ids(&group, None, false), ["success"]);
+    group.rows[1].pane.as_mut().expect("pane").is_focused = false;
+
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut more_hits = Vec::new();
+    let mut row_index = 0;
+    let snapshot = snapshot_with(Vec::new());
+    worktree_group_lines(
+        &Theme::fixed(true),
+        &group,
+        &[],
+        fixed_now(),
+        54,
+        &snapshot.theme.display.context_meter,
+        snapshot.theme.display.card_density,
+        None,
+        false,
+        None,
+        &mut row_index,
+        0,
+        0,
+        &CostRolls::default(),
+        None,
+        &mut lines,
+        &mut map,
+        &mut more_hits,
+    );
+    let texts = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(lines.len(), 2, "header plus terminal toggle: {texts:?}");
+    assert!(texts.iter().any(|line| line.contains("+2 done")));
+    assert_eq!(more_hits.len(), 1);
+}
+
 fn assert_visible(
     rows: &[crate::SidebarRow],
     filter: Option<BodyFilter>,
@@ -235,6 +311,7 @@ fn group(rows: Vec<crate::SidebarRow>) -> crate::SidebarWorktreeGroup {
         commits_behind: None,
         trunk: None,
         worktree_backed: false,
+        finished: false,
         clean: None,
         landed: None,
         trunk_sync: None,

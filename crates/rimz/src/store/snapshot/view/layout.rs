@@ -6,9 +6,10 @@ use crate::agents::{AgentState, AgentStatus};
 use crate::store::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
-use super::score::{self, GitRung};
+use super::score::{self, GitRung, GroupCalm};
 use super::{
-    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
+    SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+    WorktreePrState, WorktreeTrunkSync,
 };
 
 /// The branch shared by a group's branched rows, if any. Returns `None` for a
@@ -261,11 +262,13 @@ pub(super) fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
 pub(super) fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
     sort_rows(&mut group.rows);
     group.status_counts = status_counts(&group.rows);
+    group.finished = group_finished(group);
 }
 
 pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) {
     for group in groups.iter_mut() {
         sort_rows(&mut group.rows);
+        group.finished = group_finished(group);
     }
     groups.sort_by(compare_groups);
 }
@@ -656,10 +659,9 @@ pub(super) fn compare_groups(
     // displaces project work, so it sorts below every project group — below even
     // archived groups, and regardless of any `waiting`/`failed` member it holds.
     // Among project groups the same macro bands apply, read off the liveliest
-    // member: hot work, warm work, archive. Score decides attention rows inside
-    // the winning band, calm members collapse to one constant, process-only live
-    // groups tail calm agent groups, git decides among calm worktree groups,
-    // then pane creation and label settle ties.
+    // member: hot work, warm work, archive. Urgency decides attention inside the
+    // winning band, then calm activity orders working, successful, idle, and
+    // process-only groups before git, pane creation, and label settle ties.
     group_sort_key(
         left.rows.iter().map(row_rank_facts),
         left.kind,
@@ -679,7 +681,7 @@ struct GroupRankKey {
     external: bool,
     band: u8,
     urgency: Reverse<u32>,
-    agentless: bool,
+    calm: GroupCalm,
     git: GitRung,
     earliest_ordinal: StartKey<u64>,
     label: String,
@@ -696,27 +698,34 @@ fn group_sort_key<'a>(
     // rows instead of borrowed from `rows.first()`; an empty group sinks last.
     let mut band = u8::MAX;
     let mut urgency = 0;
-    let mut agentless = true;
+    let mut calm = GroupCalm::Processes;
     let mut earliest_ordinal: Option<u64> = None;
+    let mut has_rows = false;
+    let mut finish_blocked = false;
     for facts in facts {
+        has_rows = true;
+        finish_blocked |= member_blocks_finish(facts.status);
         let facts_band = facts_band(&facts);
         if facts_band < band {
             band = facts_band;
             urgency = group_member_urgency(&facts);
-            agentless = facts.status.is_none();
+            calm = group_member_calm(facts.status);
         } else if facts_band == band {
             urgency = urgency.max(group_member_urgency(&facts));
-            agentless &= facts.status.is_none();
+            calm = calm.min(group_member_calm(facts.status));
         }
         if let Some(ordinal) = facts.pane_ordinal {
             earliest_ordinal = Some(earliest_ordinal.map_or(ordinal, |min| min.min(ordinal)));
         }
     }
+    if has_rows && git == GitRung::Done && !finish_blocked {
+        band = 2;
+    }
     GroupRankKey {
         external: kind == SidebarWorktreeKind::External,
         band,
         urgency: Reverse(urgency),
-        agentless,
+        calm,
         git,
         // The group's earliest member pane ordinal uses the same creation-order
         // key as the calm tiebreak, so group order tracks the mux's pane layout
@@ -732,7 +741,30 @@ fn group_git_rung(group: &SidebarWorktreeGroup) -> GitRung {
         group.pr_state,
         Some(WorktreePrState::Merged | WorktreePrState::Closed)
     );
-    score::git_rung(group.clean, group.landed, pr_finished)
+    let finished = pr_finished || group.trunk_sync == Some(WorktreeTrunkSync::Merged);
+    score::git_rung(group.clean, finished)
+}
+
+pub(super) fn group_finished(group: &SidebarWorktreeGroup) -> bool {
+    !group.rows.is_empty()
+        && group_git_rung(group) == GitRung::Done
+        && !group
+            .rows
+            .iter()
+            .any(|row| member_blocks_finish(row.status()))
+}
+
+fn member_blocks_finish(status: Option<AgentStatus>) -> bool {
+    status.is_some_and(|status| status == AgentStatus::Running || status.is_attention())
+}
+
+fn group_member_calm(status: Option<AgentStatus>) -> GroupCalm {
+    match status {
+        Some(AgentStatus::Success) => GroupCalm::Finished,
+        Some(AgentStatus::Idle) => GroupCalm::Idle,
+        None => GroupCalm::Processes,
+        Some(_) => GroupCalm::Working,
+    }
 }
 
 fn group_member_urgency(facts: &RankFacts<'_>) -> u32 {

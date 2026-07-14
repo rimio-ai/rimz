@@ -96,16 +96,26 @@ pub(super) enum GitRung {
     Done,
 }
 
-pub(super) fn git_rung(clean: Option<bool>, landed: Option<bool>, pr_finished: bool) -> GitRung {
+pub(super) fn git_rung(clean: Option<bool>, finished: bool) -> GitRung {
     if clean == Some(false) {
         GitRung::Dirty
-    } else if landed == Some(true) || pr_finished {
+    } else if finished {
         GitRung::Done
     } else if clean == Some(true) {
         GitRung::Clean
     } else {
         GitRung::Unknown
     }
+}
+
+/// Calm group activity after urgency has decided: live work, successful work
+/// awaiting acceptance, idle agents, then process-only groups.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(super) enum GroupCalm {
+    Working,
+    Finished,
+    Idle,
+    Processes,
 }
 
 #[cfg(test)]
@@ -162,16 +172,20 @@ mod tests {
 
     #[test]
     fn git_rung_orders_dirty_clean_unknown_done() {
-        assert_eq!(git_rung(Some(false), Some(true), false), GitRung::Dirty);
-        assert_eq!(git_rung(Some(true), Some(false), false), GitRung::Clean);
-        assert_eq!(git_rung(None, None, false), GitRung::Unknown);
-        assert_eq!(git_rung(Some(true), Some(true), false), GitRung::Done);
-        assert_eq!(git_rung(Some(true), Some(false), true), GitRung::Done);
-        assert_eq!(git_rung(None, None, true), GitRung::Done);
-        assert_eq!(git_rung(Some(false), Some(false), true), GitRung::Dirty);
+        assert_eq!(git_rung(Some(false), true), GitRung::Dirty);
+        assert_eq!(git_rung(Some(true), false), GitRung::Clean);
+        assert_eq!(git_rung(None, false), GitRung::Unknown);
+        assert_eq!(git_rung(Some(true), true), GitRung::Done);
+        assert_eq!(git_rung(None, true), GitRung::Done);
         assert!(GitRung::Dirty < GitRung::Clean);
         assert!(GitRung::Clean < GitRung::Unknown);
         assert!(GitRung::Unknown < GitRung::Done);
+    }
+
+    #[test]
+    fn pristine_fork_is_clean_until_work_is_finished() {
+        assert_eq!(git_rung(Some(true), false), GitRung::Clean);
+        assert_eq!(git_rung(Some(true), true), GitRung::Done);
     }
 
     #[test]

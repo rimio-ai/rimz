@@ -124,6 +124,10 @@ pub struct SidebarWorktreeGroup {
     /// the first git read.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub worktree_backed: bool,
+    /// Terminal line of work: git verdict `Done` with no attention or running
+    /// member. Forces the archive band and collapses the roster in renderers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
     /// Whether the working tree is clean.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clean: Option<bool>,
