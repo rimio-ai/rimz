@@ -42,6 +42,7 @@ pub(in crate::sidebar_pane::render) struct TokenColumns {
 /// `tokens_short` for the precise W/M rows). `total` is the caller's `◇` value
 /// (`input` with cache-write folded in, plus output), passed in so a row can
 /// read it straight from its accumulated window.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::sidebar_pane::render) fn token_breakdown_spans(
     theme: &Theme,
     total: u64,
