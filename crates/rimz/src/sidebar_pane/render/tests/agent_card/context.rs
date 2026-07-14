@@ -321,6 +321,7 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
         used_percentage: Some(4),
         remaining_percentage: Some(96),
         current_usage: None,
+        session_usage: None,
     });
     qwen.context = Some(context);
 

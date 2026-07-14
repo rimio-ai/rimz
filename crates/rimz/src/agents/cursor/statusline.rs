@@ -121,6 +121,7 @@ impl ContextWindow {
             used_percentage: clamp_pct(self.used_percentage),
             remaining_percentage: clamp_pct(self.remaining_percentage),
             current_usage,
+            session_usage: None,
         };
         (usage.context_window_size.is_some()
             || usage.used_percentage.is_some()

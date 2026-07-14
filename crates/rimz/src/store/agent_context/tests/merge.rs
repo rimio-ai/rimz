@@ -55,16 +55,9 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
         transcript_stat: Some(stat()),
     };
+    write_record(&runtime, &prior).unwrap();
 
-    merge_local_context(
-        &runtime,
-        "droid",
-        "sess-1",
-        Some(prior),
-        refresh,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, "droid", "sess-1", refresh, observed_at).unwrap();
     let merged = read_one(&runtime, "droid", "sess-1").unwrap();
     let tokens = merged.context.tokens.as_ref().unwrap();
     assert_eq!(tokens.context_window_size, Some(200_000));
@@ -94,15 +87,7 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
         transcript_path: Some("/tmp/sess-1.settings.json".to_owned()),
         transcript_stat: Some(stat()),
     };
-    merge_local_context(
-        &runtime,
-        "droid",
-        "sess-1",
-        Some(merged),
-        unresolved_model,
-        observed_at,
-    )
-    .unwrap();
+    merge_local_context(&runtime, "droid", "sess-1", unresolved_model, observed_at).unwrap();
     let unresolved = read_one(&runtime, "droid", "sess-1").unwrap();
     let tokens = unresolved.context.tokens.unwrap();
     assert_eq!(tokens.context_window_size, None);
