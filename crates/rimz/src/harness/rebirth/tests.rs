@@ -97,6 +97,17 @@ impl Fixture {
             ))
             .expect("team agent event");
     }
+
+    fn seed_named_channel(&self, name: &str) {
+        let workspace = crate::workspace::WorkspaceResolver::resolve(&self.project, None)
+            .expect("resolve workspace");
+        crate::store::workspace_record::write(
+            &self.paths,
+            &crate::store::workspace_record::WorkspaceRecord::from_resolved(&workspace),
+        )
+        .expect("workspace record");
+        crate::channel::register(&self.paths, name).expect("channel record");
+    }
 }
 
 #[test]
@@ -228,15 +239,18 @@ fn failed_rebirth_append_still_consumes_roster() {
 }
 
 #[test]
-fn disabled_recovery_materializes_no_agents_or_empty_channels() {
+fn disabled_recovery_restores_empty_channels_without_seeding_agents() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let fixture = Fixture::new(&[("live", &live, true)]);
+    fixture.seed_named_channel("auth");
     let plan = fixture.inspect(true);
 
     assert_eq!(plan.preview().pane_count(), 0);
     let outcome = plan.materialize(RebirthChoice::Recover, "rimz-test");
-    assert!(outcome.resume.tabs.is_empty());
+    assert_eq!(outcome.resume.tabs.len(), 1);
+    assert_eq!(outcome.resume.tabs[0].label, "#auth");
+    assert_eq!(outcome.resume.tabs[0].pane_count(), 0);
 }
 
 #[test]
@@ -370,13 +384,49 @@ fn crash_copy_preserves_relative_cache_paths_and_skips_symlinks() {
     std::fs::write(source.join("state.kdl"), "state").expect("state");
     symlink(source.join("state.kdl"), source.join("link.kdl")).expect("symlink");
     let mux_cache = dir.path().join("archive/mux-cache");
-    let destination = cache_archive_destination(&mux_cache, &cache, &source);
+    let snapshot = capture_cache_sources(&cache, std::slice::from_ref(&source));
 
-    copy_path(&source, &destination).expect("copy");
+    write_cache_snapshot(&snapshot, &mux_cache).expect("write snapshot");
 
+    let destination = mux_cache.join("zellij/session");
     assert_eq!(destination, mux_cache.join("zellij/session"));
     assert!(destination.join("state.kdl").is_file());
     assert!(!destination.join("link.kdl").exists());
+}
+
+#[test]
+fn crash_archive_uses_cache_bytes_captured_before_room_birth() {
+    let dir = tempfile::tempdir().expect("worktrees");
+    let live = dir.path().join("live");
+    let fixture = Fixture::new(&[("live", &live, true)]);
+    let source = dir.path().join("session-info");
+    std::fs::create_dir_all(&source).expect("cache source");
+    std::fs::write(source.join("state.kdl"), "crashed").expect("crashed cache");
+    let plan = inspect_at(
+        fixture.paths.clone(),
+        fixture.runtime.clone(),
+        Some("boot-a".to_owned()),
+        vec![source.clone()],
+        &fixture.project,
+        &MachineConfig::default(),
+        false,
+    )
+    .expect("inspect");
+
+    std::fs::write(source.join("state.kdl"), "reborn").expect("reborn cache");
+    plan.materialize(RebirthChoice::Fresh, "rimz-test");
+
+    let archive = std::fs::read_dir(&fixture.paths.crashes_dir)
+        .expect("crashes")
+        .next()
+        .expect("archive")
+        .expect("archive entry")
+        .path();
+    assert_eq!(
+        std::fs::read_to_string(archive.join("mux-cache/session-info/state.kdl"))
+            .expect("archived cache"),
+        "crashed"
+    );
 }
 
 #[test]

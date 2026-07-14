@@ -61,10 +61,22 @@ pub struct RebirthPlan {
     boot_token: Option<String>,
     death: Option<LastDeathMarker>,
     crash_roster: Vec<AgentState>,
-    cache_sources: Vec<PathBuf>,
+    crash_cache: CrashCacheSnapshot,
     planned: PlannedResume,
     empty_tabs: Vec<ResumeTab>,
     teams: TeamsConfig,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CrashCacheSnapshot {
+    entries: Vec<CrashCacheEntry>,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+enum CrashCacheEntry {
+    Directory(PathBuf),
+    File { path: PathBuf, bytes: Vec<u8> },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -161,7 +173,7 @@ impl RebirthPlan {
             .is_some_and(|death| death.cause == SessionDeathCause::Crash)
             && let Err(err) = archive_crash(
                 &self.paths,
-                &self.cache_sources,
+                &self.crash_cache,
                 &self.crash_roster,
                 self.death
                     .as_ref()
@@ -241,6 +253,14 @@ fn inspect_at(
         .as_ref()
         .map(|(_, projection)| lost_agent_roster(&projection.agents, &roster))
         .unwrap_or_default();
+    let crash_cache = if death
+        .as_ref()
+        .is_some_and(|death| death.cause == SessionDeathCause::Crash)
+    {
+        capture_cache_sources(&cache_home(), &cache_sources)
+    } else {
+        CrashCacheSnapshot::default()
+    };
 
     let recovery_enabled = !disabled && machine.resume.on_rebirth;
     let teams_and_profiles = effective_teams_and_profiles(machine, project_root);
@@ -257,18 +277,14 @@ fn inspect_at(
     } else {
         PlannedResume::default()
     };
-    let empty_tabs = if recovery_enabled {
-        empty_named_channel_tabs(&paths)
-    } else {
-        Vec::new()
-    };
+    let empty_tabs = empty_named_channel_tabs(&paths);
     Ok(RebirthPlan {
         paths,
         runtime,
         boot_token: current_boot,
         death,
         crash_roster,
-        cache_sources,
+        crash_cache,
         planned,
         empty_tabs,
         teams: teams_and_profiles.0,
@@ -605,7 +621,7 @@ fn clear_live_roster(path: &Path) {
 
 fn archive_crash(
     paths: &StatePaths,
-    cache_sources: &[PathBuf],
+    cache: &CrashCacheSnapshot,
     roster: &[AgentState],
     at: Timestamp,
 ) -> Result<()> {
@@ -613,12 +629,7 @@ fn archive_crash(
     let mux_cache = archive.join("mux-cache");
     std::fs::create_dir_all(&mux_cache)
         .with_context(|| format!("creating crash archive {}", mux_cache.display()))?;
-    let cache_root = cache_home();
-    for source in cache_sources {
-        let dest = cache_archive_destination(&mux_cache, &cache_root, source);
-        copy_path(source, &dest)
-            .with_context(|| format!("archiving mux cache {}", source.display()))?;
-    }
+    write_cache_snapshot(cache, &mux_cache)?;
     crate::store::atomic::write_temp_then_rename(&archive.join("roster.json"), &roster)
         .with_context(|| format!("writing crash roster {}", archive.display()))?;
     prune_crash_archives(&paths.crashes_dir)
@@ -628,31 +639,73 @@ fn archive_name(at: Timestamp) -> String {
     at.strftime("%Y%m%dT%H%M%SZ").to_string()
 }
 
-fn cache_archive_destination(mux_cache: &Path, cache_root: &Path, source: &Path) -> PathBuf {
+fn cache_archive_relative(cache_root: &Path, source: &Path) -> PathBuf {
     if let Ok(relative) = source.strip_prefix(cache_root)
         && !relative.as_os_str().is_empty()
     {
-        return mux_cache.join(relative);
+        return relative.to_path_buf();
     }
-    mux_cache.join(source.file_name().unwrap_or_else(|| OsStr::new("cache")))
+    PathBuf::from(source.file_name().unwrap_or_else(|| OsStr::new("cache")))
 }
 
-fn copy_path(source: &Path, dest: &Path) -> std::io::Result<()> {
+fn capture_cache_sources(cache_root: &Path, sources: &[PathBuf]) -> CrashCacheSnapshot {
+    let mut snapshot = CrashCacheSnapshot::default();
+    for source in sources {
+        if let Err(err) = capture_cache_path(
+            source,
+            &cache_archive_relative(cache_root, source),
+            &mut snapshot.entries,
+        )
+        .with_context(|| format!("reading mux cache {}", source.display()))
+        {
+            snapshot.error = Some(format!("{err:#}"));
+            break;
+        }
+    }
+    snapshot
+}
+
+fn capture_cache_path(
+    source: &Path,
+    relative: &Path,
+    entries: &mut Vec<CrashCacheEntry>,
+) -> std::io::Result<()> {
     let meta = std::fs::symlink_metadata(source)?;
     if meta.file_type().is_symlink() {
         return Ok(());
     }
     if meta.is_dir() {
-        std::fs::create_dir_all(dest)?;
+        entries.push(CrashCacheEntry::Directory(relative.to_path_buf()));
         for entry in std::fs::read_dir(source)? {
             let entry = entry?;
-            copy_path(&entry.path(), &dest.join(entry.file_name()))?;
+            capture_cache_path(&entry.path(), &relative.join(entry.file_name()), entries)?;
         }
     } else if meta.is_file() {
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
+        entries.push(CrashCacheEntry::File {
+            path: relative.to_path_buf(),
+            bytes: std::fs::read(source)?,
+        });
+    }
+    Ok(())
+}
+
+fn write_cache_snapshot(cache: &CrashCacheSnapshot, mux_cache: &Path) -> Result<()> {
+    for entry in &cache.entries {
+        match entry {
+            CrashCacheEntry::Directory(path) => std::fs::create_dir_all(mux_cache.join(path))
+                .with_context(|| format!("archiving mux cache {}", path.display()))?,
+            CrashCacheEntry::File { path, bytes } => {
+                let destination = mux_cache.join(path);
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&destination, bytes)
+                    .with_context(|| format!("archiving mux cache {}", path.display()))?;
+            }
         }
-        std::fs::copy(source, dest)?;
+    }
+    if let Some(error) = cache.error.as_deref() {
+        anyhow::bail!("{error}");
     }
     Ok(())
 }
