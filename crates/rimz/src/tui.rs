@@ -6,12 +6,22 @@ use std::panic::{self, PanicHookInfo};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use ratatui::crossterm::execute;
+use ratatui::crossterm::style::Print;
 use ratatui::crossterm::{cursor, terminal};
 
 type PanicHook = Box<dyn Fn(&PanicHookInfo<'_>) + Sync + Send + 'static>;
 type SharedPanicHook = Arc<Mutex<Option<PanicHook>>>;
+
+/// Click + wheel tracking (?1000) with SGR encoding (?1006) — the only modes
+/// the sidebar consumes (`sidebar_pane::app::input::encode_mouse`). Crossterm's
+/// `EnableMouseCapture` also requests ?1002/?1003/?1015; ?1003 (all-motion)
+/// forces tmux to upgrade the outer terminal to MOUSE_ALL and drop it back
+/// whenever the window mode union changes, and Ghostty reacts to that churn
+/// by converting wheel ticks into arrow keys aimed at the active pane
+/// (ghostty-org/ghostty discussions 4617 and 7630).
+const ENABLE_CLICK_WHEEL_CAPTURE: &str = "\x1b[?1000h\x1b[?1006h";
+const DISABLE_CLICK_WHEEL_CAPTURE: &str = "\x1b[?1006l\x1b[?1000l";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseCapture {
@@ -206,8 +216,8 @@ impl Drop for TerminalModeGuard {
 fn enable_mouse(mouse: MouseCapture) -> io::Result<()> {
     match mouse {
         MouseCapture::Off => Ok(()),
-        MouseCapture::Stdout => execute!(io::stdout(), EnableMouseCapture),
-        MouseCapture::Stderr => execute!(io::stderr(), EnableMouseCapture),
+        MouseCapture::Stdout => execute!(io::stdout(), Print(ENABLE_CLICK_WHEEL_CAPTURE)),
+        MouseCapture::Stderr => execute!(io::stderr(), Print(ENABLE_CLICK_WHEEL_CAPTURE)),
     }
 }
 
@@ -215,10 +225,10 @@ pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
     match mouse {
         MouseCapture::Off => {}
         MouseCapture::Stdout => {
-            let _ = execute!(io::stdout(), DisableMouseCapture);
+            let _ = execute!(io::stdout(), Print(DISABLE_CLICK_WHEEL_CAPTURE));
         }
         MouseCapture::Stderr => {
-            let _ = execute!(io::stderr(), DisableMouseCapture);
+            let _ = execute!(io::stderr(), Print(DISABLE_CLICK_WHEEL_CAPTURE));
         }
     }
     if screen == Screen::Alternate {
@@ -234,7 +244,9 @@ pub(crate) fn restore_terminal(mouse: MouseCapture, screen: Screen) {
 
 #[cfg(test)]
 mod tests {
-    use super::{TruecolorSignals, write_crlf};
+    use super::{
+        DISABLE_CLICK_WHEEL_CAPTURE, ENABLE_CLICK_WHEEL_CAPTURE, TruecolorSignals, write_crlf,
+    };
 
     fn signals(colorterm: Option<&str>, terminfo: bool) -> TruecolorSignals {
         TruecolorSignals {
@@ -262,5 +274,11 @@ mod tests {
         write_crlf(&mut out, b"head\nrow\r\ntail").expect("write frame");
 
         assert_eq!(out, b"head\x1b[K\r\nrow\x1b[K\r\ntail\x1b[K");
+    }
+
+    #[test]
+    fn mouse_capture_requests_only_click_wheel_and_sgr_modes() {
+        assert_eq!(ENABLE_CLICK_WHEEL_CAPTURE, "\x1b[?1000h\x1b[?1006h");
+        assert_eq!(DISABLE_CLICK_WHEEL_CAPTURE, "\x1b[?1006l\x1b[?1000l");
     }
 }

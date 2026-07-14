@@ -155,6 +155,10 @@ rimz reload    # re-exec sidebars onto the current build, repair geometry, close
 
 `rimz reload` runs from anywhere and leaves stopped sessions stopped. Agent version drift and its exact effects are in [agent support](../reference/agent-support.md).
 
+### Scroll wheel sends arrow keys (Ghostty)
+
+A Ghostty tab exposed to mouse-mode churn from an older RimZ build can wedge into converting wheel ticks to arrow keys. Run `reset` once at a shell prompt or open a new Ghostty tab; current RimZ keeps the outer mouse mode constant so the state does not recur.
+
 ## Notifications don't fire
 
 RimZ raises a desktop notification by writing a terminal notification escape (OSC 777) from the sidebar; your terminal turns it into the OS banner, even over SSH. When no banner appears, check in order:

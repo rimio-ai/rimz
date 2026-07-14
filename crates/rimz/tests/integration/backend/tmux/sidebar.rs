@@ -49,6 +49,7 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
         .expect("open sidebar");
     let pane = wait_for_sidebar_pane(&server, session, None);
     wait_for_mouse_capture(&server, &pane);
+    assert_click_wheel_tracking_only(&server, &pane);
     let heartbeat = wait_for_sidebar_heartbeat(&env);
     let startup_seen = rimz::sidebar::heartbeat::SidebarHeartbeat::read_from(&heartbeat)
         .expect("read initial sidebar heartbeat")
@@ -87,6 +88,7 @@ fn sidebar_reload_keeps_mouse_capture_alive() {
         );
         thread::sleep(Duration::from_millis(10));
     }
+    assert_click_wheel_tracking_only(&server, &pane);
 }
 
 fn wait_for_mouse_capture(server: &TmuxServer, pane: &PaneId) {
@@ -101,6 +103,17 @@ fn wait_for_mouse_capture(server: &TmuxServer, pane: &PaneId) {
         );
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn assert_click_wheel_tracking_only(server: &TmuxServer, pane: &PaneId) {
+    assert_eq!(server.display(pane.raw(), "#{mouse_standard_flag}"), "1");
+    assert_eq!(server.display(pane.raw(), "#{mouse_sgr_flag}"), "1");
+    assert_eq!(
+        server.display(pane.raw(), "#{mouse_all_flag}"),
+        "0",
+        "all-motion tracking re-churns the outer terminal",
+    );
+    assert_eq!(server.display(pane.raw(), "#{mouse_button_flag}"), "0");
 }
 
 fn wait_for_sidebar_heartbeat(env: &Env) -> PathBuf {
