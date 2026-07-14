@@ -289,6 +289,7 @@ impl MachineConfig {
         let loop_path = dir.join(LOOP_FILE);
 
         let core = load_optional(config_path, parse_core_text)?.unwrap_or_default();
+        validate_account_budgets(&core.accounts, config_path)?;
         let theme = load_optional(&theme_path, parse_theme_text)?.unwrap_or_default();
         let agents = load_optional(&agents_path, parse_agents_text)?.unwrap_or_default();
         let loop_ = load_optional(&loop_path, parse_loop_text)?.unwrap_or_default();
@@ -381,6 +382,7 @@ impl MachineConfig {
             _ => {
                 let core = parse_core_text(path, text)?;
                 validate_notifications_config(&core.notifications, path)?;
+                validate_account_budgets(&core.accounts, path)?;
                 Ok(Self::assemble(
                     core,
                     ThemeConfig::default(),
@@ -536,7 +538,7 @@ pub fn broken_machine_files() -> Vec<ConfigErr> {
 
 fn broken_machine_files_in(dir: &Path) -> Vec<ConfigErr> {
     let checks = [
-        load_optional(&dir.join(CONFIG_FILE), parse_core_text).map(|_| ()),
+        load_optional(&dir.join(CONFIG_FILE), parse_core_text_strict).map(|_| ()),
         load_optional(&dir.join(THEME_FILE), parse_theme_text).map(|_| ()),
         load_optional(&dir.join(AGENTS_FILE), parse_agents_text).map(|_| ()),
         load_optional(&dir.join(LOOP_FILE), parse_loop_text).map(|_| ()),
@@ -701,17 +703,25 @@ fn recover<T>(result: Result<Option<T>>) -> Option<T> {
 }
 
 fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
-    let core: CoreConfig = toml::from_str(text).map_err(|source| ConfigErr::Parse {
+    toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         source,
-    })?;
-    core.accounts
+    })
+}
+
+fn parse_core_text_strict(path: &Path, text: &str) -> Result<CoreConfig> {
+    let core = parse_core_text(path, text)?;
+    validate_account_budgets(&core.accounts, path)?;
+    Ok(core)
+}
+
+fn validate_account_budgets(accounts: &AccountsConfig, path: &Path) -> Result<()> {
+    accounts
         .validate_budgets()
         .map_err(|source| ConfigErr::AccountBudget {
             path: path.to_path_buf(),
             source,
-        })?;
-    Ok(core)
+        })
 }
 
 fn parse_unknown_keys<'de, T>(path: &Path, text: &'de str) -> Result<Vec<String>>

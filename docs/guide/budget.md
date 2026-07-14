@@ -54,7 +54,7 @@ rimz config set harness.budget 50/day              # this project's whole fleet
 rimz config set accounts.budget.claude 100/day     # one login, every room on the machine
 ```
 
-Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap is available only for a provider whose adapter exposes durable account-spend history; RimZ rejects unknown or ineligible kinds during config edits, room start, and `rimz budget --account` rather than treating missing history as `$0`. Cursor still supports per-agent and room caps through its live local price, but it has no account-day cap. An eligible account cap sums one provider login across every room on the machine, while each room parks only the panes it owns.
+Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap requires wired authoritative account-spend history; subscription `5h`/`7d` quota bars and point-in-time or partial estimates do not qualify, so config edits, room start, and `rimz budget --account` reject unknown or ineligible kinds such as Antigravity instead of enforcing against incomplete dollars. Cursor still supports per-agent and room caps through its live local price, but it has no account-day cap. An eligible account cap sums one provider login across every room on the machine, while each room parks only the panes it owns.
 
 `rimz budget` reads and adjusts what config armed:
 

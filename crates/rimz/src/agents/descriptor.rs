@@ -391,6 +391,15 @@ impl AgentDescriptor {
             .find_map(|(declared, coverage)| (*declared == concern).then_some(*coverage))
     }
 
+    /// Whether this adapter publishes authoritative account-level dollars that
+    /// can safely enforce a provider-account budget.
+    pub fn has_authoritative_account_spend(&self) -> bool {
+        matches!(
+            self.concern_coverage(IntegrationConcern::AccountSpend),
+            Some(ConcernCoverage::Wired { .. })
+        )
+    }
+
     /// The kind as a typed identity — the one sanctioned mint of an
     /// [`AgentKind`](crate::ids::AgentKind) for a known adapter.
     pub fn kind_id(&self) -> crate::ids::AgentKind {
@@ -698,6 +707,7 @@ mod tests {
         assert!(!antigravity.capabilities.transcript_tail_context);
         assert!(antigravity.capabilities.context_usage);
         assert!(!antigravity.capabilities.account_spend);
+        assert!(!antigravity.has_authoritative_account_spend());
         assert!(!antigravity.capabilities.subagents);
         assert!(antigravity.capabilities.background_tasks);
         assert!(antigravity.capabilities.registers_lazily);

@@ -8,10 +8,12 @@ use super::harness::DayCap;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AccountBudgetConfigError {
-    #[error("unknown agent kind `{kind}` in `[accounts.budget]`")]
+    #[error(
+        "unknown agent kind in `accounts.budget.{kind}`; remove it because no adapter can publish authoritative account-level dollars"
+    )]
     UnknownKind { kind: String },
     #[error(
-        "`[accounts.budget].{kind}` cannot be enforced because {kind} has no durable account-spend source"
+        "unsupported `accounts.budget.{kind}`; remove it because {kind} has no durable account-spend source with authoritative account-level dollars"
     )]
     Unsupported { kind: String },
 }
@@ -56,7 +58,7 @@ fn validate_budget_descriptor(
     let descriptor = descriptor.ok_or_else(|| AccountBudgetConfigError::UnknownKind {
         kind: kind.to_owned(),
     })?;
-    if !descriptor.capabilities.account_spend {
+    if !descriptor.has_authoritative_account_spend() {
         return Err(AccountBudgetConfigError::Unsupported {
             kind: kind.to_owned(),
         });
@@ -185,15 +187,21 @@ mod tests {
     }
 
     #[test]
-    fn account_day_caps_require_durable_spend_capability() {
-        let supported: AccountsConfig = toml::from_str("[budget]\nclaude = \"100/day\"").unwrap();
-        assert_eq!(supported.validate_budgets(), Ok(()));
+    fn account_day_caps_require_wired_authoritative_spend() {
+        for kind in ["claude", "codex", "opencode", "pi"] {
+            let supported: AccountsConfig =
+                toml::from_str(&format!("[budget]\n{kind} = \"100/day\"")).unwrap();
+            assert_eq!(supported.validate_budgets(), Ok(()), "{kind}");
+        }
 
-        let cursor: AccountsConfig = toml::from_str("[budget]\ncursor = \"100/day\"").unwrap();
-        assert!(matches!(
-            cursor.validate_budgets(),
-            Err(AccountBudgetConfigError::Unsupported { kind }) if kind == "cursor"
-        ));
+        for kind in ["antigravity", "amp", "cursor", "kimi"] {
+            let unsupported: AccountsConfig =
+                toml::from_str(&format!("[budget]\n{kind} = \"100/day\"")).unwrap();
+            assert!(matches!(
+                unsupported.validate_budgets(),
+                Err(AccountBudgetConfigError::Unsupported { kind: rejected }) if rejected == kind
+            ));
+        }
 
         let unknown: AccountsConfig = toml::from_str("[budget]\nfuture = \"100/day\"").unwrap();
         assert!(matches!(

@@ -316,6 +316,7 @@ impl AgentAdapter for AntigravityAdapter {
         local_api::probe_rate_limits()
             .ok()
             .map(|rate_limits| super::RealtimeAccountUsage {
+                plan: None,
                 rate_limits: Some(rate_limits),
                 extra_credits: None,
                 reset_credits: None,

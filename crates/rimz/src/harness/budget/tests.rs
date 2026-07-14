@@ -558,6 +558,23 @@ fn scope_ledgers_require_config_to_arm_runtime_caps() {
 }
 
 #[test]
+fn unsupported_account_budget_is_ignored_by_projection_and_enforcement() {
+    let kind = AgentKind::new_unchecked("antigravity");
+    let config: MachineConfig =
+        toml::from_str("[accounts.budget]\nantigravity = \"50/day\"\n").expect("config");
+    let ledger = AccountBudgetLedger {
+        raised_cap_usd: Some(100.0),
+        parked: Some(BudgetParkStamp {
+            at_cost: 150.0,
+            at: Timestamp::from_second(100).expect("timestamp"),
+        }),
+        ..Default::default()
+    };
+    assert_eq!(ledger.effective_cap_usd(&kind, &config), None);
+    assert_eq!(ledger.cap_source(&kind, &config), BudgetCapSource::None);
+}
+
+#[test]
 fn park_projection_uses_agent_then_fleet_then_account_precedence() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = crate::ids::WorkspaceId::from_project_root(dir.path());

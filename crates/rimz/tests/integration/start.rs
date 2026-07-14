@@ -76,3 +76,34 @@ fn start_inside_selected_mux_reports_and_skips_launch() {
         "the nested bypass must run before hook install, got: {stderr}"
     );
 }
+
+#[test]
+fn start_rejects_unsupported_account_budget_before_room_state() {
+    let env = Env::new();
+    let config = env.config_root().join("rimz/config.toml");
+    std::fs::create_dir_all(config.parent().expect("config parent")).expect("config dir");
+    std::fs::write(config, "[accounts.budget]\nantigravity = \"50/day\"\n")
+        .expect("machine config");
+    let workspace_state = env
+        .state_root()
+        .join("rimz/workspaces")
+        .join(env.workspace_id.as_str());
+
+    let output = env
+        .rimz()
+        .arg("start")
+        .bounded_output()
+        .expect("run rimz start");
+
+    assert!(!output.status.success(), "start accepted unsupported cap");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("accounts.budget.antigravity"), "{stderr}");
+    assert!(
+        stderr.contains("authoritative account-level dollars"),
+        "{stderr}"
+    );
+    assert!(
+        !workspace_state.exists(),
+        "account-budget preflight must run before room state is created"
+    );
+}

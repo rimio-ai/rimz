@@ -542,10 +542,9 @@ fn assert_coverage_honest(
             realtime_cost_from_fixture(adapter),
             "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
         ),
-        IntegrationConcern::AccountSpend => assert_eq!(
-            !matches!(coverage, ConcernCoverage::Unsupported { .. }),
-            descriptor.capabilities.account_spend,
-            "{kind} AccountSpend coverage must match the account_spend capability"
+        IntegrationConcern::AccountSpend => assert!(
+            !descriptor.has_authoritative_account_spend() || descriptor.capabilities.account_spend,
+            "{kind} wired AccountSpend coverage requires the account_spend capability"
         ),
     }
 }

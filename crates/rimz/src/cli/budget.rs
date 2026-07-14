@@ -31,11 +31,7 @@ pub struct BudgetArgs {
 }
 
 pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
     let config = MachineConfig::load_lenient();
-    let now = Timestamp::now();
-
     let account = args
         .account
         .as_deref()
@@ -43,6 +39,12 @@ pub fn run(args: BudgetArgs, globals: &GlobalFlags) -> Result<()> {
         .filter(|kind| !kind.is_empty())
         .map(validate_kind)
         .transpose()?;
+    if account.is_some() || args.value.is_none() {
+        config.accounts.validate_budgets()?;
+    }
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let store = crate::cli::open_store(&workspace)?;
+    let now = Timestamp::now();
     let fleet_spend = account
         .is_none()
         .then(|| live_fleet_spend(&workspace, &store, globals, &config, now));

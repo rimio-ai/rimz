@@ -211,6 +211,9 @@ pub enum ScopeLedgerWriteError {
 
 impl AccountBudgetLedger {
     pub fn effective_cap_usd(&self, kind: &AgentKind, config: &MachineConfig) -> Option<f64> {
+        crate::agents::descriptor_by_kind(kind.as_str())?
+            .has_authoritative_account_spend()
+            .then_some(())?;
         config.accounts.budget(kind.as_str())?;
         if self.disabled {
             return None;
@@ -224,7 +227,10 @@ impl AccountBudgetLedger {
     }
 
     pub fn cap_source(&self, kind: &AgentKind, config: &MachineConfig) -> BudgetCapSource {
-        if config.accounts.budget(kind.as_str()).is_none() {
+        if !crate::agents::descriptor_by_kind(kind.as_str()).is_some_and(
+            crate::agents::descriptor::AgentDescriptor::has_authoritative_account_spend,
+        ) || config.accounts.budget(kind.as_str()).is_none()
+        {
             BudgetCapSource::None
         } else if self.disabled {
             BudgetCapSource::Cleared

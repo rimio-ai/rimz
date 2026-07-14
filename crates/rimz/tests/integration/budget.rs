@@ -105,3 +105,20 @@ fn unsupported_account_caps_leave_config_and_ledger_untouched() {
         "unsupported account must not create a ledger"
     );
 }
+
+#[test]
+fn config_set_rejects_unsupported_account_budget_without_writing() {
+    let env = Env::new();
+    env.rimz().args(["config", "init"]).assert().success();
+    let path = env.config_root().join("rimz/config.toml");
+    let before = std::fs::read_to_string(&path).expect("config");
+
+    env.rimz()
+        .args(["config", "set", "accounts.budget.antigravity", "50/day"])
+        .assert()
+        .failure()
+        .stderr(contains("accounts.budget.antigravity"))
+        .stderr(contains("authoritative account-level dollars"));
+
+    assert_eq!(std::fs::read_to_string(path).expect("config"), before);
+}

@@ -68,6 +68,7 @@ enum ExpectedErr {
     Agents,
     Notifications,
     Loop,
+    AccountBudget,
 }
 
 fn expect_err(file: &str, text: &str) -> ConfigErr {
@@ -81,6 +82,7 @@ fn assert_config_err(err: ConfigErr, expected: ExpectedErr) {
         | (ConfigErr::Agents { .. }, ExpectedErr::Agents)
         | (ConfigErr::Notifications { .. }, ExpectedErr::Notifications) => {}
         (ConfigErr::Loop { .. }, ExpectedErr::Loop) => {}
+        (ConfigErr::AccountBudget { .. }, ExpectedErr::AccountBudget) => {}
         _ => panic!("expected {expected:?}, got {err:?}"),
     }
 }
@@ -187,7 +189,7 @@ fn lenient_load_falls_back_only_for_the_broken_file() {
 }
 
 #[test]
-fn account_budget_validation_is_typed_and_lenient_load_drops_invalid_core() {
+fn account_budget_validation_is_typed_and_lenient_load_preserves_preflight_detail() {
     let dir = tempdir().expect("tempdir");
     let config_path = write(
         &dir,
@@ -201,11 +203,14 @@ fn account_budget_validation_is_typed_and_lenient_load_drops_invalid_core() {
             ..
         }) if kind == "cursor"
     ));
-    assert!(
-        load_lenient_no_fragments(&config_path)
-            .accounts
-            .budget
-            .is_empty()
+    let lenient = load_lenient_no_fragments(&config_path);
+    assert_eq!(
+        lenient.accounts.budget("claude").map(DayCap::as_usd),
+        Some(100.0)
+    );
+    assert_eq!(
+        lenient.accounts.budget("cursor").map(DayCap::as_usd),
+        Some(50.0)
     );
 }
 
@@ -924,6 +929,29 @@ fn loop_task_budgets_validate_during_config_load() {
         "[tasks.nightly]\nagent = \"codex\"\nprompt = \"work\"\nroot = \"/repo\"\nevery = \"day\"\nbudget = \"many dollars\"\n",
     );
     assert_config_err(err, ExpectedErr::Loop);
+}
+
+#[test]
+fn account_budgets_validate_strictly_without_erasing_lenient_preflight_detail() {
+    for kind in ["antigravity", "amp", "unknown"] {
+        let text = format!("[accounts.budget]\n{kind} = \"50/day\"\n");
+        let err = expect_err("config.toml", &text);
+        assert_config_err(err, ExpectedErr::AccountBudget);
+
+        let dir = tempdir().expect("tempdir");
+        let path = write(&dir, &text);
+        let lenient = load_lenient_no_fragments(&path);
+        assert_eq!(
+            lenient.accounts.budget(kind).map(DayCap::as_usd),
+            Some(50.0)
+        );
+    }
+
+    let valid = expect_err(
+        "config.toml",
+        "[accounts.budget]\nclaude = \"50/day\"\nnot-a-kind = \"20/day\"\n",
+    );
+    assert!(valid.to_string().contains("accounts.budget.not-a-kind"));
 }
 
 #[test]

@@ -162,7 +162,7 @@ claude = "100/day"
 codex = "100/day"
 ```
 
-`harness.budget` turns on a cap for each room's whole fleet, while `[accounts.budget]` turns on a cap for one provider login across every room on the machine. Account keys are accepted only for adapters that expose durable account-spend history; unknown kinds and identity-only or live-price-only providers such as Cursor are rejected by `config set`, strict loading, and room start. Cursor remains eligible for per-agent/session and room caps. Both daily keys read spend since local midnight in `timezone` and require the `/day` suffix; a bare amount is rejected with the form to use. These keys run no command and stay outside the project trust hash.
+`harness.budget` turns on a cap for each room's whole fleet, while `[accounts.budget]` turns on a cap for one provider login across every room on the machine. An account key requires wired authoritative account-spend history; subscription quota bars and point-in-time or partial estimates do not qualify, so `config set`, strict loading, room start, and account-budget commands reject unknown and ineligible kinds such as Antigravity with the key to remove or fix. Cursor remains eligible for per-agent/session and room caps, but not an account-day cap. Supported daily caps read spend since local midnight in `timezone` and require the `/day` suffix; a bare amount is rejected with the form to use. These keys run no command and stay outside the project trust hash.
 
 These keys are the on-switch; `rimz budget` inspects and adjusts an armed cap at runtime without touching them, and refuses to arm a cap they never set. The full cap model — the per-agent and loop-task scopes, what a park does, and what resumes it — is the [budgets guide](./budget.md).
 
