@@ -327,10 +327,15 @@ RimZ's remote-control preflight and badge read the user-level Claude `settings.j
 | Field | Meaning |
 | --- | --- |
 | `accessToken` | Bearer token for the usage request |
+| `refreshToken` | Preferred input to RimZ's non-secret account-owner digest; never sent, persisted, or refreshed by RimZ |
 | `expiresAt` | epoch milliseconds; missing or expired tokens fail the probe |
 | `scopes[]` | must include `user:profile` |
 
-The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer <accessToken>`, `Accept: application/json`, `anthropic-beta: oauth-2025-04-20`, and a `claude-code/<claude-version>` user agent when the version is known. `RIMZ_CLAUDE_OAUTH_USAGE_URL` overrides the URL for tests. The parsed response shape:
+RimZ hashes the normalized `refreshToken`, falling back to `accessToken`, with a versioned Claude-specific SHA-256 domain to obtain a full lowercase account-owner key. Access-token rotation therefore keeps one cache owner when the refresh token stays stable; only the digest reaches `credits.json`, and neither source token is logged or persisted by RimZ.
+
+On macOS, a missing credentials file falls back to `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w` with null stdin and a 1.5-second subprocess deadline. Timeout and denied/nonzero results are quiet missing credentials; the bound prevents RimZ from waiting indefinitely, while macOS may still briefly present Keychain UI before the process exits.
+
+The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer <accessToken>`, `Accept: application/json`, `anthropic-beta: oauth-2025-04-20`, and a `claude-code/<claude-version>` user agent when the version is known. `RIMZ_CLAUDE_OAUTH_USAGE_URL` overrides the URL for tests. The path is read-only: RimZ does not refresh tokens or write the file or Keychain item. The parsed response shape:
 
 ```jsonc
 {

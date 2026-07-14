@@ -354,10 +354,13 @@ Codex stores credentials according to `cli_auth_credentials_store = "file" | "ke
 | --- | --- |
 | `OPENAI_API_KEY` present, non-empty | API-key login → **unmetered** by subscription windows; the provider dashboard uses transcript-derived API spend plus any display ceiling |
 | `tokens.access_token` present | ChatGPT login → **metered** (plan tier filled by live app-server context or the OAuth usage response) |
+| `tokens.account_id` present, non-empty | explicit ChatGPT account identity copied to `AgentAccount.account_id`, the `ChatGPT-Account-Id` request header, and OAuth cache ownership |
 
 When no auth file exists, RimZ runs `codex login status` so keyring-backed logins still appear with the correct metered/unmetered posture. The command prints one line per auth mode: `Logged in using ChatGPT` (metered by subscription windows), `Logged in using an API key - <masked>` and `Logged in using Amazon Bedrock API key` (token/AWS-billed, so unmetered), `Logged in using access token` and `Logged in using personal access token` (logged in, metering unknown), or `Not logged in`. It reports login kind but no plan tier or token, so the plan rides the app-server (`account/rateLimits/read` `planType`) and direct OAuth usage remains available only when Codex exposes a file token. The semantics are in [codex.md → Account and balance](../../internals/agents/codex.md#account-and-balance).
 
-[`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`; the same local `tokens.account_id` is the cache key used to detect account switches.
+[`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage probe. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`; the same trimmed explicit field identifies the idle `AgentAccount` and the successful usage observation, so a stale preflight read cannot assign fetched facts to the wrong cache owner. RimZ does not decode JWT claims for identity.
+
+The app-server `account/rateLimits/read` `planType` is persisted with realtime credits even when plan is the only account field returned. A non-empty app-server plan replaces the cached OAuth plan; an absent app-server plan preserves it, so keyring-backed and idle sessions retain their last provider-authoritative label.
 
 The default usage URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. The parsed usage response shape:
 
