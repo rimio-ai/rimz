@@ -87,7 +87,7 @@ Default to 1, scale up (3 max, dispatched in a single message) in parallel only 
 - Quality over quantity: less is better, you should try to use the minimum number of agents necessary (usually just 1)
 - If using multiple agents: Provide each agent with a specific search focus or area to explore. Example: One agent searches for existing implementations, another explores related components, a third investigating testing patterns
 
-Gate: before leaving this phase, use Tool(AskUserQuestion) to present, in your own words, a brief of the problem as you understand it and the direction you propose. Give the user the context each option turns on before the options themselves — enough to actually decide — and tag one `(Recommend)` with your reasoning. Keep it short. Proceed only with user approval. Skip the gate only when the problem is unambiguous and a single obvious direction leaves nothing to decide — then state the call in your output and move on.
+Gate: before leaving this phase, brief the user, then ask. First write the brief as normal output text: the problem as you understand it (what the user wants and why), what exploration found (the relevant files, current behavior, constraints), and the directions worth considering with the tradeoff each carries. Then call Tool(AskUserQuestion), carrying only the decision itself, one option tagged `(Recommend)` with your reasoning. Keep the brief scannable (a few short paragraphs), but never cut the context the decision needs. Proceed only with user approval. Skip the gate only when the problem is unambiguous and a single obvious direction leaves nothing to decide: then state the call in your output and move on.
 
 ### Phase 2: Design
 
@@ -115,7 +115,7 @@ Goal: validate the plan(s) against the user's intent
 1. Read the critical files identified by agents to deepen your understanding
 2. Ensure that the plans align with the user's original request
 
-Gate: use Tool(AskUserQuestion) to present the final direction and the key design choices with your reasoning. Lay out the background each choice hinges on before its options, so the user can decide. Be strongly opinionated, apply the Design Principles, tag one option `(Recommend)` and explain why over the alternatives. Keep it concise. Proceed only with user approval. Skip the gate only when one approach is the clear, uncontested winner you're fully confident in — then state the call in your output and move on.
+Gate: brief the user, then ask. First write the design brief as normal output text: the final direction, and for each key design choice the background it hinges on, the options you weighed, and why one wins. Be strongly opinionated and apply the Design Principles. Then call Tool(AskUserQuestion), carrying only the decisions, one option tagged `(Recommend)` per question with the comparison that justifies it. Proceed only with user approval. Skip the gate only when one approach is the clear, uncontested winner you're fully confident in: then state the call in your output and move on.
 
 ### Phase 4: Final Plan
 
@@ -136,7 +136,7 @@ Output `Plan ready at <path/to/plan.md>` as your STOP message.
 
 ### Tool(AskUserQuestion) Guidelines
 
-Ground every question before you ask it. A user can't choose between options they lack the context to judge — so when a decision hinges on facts they haven't seen, first write an output that frames the problem and the background each option turns on (the tradeoff, the constraint, what it touches). Then ask. Never surface bare options that assume knowledge the user doesn't have.
+Never ask a bare question. Every AskUserQuestion call, at a gate or mid-phase, is preceded by output text that lets the user actually judge the options: the background (what you explored and found), your understanding of the problem, and the candidate solutions with the tradeoff, constraint, or blast radius each carries. The tool's fields cannot carry this context: the question line and option descriptions are too small for background, so anything that lives only inside the tool call is something the user never sees. Write the explanation first as normal output; the tool call then holds just the decision, with options that point back at the brief.
 
 Always tag exactly one option `(Recommend)` and say why — the comparison against the alternatives, not just praise for the pick. You're the one who did the exploration; carry a firm view, don't offload the decision as a neutral menu.
 
