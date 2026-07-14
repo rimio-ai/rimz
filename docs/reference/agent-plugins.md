@@ -209,11 +209,17 @@ The account probe receives an empty stdin stream and returns either a login or a
 {"plan":"pro","account_id":"account-123","rate_limit_windows":[{"used_percentage":42,"duration_mins":300,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"}]}
 ```
 
+A provider-defined quota can use a stable scope instead of a duration:
+
+```json
+{"plan":"business","account_id":"account-123","rate_limit_windows":[{"scope":{"id":"premium_interactions","label":"prm"},"used_percentage":42,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"},{"scope":{"id":"chat","label":"cht"},"used_percentage":7,"resets_at":"2026-06-01T17:00:00Z","source":"authoritative"}]}
+```
+
 ```json
 {"logged_out":true}
 ```
 
-`plan` feeds the provider label. `account_id` is the plugin's provider identity label. Optional `rate_limit_windows` use the normalized `RateLimitWindow` shape and feed the shared account-usage cache; canonical `context` events may also push the same windows while a session is live.
+`plan` feeds the provider label. `account_id` is the plugin's provider identity label. Optional `rate_limit_windows` use the normalized `RateLimitWindow` shape and feed the shared account-usage cache; canonical `context` events may also push the same windows while a session is live. A scoped window's non-empty `scope.id` is its stable fusion/cache identity and its `scope.label` is a compact presentation label clipped safely to the three-cell provider-bar slot. Omit `duration_mins` when the provider exposes no trustworthy duration: the reset may display, but rolling refill, burn pace, surplus, not-started detection, and priming remain disabled. Existing duration-only responses retain their current identity and labels unchanged.
 
 ### Version
 

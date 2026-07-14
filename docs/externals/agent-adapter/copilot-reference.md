@@ -44,7 +44,7 @@ copilot help providers
 
 Use **command hooks** as the lifecycle and decision seam. They are local, session-scoped, carry the session ID and cwd on every event, expose synchronous permission decisions, and preserve Copilot's stock interactive UI. This matches RimZ's existing pane-first contract.
 
-Use the **custom statusline command** or **file-exported OTel** for live context, model, quota, cost, and token enrichment. Statusline is the lighter UI-owned transport, but GitHub currently documents only that it receives session JSON, not that JSON's schema. OTel has a published schema and includes tokens, cost, model, session ID, compaction, errors, and subagents, but it is asynchronous telemetry and must remain enrichment rather than lifecycle truth.
+Use the **custom statusline command** or **file-exported OTel** for live context, model, cost, and token enrichment. Statusline is the lighter UI-owned transport, but GitHub currently documents only that it receives session JSON, not that JSON's schema. OTel has a published schema and includes tokens, cost, model, session ID, compaction, errors, and subagents, but it is asynchronous telemetry and must remain enrichment rather than lifecycle truth. A separate bounded read of the undocumented `/copilot_internal/user` endpoint supplies best-effort plan and named-quota enrichment when a documented environment token is available.
 
 Use **`-i, --interactive <prompt>`** for RimZ prompt-seeded panes and supervised runs: it submits the initial prompt while preserving the stock interactive UI, native asks, and the hook-driven completion path shared with other adapters. Native `-p` prompt mode is a future alternative if RimZ adds a process-output supervised backend. Evaluate **ACP** when RimZ needs structured streaming, permission requests, or session control for a supervised run. Do not replace the interactive pane with ACP: ACP changes RimZ from observing the user's stock CLI into hosting the agent protocol itself.
 
@@ -58,7 +58,8 @@ The candidate transport matrix is:
 | compaction start | `preCompact` | OTel has start and complete events; hooks have no post-compact event |
 | compaction end | OTel `session.compaction_complete`, or derived next activity | no native post-compact hook |
 | subagents | `subagentStart` / `subagentStop` | built-in `general-purpose` emits neither event |
-| model, effort, context, quota | statusline if its captured schema is suitable | OTel plus config; footer display proves fields exist but is not a read API |
+| model, effort, context | statusline if its captured schema is suitable | OTel plus config; footer display proves fields exist but is not a read API |
+| plan and named quotas | bounded `/copilot_internal/user` read with an environment token | undocumented compatibility surface; treat availability as best-effort |
 | tokens, cost, AI units | OTel | session `events.jsonl` is undocumented |
 | session resume | `--resume`, `--continue`, `--session-id` | session ID is present in hooks |
 | authentication | environment and `copilot login` | no documented machine-readable auth-status command |
@@ -384,7 +385,7 @@ New RimZ rooms set a private room-runtime file exporter for direct and managed l
 
 Captured `github.copilot.cost` was finite but `0.0` on each `chat` span, and the aggregate `invoke_agent` span exposed no session-cumulative dollar. This fails the positive cumulative-value and replacement/dedup gates, so RimZ publishes no live session dollars and keeps historical/account Copilot spend unsupported.
 
-The docs publish no rate-limit/quota attributes in the OTel schema. Quota is visible in the native footer but needs statusline capture or another documented API before RimZ can claim it.
+The docs publish no rate-limit/quota attributes in the OTel schema. Quota is visible in the native footer; RimZ reads it separately through the bounded undocumented account-usage surface below and does not infer it from telemetry.
 
 ## Programmatic mode
 
@@ -456,9 +457,17 @@ Environment-token precedence is:
 
 Supported tokens are fine-grained PATs with the **Copilot Requests** permission, Copilot CLI OAuth tokens, and GitHub CLI OAuth tokens. Classic `ghp_` PATs are unsupported. `COPILOT_GH_HOST` overrides `GH_HOST` for Copilot only.
 
-The official CLI command list has no `copilot auth status --json` equivalent. `/user show`, `/user list`, and `/user switch` are interactive slash commands. Captured `$COPILOT_HOME/config.json` state exposes the non-secret current identity as `lastLoggedInUser: {host, login}` and the known identity list as `loggedInUsers: [{host, login}]`. RimZ uses the last identity, falling back to the first list entry, as a presence-only idle account probe.
+The official CLI command list has no `copilot auth status --json` equivalent. `/user show`, `/user list`, and `/user switch` are interactive slash commands. Captured `$COPILOT_HOME/config.json` state exposes the non-secret current identity as `lastLoggedInUser: {host, login}` and the known identity list as `loggedInUsers: [{host, login}]`. RimZ uses the last valid identity, falling back to the first valid list entry, and qualifies enterprise identities as `login@host` so equal logins on different hosts remain distinct.
 
-Model only these identity fields. Leave keychain entries and `config.json` token fields such as `copilotTokens` untouched and unmodeled. Presence of an environment variable is not proof that the token is valid or that the account has an enabled Copilot CLI policy. Plan, quota, and spend still need a documented API or harmless bounded command before RimZ can claim those surfaces.
+Model only these identity fields. Leave keychain entries and `config.json` token fields such as `copilotTokens` untouched and unmodeled. Presence of an environment variable is not proof that the token is valid or that the account has an enabled Copilot CLI policy.
+
+### Undocumented account-usage response
+
+[CodexBar's Copilot usage fetcher](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Copilot/CopilotUsageFetcher.swift) demonstrates a bounded `GET /copilot_internal/user` request authenticated as `Authorization: token <credential>`, with GitHub JSON accept/version headers and Copilot editor/plugin user-agent headers. The public endpoint is `https://api.github.com/copilot_internal/user`; an enterprise host maps to its `api.<host>` authority while retaining an explicit port. This surface is compatibility evidence rather than an official GitHub API contract.
+
+The response can expose `copilot_plan`, `token_based_billing`, `quota_reset_date`, modern `quota_snapshots`, and legacy `monthly_quotas` plus `limited_user_quotas`. Premium interactions and Chat may report an explicit percentage, entitlement and remaining counts, or unlimited state; reset dates appear as RFC 3339 timestamps or calendar dates. Business responses may carry zero-entitlement placeholders and no usable quota while still providing the plan.
+
+RimZ resolves only the documented environment-token precedence above and host precedence `COPILOT_GH_HOST`, `GH_HOST`, then `github.com`. It fingerprints the normalized host and selected token for cache invalidation, stores no credential, and treats a successfully decoded response as authoritative quota data while treating missing credentials and expected authentication or unsupported-endpoint responses as quiet best-effort absence. It maps Premium and Chat to durationless named lanes `prm` and `cht`; no monthly duration is inferred from the reset date.
 
 GitHub AI Credits represent cost at **$0.01 per credit**, but model usage and plan quota behavior can change. OTel publishes `github.copilot.aiu` and `github.copilot.cost`; verify units with fixtures and current billing docs before mapping `cost` to dollars or AI units to credits.
 
@@ -483,7 +492,7 @@ The hooks-first adapter implements the lifecycle, transcript, and narrow OTel su
 7. Extend OTel only after shared-file interactive concurrency, cumulative-versus-turn replacement, `github.copilot.cost` units, subagent span identity, compaction close, and long-running flush behavior are pinned.
 8. Confirm process names, argv, parent/child tree, cwd, and environment stamping under normal, resume, remote, `-p`, ACP, worktree, and auto-update/restart paths for PID attribution.
 9. Decide whether RimZ owns a statusline wrapper; OTel stays user-opt-in unless a managed exporter path and its trust/privacy contract become product behavior.
-10. Keep coverage honest: transcript/history are captured compatibility, login identity is presence-only, usage/model are partial, and cost/plan/quota/subagent remain unsupported until their own sources are proven.
+10. Keep coverage honest: transcript/history and the internal usage endpoint are captured compatibility, usage/model/plan/quota are partial enrichment, and cost/spend/subagent remain unsupported until their own sources are proven.
 
 The expected initial lifecycle mapping is:
 
