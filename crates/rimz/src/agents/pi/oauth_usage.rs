@@ -159,18 +159,14 @@ fn select_credential(bytes: &[u8], used_provider: Option<&str>) -> Result<Select
         .as_deref()
         .filter(|token| !token.is_empty());
     let scope = account::oauth_scope(provider).unwrap_or_default();
+    let fallback_account_key = hashed_account_key(
+        refresh_token.map_or("access-token", |_| "refresh-token"),
+        refresh_token.unwrap_or(access_token),
+    );
     let account_key = if scope == ProviderAccountScope::sub_provider("openai", "oauth") {
-        account_id.clone().unwrap_or_else(|| {
-            hashed_account_key(
-                refresh_token.map_or("access-token", |_| "refresh-token"),
-                refresh_token.unwrap_or(access_token),
-            )
-        })
+        account_id.clone().unwrap_or(fallback_account_key)
     } else {
-        hashed_account_key(
-            refresh_token.map_or("access-token", |_| "refresh-token"),
-            refresh_token.unwrap_or(access_token),
-        )
+        fallback_account_key
     };
     Ok(SelectedCredential {
         provider: provider.clone(),
