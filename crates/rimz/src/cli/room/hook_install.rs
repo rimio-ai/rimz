@@ -605,7 +605,7 @@ mod tests {
         assert!(rendered.contains("-old-status"));
         assert!(rendered.contains("+new-status"));
         assert!(rendered.contains("+one"));
-        assert!(!rendered.contains("Add reporting hooks?"));
+        assert!(!rendered.contains("Install or refresh reporting hooks?"));
     }
 
     #[test]
