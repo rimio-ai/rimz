@@ -89,6 +89,14 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_uses_the_gemini_gem() {
+        assert_eq!(
+            emblem_lines("antigravity"),
+            [" ▗▛▀▀▀▜▖", "▐█ ◆ ◆ █▌", " ▝▀▀▀▀▀▘"]
+        );
+    }
+
+    #[test]
     fn unknown_kind_uses_fallback() {
         assert_eq!(emblem_lines("does-not-exist"), fallback_emblem());
     }
