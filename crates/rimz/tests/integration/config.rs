@@ -10,6 +10,10 @@ use predicates::str::contains;
 
 use crate::common::{Env, ScrubSessionEnvExt};
 
+const PI_EXTENSION_SOURCE: &str = include_str!("../../src/agents/pi/extension.ts");
+const OPENCODE_PLUGIN_SOURCE: &str = include_str!("../../src/agents/opencode/plugin.ts");
+const STALE_MANAGED_SOURCE: &str = "// old _rimz_managed source\n";
+
 fn machine_config_path(env: &Env) -> std::path::PathBuf {
     env.config_root().join("rimz").join("config.toml")
 }
@@ -31,7 +35,12 @@ fn write_machine_file(path: &std::path::Path, text: &str) {
     std::fs::write(path, text).expect("write config seed");
 }
 
-fn run_setup_pty(env: &Env, input: &str) -> String {
+fn run_setup_pty(
+    env: &Env,
+    input: &str,
+    path: Option<&std::path::Path>,
+    adapter_paths: &[(&str, &std::path::Path)],
+) -> String {
     let pty = native_pty_system();
     let pair = pty
         .openpty(PtySize {
@@ -57,7 +66,10 @@ fn run_setup_pty(env: &Env, input: &str) -> String {
     cmd.env_remove("COLORTERM");
     let empty_path = env.home_root.join("empty-bin");
     std::fs::create_dir_all(&empty_path).expect("mkdir empty PATH");
-    cmd.env("PATH", empty_path);
+    cmd.env("PATH", path.unwrap_or(&empty_path));
+    for (name, value) in adapter_paths {
+        cmd.env(name, value);
+    }
     cmd.env_remove("ENV");
     cmd.env_remove("BASH_ENV");
     cmd.env_remove("ZDOTDIR");
@@ -100,6 +112,50 @@ fn run_setup_pty(env: &Env, input: &str) -> String {
         "rimz setup failed with {status:?}; output:\n{output}"
     );
     output
+}
+
+struct SetupAgentFiles {
+    bin_dir: std::path::PathBuf,
+    antigravity_hooks: std::path::PathBuf,
+    antigravity_settings: std::path::PathBuf,
+    pi_extension: std::path::PathBuf,
+    opencode_plugin: std::path::PathBuf,
+}
+
+fn seed_setup_agents(env: &Env) -> SetupAgentFiles {
+    let bin_dir = env.home_root.join("agent-bin");
+    std::fs::create_dir_all(&bin_dir).expect("mkdir agent PATH");
+    for name in ["agy", "pi", "opencode"] {
+        let path = bin_dir.join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write agent stub");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod agent stub");
+    }
+
+    let files = SetupAgentFiles {
+        bin_dir,
+        antigravity_hooks: env.home_root.join("agent-config/antigravity/hooks.json"),
+        antigravity_settings: env.home_root.join("agent-config/antigravity/settings.json"),
+        pi_extension: env.home_root.join("agent-config/pi/rimz.ts"),
+        opencode_plugin: env.home_root.join("agent-config/opencode/rimz.ts"),
+    };
+    for path in [&files.pi_extension, &files.opencode_plugin] {
+        write_machine_file(path, STALE_MANAGED_SOURCE);
+    }
+    files
+}
+
+fn run_setup_agents_pty(env: &Env, input: &str, files: &SetupAgentFiles) -> String {
+    let adapter_paths = [
+        ("RIMZ_ANTIGRAVITY_HOOKS", files.antigravity_hooks.as_path()),
+        (
+            "RIMZ_ANTIGRAVITY_SETTINGS",
+            files.antigravity_settings.as_path(),
+        ),
+        ("RIMZ_PI_EXTENSION", files.pi_extension.as_path()),
+        ("RIMZ_OPENCODE_PLUGIN", files.opencode_plugin.as_path()),
+    ];
+    run_setup_pty(env, input, Some(&files.bin_dir), &adapter_paths)
 }
 
 #[test]
@@ -389,10 +445,16 @@ fn setup_without_tty_reports_and_writes_nothing() {
 #[test]
 fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     let env = Env::new();
+    let pi_extension = env.home_root.join("setup-yes/pi/rimz.ts");
+    let opencode_plugin = env.home_root.join("setup-yes/opencode/rimz.ts");
+    write_machine_file(&pi_extension, STALE_MANAGED_SOURCE);
+    write_machine_file(&opencode_plugin, STALE_MANAGED_SOURCE);
 
     let output = env
         .rimz()
         .args(["setup", "--yes"])
+        .env("RIMZ_PI_EXTENSION", &pi_extension)
+        .env("RIMZ_OPENCODE_PLUGIN", &opencode_plugin)
         .output()
         .expect("run setup --yes");
     assert!(output.status.success(), "setup --yes exits zero");
@@ -413,6 +475,13 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     assert!(theme_config_path(&env).exists());
     assert!(agents_config_path(&env).exists());
     assert!(loop_config_path(&env).exists());
+    for path in [&pi_extension, &opencode_plugin] {
+        assert_eq!(
+            std::fs::read(path).expect("read stale managed source"),
+            STALE_MANAGED_SOURCE.as_bytes(),
+            "setup --yes preserves managed sources byte-for-byte",
+        );
+    }
     let theme_text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
         !theme_text
@@ -426,7 +495,7 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
 fn setup_pty_writes_and_reruns_first_run_answers() {
     let env = Env::new();
 
-    let output = run_setup_pty(&env, "y\ny\ny\n");
+    let output = run_setup_pty(&env, "y\ny\ny\n", None, &[]);
 
     assert!(output.contains("Use truecolor?"));
     assert!(output.contains("Use Nerd Font icons?"));
@@ -452,7 +521,7 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
         "pet enabled:\n{text}"
     );
 
-    let output = run_setup_pty(&env, "\nn\nn\nn\n");
+    let output = run_setup_pty(&env, "\nn\nn\nn\n", None, &[]);
 
     assert!(output.contains("Keep your current config? [Y/n]"));
     assert!(output.contains("Use truecolor?"));
@@ -478,6 +547,85 @@ fn setup_pty_writes_and_reruns_first_run_answers() {
     assert!(
         text.contains("[theme.pets]") && text.contains("enabled = false"),
         "pet disabled:\n{text}"
+    );
+}
+
+#[test]
+fn setup_pty_installs_and_refreshes_detected_agent_hooks_together() {
+    let env = Env::new();
+    let files = seed_setup_agents(&env);
+    let output = run_setup_agents_pty(&env, "y\nn\nn\nn\n", &files);
+
+    assert!(
+        output
+            .lines()
+            .any(|line| line.contains("agent antigravity:")
+                && line.contains("on PATH; hooks not installed")),
+        "{output}"
+    );
+    for name in ["pi", "opencode"] {
+        assert!(
+            output
+                .lines()
+                .any(|line| line.contains(&format!("agent {name}:"))
+                    && line.contains("on PATH; hooks installed; upgrade available")),
+            "{output}"
+        );
+    }
+    assert_eq!(
+        output
+            .matches("Install or refresh reporting hooks? [Y/n]")
+            .count(),
+        1,
+        "{output}"
+    );
+    for name in ["antigravity", "pi", "opencode"] {
+        assert!(output.contains(name), "missing {name}:\n{output}");
+    }
+    assert!(output.contains("hooks.json"), "{output}");
+    assert!(output.contains("settings.json"), "{output}");
+    assert!(output.contains("updates existing config"), "{output}");
+    assert!(output.contains("new file"), "{output}");
+
+    let hooks = std::fs::read_to_string(&files.antigravity_hooks).expect("read hooks config");
+    let settings =
+        std::fs::read_to_string(&files.antigravity_settings).expect("read settings config");
+    assert!(
+        hooks.contains("rimz hooks feed --source antigravity"),
+        "{hooks}"
+    );
+    assert!(settings.contains("_rimz_managed"), "{settings}");
+    assert_eq!(
+        std::fs::read_to_string(&files.pi_extension).expect("read Pi extension"),
+        PI_EXTENSION_SOURCE,
+    );
+    assert_eq!(
+        std::fs::read_to_string(&files.opencode_plugin).expect("read OpenCode plugin"),
+        OPENCODE_PLUGIN_SOURCE,
+    );
+}
+
+#[test]
+fn setup_pty_decline_preserves_every_hook_candidate() {
+    let env = Env::new();
+    let files = seed_setup_agents(&env);
+    let output = run_setup_agents_pty(&env, "n\nn\nn\nn\n", &files);
+
+    assert!(
+        output.contains(
+            "Nothing changed - install or refresh agents any time with `rimz hooks install`."
+        ),
+        "{output}"
+    );
+    assert!(!files.antigravity_hooks.exists());
+    assert!(!files.antigravity_settings.exists());
+    assert_eq!(
+        std::fs::read(&files.pi_extension).unwrap(),
+        STALE_MANAGED_SOURCE.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(&files.opencode_plugin).unwrap(),
+        STALE_MANAGED_SOURCE.as_bytes()
     );
 }
 
@@ -561,7 +709,7 @@ fn interactive_setup_stops_cleanly_before_partial_setup_for_unparseable_config()
     let broken = "[theme.display]\nmax_cols = 64\nmax_cols = 72\n";
     write_machine_file(&path, broken);
 
-    let output = run_setup_pty(&env, "\n");
+    let output = run_setup_pty(&env, "\n", None, &[]);
 
     assert!(
         output.contains("Left "),

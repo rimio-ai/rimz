@@ -39,31 +39,31 @@ pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::
 }
 
 pub(crate) fn ensure_detected_agent_hooks() -> Result<bool> {
-    let mut missing = Vec::new();
+    let mut actionable = Vec::new();
 
     for agent in detected_installable_adapters() {
         let descriptor = agent.descriptor();
-        if !agent.hooks_installed() {
-            missing.push(agent.preview_hook_install()?);
+        if !agent.hooks_installed() || agent.hook_upgrade_available() {
+            actionable.push(agent.preview_hook_install()?);
             continue;
         }
 
         warn_untrusted_hooks(descriptor.kind, &agent.untrusted_installed_hooks())?;
     }
 
-    if missing.is_empty() {
+    if actionable.is_empty() {
         return Ok(false);
     }
 
     if !std::io::stdin().is_terminal() {
-        print_noninteractive_notice(&missing)?;
+        print_noninteractive_notice(&actionable)?;
         return Ok(true);
     }
 
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     let mut out = render::err();
-    let selected = prompt_consent(&missing, &mut input, &mut out)?;
+    let selected = prompt_consent(&actionable, &mut input, &mut out)?;
     install_selected(&selected, &mut out)?;
     Ok(true)
 }
@@ -93,7 +93,7 @@ fn prompt_consent(
             _ => {
                 writeln!(
                     out,
-                    "  Enter installs hooks for every listed agent; n skips."
+                    "  Enter installs or refreshes hooks for every listed agent; n skips."
                 )?;
             }
         }
@@ -105,7 +105,7 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
     if selected.is_empty() {
         writeln!(
             out,
-            "Nothing changed - wire agents any time with `rimz hooks install`."
+            "Nothing changed - install or refresh agents any time with `rimz hooks install`."
         )?;
         return Ok(());
     }
@@ -179,7 +179,7 @@ fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> 
     )?;
     writeln!(
         out,
-        "To show {pronoun} live in the sidebar, it adds reporting hooks to each agent's config."
+        "To show {pronoun} live in the sidebar, Rimz installs or refreshes reporting hooks in each agent's config."
     )?;
     Ok(())
 }
@@ -201,7 +201,7 @@ fn write_agent_table_entry(
         let name = if index == 0 { preview.agent } else { "" };
         let cell = agent_file_cell(preview, file, index);
         let annotation = if file.existed {
-            "existing kept"
+            "updates existing config"
         } else {
             "new file"
         };
@@ -232,7 +232,7 @@ fn write_agent_table_entry(
 fn write_prompt(out: &mut dyn Write) -> Result<()> {
     write!(
         out,
-        "Add reporting hooks? {} ",
+        "Install or refresh reporting hooks? {} ",
         render::paint(render::palette::ACCENT.bold(), "[Y/n]")
     )?;
     out.flush()?;
@@ -300,7 +300,7 @@ fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPrevi
     write_consent_footer(out)?;
     writeln!(
         out,
-        "No terminal input — nothing installed. Rimz continues into the room; wire agents later with rimz hooks install.",
+        "No terminal input — nothing installed or refreshed. Rimz continues into the room; install or refresh agents later with rimz hooks install.",
     )?;
     Ok(())
 }
@@ -480,13 +480,19 @@ mod tests {
         let (selected, _) = drive(&previews, b"n\n");
         assert!(selected.is_empty());
 
+        let (selected, rendered) = drive(&previews, b"maybe\nn\n");
+        assert!(selected.is_empty());
+        assert!(
+            rendered.contains("Enter installs or refreshes hooks for every listed agent; n skips.")
+        );
+
         let (selected, _) = drive(&previews, b"");
         assert!(selected.is_empty());
 
         let rendered = strip(|out| install_selected(&selected, out));
-        assert!(
-            rendered.contains("Nothing changed - wire agents any time with `rimz hooks install`.")
-        );
+        assert!(rendered.contains(
+            "Nothing changed - install or refresh agents any time with `rimz hooks install`."
+        ));
     }
 
     #[test]
@@ -514,12 +520,61 @@ mod tests {
                 "+ wraps your statusline for live context — yours restored on uninstall"
             ));
         }
-        assert!(interactive.contains("Add reporting hooks? [Y/n]"));
+        assert!(interactive.contains("Install or refresh reporting hooks? [Y/n]"));
         assert!(!interactive.contains("No terminal input"));
-        assert!(!noninteractive.contains("Add reporting hooks? [Y/n]"));
+        assert!(!noninteractive.contains("Install or refresh reporting hooks? [Y/n]"));
         assert!(noninteractive.contains(
-            "No terminal input — nothing installed. Rimz continues into the room; wire agents later with rimz hooks install."
+            "No terminal input — nothing installed or refreshed. Rimz continues into the room; install or refresh agents later with rimz hooks install."
         ));
+    }
+
+    #[test]
+    fn mixed_install_and_upgrade_share_one_summary_and_consent() {
+        let created = preview("claude", None, "new-hook\n");
+        let upgraded = preview("pi", Some("stale-extension\n"), "current-extension\n");
+        let mut antigravity = preview("antigravity", None, "new-hooks\n");
+        antigravity.files.push(HookInstallFilePreview {
+            path: home_config_path("antigravity-statusline"),
+            original: Some("old-statusline\n".to_owned()),
+            candidate: "new-statusline\n".to_owned(),
+            existed: true,
+        });
+        let previews = [created, upgraded, antigravity];
+
+        let (selected, summary) = drive(&previews, b"y\n");
+        assert_eq!(selected, vec!["claude", "pi", "antigravity"]);
+        assert_eq!(
+            summary
+                .matches("Install or refresh reporting hooks? [Y/n]")
+                .count(),
+            1
+        );
+        for path in [
+            "~/.claude/settings.json",
+            "~/.pi/settings.json",
+            "~/.antigravity/settings.json",
+            "~/.antigravity-statusline/settings.json",
+        ] {
+            assert!(summary.contains(path), "missing {path}:\n{summary}");
+        }
+        assert!(summary.contains("new file"));
+        assert!(summary.contains("updates existing config"));
+        assert!(!summary.contains("@@"), "consent stays concise:\n{summary}");
+
+        let (selected, _) = drive(&previews, b"n\n");
+        assert!(selected.is_empty());
+
+        let dry_run = strip(|out| render_dry_run(out, &previews));
+        for content in [
+            "+new-hook",
+            "-stale-extension",
+            "+current-extension",
+            "+new-hooks",
+            "-old-statusline",
+            "+new-statusline",
+        ] {
+            assert!(dry_run.contains(content), "missing {content}:\n{dry_run}");
+        }
     }
 
     #[test]

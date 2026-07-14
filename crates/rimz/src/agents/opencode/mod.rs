@@ -839,6 +839,10 @@ impl AgentAdapter for OpencodeAdapter {
         opencode_plugin_path().is_ok_and(|path| OPENCODE_MANAGED_SOURCE.installed_at(&path))
     }
 
+    fn hook_upgrade_available(&self) -> bool {
+        opencode_plugin_path().is_ok_and(|path| OPENCODE_MANAGED_SOURCE.upgrade_available_at(&path))
+    }
+
     fn managed_hook_artifacts_present(&self) -> bool {
         self.hooks_installed()
     }

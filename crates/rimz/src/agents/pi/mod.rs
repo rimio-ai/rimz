@@ -716,6 +716,10 @@ impl AgentAdapter for PiAdapter {
         pi_extension_path().is_ok_and(|path| PI_MANAGED_SOURCE.installed_at(&path))
     }
 
+    fn hook_upgrade_available(&self) -> bool {
+        pi_extension_path().is_ok_and(|path| PI_MANAGED_SOURCE.upgrade_available_at(&path))
+    }
+
     fn managed_hook_artifacts_present(&self) -> bool {
         self.hooks_installed()
     }

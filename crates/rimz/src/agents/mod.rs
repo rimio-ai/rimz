@@ -1193,6 +1193,14 @@ pub trait AgentAdapter: Send + Sync {
         false
     }
 
+    /// Whether interactive setup can safely refresh an installed hook source
+    /// from this build. This is separate from [`Self::hooks_installed`]: a
+    /// working older integration remains installed until the user consents to
+    /// the upgrade.
+    fn hook_upgrade_available(&self) -> bool {
+        false
+    }
+
     /// Rimz-installed hook events this agent will silently skip until the
     /// user trusts them in the agent's own UI. Empty for agents without a
     /// trust gate; Codex overrides it from `[hooks.state]` in its config.

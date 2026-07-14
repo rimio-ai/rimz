@@ -92,6 +92,14 @@ impl ManagedSource {
         std::fs::read_to_string(path).is_ok_and(|content| file_is_rimz_managed(&content))
     }
 
+    /// Whether a Rimz-owned source differs from the source embedded in this
+    /// build. Best-effort: missing, unreadable, and user-owned files are not
+    /// upgrade candidates.
+    pub fn upgrade_available_at(&self, path: &Path) -> bool {
+        std::fs::read_to_string(path)
+            .is_ok_and(|content| file_is_rimz_managed(&content) && content != self.source)
+    }
+
     fn refuse_unmarked(&self, path: &Path, original: Option<&str>) -> Result<()> {
         match original {
             Some(existing) if !file_is_rimz_managed(existing) => Err(AgentErr::Install {

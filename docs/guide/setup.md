@@ -3,7 +3,7 @@
 RimZ runs with zero configuration, and one setup pass makes it a comfortable daily driver — on a laptop or on the remote server you SSH into. Picking up where [installation](./installation.md) ends, you'll:
 
 - initialize the per-machine config,
-- install the agent hooks that let the sidebar see your agents,
+- install or refresh the agent hooks that let the sidebar see your agents,
 - check truecolor and Nerd Font support independently, and preview a pet,
 - switch on the hands-off behaviors that keep agents working while you're away,
 - and give your own Zellij or tmux a baseline worth keeping.
@@ -22,11 +22,11 @@ cd ~/code/your-project && rimz
 `rimz setup` prints a first-run report — the selected multiplexer, workspace root, trust state, config path, detected agent binaries, and hook install status — and writes any missing per-machine config under `~/.config/rimz/`. On an interactive terminal it also:
 
 - offers to keep an existing config and refresh it against the current templates,
-- offers hook install for every detected agent,
+- offers one summarized install or refresh for every detected agent with missing hooks or a stale RimZ-owned whole-file integration,
 - shows separate live truecolor and Nerd Font probes, and
 - previews the configured sidebar pet before asking whether to enable it.
 
-The first `rimz` run on a terminal asks the same hook, color, glyph, and pet questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs or trust grants — which suits a server provisioning script.
+The hook summary names every affected file and points to `rimz hooks install --dry-run` for the exact unified diff before you consent. The first `rimz` run on a terminal asks the same hook, color, glyph, and pet questions when it creates the config. `rimz setup --yes` takes the non-interactive path — merge existing files, write missing ones, no hook installs, upgrades, trust grants, or appearance changes — which suits a server provisioning script.
 
 Four files carry the settings this guide touches:
 
@@ -70,11 +70,11 @@ Hooks are how a running agent reports to the room: turn starts and ends, permiss
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # every detected installable agent, including Copilot and Cursor
+rimz hooks install              # every detected installable agent (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, qwen)
 rimz hooks install claude       # one agent kind
 ```
 
-The install is additive — your existing hooks stay — and each report names every file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, RimZ wraps the command so the sidebar reads live context, and restores yours on uninstall. Cursor shows and commits its hook file and CLI statusline config as one rollback-safe two-file operation. The first `rimz` run and interactive `rimz setup` offer the same install with a consent prompt and diff preview, so `rimz hooks install` is mainly for adding an agent later or re-checking the surface. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
+Structured installs preserve existing user hooks, and whole-file Pi and OpenCode integrations replace only a file carrying RimZ's first-line `_rimz_managed` ownership marker; an unmarked file remains user-owned and installation refuses to overwrite it. Each report names every file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, RimZ wraps the command so the sidebar reads live context, and restores yours on uninstall. Cursor shows and commits its hook file and CLI statusline config as one rollback-safe two-file operation. The first `rimz` run and interactive `rimz setup` compare marked whole-file integrations with the source embedded in the running RimZ build, include stale sources in the same summarized consent prompt as missing hooks, and point to `rimz hooks install --dry-run` for exact diffs. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
 
 Newly-born rooms also give direct Copilot launches a private metadata-only OTel file under that workspace's runtime directory, with message-content capture disabled. A room that was already alive when RimZ gained this support keeps its original environment; rebirth it after install or upgrade before expecting a plain `copilot` typed in the work shell to show model and token composition.
 

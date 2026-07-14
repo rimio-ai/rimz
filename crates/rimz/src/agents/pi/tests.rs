@@ -511,10 +511,15 @@ fn install_preview_and_uninstall_only_own_managed_files() {
     assert_eq!(report.installed_events, managed_event_names());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
     assert!(PI_MANAGED_SOURCE.installed_at(&path));
+    assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&path));
 
-    std::fs::write(&path, "// still _rimz_managed\n// user tweak\n").unwrap();
+    let stale = "// still _rimz_managed\n// older Rimz source\n";
+    std::fs::write(&path, stale).unwrap();
+    assert!(PI_MANAGED_SOURCE.installed_at(&path));
+    assert!(PI_MANAGED_SOURCE.upgrade_available_at(&path));
     assert!(PI_MANAGED_SOURCE.install_into(&path).unwrap().files[0].existed);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), EXTENSION_SOURCE);
+    assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&path));
 
     let preview = PI_MANAGED_SOURCE.preview_at(&path).unwrap();
     assert_eq!(preview.agent, "pi");
@@ -526,6 +531,7 @@ fn install_preview_and_uninstall_only_own_managed_files() {
     assert_eq!(removed.removed_events, managed_event_names());
     assert!(!path.exists());
     assert!(!PI_MANAGED_SOURCE.installed_at(&path));
+    assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&path));
     assert!(!PI_MANAGED_SOURCE.uninstall_from(&path).unwrap().files[0].existed);
 
     let user_path = dir.path().join("user.ts");
@@ -546,6 +552,7 @@ fn install_preview_and_uninstall_only_own_managed_files() {
         "// the user's own extension\n"
     );
     assert!(!PI_MANAGED_SOURCE.installed_at(&user_path));
+    assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&user_path));
 }
 
 fn managed_event_names() -> Vec<String> {
