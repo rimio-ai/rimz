@@ -162,22 +162,14 @@ fn rendered_group_lines_with(
     let mut lines = Vec::new();
     let mut map = Vec::new();
     let mut more_hits = Vec::new();
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(snapshot, theme, 54, 0, phase, &cost_rolls);
     worktree_group_lines(
-        theme,
+        &ctx,
         &snapshot.worktree_groups[0],
-        &snapshot.providers,
-        snapshot.now,
-        54,
-        &snapshot.theme.display.context_meter,
-        snapshot.theme.display.card_density,
-        None,
         false,
-        None,
         &mut row_index,
-        0,
-        phase,
-        &CostRolls::default(),
-        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+        None,
         &mut lines,
         &mut map,
         &mut more_hits,

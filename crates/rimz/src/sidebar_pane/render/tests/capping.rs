@@ -88,21 +88,15 @@ fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
     let mut more_hits = Vec::new();
     let mut row_index = 0;
     let snapshot = snapshot_with(Vec::new());
+    let theme = Theme::fixed(true);
+    let cost_rolls = CostRolls::default();
+    let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    ctx.held = Some(&held);
     worktree_group_lines(
-        &Theme::fixed(true),
+        &ctx,
         &group,
-        &[],
-        fixed_now(),
-        54,
-        &snapshot.theme.display.context_meter,
-        snapshot.theme.display.card_density,
-        None,
         false,
-        Some(&held),
         &mut row_index,
-        0,
-        0,
-        &CostRolls::default(),
         None,
         &mut lines,
         &mut map,
@@ -137,21 +131,15 @@ fn expanded_group_keeps_less_control_when_hold_makes_all_rows_visible() {
     let mut more_hits = Vec::new();
     let mut row_index = 0;
     let snapshot = snapshot_with(Vec::new());
+    let theme = Theme::fixed(true);
+    let cost_rolls = CostRolls::default();
+    let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    ctx.held = Some(&held);
     worktree_group_lines(
-        &Theme::fixed(true),
+        &ctx,
         &group,
-        &[],
-        fixed_now(),
-        54,
-        &snapshot.theme.display.context_meter,
-        snapshot.theme.display.card_density,
-        None,
         true,
-        Some(&held),
         &mut row_index,
-        0,
-        0,
-        &CostRolls::default(),
         None,
         &mut lines,
         &mut map,
@@ -230,21 +218,14 @@ fn finished_group_collapses_unread_success_until_revealed() {
     let mut more_hits = Vec::new();
     let mut row_index = 0;
     let snapshot = snapshot_with(Vec::new());
+    let theme = Theme::fixed(true);
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     worktree_group_lines(
-        &Theme::fixed(true),
+        &ctx,
         &group,
-        &[],
-        fixed_now(),
-        54,
-        &snapshot.theme.display.context_meter,
-        snapshot.theme.display.card_density,
-        None,
         false,
-        None,
         &mut row_index,
-        0,
-        0,
-        &CostRolls::default(),
         None,
         &mut lines,
         &mut map,

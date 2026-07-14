@@ -658,22 +658,13 @@ fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
         let mut map = Vec::new();
         let mut more_hits = Vec::new();
         let mut row_index = 0;
-        worktree_group_lines_with_meter(
-            theme,
+        let cost_rolls = CostRolls::default();
+        let ctx = test_row_ctx(&snapshot, theme, 44, 0, 0, &cost_rolls);
+        worktree_group_lines(
+            &ctx,
             &snapshot.worktree_groups[0],
-            &snapshot.providers,
-            snapshot.now,
-            44,
-            &snapshot.theme.display.context_meter,
-            snapshot.theme.display.card_density,
-            None,
             false,
-            None,
             &mut row_index,
-            0,
-            0,
-            &CostRolls::default(),
-            lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
             Some(pixels),
             &mut lines,
             &mut map,
@@ -785,22 +776,14 @@ fn calm_context_bar_orders_segments_left_to_right() {
         let mut map = Vec::new();
         let mut more_hits = Vec::new();
         let mut row_index = 0;
+        let cost_rolls = CostRolls::default();
+        let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
         worktree_group_lines(
-            &theme,
+            &ctx,
             &snapshot.worktree_groups[0],
-            &snapshot.providers,
-            snapshot.now,
-            44,
-            &snapshot.theme.display.context_meter,
-            snapshot.theme.display.card_density,
-            None,
             false,
-            None,
             &mut row_index,
-            0,
-            0,
-            &CostRolls::default(),
-            lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+            None,
             &mut lines,
             &mut map,
             &mut more_hits,

@@ -13,9 +13,9 @@ use super::chrome::{
     truth_notice_lines,
 };
 use super::sections::{
-    MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
-    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_size, fleet_store_lines,
-    fleet_total_lines, trim_spans_to_width, unread_total, worktree_group_lines_with_meter,
+    MakeUpHit, ProviderTabHit, RowCtx, Tier, cockpit_spend_line, cockpit_summary_line,
+    content_width, dashboard_panel_lines_with_footer, fleet_header_lines, fleet_size,
+    fleet_store_lines, fleet_total_lines, trim_spans_to_width, unread_total, worktree_group_lines,
 };
 use super::theme::Theme;
 use super::{
@@ -826,6 +826,21 @@ pub(super) fn scroll_lines(
     if !snapshot.worktree_groups.is_empty() {
         let mut row_index = 0;
         let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
+        let ctx = RowCtx {
+            theme,
+            providers: &snapshot.providers,
+            now: snapshot.now,
+            width,
+            tier: Tier::for_width(content_width(width)),
+            bands: &snapshot.theme.display.context_meter,
+            card_density: snapshot.theme.display.card_density,
+            filter: ui.make_up_filter,
+            held: ui.held_visible(),
+            selected_index: ui.selected_index,
+            animation_phase: ui.animation_phase,
+            cost_rolls: &ui.cost_rolls,
+            lead_unread: lead_unread_id,
+        };
         // A group the make-up filter empties is skipped whole — header,
         // rows, and separator — so the filtered body holds only worktrees
         // with a matching row; the external catch-all is just another group.
@@ -843,22 +858,11 @@ pub(super) fn scroll_lines(
                 map.push(None);
             }
             emitted = true;
-            worktree_group_lines_with_meter(
-                theme,
+            worktree_group_lines(
+                &ctx,
                 group,
-                &snapshot.providers,
-                snapshot.now,
-                width,
-                &snapshot.theme.display.context_meter,
-                snapshot.theme.display.card_density,
-                ui.make_up_filter,
                 expanded,
-                ui.held_visible(),
                 &mut row_index,
-                ui.selected_index,
-                ui.animation_phase,
-                &ui.cost_rolls,
-                lead_unread_id,
                 meter_pixels.as_deref_mut(),
                 &mut lines,
                 &mut map,

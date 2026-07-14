@@ -13,13 +13,18 @@
 //! This file owns only the shared section primitives — the width tiers and the
 //! gutter every section composes with.
 
+use std::collections::HashSet;
+
+use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
-use crate::config::GlyphRole;
+use crate::SidebarProviderPanel;
+use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 
 pub(super) use super::layout::{pin_right, spans_width, trim_spans_to_width};
 use super::theme::{Component, Theme};
+use super::{BodyFilter, CostRolls};
 
 mod agent_card;
 mod cockpit;
@@ -40,9 +45,23 @@ pub(super) use provider::dashboard_panel_lines_with_footer;
 #[cfg(test)]
 pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
 pub(super) use provider::{fleet_store_lines, fleet_total_lines};
-#[cfg(test)]
 pub(super) use worktree::worktree_group_lines;
-pub(super) use worktree::worktree_group_lines_with_meter;
+
+pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
+    pub(in crate::sidebar_pane::render) theme: &'a Theme,
+    pub(in crate::sidebar_pane::render) providers: &'a [SidebarProviderPanel],
+    pub(in crate::sidebar_pane::render) now: Timestamp,
+    pub(in crate::sidebar_pane::render) width: usize,
+    pub(in crate::sidebar_pane::render) tier: Tier,
+    pub(in crate::sidebar_pane::render) bands: &'a ContextMeterConfig,
+    pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
+    pub(in crate::sidebar_pane::render) filter: Option<BodyFilter>,
+    pub(in crate::sidebar_pane::render) held: Option<&'a HashSet<String>>,
+    pub(in crate::sidebar_pane::render) selected_index: usize,
+    pub(in crate::sidebar_pane::render) animation_phase: u64,
+    pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,
+    pub(in crate::sidebar_pane::render) lead_unread: Option<&'a str>,
+}
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the
 /// one-cell right rail. Card and worktree lines build to this width before

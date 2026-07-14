@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use super::chrome::abbreviate_under;
 use super::sections::{
-    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_store_lines,
-    reset_expiry_heat_amount, worktree_group_lines, worktree_group_lines_with_meter,
+    RowCtx, Tier, content_width, dashboard_panel_lines_with_footer, fleet_header_lines,
+    fleet_store_lines, reset_expiry_heat_amount, worktree_group_lines,
 };
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 
@@ -346,6 +346,31 @@ fn ui_at_phase(phase: u64) -> UiState {
     }
 }
 
+fn test_row_ctx<'a>(
+    snapshot: &'a SidebarSnapshot,
+    theme: &'a Theme,
+    width: usize,
+    selected_index: usize,
+    animation_phase: u64,
+    cost_rolls: &'a CostRolls,
+) -> RowCtx<'a> {
+    RowCtx {
+        theme,
+        providers: &snapshot.providers,
+        now: snapshot.now,
+        width,
+        tier: Tier::for_width(content_width(width)),
+        bands: &snapshot.theme.display.context_meter,
+        card_density: snapshot.theme.display.card_density,
+        filter: None,
+        held: None,
+        selected_index,
+        animation_phase,
+        cost_rolls,
+        lead_unread: lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+    }
+}
+
 /// Render one worktree group's lines, asserting the hit-test map stays in
 /// lockstep so callers can read either the spans or their text.
 fn group_lines(
@@ -366,22 +391,14 @@ fn group_lines_at_width(
     let mut lines = Vec::new();
     let mut map = Vec::new();
     let mut more_hits = Vec::new();
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(snapshot, theme, width, selected_index, 0, &cost_rolls);
     worktree_group_lines(
-        theme,
+        &ctx,
         &snapshot.worktree_groups[0],
-        &snapshot.providers,
-        snapshot.now,
-        width,
-        &snapshot.theme.display.context_meter,
-        snapshot.theme.display.card_density,
-        None,
         false,
-        None,
         &mut row_index,
-        selected_index,
-        0,
-        &CostRolls::default(),
-        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+        None,
         &mut lines,
         &mut map,
         &mut more_hits,

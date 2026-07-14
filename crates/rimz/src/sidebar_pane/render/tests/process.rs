@@ -205,22 +205,14 @@ fn process_rows_dim_a_step_below_agent_cards() {
         let mut map = Vec::new();
         let mut more_hits = Vec::new();
         let mut row_index = 0;
+        let cost_rolls = CostRolls::default();
+        let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
         worktree_group_lines(
-            &theme,
+            &ctx,
             &snapshot.worktree_groups[0],
-            &snapshot.providers,
-            snapshot.now,
-            44,
-            &snapshot.theme.display.context_meter,
-            snapshot.theme.display.card_density,
-            None,
             false,
-            None,
             &mut row_index,
-            0,
-            0,
-            &CostRolls::default(),
-            lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+            None,
             &mut lines,
             &mut map,
             &mut more_hits,
@@ -274,22 +266,14 @@ fn active_process_rows_use_the_configured_working_animation_style() {
     let mut map = Vec::new();
     let mut more_hits = Vec::new();
     let mut row_index = 0;
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
     worktree_group_lines(
-        &theme,
+        &ctx,
         &snapshot.worktree_groups[0],
-        &snapshot.providers,
-        snapshot.now,
-        44,
-        &snapshot.theme.display.context_meter,
-        snapshot.theme.display.card_density,
-        None,
         false,
-        None,
         &mut row_index,
-        0,
-        0,
-        &CostRolls::default(),
-        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+        None,
         &mut lines,
         &mut map,
         &mut more_hits,

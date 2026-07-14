@@ -7,12 +7,10 @@ use crate::agents::{AgentContext, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
-use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::fmt::{
     activity_short, age_secs, dollars2, elapsed_label, model_label, pct_label, tokens_int,
     window_short,
@@ -34,7 +32,7 @@ mod identity;
 use self::{description::*, gauge::*, identity::*};
 
 use super::process::{process_detail_line, process_row_line};
-use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
+use super::{Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
 
 /// Width budget for the agent handle on line 1: kind-role handles through
 /// `opencode-docsmith` fit, and longer profiles clip with `…` rather than
@@ -58,34 +56,24 @@ pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &Si
     awaiting_first_prompt(row) && idle_unstarted(row)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn row_lines(
-    theme: &Theme,
+    ctx: &RowCtx<'_>,
     row: &SidebarRow,
-    providers: &[SidebarProviderPanel],
-    now: Timestamp,
-    width: usize,
-    tier: Tier,
     selected: bool,
-    card_density: CardDensityMode,
-    animation_phase: u64,
-    cost_rolls: &CostRolls,
-    bands: &ContextMeterConfig,
     gutter: Gutter,
-    lead_unread: Option<&str>,
     mut meter_pixels: Option<&mut MeterPixels>,
 ) -> Vec<Line<'static>> {
-    let cw = content_width(width);
+    let cw = content_width(ctx.width);
     let status = row.status().unwrap_or(AgentStatus::Idle);
     // The single lead unread row — the oldest one that needs an answer — keeps the
     // configured continuous signal; every other unread row settles to the steady
     // bright crest, so one pane is the only thing in motion.
-    let is_lead = lead_unread == Some(row.id.as_str());
+    let is_lead = ctx.lead_unread == Some(row.id.as_str());
     let attention = CardAttention::new(
-        theme,
+        ctx.theme,
         status,
-        age_secs(row.last_activity, now),
-        animation_phase,
+        age_secs(row.last_activity, ctx.now),
+        ctx.animation_phase,
         row.unread,
         selected,
         is_lead,
@@ -97,54 +85,43 @@ pub(super) fn row_lines(
     // unread treatment reads from, so the wash and the glyph/name/buckets turn on
     // together; the selection band wins when both apply.
     let wash = (!selected && attention.emphasis == CardEmphasis::Blink)
-        .then(|| theme.unread_wash())
+        .then(|| ctx.theme.unread_wash())
         .flatten();
     // Auto/expanded modes keep the stable card shape: selection only appends
     // subagents (expanded appends them on every card). Compact is deliberately
     // different: resting cards trim by status, and the selected card opens back
     // to the full shape.
-    let identity = IdentityLineContext {
-        theme,
-        providers,
-        tier,
-        width: cw,
-        attention,
-        animation_phase,
-        cost_rolls,
-    };
-    let mut inner = vec![identity_line(identity, row)];
+    let mut inner = vec![identity_line(ctx, row, attention)];
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
     if row.is_process()
-        && let Some(line) = process_detail_line(theme, row, cw)
+        && let Some(line) = process_detail_line(ctx.theme, row, cw)
     {
         inner.push(line);
     }
     if let Some(agent) = agent(row) {
-        let compact_resting = card_density == CardDensityMode::Compact && !selected;
+        let compact_resting = ctx.card_density == CardDensityMode::Compact && !selected;
         if compact_resting {
             match row.status().unwrap_or(AgentStatus::Idle) {
                 AgentStatus::Idle => {}
                 AgentStatus::Running | AgentStatus::Waiting => {
-                    inner.push(description_line(theme, row, cw, attention));
-                    if let Some(line) =
-                        gauge_line(theme, row, bands, cw, meter_pixels.as_deref_mut())
-                    {
+                    inner.push(description_line(ctx, row, attention));
+                    if let Some(line) = gauge_line(ctx, row, meter_pixels.as_deref_mut()) {
                         inner.push(line);
                     }
                 }
                 AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed => {
-                    inner.push(description_line(theme, row, cw, attention));
+                    inner.push(description_line(ctx, row, attention));
                 }
             }
         } else {
             let compose_affordance = awaiting_first_prompt_affordance(row);
             let blank_idle = status == AgentStatus::Idle && descriptor(row).is_none();
             if !blank_idle && !compose_affordance {
-                inner.push(description_line(theme, row, cw, attention));
+                inner.push(description_line(ctx, row, attention));
             } else if selected && compose_affordance {
-                inner.push(awaiting_prompt_line(animation_phase, cw));
+                inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
             }
             // A just-started idle agent sits on the 0% baseline gauge with no
             // history behind it, so it rests at identity plus any real
@@ -153,33 +130,28 @@ pub(super) fn row_lines(
             // `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill last-activity age —
             // join the resting card.
             if !idle_unstarted(row) {
-                if let Some(line) = gauge_line(theme, row, bands, cw, meter_pixels.as_deref_mut()) {
+                if let Some(line) = gauge_line(ctx, row, meter_pixels.as_deref_mut()) {
                     inner.push(line);
                 }
-                if let Some(line) = context_tokens_line(theme, row, bands, now, cw) {
+                if let Some(line) = context_tokens_line(ctx, row) {
                     inner.push(line);
                 }
             } else if selected && compose_affordance {
-                inner.push(empty_gauge_line(theme, bands, cw, meter_pixels));
+                inner.push(empty_gauge_line(ctx, meter_pixels));
             }
             // The subagents this agent spawned this turn, appended after the
             // stats. Auto and compact show them on the selected card; expanded
             // shows them on every card.
-            if (selected || card_density == CardDensityMode::Expanded)
+            if (selected || ctx.card_density == CardDensityMode::Expanded)
                 && !agent.sub_agents.is_empty()
             {
-                inner.extend(sub_agent_lines(
-                    theme,
-                    &agent.sub_agents,
-                    cw,
-                    animation_phase,
-                ));
+                inner.extend(sub_agent_lines(ctx, &agent.sub_agents));
             }
         }
     }
     inner
         .into_iter()
-        .map(|line| with_gutter(theme, line, gutter, wash, width))
+        .map(|line| with_gutter(ctx.theme, line, gutter, wash, ctx.width))
         .collect()
 }
 
@@ -204,12 +176,10 @@ pub(super) fn row_lines(
 /// child's own lifecycle events. A child with none of them — and any finished
 /// child, whose work span is over — degrades to the bare type line, with line 2
 /// dropped.
-fn sub_agent_lines(
-    theme: &Theme,
-    sub_agents: &[SidebarSubAgent],
-    width: usize,
-    animation_phase: u64,
-) -> Vec<Line<'static>> {
+fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line<'static>> {
+    let theme = ctx.theme;
+    let width = content_width(ctx.width);
+    let animation_phase = ctx.animation_phase;
     // The `⧉` marker wears the violet of the delegation/meta family (the
     // compacting head, the `⇅ rc` flag); the label text reads at the soft
     // middle weight like the children below it.

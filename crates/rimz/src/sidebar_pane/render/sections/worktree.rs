@@ -2,28 +2,24 @@
 //! and right-pinned git story, the dim `external` divider, and the row roster
 //! with its parallel hit-test map entries.
 
-use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
+use crate::config::GlyphRole;
 use crate::{
-    SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
-    WorktreePrState, WorktreeTrunkSync,
+    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, WorktreePrState,
+    WorktreeTrunkSync,
 };
-use jiff::Timestamp;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::BodyFilter;
-use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::labels::{
     branch_delta_spans, diff_spans, status_glyph, trunk_glyph_spans,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
 use crate::sidebar_pane::render::{MoreHit, group_visible_rows};
-use std::collections::HashSet;
 
 use super::agent_card::row_lines;
-use super::{Gutter, Tier, content_width, with_gutter};
+use super::{Gutter, RowCtx, content_width, with_gutter};
 
 /// Compose one worktree group's lines, appending to `lines`, and tag each
 /// content line in the parallel `map` with the visible row index it belongs to
@@ -36,67 +32,11 @@ use super::{Gutter, Tier, content_width, with_gutter};
 /// the more/less line is filter-suppressed because a narrowed body is already
 /// uncapped.
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
 pub(in crate::sidebar_pane::render) fn worktree_group_lines(
-    theme: &Theme,
+    ctx: &RowCtx<'_>,
     group: &SidebarWorktreeGroup,
-    providers: &[SidebarProviderPanel],
-    now: Timestamp,
-    width: usize,
-    bands: &ContextMeterConfig,
-    card_density: CardDensityMode,
-    filter: Option<BodyFilter>,
     expanded: bool,
-    held: Option<&HashSet<String>>,
     row_index: &mut usize,
-    selected_index: usize,
-    animation_phase: u64,
-    cost_rolls: &CostRolls,
-    lead_unread: Option<&str>,
-    lines: &mut Vec<Line<'static>>,
-    map: &mut Vec<Option<usize>>,
-    more_hits: &mut Vec<MoreHit>,
-) {
-    worktree_group_lines_with_meter(
-        theme,
-        group,
-        providers,
-        now,
-        width,
-        bands,
-        card_density,
-        filter,
-        expanded,
-        held,
-        row_index,
-        selected_index,
-        animation_phase,
-        cost_rolls,
-        lead_unread,
-        None,
-        lines,
-        map,
-        more_hits,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(in crate::sidebar_pane::render) fn worktree_group_lines_with_meter(
-    theme: &Theme,
-    group: &SidebarWorktreeGroup,
-    providers: &[SidebarProviderPanel],
-    now: Timestamp,
-    width: usize,
-    bands: &ContextMeterConfig,
-    card_density: CardDensityMode,
-    filter: Option<BodyFilter>,
-    expanded: bool,
-    held: Option<&HashSet<String>>,
-    row_index: &mut usize,
-    selected_index: usize,
-    animation_phase: u64,
-    cost_rolls: &CostRolls,
-    lead_unread: Option<&str>,
     mut meter_pixels: Option<&mut MeterPixels>,
     lines: &mut Vec<Line<'static>>,
     map: &mut Vec<Option<usize>>,
@@ -107,10 +47,10 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_with_meter(
     // with the selected card itself lit bold `▌`. The `external` catch-all is
     // never a lane.
     let first_row = *row_index;
-    let visible = group_visible_rows(group, filter, expanded, held);
+    let visible = group_visible_rows(group, ctx.filter, expanded, ctx.held);
     let passing = visible.len();
     let group_selected = group.kind != SidebarWorktreeKind::External
-        && (first_row..first_row + passing).contains(&selected_index);
+        && (first_row..first_row + passing).contains(&ctx.selected_index);
     let lane = if group_selected {
         Gutter::Lane
     } else {
@@ -121,8 +61,8 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_with_meter(
     // otherwise), and its dotted `┄` seal shows only then, so an unselected
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
-    let header = group_header(theme, group, width, group_selected);
-    lines.push(with_gutter(theme, header, lane, None, width));
+    let header = group_header(ctx.theme, group, ctx.width, group_selected);
+    lines.push(with_gutter(ctx.theme, header, lane, None, ctx.width));
     // The worktree name is itself a click target: it lands on the group's first
     // row — the agent adjacent to the header — so clicking the pod name jumps
     // straight into it. The `external` divider is not a worktree name, so it
@@ -130,32 +70,16 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_with_meter(
     let header_target =
         (group.kind != SidebarWorktreeKind::External && passing > 0).then_some(*row_index);
     map.push(header_target);
-    let tier = Tier::for_width(content_width(width));
     for row in visible {
-        let selected = *row_index == selected_index;
+        let selected = *row_index == ctx.selected_index;
         let this_row = *row_index;
         *row_index += 1;
         let gutter = if selected { Gutter::Selected } else { lane };
-        let row_lines = row_lines(
-            theme,
-            row,
-            providers,
-            now,
-            width,
-            tier,
-            selected,
-            card_density,
-            animation_phase,
-            cost_rolls,
-            bands,
-            gutter,
-            lead_unread,
-            meter_pixels.as_deref_mut(),
-        );
+        let row_lines = row_lines(ctx, row, selected, gutter, meter_pixels.as_deref_mut());
         map.extend(std::iter::repeat_n(Some(this_row), row_lines.len()));
         lines.extend(row_lines);
     }
-    let natural_hidden = if filter.is_none() {
+    let natural_hidden = if ctx.filter.is_none() {
         group
             .rows
             .len()
@@ -163,44 +87,44 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_with_meter(
     } else {
         0
     };
-    let hidden = if filter.is_none() {
+    let hidden = if ctx.filter.is_none() {
         group
             .rows
             .len()
-            .saturating_sub(group_visible_rows(group, None, false, held).len())
+            .saturating_sub(group_visible_rows(group, None, false, ctx.held).len())
     } else {
         0
     };
-    if filter.is_none() && hidden > 0 && !expanded {
+    if ctx.filter.is_none() && hidden > 0 && !expanded {
         more_hits.push(MoreHit {
             line: lines.len(),
             group_key: group.key.clone(),
         });
         lines.push(with_gutter(
-            theme,
+            ctx.theme,
             Line::styled(
                 format!(
                     "  +{hidden} {}",
                     if group.finished { "done" } else { "more" }
                 ),
-                theme.muted(),
+                ctx.theme.muted(),
             ),
             lane,
             None,
-            width,
+            ctx.width,
         ));
         map.push(None);
-    } else if filter.is_none() && natural_hidden > 0 && expanded {
+    } else if ctx.filter.is_none() && natural_hidden > 0 && expanded {
         more_hits.push(MoreHit {
             line: lines.len(),
             group_key: group.key.clone(),
         });
         lines.push(with_gutter(
-            theme,
-            Line::styled("  − less", theme.muted()),
+            ctx.theme,
+            Line::styled("  − less", ctx.theme.muted()),
             lane,
             None,
-            width,
+            ctx.width,
         ));
         map.push(None);
     }

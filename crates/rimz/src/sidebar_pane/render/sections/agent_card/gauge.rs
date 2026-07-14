@@ -97,12 +97,13 @@ pub(super) fn bar_row(
 /// a one-decimal precise fraction (`78.2%`) over the integer gauge. An empty
 /// (0%) window reads the hollow `▢`; any usage fills it to `▣`.
 pub(super) fn gauge_line(
-    theme: &Theme,
+    ctx: &RowCtx<'_>,
     row: &SidebarRow,
-    bands: &ContextMeterConfig,
-    width: usize,
     meter_pixels: Option<&mut MeterPixels>,
 ) -> Option<Line<'static>> {
+    let theme = ctx.theme;
+    let bands = ctx.bands;
+    let width = content_width(ctx.width);
     let percent = gauge_percent(row)?;
     let precise = precise_context_pct(row);
     let value = pct_label(precise, percent);
@@ -180,11 +181,12 @@ fn log_scaled_fill(pct: f64, window: Option<u64>) -> f64 {
 
 /// The placeholder context bar for a selected, not-yet-started idle card.
 pub(super) fn empty_gauge_line(
-    theme: &Theme,
-    bands: &ContextMeterConfig,
-    width: usize,
+    ctx: &RowCtx<'_>,
     meter_pixels: Option<&mut MeterPixels>,
 ) -> Line<'static> {
+    let theme = ctx.theme;
+    let bands = ctx.bands;
+    let width = content_width(ctx.width);
     let severity = ContextSeverity::classify(0, None, bands);
     let amount = severity_heat_amount(severity, 0, None, bands);
     let color = theme.heat_tone(amount);
@@ -351,13 +353,11 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
 /// through warn, caution, and alarm toward the hour, when resuming would likely
 /// re-read the whole context uncached.
-pub(super) fn context_tokens_line(
-    theme: &Theme,
-    row: &SidebarRow,
-    bands: &ContextMeterConfig,
-    now: Timestamp,
-    width: usize,
-) -> Option<Line<'static>> {
+pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Line<'static>> {
+    let theme = row_ctx.theme;
+    let bands = row_ctx.bands;
+    let now = row_ctx.now;
+    let width = content_width(row_ctx.width);
     // The age clock is the line's one right pin — resource stats are
     // process-row vocabulary and never ride an agent card.
     let age = activity_short(row.last_activity, now)

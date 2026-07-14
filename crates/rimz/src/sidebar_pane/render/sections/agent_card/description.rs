@@ -40,11 +40,12 @@ pub(super) fn awaiting_prompt_line(animation_phase: u64, width: usize) -> Line<'
 /// unread results blink, rows worth a look or selected rows read at full body
 /// weight, and calm unselected rows soften.
 pub(super) fn description_line(
-    theme: &Theme,
+    ctx: &RowCtx<'_>,
     row: &SidebarRow,
-    width: usize,
     attention: CardAttention,
 ) -> Line<'static> {
+    let theme = ctx.theme;
+    let width = content_width(ctx.width);
     // The shared unread treatment, on a concrete body tone so the description
     // lifts in unison with the lead glyph and the name. Shimmer flows one span
     // per character; blink and bright stay a single span; calm rows read at the

@@ -37,33 +37,18 @@ pub(super) fn attention_name_spans(
     }
 }
 
-pub(super) struct IdentityLineContext<'a> {
-    pub(super) theme: &'a Theme,
-    pub(super) providers: &'a [SidebarProviderPanel],
-    pub(super) tier: Tier,
-    pub(super) width: usize,
-    pub(super) attention: CardAttention,
-    pub(super) animation_phase: u64,
-    pub(super) cost_rolls: &'a CostRolls,
-}
-
-pub(super) fn identity_line(ctx: IdentityLineContext<'_>, row: &SidebarRow) -> Line<'static> {
+pub(super) fn identity_line(
+    row_ctx: &RowCtx<'_>,
+    row: &SidebarRow,
+    attention: CardAttention,
+) -> Line<'static> {
+    let width = content_width(row_ctx.width);
     if row.is_process() {
-        return process_row_line(ctx.theme, row, ctx.width, ctx.animation_phase);
+        return process_row_line(row_ctx.theme, row, width, row_ctx.animation_phase);
     }
 
     let status = row.status().unwrap_or(AgentStatus::Idle);
-    agent_identity_line(
-        ctx.theme,
-        row,
-        ctx.providers,
-        status,
-        ctx.tier,
-        ctx.width,
-        ctx.attention,
-        ctx.animation_phase,
-        ctx.cost_rolls,
-    )
+    agent_identity_line(row_ctx, row, status, attention)
 }
 
 /// The leading status cell for an agent row, applying the two transient render
@@ -125,18 +110,14 @@ pub(super) fn agent_lead_cell(
 /// pins right. A blocked `?`/`!`/`⏸` glyph holds its fixed status tone — yellow,
 /// red, blue — with the unread attention effect, not age, drawing the eye to an
 /// unanswered ask.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn agent_identity_line(
-    theme: &Theme,
+    row_ctx: &RowCtx<'_>,
     row: &SidebarRow,
-    providers: &[SidebarProviderPanel],
     status: AgentStatus,
-    tier: Tier,
-    width: usize,
     attention: CardAttention,
-    animation_phase: u64,
-    cost_rolls: &CostRolls,
 ) -> Line<'static> {
+    let theme = row_ctx.theme;
+    let width = content_width(row_ctx.width);
     // Right cluster, built first so the left trims to whatever's left: the
     // session cost, bold in dollar green, read through the row's stepped roll so
     // an increase ticks up rather than jumps. A cost that rounds to $0.00 — an
@@ -148,8 +129,13 @@ pub(super) fn agent_identity_line(
         .and_then(|cost| cost.total_cost_usd)
         .filter(|usd| *usd >= 0.005)
     {
-        let usd = cost_rolls.display(&row.id, target, animation_phase);
-        let style = if cost_rolls.flashing(&row.id, animation_phase) {
+        let usd = row_ctx
+            .cost_rolls
+            .display(&row.id, target, row_ctx.animation_phase);
+        let style = if row_ctx
+            .cost_rolls
+            .flashing(&row.id, row_ctx.animation_phase)
+        {
             theme.value_flash()
         } else {
             theme.money_style(Modifier::BOLD)
@@ -164,12 +150,12 @@ pub(super) fn agent_identity_line(
     // the provider's brand color (or mid-gray chrome for kinds with no
     // registered descriptor); the bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
-        agent_lead_cell(theme, row, status, attention, animation_phase),
+        agent_lead_cell(theme, row, status, attention, row_ctx.animation_phase),
         Span::raw(" "),
     ];
     left.extend(attention_name_spans(
         theme,
-        providers,
+        row_ctx.providers,
         row.display_name(),
         &row.name,
         attention,
@@ -178,12 +164,12 @@ pub(super) fn agent_identity_line(
     // configures the model, and the window is the model's window. With no model resolved a
     // bare `xhigh`/`272k` names nothing, so the whole cluster rides behind a
     // known model — a model-less row reads like L0, just the handle.
-    if tier != Tier::L0
+    if row_ctx.tier != Tier::L0
         && let Some(model) = display_model(row)
     {
         left.push(Span::styled(" · ", theme.muted()));
         left.push(Span::styled(model, theme.muted()));
-        if tier == Tier::L2
+        if row_ctx.tier == Tier::L2
             && let Some(reasoning) = display_reasoning(row)
         {
             left.push(Span::styled(" · ", theme.muted()));
