@@ -179,9 +179,9 @@ impl DisplayConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ContextMeterConfig {
-    /// Log-warp the drawn fill (`ln(1 + 6f) / ln(7)`) so the working range of a
-    /// large context window keeps visual space. Display-only; `false` restores
-    /// linear fill geometry.
+    /// Log-warp the drawn fill with strength scaled by the context window: up
+    /// to 256k stays linear and 1M reaches the full curve. Display-only;
+    /// `false` restores linear fill geometry.
     pub log_scale: bool,
     /// Where the meter leaves calm green and starts warming toward yellow.
     pub green: ContextBand,

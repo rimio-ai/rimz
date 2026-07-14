@@ -86,15 +86,16 @@ pub(super) fn bar_row(
 /// expanded token line), the bar between. The fill amount and its calm-blue →
 /// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
 /// `[theme.display.context_meter]`) come from the used percentage and the
-/// absolute tokens. Fill geometry is log-scaled by default so large-window
-/// working ranges stay visible; the displayed percentage remains the raw
-/// measurement. When the statusline reports the per-message token breakdown,
-/// every severity splits the fill into cache-read / cache-write / fresh-input
-/// segments; each accent starts with a gap-fronted `╺` cap so even a half-cell
-/// fragment stays visible. The `▣` glyph wears the same severity, so glyph,
-/// bar, and the `▤` line below speak one urgency. The value prefers a
-/// one-decimal precise fraction (`78.2%`) over the integer gauge. An empty (0%)
-/// window reads the hollow `▢`; any usage fills it to `▣`.
+/// absolute tokens. Fill geometry is log-scaled by default, with curve strength
+/// scaling from linear at windows up to 256k to the full curve at 1M, so
+/// large-window working ranges stay visible; the displayed percentage remains
+/// the raw measurement. When the statusline reports the per-message token
+/// breakdown, every severity splits the fill into cache-read / cache-write /
+/// fresh-input segments; each accent starts with a gap-fronted `╺` cap so even
+/// a half-cell fragment stays visible. The `▣` glyph wears the same severity,
+/// so glyph, bar, and the `▤` line below speak one urgency. The value prefers
+/// a one-decimal precise fraction (`78.2%`) over the integer gauge. An empty
+/// (0%) window reads the hollow `▢`; any usage fills it to `▣`.
 pub(super) fn gauge_line(
     theme: &Theme,
     row: &SidebarRow,
@@ -107,7 +108,7 @@ pub(super) fn gauge_line(
     let value = pct_label(precise, percent);
     let fill = precise.unwrap_or_else(|| f64::from(percent));
     let fill = if bands.log_scale {
-        log_scaled_fill(fill)
+        log_scaled_fill(fill, display_context_window(row))
     } else {
         fill
     };
@@ -155,12 +156,26 @@ pub(super) fn gauge_line(
     ))
 }
 
-/// Log-curve strength for the drawn fill (`ln(1 + K·f) / ln(1 + K)`).
-const LOG_SCALE_K: f64 = 6.0;
+/// Window below which the drawn fill stays linear.
+const LOG_SCALE_LINEAR_FLOOR_TOKENS: f64 = 256_000.0;
+/// Window at which the curve reaches full strength ([`LOG_SCALE_MAX_K`]).
+const LOG_SCALE_FULL_CURVE_TOKENS: f64 = 1_000_000.0;
+/// Log-curve strength ceiling (`ln(1 + K·f) / ln(1 + K)` at a 1M window).
+const LOG_SCALE_MAX_K: f64 = 6.0;
 
-fn log_scaled_fill(pct: f64) -> f64 {
+/// Scale the drawn fill's log-curve strength with the resolved context window.
+fn log_scaled_fill(pct: f64, window: Option<u64>) -> f64 {
+    let Some(window) = window else { return pct };
+    let ramp = ((window as f64 - LOG_SCALE_LINEAR_FLOOR_TOKENS)
+        / (LOG_SCALE_FULL_CURVE_TOKENS - LOG_SCALE_LINEAR_FLOOR_TOKENS))
+        .clamp(0.0, 1.0);
+    let k = LOG_SCALE_MAX_K * ramp;
+    if k == 0.0 {
+        // The k→0 limit is the identity; evaluating it directly produces 0/0.
+        return pct;
+    }
     let fraction = (pct / 100.0).clamp(0.0, 1.0);
-    100.0 * (1.0 + LOG_SCALE_K * fraction).ln() / (1.0 + LOG_SCALE_K).ln()
+    100.0 * (1.0 + k * fraction).ln() / (1.0 + k).ln()
 }
 
 /// The placeholder context bar for a selected, not-yet-started idle card.
@@ -424,18 +439,38 @@ mod tests {
     }
 
     #[test]
-    fn log_scaled_fill_preserves_bounds_and_known_points() {
-        assert_close(log_scaled_fill(0.0), 0.0);
-        assert_close(log_scaled_fill(10.0), 24.1);
-        assert_close(log_scaled_fill(40.0), 62.9);
-        assert_close(log_scaled_fill(80.0), 90.3);
-        assert_close(log_scaled_fill(100.0), 100.0);
+    fn log_scaled_fill_at_one_million_preserves_bounds_and_known_points() {
+        assert_close(log_scaled_fill(0.0, Some(1_000_000)), 0.0);
+        assert_close(log_scaled_fill(10.0, Some(1_000_000)), 24.1);
+        assert_close(log_scaled_fill(40.0, Some(1_000_000)), 62.9);
+        assert_close(log_scaled_fill(80.0, Some(1_000_000)), 90.3);
+        assert_close(log_scaled_fill(100.0, Some(1_000_000)), 100.0);
     }
 
     #[test]
-    fn log_scaled_fill_is_monotonic() {
-        for pct in 0..100 {
-            assert!(log_scaled_fill(f64::from(pct)) < log_scaled_fill(f64::from(pct + 1)));
+    fn log_scaled_fill_is_linear_for_small_or_unknown_windows() {
+        for window in [None, Some(200_000), Some(256_000)] {
+            assert_eq!(log_scaled_fill(40.0, window), 40.0);
         }
+    }
+
+    #[test]
+    fn log_scaled_fill_is_monotonic_in_fill() {
+        for pct in 0..100 {
+            assert!(
+                log_scaled_fill(f64::from(pct), Some(1_000_000))
+                    < log_scaled_fill(f64::from(pct + 1), Some(1_000_000))
+            );
+        }
+    }
+
+    #[test]
+    fn log_scaled_fill_is_monotonic_in_window() {
+        let fills = [256_000, 384_000, 512_000, 1_000_000]
+            .map(|window| log_scaled_fill(40.0, Some(window)));
+
+        assert!(fills.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(fills[0] < fills[1]);
+        assert!(fills[1] < fills[3]);
     }
 }
