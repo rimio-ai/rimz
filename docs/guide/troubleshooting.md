@@ -164,6 +164,12 @@ RimZ raises a desktop notification by writing a terminal notification escape (OS
 
 A missed notification loses nothing: the sidebar is the source of truth, so the row stays unread and ranked until you visit it, and an agent that keeps waiting earns a reminder nudge.
 
+## A loop keeps reporting "previous run still active"
+
+The task's previous runner still owns its overlap lock, so later fires record `overlapped` instead of stacking another turn. Run `rimz loop show <name>` to see the linked run id, holder PID, and start age, then run `rimz loop stop <name>` to cancel the supervised run and release the lock.
+
+Stop gives durable cancellation a grace period, sends SIGTERM only when the lock remains held, and reports success once the lock releases. A lock that survives both steps exits with status `1` and prints its path and holder PID; inspect that process and terminate it manually when safe. RimZ leaves SIGKILL under operator control.
+
 ## Project config isn't taking effect
 
 A cloned repository can ship a `.rimz/config.toml` that names agents, profiles, teams, loop tasks, hooks, and environment variables, any of which can run a command. So RimZ keeps that file inert until you trust the workspace: on an untrusted clone it reads only structural metadata, and every command-running field stays disabled.

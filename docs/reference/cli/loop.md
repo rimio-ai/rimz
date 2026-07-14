@@ -16,6 +16,7 @@ rimz loop fire pr-watch
 rimz loop rename pr-watch ci-watch
 rimz loop pause pr-watch --for 2h
 rimz loop resume pr-watch
+rimz loop stop pr-watch
 rimz loop list
 rimz loop show pr-watch
 rimz loop remove pr-watch
@@ -32,6 +33,8 @@ A `<kind>-ping` agent is the window-primer: the run skips when the provider's wi
 `--surplus <RATIO>` and `--surplus-after <DURATION>` gate `--agent` and `--wake` actions on the provider's longest budget window; check-only tasks reject them. Headroom is `(remaining budget share) / (remaining time share)`, so `1.0x` is the sustainable pace and `--surplus 1.5x` requires half again that headroom. The elapsed floor is checked first, and `--surplus-after 3d` by itself also implies a `1.0x` minimum. A missing, incomplete, expired, or not-started window keeps the gate closed; API-key accounts without subscription-window readings therefore always skip. Each closed fire records strike-neutral `surplus skipped`, and `loop show` prints the configured gate and its recorded reason. The headroom model with a worked example is [budgets → spend the provider surplus](../../guide/budget.md#spend-the-provider-surplus).
 
 `--max-strikes <N>` auto-pauses the task after that many consecutive failed fires. It defaults to `3`; `0` disables auto-pause. A failed, timed-out, errored, budget-exceeded, or verify-failed result counts, as does a completed or delivered action whose check still failed; a successful action or healthy check resets the counter.
+
+`--timeout <DURATION>` caps an explicit supervised wait and its verify commands. Scheduled `--agent` runs without this task-specific value use `loop.default-timeout`, which defaults to `2h`; set it with `rimz config set loop.default-timeout 3h`. Manual `loop fire` stays unbounded when the task has no `--timeout`, while checks retain their five-minute default.
 
 ## Wakes and checks
 
@@ -53,12 +56,12 @@ A `<kind>-ping` agent is the window-primer: the run skips when the provider's wi
 
 Pause is per-machine state. Pausing a project task affects only this machine and does not edit the trust-hashed project config. Reaching the strike threshold writes the same machine pause state with a strike reason and fires `loop_paused` notification handlers; `loop resume` clears the counter. `loop fire <name>` remains the manual testing hatch: it reports the pause, then runs the task anyway.
 
-## Fire, list, show, rename
+## Fire, stop, list, show, rename
 
 `loop fire <name>` runs the task now in the foreground with the same check guard, window skip, overlap guard, and run-log record as a scheduled fire. It opens with the task's check-to-action rule, gutters the check's live output, streams the agent's replies into the same gutter, closes each stage with a glyph verdict, links successful supervised runs by run id and transcript, hints `--keep` when the transient pane closes, and keeps one-shot entries and wake schedules in place; `--keep` leaves the transient supervised pane open for inspection.
 
-A task that is already running records `overlapped` and skips instead of stacking another run. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
+A task that is already running records `overlapped` and skips instead of stacking another run. `loop stop <name>` first marks a linked supervised run canceled, wakes its waiter, and gives it a short grace to release the overlap lock; a remaining holder receives SIGTERM and another grace, while SIGKILL stays a manual operator decision. The command exits `0` after a stop or when no run is active, and exits `1` with the holder PID and lock path when the lock remains held. `loop rename` moves the task key in its store; the task then re-arms, so an interval task next fires one interval later.
 
-`loop list`, `loop watch`, and `loop show` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, today's COST, and next fire; timed pauses show their automatic resume time and strike pauses show `paused · N strikes`. `loop watch` holds a live dashboard open, repainting next-fire countdowns and the `running now` state every second; the `rimzd` loop panel runs it with `--hold`, which ignores `q` and Ctrl-C, and the sidebar elder restores the panel if its pane closes while the view survives. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, pause state or next fire, task, check, root, source with the defining file path, configured budgets, spend trend, and any active pre-threshold `strikes N/max`, then prints recent runs with per-run costs and fresh input/output tokens plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links.
+`loop list`, `loop watch`, and `loop show` read only. `loop list` groups tasks by project root with room state in the section header, then shows name, task, source, schedule, last-run age, status, today's COST, and next fire; timed pauses show their automatic resume time and strike pauses show `paused · N strikes`. `loop watch` holds a live dashboard open, repainting next-fire countdowns and the `running now` state every second; the `rimzd` loop panel runs it with `--hold`, which ignores `q` and Ctrl-C, and the sidebar elder restores the panel if its pane closes while the view survives. Source values are `machine`, `project`, `project · untrusted`, `project · stale`, and `state`. `loop show <name>` opens with one task's schedule, pause state or next fire, task, check, root, source with the defining file path, effective timeout, configured budgets, spend trend, and any active pre-threshold `strikes N/max`; an active linked run includes its run id and the matching `loop stop` command. Recent runs include per-run costs and fresh input/output tokens plus stored details such as check output, error chains, run ids, captured pane output tails, and transcript links.
 
 The task model and config shape are in [harness.md → Scheduled turns](../../internals/harness/harness.md#scheduled-turns-loop).

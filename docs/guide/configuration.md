@@ -418,6 +418,8 @@ base = "fresh"
 ### Loop tasks
 
 ```toml
+default-timeout = "2h"   # scheduled agent turns without a task timeout
+
 [tasks.morning]
 agent = "claude-ping"     # `<kind>-ping` primes a provider window
 prompt = "ping"
@@ -464,6 +466,8 @@ handle = "@planner"
 ```
 
 Loop tasks live in `~/.config/rimz/loop.toml` under `[tasks.<name>]`; shared project tasks use the same shape in `<repo>/.rimz/config.toml`, are trust-hashed, and stay inert until `rimz trust grant`. The scheduling model (shapes, watchdogs, pings, self-wakes) is [loops.md](./loops.md); this section is the field shape.
+
+`default-timeout` bounds scheduled supervised turns whose task omits `timeout`; it accepts positive `s`, `m`, `h`, and `d` durations and defaults to `2h`. Set it with `rimz config set loop.default-timeout 3h`. Task-specific `timeout` wins, and a manual `rimz loop fire` without one remains unbounded.
 
 Each task chooses `agent`, `wake`, `check`, or `check` plus one agent action:
 

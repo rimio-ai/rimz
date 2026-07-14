@@ -157,7 +157,7 @@ One pair is worth a second look. `--every 1d` is an interval: it fires a day aft
 
 Calendar times, cron, `--in`, and `--until` resolve in the top-level `timezone`, falling back to the system zone when unset.
 
-The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--surplus` and `--surplus-after` gate fires on the provider's window headroom ([above](#soak-up-the-weekly-surplus)), `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. Inspect, test, and manage tasks with the rest of the surface:
+The turn itself takes the launch-shaping flags you already know from [agents.md](./agents.md): `--worktree` hosts the pane on an isolated branch, `--mode auto|ask|yolo` sets the permission posture ([below](#the-permission-posture-for-unattended-runs)), `--effort` and `--system-prompt-file` shape the agent, `--budget` caps one run, `--budget-per-day` gates future fires, `--surplus` and `--surplus-after` gate fires on the provider's window headroom ([above](#soak-up-the-weekly-surplus)), `--timeout` caps each wait and verify command, `--verify` with `--max-attempts` defines when the task is done, and `--max-strikes` bounds repeated failed fires. A scheduled agent turn without `--timeout` receives the machine's `loop.default-timeout`, two hours by default; manual `rimz loop fire` remains unbounded unless the task sets its own timeout. Inspect, test, and manage tasks with the rest of the surface:
 
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run
@@ -167,10 +167,13 @@ rimz loop fire pr-watch        # fire now in the foreground for testing; the sch
 rimz loop fire pr-watch --keep # leave the transient pane open to inspect
 rimz loop pause pr-watch --for 2h
 rimz loop resume pr-watch
+rimz loop stop pr-watch        # cancel a stuck run and release its overlap lock
 rimz loop remove pr-watch
 ```
 
 `rimz loop fire` streams agent messages as they land, then links the completed run and its transcript.
+
+When a fire reports `previous run still active`, inspect `rimz loop show <name>` for the active run id and holder age, then run `rimz loop stop <name>`. Stop uses the durable cancellation path first and SIGTERM only as a backstop; if the holder still owns the lock, it prints the PID and lock path for manual recovery instead of escalating to SIGKILL.
 
 Pause holds the elder's clock without deleting the task, and `--for` resumes it automatically. The schedule continues from the resume moment instead of replaying missed fires. Pause state belongs to one machine, so pausing a project task affects only your machine; an auto-pause adds its strike reason, and `rimz loop resume` clears that counter. `rimz loop fire` still runs a paused task for testing.
 
