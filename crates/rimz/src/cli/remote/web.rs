@@ -309,7 +309,13 @@ fn supervise_tunnel(
                     delay.as_secs(),
                 );
                 if matches!(
-                    super::supervisor::wait_before_retry(dial_plan.as_ref(), delay, &stop),
+                    super::supervisor::wait_before_retry(
+                        dial_plan.as_ref(),
+                        delay,
+                        policy.backoff_cap,
+                        &host,
+                        &stop,
+                    ),
                     rimz::remote::reachability::WaitVerdict::AttachNow {
                         network_restored: true
                     }

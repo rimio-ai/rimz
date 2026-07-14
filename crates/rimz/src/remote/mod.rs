@@ -1,6 +1,6 @@
 //! SSH remote attach: the `[user@]host:<session-or-path>` target grammar, the
 //! guarded `ssh` command it compiles to, and the autossh-style reconnect
-//! policy with reachability-accelerated retry waits.
+//! policy with reachability-gated retry waits.
 //!
 //! `rimz remote connect` makes the local rimz a thin SSH launcher and link
 //! supervisor: everything room-shaped — workspace resolution, session birth,
@@ -508,7 +508,8 @@ impl Default for ReconnectPolicy {
 
 impl ReconnectPolicy {
     /// Resolve the policy, honoring the hidden test seams
-    /// (`RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_MS`).
+    /// (`RIMZ_REMOTE_GATETIME_MS`, `RIMZ_REMOTE_BACKOFF_MS`,
+    /// `RIMZ_REMOTE_BACKOFF_CAP_MS`).
     pub fn from_env() -> Self {
         let mut policy = Self::default();
         if let Some(gatetime) = env_ms("RIMZ_REMOTE_GATETIME_MS") {
@@ -516,6 +517,9 @@ impl ReconnectPolicy {
         }
         if let Some(base) = env_ms("RIMZ_REMOTE_BACKOFF_MS") {
             policy.backoff_base = base;
+        }
+        if let Some(cap) = env_ms("RIMZ_REMOTE_BACKOFF_CAP_MS") {
+            policy.backoff_cap = cap;
         }
         policy
     }

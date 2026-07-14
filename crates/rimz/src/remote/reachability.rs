@@ -1,4 +1,4 @@
-//! Pure SSH endpoint discovery and reconnect-wait acceleration state.
+//! Pure SSH endpoint discovery and reachability-gated reconnect-wait state.
 
 use std::time::{Duration, Instant};
 
@@ -73,40 +73,49 @@ pub enum WaitVerdict {
     AttachNow { network_restored: bool },
 }
 
-/// A reconnect wait that accelerates only after an observed network transition.
+/// A reconnect wait that holds while unreachable and accelerates on recovery.
 #[derive(Clone, Copy, Debug)]
 pub struct DialGate {
-    deadline: Instant,
-    first_dial_reachable: Option<bool>,
+    backoff_deadline: Instant,
+    hold_deadline: Instant,
+    last_dial_reachable: Option<bool>,
     network_restored: bool,
 }
 
 impl DialGate {
-    pub fn new(started: Instant, delay: Duration) -> Self {
+    pub fn new(started: Instant, delay: Duration, hold: Duration) -> Self {
         Self {
-            deadline: started + delay,
-            first_dial_reachable: None,
+            backoff_deadline: started + delay,
+            hold_deadline: started + delay.max(hold),
+            last_dial_reachable: None,
             network_restored: false,
         }
     }
 
     pub fn note_dial(&mut self, reachable: bool) {
-        match self.first_dial_reachable {
-            None => self.first_dial_reachable = Some(reachable),
-            Some(false) if reachable => self.network_restored = true,
-            Some(_) => {}
+        if self.last_dial_reachable == Some(false) && reachable {
+            self.network_restored = true;
+        }
+        self.last_dial_reachable = Some(reachable);
+    }
+
+    pub fn effective_deadline(&self) -> Instant {
+        if self.last_dial_reachable == Some(false) {
+            self.hold_deadline
+        } else {
+            self.backoff_deadline
         }
     }
 
     pub fn verdict(&self, now: Instant) -> WaitVerdict {
-        if now >= self.deadline {
-            return WaitVerdict::AttachNow {
-                network_restored: false,
-            };
-        }
         if self.network_restored {
             return WaitVerdict::AttachNow {
                 network_restored: true,
+            };
+        }
+        if now >= self.effective_deadline() {
+            return WaitVerdict::AttachNow {
+                network_restored: false,
             };
         }
         WaitVerdict::KeepWaiting
@@ -152,9 +161,8 @@ mod tests {
     #[test]
     fn reachable_from_start_honors_backoff() {
         let started = Instant::now();
-        let mut gate = DialGate::new(started, Duration::from_secs(10));
+        let mut gate = DialGate::new(started, Duration::from_secs(10), Duration::from_secs(30));
         gate.note_dial(true);
-        gate.note_dial(false);
         gate.note_dial(true);
 
         assert_eq!(
@@ -172,7 +180,7 @@ mod tests {
     #[test]
     fn unreachable_to_reachable_transition_accelerates() {
         let started = Instant::now();
-        let mut gate = DialGate::new(started, Duration::from_secs(10));
+        let mut gate = DialGate::new(started, Duration::from_secs(10), Duration::from_secs(30));
         gate.note_dial(false);
         assert_eq!(
             gate.verdict(started + Duration::from_secs(1)),
@@ -189,13 +197,41 @@ mod tests {
     }
 
     #[test]
-    fn backoff_expiry_wins_without_a_transition() {
+    fn mid_window_down_up_transition_accelerates() {
         let started = Instant::now();
-        let mut gate = DialGate::new(started, Duration::from_secs(10));
+        let mut gate = DialGate::new(started, Duration::from_secs(10), Duration::from_secs(30));
+        gate.note_dial(true);
+        gate.note_dial(false);
+        gate.note_dial(true);
+
+        assert_eq!(
+            gate.verdict(started + Duration::from_secs(2)),
+            WaitVerdict::AttachNow {
+                network_restored: true
+            }
+        );
+    }
+
+    #[test]
+    fn unreachable_holds_past_backoff_deadline() {
+        let started = Instant::now();
+        let mut gate = DialGate::new(started, Duration::from_secs(10), Duration::from_secs(30));
         gate.note_dial(false);
 
         assert_eq!(
             gate.verdict(started + Duration::from_secs(10)),
+            WaitVerdict::KeepWaiting
+        );
+    }
+
+    #[test]
+    fn hold_expiry_attaches_while_unreachable() {
+        let started = Instant::now();
+        let mut gate = DialGate::new(started, Duration::from_secs(10), Duration::from_secs(30));
+        gate.note_dial(false);
+
+        assert_eq!(
+            gate.verdict(started + Duration::from_secs(30)),
             WaitVerdict::AttachNow {
                 network_restored: false
             }

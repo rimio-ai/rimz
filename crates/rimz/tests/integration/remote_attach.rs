@@ -497,6 +497,118 @@ fn network_transition_accelerates_a_long_reconnect_wait() {
 }
 
 #[test]
+fn unreachable_endpoint_holds_reconnect_attempts_until_restored() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let ssh_config = env.project_root.join("ssh-config.txt");
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve dial port");
+    let address = reservation.local_addr().expect("dial address");
+    drop(reservation);
+    std::fs::write(&plan, "255\n0\n").expect("write plan");
+    std::fs::write(
+        &ssh_config,
+        format!("hostname 127.0.0.1\nport {}\n", address.port()),
+    )
+    .expect("write ssh config fixture");
+
+    let mut child = env
+        .rimz()
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
+        .env("RIMZ_SSH_BIN", ssh_shim())
+        .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
+        .env("RIMZ_REMOTE_GATETIME_MS", "0")
+        .env("RIMZ_REMOTE_BACKOFF_MS", "50")
+        .env("RIMZ_REMOTE_DIAL_MS", "25")
+        .env("RIMZ_REMOTE_PROBE_MS", "0")
+        .env("TERM", "xterm-256color")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn supervised remote connect");
+
+    wait_for_main_invocations(&mut child, &log, 1, Duration::from_secs(2));
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        main_invocation_count(&log),
+        1,
+        "an unreachable endpoint must not consume reconnect attempts"
+    );
+
+    let _listener = TcpListener::bind(address).expect("restore reachable endpoint");
+    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(3));
+    let out = child.wait_with_output().expect("wait for clean reattach");
+
+    assert!(
+        out.status.success(),
+        "restored endpoint reattaches cleanly\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "dev-box unreachable — holding reconnect until the network returns; Ctrl-C stops"
+        ),
+        "the unreachable hold is visible: {stderr}"
+    );
+    assert!(
+        stderr.contains("network to dev-box restored — reconnecting now"),
+        "the network edge is visible: {stderr}"
+    );
+}
+
+#[test]
+fn unreachable_endpoint_retries_at_the_hold_cap() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("ssh-trace.plan");
+    let ssh_config = env.project_root.join("ssh-config.txt");
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve dial port");
+    let address = reservation.local_addr().expect("dial address");
+    drop(reservation);
+    std::fs::write(&plan, "255\n0\n").expect("write plan");
+    std::fs::write(
+        &ssh_config,
+        format!("hostname 127.0.0.1\nport {}\n", address.port()),
+    )
+    .expect("write ssh config fixture");
+
+    let mut child = env
+        .rimz()
+        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
+        .env("RIMZ_SSH_BIN", ssh_shim())
+        .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_TEST_SSH_PLAN", &plan)
+        .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
+        .env("RIMZ_REMOTE_GATETIME_MS", "0")
+        .env("RIMZ_REMOTE_BACKOFF_MS", "50")
+        .env("RIMZ_REMOTE_BACKOFF_CAP_MS", "200")
+        .env("RIMZ_REMOTE_DIAL_MS", "25")
+        .env("RIMZ_REMOTE_PROBE_MS", "0")
+        .env("TERM", "xterm-256color")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn supervised remote connect");
+
+    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(2));
+    let out = child.wait_with_output().expect("wait for capped retry");
+
+    assert!(
+        out.status.success(),
+        "hold-cap retry exits cleanly\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        main_invocation_count(&log),
+        2,
+        "the safety valve launches one retry while dials stay unreachable"
+    );
+}
+
+#[test]
 fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");

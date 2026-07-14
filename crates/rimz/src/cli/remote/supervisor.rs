@@ -118,7 +118,7 @@ pub(super) fn supervise_remote(
                     );
                 }
                 if matches!(
-                    wait_before_retry(dial_plan.as_ref(), delay, &stop),
+                    wait_before_retry(dial_plan.as_ref(), delay, policy.backoff_cap, host, &stop,),
                     WaitVerdict::AttachNow {
                         network_restored: true
                     }
@@ -331,6 +331,8 @@ fn dial_with_timeout(plan: &DialPlan, timeout: Duration) -> bool {
 pub(super) fn wait_before_retry(
     dial_plan: Option<&DialPlan>,
     delay: Duration,
+    hold: Duration,
+    host: &str,
     stop: &AtomicBool,
 ) -> WaitVerdict {
     let Some(plan) = dial_plan else {
@@ -347,9 +349,9 @@ pub(super) fn wait_before_retry(
     };
 
     let started = Instant::now();
-    let deadline = started + delay;
-    let mut gate = DialGate::new(started, delay);
+    let mut gate = DialGate::new(started, delay, hold);
     let mut next_dial = started;
+    let mut reported_unreachable = false;
     loop {
         let now = Instant::now();
         let verdict = gate.verdict(now);
@@ -362,15 +364,24 @@ pub(super) fn wait_before_retry(
             };
         }
         if now >= next_dial {
-            let timeout = DIAL_TIMEOUT.min(deadline.saturating_duration_since(now));
-            gate.note_dial(dial_with_timeout(plan, timeout));
+            let timeout =
+                DIAL_TIMEOUT.min(gate.effective_deadline().saturating_duration_since(now));
+            let reachable = dial_with_timeout(plan, timeout);
+            gate.note_dial(reachable);
+            if !reachable && !reported_unreachable {
+                reported_unreachable = true;
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: {host} unreachable — holding reconnect until the network returns; Ctrl-C stops",
+                );
+            }
             let verdict = gate.verdict(Instant::now());
             if !matches!(verdict, WaitVerdict::KeepWaiting) {
                 return verdict;
             }
             next_dial = Instant::now() + interval;
         }
-        let wake_at = next_dial.min(deadline);
+        let wake_at = next_dial.min(gate.effective_deadline());
         super::sleep_interruptibly(wake_at.saturating_duration_since(Instant::now()), stop);
     }
 }
