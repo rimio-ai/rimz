@@ -26,7 +26,7 @@ use super::{
     RefreshTrigger, Result, TranscriptMessage, TranscriptStat,
 };
 
-const HOOK_INSTALL_UNAVAILABLE: &str = "Kiro CLI 2.12.1 v3 does not execute standalone hook configs; re-enable after a pinned v3 release provides a reproducible native hook contract";
+const HOOK_INSTALL_UNAVAILABLE: &str = "the v3 engine does not execute standalone hook configs (verified against Kiro CLI 2.12.1); re-enable after a pinned v3 release provides a reproducible native hook contract";
 
 static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "kiro",

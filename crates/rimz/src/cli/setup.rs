@@ -299,7 +299,7 @@ fn integration_state(
     local_session_discovery: bool,
 ) -> &'static str {
     if !hook_install && local_session_discovery {
-        "local-session discovery; hook install unavailable"
+        "local-session discovery (no hooks needed)"
     } else if !hook_install {
         "hook install unsupported"
     } else if hooks_installed {
@@ -317,7 +317,7 @@ mod tests {
     fn setup_leads_with_the_hookless_adapters_observation_path() {
         assert_eq!(
             integration_state(false, false, true),
-            "local-session discovery; hook install unavailable"
+            "local-session discovery (no hooks needed)"
         );
         assert_eq!(
             integration_state(false, false, false),

@@ -23,10 +23,10 @@ pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::
             let reason = descriptor
                 .hook_install_unavailable
                 .unwrap_or("hook install is not supported for this adapter");
-            tracing::warn!(
+            tracing::debug!(
                 agent = descriptor.kind,
                 reason,
-                "detected agent cannot be wired automatically",
+                "agent integrates without rimz-managed hooks; skipping hook install",
             );
             continue;
         }
