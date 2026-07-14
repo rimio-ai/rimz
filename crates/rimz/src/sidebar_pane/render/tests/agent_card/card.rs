@@ -79,6 +79,36 @@ fn render_agent_capability_and_window() {
 }
 
 #[test]
+fn render_cursor_normalized_model_metadata_once() {
+    let mut cursor = agent(
+        "cursor-1",
+        "cursor",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("normalize model metadata"),
+    );
+    let mut context = claude_context(fixed_now());
+    context.source = "cursor".to_owned();
+    context.model_id = Some("auto".to_owned());
+    context.model_display_name = Some("GPT-5.6 Sol".to_owned());
+    context.effort = Some("medium".to_owned());
+    context.tokens.as_mut().unwrap().context_window_size = Some(200_000);
+    cursor.context = Some(context);
+
+    let rendered = snapshot_to_screen(&snapshot_with(vec![cursor]), 54, 15);
+
+    assert!(
+        rendered.contains("GPT 5.6 Sol · medium · 200k"),
+        "the identity line separates Cursor's normalized capabilities:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("272K") && !rendered.contains("272k"),
+        "the nominal selector window does not leak into the card:\n{rendered}"
+    );
+}
+
+#[test]
 fn render_agent_capability_uses_descriptor_default_window() {
     let mut codex = agent(
         "codex-1",

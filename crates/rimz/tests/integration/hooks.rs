@@ -1420,9 +1420,14 @@ fn cursor_statusline_and_stop_hook_merge_rich_context_and_idempotent_cost() {
 
     let payload = r#"{
         "session_id": "sess-cursor",
-        "model": { "id": "default", "display_name": "Auto" },
+        "model": {
+            "id": "default",
+            "display_name": "GPT-5.6 Sol 272K Medium",
+            "param_summary": "272K Medium",
+            "max_mode": false
+        },
         "context_window": {
-            "context_window_size": 256000,
+            "context_window_size": 200000,
             "used_percentage": 8.9,
             "current_usage": {
                 "input_tokens": 14021,
@@ -1475,9 +1480,14 @@ fn cursor_statusline_and_stop_hook_merge_rich_context_and_idempotent_cost() {
         .into_iter()
         .find(|record| record.agent_id.as_str() == "sess-cursor")
         .expect("Cursor sidecar");
-    assert_eq!(record.context.model_display_name.as_deref(), Some("Auto"));
+    assert_eq!(record.context.model_id.as_deref(), Some("auto"));
+    assert_eq!(
+        record.context.model_display_name.as_deref(),
+        Some("GPT-5.6 Sol")
+    );
+    assert_eq!(record.context.effort.as_deref(), Some("medium"));
     let tokens = record.context.tokens.unwrap();
-    assert_eq!(tokens.context_window_size, Some(256_000));
+    assert_eq!(tokens.context_window_size, Some(200_000));
     assert_eq!(tokens.used_percentage, Some(9));
     assert_eq!(tokens.current_usage.unwrap().input_tokens, Some(14_021));
     let cost = record.context.cost.unwrap().total_cost_usd.unwrap();
