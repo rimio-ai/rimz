@@ -1333,15 +1333,28 @@ fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
         "install stderr: {}",
         String::from_utf8_lossy(&install.stderr)
     );
-    let reports: Value = serde_json::from_slice(&install.stdout).expect("install reports json");
-    let reports = reports.as_array().expect("array report");
-    let agents = reports
-        .iter()
-        .filter_map(|report| report["agent"].as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(agents, vec!["claude", "codex"]);
+    let install_stdout = String::from_utf8_lossy(&install.stdout);
+    assert!(install_stdout.contains("✓ claude  installed"));
+    assert!(install_stdout.contains("~/.claude/settings.json"));
+    assert!(install_stdout.contains("✓ codex  installed"));
+    assert!(install_stdout.contains("~/.codex/config.toml"));
     assert!(env.agent_hooks_installed("claude"));
     assert!(env.agent_hooks_installed("codex"));
+
+    let rerun = env
+        .rimz()
+        .env("PATH", bin_dir.path())
+        .args(["hooks", "install"])
+        .output()
+        .expect("spawn install rerun");
+    assert!(
+        rerun.status.success(),
+        "install rerun stderr: {}",
+        String::from_utf8_lossy(&rerun.stderr)
+    );
+    let rerun_stdout = String::from_utf8_lossy(&rerun.stdout);
+    assert!(rerun_stdout.contains("✓ claude  hooks up to date"));
+    assert!(rerun_stdout.contains("✓ codex  hooks up to date"));
 
     let empty_path = fake_agent_bin_dir(&[]);
     let uninstall = env
@@ -1355,16 +1368,29 @@ fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
         "uninstall stderr: {}",
         String::from_utf8_lossy(&uninstall.stderr)
     );
-    let reports: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall reports json");
-    let agents = reports
-        .as_array()
-        .expect("array report")
-        .iter()
-        .filter_map(|report| report["agent"].as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(agents, vec!["claude", "codex"]);
+    let uninstall_stdout = String::from_utf8_lossy(&uninstall.stdout);
+    assert!(uninstall_stdout.contains("✓ claude  removed"));
+    assert!(uninstall_stdout.contains("~/.claude/settings.json"));
+    assert!(uninstall_stdout.contains("✓ codex  removed"));
+    assert!(uninstall_stdout.contains("~/.codex/config.toml"));
     assert!(!env.agent_hooks_installed("claude"));
     assert!(!env.agent_hooks_installed("codex"));
+
+    let empty = env
+        .rimz()
+        .env("PATH", empty_path.path())
+        .args(["hooks", "uninstall"])
+        .output()
+        .expect("spawn empty uninstall");
+    assert!(
+        empty.status.success(),
+        "empty uninstall stderr: {}",
+        String::from_utf8_lossy(&empty.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&empty.stdout),
+        "No Rimz-managed hooks are installed; nothing to uninstall.\n"
+    );
 }
 
 /// The statusline feed passes the JSON through to the wrapped command verbatim

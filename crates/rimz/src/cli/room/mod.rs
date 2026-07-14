@@ -34,7 +34,9 @@ use attach_exec::{
 use coroner::{BirthRecovery, inspect_previous_incarnation, report_previous_session_death};
 use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 pub(crate) use hook_install::{
-    detected_installable_adapters, ensure_detected_agent_hooks, render_dry_run,
+    detected_installable_adapters, ensure_detected_agent_hooks, install_disposition,
+    render_dry_run, write_install_result, write_post_install_footer, write_uninstall_result,
+    write_untrusted_hooks_notice,
 };
 use resume::{AgentRecovery, materialize_room_resume, plan_room_resume, report_resume};
 pub(crate) use room_recovery::gate_room_before_attach;

@@ -13,6 +13,23 @@ use crate::cli::{first_run, render};
 
 const DIFF_CONTEXT_LINES: usize = 3;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InstallDisposition {
+    Installed,
+    Refreshed,
+    Current,
+}
+
+pub(crate) fn install_disposition(agent: &dyn rimz::agents::AgentAdapter) -> InstallDisposition {
+    if !agent.hooks_installed() {
+        InstallDisposition::Installed
+    } else if agent.hook_upgrade_available() {
+        InstallDisposition::Refreshed
+    } else {
+        InstallDisposition::Current
+    }
+}
+
 pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::AgentAdapter> {
     let mut detected = Vec::new();
     for agent in rimz::agents::ADAPTERS {
@@ -112,16 +129,13 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
 
     for name in selected {
         let agent = rimz::agents::adapter_by_kind(name)?;
+        let disposition = install_disposition(agent);
         let report = agent.install_hooks()?;
-        write_install_result(out, &report)?;
+        write_install_result(out, &report, disposition)?;
         write_untrusted_hooks_notice(name, &agent.untrusted_installed_hooks(), out)?;
     }
 
-    writeln!(
-        out,
-        "All set — your agents appear in the sidebar as they run."
-    )?;
-    Ok(())
+    write_post_install_footer(out)
 }
 
 /// Stderr notice for hooks the agent's own trust gate still skips: the gate
@@ -134,7 +148,7 @@ fn warn_untrusted_hooks(kind: &str, untrusted: &[String]) -> Result<()> {
     write_untrusted_hooks_notice(kind, untrusted, &mut out)
 }
 
-fn write_untrusted_hooks_notice(
+pub(crate) fn write_untrusted_hooks_notice(
     kind: &str,
     untrusted: &[String],
     out: &mut dyn Write,
@@ -269,16 +283,68 @@ fn color_diff_line(line: &str) -> String {
     }
 }
 
-fn write_install_result(out: &mut dyn Write, report: &HookInstallReport) -> Result<()> {
+pub(crate) fn write_install_result(
+    out: &mut dyn Write,
+    report: &HookInstallReport,
+    disposition: InstallDisposition,
+) -> Result<()> {
+    let summary = match disposition {
+        InstallDisposition::Installed => {
+            format!("installed {} hooks", report.installed_events.len())
+        }
+        InstallDisposition::Refreshed => {
+            format!("refreshed {} hooks", report.installed_events.len())
+        }
+        InstallDisposition::Current => {
+            format!("hooks up to date ({})", report.installed_events.len())
+        }
+    };
+    for (index, file) in report.files.iter().enumerate() {
+        let annotation = if file.existed {
+            "(updated existing config)"
+        } else {
+            "(new file)"
+        };
+        if index == 0 {
+            writeln!(
+                out,
+                "{} {}  {} → {}  {}",
+                render::paint(render::palette::GOOD.bold(), "✓"),
+                report.agent,
+                summary,
+                home_relative_path(&file.path),
+                render::paint(render::palette::MUTED, annotation),
+            )?;
+        } else {
+            writeln!(
+                out,
+                "       config → {}  {}",
+                home_relative_path(&file.path),
+                render::paint(render::palette::MUTED, annotation),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn write_uninstall_result(
+    out: &mut dyn Write,
+    report: &rimz::agents::HookUninstallReport,
+) -> Result<()> {
+    if report.files.is_empty() {
+        writeln!(out, "{} — no Rimz-managed hooks found", report.agent)?;
+        return Ok(());
+    }
+
     for (index, file) in report.files.iter().enumerate() {
         if index == 0 {
             writeln!(
                 out,
-                "{} {}  {} hooks → {}",
+                "{} {}  removed {} hooks → {}",
                 render::paint(render::palette::GOOD.bold(), "✓"),
                 report.agent,
-                report.installed_events.len(),
-                home_relative_path(&file.path)
+                report.removed_events.len(),
+                home_relative_path(&file.path),
             )?;
         } else {
             writeln!(out, "       config → {}", home_relative_path(&file.path))?;
@@ -338,6 +404,20 @@ fn write_consent_footer(out: &mut dyn Write) -> Result<()> {
         out,
         "Each hook is one `rimz hooks feed` line — it reports events, never acts or answers for you."
     )?;
+    write_undo_preview_hints(out)
+}
+
+pub(crate) fn write_post_install_footer(out: &mut dyn Write) -> Result<()> {
+    writeln!(out)?;
+    write_undo_preview_hints(out)?;
+    writeln!(
+        out,
+        "All set — your agents appear in the sidebar as they run."
+    )?;
+    Ok(())
+}
+
+fn write_undo_preview_hints(out: &mut dyn Write) -> Result<()> {
     writeln!(
         out,
         "  {}     rimz hooks uninstall",
@@ -609,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_and_json_reports_name_every_cursor_config_file() {
+    fn dry_run_names_every_cursor_config_file() {
         let mut cursor = preview("cursor", Some("{}\n"), "{\"hooks\": {}}\n");
         cursor.files[0].path = cursor.files[0].path.with_file_name("hooks.json");
         let cli_config = home_config_path("cursor").with_file_name("cli-config.json");
@@ -623,7 +703,11 @@ mod tests {
         assert!(rendered.contains("~/.cursor/hooks.json"));
         assert!(rendered.contains("~/.cursor/cli-config.json"));
         assert_eq!(rendered.matches("@@").count(), 4);
+    }
 
+    #[test]
+    fn completed_hook_reports_render_dispositions_files_and_footer() {
+        let cli_config = home_config_path("cursor").with_file_name("cli-config.json");
         let report = HookInstallReport {
             agent: "cursor",
             files: vec![
@@ -638,7 +722,40 @@ mod tests {
             ],
             installed_events: vec!["stop".to_owned()],
         };
-        let json = serde_json::to_value(report).unwrap();
-        assert_eq!(json["files"].as_array().unwrap().len(), 2);
+
+        for (disposition, summary) in [
+            (InstallDisposition::Installed, "installed 1 hooks"),
+            (InstallDisposition::Refreshed, "refreshed 1 hooks"),
+            (InstallDisposition::Current, "hooks up to date (1)"),
+        ] {
+            let rendered = strip(|out| write_install_result(out, &report, disposition));
+            assert!(rendered.contains(&format!("✓ cursor  {summary}")));
+            assert!(rendered.contains("~/.cursor/hooks.json"));
+            assert!(rendered.contains("(updated existing config)"));
+            assert!(rendered.contains("config → ~/.cursor/cli-config.json"));
+            assert!(rendered.contains("(new file)"));
+        }
+
+        let uninstall = rimz::agents::HookUninstallReport {
+            agent: "cursor",
+            files: report.files,
+            removed_events: vec!["stop".to_owned()],
+        };
+        let rendered = strip(|out| write_uninstall_result(out, &uninstall));
+        assert!(rendered.contains("✓ cursor  removed 1 hooks → ~/.cursor/hooks.json"));
+        assert!(rendered.contains("config → ~/.cursor/cli-config.json"));
+
+        let empty = rimz::agents::HookUninstallReport {
+            agent: "codex",
+            files: Vec::new(),
+            removed_events: Vec::new(),
+        };
+        let rendered = strip(|out| write_uninstall_result(out, &empty));
+        assert_eq!(rendered, "codex — no Rimz-managed hooks found\n");
+
+        let rendered = strip(|out| write_post_install_footer(out));
+        assert!(rendered.contains("rimz hooks uninstall"));
+        assert!(rendered.contains("rimz hooks install --dry-run"));
+        assert!(rendered.contains("All set — your agents appear in the sidebar as they run."));
     }
 }

@@ -1,7 +1,10 @@
 use std::io::Write as _;
 
 use super::*;
-use crate::cli::room::{detected_installable_adapters, render_dry_run};
+use crate::cli::room::{
+    detected_installable_adapters, install_disposition, render_dry_run, write_install_result,
+    write_post_install_footer, write_uninstall_result, write_untrusted_hooks_notice,
+};
 use rimz::agents::HookUninstallReport;
 
 pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
@@ -9,98 +12,62 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
         return run_install_dry_run(agent);
     }
 
-    match agent {
-        Some(agent) => {
-            let integration = adapter_by_kind(&agent)?;
-            let report = integration.install_hooks()?;
-            // User-facing JSON. Report struct derives Serialize so the shape stays in
-            // lockstep with `HookInstallReport`.
-            let rendered = serde_json::to_string_pretty(&report)?;
-            #[expect(clippy::print_stdout, reason = "user-visible install report")]
-            {
-                println!("{rendered}");
-            }
-        }
-        None => {
-            let adapters = detected_installable_adapters();
-            if adapters.is_empty() {
-                anyhow::bail!(
-                    "no supported coding agents detected on PATH ({}) - install an agent and rerun, or name one: rimz hooks install <agent>",
-                    rimz::agents::known_kinds().collect::<Vec<_>>().join(", "),
-                );
-            }
-            let mut reports = Vec::new();
-            for integration in adapters {
-                reports.push(integration.install_hooks()?);
-            }
-            let rendered = serde_json::to_string_pretty(&reports)?;
-            #[expect(clippy::print_stdout, reason = "user-visible install report")]
-            {
-                println!("{rendered}");
-            }
-        }
+    let adapters = install_adapters(agent)?;
+    let mut out = crate::cli::render::out();
+    for integration in adapters {
+        let disposition = install_disposition(integration);
+        let report = integration.install_hooks()?;
+        write_install_result(&mut out, &report, disposition)?;
+        write_untrusted_hooks_notice(
+            report.agent,
+            &integration.untrusted_installed_hooks(),
+            &mut out,
+        )?;
     }
-    Ok(())
+    write_post_install_footer(&mut out)
 }
 
 fn run_install_dry_run(agent: Option<String>) -> Result<()> {
-    let previews = match agent {
-        Some(agent) => {
-            let integration = adapter_by_kind(&agent)?;
-            vec![integration.preview_hook_install()?]
-        }
-        None => {
-            let adapters = detected_installable_adapters();
-            if adapters.is_empty() {
-                anyhow::bail!(
-                    "no supported coding agents detected on PATH ({}) - install an agent and rerun, or name one: rimz hooks install <agent>",
-                    rimz::agents::known_kinds().collect::<Vec<_>>().join(", "),
-                );
-            }
-            let mut previews = Vec::new();
-            for integration in adapters {
-                previews.push(integration.preview_hook_install()?);
-            }
-            previews
-        }
-    };
-    let mut out = crate::cli::render::err();
+    let mut previews = Vec::new();
+    for integration in install_adapters(agent)? {
+        previews.push(integration.preview_hook_install()?);
+    }
+    let mut out = crate::cli::render::out();
     render_dry_run(&mut out, &previews)
 }
 
 pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
-    match agent {
-        Some(agent) => {
-            let integration = adapter_by_kind(&agent)?;
-            let report = integration.uninstall_hooks()?;
-            let rendered = serde_json::to_string_pretty(&report)?;
-            #[expect(clippy::print_stdout, reason = "user-visible uninstall report")]
-            {
-                println!("{rendered}");
-            }
-        }
-        None => {
-            let reports = uninstall_managed_hooks()?;
-            if reports.is_empty() {
-                #[expect(clippy::print_stdout, reason = "user-visible uninstall report")]
-                {
-                    println!("[]");
-                }
-                let mut stderr = std::io::stderr().lock();
-                writeln!(
-                    stderr,
-                    "No Rimz-managed hooks are installed; nothing to uninstall."
-                )?;
-                return Ok(());
-            }
-            let rendered = serde_json::to_string_pretty(&reports)?;
-            #[expect(clippy::print_stdout, reason = "user-visible uninstall report")]
-            {
-                println!("{rendered}");
-            }
-        }
+    let reports = match agent {
+        Some(agent) => vec![adapter_by_kind(&agent)?.uninstall_hooks()?],
+        None => uninstall_managed_hooks()?,
+    };
+    let mut out = crate::cli::render::out();
+    if reports.is_empty() {
+        writeln!(
+            out,
+            "No Rimz-managed hooks are installed; nothing to uninstall."
+        )?;
+        return Ok(());
+    }
+    for report in &reports {
+        write_uninstall_result(&mut out, report)?;
     }
     Ok(())
+}
+
+fn install_adapters(agent: Option<String>) -> Result<Vec<&'static dyn rimz::agents::AgentAdapter>> {
+    if let Some(agent) = agent {
+        return Ok(vec![adapter_by_kind(&agent)?]);
+    }
+
+    let adapters = detected_installable_adapters();
+    if adapters.is_empty() {
+        anyhow::bail!(
+            "no supported coding agents detected on PATH ({}) - install an agent and rerun, or name one: rimz hooks install <agent>",
+            rimz::agents::known_kinds().collect::<Vec<_>>().join(", "),
+        );
+    }
+    Ok(adapters)
 }
 
 pub(crate) fn uninstall_managed_hooks() -> Result<Vec<HookUninstallReport>> {

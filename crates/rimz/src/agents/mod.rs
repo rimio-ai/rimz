@@ -302,10 +302,9 @@ impl ClassificationSample {
     }
 }
 
-/// Result of installing hooks. Surfaced to the CLI so the user sees which
-/// files were touched. Serialized verbatim as the `rimz hooks install` JSON
-/// output — fields are part of the user-visible report contract.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// Result of installing hooks. The CLI uses these fields to render the
+/// per-agent event count and every config file touched.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HookInstallReport {
     pub agent: &'static str,
     /// Config files the installer wrote.
@@ -315,14 +314,14 @@ pub struct HookInstallReport {
 }
 
 /// One config file written by a completed hook install or uninstall.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HookInstallFileReport {
     pub path: PathBuf,
     /// True when the file existed before the operation.
     pub existed: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HookInstallPreview {
     pub agent: &'static str,
     pub files: Vec<HookInstallFilePreview>,
@@ -331,17 +330,15 @@ pub struct HookInstallPreview {
     /// summary that keeps the wrap a visible security surface. The full change
     /// is also in the matching file artifact's diff. `None` for agents that manage no
     /// statusline (Codex).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_line_change: Option<StatusLineChange>,
     /// How the install changes the agent's `subagentStatusLine` (the per-child
     /// render command), same consent-surface discipline as `status_line_change`.
     /// `None` for agents that manage no subagent statusline (Codex).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_status_line_change: Option<StatusLineChange>,
 }
 
 /// One exact config-file change in a hook-install preview.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HookInstallFilePreview {
     pub path: PathBuf,
     pub original: Option<String>,
@@ -351,8 +348,7 @@ pub struct HookInstallFilePreview {
 
 /// What `rimz hooks install` does to the agent's statusline command, surfaced
 /// in the consent gate alongside the hook diff.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StatusLineChange {
     /// No prior statusline; install adds Rimz's reader.
     Added,
@@ -373,7 +369,7 @@ pub enum StatusLineInvocation {
     DirectArgv,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HookUninstallReport {
     pub agent: &'static str,
     pub files: Vec<HookInstallFileReport>,
