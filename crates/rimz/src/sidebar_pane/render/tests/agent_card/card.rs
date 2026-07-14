@@ -109,6 +109,55 @@ fn render_cursor_normalized_model_metadata_once() {
 }
 
 #[test]
+fn cursor_idle_session_name_yields_to_first_prompt_affordance() {
+    let mut cursor = agent(
+        "cursor-1",
+        "cursor",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    let mut context = codex_context(fixed_now());
+    context.source = "cursor".to_owned();
+    context.session_name = Some("provider-owned pre-prompt title".to_owned());
+    context.model_id = None;
+    context.model_display_name = None;
+    context.effort = None;
+    context.rate_limits = None;
+    cursor.context = Some(context);
+    let theme = Theme::fixed(true);
+
+    let before_prompt = line_texts(&group_lines(
+        &snapshot_with(vec![cursor.clone()]),
+        &theme,
+        0,
+    ));
+    assert!(
+        before_prompt.iter().any(|line| line.contains(".  ")),
+        "a provider-owned session title cannot displace the compose affordance:\n{}",
+        before_prompt.join("\n")
+    );
+    assert!(
+        before_prompt
+            .iter()
+            .all(|line| !line.contains("provider-owned pre-prompt title")),
+        "pre-prompt presentation text stays off the card:\n{}",
+        before_prompt.join("\n")
+    );
+
+    cursor.prompt = Some("first real prompt".to_owned());
+    let after_prompt = line_texts(&group_lines(&snapshot_with(vec![cursor]), &theme, 0));
+    assert!(
+        after_prompt
+            .iter()
+            .any(|line| line.contains("provider-owned pre-prompt title")),
+        "durable prompt evidence enables the normal session-name precedence:\n{}",
+        after_prompt.join("\n")
+    );
+}
+
+#[test]
 fn render_agent_capability_uses_descriptor_default_window() {
     let mut codex = agent(
         "codex-1",

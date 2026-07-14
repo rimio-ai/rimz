@@ -248,7 +248,7 @@ Cursor CLI `2026.07.09-a3815c0` supports a command statusline in `~/.cursor/cli-
 }
 ```
 
-The command receives structured JSON on stdin with `session_id`, `session_name`, `model.{id,display_name,param_summary,max_mode}`, `version`, `output_style`, `vim`, and `context_window.{context_window_size,used_percentage,remaining_percentage,current_usage}`. Current usage separates input, output, cache-create, and cache-read tokens. Treat every nested field as optional and field-locally lossy because the rolling CLI schema is not versioned.
+The command receives structured JSON on stdin with `session_id`, `session_name`, `model.{id,display_name,param_summary,max_mode}`, `version`, `output_style`, `vim`, and `context_window.{context_window_size,used_percentage,remaining_percentage,current_usage}`. Current usage separates input, output, cache-create, and cache-read tokens. Before the first prompt, `session_name` can contain Cursor-owned presentation text; use prompt lifecycle evidence rather than matching that text to decide whether the session is named. Treat every nested field as optional and field-locally lossy because the rolling CLI schema is not versioned.
 
 An explicit-model capture from `2026.07.09-a3815c0` reported `model.display_name = "GPT-5.6 Sol 272K Medium"`, `model.param_summary = "272K Medium"`, and `context_window.context_window_size = 200000`. The `272K` parameter describes the nominal model selector while the independent `200000` field is the live usable window and fill denominator; consumers separate the summary suffix into model qualifiers and reasoning effort without promoting its nominal magnitude to live token usage.
 

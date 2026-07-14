@@ -139,9 +139,9 @@ pub(super) fn row_lines(
                 }
             }
         } else {
-            let awaiting = awaiting_first_prompt(row);
             let compose_affordance = awaiting_first_prompt_affordance(row);
-            if !awaiting {
+            let blank_idle = status == AgentStatus::Idle && descriptor(row).is_none();
+            if !blank_idle && !compose_affordance {
                 inner.push(description_line(theme, row, cw, attention));
             } else if selected && compose_affordance {
                 inner.push(awaiting_prompt_line(animation_phase, cw));
