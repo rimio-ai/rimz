@@ -19,10 +19,12 @@
 //!   with remote control enabled and returns. That daemon is a **per-user
 //!   singleton** (one control socket), so it is *not* a per-workspace pane:
 //!   [`ensure_codex_daemon`] spawns the (idempotent) start command detached with
-//!   null stdio, and Codex enrichment reaches the daemon over the control socket
-//!   (see [`crate::agents::codex::app_server`]). A missing control socket plus
-//!   Codex PID records that prove the app-server is a zombie child of its
-//!   managed updater triggers one bounded updater recycle before startup.
+//!   null stdio from the durable Codex home, and Codex enrichment reaches the
+//!   daemon over the control socket (see [`crate::agents::codex::app_server`]).
+//!   The durable cwd lets the daemon keep loading config after the room worktree
+//!   that requested startup is removed. A missing control socket plus Codex PID
+//!   records that prove the app-server is a zombie child of its managed updater
+//!   triggers one bounded updater recycle before startup.
 //! - **Loops** run an always-present `rimz loop watch` panel in the runtime
 //!   column. Scheduled loop runs split against that pane so transient agents
 //!   stay in the daemon view's loop zone.
@@ -40,7 +42,7 @@
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -464,7 +466,7 @@ pub fn ensure_codex_daemon(config: &RemoteControlConfig) {
             "recovered a stale Codex daemon updater after its app-server became a zombie",
         );
     }
-    spawn_codex_daemon(&bin);
+    spawn_codex_daemon(&bin, &home);
 }
 
 /// A synchronous Codex remote-control transition requested by `rimz config
@@ -485,23 +487,26 @@ pub fn reconcile_codex_daemon(enabled: bool) -> Result<(), CodexDaemonControlErr
     } else {
         codex_stop_command(&bin)
     };
-    let first = run_codex_daemon_command(&argv, enabled);
+    let first = run_codex_daemon_command(&argv, enabled, &home);
     if first.is_err() && recover_stale_codex_daemon(&home) {
         tracing::warn!(
             action = codex_daemon_action(enabled),
             "recovered a stale Codex daemon updater after its app-server became a zombie",
         );
-        return run_codex_daemon_command(&argv, enabled);
+        return run_codex_daemon_command(&argv, enabled, &home);
     }
     first
 }
 
-fn run_codex_daemon_command(argv: &[String], enabled: bool) -> Result<(), CodexDaemonControlError> {
-    let Some((program, args)) = argv.split_first() else {
+fn run_codex_daemon_command(
+    argv: &[String],
+    enabled: bool,
+    codex_home: &Path,
+) -> Result<(), CodexDaemonControlError> {
+    let Some(spec) = codex_daemon_command_spec(argv, codex_home) else {
         return Ok(());
     };
-    let output = CommandSpec::new(program)
-        .args(args.iter().cloned())
+    let output = spec
         .output_raw_with_timeout(CODEX_DAEMON_CONTROL_TIMEOUT)
         .map_err(|source| CodexDaemonControlError::Command {
             action: codex_daemon_action(enabled),
@@ -510,7 +515,7 @@ fn run_codex_daemon_command(argv: &[String], enabled: bool) -> Result<(), CodexD
     if !output.status.success() {
         return Err(CodexDaemonControlError::Exit {
             action: codex_daemon_action(enabled),
-            program: PathBuf::from(program),
+            program: PathBuf::from(&spec.program),
             status: output.status,
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         });
@@ -730,22 +735,34 @@ fn should_ensure_codex_daemon(codex_enabled: bool, standalone_present: bool) -> 
     codex_enabled && standalone_present
 }
 
+/// Build a provider control command whose descendants inherit a durable cwd.
+/// Room and worktree cleanup may remove the directory `rimz start` was invoked
+/// from while the per-user daemon remains alive. Codex resolves even absolute
+/// thread cwd values through its process cwd during config loading, so anchoring
+/// the control command in `$CODEX_HOME` keeps later TUI bootstraps valid.
+fn codex_daemon_command_spec(argv: &[String], codex_home: &Path) -> Option<CommandSpec> {
+    let (program, args) = argv.split_first()?;
+    Some(
+        CommandSpec::new(program)
+            .args(args.iter().cloned())
+            .cwd(codex_home),
+    )
+}
+
 /// Spawn `codex remote-control start` from the managed standalone `bin` detached,
-/// with all stdio nulled, and hand it to the shared reaper. The command is
-/// idempotent — it no-ops once the per-user daemon is up — and returns as soon
-/// as the daemon is running, so this adds no latency and prints nothing to the
-/// terminal. Best-effort: a spawn failure is logged and ignored, because the
-/// app-server is enrichment, not correctness — the enrichment client cold-spawns
-/// a server when the daemon is absent.
-fn spawn_codex_daemon(bin: &Path) {
+/// with all stdio nulled and `$CODEX_HOME` as its cwd, and hand it to the shared
+/// reaper. The command is idempotent — it no-ops once the per-user daemon is up —
+/// and returns as soon as the daemon is running, so this adds no latency and
+/// prints nothing to the terminal. Best-effort: a spawn failure is logged and
+/// ignored, because the app-server is enrichment, not correctness — the
+/// enrichment client cold-spawns a server when the daemon is absent.
+fn spawn_codex_daemon(bin: &Path, codex_home: &Path) {
     let argv = codex_command(bin);
-    let mut parts = argv.iter();
-    let Some(program) = parts.next() else {
+    let Some(spec) = codex_daemon_command_spec(&argv, codex_home) else {
         return;
     };
-    let mut cmd = Command::new(program);
-    cmd.args(parts)
-        .stdin(Stdio::null())
+    let mut cmd = spec.to_command();
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "codex-daemon") {

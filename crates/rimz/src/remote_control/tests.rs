@@ -362,6 +362,18 @@ fn codex_toggle_uses_symmetric_start_and_stop_commands() {
     assert_eq!(codex_daemon_action(false), "stop");
 }
 
+#[test]
+fn codex_daemon_commands_anchor_descendants_to_codex_home() {
+    let bin = Path::new("/home/u/.codex/packages/standalone/current/codex");
+    let home = Path::new("/home/u/.codex");
+    for argv in [codex_command(bin), codex_stop_command(bin)] {
+        let spec = codex_daemon_command_spec(&argv, home).expect("non-empty Codex command");
+        assert_eq!(spec.cwd.as_deref(), Some(home));
+        assert_eq!(spec.program, argv[0]);
+        assert_eq!(spec.args, argv[1..]);
+    }
+}
+
 #[cfg(unix)]
 fn daemon_pid_record(pid: u32) -> CodexDaemonPidRecord {
     CodexDaemonPidRecord {
