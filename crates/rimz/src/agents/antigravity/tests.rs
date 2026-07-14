@@ -335,6 +335,7 @@ fn statusline_projects_model_account_and_context_usage() {
     let account = context.account.unwrap();
     assert_eq!(account.plan.as_deref(), Some("ultra"));
     assert_eq!(account.account_id.as_deref(), Some("user@example.com"));
+    assert_eq!(account.metered, Some(true));
     let tokens = context.tokens.unwrap();
     assert_eq!(tokens.context_window_size, Some(1_048_576));
     assert_eq!(tokens.used_percentage, Some(8));
@@ -1022,6 +1023,311 @@ fn home_resolution_and_presence_are_exact() {
     );
     assert!(AntigravityAdapter.descriptor().runs_as("agy"));
     assert!(!AntigravityAdapter.descriptor().runs_as("antigravity"));
+}
+
+mod local_account_api {
+    use std::collections::BTreeSet;
+    use std::ffi::OsStr;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use jiff::Timestamp;
+    use serde_json::json;
+
+    use super::super::local_api::{self, LoopbackEndpoint};
+    use super::*;
+
+    const OBSERVED_AT: &str = "2026-06-15T08:00:00Z";
+    const FIVE_HOUR_RESET: &str = "2026-06-15T12:00:00Z";
+    const WEEK_RESET: &str = "2026-06-20T08:00:00Z";
+
+    fn observed_at() -> Timestamp {
+        OBSERVED_AT.parse().unwrap()
+    }
+
+    #[test]
+    fn process_identity_requires_exact_binary_argv_and_uid() {
+        use local_api::process::{candidate_identity_matches, identity_matches};
+
+        assert!(identity_matches(
+            Some(501),
+            501,
+            Path::new("/home/me/.local/bin/agy"),
+            OsStr::new("/home/me/.local/bin/agy"),
+        ));
+        assert!(!identity_matches(
+            Some(502),
+            501,
+            Path::new("/home/me/.local/bin/agy"),
+            OsStr::new("agy"),
+        ));
+        assert!(!identity_matches(
+            Some(501),
+            501,
+            Path::new("/usr/bin/sh"),
+            OsStr::new("agy"),
+        ));
+        assert!(!identity_matches(
+            Some(501),
+            501,
+            Path::new("/home/me/.local/bin/agy"),
+            OsStr::new("wrapper"),
+        ));
+
+        let candidate = local_api::Candidate {
+            pid: 42,
+            uid: 501,
+            start_token: "1000".to_owned(),
+            endpoints: Vec::new(),
+        };
+        assert!(candidate_identity_matches(
+            &candidate,
+            Some(501),
+            Path::new("/home/me/.local/bin/agy"),
+            OsStr::new("agy"),
+            Some("1000"),
+        ));
+        assert!(!candidate_identity_matches(
+            &candidate,
+            Some(501),
+            Path::new("/home/me/.local/bin/agy"),
+            OsStr::new("agy"),
+            Some("1001"),
+        ));
+    }
+
+    #[test]
+    fn linux_socket_tables_intersect_owned_inodes_and_loopback_only() {
+        let inodes = BTreeSet::from(["12345".to_owned(), "67890".to_owned()]);
+        let tcp = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n\
+   0: 0100007F:1F90 00000000:0000 0A 0:0 00:0 0 501 0 12345\n\
+   1: 00000000:2382 00000000:0000 0A 0:0 00:0 0 501 0 67890\n\
+   2: 0100007F:2383 00000000:0000 01 0:0 00:0 0 501 0 67890\n\
+   3: 0100007F:2384 00000000:0000 0A 0:0 00:0 0 501 0 99999";
+        assert_eq!(
+            local_api::process::parse_proc_net(tcp, &inodes, false),
+            vec![LoopbackEndpoint {
+                address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                port: 8080,
+            }]
+        );
+
+        let tcp6 = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n\
+   0: 00000000000000000000000001000000:18EB 00000000000000000000000000000000:0000 0A 0:0 00:0 0 501 0 67890";
+        assert_eq!(
+            local_api::process::parse_proc_net(tcp6, &inodes, true),
+            vec![LoopbackEndpoint {
+                address: IpAddr::V6(Ipv6Addr::LOCALHOST),
+                port: 6379,
+            }]
+        );
+        assert_eq!(
+            local_api::process::socket_inode("socket:[12345]").as_deref(),
+            Some("12345")
+        );
+        assert!(local_api::process::socket_inode("pipe:[12345]").is_none());
+    }
+
+    #[test]
+    fn lsof_parser_and_urls_accept_only_typed_loopback_endpoints() {
+        let endpoints = local_api::process::parse_lsof(
+            "p42\nn127.0.0.1:5000\nn[::1]:5001\nn0.0.0.0:5002\nn10.0.0.2:5003\n",
+        );
+        assert_eq!(endpoints.len(), 2);
+        assert_eq!(
+            LoopbackEndpoint {
+                address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                port: 5000,
+            }
+            .url("/status"),
+            "https://127.0.0.1:5000/status"
+        );
+        assert_eq!(
+            LoopbackEndpoint {
+                address: IpAddr::V6(Ipv6Addr::LOCALHOST),
+                port: 5001,
+            }
+            .url("/status"),
+            "https://[::1]:5001/status"
+        );
+        assert_eq!(local_api::MAX_RESPONSE_BYTES, 256 * 1024);
+    }
+
+    #[test]
+    fn identity_accepts_success_codes_and_prefers_user_tier() {
+        for code in [json!(0), json!("0"), json!("ok"), json!("success")] {
+            let body = json!({
+                "code": code,
+                "userStatus": {
+                    "email": " user@example.com ",
+                    "userTier": { "name": " Google AI Ultra " },
+                    "planStatus": { "planInfo": { "planName": "Pro" } }
+                }
+            });
+            let account = local_api::wire::parse_identity(&body.to_string()).unwrap();
+            assert_eq!(account.account_id.as_deref(), Some("user@example.com"));
+            assert_eq!(account.plan.as_deref(), Some("Google AI Ultra"));
+            assert_eq!(account.metered, Some(true));
+        }
+    }
+
+    #[test]
+    fn identity_uses_plan_fallbacks_and_rejects_unusable_responses() {
+        let account = local_api::wire::parse_identity(
+            &json!({
+                "userStatus": {
+                    "planStatus": { "planInfo": { "displayName": " Antigravity Pro " } }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(account.plan.as_deref(), Some("Antigravity Pro"));
+
+        for body in [
+            json!({"code": 16, "userStatus": {"email": "user@example.com"}}),
+            json!({"code": "denied", "userStatus": {"email": "user@example.com"}}),
+            json!({"userStatus": {"email": " ", "userTier": {"name": " "}}}),
+            json!({"response": {}}),
+        ] {
+            assert!(local_api::wire::parse_identity(&body.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn quota_envelopes_and_fraction_shapes_normalize_to_two_windows() {
+        let groups = json!([{
+            "buckets": [
+                {
+                    "bucketId": "gemini-5h",
+                    "remainingFraction": 0.8,
+                    "resetTime": FIVE_HOUR_RESET
+                },
+                {
+                    "bucketId": "3p-5h",
+                    "remaining": {"remainingFraction": 0.3},
+                    "resetTime": "2026-06-15T11:00:00Z"
+                },
+                {
+                    "bucketId": "gemini-weekly",
+                    "remaining": {"case": "remainingFraction", "value": 0.4},
+                    "resetTime": WEEK_RESET
+                },
+                {
+                    "bucketId": "3p-weekly",
+                    "remaining": {"remainingFraction": 0.6},
+                    "resetTime": "2026-06-21T08:00:00Z"
+                }
+            ]
+        }]);
+        for body in [
+            json!({"response": {"groups": groups.clone()}}),
+            json!({"summary": {"groups": groups.clone()}}),
+            json!({"groups": groups.clone()}),
+        ] {
+            let limits =
+                local_api::wire::parse_rate_limits(&body.to_string(), observed_at()).unwrap();
+            assert_eq!(limits.windows.len(), 2);
+            assert_eq!(limits.windows[0].duration_mins, Some(300));
+            assert_eq!(limits.windows[0].used_percentage, Some(70));
+            assert_eq!(limits.windows[1].duration_mins, Some(10_080));
+            assert_eq!(limits.windows[1].used_percentage, Some(60));
+            assert!(limits.windows.iter().all(|window| {
+                window.source == crate::agents::context::WindowSource::Authoritative
+                    && !window.lifted
+            }));
+        }
+    }
+
+    #[test]
+    fn quota_reduction_breaks_ties_by_later_reset_then_identity() {
+        let body = json!({"groups": [{"buckets": [
+            {
+                "bucketId": "z-5h",
+                "remainingFraction": 0.25,
+                "resetTime": "2026-06-15T10:00:00Z"
+            },
+            {
+                "bucketId": "b-5h",
+                "remainingFraction": 0.25,
+                "resetTime": "2026-06-15T12:00:00Z"
+            },
+            {
+                "bucketId": "a-5h",
+                "remainingFraction": 0.25,
+                "resetTime": "2026-06-15T12:00:00Z"
+            }
+        ]}]});
+        let limits = local_api::wire::parse_rate_limits(&body.to_string(), observed_at()).unwrap();
+        assert_eq!(limits.windows[0].used_percentage, Some(75));
+        assert_eq!(
+            limits.windows[0].resets_at,
+            Some(FIVE_HOUR_RESET.parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn quota_preserves_unknown_periods_and_accepts_one_period() {
+        let body = json!({"groups": [{"buckets": [
+            {"bucketId": "gemini-5h", "disabled": true, "remainingFraction": 0.5},
+            {"bucketId": "3p-5h"},
+            {
+                "displayName": "Weekly Limit",
+                "remainingFraction": 0.001,
+                "resetTime": WEEK_RESET
+            }
+        ]}]});
+        let limits = local_api::wire::parse_rate_limits(&body.to_string(), observed_at()).unwrap();
+        assert_eq!(limits.windows[0].used_percentage, None);
+        assert_eq!(limits.windows[0].resets_at, None);
+        assert_eq!(limits.windows[1].used_percentage, Some(99));
+
+        let exhausted = json!({"groups": [{"buckets": [{
+            "bucketId": "gemini-weekly",
+            "remainingFraction": 0,
+            "resetTime": WEEK_RESET
+        }]}]});
+        let limits =
+            local_api::wire::parse_rate_limits(&exhausted.to_string(), observed_at()).unwrap();
+        assert_eq!(limits.windows.len(), 1);
+        assert_eq!(limits.windows[0].used_percentage, Some(100));
+    }
+
+    #[test]
+    fn quota_rejects_malformed_recognized_usage_and_unknown_only_payloads() {
+        for bucket in [
+            json!({"bucketId": "gemini-5h", "remainingFraction": -0.1, "resetTime": FIVE_HOUR_RESET}),
+            json!({"bucketId": "gemini-5h", "remainingFraction": 1.1, "resetTime": FIVE_HOUR_RESET}),
+            json!({"bucketId": "gemini-5h", "remainingFraction": 0.5, "resetTime": "invalid"}),
+            json!({"bucketId": "gemini-5h", "remainingFraction": 0.5, "resetTime": OBSERVED_AT}),
+        ] {
+            let body = json!({"groups": [{"buckets": [
+                bucket,
+                {"bucketId": "3p-5h", "remainingFraction": 0.9, "resetTime": FIVE_HOUR_RESET}
+            ]}]});
+            assert!(local_api::wire::parse_rate_limits(&body.to_string(), observed_at()).is_err());
+        }
+
+        let unknown = json!({"groups": [{"buckets": [{
+            "bucketId": "legacy-model-quota",
+            "remainingFraction": 0.5,
+            "resetTime": FIVE_HOUR_RESET
+        }]}]});
+        assert!(local_api::wire::parse_rate_limits(&unknown.to_string(), observed_at()).is_err());
+    }
+
+    #[test]
+    fn adapter_keeps_dollars_credits_and_oauth_unsupported() {
+        assert!(!AntigravityAdapter.descriptor().capabilities.account_spend);
+        assert!(matches!(
+            AntigravityAdapter.probe_oauth_usage(),
+            crate::agents::OauthUsageProbe::Unsupported
+        ));
+        assert_eq!(AntigravityAdapter.oauth_credentials_stamp(), None);
+        assert_eq!(AntigravityAdapter.oauth_account_key(), None);
+        assert_eq!(AntigravityAdapter.probe_version(), None);
+    }
 }
 
 fn write_transcript(home: &Path, session_id: &str) -> std::path::PathBuf {

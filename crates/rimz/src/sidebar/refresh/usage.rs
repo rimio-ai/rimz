@@ -443,6 +443,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn metered_antigravity_panel_schedules_shared_usage_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let mut snapshot = SidebarSnapshot::build_with_agents(
+            workspace,
+            vec![AgentState::stub("antigravity", "agy-1", AgentStatus::Idle)],
+            Timestamp::now(),
+        );
+        snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
+            "antigravity",
+            Vec::new(),
+        )];
+
+        let mut spawned = Vec::new();
+        refresh_account_usage_with(&snapshot, &runtime, |_, kind, merge_windows| {
+            spawned.push((kind.to_owned(), merge_windows));
+        });
+
+        assert_eq!(spawned, vec![("antigravity".to_owned(), true)]);
+        assert!(usage_probe_marker(&runtime, "antigravity").exists());
+    }
+
     fn snapshot_with_agent(agent: AgentState) -> SidebarSnapshot {
         SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(std::path::Path::new("/tmp/usage-refresh")),

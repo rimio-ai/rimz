@@ -2,7 +2,7 @@
 
 > The agent-agnostic boundary and state machine are in [model.md](./model.md). The pinned upstream surface and live 1.1.2 evidence are in [antigravity-reference.md](../../externals/agent-adapter/antigravity-reference.md).
 
-Antigravity support targets `agy` 1.1.2. RimZ owns stock interactive launch, permission-mode flags, model presets, exact conversation resume, process identity, safe lifecycle hooks, custom-statusline context, validated local-session discovery, transcript history, assistant streaming, and supervised completion.
+Antigravity support targets `agy` 1.1.2. RimZ owns stock interactive launch, permission-mode flags, model presets, exact conversation resume, process identity, safe lifecycle hooks, custom-statusline context, validated local-session discovery, idle account and quota enrichment, transcript history, assistant streaming, and supervised completion.
 
 ## Launch, resume, and presence
 
@@ -30,7 +30,7 @@ Reads preserve physical order, tolerate unknown complete records, and retain a t
 
 Discovery folds a bounded tail; the first `PreInvocation` reads the same bounded tail to carry the latest completed, visible, sanitized user prompt into the turn, while later lifecycle hooks stay free of transcript reads. Full history and incremental assistant output use the adapter-normalized transcript path.
 
-The pulled records remain a cold-start and history fallback. Installed hooks own live turn state; the statusline owns model, account, and context usage.
+The pulled records remain a cold-start and history fallback. Installed hooks own live turn state; the statusline owns live model, account, and context usage, while the local service supplies account and quota between turns.
 
 ## Hooks and rich state
 
@@ -45,5 +45,13 @@ The statusline wrapper forwards the user's prior command and maps the official p
 When the model and current usage are priceable, the wrapper prices input, output, cache creation, and cache read as disjoint values into the ordinary live `AgentCost.total_cost_usd` slot with a `DisplayEstimate` basis. Canonical IDs use the shared price resolver; a captured selector label with a recognized reasoning qualifier strips that qualifier and tries only normalized exact-table keys. The card and `agents show` render the API-rate value as `≈$`; its point-in-time shape excludes it from room/provider aggregates, budgets, provider history, account spend, and `rimz stats`.
 
 `tool_confirmation_pending` adds a timestamped read-only permission marker: while it is newer than lifecycle activity, the sidebar projects the running card to waiting and routes focus to its pane; a later post-tool/turn hook self-clears a missed false refresh. This marker creates no durable ask and sends no decision to Antigravity. The wrapper emits no display text when no prior command exists and sets `stack_with_default` so Antigravity keeps its built-in line.
+
+## Account and quota
+
+The producer reads account identity and quota from the private Connect service of an already-running `agy` process. Discovery accepts only an exact `agy` executable and `argv[0]` owned by the current uid, intersects that process's owned listening sockets with loopback listeners, rechecks the process start identity before every connection, and applies strict attempt, response-size, and total deadlines. The service uses HTTPS with a self-signed certificate; certificate verification is relaxed only inside this client after the process, uid, socket ownership, and loopback checks pass.
+
+`GetUserStatus` supplies trimmed account email and the native user tier or plan label, and `RetrieveUserQuotaSummary` supplies quota fractions and reset times. Both readings are best-effort enrichment: RimZ starts no helper, reads no credential or OAuth token, sends no pane command, and keeps the last shared account/window cache when the service is absent or malformed. Antigravity's binary version probe abstains rather than invoking `agy --version`, so account refresh cannot disturb the TUI or spawn a second process.
+
+The native response can contain per-model quota buckets. RimZ recognizes only explicit five-hour and weekly periods, then folds every enabled bucket in each period into one conservative account window: the smallest remaining fraction wins, ties take the later reset, and model identity breaks a full tie stably. A missing or disabled recognized period stays an unknown `5h` or `7d` track; an unknown period is ignored; any malformed recognized fraction or reset rejects the whole reading. These authoritative windows feed the shared provider cache and normal window fusion without inventing AI credits or dollars.
 
 With hooks installed, `rimz agents antigravity -p` completes from `Stop` and reads the final visible assistant response from the hook-provided transcript. Permission wait detail, durable asks, artifact waits, structured answers, cumulative session/provider billing, account spend, compaction, identified subagent rows, and remote control remain unsupported. Answer native prompts in the Antigravity pane.

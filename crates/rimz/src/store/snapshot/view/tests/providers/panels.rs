@@ -308,6 +308,55 @@ fn idle_provider_presence_requires_account_substance() {
     assert_eq!(provider_kinds(&live), vec!["kimi"]);
 }
 
+#[test]
+fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
+    let mut account = AgentAccount {
+        plan: Some("Google AI Ultra".to_owned()),
+        account_id: Some("user@example.com".to_owned()),
+        metered: Some(true),
+        ..Default::default()
+    };
+    let mut accounts = BTreeMap::from([("antigravity".to_owned(), account.clone())]);
+    let initial =
+        room(Vec::new()).with_provider_aggregates(&accounts, &BTreeMap::new(), &BTreeMap::new());
+    let panel = initial.providers.first().expect("account-only panel");
+    assert_eq!(panel.kind, "antigravity");
+    assert!(panel.metered);
+    assert!(panel.windows.is_empty());
+
+    let now = initial.now;
+    let agent = agent("antigravity", "agy-1", AgentStatus::Idle, 10).limits(vec![
+        RateLimitWindow {
+            used_percentage: Some(70),
+            resets_at: now.checked_add(jiff::SignedDuration::from_hours(4)).ok(),
+            duration_mins: Some(300),
+            source: crate::agents::context::WindowSource::Authoritative,
+            ..Default::default()
+        },
+        RateLimitWindow {
+            used_percentage: Some(60),
+            resets_at: now.checked_add(jiff::SignedDuration::from_hours(120)).ok(),
+            duration_mins: Some(10_080),
+            source: crate::agents::context::WindowSource::Authoritative,
+            ..Default::default()
+        },
+    ]);
+    account.plan = None;
+    accounts.insert("antigravity".to_owned(), account);
+    let with_quota =
+        room(vec![agent]).with_provider_aggregates(&accounts, &BTreeMap::new(), &BTreeMap::new());
+    let panel = with_quota.providers.first().expect("live panel");
+    assert!(panel.metered);
+    assert_eq!(
+        panel
+            .windows
+            .iter()
+            .map(|window| (window.duration_mins, window.used_percentage))
+            .collect::<Vec<_>>(),
+        vec![(Some(300), Some(70)), (Some(10_080), Some(60))]
+    );
+}
+
 fn provider_sessions(
     entries: impl IntoIterator<Item = (&'static str, u32, u32, u32)>,
 ) -> BTreeMap<String, SpendTally> {

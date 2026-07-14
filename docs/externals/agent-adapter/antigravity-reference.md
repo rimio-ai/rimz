@@ -10,7 +10,7 @@ Coverage is **depth on viable RimZ inputs, breadth as an index**. Google publish
 
 This reference was refreshed on 2026-07-13 against an installed Antigravity CLI `1.1.2`, its embedded hook/statusline documentation, and Google's living documentation. The [`1.1.1`](https://github.com/google-antigravity/antigravity-cli/releases/tag/1.1.1) tag at commit [`b5578c4bbeae95fd9be14d14ac61563bd9f20363`](https://github.com/google-antigravity/antigravity-cli/tree/b5578c4bbeae95fd9be14d14ac61563bd9f20363) remains the latest public source snapshot used for repository examples; the distributed CLI implementation is not published there.
 
-RimZ's typed fixtures target Antigravity CLI 1.1.2. The adapter keeps tolerant readers for additive fields and `rimz doctor` reports detected version drift; refresh this reference and its fixtures when Google changes hook decisions, config locations, or payload semantics.
+RimZ's typed fixtures target Antigravity CLI 1.1.2. The adapter keeps tolerant readers for additive fields; refresh this reference and its fixtures when Google changes hook decisions, config locations, payload semantics, or the private local-service wire. The local-service account probe deliberately abstains from running `agy --version`, because a version command is not a safe idle-enrichment precondition for this TUI.
 
 Google's website documentation is a living surface without versioned snapshots. The installed 1.1.2 embedded documentation wins for executable hook behavior, while the 1.1.1 tagged examples remain provenance for unchanged examples; every known conflict stays visible in [Documentation drift](#documentation-drift).
 
@@ -44,7 +44,7 @@ The initial RimZ integration target is **Antigravity CLI**, because it owns a st
 
 ## Adapter feasibility at a glance
 
-Antigravity exposes enough official surface for a useful adapter, but not enough to implement every RimZ capability. The landed adapter owns process/launch/resume, validated local conversation discovery, transcript history and question waits, safe command hooks, custom-statusline context and live API-rate estimates, background parking, and supervised completion. Policy-changing pre-tool decisions, artifact waits, stable child identities, quota, provider-history/account spend, and remote control remain outside the verified boundary.
+Antigravity exposes enough official surface for a useful adapter, plus a version-sensitive private local service observed in a running CLI. The landed adapter owns process/launch/resume, validated local conversation discovery, transcript history and question waits, safe command hooks, custom-statusline context and live API-rate estimates, background parking, supervised completion, and read-only account/quota enrichment. Policy-changing pre-tool decisions, artifact waits, stable child identities, credits, provider-history/account spend, and remote control remain outside the verified boundary.
 
 | RimZ need | Antigravity surface | Verdict |
 | --- | --- | --- |
@@ -64,8 +64,8 @@ Antigravity exposes enough official surface for a useful adapter, but not enough
 | Transcript/history | official hook path plus captured 1.1.1 text records | basic root user/assistant history landed; all other records remain unknown |
 | Durable conversation store | 1.1.1 changelog says SQLite is the CLI conversation format | format known, schema and authoritative path unpublished |
 | Compaction | no documented hook, command, or marker | unsupported until verified |
-| Account identity | statusline `email` and `plan_tier` | direct live enrichment; treat email as private |
-| Quota and credits | interactive `/usage`/`/quota` and `/credits` panels | no documented machine-readable API |
+| Account identity | statusline `email` and `plan_tier`; private local `GetUserStatus` | direct live plus version-sensitive idle enrichment; treat email as private |
+| Quota and credits | private local `RetrieveUserQuotaSummary`; interactive `/usage`/`/quota` and `/credits` panels | conservative 5h/weekly quota windows landed; credits remain unsupported |
 | Session spend | statusline current token split plus exact model ID; no documented cumulative billing record | partial live API-rate estimate only |
 | Supervised `-p` runs | stock interactive prompt, `Stop`, and transcript final response | RimZ supervised hook transport landed; native headless mode remains separate |
 | Native resume | `--conversation <UUID>`; `-c`/`--continue` for workspace latest | direct |
@@ -519,7 +519,7 @@ Antigravity is multi-model. The captured 1.1.2 selector lists `Gemini 3.5 Flash 
 
 The CLI authenticates through the OS secure keyring (Apple Keychain, Linux Secret Service/D-Bus, or Windows Credential Manager), silently reusing a session and falling back to browser Google Sign-In. SSH launches use a URL-and-code OAuth flow. `/logout` purges the saved authentication profile.
 
-No credential file or stable machine-readable auth command is documented. Do not scrape or export keyring tokens. While a pane is live, statusline `email` and `plan_tier` can populate best-effort account identity; discard or redact email outside the account cache and diagnostics according to RimZ privacy policy. `AGY_CLI_HIDE_ACCOUNT_INFO` hides header presentation but the official docs do not say it removes those statusline fields, so verify rather than assuming.
+No credential file or stable machine-readable auth command is documented. Do not scrape or export keyring tokens. While a pane is live, statusline `email` and `plan_tier` populate best-effort account identity; while the same user's `agy` process is already running, its private local service can return email and the native user tier or plan label through `GetUserStatus`. Discard or redact email outside the account cache and diagnostics according to RimZ privacy policy. `AGY_CLI_HIDE_ACCOUNT_INFO` hides header presentation but the official docs do not say it removes those statusline or local-service fields, so verify rather than assuming.
 
 ### Quota and credits
 
@@ -527,7 +527,11 @@ No credential file or stable machine-readable auth command is documented. Do not
 
 Plans provide baseline quota with plan-dependent five-hour and/or weekly refresh behavior, and optional AI-credit overages for eligible paid plans. Google explicitly says quota is capacity-dependent and measured by work rather than a stable prompt or token count. Do not synthesize RimZ `RateLimitWindow`s from plan prose.
 
-Account quota/credits stay unsupported until Google publishes a machine API or a read-only live capture identifies stable, non-secret fields with reset times and semantics.
+The distributed CLI exposes a private Connect-over-HTTPS service on process-owned loopback sockets. This surface is undocumented by Google and therefore version-sensitive; its wire and discovery were cross-checked against CodexBar commit [`b41715f`](https://github.com/steipete/CodexBar/tree/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8), specifically the pinned [`AntigravityStatusProbe`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe.swift), [`AntigravityStatusProbe+PortDetection`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe%2BPortDetection.swift), and [`AntigravityQuotaSummaryParser`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityQuotaSummaryParser.swift).
+
+RimZ POSTs `{}` to `/exa.language_server_pb.LanguageServerService/GetUserStatus` and `{"forceRefresh":true}` to `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`, with `Content-Type: application/json` and `Connect-Protocol-Version: 1`. It accepts only an exact current-uid `agy` executable and `argv[0]`, intersects that process's owned sockets with loopback listeners, and revalidates the process start identity immediately before connecting. The client starts no process, reads no credential, follows no redirect, applies bounded deadlines and body size, and accepts the service's self-signed certificate only after those process/socket checks.
+
+The quota response can wrap its summary at the root, under `response`, or under `summary`, and can encode a remaining fraction directly, nested, or through an observed oneof shape. RimZ recognizes only explicit five-hour and weekly period labels/IDs; every enabled native model bucket in a period folds to the smallest remaining fraction, with later reset and stable model identity breaking ties. A missing or disabled recognized period stays an unknown window, unknown periods are ignored, and any malformed recognized fraction or nonfuture reset rejects the reading. The normalized `5h` and `7d` windows are authoritative account quota; AI credits and dollars remain unknown.
 
 ### Spend
 
@@ -684,9 +688,9 @@ Run the remaining probes with a temporary HOME and throwaway Git workspace again
 - Verify `-p` stdout/stderr and exit codes for success, provider error, permission required, timeout, SIGINT, empty answer, resume, and sandbox.
 - Verify whether a prompt supplied by stdin has any supported form; RimZ should pass the prompt flag until a contract exists.
 - Confirm the final answer contains only the new response on resumed print runs.
-- Treat `/usage` and `/credits` as TUI-only until a documented non-secret read channel is found; do not scrape pane text into account truth.
+- Re-capture `GetUserStatus` and `RetrieveUserQuotaSummary` envelopes, success codes, period labels, fractions, and reset fields against each supported CLI release; keep `/credits` TUI-only and do not scrape pane text into account truth.
 - Verify statusline context token semantics across turns, model changes, cache reads, and any implicit compaction before using totals for anything beyond live context.
 
 ### Conformance target
 
-The landed descriptor claims only what the current fixtures prove: lazy pulled registration; interactive launch; exact resume; model preset; ask/auto/plan/yolo launch mappings; basic text transcript history and streaming; and partial pulled text-turn state. Supervised runs, hook-driven lifecycle/tool/wait signals, live context, session spend, quota, native fork, compaction, remote control, structured answers, and subagent rows remain unsupported. Promote each capability in the same commit that adds its typed parser, fixture, mapping, and conformance case.
+The landed descriptor claims only what the current fixtures prove: lazy pulled registration; interactive launch; exact resume; model preset; ask/auto/plan/yolo launch mappings; basic text transcript history and streaming; partial pulled text-turn state; safe hook-driven lifecycle/tool/wait signals; live context; supervised runs; and private-service account/quota enrichment. Cumulative session/account spend, credits, native fork, compaction, remote control, structured answers, and subagent rows remain unsupported. Promote each capability in the same commit that adds its typed parser, fixture, mapping, and conformance case.

@@ -5,6 +5,7 @@
 //! `PostToolUse` matchers recover tool phase after execution instead.
 
 mod install;
+mod local_api;
 mod payloads;
 mod session;
 mod statusline;
@@ -99,7 +100,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         hook_install: true,
         implicit_unlimited_window_mins: &[],
         realtime_usage: RealtimeUsageChannel {
-            covers_account_while_live: false,
+            covers_account_while_live: true,
             windows_defer_to_fresh_realtime: false,
         },
         remote_control: RemoteControlCapability {
@@ -200,7 +201,7 @@ const ANTIGRAVITY_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::RichContext,
         ConcernCoverage::Wired {
-            via: "custom statusline model, version, plan, account, and token context",
+            via: "custom statusline context plus local account identity and subscription quota",
         },
     ),
     (
@@ -300,6 +301,29 @@ pub struct AntigravityAdapter;
 impl AgentAdapter for AntigravityAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &ANTIGRAVITY_DESCRIPTOR
+    }
+
+    fn probe_account(&self) -> super::account::AccountProbe {
+        local_api::probe_account()
+            .map(super::account::AccountProbe::Found)
+            .unwrap_or(super::account::AccountProbe::Unavailable)
+    }
+
+    fn probe_realtime_account_usage(
+        &self,
+        _runtime: &crate::RuntimePaths,
+    ) -> Option<super::RealtimeAccountUsage> {
+        local_api::probe_rate_limits()
+            .ok()
+            .map(|rate_limits| super::RealtimeAccountUsage {
+                rate_limits: Some(rate_limits),
+                extra_credits: None,
+                reset_credits: None,
+            })
+    }
+
+    fn probe_version(&self) -> Option<String> {
+        None
     }
 
     #[cfg(test)]

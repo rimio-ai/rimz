@@ -190,6 +190,7 @@ impl StatuslinePayload {
         let account = (plan.is_some() || account_id.is_some()).then(|| AgentAccount {
             plan,
             account_id,
+            metered: Some(true),
             ..AgentAccount::default()
         });
         AgentContext {

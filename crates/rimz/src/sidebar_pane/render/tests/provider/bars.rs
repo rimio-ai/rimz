@@ -464,6 +464,50 @@ fn api_key_provider_uses_month_spend_bar_with_optional_ceiling() {
 }
 
 #[test]
+fn antigravity_metered_unknown_and_quota_rows_never_render_as_api() {
+    let theme = Theme::fixed(true);
+    let mut panel = provider_panel("antigravity", "Antigravity", 33, true, false, None);
+    let initial = metered_bar_rows(&theme, &panel);
+    assert_eq!(initial.len(), 1);
+    let initial_text = initial[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(
+        !initial_text.trim_start().starts_with("api"),
+        "{initial_text:?}"
+    );
+
+    panel.windows = vec![
+        RateLimitWindow {
+            used_percentage: Some(70),
+            duration_mins: Some(300),
+            ..Default::default()
+        },
+        RateLimitWindow {
+            used_percentage: Some(60),
+            duration_mins: Some(10_080),
+            ..Default::default()
+        },
+    ];
+    let rows = metered_bar_rows(&theme, &panel);
+    let labels = rows
+        .iter()
+        .map(|row| row.spans.first().unwrap().content.trim().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["5h", "7d"]);
+    assert!(rows.iter().all(|row| {
+        !row.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+            .trim_start()
+            .starts_with("api")
+    }));
+}
+
+#[test]
 fn provider_window_states_control_countdowns_and_empty_tracks() {
     let theme = Theme::fixed(false);
     let now = fixed_now();
