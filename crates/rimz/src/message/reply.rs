@@ -465,6 +465,7 @@ impl Leg {
         ReplyResult {
             label: self.target.label.clone(),
             message_id: self.message_id.clone(),
+            // Results are constructed only from indices marked settled.
             status: self.done.expect("settled reply leg has status"),
             final_message: self.last_message.clone(),
             failure: self.failure.clone(),

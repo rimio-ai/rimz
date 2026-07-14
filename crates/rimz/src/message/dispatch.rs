@@ -241,6 +241,7 @@ pub fn dispatch(
         )
     });
     let mut snapshot = if rollup_only {
+        // Rollup-only is computed solely from the cached snapshot above.
         cached_snapshot.expect("rollup-only proof requires cached snapshot")
     } else {
         crate::sidebar::produce::resolution_snapshot(workspace, store, request.mux)?
@@ -316,6 +317,7 @@ pub fn dispatch(
     let (outcomes, compacted) = dispatch_targets(&mut state, &targets, &text, &mode)?;
     let reply = reply_preparation
         .map(|preparation| {
+            // Preparation exists only when the same request supplied a join mode.
             preparation.attach(
                 &outcomes,
                 mode.steer,
@@ -616,6 +618,7 @@ fn resolve_after(
                 &request.address,
                 &request.address,
             )?;
+            // Condition target resolution rejects pane-only targets.
             let agent = target.agent.as_ref().expect("condition target validated");
             if recipients.iter().any(|recipient| {
                 recipient.agent.as_ref().is_some_and(|recipient| {
@@ -669,6 +672,7 @@ fn resolve_when(
                 &request.address,
                 &request.expression,
             )?;
+            // Condition target resolution rejects pane-only targets.
             let agent = target.agent.as_ref().expect("condition target validated");
             let mut condition = WhenCondition {
                 kind: agent.kind.clone(),
@@ -726,6 +730,7 @@ fn resolve_condition_target(
         }
         .into());
     }
+    // Arity was checked immediately above.
     let target = targets.into_iter().next().expect("one condition target");
     if target.agent.is_none() {
         return Err(ConditionErr::NoLifecycle {
