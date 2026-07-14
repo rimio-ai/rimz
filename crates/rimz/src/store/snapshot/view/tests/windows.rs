@@ -64,12 +64,12 @@ fn fresh_windows_keep_named_quotas_and_same_duration_scopes_independent() {
         ..Default::default()
     };
     let first = reading([
-        scoped("premium_interactions", "prm", 20, None),
-        scoped("chat", "cht", 70, None),
+        scoped("build_minutes", "bld", 20, None),
+        scoped("deployments", "dep", 70, None),
     ]);
     let second = reading([
-        scoped("premium_interactions", "prm", 60, None),
-        scoped("chat", "cht", 30, None),
+        scoped("build_minutes", "bld", 60, None),
+        scoped("deployments", "dep", 30, None),
     ]);
     let windows = fresh_windows([&first, &second].into_iter(), epoch());
     assert_eq!(windows.len(), 2);
@@ -79,7 +79,7 @@ fn fresh_windows_keep_named_quotas_and_same_duration_scopes_independent() {
             .find(|window| window
                 .scope
                 .as_ref()
-                .is_some_and(|scope| scope.id == "premium_interactions"))
+                .is_some_and(|scope| scope.id == "build_minutes"))
             .and_then(|window| window.used_percentage),
         Some(60)
     );
@@ -89,14 +89,14 @@ fn fresh_windows_keep_named_quotas_and_same_duration_scopes_independent() {
             .find(|window| window
                 .scope
                 .as_ref()
-                .is_some_and(|scope| scope.id == "chat"))
+                .is_some_and(|scope| scope.id == "deployments"))
             .and_then(|window| window.used_percentage),
         Some(70)
     );
 
     let same_duration = reading([
-        scoped("premium_interactions", "prm", 10, Some(300)),
-        scoped("chat", "cht", 20, Some(300)),
+        scoped("build_minutes", "bld", 10, Some(300)),
+        scoped("deployments", "dep", 20, Some(300)),
     ]);
     assert_eq!(
         fresh_windows([&same_duration].into_iter(), epoch()).len(),

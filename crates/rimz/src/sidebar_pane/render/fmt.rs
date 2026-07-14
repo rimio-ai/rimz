@@ -339,12 +339,12 @@ mod tests {
         assert_eq!(
             window_label(&RateLimitWindow {
                 scope: Some(crate::agents::RateLimitWindowScope {
-                    id: "premium".to_owned(),
-                    label: "prmium".to_owned(),
+                    id: "build_minutes".to_owned(),
+                    label: "bld-minutes".to_owned(),
                 }),
                 ..Default::default()
             }),
-            "prm"
+            "bld"
         );
     }
 

@@ -143,8 +143,8 @@ fn durationless_scoped_quotas_do_not_drive_temporal_decisions() {
     let now = Timestamp::from_second(1_000_000).unwrap();
     let mut window = surplus_window(now, Some(50), 86_400, None);
     window.scope = Some(crate::agents::RateLimitWindowScope {
-        id: "premium_interactions".to_owned(),
-        label: "prm".to_owned(),
+        id: "build_minutes".to_owned(),
+        label: "bld".to_owned(),
     });
     let cache = rate_limits(vec![window]);
 

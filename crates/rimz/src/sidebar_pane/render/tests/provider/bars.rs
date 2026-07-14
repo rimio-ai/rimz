@@ -435,7 +435,7 @@ fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
         id: id.to_owned(),
         label: label.to_owned(),
     };
-    let mut panel = provider_panel("copilot", "Copilot", 140, true, false, None);
+    let mut panel = provider_panel("plugin", "Plugin", 140, true, false, None);
     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
         None,
         Some(10.0),
@@ -443,13 +443,13 @@ fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
     ));
     panel.windows = vec![
         RateLimitWindow {
-            scope: Some(scope("premium_interactions", "prm")),
+            scope: Some(scope("build_minutes", "bld")),
             used_percentage: Some(100),
             resets_at: Some(now + Duration::from_secs(4 * 3_600)),
             ..Default::default()
         },
         RateLimitWindow {
-            scope: Some(scope("chat", "cht")),
+            scope: Some(scope("deployments", "dep")),
             used_percentage: Some(20),
             resets_at: Some(now + Duration::from_secs(4 * 3_600)),
             ..Default::default()
@@ -467,16 +467,16 @@ fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
                 .collect::<String>()
         })
         .collect::<Vec<_>>();
-    assert!(texts[0].trim_start().starts_with("prm"), "{:?}", texts);
-    assert!(texts[1].trim_start().starts_with("cht"), "{:?}", texts);
+    assert!(texts[0].trim_start().starts_with("bld"), "{:?}", texts);
+    assert!(texts[1].trim_start().starts_with("dep"), "{:?}", texts);
     assert!(
         !texts[0].contains('▰'),
-        "spent premium has no fill: {:?}",
+        "spent build quota has no fill: {:?}",
         texts
     );
     assert!(
         texts[1].contains('▰'),
-        "spent premium cannot paint chat exhausted: {:?}",
+        "spent build quota cannot paint deployments exhausted: {:?}",
         texts
     );
     assert!(texts.iter().all(|text| text.contains("↻  4h00m")));
@@ -490,7 +490,7 @@ fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(unlimited.starts_with("prm"));
+    assert!(unlimited.starts_with("bld"));
     assert!(unlimited.contains('∞'));
 }
 

@@ -795,8 +795,8 @@ mod tests {
     fn scoped_window_identity_projection_and_wire_round_trip() {
         let now = Timestamp::from_second(2_000_000_000).unwrap();
         let scope = RateLimitWindowScope {
-            id: "premium_interactions".to_owned(),
-            label: "prm".to_owned(),
+            id: "build_minutes".to_owned(),
+            label: "bld".to_owned(),
         };
         let window = RateLimitWindow {
             scope: Some(scope.clone()),
@@ -807,13 +807,13 @@ mod tests {
         };
         assert_eq!(
             window.key(),
-            RateLimitWindowKey::Scope("premium_interactions".to_owned())
+            RateLimitWindowKey::Scope("build_minutes".to_owned())
         );
         assert_eq!(window.clone().projected_at(now), window);
 
         let encoded = serde_json::to_value(&window).unwrap();
-        assert_eq!(encoded["scope"]["id"], "premium_interactions");
-        assert_eq!(encoded["scope"]["label"], "prm");
+        assert_eq!(encoded["scope"]["id"], "build_minutes");
+        assert_eq!(encoded["scope"]["label"], "bld");
         assert_eq!(
             serde_json::from_value::<RateLimitWindow>(encoded).unwrap(),
             window
@@ -835,8 +835,8 @@ mod tests {
         let now = Timestamp::from_second(2_000_000_000).unwrap();
         let scoped = |reset| RateLimitWindow {
             scope: Some(RateLimitWindowScope {
-                id: "chat".to_owned(),
-                label: "cht".to_owned(),
+                id: "deployments".to_owned(),
+                label: "dep".to_owned(),
             }),
             used_percentage: Some(20),
             resets_at: Some(reset),

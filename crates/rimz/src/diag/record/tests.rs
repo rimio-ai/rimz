@@ -638,21 +638,18 @@ fn renderer_exit_envelope_serializes_schema_cause_and_severity() {
 
 #[test]
 fn provider_mana_identity_prefers_scope_and_keeps_legacy_duration_wire() {
-    let premium = AggregateKey::ProviderMana {
-        kind: "copilot".to_owned(),
-        scope_id: Some("premium_interactions".to_owned()),
+    let build = AggregateKey::ProviderMana {
+        kind: "plugin".to_owned(),
+        scope_id: Some("build_minutes".to_owned()),
         duration_mins: None,
     };
-    let chat = AggregateKey::ProviderMana {
-        kind: "copilot".to_owned(),
-        scope_id: Some("chat".to_owned()),
+    let deployment = AggregateKey::ProviderMana {
+        kind: "plugin".to_owned(),
+        scope_id: Some("deployments".to_owned()),
         duration_mins: None,
     };
-    assert_ne!(premium.identity(), chat.identity());
-    assert_eq!(
-        premium.identity(),
-        "provider_mana:copilot:scope:premium_interactions"
-    );
+    assert_ne!(build.identity(), deployment.identity());
+    assert_eq!(build.identity(), "provider_mana:plugin:scope:build_minutes");
 
     let legacy: AggregateKey = serde_json::from_value(serde_json::json!({
         "aggregate": "provider_mana",
