@@ -320,6 +320,7 @@ mod tests {
             cost,
             AgentCost {
                 total_cost_usd: cost.total_cost_usd,
+                estimated: true,
                 ..AgentCost::default()
             }
         );
