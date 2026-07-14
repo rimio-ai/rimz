@@ -90,6 +90,13 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
         credits["entries"]["claude"]["extra_credits"]["known"]["limit_usd"],
         50.0
     );
+    assert_eq!(
+        credits["entries"]["claude"]["account_key"]
+            .as_str()
+            .map(str::len),
+        Some(64)
+    );
+    assert_ne!(credits["entries"]["claude"]["account_key"], "claude-token");
     let limits = read_json(runtime.shared_rate_limits_path());
     assert_eq!(
         limits["windows"]["claude"]["windows"][0]["used_percentage"],
@@ -238,6 +245,7 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
         credits["entries"]["codex"]["extra_credits"]["known"]["remaining_usd"],
         18.5
     );
+    assert_eq!(credits["entries"]["codex"]["account_key"], "acc_123");
     let limits = read_json(runtime.shared_rate_limits_path());
     assert_eq!(
         limits["windows"]["codex"]["windows"][0]["used_percentage"],
