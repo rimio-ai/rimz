@@ -12,6 +12,8 @@ mod paths;
 pub(crate) mod payloads;
 mod transcript;
 
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -683,6 +685,16 @@ impl AgentAdapter for CopilotAdapter {
         )]
     }
 
+    fn room_env(&self, runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {
+        room_env_from(
+            runtime,
+            std::env::var_os("COPILOT_OTEL_FILE_EXPORTER_PATH").as_deref(),
+            std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").as_deref(),
+            std::env::var_os("COPILOT_OTEL_EXPORTER_TYPE").as_deref(),
+            std::env::var_os("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT").as_deref(),
+        )
+    }
+
     fn install_hooks(&self) -> Result<HookInstallReport> {
         COPILOT_MANAGED_SOURCE.install_into(&paths::hooks_path()?)
     }
@@ -706,6 +718,50 @@ impl AgentAdapter for CopilotAdapter {
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
     }
+}
+
+fn room_env_from(
+    runtime: &crate::store::RuntimePaths,
+    explicit_file: Option<&OsStr>,
+    otlp_endpoint: Option<&OsStr>,
+    exporter_type: Option<&OsStr>,
+    capture_content: Option<&OsStr>,
+) -> BTreeMap<String, String> {
+    let mut ambient = BTreeMap::new();
+    for (key, value) in [
+        ("COPILOT_OTEL_FILE_EXPORTER_PATH", explicit_file),
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", otlp_endpoint),
+        ("COPILOT_OTEL_EXPORTER_TYPE", exporter_type),
+        (
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+            capture_content,
+        ),
+    ] {
+        if let Some(value) = value.filter(|value| !value.is_empty()) {
+            ambient.insert(key.to_owned(), value.to_string_lossy().into_owned());
+        }
+    }
+    if ambient.contains_key("COPILOT_OTEL_FILE_EXPORTER_PATH") {
+        return ambient;
+    }
+
+    if paths::otlp_only_config(otlp_endpoint, exporter_type) {
+        tracing::warn!(
+            "Copilot direct-launch enrichment is unavailable because an OTLP exporter is configured; set COPILOT_OTEL_FILE_EXPORTER_PATH to retain a file source"
+        );
+        return ambient;
+    }
+
+    BTreeMap::from([
+        (
+            "COPILOT_OTEL_FILE_EXPORTER_PATH".to_owned(),
+            runtime.copilot_otel_path().to_string_lossy().into_owned(),
+        ),
+        (
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT".to_owned(),
+            "false".to_owned(),
+        ),
+    ])
 }
 
 #[cfg(test)]

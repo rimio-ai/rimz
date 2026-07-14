@@ -12,19 +12,49 @@ fn ensure_session_applies_room_contract() {
         "a fresh private socket starts with no sessions",
     );
     let cwd = TempDir::new().expect("cwd tempdir");
-    server
-        .backend
-        .ensure_session(&SessionOptions {
-            truecolor: true,
-            ..session_opts(
-                "rimz-options",
-                WorkspaceId::from_project_root(cwd.path()),
-                cwd.path(),
-                cwd.path(),
-                None,
-            )
-        })
-        .expect("ensure");
+    let workspace_id = WorkspaceId::from_project_root(cwd.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), &cwd.path().join("runtime"))
+        .expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let shim_dir = TempDir::new().expect("shim tempdir");
+    let marker = cwd.path().join("copilot-env.txt");
+    let copilot = shim_dir.path().join("copilot");
+    std::fs::write(
+        &copilot,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$COPILOT_OTEL_FILE_EXPORTER_PATH\" \"$OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT\" > '{}'\n",
+            marker.display()
+        ),
+    )
+    .expect("write copilot shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&copilot, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod copilot shim");
+    }
+    let extra_env = BTreeMap::from([
+        (
+            "COPILOT_OTEL_FILE_EXPORTER_PATH".to_owned(),
+            runtime.copilot_otel_path().to_string_lossy().into_owned(),
+        ),
+        (
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT".to_owned(),
+            "false".to_owned(),
+        ),
+    ]);
+    let opts = SessionOptions {
+        truecolor: true,
+        extra_env,
+        ..session_opts(
+            "rimz-options",
+            workspace_id.clone(),
+            cwd.path(),
+            cwd.path(),
+            None,
+        )
+    };
+    server.backend.ensure_session(&opts).expect("ensure");
     assert_eq!(server.show_option(&["-s"], "escape-time"), "0");
     assert_eq!(server.show_option(&["-s"], "extended-keys"), "on");
     let terminal_features = server.show_option(&["-s"], "terminal-features");
@@ -82,11 +112,7 @@ fn ensure_session_applies_room_contract() {
     let pin = show_session_environment(&server, "rimz-options", rimz::workspace::ENV_WORKSPACE_ID);
     assert_eq!(
         pin,
-        format!(
-            "{}={}",
-            rimz::workspace::ENV_WORKSPACE_ID,
-            WorkspaceId::from_project_root(cwd.path()),
-        ),
+        format!("{}={}", rimz::workspace::ENV_WORKSPACE_ID, workspace_id,),
     );
     let root = show_session_environment(&server, "rimz-options", rimz::workspace::ENV_PROJECT_ROOT);
     assert_eq!(
@@ -100,6 +126,61 @@ fn ensure_session_applies_room_contract() {
     assert_eq!(
         show_session_environment(&server, "rimz-options", "COLORTERM"),
         "COLORTERM=truecolor",
+    );
+    assert_eq!(
+        show_session_environment(&server, "rimz-options", "COPILOT_OTEL_FILE_EXPORTER_PATH"),
+        format!(
+            "COPILOT_OTEL_FILE_EXPORTER_PATH={}",
+            runtime.copilot_otel_path().display()
+        ),
+    );
+    assert_eq!(
+        show_session_environment(
+            &server,
+            "rimz-options",
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+        ),
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false",
+    );
+
+    let work_pane = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-options".to_owned()),
+            ..Default::default()
+        })
+        .expect("list work pane")
+        .panes[0]
+        .pane_id
+        .clone();
+    server
+        .backend
+        .send_keys(&work_pane, copilot.to_string_lossy().as_ref())
+        .expect("type direct copilot shim");
+    server
+        .backend
+        .send_key(&work_pane, NamedKey::Enter)
+        .expect("run direct copilot shim");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("direct copilot shim output"),
+        format!("{}\nfalse\n", runtime.copilot_otel_path().display()),
+    );
+
+    let mut reasserted = opts;
+    reasserted
+        .extra_env
+        .insert("RIMZ_TEST_REASSERT".to_owned(), "after-birth".to_owned());
+    server
+        .backend
+        .ensure_session(&reasserted)
+        .expect("reassert existing session env");
+    assert_eq!(
+        show_session_environment(&server, "rimz-options", "RIMZ_TEST_REASSERT"),
+        "RIMZ_TEST_REASSERT=after-birth",
     );
 }
 

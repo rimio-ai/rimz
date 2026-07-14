@@ -4,6 +4,8 @@
 //! them through [`all_adapters`]. Every behavioral dispatch site resolves
 //! through this module, so no consumer grows a per-agent match arm.
 
+use std::collections::BTreeMap;
+
 use super::amp::AmpAdapter;
 use super::antigravity::AntigravityAdapter;
 use super::claude::ClaudeAdapter;
@@ -66,6 +68,16 @@ pub fn descriptor_by_kind(kind: &str) -> Option<&'static AgentDescriptor> {
 /// Display-order kinds — the walk doctor and the wiring probes iterate.
 pub fn known_kinds() -> impl Iterator<Item = &'static str> {
     all_adapters().map(|adapter| adapter.descriptor().kind)
+}
+
+/// Adapter-owned enrichment environment for a new room. Backends receive one
+/// opaque map and remain independent of provider protocols.
+pub fn room_env(runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    for adapter in all_adapters() {
+        env.extend(adapter.room_env(runtime));
+    }
+    env
 }
 
 /// Dispatch a command line to the one adapter that recognizes its native

@@ -235,10 +235,14 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
     let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
     let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
+    let Ok(extra_env) = crate::cli::room::room_env_for_workspace(&workspace.workspace_id) else {
+        return;
+    };
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
         session_name: &workspace.session_name,
+        extra_env,
         cwd: &workspace.worktree_root,
         mux_config: &mux_config,
         width,

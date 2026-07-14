@@ -324,6 +324,81 @@ fn launch_resume_permissions_and_presets_are_pinned() {
             "false"
         )]
     );
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = crate::store::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(temp.path()),
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        super::room_env_from(&runtime, None, None, None, None),
+        std::collections::BTreeMap::from([
+            (
+                "COPILOT_OTEL_FILE_EXPORTER_PATH".to_owned(),
+                runtime.copilot_otel_path().to_string_lossy().into_owned(),
+            ),
+            (
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT".to_owned(),
+                "false".to_owned(),
+            ),
+        ])
+    );
+    assert_eq!(
+        super::room_env_from(
+            &runtime,
+            Some(std::ffi::OsStr::new("/user/otel.jsonl")),
+            None,
+            None,
+            Some(std::ffi::OsStr::new("true")),
+        ),
+        std::collections::BTreeMap::from([
+            (
+                "COPILOT_OTEL_FILE_EXPORTER_PATH".to_owned(),
+                "/user/otel.jsonl".to_owned(),
+            ),
+            (
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT".to_owned(),
+                "true".to_owned(),
+            ),
+        ])
+    );
+    assert_eq!(
+        super::room_env_from(
+            &runtime,
+            None,
+            Some(std::ffi::OsStr::new("http://otel")),
+            None,
+            None,
+        ),
+        std::collections::BTreeMap::from([(
+            "OTEL_EXPORTER_OTLP_ENDPOINT".to_owned(),
+            "http://otel".to_owned(),
+        )])
+    );
+    assert_eq!(
+        super::room_env_from(
+            &runtime,
+            None,
+            None,
+            Some(std::ffi::OsStr::new("otlp-http")),
+            None,
+        ),
+        std::collections::BTreeMap::from([(
+            "COPILOT_OTEL_EXPORTER_TYPE".to_owned(),
+            "otlp-http".to_owned(),
+        )])
+    );
+    assert_eq!(
+        super::room_env_from(
+            &runtime,
+            None,
+            Some(std::ffi::OsStr::new("http://unused")),
+            Some(std::ffi::OsStr::new("file")),
+            None,
+        )
+        .get("COPILOT_OTEL_FILE_EXPORTER_PATH"),
+        Some(&runtime.copilot_otel_path().to_string_lossy().into_owned())
+    );
     assert_eq!(
         CopilotAdapter.resume_command("sess-1", Path::new("/tmp")),
         Some(vec![

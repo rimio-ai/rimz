@@ -12,6 +12,7 @@ fn sidebar_opts(
         session_name: session_name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
         project_root: PathBuf::from("/proj/root"),
+        extra_env: Default::default(),
         cwd: PathBuf::from("/proj/worktree"),
         width,
         birth_size: width.birth_size(detected_cols),

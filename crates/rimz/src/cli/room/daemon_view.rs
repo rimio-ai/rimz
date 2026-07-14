@@ -59,6 +59,7 @@ fn build_daemon_view_options(
             session_name: workspace.session_name.clone(),
             workspace_id: workspace.workspace_id.clone(),
             project_root: workspace.project_root.clone(),
+            extra_env: room.extra_env.clone(),
             cwd: workspace.worktree_root.clone(),
             width: room.width,
             birth_size: room.birth_size(width_override),

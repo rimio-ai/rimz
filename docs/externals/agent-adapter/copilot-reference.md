@@ -334,7 +334,9 @@ User setting `statusLine` runs a command that receives **session JSON on stdin**
 
 The footer can display model/effort, directory, branch, context window, quota, agent, AI used, code changes, username, sandbox, yolo state, and custom content. This proves the TUI maintains the main enrichment values, but the official docs do not publish the statusline input fields, update triggers, timeout, environment, exit handling, ANSI rules, or command-chaining semantics.
 
-Before selecting this transport, install a capture-only command against CLI 1.0.70 and record fixtures for: fresh session, after one response, tool execution, permission wait, `ask_user`, model/effort change, auto model, compaction, subagent, rate-limit warning, and remote mode. Verify that wrapping an existing user command preserves its exact stdout and timing. Until then, OTel is the only published structured enrichment schema.
+A sanitized 1.0.70 capture observed stable top-level `session_id`, `version`, `model`, `context_window`, `cost`, and `ai_used` objects. After one auto-model turn, `model` was `{id: "auto", display_name: "Auto → gpt-5-mini"}` and `context_window` added `current_context_tokens`, `displayed_context_limit`, and `current_context_used_percentage`, while its nominal `context_window_size`, `used_percentage`, `remaining_percentage`, and `remaining_tokens` stayed null. The payload later added latest-call and cumulative token fields. This binds a candidate payload to lifecycle identity, but does not choose stable denominator semantics or prove a lossless wrapper under concurrent sessions, so RimZ leaves the Copilot statusline untouched.
+
+Before selecting this transport, complete the remaining capture matrix: tool execution, permission wait, `ask_user`, model/effort and context-tier changes, compaction, subagent, rate-limit warning, remote mode, concurrent sessions, and exact wrapper stdin/stdout/stderr/exit/timeout behavior. OTel remains the only selected structured enrichment schema until those gates pass.
 
 ## OpenTelemetry
 
@@ -374,9 +376,13 @@ Lifecycle span events relevant to RimZ:
 | `exception` | Copilot error type, HTTP status, provider call ID |
 | `github.copilot.hook.start/end/error` | hook type and invocation ID; diagnostics only |
 
-OTel is asynchronous and exporters can drop data, so lifecycle still comes from hooks/store. The RimZ 1.0.70 reader deliberately accepts only `chat` spans with an exact `gen_ai.conversation.id`, chooses the newest captured timestamp, prefers resolved over requested model, and maps latest-call input/output/cache counts. It ignores `invoke_agent`, inference/agent-turn logs, metrics, costs, quotas, and account data until ordering and units are pinned.
+OTel is asynchronous and exporters can drop data, so lifecycle still comes from hooks/store. The RimZ 1.0.70 reader deliberately accepts only `chat` spans with an exact `gen_ai.conversation.id`, chooses the newest captured timestamp, prefers resolved over requested model, and maps latest-call input/output/cache counts. Captured input counts include the cache-read slice, so normalized fresh input is the saturating `input - cache_read` difference. It ignores `invoke_agent`, inference/agent-turn logs, metrics, costs, quotas, and account data.
 
-Keep content capture off: RimZ-managed launches pin `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`, do not enable export automatically, and do not create a shared exporter path. A user-selected file can be shared by concurrent sessions because each refresh filters by conversation ID.
+The 1.0.70 concurrency gate ran three overlapping turns in each of two direct processes against one file. It produced 84 complete JSON records and 93,721 bytes without truncation or interleaving; the bounded final 64 KiB retained two complete `chat` spans for each exact conversation ID. In a separate flush probe, the completed `chat` span was visible by `agentStop` (2,743 bytes), while `invoke_agent` and metric records appended during shutdown (15,357 bytes at exit); stat-gated Tick/Watch refresh observes later growth without another turn. Live rotation remains disabled because exporter reopen behavior is not verified.
+
+New RimZ rooms set a private room-runtime file exporter for direct and managed launches and pin `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`. An ambient `COPILOT_OTEL_FILE_EXPORTER_PATH` is preserved. An OTLP endpoint or explicitly non-file exporter is not redirected; file enrichment remains unavailable unless the user also selects a file exporter. Exact conversation filtering isolates concurrent sessions.
+
+Captured `github.copilot.cost` was finite but `0.0` on each `chat` span, and the aggregate `invoke_agent` span exposed no session-cumulative dollar. This fails the positive cumulative-value and replacement/dedup gates, so RimZ publishes no live session dollars and keeps historical/account Copilot spend unsupported.
 
 The docs publish no rate-limit/quota attributes in the OTel schema. Quota is visible in the native footer but needs statusline capture or another documented API before RimZ can claim it.
 

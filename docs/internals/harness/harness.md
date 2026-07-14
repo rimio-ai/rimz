@@ -56,6 +56,8 @@ Every agent pane runs the hidden **`rimz agents exec <kind>`** wrapper rather th
 
 The wrapper runs the agent in the pane, inheriting the pane's TTY. It launches through the user's shell-startup path when that shell and `/usr/bin/env` are available, falling back to direct exec otherwise, and it exports `RIMZ_RTK` from `[harness] rtk` into the run, which `cargo xtask` reads to route recognized cargo subcommands through `rtk`.
 
+Room birth also carries one generic adapter-enrichment environment map through the mux seam. RimZ-managed launches still apply their adapter `launch_env` last, while a stock agent typed directly into the ordinary work shell inherits the room baseline. Existing processes and shells cannot be upgraded retroactively; rebirth is the parity boundary on both backends.
+
 The wrapper stays resident behind the agent whenever it has work left after the agent exits (a run to complete, an idle shell to leave in a close-pane or worktree pane, a worktree to reclaim, a pane to close), which makes it the attach point for supervised runs ([below](#supervised-runs)) and for the end traces and reclamation in [Cleanup](#cleanup). A plain in-place launch has none of those, so the wrapper direct-execs the agent and the pane returns straight to the shell.
 
 ### Backend shape and placement

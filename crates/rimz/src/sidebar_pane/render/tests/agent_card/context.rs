@@ -261,6 +261,120 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
 }
 
 #[test]
+fn copilot_token_only_context_shows_model_and_composition_without_a_fake_gauge() {
+    let mut copilot = agent(
+        "copilot-1",
+        "copilot",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("review telemetry"),
+    );
+    copilot.model = Some("auto".to_owned());
+    copilot.context_pct = Some(0);
+    let mut context = codex_context(fixed_now());
+    context.source = "copilot".to_owned();
+    context.model_id = Some("gpt-5-mini".to_owned());
+    context.model_display_name = None;
+    context.effort = None;
+    context.agent_version = None;
+    context.rate_limits = None;
+    context.tokens = Some(AgentTokenUsage {
+        current_usage: Some(AgentCurrentUsage {
+            input_tokens: Some(10),
+            output_tokens: Some(3),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(80),
+        }),
+        ..AgentTokenUsage::default()
+    });
+    copilot.context = Some(context);
+    let snapshot = snapshot_with(vec![copilot.clone()]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        },
+        48,
+        17,
+    );
+
+    assert!(
+        rendered.contains("GPT 5 Mini"),
+        "resolved model wins:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Auto"),
+        "lifecycle fallback stays hidden:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("▤ 90 · ◌ 80 ↘ 10 ↗ 3"),
+        "the latest call remains visible:\n{rendered}"
+    );
+    assert!(
+        !rendered
+            .lines()
+            .any(|line| line.contains("▌  ▣") || line.contains("▌  ▢")),
+        "no denominator means no gauge:\n{rendered}"
+    );
+    assert!(
+        rendered
+            .lines()
+            .filter(|line| line.contains('▌'))
+            .all(|line| !line.contains('$')),
+        "the Copilot card carries no dollars:\n{rendered}"
+    );
+
+    copilot.status = AgentStatus::Idle;
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot_with(vec![copilot.clone()]),
+        None,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        },
+        48,
+        17,
+    );
+    assert!(rendered.contains("GPT 5 Mini"));
+    assert!(rendered.contains("▤ 90 · ◌ 80 ↘ 10 ↗ 3"));
+    assert!(
+        !rendered
+            .lines()
+            .any(|line| line.contains("▌  ▣") || line.contains("▌  ▢")),
+        "selected idle token-only cards still have no gauge:\n{rendered}",
+    );
+
+    let selected = agent(
+        "other",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/other"),
+        Some("other"),
+        Some("selected"),
+    );
+    let mut compact = snapshot_with(vec![copilot, selected]);
+    compact.theme.display.card_density = crate::config::CardDensityMode::Compact;
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &compact,
+        None,
+        &UiState {
+            selected_index: 1,
+            ..Default::default()
+        },
+        48,
+        17,
+    );
+    assert!(rendered.contains("GPT 5 Mini"));
+    assert!(
+        !rendered.contains("▤ 90"),
+        "unselected idle compact cards retain compact density:\n{rendered}"
+    );
+}
+
+#[test]
 fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
     let mut codex = agent(
         "codex-1",

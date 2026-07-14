@@ -124,6 +124,7 @@ impl SidebarHarness {
             session_name: "session".to_owned(),
             workspace_id: self.workspace_id.clone(),
             project_root: self.cwd.clone(),
+            extra_env: Default::default(),
             cwd: self.cwd.clone(),
             width,
             birth_size: width.birth_size(None),

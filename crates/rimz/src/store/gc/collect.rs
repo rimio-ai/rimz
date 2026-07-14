@@ -72,6 +72,7 @@ fn collect_workspace_runtime(
     let activity_dir = workspace_root.join("agent-activity");
     let context_dir = workspace_root.join("agent_context");
     let subagent_context_dir = workspace_root.join("subagent_context");
+    let telemetry_dir = workspace_root.join("agent-telemetry");
     for dir in [
         &heartbeat_dir,
         &sock_dir,
@@ -79,21 +80,33 @@ fn collect_workspace_runtime(
         &activity_dir,
         &context_dir,
         &subagent_context_dir,
+        &telemetry_dir,
         workspace_root,
     ] {
         sweep.remember_dir_size(dir);
     }
+    // An open exporter keeps writing the inode it opened. Preserve both its
+    // file and parent while the room heartbeat is fresh; unlinking either
+    // would silently strand a live Copilot process because reopen behavior is
+    // not part of the verified exporter contract.
+    let room_is_live = !fresh_sidebar_instance_ids(&heartbeat_dir, older_than)?.is_empty();
     collect_heartbeats(&heartbeat_dir, &sock_dir, older_than, sweep, report)?;
     collect_stale_read_marks(&read_marks_dir, &heartbeat_dir, older_than, sweep, report)?;
     collect_stale_sidecars(&activity_dir, older_than, sweep, report)?;
     collect_stale_sidecars(&context_dir, older_than, sweep, report)?;
     collect_stale_sidecars(&subagent_context_dir, older_than, sweep, report)?;
+    if !room_is_live {
+        collect_stale_sidecars(&telemetry_dir, older_than, sweep, report)?;
+    }
     sweep.remove_dir_if_empty(&heartbeat_dir, report)?;
     sweep.remove_dir_if_empty(&sock_dir, report)?;
     sweep.remove_dir_if_empty(&read_marks_dir, report)?;
     sweep.remove_dir_if_empty(&activity_dir, report)?;
     sweep.remove_dir_if_empty(&context_dir, report)?;
     sweep.remove_dir_if_empty(&subagent_context_dir, report)?;
+    if !room_is_live {
+        sweep.remove_dir_if_empty(&telemetry_dir, report)?;
+    }
     sweep.remove_dir_if_empty(workspace_root, report)?;
     Ok(())
 }
@@ -534,12 +547,15 @@ mod tests {
         fs::write(&stale_context, b"{}").unwrap();
         let stale_subagent = rt.subagent_context_dir.join("sub.cafebabecafebabe.json");
         fs::write(&stale_subagent, b"{}").unwrap();
+        let stale_telemetry = rt.copilot_otel_path();
+        fs::write(&stale_telemetry, b"{}\n").unwrap();
         let old = SystemTime::now() - Duration::from_secs(7200);
         for path in [
             &stale_read_marks,
             &stale_activity,
             &stale_context,
             &stale_subagent,
+            &stale_telemetry,
         ] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
@@ -548,7 +564,7 @@ mod tests {
             collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
                 .unwrap();
 
-        assert_eq!(report.sidecar_files_removed, 4);
+        assert_eq!(report.sidecar_files_removed, 5);
         assert!(
             !rt.read_marks_dir.exists(),
             "the emptied read-marks dir is removed"
@@ -564,6 +580,10 @@ mod tests {
         assert!(
             !rt.subagent_context_dir.exists(),
             "the emptied subagent-context dir is removed"
+        );
+        assert!(
+            !rt.agent_telemetry_dir.exists(),
+            "the emptied telemetry dir is removed"
         );
         assert!(
             !rt.agent_activity_dir.parent().unwrap().exists(),
@@ -602,6 +622,71 @@ mod tests {
             !rt.agent_activity_dir.parent().unwrap().exists(),
             "apply removes the now-empty workspace root"
         );
+    }
+
+    #[test]
+    fn runtime_gc_accounts_for_stale_telemetry_and_keeps_fresh_files() {
+        let temp = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(temp.path());
+        let rt = RuntimePaths::under(workspace_id, temp.path()).unwrap();
+        rt.ensure_dirs().unwrap();
+
+        let stale = rt.copilot_otel_path();
+        let fresh = rt.agent_telemetry_dir.join("fresh.jsonl");
+        fs::write(&stale, b"stale telemetry\n").unwrap();
+        fs::write(&fresh, b"fresh telemetry\n").unwrap();
+        fs::File::open(&stale)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+
+        let preview =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), true)
+                .unwrap();
+        assert_eq!(preview.sidecar_files_removed, 1);
+        assert!(preview.bytes_removed >= b"stale telemetry\n".len() as u64);
+        assert!(stale.exists(), "dry-run keeps stale telemetry");
+
+        let applied =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
+                .unwrap();
+        assert_eq!(preview, applied);
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+        assert!(rt.agent_telemetry_dir.exists());
+    }
+
+    #[test]
+    fn runtime_gc_does_not_unlink_a_live_room_exporter() {
+        let temp = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(temp.path());
+        let rt = RuntimePaths::under(workspace_id.clone(), temp.path()).unwrap();
+        rt.ensure_dirs().unwrap();
+
+        let telemetry = rt.copilot_otel_path();
+        fs::write(&telemetry, b"open exporter\n").unwrap();
+        fs::File::open(&telemetry)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+        let instance_id = SidebarInstanceId::new();
+        let heartbeat = SidebarHeartbeat::new(
+            workspace_id,
+            instance_id.clone(),
+            MuxName::Tmux,
+            "rimz-live",
+            rt.sock_dir.join("sidebar.live.sock"),
+            None,
+        );
+        write_json(&rt.sidebar_heartbeat_path(&instance_id), &heartbeat);
+
+        let report =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
+                .unwrap();
+
+        assert_eq!(report.sidecar_files_removed, 0);
+        assert!(telemetry.exists(), "live exporter inode remains linked");
+        assert!(rt.agent_telemetry_dir.exists());
     }
 
     #[test]

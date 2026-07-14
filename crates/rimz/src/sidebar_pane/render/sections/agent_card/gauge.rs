@@ -9,12 +9,13 @@ pub(super) fn ctx(row: &SidebarRow) -> Option<&AgentContext> {
     agent(row).and_then(|agent| agent.context.as_ref())
 }
 
-/// Model name preferred from the statusline (`Opus 4.8 (1M context)`) over the
-/// coarser transcript scalar (`Opus`), then shortened for the row
-/// (`Opus 4.8 (1M)`); never synthesized.
+/// Model name preferred from the provider display label over the normalized
+/// context model id, then the coarser lifecycle scalar, and shortened for the
+/// row (`Opus 4.8 (1M)`); never synthesized.
 pub(super) fn display_model(row: &SidebarRow) -> Option<String> {
     ctx(row)
         .and_then(|context| context.model_display_name.as_deref())
+        .or_else(|| ctx(row).and_then(|context| context.model_id.as_deref()))
         .or_else(|| agent(row).and_then(|agent| agent.model.as_deref()))
         .filter(|model| !model.is_empty())
         .map(model_label)

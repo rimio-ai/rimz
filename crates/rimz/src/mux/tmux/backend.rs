@@ -115,6 +115,7 @@ impl MuxBackend for TmuxBackend {
 
     fn ensure_session(&self, opts: &SessionOptions) -> Result<()> {
         let mut env = crate::workspace::pin_env(&opts.workspace_id, &opts.project_root);
+        env.extend(opts.extra_env.clone());
         // tmux strips COLORTERM and births panes under `tmux-256color`, whose
         // terminfo carries no RGB cap, so apps inside the room — the sidebar and
         // the user's own TUIs — downgrade to 256-color. Restore it for the room

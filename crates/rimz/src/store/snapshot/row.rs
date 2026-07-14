@@ -414,15 +414,24 @@ impl AgentCard {
     /// fold-derived scalar. The pairing matters — the identity line shows
     /// `context_window_size` when present, so trusting a percentage only
     /// alongside that window keeps the bar and the window label on one
-    /// denominator. A percentage with no window would otherwise be drawn
-    /// against the fold's window (the original mismatch), so it falls through to
-    /// `context_pct`, which the fold derived against that same window.
+    /// denominator. A nonzero rich composition with no window is explicitly
+    /// unknown rather than falling through to a synthetic lifecycle 0%; other
+    /// untethered context falls through to the fold-derived `context_pct`.
     pub fn context_gauge_percent(&self) -> Option<u8> {
-        let sidecar_tokens = self
+        let context_tokens = self
             .context
             .as_ref()
-            .and_then(|context| context.tokens.as_ref())
-            .filter(|tokens| tokens.context_window_size.is_some());
+            .and_then(|context| context.tokens.as_ref());
+        if context_tokens.is_some_and(|tokens| {
+            tokens.context_window_size.is_none()
+                && tokens
+                    .current_usage
+                    .as_ref()
+                    .is_some_and(|usage| !usage.is_zero())
+        }) {
+            return None;
+        }
+        let sidecar_tokens = context_tokens.filter(|tokens| tokens.context_window_size.is_some());
 
         sidecar_tokens
             .and_then(|tokens| tokens.used_percentage)
@@ -462,6 +471,12 @@ impl AgentCard {
     pub fn has_session_history(&self) -> bool {
         self.total_tokens.is_some_and(|total| total > 0)
             || self.compaction_count > 0
+            || self
+                .context
+                .as_ref()
+                .and_then(|context| context.tokens.as_ref())
+                .and_then(|tokens| tokens.current_usage.as_ref())
+                .is_some_and(|usage| !usage.is_zero())
             || self
                 .context
                 .as_ref()

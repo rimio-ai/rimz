@@ -547,6 +547,7 @@ fn open_resume_tab(
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
         session_name: &workspace.session_name,
+        extra_env: crate::cli::room::room_env_for_workspace(&workspace.workspace_id)?,
         cwd: &tab.cwd,
         mux_config: &mux_config,
         width,

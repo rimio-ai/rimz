@@ -54,16 +54,19 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     if ctx.prior_transcript_stat == Some(&stat) {
         return None;
     }
-    let usage = latest_chat_usage(&read_transcript_tail(&path)?, ctx.agent_id)?;
+    let usage = latest_chat_usage(&read_transcript_tail(&path)?, ctx.agent_id);
     Some(LocalContextRefresh {
         model_id: usage
-            .model_id
+            .as_ref()
+            .and_then(|usage| usage.model_id.clone())
             .or_else(|| ctx.model_hint.map(ToOwned::to_owned)),
         effort: None,
-        tokens: usage.current_usage.map(|current_usage| AgentTokenUsage {
-            current_usage: Some(current_usage),
-            ..AgentTokenUsage::default()
-        }),
+        tokens: usage
+            .and_then(|usage| usage.current_usage)
+            .map(|current_usage| AgentTokenUsage {
+                current_usage: Some(current_usage),
+                ..AgentTokenUsage::default()
+            }),
         cost: None,
         turn_error: None,
         turn_complete: None,
@@ -206,6 +209,7 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = include_str!("tests/fixtures/otel.jsonl");
+    const INTERLEAVED_FIXTURE: &str = include_str!("tests/fixtures/otel-interleaved.jsonl");
 
     #[test]
     fn captured_chat_span_maps_model_and_latest_call_tokens() {
@@ -240,6 +244,34 @@ mod tests {
                     output_tokens: Some(6),
                     cache_creation_input_tokens: Some(5),
                     cache_read_input_tokens: Some(10),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn interleaved_shared_file_isolates_sessions_and_tolerates_noise() {
+        assert_eq!(
+            latest_chat_usage(INTERLEAVED_FIXTURE, "session-a"),
+            Some(ChatUsage {
+                model_id: Some("gpt-a-new".to_owned()),
+                current_usage: Some(AgentCurrentUsage {
+                    input_tokens: Some(90),
+                    output_tokens: Some(11),
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: Some(10),
+                }),
+            })
+        );
+        assert_eq!(
+            latest_chat_usage(INTERLEAVED_FIXTURE, "session-b"),
+            Some(ChatUsage {
+                model_id: Some("gpt-b".to_owned()),
+                current_usage: Some(AgentCurrentUsage {
+                    input_tokens: Some(35),
+                    output_tokens: Some(7),
+                    cache_creation_input_tokens: Some(2),
+                    cache_read_input_tokens: Some(5),
                 }),
             })
         );
@@ -303,5 +335,45 @@ mod tests {
         .unwrap();
         assert_eq!(next.model_id.as_deref(), Some("next-model"));
         assert_ne!(next.transcript_stat, Some(stat));
+    }
+
+    #[test]
+    fn local_refresh_anchors_an_empty_managed_file_then_sees_a_bounded_tail_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let pricing = dir.path().join("pricing.json");
+        let anchored = refresh(&LocalContextRefreshCtx {
+            agent_id: "session-a",
+            model_hint: None,
+            current_transcript_path: None,
+            prior_transcript_path: Some(path.to_str().unwrap()),
+            prior_transcript_stat: None,
+            shared_pricing_cache_path: &pricing,
+        })
+        .unwrap();
+        assert_eq!(anchored.transcript_path.as_deref(), path.to_str());
+        assert!(anchored.tokens.is_none());
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for _ in 0..2_500 {
+            writeln!(file, r#"{{"type":"metric","name":"padding"}}"#).unwrap();
+        }
+        file.write_all(INTERLEAVED_FIXTURE.as_bytes()).unwrap();
+
+        let refreshed = refresh(&LocalContextRefreshCtx {
+            agent_id: "session-a",
+            model_hint: None,
+            current_transcript_path: None,
+            prior_transcript_path: anchored.transcript_path.as_deref(),
+            prior_transcript_stat: anchored.transcript_stat.as_ref(),
+            shared_pricing_cache_path: &pricing,
+        })
+        .unwrap();
+        assert_eq!(refreshed.model_id.as_deref(), Some("gpt-a-new"));
+        assert!(refreshed.tokens.is_some());
     }
 }

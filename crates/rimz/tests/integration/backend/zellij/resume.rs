@@ -36,6 +36,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
         session_name: workspace.session_name.clone(),
         workspace_id: workspace.workspace_id.clone(),
         project_root: workspace.project_root.clone(),
+        extra_env: Default::default(),
         cwd: workspace.project_root.clone(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(160)),

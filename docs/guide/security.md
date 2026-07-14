@@ -12,6 +12,8 @@ Three things, each previewable before it happens and reversible after.
 
 **Files under your home directory.** Configuration lives under `~/.config/rimz/`, durable room state under `~/.local/state/rimz/`, both plain files you can read and edit. `rimz uninstall` removes hooks, rooms, runtime state, and the binary, with flags to also drop the stores and config ([maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall)).
 
+**Disposable Copilot telemetry.** A newly-born room can hold `agent-telemetry/copilot-otel.jsonl` under its mode-`0700` runtime root. RimZ forces message-content capture off for this managed exporter and reads only allow-listed model/token metadata for the exact Copilot conversation. Reset and runtime GC remove the cache; RimZ neither rotates a live exporter file nor derives account history from it. An explicit user exporter remains user-owned and takes precedence.
+
 **A permission grant for its Zellij plugin.** On Zellij, RimZ seeds a permission grant for the presence plugin it ships, so the first attach runs without an interrupting prompt. Your `config.kdl` stays untouched, and the grant is yours to revoke. Details in [The Zellij presence plugin](#the-zellij-presence-plugin).
 
 ## What can run commands

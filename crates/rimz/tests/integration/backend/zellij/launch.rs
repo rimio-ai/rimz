@@ -51,6 +51,7 @@ fn open_sidebar_births_native_layout_and_template() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
+    std::fs::write(xdg.path().join(".zshrc"), "").expect("disable zsh first-run menu");
     let name = unique_session_name("sidebar");
     let _cleanup = ScopedSessionCleanup {
         name: name.clone(),
@@ -60,7 +61,37 @@ fn open_sidebar_births_native_layout_and_template() {
 
     let (_stub_dir, stub) = sidebar_command_stub();
     let backend = ZellijBackend::with_runtime_dir(xdg.path());
-    let opts = sidebar_opts(&name, cwd.path(), stub, 120);
+    let mut opts = sidebar_opts(&name, cwd.path(), stub, 120);
+    let runtime =
+        rimz::RuntimePaths::under(opts.workspace_id.clone(), xdg.path()).expect("runtime paths");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let shim_dir = TempDir::new().expect("shim tempdir");
+    let marker = cwd.path().join("copilot-env.txt");
+    let copilot = shim_dir.path().join("copilot");
+    std::fs::write(
+        &copilot,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$COPILOT_OTEL_FILE_EXPORTER_PATH\" \"$OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT\" > '{}'\n",
+            marker.display()
+        ),
+    )
+    .expect("write copilot shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&copilot, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod copilot shim");
+    }
+    opts.extra_env = std::collections::BTreeMap::from([
+        (
+            "COPILOT_OTEL_FILE_EXPORTER_PATH".to_owned(),
+            runtime.copilot_otel_path().to_string_lossy().into_owned(),
+        ),
+        (
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT".to_owned(),
+            "false".to_owned(),
+        ),
+    ]);
     backend.open_sidebar(&opts, None).expect("open_sidebar");
 
     let panes = wait_for_pane_count(xdg.path(), &name, 2);
@@ -71,6 +102,34 @@ fn open_sidebar_births_native_layout_and_template() {
     assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
     assert_session_has_bottom_bar(xdg.path(), &name);
     assert_sidebars_not_held(xdg.path(), &name, "initial tab");
+
+    let work_pane = panes
+        .iter()
+        .find(|pane| pane.spawn_command.is_none())
+        .expect("ordinary work shell")
+        .pane_id
+        .clone();
+    backend
+        .send_keys(&work_pane, copilot.to_string_lossy().as_ref())
+        .expect("type direct copilot shim");
+    backend
+        .send_key(&work_pane, rimz::mux::NamedKey::Enter)
+        .expect("run direct copilot shim");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !marker.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let capture = backend
+        .capture_pane(&work_pane, Some(20), false)
+        .expect("capture direct copilot pane");
+    assert!(
+        marker.exists(),
+        "direct copilot shim did not run; panes={panes:#?}; capture={capture:#?}",
+    );
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("direct copilot shim output"),
+        format!("{}\nfalse\n", runtime.copilot_otel_path().display()),
+    );
 
     let template = new_tab_template_dump(xdg.path(), &name);
     assert!(
@@ -134,6 +193,7 @@ fn ensure_clean_session_births_running_then_is_idempotent() {
         session_name: name.clone(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-cleanroom")),
         project_root: cwd.path().to_path_buf(),
+        extra_env: Default::default(),
         cwd: cwd.path().to_path_buf(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(120)),

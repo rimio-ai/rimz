@@ -249,6 +249,8 @@ pub struct SessionOptions {
     /// ([`crate::workspace::WorkspaceResolver::resolve_participant_with_pin_recovery`]).
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
+    /// Adapter-owned enrichment environment carried through the room session seam.
+    pub extra_env: std::collections::BTreeMap<String, String>,
     pub cwd: PathBuf,
     pub config: crate::config::MultiplexerConfig,
     /// The invoking terminal's `(cols, rows)`, when launch ran in one
@@ -311,6 +313,9 @@ pub struct SidebarPaneOptions {
     /// Zellij birth stamps on the spawned server so every pane inherits it
     /// (tmux pins through [`SessionOptions`] at `new-session` instead).
     pub project_root: PathBuf,
+    /// Adapter-owned enrichment environment for the Zellij server birth.
+    /// tmux carries the same map through [`SessionOptions`].
+    pub extra_env: std::collections::BTreeMap<String, String>,
     pub cwd: PathBuf,
     /// Live per-view width policy. The birth seed below gets panes onto the
     /// screen; this policy owns their canonical width thereafter.

@@ -159,6 +159,29 @@ fn agent_card_session_history_requires_positive_evidence() {
     );
     assert!(
         AgentCard {
+            context: Some(context_with_tokens(AgentTokenUsage {
+                current_usage: Some(AgentCurrentUsage {
+                    input_tokens: Some(1),
+                    ..AgentCurrentUsage::default()
+                }),
+                ..AgentTokenUsage::default()
+            })),
+            ..AgentCard::default()
+        }
+        .has_session_history()
+    );
+    assert!(
+        !AgentCard {
+            context: Some(context_with_tokens(AgentTokenUsage {
+                current_usage: Some(AgentCurrentUsage::default()),
+                ..AgentTokenUsage::default()
+            })),
+            ..AgentCard::default()
+        }
+        .has_session_history()
+    );
+    assert!(
+        AgentCard {
             total_tokens: Some(1),
             ..AgentCard::default()
         }
@@ -257,6 +280,21 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
         ..AgentCard::default()
     };
     assert_eq!(tethered.context_gauge_percent(), Some(40));
+
+    let token_only = AgentCard {
+        context_pct: Some(0),
+        context: Some(context_with_tokens(AgentTokenUsage {
+            current_usage: Some(AgentCurrentUsage {
+                input_tokens: Some(20),
+                output_tokens: Some(2),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: Some(80),
+            }),
+            ..AgentTokenUsage::default()
+        })),
+        ..AgentCard::default()
+    };
+    assert_eq!(token_only.context_gauge_percent(), None);
 }
 
 #[test]

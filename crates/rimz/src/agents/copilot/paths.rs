@@ -32,11 +32,31 @@ pub(super) fn validated_transcript_path(path: &Path, session_id: &str) -> Option
 }
 
 pub(super) fn otel_source(prior_path: Option<&Path>) -> Option<PathBuf> {
+    let exporter_path = std::env::var_os("COPILOT_OTEL_FILE_EXPORTER_PATH");
+    if prior_path.is_none_or(|path| !path.is_file())
+        && non_empty_path(exporter_path.as_deref()).is_none()
+        && otlp_only_config(
+            std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").as_deref(),
+            std::env::var_os("COPILOT_OTEL_EXPORTER_TYPE").as_deref(),
+        )
+    {
+        return None;
+    }
     otel_source_from(
         prior_path,
-        std::env::var_os("COPILOT_OTEL_FILE_EXPORTER_PATH").as_deref(),
+        exporter_path.as_deref(),
         copilot_home().as_deref(),
     )
+}
+
+pub(super) fn otlp_only_config(endpoint: Option<&OsStr>, exporter_type: Option<&OsStr>) -> bool {
+    let exporter_type = exporter_type
+        .and_then(OsStr::to_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    exporter_type.is_some_and(|value| !value.eq_ignore_ascii_case("file"))
+        || (non_empty_path(endpoint).is_some()
+            && !exporter_type.is_some_and(|value| value.eq_ignore_ascii_case("file")))
 }
 
 fn non_empty_path(raw: Option<&OsStr>) -> Option<PathBuf> {
@@ -229,5 +249,15 @@ mod tests {
             ),
             Some(older)
         );
+    }
+
+    #[test]
+    fn otlp_only_configuration_is_not_redirected_to_a_home_file() {
+        assert!(otlp_only_config(Some(OsStr::new("http://otel")), None));
+        assert!(otlp_only_config(None, Some(OsStr::new("otlp-http"))));
+        assert!(!otlp_only_config(
+            Some(OsStr::new("http://unused")),
+            Some(OsStr::new("file"))
+        ));
     }
 }

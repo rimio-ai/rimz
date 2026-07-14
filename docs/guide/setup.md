@@ -70,11 +70,13 @@ Hooks are how a running agent reports to the room: turn starts and ends, permiss
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # every detected installable agent (claude, codex, amp, kimi, pi, opencode, droid)
+rimz hooks install              # every detected installable agent (including Copilot)
 rimz hooks install claude       # one agent kind
 ```
 
 The install is additive — your existing hooks stay — and each report names the file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, RimZ wraps the command so the sidebar reads live context, and restores yours on uninstall. The first `rimz` run and interactive `rimz setup` offer the same install with a consent prompt and diff preview, so `rimz hooks install` is mainly for adding an agent later or re-checking the surface. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
+
+Newly-born rooms also give direct Copilot launches a private metadata-only OTel file under that workspace's runtime directory, with message-content capture disabled. A room that was already alive when RimZ gained this support keeps its original environment; rebirth it after install or upgrade before expecting a plain `copilot` typed in the work shell to show model and token composition.
 
 Kiro CLI 2.12.1 v3 does not execute its documented standalone hook configs, so RimZ leaves Kiro out of hook installation. Its validated stock local session store supplies transcript and live display without a setup step.
 

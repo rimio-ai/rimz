@@ -39,6 +39,7 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         session_name: name.to_owned(),
         workspace_id: WorkspaceId::from_project_root(&workspace_root),
         project_root: cwd.to_path_buf(),
+        extra_env: Default::default(),
         cwd: cwd.to_path_buf(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),

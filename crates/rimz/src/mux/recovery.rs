@@ -631,6 +631,7 @@ mod tests {
             session_name: SESSION.to_owned(),
             workspace_id: WorkspaceId::from_project_root(&root),
             project_root: root.clone(),
+            extra_env: Default::default(),
             cwd: root,
             width,
             birth_size: width.birth_size(None),

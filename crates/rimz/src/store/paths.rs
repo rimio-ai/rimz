@@ -158,6 +158,10 @@ pub struct RuntimePaths {
     /// Kept apart from `agent_context/` so each reader deserializes only its own
     /// record shape.
     pub subagent_context_dir: PathBuf,
+    /// Provider telemetry exported inside one room. This is disposable live
+    /// cache data: provider processes append here while the room is alive and
+    /// runtime GC reclaims stale files with the rest of the workspace root.
+    pub agent_telemetry_dir: PathBuf,
     /// Per-agent activity heartbeats (see [`crate::agent_activity`]). Latency
     /// hints the snapshot folds into each agent's `last_activity`.
     pub agent_activity_dir: PathBuf,
@@ -214,6 +218,7 @@ impl RuntimePaths {
         let read_marks_dir = root.join("read-marks");
         let agent_context_dir = root.join("agent_context");
         let subagent_context_dir = root.join("subagent_context");
+        let agent_telemetry_dir = root.join("agent-telemetry");
         let agent_activity_dir = root.join("agent-activity");
         Ok(Self {
             workspace_id,
@@ -225,6 +230,7 @@ impl RuntimePaths {
             read_marks_dir,
             agent_context_dir,
             subagent_context_dir,
+            agent_telemetry_dir,
             agent_activity_dir,
         })
     }
@@ -258,6 +264,11 @@ impl RuntimePaths {
     /// [`Self::agent_context_path`].
     pub fn subagent_context_path(&self, kind: &str, agent_id: &str) -> PathBuf {
         sidecar::path(&self.subagent_context_dir, "sub", kind, agent_id)
+    }
+
+    /// Room-scoped Copilot OpenTelemetry JSONL exporter cache.
+    pub fn copilot_otel_path(&self) -> PathBuf {
+        self.agent_telemetry_dir.join("copilot-otel.jsonl")
     }
 
     /// Path of a sidebar instance's heartbeat file. The freshness scan in
@@ -398,6 +409,7 @@ impl RuntimePaths {
         mkdir_p(&self.read_marks_dir)?;
         mkdir_p(&self.agent_context_dir)?;
         mkdir_p(&self.subagent_context_dir)?;
+        mkdir_p(&self.agent_telemetry_dir)?;
         mkdir_p(&self.agent_activity_dir)?;
         Ok(())
     }
@@ -671,6 +683,13 @@ mod tests {
         let second_paths = RuntimePaths::under(second, root).unwrap();
 
         assert_ne!(first_paths.root, second_paths.root);
+        assert_eq!(
+            first_paths.copilot_otel_path(),
+            first_paths
+                .root
+                .join("agent-telemetry")
+                .join("copilot-otel.jsonl")
+        );
         assert_eq!(first_paths.shared_root, second_paths.shared_root);
         assert_eq!(
             first_paths.shared_accounts_path(),
@@ -738,6 +757,7 @@ mod tests {
 
         assert!(paths.persistent_shared_root.is_dir());
         assert!(paths.shared_root.is_dir());
+        assert!(paths.agent_telemetry_dir.is_dir());
     }
 
     #[test]

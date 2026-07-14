@@ -120,6 +120,8 @@ Kiro CLI 2.12.1 v3 is the exception: RimZ reads its stock local session store an
 
 If a card stops updating after you hand-edited an agent's config, the RimZ-managed hook block was likely disturbed. Re-run `rimz hooks install --dry-run` to see the current diff, then `rimz hooks install` to restore the block. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix in the `HOOKS` row.
 
+If a directly-launched Copilot card has lifecycle but no resolved model or token composition, first rebirth a room created before the current RimZ build. RimZ preserves `COPILOT_OTEL_FILE_EXPORTER_PATH`; that file must remain readable to the room. An `OTEL_EXPORTER_OTLP_ENDPOINT` or non-`file` `COPILOT_OTEL_EXPORTER_TYPE` selects the user's OTLP pipeline instead of RimZ's local cache, so set an explicit `COPILOT_OTEL_FILE_EXPORTER_PATH` when you also want file enrichment.
+
 ### Zellij pane discovery stopped
 
 On Zellij, RimZ loads a small presence plugin so the sidebar learns which panes exist and where. Its permission grant is seeded for you on the first attach. Revoking that grant in Zellij's plugin manager stops pane discovery until you restore it, and `rimz doctor` names the fix in the `presence` row. Re-grant the plugin's permissions in Zellij, then run `rimz reload`. The grant lives in Zellij's own permission store, and the plugin ships no pane content anywhere; the full picture is in [security and trust](./security.md#the-zellij-presence-plugin).

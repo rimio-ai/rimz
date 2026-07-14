@@ -157,6 +157,7 @@ fn open_tab_rejects_an_empty_layout() {
         session_name: "rimz-empty".to_owned(),
         workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-empty")),
         project_root: PathBuf::from("/tmp/rimz-empty"),
+        extra_env: Default::default(),
         cwd: PathBuf::from("/tmp/rimz-empty"),
         width,
         birth_size: width.birth_size(Some(80)),

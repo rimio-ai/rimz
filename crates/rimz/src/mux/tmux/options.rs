@@ -276,6 +276,7 @@ mod tests {
             session_name: "room".to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tmux-refresh")),
             project_root: PathBuf::from("/tmp/rimz-tmux-refresh"),
+            extra_env: Default::default(),
             cwd: PathBuf::from("/tmp/rimz-tmux-refresh"),
             width,
             birth_size: width.birth_size(None),

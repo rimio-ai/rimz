@@ -506,6 +506,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 workspace_id: &workspace.workspace_id,
                 project_root: &workspace.project_root,
                 session_name: &workspace.session_name,
+                extra_env: room_env_for_workspace(&workspace.workspace_id)?,
                 cwd: &workspace.worktree_root,
                 mux_config: &mux_config,
                 width: sidebar_width,
@@ -546,6 +547,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 workspace_id: &workspace.workspace_id,
                 project_root: &workspace.project_root,
                 session_name: &workspace.session_name,
+                extra_env: room_env_for_workspace(&workspace.workspace_id)?,
                 cwd: &workspace.worktree_root,
                 mux_config: &mux_config,
                 width: sidebar_width,
@@ -569,6 +571,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 workspace_id: &record.workspace_id,
                 project_root: &record.project_root,
                 session_name: &record.session_name,
+                extra_env: room_env_for_workspace(&record.workspace_id)?,
                 cwd: &record.project_root,
                 mux_config: &mux_config,
                 width: sidebar_width,
@@ -595,6 +598,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                     workspace_id: &record.workspace_id,
                     project_root: &record.project_root,
                     session_name: &record.session_name,
+                    extra_env: room_env_for_workspace(&record.workspace_id)?,
                     cwd: &record.project_root,
                     mux_config: &mux_config,
                     width: sidebar_width,
@@ -1113,6 +1117,7 @@ fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
         session_name: room.session_name.to_owned(),
         workspace_id: room.workspace_id.clone(),
         project_root: room.project_root.to_path_buf(),
+        extra_env: room.extra_env.clone(),
         cwd: room.cwd.to_path_buf(),
         config: room.mux_config.clone(),
         detected_size: room.detected_size,
@@ -1173,6 +1178,7 @@ pub(crate) struct RunRoom {
     mux_config: rimz::config::MultiplexerConfig,
     width: SidebarWidth,
     detected_size: Option<(u16, u16)>,
+    extra_env: std::collections::BTreeMap<String, String>,
 }
 
 impl RunRoom {
@@ -1193,6 +1199,7 @@ impl RunRoom {
             workspace_id: &workspace.workspace_id,
             project_root: &workspace.project_root,
             session_name: &workspace.session_name,
+            extra_env: self.extra_env.clone(),
             cwd,
             mux_config: &self.mux_config,
             width: self.width,
@@ -1222,10 +1229,12 @@ pub(crate) fn birth_room_for_run(
     if !was_live {
         purge_rebirth_heartbeats_for_workspace(&workspace.workspace_id);
     }
+    let extra_env = room_env_for_workspace(&workspace.workspace_id)?;
     backend.ensure_session(&SessionOptions {
         session_name: workspace.session_name.clone(),
         workspace_id: workspace.workspace_id.clone(),
         project_root: workspace.project_root.clone(),
+        extra_env: extra_env.clone(),
         cwd: cwd.to_path_buf(),
         config: mux_config.clone(),
         detected_size,
@@ -1239,6 +1248,7 @@ pub(crate) fn birth_room_for_run(
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
         session_name: &workspace.session_name,
+        extra_env: extra_env.clone(),
         cwd,
         mux_config: &mux_config,
         width,
@@ -1261,6 +1271,7 @@ pub(crate) fn birth_room_for_run(
         mux_config,
         width,
         detected_size: if was_live { None } else { detected_size },
+        extra_env,
     })
 }
 
@@ -1273,6 +1284,17 @@ pub(crate) fn purge_rebirth_heartbeats_for_workspace(workspace_id: &WorkspaceId)
             "sidebar rebirth heartbeat purge skipped because runtime paths are unavailable",
         ),
     }
+}
+
+pub(crate) fn room_env_for_workspace(
+    workspace_id: &WorkspaceId,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let runtime = RuntimePaths::for_workspace(workspace_id.clone())
+        .context("preparing adapter runtime paths")?;
+    runtime
+        .ensure_dirs()
+        .context("preparing adapter runtime directories")?;
+    Ok(rimz::agents::registry::room_env(&runtime))
 }
 
 fn finish_attach(
@@ -1320,6 +1342,8 @@ pub(crate) struct RoomTarget<'a> {
     /// session birth stamps into the mux environment.
     pub(crate) project_root: &'a Path,
     pub(crate) session_name: &'a str,
+    /// Registry-owned environment computed once for every birth/options flow.
+    pub(crate) extra_env: std::collections::BTreeMap<String, String>,
     pub(crate) cwd: &'a Path,
     pub(crate) mux_config: &'a rimz::config::MultiplexerConfig,
     pub(crate) width: SidebarWidth,
@@ -1358,6 +1382,7 @@ pub(crate) fn build_sidebar_opts(
         session_name: target.session_name.to_owned(),
         workspace_id: target.workspace_id.clone(),
         project_root: target.project_root.to_path_buf(),
+        extra_env: target.extra_env.clone(),
         cwd: target.cwd.to_path_buf(),
         width: target.width,
         birth_size: target.birth_size(width_override),

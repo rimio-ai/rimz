@@ -98,6 +98,9 @@ impl ZellijBackend {
         for (key, value) in crate::workspace::pin_env(&opts.workspace_id, &opts.project_root) {
             spec = spec.env(key, value);
         }
+        for (key, value) in &opts.extra_env {
+            spec = spec.env(key, value);
+        }
         // Zellij fixes each pane's TERM at server birth from this process's
         // environment and never re-asserts it. A non-PTY birth carries no TERM,
         // so ncurses apps in the room see the compiled default `unknown` and

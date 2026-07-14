@@ -52,6 +52,7 @@ pub(crate) mod transcript_fs;
 pub mod turns;
 pub mod version;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -1084,6 +1085,12 @@ pub trait AgentAdapter: Send + Sync {
     /// integration cannot drive.
     fn launch_env(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()
+    }
+
+    /// Environment a newly-born room exports for direct agent launches. The
+    /// mux layer carries this opaque map; provider policy stays in adapters.
+    fn room_env(&self, _runtime: &crate::store::RuntimePaths) -> BTreeMap<String, String> {
+        BTreeMap::new()
     }
 
     /// Write or merge the adapter's hook config into the agent's per-user

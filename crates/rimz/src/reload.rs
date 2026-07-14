@@ -336,6 +336,7 @@ fn reconcile_live(
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),
         project_root: ws.project_root.clone(),
+        extra_env: crate::agents::registry::room_env(runtime),
         cwd: ws.project_root.clone(),
         width,
         // A reload can run from a terminal unrelated to the session's clients,
