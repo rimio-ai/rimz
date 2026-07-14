@@ -28,8 +28,9 @@ use serde_json::json;
 
 use super::AskKind;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
+    IntegrationConcern, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
 use super::managed_source::ManagedSource;
@@ -71,7 +72,11 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         local_session_discovery: false,
         daemon_hooked_sessions: false,
         hook_install: true,
-        implicit_unlimited_window_mins: &[],
+        implicit_unlimited_windows: &[ImplicitUnlimitedWindow::sub_provider(
+            5 * 60,
+            "openai",
+            "oauth",
+        )],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: false,
             windows_defer_to_fresh_realtime: false,
@@ -857,6 +862,14 @@ impl AgentAdapter for OpencodeAdapter {
 
     fn oauth_credentials_stamp(&self) -> Option<u64> {
         oauth_usage::credentials_stamp()
+    }
+
+    fn oauth_account_key(&self) -> Option<String> {
+        oauth_usage::current_account_key()
+    }
+
+    fn oauth_account_scope(&self) -> crate::agents::ProviderAccountScope {
+        oauth_usage::current_account_scope()
     }
 }
 

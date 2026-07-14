@@ -72,9 +72,9 @@ pub use context::{
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe, ResetCredits};
 pub use descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
-    program_names_kind,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
+    ImplicitUnlimitedWindowApplicability, IntegrationConcern, PlanLabel, RealtimeUsageChannel,
+    RemoteControlCapability, ThreadKey, ToolClassification, program_names_kind,
 };
 pub use emblems::{emblem_lines, fallback_emblem};
 pub(crate) use identity::{

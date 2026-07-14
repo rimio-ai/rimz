@@ -56,12 +56,10 @@ pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
 /// of staying blank until a live session reports. Read-modify-write over the
 /// existing cache; other kinds are preserved untouched.
 ///
-/// Best-effort and racy by contract: the producer rewrites this file each frame
-/// from the panels (live-reading-or-prior), so a write here can be clobbered by a
-/// concurrent producer frame. It converges within a frame or two because the
-/// producer carries the prior reading forward, and the out-of-band fetch is
-/// throttled — so a lost write is simply retried. Used by the detached
-/// `rimz agents refresh-usage` helper, never on the per-tick path.
+/// Detached authoritative writers wait for the producer's short critical
+/// section so an accepted OAuth observation is published before its five-minute
+/// attempt throttle advances. Used by the detached `rimz agents refresh-usage`
+/// helper, never on the per-tick path.
 pub fn merge_account_rate_limits(
     runtime: &RuntimePaths,
     kind: &str,
@@ -69,7 +67,10 @@ pub fn merge_account_rate_limits(
     windows: AgentRateLimits,
 ) {
     let path = runtime.shared_rate_limits_path();
-    let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {
+    let Some(_guard) = acquire_rate_limits_cache_lock(
+        &runtime.shared_rate_limits_lock(),
+        "cache.rate_limits_merge_lock",
+    ) else {
         return;
     };
     let mut cache = read_rate_limits_cache(&path);
@@ -79,44 +80,13 @@ pub fn merge_account_rate_limits(
     // official reading settles the question the debounce was waiting on.
     let observed_at = Timestamp::now();
     let mut windows = windows.stamped_at(observed_at);
-    if !windows.windows.is_empty() {
-        let reported: BTreeSet<u32> = windows
-            .windows
-            .iter()
-            .filter(|window| window.scope.is_none())
-            .filter_map(|window| window.duration_mins)
-            .collect();
-        let declared = descriptor_by_kind(kind)
-            .map(|descriptor| descriptor.capabilities.implicit_unlimited_window_mins)
-            .unwrap_or(&[]);
-        let expected: BTreeSet<u32> = cache
-            .entries
-            .get(kind)
-            .filter(|entry| entry.scope == scope)
-            .into_iter()
-            .flat_map(|entry| {
-                entry
-                    .limits
-                    .windows
-                    .iter()
-                    .filter(|window| window.scope.is_none())
-                    .filter_map(|window| window.duration_mins)
-            })
-            .chain(declared.iter().copied())
-            .collect();
-        windows.windows.extend(
-            expected
-                .into_iter()
-                .filter(|duration| !reported.contains(duration))
-                .map(|duration_mins| RateLimitWindow {
-                    duration_mins: Some(duration_mins),
-                    observed_at: Some(observed_at),
-                    source: crate::agents::context::WindowSource::Authoritative,
-                    lifted: true,
-                    ..Default::default()
-                }),
-        );
-    }
+    let prior = cache
+        .entries
+        .get(kind)
+        .filter(|entry| entry.scope == scope)
+        .map(|entry| entry.limits.windows.as_slice())
+        .unwrap_or_default();
+    complete_omitted_duration_windows(kind, &scope, prior, &mut windows);
     cache.entries.insert(
         kind.to_owned(),
         RateLimitCacheEntry {
@@ -129,11 +99,14 @@ pub fn merge_account_rate_limits(
 }
 
 /// Drop one provider kind's account-scoped windows after the local OAuth account
-/// key changes. Best-effort: a contended lock or absent kind is a no-op; the
-/// next refresh helper retries.
+/// key changes. The detached writer waits for normal producer contention; a
+/// real lock acquisition failure or absent kind is a no-op.
 pub fn drop_kind_rate_limits(runtime: &RuntimePaths, kind: &str) {
     let path = runtime.shared_rate_limits_path();
-    let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {
+    let Some(_guard) = acquire_rate_limits_cache_lock(
+        &runtime.shared_rate_limits_lock(),
+        "cache.rate_limits_drop_lock",
+    ) else {
         return;
     };
     let mut cache = read_rate_limits_cache(&path);
@@ -290,6 +263,78 @@ fn try_rate_limits_cache_lock(path: &Path) -> Option<std::fs::File> {
     Some(file)
 }
 
+fn acquire_rate_limits_cache_lock(
+    path: &Path,
+    operation: &'static str,
+) -> Option<crate::store::lock::WorkspaceLock> {
+    match crate::store::lock::WorkspaceLock::acquire(path) {
+        Ok(guard) => Some(guard),
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                tags.operation = operation,
+                error = &err as &dyn std::error::Error,
+                "sidebar rate-limits cache lock failed",
+            );
+            None
+        }
+    }
+}
+
+/// Complete duration windows omitted by a stamped authoritative temporal
+/// reading. Expected durations come only from same-scope persisted truth and
+/// scope-applicable descriptor declarations; named quotas and best-effort
+/// readings cannot claim that an absent limit is lifted.
+fn complete_omitted_duration_windows(
+    kind: &str,
+    scope: &ProviderAccountScope,
+    prior: &[RateLimitWindow],
+    current: &mut AgentRateLimits,
+) {
+    let Some(observed_at) = current
+        .windows
+        .iter()
+        .filter(|window| {
+            window.scope.is_none()
+                && window.duration_mins.is_some()
+                && window.source.is_authoritative()
+        })
+        .filter_map(|window| window.observed_at)
+        .max()
+    else {
+        return;
+    };
+    let reported: BTreeSet<u32> = current
+        .windows
+        .iter()
+        .filter(|window| window.scope.is_none())
+        .filter_map(|window| window.duration_mins)
+        .collect();
+    let declared = descriptor_by_kind(kind).into_iter().flat_map(|descriptor| {
+        descriptor
+            .capabilities
+            .implicit_unlimited_window_mins(scope)
+    });
+    let expected: BTreeSet<u32> = prior
+        .iter()
+        .filter(|window| window.scope.is_none())
+        .filter_map(|window| window.duration_mins)
+        .chain(declared)
+        .collect();
+    current.windows.extend(
+        expected
+            .into_iter()
+            .filter(|duration| !reported.contains(duration))
+            .map(|duration_mins| RateLimitWindow {
+                duration_mins: Some(duration_mins),
+                observed_at: Some(observed_at),
+                source: crate::agents::context::WindowSource::Authoritative,
+                lifted: true,
+                ..Default::default()
+            }),
+    );
+}
+
 fn apply_rate_limit_cache_with(
     snapshot: &mut SidebarSnapshot,
     cached: &RateLimitsCache,
@@ -310,17 +355,29 @@ fn apply_rate_limit_cache_with(
             panel.windows.clear();
             continue;
         }
-        // Index this kind's live (this-frame) and cached (last-known) readings by
-        // stable window identity, so each duration or named quota is fused independently.
-        let live: BTreeMap<RateLimitWindowKey, RateLimitWindow> =
-            std::mem::take(&mut panel.windows)
-                .into_iter()
-                .map(|window| (window.key(), window))
-                .collect();
+        // Complete authoritative omissions against matching persisted truth
+        // before indexing the live reading, then fuse each stable duration or
+        // named-quota identity independently.
         let prior_entry = cached
             .entries
             .get(&panel.kind)
             .filter(|entry| entry.scope == panel.account_scope);
+        let mut live_limits = AgentRateLimits {
+            windows: std::mem::take(&mut panel.windows),
+        };
+        complete_omitted_duration_windows(
+            &panel.kind,
+            &panel.account_scope,
+            prior_entry
+                .map(|entry| entry.limits.windows.as_slice())
+                .unwrap_or_default(),
+            &mut live_limits,
+        );
+        let live: BTreeMap<RateLimitWindowKey, RateLimitWindow> = live_limits
+            .windows
+            .into_iter()
+            .map(|window| (window.key(), window))
+            .collect();
         let prev: BTreeMap<RateLimitWindowKey, RateLimitWindow> = prior_entry
             .into_iter()
             .flat_map(|entry| entry.limits.windows.iter())
@@ -373,9 +430,9 @@ fn apply_rate_limit_cache_with(
             reset_kinds.insert(panel.kind.clone());
         }
 
-        // Persist ground truth only: the fused readings and any in-flight refill.
-        // The synthesized full or unknown windows below are never written — they
-        // are recomputed each frame.
+        // Persist fused truth, including authoritative lifted rows, and any
+        // in-flight refill. Display-only reset projections and unknown windows
+        // below are recomputed each frame.
         if persist && (!truth.is_empty() || !pending.is_empty()) {
             next.entries.insert(
                 panel.kind.clone(),

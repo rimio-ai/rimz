@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use super::spend::{latest_message_provider, opencode_data_dirs};
 use crate::agents::account::AccountProbe;
-use crate::agents::context::AgentAccount;
+use crate::agents::context::{AgentAccount, ProviderAccountScope};
 
 pub(crate) fn probe() -> AccountProbe {
     let Some(path) = auth_path() else {
@@ -56,8 +56,12 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
     else {
         return AccountProbe::LoggedOut;
     };
+    let scope = (credential.kind.as_deref() == Some("oauth"))
+        .then(|| oauth_scope(provider))
+        .flatten()
+        .unwrap_or_default();
     AccountProbe::Found(AgentAccount {
-        scope: Default::default(),
+        scope,
         plan: Some(sub_label(provider, credential.kind.as_deref())),
         account_id: None,
         metered: match credential.kind.as_deref() {
@@ -69,6 +73,15 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
         sub_provider: Some(provider.clone()),
         credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
     })
+}
+
+/// Stable quota-cache scope for OAuth providers OpenCode can query directly.
+pub(super) fn oauth_scope(provider: &str) -> Option<ProviderAccountScope> {
+    match provider {
+        "openai" | "openai-codex" => Some(ProviderAccountScope::sub_provider("openai", "oauth")),
+        "anthropic" => Some(ProviderAccountScope::sub_provider("anthropic", "oauth")),
+        _ => None,
+    }
 }
 
 fn sub_label(provider: &str, kind: Option<&str>) -> String {
@@ -120,8 +133,23 @@ mod tests {
         let account = found(probe_auth(&path, None), "oauth account");
         assert_eq!(account.plan.as_deref(), Some("Anthropic OAuth"));
         assert_eq!(account.metered, Some(true));
+        assert_eq!(
+            account.scope,
+            ProviderAccountScope::sub_provider("anthropic", "oauth")
+        );
         assert_eq!(account.sub_provider.as_deref(), Some("anthropic"));
         assert!(account.credentials_updated_at_ms.is_some());
+
+        let path = write_auth(
+            dir.path(),
+            r#"{ "openai-codex": { "type": "oauth", "access": "a" } }"#,
+        );
+        let account = found(probe_auth(&path, None), "OpenAI OAuth account");
+        assert_eq!(account.plan.as_deref(), Some("OpenAI OAuth"));
+        assert_eq!(
+            account.scope,
+            ProviderAccountScope::sub_provider("openai", "oauth")
+        );
 
         let path = write_auth(
             dir.path(),
@@ -136,6 +164,7 @@ mod tests {
         );
         assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
         assert_eq!(account.metered, Some(false));
+        assert_eq!(account.scope, ProviderAccountScope::KindWide);
 
         let path = write_auth(
             dir.path(),
@@ -153,6 +182,7 @@ mod tests {
         );
         assert_eq!(account.plan.as_deref(), Some("OpenCode Wellknown"));
         assert_eq!(account.metered, None);
+        assert_eq!(account.scope, ProviderAccountScope::KindWide);
     }
 
     #[test]

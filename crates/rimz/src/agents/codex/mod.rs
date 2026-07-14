@@ -79,8 +79,9 @@ pub use self::transcript::{
 use super::AskKind;
 use super::context::AgentContext;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
+    IntegrationConcern, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::hook_types::SessionSource;
 use super::lifecycle::{LifecycleSignal, LifecycleSignalKind};
@@ -182,7 +183,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         local_session_discovery: false,
         daemon_hooked_sessions: true,
         hook_install: true,
-        implicit_unlimited_window_mins: &[5 * 60],
+        implicit_unlimited_windows: &[ImplicitUnlimitedWindow::kind_wide(5 * 60)],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: true,
             windows_defer_to_fresh_realtime: false,

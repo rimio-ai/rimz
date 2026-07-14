@@ -9,6 +9,11 @@ use crate::sidebar::test_support::{
 };
 use jiff::SignedDuration;
 
+fn authoritative(mut window: RateLimitWindow) -> RateLimitWindow {
+    window.source = WindowSource::Authoritative;
+    window
+}
+
 fn kind_wide_cache(
     refreshed_at_ms: u64,
     windows: BTreeMap<String, AgentRateLimits>,
@@ -719,7 +724,7 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
     );
 
     let only_week = AgentRateLimits {
-        windows: vec![rl_window_mins(41, None, seven_days)],
+        windows: vec![authoritative(rl_window_mins(41, None, seven_days))],
     };
     merge_account_rate_limits(&runtime, "codex", only_week.clone());
     merge_account_rate_limits(&runtime, "codex", only_week);
@@ -749,8 +754,8 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
         "codex",
         AgentRateLimits {
             windows: vec![
-                rl_window_mins(2, None, five_hours),
-                rl_window_mins(42, None, seven_days),
+                authoritative(rl_window_mins(2, None, five_hours)),
+                authoritative(rl_window_mins(42, None, seven_days)),
             ],
         },
     );
@@ -820,7 +825,7 @@ fn codex_cold_cache_synthesizes_declared_omitted_window_as_lifted() {
         &runtime,
         "codex",
         AgentRateLimits {
-            windows: vec![rl_window_mins(41, None, seven_days)],
+            windows: vec![authoritative(rl_window_mins(41, None, seven_days))],
         },
     );
 
@@ -854,8 +859,8 @@ fn codex_reported_declared_window_stays_real() {
         "codex",
         AgentRateLimits {
             windows: vec![
-                rl_window_mins(12, None, 5 * 60),
-                rl_window_mins(41, None, 7 * 24 * 60),
+                authoritative(rl_window_mins(12, None, 5 * 60)),
+                authoritative(rl_window_mins(41, None, 7 * 24 * 60)),
             ],
         },
     );
@@ -869,6 +874,121 @@ fn codex_reported_declared_window_stays_real() {
             .iter()
             .find(|window| window.duration_mins == Some(5 * 60))
             .is_some_and(|window| window.used_percentage == Some(12))
+    );
+}
+
+#[test]
+fn authoritative_live_panel_completes_and_persists_codex_omission_in_one_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let observed_at = Timestamp::now();
+    let seven_days = 7 * 24 * 60;
+    let weekly = RateLimitWindow {
+        observed_at: Some(observed_at),
+        ..authoritative(rl_window_mins(41, None, seven_days))
+    };
+    let mut snapshot = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel("codex", vec![weekly])],
+    );
+
+    apply_rate_limit_cache(&mut snapshot, &runtime, true);
+
+    assert_eq!(snapshot.providers[0].windows.len(), 2);
+    assert!(
+        snapshot.providers[0]
+            .windows
+            .iter()
+            .any(|window| window.duration_mins == Some(300) && window.lifted)
+    );
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert!(
+        cache_limits(&cache, "codex")
+            .windows
+            .iter()
+            .any(|window| window.duration_mins == Some(300) && window.lifted),
+        "same-frame completion is persisted as fused truth"
+    );
+
+    let real = [(300, 2), (seven_days, 42)]
+        .into_iter()
+        .map(|(duration, used)| RateLimitWindow {
+            observed_at: Some(Timestamp::now()),
+            ..authoritative(rl_window_mins(used, None, duration))
+        })
+        .collect();
+    let mut reported = snapshot_with_panels(workspace, vec![provider_panel("codex", real)]);
+    apply_rate_limit_cache(&mut reported, &runtime, true);
+    assert!(
+        reported.providers[0]
+            .windows
+            .iter()
+            .all(|window| !window.lifted)
+    );
+    assert!(
+        cache_limits(
+            &read_rate_limits_cache(&runtime.shared_rate_limits_path()),
+            "codex",
+        )
+        .windows
+        .iter()
+        .all(|window| !window.lifted),
+        "a real 5h reading replaces the persisted lifted row"
+    );
+}
+
+#[test]
+fn completion_requires_authoritative_scope_applicable_temporal_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let observed_at = Timestamp::now();
+    let seven_days = 7 * 24 * 60;
+    let weekly = |source| RateLimitWindow {
+        observed_at: Some(observed_at),
+        source,
+        ..rl_window_mins(41, None, seven_days)
+    };
+
+    let mut best_effort = snapshot_with_panels(
+        workspace.clone(),
+        vec![provider_panel(
+            "codex",
+            vec![weekly(WindowSource::BestEffort)],
+        )],
+    );
+    apply_rate_limit_cache(&mut best_effort, &runtime, false);
+    assert_eq!(best_effort.providers[0].windows.len(), 1);
+
+    for kind in ["pi", "opencode"] {
+        let mut openai_panel = provider_panel(kind, vec![weekly(WindowSource::Authoritative)]);
+        openai_panel.account_scope = ProviderAccountScope::sub_provider("openai", "oauth");
+        let mut openai = snapshot_with_panels(workspace.clone(), vec![openai_panel]);
+        apply_rate_limit_cache(&mut openai, &runtime, false);
+        assert_eq!(openai.providers[0].windows.len(), 2, "{kind} OpenAI");
+
+        let mut anthropic_panel = provider_panel(kind, vec![weekly(WindowSource::Authoritative)]);
+        anthropic_panel.account_scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
+        let mut anthropic = snapshot_with_panels(workspace.clone(), vec![anthropic_panel]);
+        apply_rate_limit_cache(&mut anthropic, &runtime, false);
+        assert_eq!(anthropic.providers[0].windows.len(), 1, "{kind} Anthropic");
+    }
+
+    let mut openai_seed = provider_panel("pi", vec![weekly(WindowSource::Authoritative)]);
+    openai_seed.account_scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let mut seeded = snapshot_with_panels(workspace.clone(), vec![openai_seed]);
+    apply_rate_limit_cache(&mut seeded, &runtime, true);
+    let mut switched_panel = provider_panel("pi", vec![weekly(WindowSource::Authoritative)]);
+    switched_panel.account_scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
+    let mut switched = snapshot_with_panels(workspace, vec![switched_panel]);
+    apply_rate_limit_cache(&mut switched, &runtime, false);
+    assert_eq!(
+        switched.providers[0].windows.len(),
+        1,
+        "same-kind prior windows from another scope are excluded"
     );
 }
 
@@ -1008,6 +1128,57 @@ fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds
         "the contending producer does not publish its partial provider set"
     );
     lock_file.unlock().unwrap();
+}
+
+#[test]
+fn detached_authoritative_merge_waits_for_lock_and_preserves_other_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.shared_rate_limits_path();
+    write_rate_limits_cache(
+        &path,
+        &kind_wide_cache(
+            1,
+            BTreeMap::from([(
+                "claude".to_owned(),
+                AgentRateLimits {
+                    windows: vec![rl_window(20, None)],
+                },
+            )]),
+            BTreeMap::new(),
+        ),
+    );
+    let held =
+        crate::store::lock::WorkspaceLock::acquire(&runtime.shared_rate_limits_lock()).unwrap();
+    let worker_runtime = runtime.clone();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        merge_account_rate_limits(
+            &worker_runtime,
+            "codex",
+            AgentRateLimits {
+                windows: vec![authoritative(rl_window(55, None))],
+            },
+        );
+        finished_tx.send(()).unwrap();
+    });
+    assert!(
+        finished_rx
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err(),
+        "the detached merge waits instead of discarding a fetched observation"
+    );
+
+    drop(held);
+    finished_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    worker.join().unwrap();
+    let cache = read_rate_limits_cache(&path);
+    assert!(cache.entries.contains_key("claude"));
+    assert!(cache.entries.contains_key("codex"));
 }
 
 // ── fuse_window: source- and time-aware refill trust ────────────────────────

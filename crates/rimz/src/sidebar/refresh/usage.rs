@@ -466,6 +466,77 @@ mod tests {
     }
 
     #[test]
+    fn delegated_oauth_identity_stays_throttled_and_keeps_cached_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let scope = ProviderAccountScope::sub_provider("openai", "oauth");
+        let entries = ["pi", "opencode"]
+            .into_iter()
+            .map(|kind| {
+                (
+                    kind.to_owned(),
+                    ProviderCreditsEntry {
+                        scope: scope.clone(),
+                        account_key: Some(format!("{kind}-account")),
+                        ok: true,
+                        ..ProviderCreditsEntry::default()
+                    },
+                )
+            })
+            .collect();
+        crate::sidebar::refresh::credits::write_credits_cache(
+            &runtime.shared_credits_path(),
+            &crate::sidebar::refresh::credits::CreditsCache {
+                refreshed_at_ms: 1,
+                entries,
+            },
+        );
+
+        for kind in ["pi", "opencode"] {
+            let account_key = format!("{kind}-account");
+            merge_account_rate_limits(
+                &runtime,
+                kind,
+                scope.clone(),
+                AgentRateLimits {
+                    windows: vec![RateLimitWindow {
+                        duration_mins: Some(7 * 24 * 60),
+                        used_percentage: Some(50),
+                        ..RateLimitWindow::default()
+                    }],
+                },
+            );
+
+            assert!(usage_probe_due_with_scope(
+                &runtime,
+                kind,
+                None,
+                Some(&account_key),
+                &scope,
+            ));
+            assert!(
+                !usage_probe_due_with_scope(&runtime, kind, None, Some(&account_key), &scope,),
+                "matching {kind} preflight identity keeps the fresh marker throttled"
+            );
+            assert!(!drop_windows_on_account_change(
+                &runtime,
+                kind,
+                Some(&(scope.clone(), Some(account_key.clone()))),
+                &scope,
+                Some(&account_key),
+            ));
+            assert!(
+                crate::agents::read_rate_limits_cache(&runtime.shared_rate_limits_path())
+                    .entries
+                    .contains_key(kind),
+                "matching {kind} owner identity keeps its cached windows"
+            );
+        }
+    }
+
+    #[test]
     fn usage_probe_marker_tracks_credential_stamp_and_accepts_legacy_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let runtime =

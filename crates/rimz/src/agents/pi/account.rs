@@ -19,7 +19,7 @@ use std::path::Path;
 
 use super::spend::{pi_config_dir, pi_session_files};
 use crate::agents::account::AccountProbe;
-use crate::agents::context::AgentAccount;
+use crate::agents::context::{AgentAccount, ProviderAccountScope};
 use crate::agents::read_transcript_tail;
 
 /// Probe Pi's account: parse the auth file and label the used subscription.
@@ -67,8 +67,12 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
     else {
         return AccountProbe::LoggedOut;
     };
+    let scope = (credential.kind.as_deref() == Some("oauth"))
+        .then(|| oauth_scope(provider))
+        .flatten()
+        .unwrap_or_default();
     AccountProbe::Found(AgentAccount {
-        scope: Default::default(),
+        scope,
         plan: Some(sub_label(provider, credential.kind.as_deref())),
         account_id: None,
         // The reference mapping: an OAuth credential is a metered
@@ -85,6 +89,15 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
         sub_provider: Some(provider.clone()),
         credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
     })
+}
+
+/// Stable quota-cache scope for OAuth providers Pi can query directly.
+pub(super) fn oauth_scope(provider: &str) -> Option<ProviderAccountScope> {
+    match provider {
+        "openai" | "openai-codex" => Some(ProviderAccountScope::sub_provider("openai", "oauth")),
+        "anthropic" => Some(ProviderAccountScope::sub_provider("anthropic", "oauth")),
+        _ => None,
+    }
 }
 
 /// The raw plan string for a credential: the provider's display name plus the
@@ -180,6 +193,10 @@ mod tests {
         let account = found(probe_auth(&path, None), "oauth account");
         assert_eq!(account.plan.as_deref(), Some("Anthropic OAuth"));
         assert_eq!(account.metered, Some(true));
+        assert_eq!(
+            account.scope,
+            ProviderAccountScope::sub_provider("anthropic", "oauth")
+        );
         assert_eq!(account.version, None);
         // The raw credential key rides along, so the dashboard can name the
         // backing subscription Pi is using.
@@ -199,6 +216,7 @@ mod tests {
         );
         assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
         assert_eq!(account.metered, Some(false));
+        assert_eq!(account.scope, ProviderAccountScope::KindWide);
 
         let path = write_auth(
             dir.path(),
@@ -210,6 +228,10 @@ mod tests {
         let account = found(probe_auth(&path, None), "oauth lead");
         assert_eq!(account.plan.as_deref(), Some("OpenAI OAuth"));
         assert_eq!(account.metered, Some(true));
+        assert_eq!(
+            account.scope,
+            ProviderAccountScope::sub_provider("openai", "oauth")
+        );
     }
 
     #[test]

@@ -98,7 +98,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         local_session_discovery: true,
         daemon_hooked_sessions: false,
         hook_install: true,
-        implicit_unlimited_window_mins: &[],
+        implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
             covers_account_while_live: true,
             windows_defer_to_fresh_realtime: false,
