@@ -66,7 +66,7 @@ pub(super) fn probe_rate_limits() -> Result<AgentRateLimits, LocalApiError> {
     query(
         RETRIEVE_QUOTA_PATH,
         r#"{"forceRefresh":true}"#,
-        |body, at| wire::parse_rate_limits(body, at),
+        wire::parse_rate_limits,
     )
 }
 
