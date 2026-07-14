@@ -10,6 +10,7 @@ use crate::common::{CommandTimeoutExt, Env};
 #[test]
 fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint() {
     let env = Env::new();
+    let claim_id = env.seed_usage_claim("claude");
     let (origin, server) = serve_after_failures(
         0,
         r#"{
@@ -51,6 +52,8 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
             "claude",
             "--workspace-id",
             env.workspace_id.as_str(),
+            "--claim-id",
+            &claim_id,
             "--merge-windows",
         ])
         .env(
@@ -111,6 +114,7 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
 #[test]
 fn claude_refresh_usage_retries_transient_http_failures() {
     let env = Env::new();
+    let claim_id = env.seed_usage_claim("claude");
     let (origin, server) = serve_after_failures(
         2,
         r#"{
@@ -143,6 +147,8 @@ fn claude_refresh_usage_retries_transient_http_failures() {
             "claude",
             "--workspace-id",
             env.workspace_id.as_str(),
+            "--claim-id",
+            &claim_id,
             "--merge-windows",
         ])
         .env(
@@ -175,6 +181,7 @@ fn claude_refresh_usage_retries_transient_http_failures() {
 #[test]
 fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unreachable() {
     let env = Env::new();
+    let claim_id = env.seed_usage_claim("codex");
     let (origin, server) = serve_after_failures(
         0,
         r#"{
@@ -222,6 +229,8 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
             "codex",
             "--workspace-id",
             env.workspace_id.as_str(),
+            "--claim-id",
+            &claim_id,
         ])
         .env("RIMZ_CODEX_BIN", env.home_root.join("missing-codex"))
         .env("RIMZ_CODEX_APP_SERVER_SOCK", "")

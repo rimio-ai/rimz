@@ -11,7 +11,36 @@ use std::process::{Command, Stdio};
 use serde::Deserialize;
 
 use crate::agents::account::AccountProbe;
-use crate::agents::context::AgentAccount;
+use crate::agents::context::{AgentAccount, RateLimitWindow, WindowSource};
+use crate::agents::payload::non_empty_trimmed;
+
+/// Claude's named subscription budget durations.
+pub(crate) const FIVE_HOUR_MINS: u32 = 5 * 60;
+pub(crate) const SEVEN_DAY_MINS: u32 = 7 * 24 * 60;
+
+/// Normalize one already-parsed Claude subscription window.
+pub(crate) fn budget_window(
+    utilization: Option<f64>,
+    resets_at: Option<jiff::Timestamp>,
+    duration_mins: u32,
+    source: WindowSource,
+) -> Option<RateLimitWindow> {
+    let used_percentage = utilization.map(|value| {
+        let clamped = value.clamp(0.0, 100.0);
+        if clamped > 0.0 && clamped < 100.0 {
+            clamped.round().min(99.0) as u8
+        } else {
+            clamped.round() as u8
+        }
+    });
+    (used_percentage.is_some() || resets_at.is_some()).then_some(RateLimitWindow {
+        used_percentage,
+        resets_at,
+        duration_mins: Some(duration_mins),
+        source,
+        ..Default::default()
+    })
+}
 
 /// Probe Claude's account via `claude auth status` (JSON on stdout). Captures
 /// stdout only — never inherits stdio — so it stays quiet in a TUI. A spawn
@@ -30,7 +59,11 @@ pub(crate) fn probe() -> AccountProbe {
     if !output.status.success() {
         return AccountProbe::Unavailable;
     }
-    parse_claude_auth(&output.stdout)
+    let mut probe = parse_claude_auth(&output.stdout);
+    if let AccountProbe::Found(account) = &mut probe {
+        account.credentials_updated_at_ms = super::oauth_usage::credentials_stamp();
+    }
+    probe
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -55,26 +88,20 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     if status.logged_in == Some(false) {
         return AccountProbe::LoggedOut;
     }
-    let auth_method = status.auth_method.and_then(non_empty_trimmed);
-    let plan = status.subscription_type.and_then(non_empty_trimmed);
+    let auth_method = status.auth_method.as_deref().and_then(non_empty_trimmed);
+    let plan = status
+        .subscription_type
+        .as_deref()
+        .and_then(non_empty_trimmed);
     if status.logged_in != Some(true) && plan.is_none() && auth_method.is_none() {
         return AccountProbe::LoggedOut;
     }
     let metered = auth_method.map(|method| method != "apiKey");
     AccountProbe::Found(AgentAccount {
-        scope: Default::default(),
         plan,
-        account_id: None,
         metered,
-        version: None,
-        sub_provider: None,
-        credentials_updated_at_ms: None,
+        ..Default::default()
     })
-}
-
-fn non_empty_trimmed(value: String) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
 }
 
 #[cfg(test)]
@@ -133,5 +160,29 @@ mod tests {
             parse_claude_auth(b"not json"),
             AccountProbe::Unavailable
         ));
+    }
+
+    #[test]
+    fn budget_window_owns_clamping_omission_and_source() {
+        assert!(budget_window(None, None, FIVE_HOUR_MINS, WindowSource::BestEffort).is_none());
+
+        let reset = "2026-07-06T12:00:00Z".parse().unwrap();
+        let window = budget_window(
+            Some(99.5),
+            Some(reset),
+            SEVEN_DAY_MINS,
+            WindowSource::Authoritative,
+        )
+        .unwrap();
+        assert_eq!(window.used_percentage, Some(99));
+        assert_eq!(window.resets_at, Some(reset));
+        assert_eq!(window.duration_mins, Some(10_080));
+        assert!(window.source.is_authoritative());
+        assert_eq!(
+            budget_window(Some(100.0), None, FIVE_HOUR_MINS, WindowSource::BestEffort)
+                .unwrap()
+                .used_percentage,
+            Some(100)
+        );
     }
 }

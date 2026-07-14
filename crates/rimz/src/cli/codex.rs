@@ -175,7 +175,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
         codex::refresh_app_server_enrichment(Some(session_id), model, Some(&broker_socket))
     else {
         let oauth_wrote = oauth_enabled
-            && rimz::sidebar::refresh::merge_oauth_usage_if_due(&runtime, "codex", true);
+            && rimz::sidebar::refresh::merge_account_usage_if_due(&runtime, "codex", true);
         // App-server unreachable / nothing to record. Transcript context, if it
         // changed, was already written above.
         if wrote || oauth_wrote {
@@ -193,12 +193,17 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
             || enrichment.extra_credits.is_some()
             || enrichment.reset_credits.is_some())
     {
-        rimz::sidebar::refresh::merge_provider_realtime_usage(
+        rimz::sidebar::refresh::publish_account_usage_snapshot(
             &runtime,
             "codex",
-            realtime_plan.clone(),
-            enrichment.extra_credits.clone(),
-            enrichment.reset_credits.clone(),
+            rimz::ProviderAccountScope::KindWide,
+            rimz::AccountUsageSnapshot {
+                plan: realtime_plan.clone(),
+                rate_limits: enrichment.context.rate_limits.clone(),
+                extra_credits: enrichment.extra_credits.clone(),
+                reset_credits: enrichment.reset_credits.clone(),
+            },
+            true,
         );
     }
     if oauth_enabled
@@ -206,7 +211,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
             || enrichment.extra_credits.is_none()
             || enrichment.context.rate_limits.is_none())
     {
-        rimz::sidebar::refresh::merge_oauth_usage_if_due(
+        rimz::sidebar::refresh::merge_account_usage_if_due(
             &runtime,
             "codex",
             enrichment.context.rate_limits.is_none(),

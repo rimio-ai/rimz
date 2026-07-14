@@ -343,9 +343,9 @@ impl AgentAdapter for PluginAdapter {
         probes::account(self.descriptor.kind, self.plugin_dir, argv)
     }
 
-    fn probe_oauth_usage(&self) -> super::OauthUsageProbe {
+    fn probe_account_usage(&self) -> super::AccountUsageProbe {
         let Some(argv) = self.manifest.probes.account.as_deref() else {
-            return super::OauthUsageProbe::Unsupported;
+            return super::AccountUsageProbe::Unsupported;
         };
         probes::account_usage(self.descriptor.kind, self.plugin_dir, argv)
     }
@@ -508,9 +508,7 @@ fn build_descriptor(
             registers_lazily: manifest.capabilities.registers_lazily,
             local_session_discovery: false,
             daemon_hooked_sessions: false,
-            implicit_unlimited_windows: &[],
             realtime_usage: RealtimeUsageChannel {
-                covers_account_while_live: false,
                 windows_defer_to_fresh_realtime: false,
             },
             remote_control: RemoteControlCapability {

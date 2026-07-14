@@ -60,9 +60,7 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
-            covers_account_while_live: false,
             windows_defer_to_fresh_realtime: false,
         },
         remote_control: RemoteControlCapability {
@@ -628,8 +626,8 @@ impl AgentAdapter for CopilotAdapter {
         account::probe()
     }
 
-    fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
-        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "copilot")
+    fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
+        oauth_usage::probe()
     }
 
     fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {

@@ -133,46 +133,22 @@ fn clamp_pct(value: Option<f64>) -> Option<u8> {
     value.map(|v| v.round().clamp(0.0, 100.0) as u8)
 }
 
-/// Round rate-limit usage without turning a still-live sliver into exhaustion.
-pub(crate) fn clamp_rate_limit_used_pct(value: Option<f64>) -> Option<u8> {
-    value.map(|v| {
-        let clamped = v.clamp(0.0, 100.0);
-        if clamped > 0.0 && clamped < 100.0 {
-            clamped.round().min(99.0) as u8
-        } else {
-            clamped.round() as u8
-        }
-    })
-}
-
 fn non_empty<T: Default + PartialEq>(value: T) -> Option<T> {
     (value != T::default()).then_some(value)
 }
 
-/// Claude's two named wire windows, in minutes — stamped onto each window so the
-/// dashboard labels and ages it like any other provider's.
-pub(crate) const CLAUDE_FIVE_HOUR_MINS: u32 = 5 * 60;
-pub(crate) const CLAUDE_SEVEN_DAY_MINS: u32 = 7 * 24 * 60;
-
-/// Map one of Claude's named wire windows to a [`RateLimitWindow`], stamping the
-/// `duration_mins` the kind implies (Claude omits it from the wire). `None` when
-/// the wire window carried neither a usage percentage nor a reset.
-fn rate_window(field: Option<RateWindowField>, duration_mins: u32) -> Option<RateLimitWindow> {
+fn parse_rate_window(
+    field: Option<RateWindowField>,
+    duration_mins: u32,
+) -> Option<RateLimitWindow> {
     let field = field?;
-    let used_percentage = clamp_rate_limit_used_pct(field.used_percentage);
     let resets_at = field.resets_at.and_then(|s| Timestamp::from_second(s).ok());
-    (used_percentage.is_some() || resets_at.is_some()).then_some(RateLimitWindow {
-        used_percentage,
+    super::account::budget_window(
+        field.used_percentage,
         resets_at,
-        duration_mins: Some(duration_mins),
-        // Statusline readings are best-effort: an idle session re-emits this
-        // payload with a fresh stamp, so the fusion judges freshness by the
-        // shortest window's reset and confirms a drop before trusting it.
-        // `observed_at` is stamped in `into_context`, where the capture time is known.
-        observed_at: None,
-        source: WindowSource::BestEffort,
-        ..Default::default()
-    })
+        duration_mins,
+        WindowSource::BestEffort,
+    )
 }
 
 fn current_usage(field: Option<CurrentUsageField>) -> Option<AgentCurrentUsage> {
@@ -445,8 +421,8 @@ impl StatuslinePayload {
             session_usage: None,
         });
         let windows: Vec<RateLimitWindow> = [
-            rate_window(self.rate_limits.five_hour, CLAUDE_FIVE_HOUR_MINS),
-            rate_window(self.rate_limits.seven_day, CLAUDE_SEVEN_DAY_MINS),
+            parse_rate_window(self.rate_limits.five_hour, super::account::FIVE_HOUR_MINS),
+            parse_rate_window(self.rate_limits.seven_day, super::account::SEVEN_DAY_MINS),
         ]
         .into_iter()
         .flatten()
@@ -495,6 +471,7 @@ impl StatuslinePayload {
 
 #[cfg(test)]
 mod tests {
+    use super::super::account;
     use super::*;
     use serde_json::json;
 
@@ -579,7 +556,7 @@ mod tests {
         assert_eq!(usage.cache_read_input_tokens, Some(2000));
 
         let rate = ctx.rate_limits.unwrap();
-        let five = window_by_mins(&rate, CLAUDE_FIVE_HOUR_MINS);
+        let five = window_by_mins(&rate, account::FIVE_HOUR_MINS);
         // 23.5 rounds to 24.
         assert_eq!(five.used_percentage, Some(24));
         assert_eq!(five.resets_at, Timestamp::from_second(1738425600).ok());
@@ -593,7 +570,7 @@ mod tests {
             "into_context stamps the capture instant onto each window"
         );
         assert_eq!(
-            window_by_mins(&rate, CLAUDE_SEVEN_DAY_MINS).used_percentage,
+            window_by_mins(&rate, account::SEVEN_DAY_MINS).used_percentage,
             Some(41)
         );
 
@@ -646,7 +623,7 @@ mod tests {
             "rate_limits": { "five_hour": { "used_percentage": 10, "resets_at": i64::MIN } }
         }));
         let rate = ctx.rate_limits.unwrap();
-        let five = window_by_mins(&rate, CLAUDE_FIVE_HOUR_MINS);
+        let five = window_by_mins(&rate, account::FIVE_HOUR_MINS);
         assert_eq!(five.used_percentage, Some(10));
         assert!(five.resets_at.is_none());
 
@@ -658,12 +635,12 @@ mod tests {
         }));
         let rate = ctx.rate_limits.unwrap();
         assert_eq!(
-            window_by_mins(&rate, CLAUDE_FIVE_HOUR_MINS).used_percentage,
+            window_by_mins(&rate, account::FIVE_HOUR_MINS).used_percentage,
             Some(99),
             "99.5% used still leaves visible remaining budget"
         );
         assert_eq!(
-            window_by_mins(&rate, CLAUDE_SEVEN_DAY_MINS).used_percentage,
+            window_by_mins(&rate, account::SEVEN_DAY_MINS).used_percentage,
             Some(100),
             "exactly 100% used remains exhausted"
         );

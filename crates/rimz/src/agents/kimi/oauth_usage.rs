@@ -29,7 +29,7 @@ pub enum Error {
     Http { kind: HttpErrKind, host: String },
 }
 
-impl crate::agents::credits::OauthReportable for Error {
+impl crate::agents::credits::AccountUsageReportable for Error {
     fn should_report(&self) -> bool {
         !matches!(self, Self::NoCredentials | Self::Unavailable)
             && !matches!(self, Self::Http { kind, .. } if kind.is_auth_rejected())
@@ -45,10 +45,16 @@ struct Credentials {
     expires_at: Option<f64>,
 }
 
-pub fn fetch() -> Result<AccountUsageSnapshot, Error> {
-    refuse_managed_base_override()?;
-    let token = load_token(&super::account::credentials_path())?;
-    fetch_with(USAGE_URL, &token)
+pub fn probe() -> crate::agents::AccountUsageProbe {
+    let identity = crate::agents::AccountUsageIdentity {
+        credentials_stamp: credentials_stamp(),
+        ..Default::default()
+    };
+    let result = refuse_managed_base_override().and_then(|()| {
+        let token = load_token(&super::account::credentials_path())?;
+        fetch_with(USAGE_URL, &token)
+    });
+    crate::agents::credits::map_account_usage_probe(result, identity, "kimi")
 }
 
 fn refuse_managed_base_override() -> Result<(), Error> {

@@ -1,40 +1,23 @@
 //! Uniform provider account-usage refresh.
 //!
-//! Every metered provider has two account-usage channels: a *realtime* source
-//! (a live session's statusline/app-server/extension reading, folded per kind by
-//! the snapshot view) and an *API-query* source — a direct read of the
-//! provider's own quota surface using its local credential
-//! ([`AgentAdapter::probe_oauth_usage`](crate::agents::AgentAdapter::probe_oauth_usage)).
-//!
-//! This module owns the producer-side driver that schedules the API-query
-//! channel — one loop over the metered provider panels — and the child-side
-//! executor that performs the read under the shared single-flight. The actual
-//! network read runs in detached `rimz agents refresh-usage` helpers; the
-//! producer only decides whether to spawn them. Both halves write the same
-//! per-kind `rate_limits.json`/`credits.json` caches the realtime channel does,
-//! so the existing fusion reconciles the two sources with nothing keyed across
-//! providers.
+//! Sidebar producers claim due direct reads in `credits.json` before spawning a
+//! helper. Provider calls run outside cache locks; a matching nonce alone may
+//! publish the result. Realtime and direct readings share one snapshot shape
+//! and one cache-publication path.
 
-use std::path::PathBuf;
-use std::time::SystemTime;
+use uuid::Uuid;
 
-use serde::{Deserialize, Serialize};
+use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, ProviderAccountScope};
+use crate::{RuntimePaths, SidebarSnapshot};
 
-use crate::RuntimePaths;
-use crate::agents::{OauthUsageProbe, ProviderAccountScope};
-use crate::sidebar::timing::unix_now_ms;
-use crate::sidebar::timing::{CREDITS_TTL, OAUTH_USAGE_TTL};
-
+use super::accounts::cached_account_usage_hint;
 use super::credits::{
-    ProviderCreditsEntry, account_key_mismatch, merge_provider_credits_entry_if_due,
-    read_credits_cache,
+    account_usage_claim_matches, cancel_provider_account_usage_claim, claim_provider_account_usage,
+    complete_provider_account_usage, merge_provider_realtime_usage,
 };
-use super::{SidebarSnapshot, drop_kind_rate_limits, merge_account_rate_limits};
+use super::{drop_kind_rate_limits, merge_account_rate_limits};
 
-/// Schedule each metered, logged-in provider's API-query account-usage refresh.
-/// One uniform loop: gate on the offline override and the OAuth-attempt
-/// throttle marker, then spawn the detached helper. Producer-only; the network
-/// read runs in the child and single-flights on the shared credits cache.
+/// Claim and spawn each metered provider's direct account-usage refresh.
 pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
     refresh_account_usage_with(snapshot, runtime, spawn_usage_refresh);
 }
@@ -42,7 +25,7 @@ pub(crate) fn refresh_account_usage(snapshot: &SidebarSnapshot, runtime: &Runtim
 fn refresh_account_usage_with(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
-    mut spawn: impl FnMut(&RuntimePaths, &str, bool),
+    mut spawn: impl FnMut(&RuntimePaths, &str, bool, Uuid) -> bool,
 ) {
     if crate::agents::credits::oauth_usage_offline() {
         return;
@@ -52,136 +35,185 @@ fn refresh_account_usage_with(
             continue;
         }
         let kind = panel.kind.as_str();
-        if crate::agents::descriptor_by_kind(kind).is_none() {
+        let Some(adapter) = crate::agents::find_adapter(kind) else {
             continue;
-        }
-        if !usage_probe_due(runtime, kind) {
+        };
+        let identity = scheduling_identity(runtime, kind, adapter);
+        let Some(claim_id) = claim_provider_account_usage(runtime, kind, identity) else {
             continue;
+        };
+        if !spawn(runtime, kind, merge_windows_hint(snapshot, kind), claim_id) {
+            cancel_provider_account_usage_claim(runtime, kind, claim_id);
         }
-        spawn(runtime, kind, merge_windows_hint(snapshot, kind));
     }
 }
 
-/// Run one kind's API-query channel: single-flight the network read through the
-/// credits cache, fold paid usage into `credits.json`, and merge any returned
-/// windows into `rate_limits.json` when `merge_windows` is set. Returns whether
-/// anything was written — a still-fresh cache entry skips the fetch and returns
-/// `false`. The detached refresh child calls this; the producer never does I/O.
-pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> bool {
+fn scheduling_identity(
+    runtime: &RuntimePaths,
+    kind: &str,
+    adapter: &dyn crate::agents::AgentAdapter,
+) -> AccountUsageIdentity {
+    let cached_hint = cached_account_usage_hint(runtime, kind);
+    if let Some((scope, Some(credentials_stamp))) = cached_hint.as_ref() {
+        return AccountUsageIdentity {
+            scope: scope.clone(),
+            credentials_stamp: Some(*credentials_stamp),
+            account_key: None,
+        };
+    }
+    let mut identity = adapter.account_usage_identity();
+    if let Some((scope, stamp)) = cached_hint {
+        identity.scope = scope;
+        identity.credentials_stamp = identity.credentials_stamp.or(stamp);
+    }
+    identity
+}
+
+/// Run one producer-created claim. The helper validates the nonce before any
+/// provider call; late or superseded workers leave both caches untouched.
+pub fn refresh_claimed_account_usage(
+    runtime: &RuntimePaths,
+    kind: &str,
+    claim_id: Uuid,
+    merge_windows: bool,
+) -> bool {
+    if crate::agents::credits::oauth_usage_offline() {
+        cancel_provider_account_usage_claim(runtime, kind, claim_id);
+        return false;
+    }
+    if !account_usage_claim_matches(runtime, kind, claim_id) {
+        return false;
+    }
+    let Some(adapter) = crate::agents::find_adapter(kind) else {
+        cancel_provider_account_usage_claim(runtime, kind, claim_id);
+        return false;
+    };
+    let realtime = adapter.probe_realtime_account_usage(runtime);
+    let publish_direct_windows = direct_windows_should_publish(
+        merge_windows,
+        realtime.as_ref(),
+        adapter
+            .descriptor()
+            .capabilities
+            .realtime_usage
+            .windows_defer_to_fresh_realtime,
+    );
+    if !account_usage_claim_matches(runtime, kind, claim_id) {
+        return false;
+    }
+    let mut wrote = false;
+    if let Some(usage) = realtime {
+        wrote |= publish_account_usage_snapshot(
+            runtime,
+            kind,
+            ProviderAccountScope::KindWide,
+            usage,
+            true,
+        );
+    }
+    wrote |= complete_direct_account_usage(
+        runtime,
+        kind,
+        claim_id,
+        adapter.probe_account_usage(),
+        publish_direct_windows,
+    );
+    wrote
+}
+
+fn direct_windows_should_publish(
+    requested: bool,
+    realtime: Option<&AccountUsageSnapshot>,
+    defer_to_fresh_realtime: bool,
+) -> bool {
+    requested
+        || realtime.is_some_and(|usage| usage.rate_limits.is_none())
+        || (realtime.is_none() && !defer_to_fresh_realtime)
+}
+
+/// Claim and execute a direct read in-process. Codex synchronous refresh paths
+/// use this instead of maintaining a separate cadence.
+pub fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> bool {
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return false;
     };
-    let identity = adapter.account_usage_identity();
-    let stamp = identity.credentials_stamp;
-    let account_key = identity.account_key;
-    let account_scope = identity.scope;
-    let prior_identity = read_credits_cache(&runtime.shared_credits_path())
-        .entries
-        .get(kind)
-        .map(|entry| (entry.scope.clone(), entry.account_key.clone()));
-    if prior_identity.as_ref().is_some_and(|(scope, key)| {
-        scope != &account_scope || account_key_mismatch(key.as_deref(), account_key.as_deref())
-    }) {
-        tracing::info!(
-            target: crate::observability::BREADCRUMB_TARGET,
-            kind,
-            "provider account changed; dropping cached windows",
-        );
-        drop_kind_rate_limits(runtime, kind);
-    }
-    let mut fetched_windows = None;
-    let entry = merge_provider_credits_entry_if_due(
+    let identity = scheduling_identity(runtime, kind, adapter);
+    let Some(claim_id) = claim_provider_account_usage(runtime, kind, identity) else {
+        return false;
+    };
+    complete_direct_account_usage(
         runtime,
         kind,
-        stamp,
-        account_key.clone(),
-        account_scope.clone(),
-        || match adapter.probe_oauth_usage() {
-            OauthUsageProbe::Found(usage) => {
-                fetched_windows = usage
-                    .rate_limits
-                    .clone()
-                    .map(|limits| (usage.scope.clone(), limits));
-                ProviderCreditsEntry {
-                    scope: usage.scope,
-                    observed_at_ms: unix_now_ms(),
-                    oauth_read_at_ms: unix_now_ms(),
-                    auth_settled: false,
-                    credentials_stamp: None,
-                    account_key: usage.account_key,
-                    plan: usage.plan,
-                    ok: true,
-                    extra_credits: usage.extra_credits,
-                    reset_credits: usage.reset_credits,
-                }
-            }
-            OauthUsageProbe::NoCredentials => ProviderCreditsEntry {
-                scope: account_scope.clone(),
-                observed_at_ms: unix_now_ms(),
-                oauth_read_at_ms: unix_now_ms(),
-                auth_settled: true,
-                credentials_stamp: stamp,
-                account_key: None,
-                plan: None,
-                ok: false,
-                extra_credits: None,
-                reset_credits: None,
-            },
-            OauthUsageProbe::Failed | OauthUsageProbe::Unsupported => ProviderCreditsEntry {
-                scope: account_scope.clone(),
-                observed_at_ms: unix_now_ms(),
-                oauth_read_at_ms: unix_now_ms(),
-                auth_settled: false,
-                credentials_stamp: None,
-                account_key: None,
-                plan: None,
-                ok: false,
-                extra_credits: None,
-                reset_credits: None,
-            },
-        },
-    );
-    let written = entry.is_some();
-    if entry.as_ref().is_some_and(|entry| {
-        drop_windows_on_account_change(
-            runtime,
-            kind,
-            prior_identity.as_ref(),
-            &entry.scope,
-            entry.account_key.as_deref(),
-        )
-    }) {
+        claim_id,
+        adapter.probe_account_usage(),
+        merge_windows,
+    )
+}
+
+fn complete_direct_account_usage(
+    runtime: &RuntimePaths,
+    kind: &str,
+    claim_id: Uuid,
+    probe: crate::agents::AccountUsageProbe,
+    merge_windows: bool,
+) -> bool {
+    let Some(completion) = complete_provider_account_usage(runtime, kind, claim_id, probe) else {
+        return false;
+    };
+    if completion.account_changed {
         tracing::info!(
             target: crate::observability::BREADCRUMB_TARGET,
             kind,
             "provider account changed; dropping cached windows",
         );
-    }
-    if merge_windows && let Some((scope, rate_limits)) = fetched_windows {
-        merge_account_rate_limits(runtime, kind, scope, rate_limits);
-    }
-    written
-}
-
-fn drop_windows_on_account_change(
-    runtime: &RuntimePaths,
-    kind: &str,
-    prior_identity: Option<&(ProviderAccountScope, Option<String>)>,
-    current_scope: &ProviderAccountScope,
-    current_account_key: Option<&str>,
-) -> bool {
-    let changed = prior_identity.is_some_and(|(scope, account_key)| {
-        scope != current_scope || account_key_mismatch(account_key.as_deref(), current_account_key)
-    });
-    if changed {
         drop_kind_rate_limits(runtime, kind);
     }
-    changed
+    if let Some(snapshot) = completion.snapshot {
+        publish_account_usage_windows(
+            runtime,
+            kind,
+            completion.identity.scope,
+            snapshot.rate_limits,
+            merge_windows,
+        );
+    }
+    true
 }
 
-/// Whether the OAuth windows the API-query channel returns should be merged for
-/// this kind. Kinds with fresh realtime windows defer through their descriptor
-/// flag; every other kind merges OAuth windows here.
+/// Publish one normalized realtime snapshot. Credits and optional windows keep
+/// their owning locks and no provider call runs while either lock is held.
+pub fn publish_account_usage_snapshot(
+    runtime: &RuntimePaths,
+    kind: &str,
+    scope: ProviderAccountScope,
+    mut snapshot: AccountUsageSnapshot,
+    publish_windows: bool,
+) -> bool {
+    let windows = snapshot.rate_limits.take();
+    let has_credits = snapshot.plan.is_some()
+        || snapshot.extra_credits.is_some()
+        || snapshot.reset_credits.is_some();
+    if has_credits {
+        merge_provider_realtime_usage(runtime, kind, scope.clone(), snapshot);
+    }
+    let has_windows = publish_account_usage_windows(runtime, kind, scope, windows, publish_windows);
+    has_credits || has_windows
+}
+
+fn publish_account_usage_windows(
+    runtime: &RuntimePaths,
+    kind: &str,
+    scope: ProviderAccountScope,
+    windows: Option<crate::agents::AgentRateLimits>,
+    publish: bool,
+) -> bool {
+    let Some(windows) = windows.filter(|_| publish) else {
+        return false;
+    };
+    merge_account_rate_limits(runtime, kind, scope, windows);
+    true
+}
+
 fn merge_windows_hint(snapshot: &SidebarSnapshot, kind: &str) -> bool {
     !crate::agents::descriptor_by_kind(kind).is_some_and(|descriptor| {
         descriptor
@@ -192,11 +224,6 @@ fn merge_windows_hint(snapshot: &SidebarSnapshot, kind: &str) -> bool {
     })
 }
 
-/// Whether a live, content-fresh realtime reading already carries this
-/// frame's windows, so the authoritative OAuth merge can skip them (the credits
-/// read still runs). An idle session may re-emit a days-old payload with a
-/// fresh capture stamp, so the capture stamp alone would wrongly shadow truth —
-/// the reading's shortest window's passed reset gives the stale payload away.
 fn has_fresh_realtime_windows(snapshot: &SidebarSnapshot, kind: &str) -> bool {
     let now = snapshot.now;
     snapshot.agents.iter().any(|agent| {
@@ -211,94 +238,21 @@ fn has_fresh_realtime_windows(snapshot: &SidebarSnapshot, kind: &str) -> bool {
         };
         !limits.windows.is_empty()
             && !limits.content_stale_at(now)
-            && now.duration_since(context.observed_at).as_secs() <= CREDITS_TTL.as_secs() as i64
+            && now.duration_since(context.observed_at).as_secs()
+                <= crate::sidebar::timing::CREDITS_TTL.as_secs() as i64
     })
 }
 
-/// Throttle one kind's API-query refresh via a marker file under the runtime
-/// root: skip when the last attempt is younger than the OAuth TTL, touch it
-/// before spawning so a fetch that never publishes still backs off this kind.
-pub(crate) fn usage_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
-    let Some(adapter) = crate::agents::find_adapter(kind) else {
-        return false;
-    };
-    let identity = adapter.account_usage_identity();
-    usage_probe_due_with_scope(
-        runtime,
-        kind,
-        identity.credentials_stamp,
-        identity.account_key.as_deref(),
-        &identity.scope,
-    )
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct UsageProbeMarker {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    credentials_stamp: Option<u64>,
-}
-
-#[cfg(test)]
-fn usage_probe_due_with_identity(
-    runtime: &RuntimePaths,
-    kind: &str,
-    current_credentials_stamp: Option<u64>,
-    current_account_key: Option<&str>,
-) -> bool {
-    usage_probe_due_with_scope(
-        runtime,
-        kind,
-        current_credentials_stamp,
-        current_account_key,
-        &ProviderAccountScope::KindWide,
-    )
-}
-
-fn usage_probe_due_with_scope(
-    runtime: &RuntimePaths,
-    kind: &str,
-    current_credentials_stamp: Option<u64>,
-    current_account_key: Option<&str>,
-    current_scope: &ProviderAccountScope,
-) -> bool {
-    let path = usage_probe_marker(runtime, kind);
-    let account_changed = read_credits_cache(&runtime.shared_credits_path())
-        .entries
-        .get(kind)
-        .is_some_and(|entry| {
-            &entry.scope != current_scope
-                || account_key_mismatch(entry.account_key.as_deref(), current_account_key)
-        });
-    let age_due = std::fs::metadata(&path)
-        .and_then(|meta| meta.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_none_or(|age| age >= OAUTH_USAGE_TTL);
-    let stored_stamp = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<UsageProbeMarker>(&bytes).ok())
-        .and_then(|marker| marker.credentials_stamp);
-    let due = age_due || stored_stamp != current_credentials_stamp || account_changed;
-    if due
-        && let Ok(payload) = serde_json::to_vec(&UsageProbeMarker {
-            credentials_stamp: current_credentials_stamp,
-        })
-    {
-        let _ = std::fs::write(&path, payload);
-    }
-    due
-}
-
 pub(crate) fn invalidate_oauth_usage_throttle(runtime: &RuntimePaths, kind: &str) {
-    let _ = std::fs::remove_file(usage_probe_marker(runtime, kind));
-    crate::sidebar::refresh::credits::invalidate_oauth_read(runtime, kind);
+    super::credits::invalidate_oauth_read(runtime, kind);
 }
 
-pub(crate) fn usage_probe_marker(runtime: &RuntimePaths, kind: &str) -> PathBuf {
-    runtime.shared_root.join(format!("usage-probe.{kind}"))
-}
-
-fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) {
+fn spawn_usage_refresh(
+    runtime: &RuntimePaths,
+    kind: &str,
+    merge_windows: bool,
+    claim_id: Uuid,
+) -> bool {
     let exe = crate::proc::rimz_exe();
     let mut cmd = crate::child_process::detached_rimz_command(exe, runtime);
     cmd.args([
@@ -308,6 +262,8 @@ fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) 
         kind,
         "--workspace-id",
         runtime.workspace_id.as_str(),
+        "--claim-id",
+        &claim_id.to_string(),
     ]);
     if merge_windows {
         cmd.arg("--merge-windows");
@@ -319,439 +275,127 @@ fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) 
         merge_windows,
         "sidebar: spawning account usage refresh",
     );
-    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agents-refresh-usage")
-    {
-        // Best-effort enrichment on a throttled producer path. The CWD anchor
-        // clears the gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH is an
-        // environment fact, not a Rimz fault. Keep it at debug! so it never
-        // reaches Sentry.
-        tracing::debug!(
-            workspace = %runtime.workspace_id,
-            kind,
-            tags.operation = "agents.usage_refresh.spawn",
-            error = &err as &dyn std::error::Error,
-            "sidebar: failed to spawn account usage refresh",
-        );
+    match crate::child_process::spawn_detached_reaped(&mut cmd, "agents-refresh-usage") {
+        Ok(_) => true,
+        Err(err) => {
+            tracing::debug!(
+                workspace = %runtime.workspace_id,
+                kind,
+                tags.operation = "agents.usage_refresh.spawn",
+                error = &err as &dyn std::error::Error,
+                "sidebar: failed to spawn account usage refresh",
+            );
+            false
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::time::Duration;
-
     use jiff::Timestamp;
 
-    use crate::agents::lifecycle::TurnPhase;
-    use crate::agents::{AgentRateLimits, RateLimitWindow};
-    use crate::agents::{AgentState, AgentStatus};
-    use crate::ids::{PaneId, WorkspaceId};
-    use crate::pane::PaneRef;
+    use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow};
+    use crate::ids::WorkspaceId;
+    use crate::sidebar::refresh::accounts::{AccountsCache, ProviderRecord};
+    use crate::sidebar::test_support::{provider_panel, snapshot_with_panels};
 
     use super::*;
 
     #[test]
-    fn usage_probe_marker_throttles_per_kind() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-
-        assert!(usage_probe_due_with_identity(
-            &runtime, "opencode", None, None
-        ));
-        assert!(!usage_probe_due_with_identity(
-            &runtime, "opencode", None, None
-        ));
-        // A different kind has its own marker.
-        assert!(usage_probe_due_with_identity(&runtime, "pi", None, None));
-
-        let old = SystemTime::now()
-            .checked_sub(OAUTH_USAGE_TTL + Duration::from_secs(1))
-            .unwrap();
-        std::fs::File::open(usage_probe_marker(&runtime, "opencode"))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-        assert!(usage_probe_due_with_identity(
-            &runtime, "opencode", None, None
-        ));
-    }
-
-    #[test]
-    fn account_key_switch_bypasses_a_fresh_spawn_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        crate::sidebar::refresh::credits::write_credits_cache(
-            &runtime.shared_credits_path(),
-            &crate::sidebar::refresh::credits::CreditsCache {
-                refreshed_at_ms: 1,
-                entries: BTreeMap::from([(
-                    "copilot".to_owned(),
-                    ProviderCreditsEntry {
-                        account_key: Some("old".to_owned()),
-                        ..ProviderCreditsEntry::default()
-                    },
-                )]),
-            },
-        );
-
-        assert!(usage_probe_due_with_identity(
-            &runtime,
-            "copilot",
-            None,
-            Some("old")
-        ));
-        assert!(!usage_probe_due_with_identity(
-            &runtime,
-            "copilot",
-            None,
-            Some("old")
-        ));
-        assert!(usage_probe_due_with_identity(
-            &runtime,
-            "copilot",
-            None,
-            Some("new")
-        ));
-    }
-
-    #[test]
-    fn account_scope_switch_bypasses_a_fresh_spawn_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let international = ProviderAccountScope::sub_provider("alibaba", "international");
-        let china = ProviderAccountScope::sub_provider("alibaba", "china");
-        crate::sidebar::refresh::credits::write_credits_cache(
-            &runtime.shared_credits_path(),
-            &crate::sidebar::refresh::credits::CreditsCache {
-                refreshed_at_ms: 1,
-                entries: BTreeMap::from([(
-                    "qwen".to_owned(),
-                    ProviderCreditsEntry {
-                        scope: international.clone(),
-                        account_key: Some("account".to_owned()),
-                        ..ProviderCreditsEntry::default()
-                    },
-                )]),
-            },
-        );
-
-        assert!(usage_probe_due_with_scope(
-            &runtime,
-            "qwen",
-            None,
-            Some("account"),
-            &international,
-        ));
-        assert!(!usage_probe_due_with_scope(
-            &runtime,
-            "qwen",
-            None,
-            Some("account"),
-            &international,
-        ));
-        assert!(usage_probe_due_with_scope(
-            &runtime,
-            "qwen",
-            None,
-            Some("account"),
-            &china,
-        ));
-    }
-
-    #[test]
-    fn delegated_oauth_identity_stays_throttled_and_keeps_cached_windows() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let scope = ProviderAccountScope::sub_provider("openai", "oauth");
-        let entries = ["pi", "opencode"]
-            .into_iter()
-            .map(|kind| {
-                (
-                    kind.to_owned(),
-                    ProviderCreditsEntry {
-                        scope: scope.clone(),
-                        account_key: Some(format!("{kind}-account")),
-                        ok: true,
-                        ..ProviderCreditsEntry::default()
-                    },
-                )
-            })
-            .collect();
-        crate::sidebar::refresh::credits::write_credits_cache(
-            &runtime.shared_credits_path(),
-            &crate::sidebar::refresh::credits::CreditsCache {
-                refreshed_at_ms: 1,
-                entries,
-            },
-        );
-
-        for kind in ["pi", "opencode"] {
-            let account_key = format!("{kind}-account");
-            merge_account_rate_limits(
-                &runtime,
-                kind,
-                scope.clone(),
-                AgentRateLimits {
-                    windows: vec![RateLimitWindow {
-                        duration_mins: Some(7 * 24 * 60),
-                        used_percentage: Some(50),
-                        ..RateLimitWindow::default()
-                    }],
-                },
-            );
-
-            assert!(usage_probe_due_with_scope(
-                &runtime,
-                kind,
-                None,
-                Some(&account_key),
-                &scope,
-            ));
-            assert!(
-                !usage_probe_due_with_scope(&runtime, kind, None, Some(&account_key), &scope,),
-                "matching {kind} preflight identity keeps the fresh marker throttled"
-            );
-            assert!(!drop_windows_on_account_change(
-                &runtime,
-                kind,
-                Some(&(scope.clone(), Some(account_key.clone()))),
-                &scope,
-                Some(&account_key),
-            ));
-            assert!(
-                crate::agents::read_rate_limits_cache(&runtime.shared_rate_limits_path())
-                    .entries
-                    .contains_key(kind),
-                "matching {kind} owner identity keeps its cached windows"
-            );
-        }
-    }
-
-    #[test]
-    fn usage_probe_marker_tracks_credential_stamp_and_accepts_legacy_payloads() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime =
-            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-
-        assert!(usage_probe_due_with_identity(
-            &runtime,
-            "codex",
-            Some(1),
-            None
-        ));
-        assert!(!usage_probe_due_with_identity(
-            &runtime,
-            "codex",
-            Some(1),
-            None
-        ));
-        assert!(usage_probe_due_with_identity(
-            &runtime,
-            "codex",
-            Some(2),
-            None
-        ));
-
-        let legacy = usage_probe_marker(&runtime, "claude");
-        std::fs::write(&legacy, b"").unwrap();
-        assert!(
-            !usage_probe_due_with_identity(&runtime, "claude", None, None),
-            "legacy markers still throttle sources without a file stamp"
-        );
-        assert!(
-            usage_probe_due_with_identity(&runtime, "claude", Some(7), None),
-            "a known file stamp bypasses a legacy marker"
-        );
-    }
-
-    #[test]
-    fn identified_owner_drops_unowned_cached_windows() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime =
-            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        merge_account_rate_limits(
-            &runtime,
-            "codex",
-            ProviderAccountScope::KindWide,
-            AgentRateLimits {
-                windows: vec![RateLimitWindow {
-                    duration_mins: Some(300),
-                    used_percentage: Some(50),
-                    ..RateLimitWindow::default()
-                }],
-            },
-        );
-
-        assert!(drop_windows_on_account_change(
-            &runtime,
-            "codex",
-            Some(&(ProviderAccountScope::KindWide, None)),
-            &ProviderAccountScope::KindWide,
-            Some("acc")
-        ));
-        assert!(
-            !crate::agents::read_rate_limits_cache(&runtime.shared_rate_limits_path())
-                .entries
-                .contains_key("codex")
-        );
-    }
-
-    #[test]
-    fn realtime_windows_merge_only_defers_to_recent_statusline_windows() {
-        let now = Timestamp::now();
-        let fresh = snapshot_with_agent(statusline_agent("fresh", now));
-        assert!(has_fresh_realtime_windows(&fresh, "claude"));
-        assert!(!merge_windows_hint(&fresh, "claude"));
-        assert!(merge_windows_hint(&fresh, "codex"));
-
-        let stale_at = now
-            .checked_sub(jiff::SignedDuration::from_secs(
-                CREDITS_TTL.as_secs() as i64 + 1,
-            ))
-            .unwrap();
-        let stale = snapshot_with_agent(statusline_agent("stale", stale_at));
-        assert!(!has_fresh_realtime_windows(&stale, "claude"));
-        assert!(merge_windows_hint(&stale, "claude"));
-
-        let mut no_windows = statusline_agent("none", now);
-        no_windows.context.as_mut().unwrap().rate_limits = None;
-        assert!(!has_fresh_realtime_windows(
-            &snapshot_with_agent(no_windows),
-            "claude"
-        ));
-
-        // The idle-session trap: a fresh capture stamp over a stale payload. The
-        // 5h window already reset (so the content is stale) even though
-        // `observed_at` is now and the longer 7d window's reset is still future.
-        let mut content_stale = statusline_agent("content-stale", now);
-        content_stale.context.as_mut().unwrap().rate_limits = Some(AgentRateLimits {
-            windows: vec![
-                RateLimitWindow {
-                    used_percentage: Some(57),
-                    resets_at: now.checked_sub(jiff::SignedDuration::from_hours(1)).ok(),
-                    duration_mins: Some(300),
-                    ..Default::default()
-                },
-                RateLimitWindow {
-                    used_percentage: Some(59),
-                    resets_at: now.checked_add(jiff::SignedDuration::from_hours(48)).ok(),
-                    duration_mins: Some(7 * 24 * 60),
-                    ..Default::default()
-                },
-            ],
-        });
-        assert!(
-            !has_fresh_realtime_windows(&snapshot_with_agent(content_stale), "claude"),
-            "a fresh capture stamp can't rescue a payload whose 5h window already reset"
-        );
-    }
-
-    #[test]
-    fn codex_with_live_root_session_still_schedules_oauth_refresh() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        let now = Timestamp::now();
-        let mut snapshot =
-            SidebarSnapshot::build_with_agents(workspace, vec![codex_agent("codex-1", now)], now);
-        snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
-            "codex",
-            Vec::new(),
-        )];
-
-        let mut spawned = Vec::new();
-        refresh_account_usage_with(&snapshot, &runtime, |_, kind, merge_windows| {
-            spawned.push((kind.to_owned(), merge_windows));
-        });
-
-        assert_eq!(spawned, vec![("codex".to_owned(), true)]);
-        assert!(
-            usage_probe_marker(&runtime, "codex").exists(),
-            "a live root session no longer suppresses the OAuth usage helper"
-        );
-    }
-
-    #[test]
-    fn metered_antigravity_panel_schedules_shared_usage_refresh() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
+    fn fresh_realtime_claude_windows_defer_direct_window_publication() {
         let mut snapshot = SidebarSnapshot::build_with_agents(
-            workspace,
-            vec![AgentState::stub("antigravity", "agy-1", AgentStatus::Idle)],
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/usage-refresh")),
+            vec![crate::testkit::agent_state(
+                "claude",
+                "one",
+                Timestamp::now(),
+            )],
             Timestamp::now(),
         );
-        snapshot.providers = vec![crate::sidebar::test_support::provider_panel(
-            "antigravity",
-            Vec::new(),
-        )];
-
-        let mut spawned = Vec::new();
-        refresh_account_usage_with(&snapshot, &runtime, |_, kind, merge_windows| {
-            spawned.push((kind.to_owned(), merge_windows));
-        });
-
-        assert_eq!(spawned, vec![("antigravity".to_owned(), true)]);
-        assert!(usage_probe_marker(&runtime, "antigravity").exists());
-    }
-
-    fn snapshot_with_agent(agent: AgentState) -> SidebarSnapshot {
-        SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(std::path::Path::new("/tmp/usage-refresh")),
-            vec![agent],
-            Timestamp::now(),
-        )
-    }
-
-    fn statusline_agent(id: &str, observed_at: Timestamp) -> AgentState {
-        let mut context = crate::store::agent_context::empty_context("claude", observed_at);
-        context.rate_limits = Some(AgentRateLimits {
+        snapshot.agents[0].context = Some(crate::store::agent_context::empty_context(
+            "claude",
+            snapshot.now,
+        ));
+        snapshot.agents[0].context.as_mut().unwrap().rate_limits = Some(AgentRateLimits {
             windows: vec![RateLimitWindow {
-                used_percentage: Some(12),
-                resets_at: None,
                 duration_mins: Some(300),
+                used_percentage: Some(12),
+                resets_at: snapshot
+                    .now
+                    .checked_add(jiff::SignedDuration::from_hours(1))
+                    .ok(),
                 ..Default::default()
             }],
         });
-        base_agent(id, "claude", Some(context), observed_at)
+        assert!(!merge_windows_hint(&snapshot, "claude"));
+        assert!(merge_windows_hint(&snapshot, "codex"));
     }
 
-    fn codex_agent(id: &str, observed_at: Timestamp) -> AgentState {
-        base_agent(id, "codex", None, observed_at)
+    #[test]
+    fn realtime_window_fallback_preserves_explicit_statusline_defer() {
+        assert!(!direct_windows_should_publish(false, None, true));
+        assert!(direct_windows_should_publish(false, None, false));
+        assert!(direct_windows_should_publish(
+            false,
+            Some(&AccountUsageSnapshot::default()),
+            true,
+        ));
+        assert!(!direct_windows_should_publish(
+            false,
+            Some(&AccountUsageSnapshot {
+                rate_limits: Some(AgentRateLimits::default()),
+                ..Default::default()
+            }),
+            true,
+        ));
     }
 
-    fn base_agent(
-        id: &str,
-        kind: &str,
-        context: Option<crate::agents::AgentContext>,
-        observed_at: Timestamp,
-    ) -> AgentState {
-        AgentState {
-            status: AgentStatus::Running,
-            phase: TurnPhase::Reasoning,
-            pane: Some(pane()),
-            context,
-            ..crate::testkit::agent_state(kind, id, observed_at)
-        }
-    }
-
-    fn pane() -> PaneRef {
-        let mut pane = PaneRef::from_id(PaneId::parse("tmux:%1").unwrap());
-        pane.session_name = "test".to_owned();
-        pane.view_id = Some("tab-1".to_owned());
-        pane.command = Some("claude".to_owned());
-        pane
+    #[test]
+    fn failed_spawn_cancels_claim_for_immediate_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        super::super::accounts::write_accounts_cache(
+            &runtime.shared_accounts_path(),
+            &AccountsCache {
+                providers: std::collections::BTreeMap::from([(
+                    "claude".to_owned(),
+                    ProviderRecord {
+                        probed_at_ms: 1,
+                        ok: true,
+                        account: Some(AgentAccount {
+                            metered: Some(true),
+                            credentials_updated_at_ms: Some(7),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            },
+        );
+        let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+        let mut spawn_attempts = 0;
+        refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+            spawn_attempts += 1;
+            false
+        });
+        assert_eq!(spawn_attempts, 1);
+        assert_eq!(
+            super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries
+                ["claude"]
+                .direct_query_claim,
+            None
+        );
+        assert!(
+            claim_provider_account_usage(
+                &runtime,
+                "claude",
+                AccountUsageIdentity {
+                    credentials_stamp: Some(7),
+                    ..Default::default()
+                }
+            )
+            .is_some()
+        );
     }
 }

@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use super::selection::{AlibabaRegion, SelectedProvider, Selection};
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::oauth_http_post_json;
-use crate::agents::{AccountUsageSnapshot, HttpErrKind, OauthUsageProbe};
+use crate::agents::{AccountUsageProbe, AccountUsageSnapshot, HttpErrKind};
 
 const ACTION: &str = "zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2";
 const PRODUCT: &str = "broadscope-bailian";
@@ -28,17 +28,18 @@ pub(crate) enum Error {
     Schema { shape: String },
 }
 
-pub(crate) fn probe(selection: Selection) -> OauthUsageProbe {
+pub(crate) fn probe(selection: Selection) -> AccountUsageProbe {
+    let identity = selection.account_usage_identity();
     let SelectedProvider::Alibaba(region) = selection.provider else {
-        return OauthUsageProbe::Unsupported;
+        return AccountUsageProbe::Unsupported;
     };
     match fetch(region, &selection.credential) {
-        Ok(snapshot) => OauthUsageProbe::Found(snapshot),
+        Ok(snapshot) => AccountUsageProbe::Found { identity, snapshot },
         Err(Error::AuthRejected) => {
             tracing::debug!(provider = "qwen", "Alibaba Coding Plan API key rejected");
-            OauthUsageProbe::NoCredentials
+            AccountUsageProbe::NoCredentials(identity)
         }
-        Err(Error::Unsupported | Error::Throttled) => OauthUsageProbe::Unsupported,
+        Err(Error::Unsupported | Error::Throttled) => AccountUsageProbe::Unsupported,
         Err(error) => {
             tracing::warn!(
                 tags.operation = "oauth_usage",
@@ -46,7 +47,7 @@ pub(crate) fn probe(selection: Selection) -> OauthUsageProbe {
                 error = &error as &dyn std::error::Error,
                 "OAuth account usage fetch failed",
             );
-            OauthUsageProbe::Failed
+            AccountUsageProbe::Failed(identity)
         }
     }
 }
@@ -134,7 +135,7 @@ struct QueryRequest<'a> {
 
 pub(crate) fn parse_response(
     body: &str,
-    region: AlibabaRegion,
+    _region: AlibabaRegion,
 ) -> Result<AccountUsageSnapshot, Error> {
     let root: Value = serde_json::from_str(body).map_err(|_| Error::Schema {
         shape: "invalid-json".to_owned(),
@@ -210,12 +211,9 @@ pub(crate) fn parse_response(
         });
     }
     Ok(AccountUsageSnapshot {
-        account_key: None,
-        scope: region.scope(),
         rate_limits: (!windows.is_empty()).then_some(AgentRateLimits { windows }),
-        extra_credits: None,
-        reset_credits: None,
         plan,
+        ..Default::default()
     })
 }
 

@@ -106,6 +106,32 @@ impl Env {
         env
     }
 
+    pub fn seed_usage_claim(&self, kind: &str) -> String {
+        let runtime = self.runtime_paths();
+        runtime.ensure_dirs().expect("runtime dirs");
+        let claim_id = uuid::Uuid::now_v7();
+        std::fs::write(
+            runtime.shared_credits_path(),
+            serde_json::to_vec(&serde_json::json!({
+                "refreshed_at_ms": 1,
+                "entries": {
+                    (kind): {
+                        "observed_at_ms": 0,
+                        "ok": false,
+                        "direct_query_claim": {
+                            "nonce": claim_id,
+                            "claimed_at_ms": 1,
+                            "requested_scope": { "kind": "kind_wide" }
+                        }
+                    }
+                }
+            }))
+            .expect("serialize usage claim"),
+        )
+        .expect("write usage claim");
+        claim_id.to_string()
+    }
+
     // --- paths ---
 
     pub fn state_root(&self) -> PathBuf {

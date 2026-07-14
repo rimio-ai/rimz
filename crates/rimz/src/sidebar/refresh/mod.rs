@@ -28,8 +28,8 @@ pub mod usage;
 
 pub use accounts::{AccountsCache, ProviderRecord};
 pub use credits::{
-    CreditsCache, ProviderCreditsEntry, merge_provider_credits,
-    merge_provider_credits_entry_if_due, merge_provider_realtime_usage,
+    CreditsCache, DirectQueryClaim, ProviderCreditsEntry, merge_provider_credits,
+    merge_provider_realtime_usage,
 };
 pub use daemon_reap::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
 pub use live_spend::{apply_live_day_spend, apply_live_today_spend};
@@ -39,7 +39,9 @@ pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,
     refresh_session_transcript_context_from_watch,
 };
-pub use usage::merge_oauth_usage_if_due;
+pub use usage::{
+    merge_account_usage_if_due, publish_account_usage_snapshot, refresh_claimed_account_usage,
+};
 
 use self::accounts::produce_accounts;
 use self::daemon_reap::refresh_codex_daemon_reap_cache;

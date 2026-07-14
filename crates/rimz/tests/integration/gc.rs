@@ -246,17 +246,8 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
     let recent_session_marker = rt.shared_root.join(format!(
         "{SESSION_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
     ));
-    let old_usage_marker = rt.shared_root.join("usage-probe.opencode");
-    let recent_usage_marker = rt.shared_root.join("usage-probe.codex");
-    let fresh_marker = rt.shared_root.join("usage-probe.pi");
     let spending_lock = rt.shared_root.join("spending.lock");
-    for path in [
-        &old_session_marker,
-        &recent_session_marker,
-        &old_usage_marker,
-        &recent_usage_marker,
-        &fresh_marker,
-    ] {
+    for path in [&old_session_marker, &recent_session_marker] {
         std::fs::write(path, b"probe").expect("write probe marker");
     }
     std::fs::write(&spending_lock, b"lock").expect("write lock");
@@ -267,7 +258,6 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
         &old_state_rollup,
         &old_runtime_shared,
         &old_session_marker,
-        &old_usage_marker,
         &spending_lock,
     ] {
         std::fs::File::open(path)
@@ -276,12 +266,10 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
             .unwrap();
     }
     let recently_dead = SystemTime::now() - (SESSION_PROBE_MARKER_TTL + Duration::from_secs(1));
-    for path in [&recent_session_marker, &recent_usage_marker] {
-        std::fs::File::open(path)
-            .unwrap()
-            .set_modified(recently_dead)
-            .unwrap();
-    }
+    std::fs::File::open(&recent_session_marker)
+        .unwrap()
+        .set_modified(recently_dead)
+        .unwrap();
 
     env.rimz()
         .args(["gc", "--older-than", "1h"])
@@ -296,10 +284,7 @@ fn gc_sweeps_orphan_temps_and_probe_markers() {
     assert!(!old_runtime_shared.exists());
     assert!(!old_session_marker.exists());
     assert!(!recent_session_marker.exists());
-    assert!(!old_usage_marker.exists());
-    assert!(recent_usage_marker.exists());
     assert!(fresh_temp.exists());
-    assert!(fresh_marker.exists());
     assert!(spending_lock.exists());
 }
 

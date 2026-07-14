@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 
-use crate::agents::credits::OauthReportable;
+use crate::agents::credits::AccountUsageReportable;
 
 use super::*;
 

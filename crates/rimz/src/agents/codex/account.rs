@@ -11,9 +11,107 @@
 use std::process::{Command, Stdio};
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::agents::account::AccountProbe;
-use crate::agents::context::AgentAccount;
+use crate::agents::context::{
+    AgentAccount, AgentRateLimits, RateLimitWindow, RateLimitWindowScope, WindowSource,
+};
+use crate::agents::payload::non_empty_trimmed;
+use crate::agents::{AccountUsageSnapshot, ExtraCredits};
+
+const FIVE_HOUR_MINS: u32 = 5 * 60;
+
+/// Transport-neutral input for one Codex/OpenAI rate-limit row.
+#[derive(Debug)]
+pub(crate) struct UsageWindow {
+    pub(crate) used_percentage: Option<f64>,
+    pub(crate) resets_at: Option<jiff::Timestamp>,
+    pub(crate) duration_mins: Option<u32>,
+    pub(crate) scope: Option<RateLimitWindowScope>,
+    pub(crate) source: WindowSource,
+}
+
+/// Transport-neutral input for Codex paid credits.
+#[derive(Debug)]
+pub(crate) struct UsageCredits {
+    pub(crate) has_credits: Option<bool>,
+    pub(crate) unlimited: Option<bool>,
+    pub(crate) overage_limit_reached: Option<bool>,
+    pub(crate) balance: Option<f64>,
+}
+
+/// Normalize Codex/OpenAI account usage after transport-specific parsing.
+pub(crate) fn normalize_usage(
+    plan: Option<String>,
+    windows: impl IntoIterator<Item = UsageWindow>,
+    credits: Option<UsageCredits>,
+) -> AccountUsageSnapshot {
+    let mut windows: Vec<RateLimitWindow> = windows
+        .into_iter()
+        .map(|window| RateLimitWindow {
+            used_percentage: window
+                .used_percentage
+                .map(|value| value.round().clamp(0.0, 100.0) as u8),
+            resets_at: window.resets_at,
+            duration_mins: window.duration_mins,
+            scope: window.scope,
+            source: window.source,
+            ..Default::default()
+        })
+        .filter(|window| {
+            window.used_percentage.is_some()
+                || window.resets_at.is_some()
+                || window.duration_mins.is_some()
+                || window.scope.is_some()
+        })
+        .collect();
+    let completes_five_hour = windows.iter().any(|window| {
+        window.scope.is_none() && window.duration_mins.is_some() && window.source.is_authoritative()
+    });
+    if completes_five_hour
+        && !windows
+            .iter()
+            .any(|window| window.scope.is_none() && window.duration_mins == Some(FIVE_HOUR_MINS))
+    {
+        windows.push(RateLimitWindow {
+            duration_mins: Some(FIVE_HOUR_MINS),
+            source: WindowSource::Authoritative,
+            lifted: true,
+            ..Default::default()
+        });
+    }
+    windows.sort_by_key(|window| window.duration_mins.unwrap_or(u32::MAX));
+    AccountUsageSnapshot {
+        rate_limits: (!windows.is_empty()).then_some(AgentRateLimits { windows }),
+        extra_credits: credits.and_then(normalize_credits),
+        plan: plan.as_deref().and_then(non_empty_trimmed),
+        ..Default::default()
+    }
+}
+
+pub(crate) fn normalize_credits(credits: UsageCredits) -> Option<ExtraCredits> {
+    if credits.overage_limit_reached == Some(true) {
+        return Some(ExtraCredits::known(None, Some(0.0), None));
+    }
+    if credits.unlimited == Some(true) {
+        return Some(ExtraCredits::known(None, None, None));
+    }
+    if let Some(balance) = credits.balance {
+        return Some(ExtraCredits::known(None, Some(balance), None));
+    }
+    (credits.has_credits == Some(false)).then_some(ExtraCredits::Disabled)
+}
+
+pub(crate) fn parse_balance(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(value) => value.as_f64().filter(|value| value.is_finite()),
+        Value::String(value) => value.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|value| value.is_finite())
+    .map(|value| value.max(0.0))
+}
 
 /// Probe Codex's login from `~/.codex/auth.json` (honoring `CODEX_HOME`), then
 /// fall back to `codex login status` when credentials live in the OS keyring.
@@ -88,13 +186,8 @@ fn parse_login_status(text: &str) -> AccountProbe {
         return AccountProbe::Unavailable;
     };
     AccountProbe::Found(AgentAccount {
-        scope: Default::default(),
-        plan: None,
-        account_id: None,
         metered,
-        version: None,
-        sub_provider: None,
-        credentials_updated_at_ms: None,
+        ..Default::default()
     })
 }
 
@@ -135,34 +228,20 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
         .is_some_and(|key| !key.is_empty())
     {
         return AccountProbe::Found(AgentAccount {
-            scope: Default::default(),
-            plan: None,
-            account_id: None,
             metered: Some(false),
-            version: None,
-            sub_provider: None,
-            credentials_updated_at_ms: None,
+            ..Default::default()
         });
     }
     if let Some(tokens) = auth.tokens
         && tokens.access_token.is_some_and(|token| !token.is_empty())
     {
         return AccountProbe::Found(AgentAccount {
-            scope: Default::default(),
-            plan: None,
-            account_id: tokens.account_id.and_then(non_empty_trimmed),
+            account_id: tokens.account_id.as_deref().and_then(non_empty_trimmed),
             metered: Some(true),
-            version: None,
-            sub_provider: None,
-            credentials_updated_at_ms: None,
+            ..Default::default()
         });
     }
     AccountProbe::LoggedOut
-}
-
-fn non_empty_trimmed(value: String) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
 }
 
 #[cfg(test)]
@@ -273,5 +352,81 @@ mod tests {
             parse_login_status("Error checking login status: boom\n"),
             AccountProbe::Unavailable
         ));
+    }
+
+    #[test]
+    fn usage_normalization_orders_clamps_credits_and_lifts_missing_five_hour() {
+        let usage = normalize_usage(
+            Some(" pro ".to_owned()),
+            [UsageWindow {
+                used_percentage: Some(120.0),
+                resets_at: None,
+                duration_mins: Some(43_800),
+                scope: None,
+                source: WindowSource::Authoritative,
+            }],
+            Some(UsageCredits {
+                has_credits: Some(false),
+                unlimited: None,
+                overage_limit_reached: None,
+                balance: Some(12.5),
+            }),
+        );
+        assert_eq!(usage.plan.as_deref(), Some("pro"));
+        let windows = usage.rate_limits.unwrap().windows;
+        assert_eq!(windows[0].duration_mins, Some(300));
+        assert!(windows[0].lifted);
+        assert_eq!(windows[1].duration_mins, Some(43_800));
+        assert_eq!(windows[1].used_percentage, Some(100));
+        assert_eq!(
+            usage.extra_credits,
+            Some(ExtraCredits::known(None, Some(12.5), None))
+        );
+    }
+
+    #[test]
+    fn real_five_hour_and_non_temporal_readings_are_not_lifted() {
+        let real = normalize_usage(
+            None,
+            [UsageWindow {
+                used_percentage: Some(42.0),
+                resets_at: None,
+                duration_mins: Some(300),
+                scope: None,
+                source: WindowSource::Authoritative,
+            }],
+            None,
+        );
+        assert_eq!(real.rate_limits.unwrap().windows.len(), 1);
+
+        for window in [
+            UsageWindow {
+                used_percentage: Some(42.0),
+                resets_at: None,
+                duration_mins: Some(10_080),
+                scope: None,
+                source: WindowSource::BestEffort,
+            },
+            UsageWindow {
+                used_percentage: Some(42.0),
+                resets_at: None,
+                duration_mins: None,
+                scope: Some(RateLimitWindowScope {
+                    id: "named".to_owned(),
+                    label: "Named".to_owned(),
+                }),
+                source: WindowSource::Authoritative,
+            },
+        ] {
+            let usage = normalize_usage(None, [window], None);
+            assert!(
+                usage
+                    .rate_limits
+                    .unwrap()
+                    .windows
+                    .iter()
+                    .all(|row| !row.lifted)
+            );
+        }
     }
 }

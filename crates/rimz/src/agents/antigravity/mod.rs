@@ -92,9 +92,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
-        implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
-            covers_account_while_live: true,
             windows_defer_to_fresh_realtime: false,
         },
         remote_control: RemoteControlCapability {
@@ -224,14 +222,12 @@ impl AgentAdapter for AntigravityAdapter {
     fn probe_realtime_account_usage(
         &self,
         _runtime: &crate::RuntimePaths,
-    ) -> Option<super::RealtimeAccountUsage> {
+    ) -> Option<super::AccountUsageSnapshot> {
         local_api::probe_rate_limits()
             .ok()
-            .map(|rate_limits| super::RealtimeAccountUsage {
-                plan: None,
+            .map(|rate_limits| super::AccountUsageSnapshot {
                 rate_limits: Some(rate_limits),
-                extra_credits: None,
-                reset_credits: None,
+                ..Default::default()
             })
     }
 

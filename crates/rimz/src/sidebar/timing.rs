@@ -207,6 +207,10 @@ pub const OAUTH_USAGE_TTL: Duration = Duration::from_secs(5 * 60);
 /// sooner when the user re-logs-in.
 pub const OAUTH_USAGE_SETTLED_TTL: Duration = Duration::from_secs(60 * 60);
 
+/// Lease for one direct account-usage worker. Covers three bounded HTTP
+/// attempts plus realtime probing while recovering promptly from a dead child.
+pub const ACCOUNT_USAGE_CLAIM_TTL: Duration = Duration::from_secs(30);
+
 /// How often the producer samples a pane attached clients are currently
 /// viewing. Focus, not process activity, buys the fast `/proc` lane so the
 /// pane under the user's eyes stays live.

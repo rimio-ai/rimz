@@ -1916,6 +1916,7 @@ fn codex_stop_over_error_rollout_writes_turn_error_sidecar() {
 #[test]
 fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
     let env = Env::new();
+    let claim_id = env.seed_usage_claim("codex");
     let out = env
         .rimz()
         .env("RIMZ_CODEX_BIN", codex_appserver_stub())
@@ -1926,6 +1927,8 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
             "codex",
             "--workspace-id",
             env.workspace_id.as_str(),
+            "--claim-id",
+            &claim_id,
         ])
         .output()
         .expect("spawn agents refresh-usage codex");

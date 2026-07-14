@@ -55,9 +55,8 @@ pub(crate) use transport::{
 use transport::{FramedTransport, WsTransport};
 use wire::{
     MatchedModel, ModelListResponse, RateLimitsResponse, ThreadListResponse, ThreadReadResponse,
-    ThreadSummary, codex_version_from_user_agent, collect_credits, collect_reset_credits,
-    collect_windows, into_context, parse_loaded_threads, thread_matches_session,
-    thread_summary_from_raw,
+    ThreadSummary, codex_version_from_user_agent, collect_reset_credits, collect_usage,
+    into_context, parse_loaded_threads, thread_matches_session, thread_summary_from_raw,
 };
 
 /// Total wall-clock budget for one refresh (spawn + handshake + reads). The
@@ -261,20 +260,20 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             .request("account/rateLimits/read", Value::Null)?;
         let parsed: RateLimitsResponse = serde_json::from_value(result)
             .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
-        let credits = collect_credits(&parsed);
         let reset_credits = collect_reset_credits(&parsed);
-        let windows = collect_windows(parsed.rate_limits.primary, parsed.rate_limits.secondary);
-        let plan = parsed.rate_limits.plan_type.filter(|plan| !plan.is_empty());
-        let account = (plan.is_some() || windows.is_some()).then_some(AgentAccount {
-            scope: Default::default(),
-            metered: Some(true),
-            plan,
-            account_id: None,
-            version: None,
-            sub_provider: None,
-            credentials_updated_at_ms: None,
-        });
-        Ok((windows, account, credits, reset_credits))
+        let usage = collect_usage(parsed);
+        let account =
+            (usage.plan.is_some() || usage.rate_limits.is_some()).then_some(AgentAccount {
+                metered: Some(true),
+                plan: usage.plan,
+                ..Default::default()
+            });
+        Ok((
+            usage.rate_limits,
+            account,
+            usage.extra_credits,
+            reset_credits,
+        ))
     }
 
     /// Match the session's model `hint` (a raw model id from the lifecycle

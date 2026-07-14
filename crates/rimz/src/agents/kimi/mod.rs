@@ -93,9 +93,7 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        implicit_unlimited_windows: &[],
         realtime_usage: RealtimeUsageChannel {
-            covers_account_while_live: false,
             windows_defer_to_fresh_realtime: false,
         },
         remote_control: RemoteControlCapability {
@@ -668,8 +666,8 @@ impl AgentAdapter for KimiAdapter {
         account::probe()
     }
 
-    fn probe_oauth_usage(&self) -> super::OauthUsageProbe {
-        super::credits::map_probe_snapshot(oauth_usage::fetch(), "kimi")
+    fn probe_account_usage(&self) -> super::AccountUsageProbe {
+        oauth_usage::probe()
     }
 
     fn account_usage_identity(&self) -> super::AccountUsageIdentity {

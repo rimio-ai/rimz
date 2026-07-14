@@ -13,7 +13,7 @@ use tracing::warn;
 use crate::agents::account::AccountProbe;
 use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse};
 use crate::agents::{
-    AccountUsageSnapshot, AgentAccount, AgentRateLimits, OauthUsageProbe, RateLimitWindow,
+    AccountUsageProbe, AccountUsageSnapshot, AgentAccount, AgentRateLimits, RateLimitWindow,
 };
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -144,24 +144,31 @@ pub(super) fn account(kind: &str, plugin_dir: &Path, argv: &[String]) -> Account
     })
 }
 
-pub(super) fn account_usage(kind: &str, plugin_dir: &Path, argv: &[String]) -> OauthUsageProbe {
+pub(super) fn account_usage(kind: &str, plugin_dir: &Path, argv: &[String]) -> AccountUsageProbe {
     let Some(response) = account_response(kind, plugin_dir, argv) else {
-        return OauthUsageProbe::Failed;
+        return AccountUsageProbe::Failed(Default::default());
+    };
+    let identity = crate::agents::AccountUsageIdentity {
+        account_key: response.account_id.clone(),
+        ..Default::default()
     };
     if response.logged_out
         || (response.plan.is_none()
             && response.account_id.is_none()
             && response.rate_limit_windows.is_none())
     {
-        return OauthUsageProbe::NoCredentials;
+        return AccountUsageProbe::NoCredentials(identity);
     }
-    OauthUsageProbe::Found(AccountUsageSnapshot {
-        rate_limits: response
-            .rate_limit_windows
-            .map(|windows| AgentRateLimits { windows }),
-        plan: response.plan,
-        ..AccountUsageSnapshot::default()
-    })
+    AccountUsageProbe::Found {
+        identity,
+        snapshot: AccountUsageSnapshot {
+            rate_limits: response
+                .rate_limit_windows
+                .map(|windows| AgentRateLimits { windows }),
+            plan: response.plan,
+            ..AccountUsageSnapshot::default()
+        },
+    }
 }
 
 pub(super) fn account_key(kind: &str, plugin_dir: &Path, argv: &[String]) -> Option<String> {
@@ -412,7 +419,10 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("pro"));
         assert_eq!(account.account_id.as_deref(), Some("acct-1"));
 
-        let OauthUsageProbe::Found(usage) = account_usage("testbot", dir.path(), &argv) else {
+        let AccountUsageProbe::Found {
+            snapshot: usage, ..
+        } = account_usage("testbot", dir.path(), &argv)
+        else {
             panic!("account usage probe should find windows");
         };
         assert_eq!(

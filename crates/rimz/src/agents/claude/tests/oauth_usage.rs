@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::credits::OauthReportable;
+use crate::agents::credits::AccountUsageReportable;
 
 #[test]
 fn reportable_classifier_treats_unauthorized_as_settled_auth() {
@@ -132,7 +132,7 @@ fn usage_response_maps_windows_and_extra_usage() {
     let windows = usage.rate_limits.expect("windows");
     assert_eq!(
         windows.windows[0].duration_mins,
-        Some(CLAUDE_FIVE_HOUR_MINS)
+        Some(super::super::account::FIVE_HOUR_MINS)
     );
     assert_eq!(windows.windows[0].used_percentage, Some(1));
     assert_eq!(
@@ -141,7 +141,7 @@ fn usage_response_maps_windows_and_extra_usage() {
     );
     assert_eq!(
         windows.windows[1].duration_mins,
-        Some(CLAUDE_SEVEN_DAY_MINS)
+        Some(super::super::account::SEVEN_DAY_MINS)
     );
     assert_eq!(windows.windows[1].used_percentage, Some(88));
     assert!(
@@ -207,12 +207,12 @@ fn usage_response_tolerates_verified_full_payload_shape() {
     assert_eq!(windows.windows.len(), 2);
     assert_eq!(
         windows.windows[0].duration_mins,
-        Some(CLAUDE_FIVE_HOUR_MINS)
+        Some(super::super::account::FIVE_HOUR_MINS)
     );
     assert_eq!(windows.windows[0].used_percentage, Some(13));
     assert_eq!(
         windows.windows[1].duration_mins,
-        Some(CLAUDE_SEVEN_DAY_MINS)
+        Some(super::super::account::SEVEN_DAY_MINS)
     );
     assert_eq!(windows.windows[1].used_percentage, Some(7));
     assert_eq!(usage.extra_credits, Some(ExtraCredits::Disabled));

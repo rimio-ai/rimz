@@ -81,7 +81,7 @@ fn rate_limits_result() -> Value {
             "limitId": "codex",
             "primary": { "usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1_780_092_691_i64 },
             "secondary": { "usedPercent": 88, "windowDurationMins": 10080, "resetsAt": 1_780_186_207_i64 },
-            "planType": "team"
+            "planType": " team "
         }
     })
 }
@@ -157,11 +157,13 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
     client.handshake().unwrap();
     let ctx = client.observe_context("codex", None, None, ts());
     let limits = ctx.rate_limits.expect("single window");
-    assert_eq!(limits.windows.len(), 1);
-    assert_eq!(limits.windows[0].duration_mins, Some(43800));
-    assert_eq!(limits.windows[0].used_percentage, Some(0));
+    assert_eq!(limits.windows.len(), 2);
+    assert_eq!(limits.windows[0].duration_mins, Some(300));
+    assert!(limits.windows[0].lifted);
+    assert_eq!(limits.windows[1].duration_mins, Some(43800));
+    assert_eq!(limits.windows[1].used_percentage, Some(0));
     assert_eq!(
-        limits.windows[0].resets_at,
+        limits.windows[1].resets_at,
         Timestamp::from_second(1_783_005_867).ok()
     );
 

@@ -332,10 +332,15 @@ fn producer_reset_advance_invalidates_oauth_usage_throttle() {
             ok: true,
             extra_credits: Some(crate::agents::ExtraCredits::known(None, Some(4.0), None)),
             reset_credits: None,
+            direct_query_claim: Some(crate::sidebar::refresh::credits::DirectQueryClaim {
+                nonce: uuid::Uuid::nil(),
+                claimed_at_ms: 1,
+                requested_scope: Default::default(),
+                credentials_stamp: None,
+                preflight_account_key: None,
+            }),
         },
     );
-    let marker = crate::sidebar::refresh::usage::usage_probe_marker(&runtime, "codex");
-    std::fs::write(&marker, b"").unwrap();
 
     let mut frame = snapshot_with_panels(
         workspace,
@@ -343,18 +348,11 @@ fn producer_reset_advance_invalidates_oauth_usage_throttle() {
     );
     apply_rate_limit_cache(&mut frame, &runtime, true);
 
-    assert!(
-        !marker.exists(),
-        "new budget epoch removes the producer spawn throttle"
-    );
-    assert_eq!(
-        crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path())
-            .entries
-            .get("codex")
-            .map(|entry| entry.oauth_read_at_ms),
-        Some(0),
-        "new budget epoch clears the helper-side OAuth gate"
-    );
+    let credits =
+        crate::sidebar::refresh::credits::read_credits_cache(&runtime.shared_credits_path());
+    let entry = credits.entries.get("codex").unwrap();
+    assert_eq!(entry.oauth_read_at_ms, 0);
+    assert_eq!(entry.direct_query_claim, None);
 }
 
 #[test]
@@ -714,8 +712,8 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
                 "codex".to_owned(),
                 AgentRateLimits {
                     windows: vec![
-                        rl_window_mins(20, None, five_hours),
-                        rl_window_mins(40, None, seven_days),
+                        authoritative(rl_window_mins(20, None, five_hours)),
+                        authoritative(rl_window_mins(40, None, seven_days)),
                     ],
                 },
             )]),
@@ -814,40 +812,6 @@ fn authoritative_merge_does_not_fabricate_lifted_named_quotas() {
 }
 
 #[test]
-fn codex_cold_cache_synthesizes_declared_omitted_window_as_lifted() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let seven_days = 7 * 24 * 60;
-
-    merge_account_rate_limits(
-        &runtime,
-        "codex",
-        AgentRateLimits {
-            windows: vec![authoritative(rl_window_mins(41, None, seven_days))],
-        },
-    );
-
-    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let windows = &cache_limits(&cache, "codex").windows;
-    assert_eq!(windows.len(), 2);
-    let five_hours = windows
-        .iter()
-        .find(|window| window.duration_mins == Some(5 * 60))
-        .expect("the declared 5h window is synthesized from a cold cache");
-    assert!(five_hours.lifted);
-    assert_eq!(five_hours.used_percentage, None);
-    assert_eq!(five_hours.source, WindowSource::Authoritative);
-    assert!(
-        windows
-            .iter()
-            .find(|window| window.duration_mins == Some(seven_days))
-            .is_some_and(|window| !window.lifted && window.used_percentage == Some(41))
-    );
-}
-
-#[test]
 fn codex_reported_declared_window_stays_real() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -878,118 +842,96 @@ fn codex_reported_declared_window_stays_real() {
 }
 
 #[test]
-fn authoritative_live_panel_completes_and_persists_codex_omission_in_one_frame() {
+fn completion_uses_only_prior_authoritative_windows_from_same_scope() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let observed_at = Timestamp::now();
-    let seven_days = 7 * 24 * 60;
-    let weekly = RateLimitWindow {
-        observed_at: Some(observed_at),
-        ..authoritative(rl_window_mins(41, None, seven_days))
-    };
-    let mut snapshot = snapshot_with_panels(
-        workspace.clone(),
-        vec![provider_panel("codex", vec![weekly])],
+    let scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    write_rate_limits_cache(
+        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache {
+            entries: BTreeMap::from([(
+                "pi".to_owned(),
+                RateLimitCacheEntry {
+                    scope: scope.clone(),
+                    limits: AgentRateLimits {
+                        windows: vec![
+                            authoritative(rl_window_mins(20, None, 300)),
+                            authoritative(rl_window_mins(40, None, 10_080)),
+                        ],
+                    },
+                    pending: Vec::new(),
+                },
+            )]),
+            ..Default::default()
+        },
     );
+    let weekly = |source| RateLimitWindow {
+        observed_at: Some(Timestamp::now()),
+        source,
+        ..rl_window_mins(41, None, 10_080)
+    };
 
-    apply_rate_limit_cache(&mut snapshot, &runtime, true);
-
+    let mut same_scope = provider_panel("pi", vec![weekly(WindowSource::Authoritative)]);
+    same_scope.account_scope = scope;
+    let mut snapshot = snapshot_with_panels(workspace.clone(), vec![same_scope]);
+    apply_rate_limit_cache(&mut snapshot, &runtime, false);
     assert_eq!(snapshot.providers[0].windows.len(), 2);
     assert!(
         snapshot.providers[0]
             .windows
             .iter()
-            .any(|window| window.duration_mins == Some(300) && window.lifted)
-    );
-    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    assert!(
-        cache_limits(&cache, "codex")
-            .windows
-            .iter()
-            .any(|window| window.duration_mins == Some(300) && window.lifted),
-        "same-frame completion is persisted as fused truth"
+            .any(|window| window.lifted)
     );
 
-    let real = [(300, 2), (seven_days, 42)]
-        .into_iter()
-        .map(|(duration, used)| RateLimitWindow {
-            observed_at: Some(Timestamp::now()),
-            ..authoritative(rl_window_mins(used, None, duration))
-        })
-        .collect();
-    let mut reported = snapshot_with_panels(workspace, vec![provider_panel("codex", real)]);
-    apply_rate_limit_cache(&mut reported, &runtime, true);
+    let mut best_effort = provider_panel("pi", vec![weekly(WindowSource::BestEffort)]);
+    best_effort.account_scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let mut snapshot = snapshot_with_panels(workspace.clone(), vec![best_effort]);
+    apply_rate_limit_cache(&mut snapshot, &runtime, false);
     assert!(
-        reported.providers[0]
+        snapshot.providers[0]
             .windows
             .iter()
             .all(|window| !window.lifted)
     );
-    assert!(
-        cache_limits(
-            &read_rate_limits_cache(&runtime.shared_rate_limits_path()),
-            "codex",
-        )
-        .windows
-        .iter()
-        .all(|window| !window.lifted),
-        "a real 5h reading replaces the persisted lifted row"
-    );
-}
 
-#[test]
-fn completion_requires_authoritative_scope_applicable_temporal_evidence() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-    let observed_at = Timestamp::now();
-    let seven_days = 7 * 24 * 60;
-    let weekly = |source| RateLimitWindow {
-        observed_at: Some(observed_at),
-        source,
-        ..rl_window_mins(41, None, seven_days)
+    let prior_best_effort = RateLimitWindow {
+        source: WindowSource::BestEffort,
+        ..authoritative(rl_window_mins(20, None, 300))
     };
-
-    let mut best_effort = snapshot_with_panels(
-        workspace.clone(),
-        vec![provider_panel(
-            "codex",
-            vec![weekly(WindowSource::BestEffort)],
-        )],
+    write_rate_limits_cache(
+        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache {
+            entries: BTreeMap::from([(
+                "pi".to_owned(),
+                RateLimitCacheEntry {
+                    scope: ProviderAccountScope::sub_provider("openai", "oauth"),
+                    limits: AgentRateLimits {
+                        windows: vec![prior_best_effort],
+                    },
+                    pending: Vec::new(),
+                },
+            )]),
+            ..Default::default()
+        },
     );
-    apply_rate_limit_cache(&mut best_effort, &runtime, false);
-    assert_eq!(best_effort.providers[0].windows.len(), 1);
-
-    for kind in ["pi", "opencode"] {
-        let mut openai_panel = provider_panel(kind, vec![weekly(WindowSource::Authoritative)]);
-        openai_panel.account_scope = ProviderAccountScope::sub_provider("openai", "oauth");
-        let mut openai = snapshot_with_panels(workspace.clone(), vec![openai_panel]);
-        apply_rate_limit_cache(&mut openai, &runtime, false);
-        assert_eq!(openai.providers[0].windows.len(), 2, "{kind} OpenAI");
-
-        let mut anthropic_panel = provider_panel(kind, vec![weekly(WindowSource::Authoritative)]);
-        anthropic_panel.account_scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
-        let mut anthropic = snapshot_with_panels(workspace.clone(), vec![anthropic_panel]);
-        apply_rate_limit_cache(&mut anthropic, &runtime, false);
-        assert_eq!(anthropic.providers[0].windows.len(), 1, "{kind} Anthropic");
-    }
-
-    let mut openai_seed = provider_panel("pi", vec![weekly(WindowSource::Authoritative)]);
-    openai_seed.account_scope = ProviderAccountScope::sub_provider("openai", "oauth");
-    let mut seeded = snapshot_with_panels(workspace.clone(), vec![openai_seed]);
-    apply_rate_limit_cache(&mut seeded, &runtime, true);
-    let mut switched_panel = provider_panel("pi", vec![weekly(WindowSource::Authoritative)]);
-    switched_panel.account_scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
-    let mut switched = snapshot_with_panels(workspace, vec![switched_panel]);
-    apply_rate_limit_cache(&mut switched, &runtime, false);
-    assert_eq!(
-        switched.providers[0].windows.len(),
-        1,
-        "same-kind prior windows from another scope are excluded"
+    let mut authoritative_current = provider_panel("pi", vec![weekly(WindowSource::Authoritative)]);
+    authoritative_current.account_scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let mut snapshot = snapshot_with_panels(workspace.clone(), vec![authoritative_current]);
+    apply_rate_limit_cache(&mut snapshot, &runtime, false);
+    assert!(
+        snapshot.providers[0]
+            .windows
+            .iter()
+            .all(|window| !window.lifted)
     );
+
+    let mut other_scope = provider_panel("pi", vec![weekly(WindowSource::Authoritative)]);
+    other_scope.account_scope = ProviderAccountScope::sub_provider("anthropic", "oauth");
+    let mut snapshot = snapshot_with_panels(workspace, vec![other_scope]);
+    apply_rate_limit_cache(&mut snapshot, &runtime, false);
+    assert_eq!(snapshot.providers[0].windows.len(), 1);
 }
 
 #[test]

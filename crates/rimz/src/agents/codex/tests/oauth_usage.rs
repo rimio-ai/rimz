@@ -1,5 +1,6 @@
 use super::*;
-use crate::agents::credits::OauthReportable;
+use crate::agents::ExtraCredits;
+use crate::agents::credits::AccountUsageReportable;
 
 #[test]
 fn reportable_classifier_treats_unauthorized_as_settled_auth() {
@@ -321,4 +322,27 @@ fn usage_response_maps_verified_team_payload_with_disabled_credits() {
     assert_eq!(windows.windows[0].duration_mins, Some(300));
     assert_eq!(windows.windows[1].duration_mins, Some(10080));
     assert_eq!(usage.extra_credits, Some(ExtraCredits::Disabled));
+}
+
+#[test]
+fn usage_response_lifts_missing_five_hour_for_dynamic_month() {
+    let usage = parse_usage_response(
+        r#"{
+            "plan_type": " pro ",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 7,
+                    "reset_at": 1780186207,
+                    "limit_window_seconds": 2628000
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(usage.plan.as_deref(), Some("pro"));
+    let windows = usage.rate_limits.unwrap().windows;
+    assert_eq!(windows.len(), 2);
+    assert_eq!(windows[0].duration_mins, Some(300));
+    assert!(windows[0].lifted);
+    assert_eq!(windows[1].duration_mins, Some(43_800));
 }

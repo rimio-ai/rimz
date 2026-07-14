@@ -9,7 +9,6 @@
 
 use serde_json::Value;
 
-use super::context::ProviderAccountScope;
 use super::lifecycle::{AskKind, LifecycleSignalKind};
 
 /// Static identity, branding, capabilities, and classification tables for one
@@ -408,92 +407,19 @@ pub struct Capabilities {
     /// conversation, so a new session may succeed another in the same pane
     /// before the reaper clears the stamp.
     pub daemon_hooked_sessions: bool,
-    /// Rate-limit windows this provider conceptually enforces but may omit
-    /// from authoritative readings on some plans. Applicability follows the
-    /// account scope so a multi-provider agent inherits only its backing
-    /// provider's omission rules. A real reading for the duration still takes
-    /// precedence over the declaration.
-    pub implicit_unlimited_windows: &'static [ImplicitUnlimitedWindow],
     /// How this provider's realtime usage channel interacts with the uniform
-    /// OAuth account-usage driver.
+    /// account-usage driver.
     pub realtime_usage: RealtimeUsageChannel,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
 }
 
-impl Capabilities {
-    /// Declared omitted duration windows applicable to this account scope.
-    pub fn implicit_unlimited_window_mins<'a>(
-        &'a self,
-        scope: &'a ProviderAccountScope,
-    ) -> impl Iterator<Item = u32> + 'a {
-        self.implicit_unlimited_windows
-            .iter()
-            .filter(move |window| window.applies_to(scope))
-            .map(|window| window.duration_mins)
-    }
-}
-
-/// One conceptual duration window an authoritative provider response may omit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ImplicitUnlimitedWindow {
-    pub duration_mins: u32,
-    pub applicability: ImplicitUnlimitedWindowApplicability,
-}
-
-impl ImplicitUnlimitedWindow {
-    pub const fn kind_wide(duration_mins: u32) -> Self {
-        Self {
-            duration_mins,
-            applicability: ImplicitUnlimitedWindowApplicability::KindWide,
-        }
-    }
-
-    pub const fn sub_provider(
-        duration_mins: u32,
-        provider: &'static str,
-        variant: &'static str,
-    ) -> Self {
-        Self {
-            duration_mins,
-            applicability: ImplicitUnlimitedWindowApplicability::SubProvider { provider, variant },
-        }
-    }
-
-    fn applies_to(self, scope: &ProviderAccountScope) -> bool {
-        match (self.applicability, scope) {
-            (ImplicitUnlimitedWindowApplicability::KindWide, _) => true,
-            (
-                ImplicitUnlimitedWindowApplicability::SubProvider {
-                    provider: expected_provider,
-                    variant: expected_variant,
-                },
-                ProviderAccountScope::SubProvider { provider, variant },
-            ) => provider == expected_provider && variant == expected_variant,
-            (ImplicitUnlimitedWindowApplicability::SubProvider { .. }, _) => false,
-        }
-    }
-}
-
-/// Account scopes on which an implicit unlimited window applies.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ImplicitUnlimitedWindowApplicability {
-    KindWide,
-    SubProvider {
-        provider: &'static str,
-        variant: &'static str,
-    },
-}
-
-/// How a provider's realtime usage channel interacts with the uniform OAuth
+/// How a provider's realtime usage channel interacts with the uniform direct
 /// account-usage driver.
 #[derive(Clone, Copy, Debug)]
 pub struct RealtimeUsageChannel {
-    /// A live root session's realtime channel already covers the
-    /// account-scoped fetch, so the driver skips this kind while one is live.
-    pub covers_account_while_live: bool,
     /// A content-fresh realtime windows reading owns the included-budget
-    /// windows, so the OAuth merge defers to it.
+    /// windows, so the direct merge defers to it.
     pub windows_defer_to_fresh_realtime: bool,
 }
 
@@ -602,7 +528,7 @@ impl AgentDescriptor {
 mod tests {
     use serde_json::json;
 
-    use super::{ImplicitUnlimitedWindow, ProviderAccountScope, program_names_kind};
+    use super::program_names_kind;
     use crate::agents::AskKind;
     use crate::agents::registry::ADAPTERS;
 
@@ -679,46 +605,5 @@ mod tests {
         assert!(codex.runs_as("node"));
         assert!(codex.runs_as("codex-aarch64-a"));
         assert!(!codex.runs_as("zsh"));
-    }
-    #[test]
-    fn implicit_unlimited_windows_follow_account_scope() {
-        let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
-        assert_eq!(
-            codex.capabilities.implicit_unlimited_windows,
-            &[ImplicitUnlimitedWindow::kind_wide(300)]
-        );
-        assert_eq!(
-            codex
-                .capabilities
-                .implicit_unlimited_window_mins(&ProviderAccountScope::KindWide)
-                .collect::<Vec<_>>(),
-            vec![300]
-        );
-
-        let openai_oauth = ProviderAccountScope::sub_provider("openai", "oauth");
-        let anthropic_oauth = ProviderAccountScope::sub_provider("anthropic", "oauth");
-        for kind in ["pi", "opencode"] {
-            let descriptor = crate::agents::registry::descriptor_by_kind(kind).unwrap();
-            assert_eq!(
-                descriptor.capabilities.implicit_unlimited_windows,
-                &[ImplicitUnlimitedWindow::sub_provider(
-                    300, "openai", "oauth"
-                )]
-            );
-            assert_eq!(
-                descriptor
-                    .capabilities
-                    .implicit_unlimited_window_mins(&openai_oauth)
-                    .collect::<Vec<_>>(),
-                vec![300]
-            );
-            assert!(
-                descriptor
-                    .capabilities
-                    .implicit_unlimited_window_mins(&anthropic_oauth)
-                    .next()
-                    .is_none()
-            );
-        }
     }
 }

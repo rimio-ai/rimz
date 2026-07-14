@@ -2,11 +2,17 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::agents::{ExtraCredits, ProviderAccountScope, ResetCredits};
+use crate::agents::{
+    AccountUsageIdentity, AccountUsageProbe, AccountUsageSnapshot, ExtraCredits,
+    ProviderAccountScope, ResetCredits,
+};
 use crate::config::AccountsConfig;
 use crate::sidebar::timing::unix_now_ms;
-use crate::sidebar::timing::{CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL};
+use crate::sidebar::timing::{
+    ACCOUNT_USAGE_CLAIM_TTL, CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL,
+};
 use crate::store::snapshot::format_plan_label;
 use crate::{RuntimePaths, SidebarSnapshot};
 
@@ -45,6 +51,27 @@ pub struct ProviderCreditsEntry {
     pub extra_credits: Option<ExtraCredits>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset_credits: Option<ResetCredits>,
+    /// One cross-workspace direct-query lease. Old cache files omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_query_claim: Option<DirectQueryClaim>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectQueryClaim {
+    pub nonce: Uuid,
+    pub claimed_at_ms: u64,
+    pub requested_scope: ProviderAccountScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_stamp: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preflight_account_key: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AccountUsageCompletion {
+    pub identity: AccountUsageIdentity,
+    pub snapshot: Option<AccountUsageSnapshot>,
+    pub account_changed: bool,
 }
 
 pub(crate) fn read_credits_cache(path: &Path) -> CreditsCache {
@@ -72,102 +99,207 @@ pub fn merge_provider_credits(
     kind: &str,
     extra_credits: Option<ExtraCredits>,
 ) {
-    merge_provider_realtime_usage(runtime, kind, None, extra_credits, None);
+    merge_provider_realtime_usage(
+        runtime,
+        kind,
+        ProviderAccountScope::KindWide,
+        AccountUsageSnapshot {
+            extra_credits,
+            ..Default::default()
+        },
+    );
 }
 
 pub fn merge_provider_realtime_usage(
     runtime: &RuntimePaths,
     kind: &str,
-    plan: Option<String>,
-    extra_credits: Option<ExtraCredits>,
-    reset_credits: Option<ResetCredits>,
+    scope: ProviderAccountScope,
+    snapshot: AccountUsageSnapshot,
 ) {
-    let plan = plan.and_then(non_empty_trimmed);
+    let (plan, extra_credits, reset_credits) = account_usage_credit_fields(Some(&snapshot));
     merge_provider_credits_entry(
         runtime,
         kind,
         ProviderCreditsEntry {
-            scope: ProviderAccountScope::KindWide,
+            scope,
             observed_at_ms: unix_now_ms(),
-            oauth_read_at_ms: 0,
-            auth_settled: false,
-            credentials_stamp: None,
-            account_key: None,
             plan: plan.clone(),
             ok: plan.is_some() || extra_credits.is_some() || reset_credits.is_some(),
             extra_credits,
             reset_credits,
+            ..Default::default()
         },
     );
 }
 
-/// Merge one provider's entry only when the existing success/failure entry is
-/// past its TTL or a settled auth failure's credential source changed. The
-/// freshness check happens under the shared lock, so detached helpers in
-/// multiple workspaces single-flight the network fetch.
-pub fn merge_provider_credits_entry_if_due(
+/// Claim one due direct account-usage read under the shared credits lock.
+pub fn claim_provider_account_usage(
     runtime: &RuntimePaths,
     kind: &str,
-    current_stamp: Option<u64>,
-    current_account_key: Option<String>,
-    current_scope: ProviderAccountScope,
-    entry: impl FnOnce() -> ProviderCreditsEntry,
-) -> Option<ProviderCreditsEntry> {
+    identity: AccountUsageIdentity,
+) -> Option<Uuid> {
+    claim_provider_account_usage_at(runtime, kind, identity, unix_now_ms(), Uuid::now_v7())
+}
+
+fn claim_provider_account_usage_at(
+    runtime: &RuntimePaths,
+    kind: &str,
+    identity: AccountUsageIdentity,
+    now_ms: u64,
+    nonce: Uuid,
+) -> Option<Uuid> {
     let path = runtime.shared_credits_path();
     let _guard = try_credits_cache_lock(&runtime.shared_credits_lock())?;
     let mut cache = read_credits_cache(&path);
-    let now_ms = unix_now_ms();
-    let prior = cache.entries.get(kind).cloned();
-    if prior.as_ref().is_some_and(|entry| {
-        oauth_read_is_fresh(
-            entry,
-            now_ms,
-            current_stamp,
-            current_account_key.as_deref(),
-            &current_scope,
-        )
-    }) {
+    let entry = cache.entries.entry(kind.to_owned()).or_default();
+    if entry.direct_query_claim.as_ref().is_some_and(|claim| {
+        now_ms.saturating_sub(claim.claimed_at_ms) <= ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64
+    }) || oauth_read_is_fresh(entry, now_ms, &identity)
+    {
         return None;
     }
-    let mut entry = entry();
-    if entry.oauth_read_at_ms == 0 {
-        entry.oauth_read_at_ms = unix_now_ms();
-    }
-    let effective_account_key = if entry.ok {
-        entry
-            .account_key
-            .clone()
-            .or_else(|| current_account_key.clone())
-    } else {
-        current_account_key
-    };
-    let prior_account_mismatch = prior.as_ref().is_some_and(|prior| {
-        prior.scope != entry.scope
-            || account_key_mismatch(
-                prior.account_key.as_deref(),
-                effective_account_key.as_deref(),
-            )
+    entry.direct_query_claim = Some(DirectQueryClaim {
+        nonce,
+        claimed_at_ms: now_ms,
+        requested_scope: identity.scope,
+        credentials_stamp: identity.credentials_stamp,
+        preflight_account_key: identity.account_key,
     });
-    if !entry.ok {
-        if !prior_account_mismatch && let Some(prior) = prior.as_ref() {
+    cache.refreshed_at_ms = now_ms;
+    write_credits_cache(&path, &cache);
+    Some(nonce)
+}
+
+pub fn account_usage_claim_matches(runtime: &RuntimePaths, kind: &str, nonce: Uuid) -> bool {
+    read_credits_cache(&runtime.shared_credits_path())
+        .entries
+        .get(kind)
+        .and_then(|entry| entry.direct_query_claim.as_ref())
+        .is_some_and(|claim| claim.nonce == nonce)
+}
+
+pub fn cancel_provider_account_usage_claim(
+    runtime: &RuntimePaths,
+    kind: &str,
+    nonce: Uuid,
+) -> bool {
+    let path = runtime.shared_credits_path();
+    let Some(_guard) = try_credits_cache_lock(&runtime.shared_credits_lock()) else {
+        return false;
+    };
+    let mut cache = read_credits_cache(&path);
+    let Some(entry) = cache.entries.get_mut(kind) else {
+        return false;
+    };
+    if entry.direct_query_claim.as_ref().map(|claim| claim.nonce) != Some(nonce) {
+        return false;
+    }
+    entry.direct_query_claim = None;
+    cache.refreshed_at_ms = unix_now_ms();
+    write_credits_cache(&path, &cache);
+    true
+}
+
+pub fn complete_provider_account_usage(
+    runtime: &RuntimePaths,
+    kind: &str,
+    nonce: Uuid,
+    probe: AccountUsageProbe,
+) -> Option<AccountUsageCompletion> {
+    let path = runtime.shared_credits_path();
+    let _guard = try_credits_cache_lock(&runtime.shared_credits_lock())?;
+    let mut cache = read_credits_cache(&path);
+    let prior = cache.entries.get(kind).cloned()?;
+    let claim = prior
+        .direct_query_claim
+        .as_ref()
+        .filter(|claim| claim.nonce == nonce)?;
+    let claim_identity = AccountUsageIdentity {
+        scope: claim.requested_scope.clone(),
+        account_key: claim.preflight_account_key.clone(),
+        credentials_stamp: claim.credentials_stamp,
+    };
+    let (mut identity, snapshot, auth_settled, failed) = match probe {
+        AccountUsageProbe::Found { identity, snapshot } => (identity, Some(snapshot), false, false),
+        AccountUsageProbe::NoCredentials(identity) => (identity, None, true, false),
+        AccountUsageProbe::Failed(identity) => (identity, None, false, true),
+        AccountUsageProbe::Unsupported => (claim_identity.clone(), None, false, true),
+    };
+    if failed {
+        if identity.scope == ProviderAccountScope::KindWide
+            && claim_identity.scope != ProviderAccountScope::KindWide
+        {
+            identity.scope = claim_identity.scope;
+        }
+        identity.account_key = identity.account_key.or(claim_identity.account_key);
+        identity.credentials_stamp = identity
+            .credentials_stamp
+            .or(claim_identity.credentials_stamp);
+    }
+    let account_changed = if failed {
+        (identity.scope != ProviderAccountScope::KindWide && prior.scope != identity.scope)
+            || identity
+                .account_key
+                .as_deref()
+                .is_some_and(|current| prior.account_key.as_deref() != Some(current))
+    } else {
+        prior.scope != identity.scope
+            || prior.account_key.as_deref() != identity.account_key.as_deref()
+    };
+    let now_ms = unix_now_ms();
+    let (plan, extra_credits, reset_credits) = account_usage_credit_fields(snapshot.as_ref());
+    let mut entry = ProviderCreditsEntry {
+        scope: identity.scope.clone(),
+        observed_at_ms: now_ms,
+        oauth_read_at_ms: now_ms,
+        auth_settled,
+        credentials_stamp: identity.credentials_stamp,
+        account_key: identity.account_key.clone(),
+        ok: snapshot.is_some(),
+        plan,
+        extra_credits,
+        reset_credits,
+        direct_query_claim: None,
+    };
+    if !account_changed {
+        if snapshot.is_none() {
             entry.observed_at_ms = prior.observed_at_ms;
             entry.ok = prior.ok;
-            entry.extra_credits = prior.extra_credits.clone();
-            entry.reset_credits = prior.reset_credits.clone();
-            entry.plan = prior.plan.clone();
+            entry.plan = prior.plan;
+            entry.extra_credits = prior.extra_credits;
+            entry.reset_credits = prior.reset_credits;
+            if failed {
+                if entry.scope == ProviderAccountScope::KindWide {
+                    entry.scope = prior.scope;
+                }
+                entry.credentials_stamp = entry.credentials_stamp.or(prior.credentials_stamp);
+                entry.account_key = entry.account_key.or(prior.account_key);
+            }
+        } else {
+            entry.plan = entry.plan.or(prior.plan);
+            entry.extra_credits = entry.extra_credits.or(prior.extra_credits);
+            entry.reset_credits = entry.reset_credits.or(prior.reset_credits);
         }
-    } else if !prior_account_mismatch && let Some(prior) = prior.as_ref() {
-        entry.plan = entry.plan.or_else(|| prior.plan.clone());
-        entry.extra_credits = entry.extra_credits.or_else(|| prior.extra_credits.clone());
-        // A reading without reset-credit data must not erase the last successful
-        // app-server or OAuth reset-credit read.
-        entry.reset_credits = entry.reset_credits.or_else(|| prior.reset_credits.clone());
     }
-    entry.account_key = effective_account_key;
-    cache.refreshed_at_ms = unix_now_ms();
-    cache.entries.insert(kind.to_owned(), entry.clone());
+    cache.refreshed_at_ms = now_ms;
+    cache.entries.insert(kind.to_owned(), entry);
     write_credits_cache(&path, &cache);
-    Some(entry)
+    Some(AccountUsageCompletion {
+        identity,
+        snapshot,
+        account_changed,
+    })
+}
+
+fn account_usage_credit_fields(
+    snapshot: Option<&AccountUsageSnapshot>,
+) -> (Option<String>, Option<ExtraCredits>, Option<ResetCredits>) {
+    let plan = snapshot
+        .and_then(|usage| usage.plan.as_deref())
+        .and_then(crate::agents::non_empty_trimmed);
+    let extra_credits = snapshot.and_then(|usage| usage.extra_credits.clone());
+    let reset_credits = snapshot.and_then(|usage| usage.reset_credits.clone());
+    (plan, extra_credits, reset_credits)
 }
 
 pub(crate) fn merge_provider_credits_entry(
@@ -181,7 +313,10 @@ pub(crate) fn merge_provider_credits_entry(
     };
     let mut cache = read_credits_cache(&path);
     let mut entry = entry;
-    entry.plan = entry.plan.and_then(non_empty_trimmed);
+    entry.plan = entry
+        .plan
+        .as_deref()
+        .and_then(crate::agents::non_empty_trimmed);
     let prior = cache
         .entries
         .get(kind)
@@ -193,6 +328,7 @@ pub(crate) fn merge_provider_credits_entry(
         entry.auth_settled = prior.auth_settled;
         entry.credentials_stamp = prior.credentials_stamp;
         entry.account_key = prior.account_key.clone();
+        entry.direct_query_claim = prior.direct_query_claim.clone();
         if entry.plan.is_none() {
             entry.plan = prior.plan.clone();
         }
@@ -220,6 +356,8 @@ pub fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {
         return;
     };
     entry.oauth_read_at_ms = 0;
+    entry.auth_settled = false;
+    entry.direct_query_claim = None;
     cache.refreshed_at_ms = unix_now_ms();
     write_credits_cache(&path, &cache);
 }
@@ -227,20 +365,21 @@ pub fn invalidate_oauth_read(runtime: &RuntimePaths, kind: &str) {
 fn oauth_read_is_fresh(
     entry: &ProviderCreditsEntry,
     now_ms: u64,
-    current_stamp: Option<u64>,
-    current_account_key: Option<&str>,
-    current_scope: &ProviderAccountScope,
+    identity: &AccountUsageIdentity,
 ) -> bool {
     if entry.oauth_read_at_ms == 0 {
         return false;
     }
-    if &entry.scope != current_scope
-        || account_key_mismatch(entry.account_key.as_deref(), current_account_key)
+    if entry.scope != identity.scope
+        || preflight_account_key_changed(entry, identity)
+        || identity
+            .credentials_stamp
+            .is_some_and(|stamp| entry.credentials_stamp != Some(stamp))
     {
         return false;
     }
     let ttl = if entry.auth_settled {
-        if entry.credentials_stamp != current_stamp {
+        if entry.credentials_stamp != identity.credentials_stamp {
             return false;
         }
         OAUTH_USAGE_SETTLED_TTL
@@ -250,13 +389,17 @@ fn oauth_read_is_fresh(
     now_ms.saturating_sub(entry.oauth_read_at_ms) <= ttl.as_millis() as u64
 }
 
-pub(crate) fn account_key_mismatch(prior: Option<&str>, current: Option<&str>) -> bool {
-    prior != current
-}
-
-fn non_empty_trimmed(value: String) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
+fn preflight_account_key_changed(
+    entry: &ProviderCreditsEntry,
+    identity: &AccountUsageIdentity,
+) -> bool {
+    match identity.account_key.as_deref() {
+        Some(current) => entry.account_key.as_deref() != Some(current),
+        // File-stamped scheduling hints omit owner to avoid rereading
+        // credentials every tick. Without a stamp, `None` is the exact source
+        // result and detects Some -> None symmetrically.
+        None => identity.credentials_stamp.is_none() && entry.account_key.is_some(),
+    }
 }
 
 fn entry_is_displayable(entry: &ProviderCreditsEntry, now_ms: u64) -> bool {

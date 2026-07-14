@@ -34,7 +34,7 @@ pub(super) enum Error {
     Http { kind: HttpErrKind, host: String },
 }
 
-impl crate::agents::credits::OauthReportable for Error {
+impl crate::agents::credits::AccountUsageReportable for Error {
     fn should_report(&self) -> bool {
         !matches!(self, Self::NoCredentials | Self::Unavailable)
     }
@@ -136,9 +136,22 @@ struct Credentials {
     host: GitHubHost,
 }
 
-pub(super) fn fetch() -> Result<AccountUsageSnapshot> {
-    let credentials = credentials_from(|key| std::env::var_os(key))?;
-    fetch_with(&credentials)
+pub(super) fn probe() -> crate::agents::AccountUsageProbe {
+    let credentials = match credentials_from(|key| std::env::var_os(key)) {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return crate::agents::credits::map_account_usage_probe(
+                Err(error),
+                Default::default(),
+                "copilot",
+            );
+        }
+    };
+    let identity = crate::agents::AccountUsageIdentity {
+        account_key: Some(credentials.fingerprint()),
+        ..Default::default()
+    };
+    crate::agents::credits::map_account_usage_probe(fetch_with(&credentials), identity, "copilot")
 }
 
 pub(super) fn account_key() -> Option<String> {
@@ -194,9 +207,7 @@ fn fetch_with(credentials: &Credentials) -> Result<AccountUsageSnapshot> {
         "copilot: fetching GitHub account usage",
     )
     .map_err(map_http_error)?;
-    let mut snapshot = parse_response(&body)?;
-    snapshot.account_key = Some(credentials.fingerprint());
-    Ok(snapshot)
+    parse_response(&body)
 }
 
 fn map_http_error((kind, host): (HttpErrKind, String)) -> Error {
@@ -337,12 +348,9 @@ pub(super) fn parse_response(body: &str) -> Result<AccountUsageSnapshot> {
         return Err(Error::MalformedResponse);
     }
     Ok(AccountUsageSnapshot {
-        account_key: None,
-        scope: Default::default(),
         rate_limits: (!windows.is_empty()).then_some(AgentRateLimits { windows }),
-        extra_credits: None,
-        reset_credits: None,
         plan,
+        ..Default::default()
     })
 }
 

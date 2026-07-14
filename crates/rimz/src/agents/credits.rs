@@ -11,7 +11,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::context::{AgentRateLimits, ProviderAccountScope};
+use crate::agents::AccountUsageIdentity;
+use crate::agents::context::AgentRateLimits;
 
 /// `true` when direct provider account-usage fetches are disabled for this
 /// process (tests, CI, air-gapped runs).
@@ -214,14 +215,10 @@ fn oauth_http_post_json_once<T: Serialize>(
 /// balances.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AccountUsageSnapshot {
-    /// Opaque, non-secret discriminator for the local login whose credentials
-    /// produced this observation. This is cache identity, never display identity.
-    pub account_key: Option<String>,
     pub rate_limits: Option<AgentRateLimits>,
     pub extra_credits: Option<ExtraCredits>,
     pub reset_credits: Option<ResetCredits>,
     pub plan: Option<String>,
-    pub scope: ProviderAccountScope,
 }
 
 /// Paid usage beyond the subscription windows: Claude extra usage, Codex
@@ -357,7 +354,7 @@ fn clean_usd(value: Option<f64>) -> Option<f64> {
         .map(|value| value.max(0.0))
 }
 
-/// The outcome of an adapter's direct-OAuth account-usage query, mirroring the
+/// The outcome of an adapter's direct account-usage query, mirroring the
 /// tri-state discipline of [`AccountProbe`](super::account::AccountProbe) so the
 /// shared refresh driver can key its cache TTL on the arm, not just the value:
 ///
@@ -367,43 +364,47 @@ fn clean_usd(value: Option<f64>) -> Option<f64> {
 ///   token, a provider with no quota surface). A settled state, logged at debug.
 /// - `Failed` — the probe could not complete (unreadable file, parse error, HTTP
 ///   error). Transient, logged at warn, retried on the short TTL.
-/// - `Unsupported` — the adapter exposes no OAuth usage probe (the trait
+/// - `Unsupported` — the adapter exposes no direct account-usage probe (the trait
 ///   default). Nothing to spawn.
 #[derive(Clone, Debug, PartialEq)]
-pub enum OauthUsageProbe {
-    Found(AccountUsageSnapshot),
-    NoCredentials,
-    Failed,
+pub enum AccountUsageProbe {
+    Found {
+        identity: AccountUsageIdentity,
+        snapshot: AccountUsageSnapshot,
+    },
+    NoCredentials(AccountUsageIdentity),
+    Failed(AccountUsageIdentity),
     Unsupported,
 }
 
-/// Whether an OAuth-usage error is worth reporting off-box. Implemented by each
-/// adapter's `oauth_usage` error so [`map_probe_snapshot`] can fold every
+/// Whether an account-usage error is worth reporting off-box. Implemented by each
+/// adapter's account-usage error so [`map_account_usage_probe`] can fold every
 /// adapter's result through one classifier instead of a hand-rolled match per
 /// adapter. The "report" set (HTTP/IO/parse faults) maps to `Failed`; the silent
 /// set (absent/api-key/expired credentials) maps to `NoCredentials`.
-pub(crate) trait OauthReportable {
+pub(crate) trait AccountUsageReportable {
     fn should_report(&self) -> bool;
 }
 
 /// Fold an adapter's `Result<AccountUsageSnapshot, E>` into the shared
-/// [`OauthUsageProbe`], logging once at the right level. The single home for the
-/// debug-vs-warn split, so every adapter's `probe_oauth_usage` is a one-line
-/// delegation to its `oauth_usage` fetcher. Every provider reports the static
+/// [`AccountUsageProbe`], logging once at the right level. The single home for the
+/// debug-vs-warn split, so every adapter's `probe_account_usage` is a one-line
+/// delegation to its account-usage fetcher. Every provider reports the static
 /// `oauth_usage` operation so Sentry groups them together; the provider tag and
 /// error's host authority keep the source visible.
-pub(crate) fn map_probe_snapshot<E>(
+pub(crate) fn map_account_usage_probe<E>(
     result: std::result::Result<AccountUsageSnapshot, E>,
+    identity: AccountUsageIdentity,
     provider: &'static str,
-) -> OauthUsageProbe
+) -> AccountUsageProbe
 where
-    E: OauthReportable + std::error::Error + 'static,
+    E: AccountUsageReportable + std::error::Error + 'static,
 {
     match result {
-        Ok(snapshot) => OauthUsageProbe::Found(snapshot),
+        Ok(snapshot) => AccountUsageProbe::Found { identity, snapshot },
         Err(err) if !err.should_report() => {
             tracing::debug!(error = %err, provider, "OAuth account usage unavailable");
-            OauthUsageProbe::NoCredentials
+            AccountUsageProbe::NoCredentials(identity)
         }
         Err(err) => {
             tracing::warn!(
@@ -412,7 +413,7 @@ where
                 error = &err as &dyn std::error::Error,
                 "OAuth account usage fetch failed",
             );
-            OauthUsageProbe::Failed
+            AccountUsageProbe::Failed(identity)
         }
     }
 }

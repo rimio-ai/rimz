@@ -6,11 +6,11 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agents::codex::oauth_usage::{credits_to_extra, parse_balance};
-use crate::agents::context::{
-    AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow, WindowSource,
+use crate::agents::codex::account::{
+    UsageCredits, UsageWindow, normalize_credits, normalize_usage, parse_balance,
 };
-use crate::agents::{ExtraCredits, ResetCredits};
+use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits, WindowSource};
+use crate::agents::{AccountUsageSnapshot, ResetCredits};
 
 use super::transport::AppServerErr;
 
@@ -274,38 +274,47 @@ pub(super) fn into_context(
 /// server-side change in count or length (e.g. a transient single ~30-day window)
 /// maps without special-casing. The wire order is preserved here and sorted
 /// short→long downstream by the producer.
-pub(super) fn collect_windows(
-    primary: Option<RawWindow>,
-    secondary: Option<RawWindow>,
-) -> Option<AgentRateLimits> {
-    let windows: Vec<RateLimitWindow> = [primary, secondary]
-        .into_iter()
-        .flatten()
-        .map(|window| RateLimitWindow {
-            used_percentage: window.used_percent.map(clamp_pct),
-            resets_at: window
-                .resets_at
-                .and_then(|secs| Timestamp::from_second(secs).ok()),
-            duration_mins: window
-                .window_duration_mins
-                .and_then(|mins| u32::try_from(mins).ok()),
-            // The app-server queries Codex's official usage API, so its reading
-            // is authoritative — it may lower the bar at once. `observed_at` is
-            // stamped in `into_context`.
-            observed_at: None,
-            source: WindowSource::Authoritative,
-            ..Default::default()
-        })
-        .collect();
-    (!windows.is_empty()).then_some(AgentRateLimits { windows })
-}
-
-pub(super) fn collect_credits(parsed: &RateLimitsResponse) -> Option<ExtraCredits> {
-    parsed
+pub(super) fn collect_usage(parsed: RateLimitsResponse) -> AccountUsageSnapshot {
+    let extra_credits = parsed
         .credits
         .as_ref()
-        .and_then(map_credits)
-        .or_else(|| parsed.rate_limits.credits.as_ref().and_then(map_credits))
+        .and_then(|credits| normalize_credits(credits_input(credits)))
+        .or_else(|| {
+            parsed
+                .rate_limits
+                .credits
+                .as_ref()
+                .and_then(|credits| normalize_credits(credits_input(credits)))
+        });
+    let mut usage = normalize_usage(
+        parsed.rate_limits.plan_type,
+        [parsed.rate_limits.primary, parsed.rate_limits.secondary]
+            .into_iter()
+            .flatten()
+            .map(|window| UsageWindow {
+                used_percentage: window.used_percent.map(|value| value as f64),
+                resets_at: window
+                    .resets_at
+                    .and_then(|secs| Timestamp::from_second(secs).ok()),
+                duration_mins: window
+                    .window_duration_mins
+                    .and_then(|mins| u32::try_from(mins).ok()),
+                scope: None,
+                source: WindowSource::Authoritative,
+            }),
+        None,
+    );
+    usage.extra_credits = extra_credits;
+    usage
+}
+
+fn credits_input(credits: &CreditsWire) -> UsageCredits {
+    UsageCredits {
+        has_credits: credits.has_credits,
+        unlimited: credits.unlimited,
+        overage_limit_reached: credits.overage_limit_reached,
+        balance: credits.balance.as_ref().and_then(parse_balance),
+    }
 }
 
 pub(super) fn collect_reset_credits(parsed: &RateLimitsResponse) -> Option<ResetCredits> {
@@ -326,19 +335,6 @@ pub(super) fn collect_reset_credits(parsed: &RateLimitsResponse) -> Option<Reset
         count,
         soonest_expiry,
     })
-}
-
-fn map_credits(credits: &CreditsWire) -> Option<ExtraCredits> {
-    credits_to_extra(
-        credits.has_credits,
-        credits.unlimited,
-        credits.overage_limit_reached,
-        credits.balance.as_ref().and_then(parse_balance),
-    )
-}
-
-fn clamp_pct(value: i64) -> u8 {
-    value.clamp(0, 100) as u8
 }
 
 /// Extract the Codex version from the server's `userAgent`. The first token is

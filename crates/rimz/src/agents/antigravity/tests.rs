@@ -1316,8 +1316,8 @@ mod local_account_api {
                 .has_authoritative_account_spend()
         );
         assert!(matches!(
-            AntigravityAdapter.probe_oauth_usage(),
-            crate::agents::OauthUsageProbe::Unsupported
+            AntigravityAdapter.probe_account_usage(),
+            crate::agents::AccountUsageProbe::Unsupported
         ));
         assert_eq!(
             AntigravityAdapter.account_usage_identity(),

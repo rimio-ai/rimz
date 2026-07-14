@@ -23,6 +23,7 @@ pub mod context;
 pub mod copilot;
 pub mod credits;
 pub mod cursor;
+pub(crate) mod delegated_account;
 pub mod descriptor;
 pub mod droid;
 mod emblems;
@@ -71,11 +72,11 @@ pub use context::{
     RateLimitWindow, RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
-pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe, ResetCredits};
+pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
 pub use descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
-    ImplicitUnlimitedWindowApplicability, IntegrationConcern, PlanLabel, RealtimeUsageChannel,
-    RemoteControlCapability, ThreadKey, ToolClassification, program_names_kind,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
+    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    program_names_kind,
 };
 pub use emblems::{emblem_lines, fallback_emblem};
 pub(crate) use identity::{
@@ -511,14 +512,6 @@ pub struct RefreshSpawn {
     pub args: Vec<String>,
 }
 
-/// Account usage read from a provider-owned realtime account channel.
-pub struct RealtimeAccountUsage {
-    pub plan: Option<String>,
-    pub rate_limits: Option<AgentRateLimits>,
-    pub extra_credits: Option<ExtraCredits>,
-    pub reset_credits: Option<ResetCredits>,
-}
-
 /// Dynamic remote-control state read from the agent's own machine-local
 /// settings and the already-published account cache. Static capability still
 /// lives in [`AgentDescriptor`].
@@ -928,18 +921,17 @@ pub trait AgentAdapter: Send + Sync {
     }
 
     /// Query this provider's account usage (included rate-limit windows + paid
-    /// extra credits) directly from its own local OAuth credentials. This is the
-    /// uniform *API-query channel*: every adapter reads its own auth file with
-    /// its own token and normalizes the provider's quota surface into an
-    /// [`AccountUsageSnapshot`]. Producer-only and best-effort — the shared
+    /// extra credits) from its selected local credentials. The identity and
+    /// normalized [`AccountUsageSnapshot`] return together in one
+    /// [`AccountUsageProbe`]. Producer-only and best-effort — the shared
     /// refresh driver single-flights it behind the credits cache and keys the
     /// cache TTL on the returned arm. Defaults to
-    /// [`OauthUsageProbe::Unsupported`] for an agent with no OAuth usage surface.
-    fn probe_oauth_usage(&self) -> OauthUsageProbe {
-        OauthUsageProbe::Unsupported
+    /// [`AccountUsageProbe::Unsupported`] for an agent with no account-usage surface.
+    fn probe_account_usage(&self) -> AccountUsageProbe {
+        AccountUsageProbe::Unsupported
     }
 
-    /// Cache identity of the credentials behind this provider usage probe.
+    /// Scheduling fallback for sources without a cached credential-file stamp.
     fn account_usage_identity(&self) -> AccountUsageIdentity {
         AccountUsageIdentity::default()
     }
@@ -951,7 +943,7 @@ pub trait AgentAdapter: Send + Sync {
     fn probe_realtime_account_usage(
         &self,
         _runtime: &crate::RuntimePaths,
-    ) -> Option<RealtimeAccountUsage> {
+    ) -> Option<AccountUsageSnapshot> {
         None
     }
 

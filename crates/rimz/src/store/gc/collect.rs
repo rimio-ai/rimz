@@ -810,46 +810,29 @@ mod tests {
         let recent_session = shared.join(format!(
             "{SESSION_PROBE_MARKER_PREFIX}11111111111111111111111111111111"
         ));
-        let stale_usage = shared.join("usage-probe.opencode");
-        let recent_usage = shared.join("usage-probe.codex");
-        let fresh = shared.join("usage-probe.pi");
         let accounts = shared.join("accounts.json");
         let lock = shared.join("accounts.lock");
         let trace = shared.join("rate_limits_trace.jsonl");
-        for path in [
-            &stale_session,
-            &recent_session,
-            &stale_usage,
-            &recent_usage,
-            &fresh,
-            &accounts,
-            &lock,
-            &trace,
-        ] {
+        for path in [&stale_session, &recent_session, &accounts, &lock, &trace] {
             fs::write(path, b"probe").unwrap();
         }
         let old = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&stale_session, &stale_usage, &accounts, &lock, &trace] {
+        for path in [&stale_session, &accounts, &lock, &trace] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
         let recently_dead = SystemTime::now() - (SESSION_PROBE_MARKER_TTL + Duration::from_secs(1));
-        for path in [&recent_session, &recent_usage] {
-            fs::File::open(path)
-                .unwrap()
-                .set_modified(recently_dead)
-                .unwrap();
-        }
+        fs::File::open(&recent_session)
+            .unwrap()
+            .set_modified(recently_dead)
+            .unwrap();
 
         let report =
             collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600), false)
                 .unwrap();
 
-        assert_eq!(report.probe_markers_removed, 3);
+        assert_eq!(report.probe_markers_removed, 2);
         assert!(!stale_session.exists());
         assert!(!recent_session.exists());
-        assert!(!stale_usage.exists());
-        assert!(recent_usage.exists());
-        assert!(fresh.exists());
         assert!(accounts.exists());
         assert!(lock.exists());
         assert!(trace.exists());

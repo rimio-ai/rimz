@@ -44,12 +44,6 @@ fn stock_store_transcript_context_and_lifecycle_are_normalized() {
     assert!(descriptor.capabilities.local_session_discovery);
     assert!(descriptor.capabilities.transcript_tail_context);
     assert!(!descriptor.has_authoritative_account_spend());
-    assert!(
-        !descriptor
-            .capabilities
-            .realtime_usage
-            .covers_account_while_live
-    );
 
     let ping = include_str!("tests/fixtures/stock_ping/messages.jsonl");
     let messages = KiroAdapter.parse_transcript_messages(ping);

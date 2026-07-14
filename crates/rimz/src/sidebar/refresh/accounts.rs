@@ -91,6 +91,16 @@ pub(crate) fn cached_accounts_for_snapshot(
     accounts_with_context_versions(&cache, &context_versions(snapshot))
 }
 
+/// Cheap scheduling hint from the already-published account cache.
+pub(crate) fn cached_account_usage_hint(
+    runtime: &RuntimePaths,
+    kind: &str,
+) -> Option<(crate::agents::ProviderAccountScope, Option<u64>)> {
+    let cache = read_accounts_cache(&runtime.shared_accounts_path());
+    let account = cache.providers.get(kind)?.account.as_ref()?;
+    Some((account.scope.clone(), account.credentials_updated_at_ms))
+}
+
 fn due_provider_kinds(
     cache: &AccountsCache,
     snapshot: &SidebarSnapshot,

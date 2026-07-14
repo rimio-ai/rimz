@@ -7,7 +7,7 @@ use jiff::Timestamp;
 use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{
     AgentRateLimits, PendingRefill, ProviderAccountScope, RateLimitCacheEntry, RateLimitWindow,
-    RateLimitsCache, descriptor_by_kind, read_rate_limits_cache,
+    RateLimitsCache, read_rate_limits_cache,
 };
 use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot};
@@ -86,7 +86,7 @@ pub fn merge_account_rate_limits(
         .filter(|entry| entry.scope == scope)
         .map(|entry| entry.limits.windows.as_slice())
         .unwrap_or_default();
-    complete_omitted_duration_windows(kind, &scope, prior, &mut windows);
+    complete_omitted_duration_windows(prior, &mut windows);
     cache.entries.insert(
         kind.to_owned(),
         RateLimitCacheEntry {
@@ -282,15 +282,10 @@ fn acquire_rate_limits_cache_lock(
 }
 
 /// Complete duration windows omitted by a stamped authoritative temporal
-/// reading. Expected durations come only from same-scope persisted truth and
-/// scope-applicable descriptor declarations; named quotas and best-effort
-/// readings cannot claim that an absent limit is lifted.
-fn complete_omitted_duration_windows(
-    kind: &str,
-    scope: &ProviderAccountScope,
-    prior: &[RateLimitWindow],
-    current: &mut AgentRateLimits,
-) {
+/// reading. Expected durations come only from same-scope persisted
+/// authoritative truth; named quotas and best-effort readings cannot claim
+/// that an absent limit is lifted.
+fn complete_omitted_duration_windows(prior: &[RateLimitWindow], current: &mut AgentRateLimits) {
     let Some(observed_at) = current
         .windows
         .iter()
@@ -310,16 +305,10 @@ fn complete_omitted_duration_windows(
         .filter(|window| window.scope.is_none())
         .filter_map(|window| window.duration_mins)
         .collect();
-    let declared = descriptor_by_kind(kind).into_iter().flat_map(|descriptor| {
-        descriptor
-            .capabilities
-            .implicit_unlimited_window_mins(scope)
-    });
     let expected: BTreeSet<u32> = prior
         .iter()
-        .filter(|window| window.scope.is_none())
+        .filter(|window| window.scope.is_none() && window.source.is_authoritative())
         .filter_map(|window| window.duration_mins)
-        .chain(declared)
         .collect();
     current.windows.extend(
         expected
@@ -366,8 +355,6 @@ fn apply_rate_limit_cache_with(
             windows: std::mem::take(&mut panel.windows),
         };
         complete_omitted_duration_windows(
-            &panel.kind,
-            &panel.account_scope,
             prior_entry
                 .map(|entry| entry.limits.windows.as_slice())
                 .unwrap_or_default(),

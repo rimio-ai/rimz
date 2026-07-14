@@ -226,7 +226,7 @@ Built-in adapters implement the trait plus a static [`AgentDescriptor`](../../..
 - **`observe_lifecycle`** is the normalizer: it maps a native lifecycle event onto one [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs). `None` means "no transition here", so high-frequency events stay silent.
 - **`render_neutral`** emits the agent-native no-op for blocking asks. Hooks record the waiting observation and return neutral; the agent's own UI stays open as the answer surface.
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../../crates/rimz/src/agents/context.rs); **`local_context_refresh`** derives sidecar fields from local provider state on hook or producer tick triggers; **`context_refresh_spawn`** maps hook or tick triggers to a detached `rimz` helper when a provider's rich context transport needs one.
-- **`install_hooks`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it; **`probe_account`** / **`parse_spend`** / **`transcript_files`** feed the account and spend model in [providers.md](./providers.md).
+- **`install_hooks`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it; **`probe_account`** feeds display identity; **`probe_account_usage`** returns one identity-bearing normalized usage result; **`probe_realtime_account_usage`** returns the same snapshot shape without direct-query cadence; **`parse_spend`** / **`transcript_files`** feed the spend model in [providers.md](./providers.md).
 
 Two invariants hold the seam shut:
 

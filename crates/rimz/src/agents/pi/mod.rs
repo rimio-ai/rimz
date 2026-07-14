@@ -27,7 +27,6 @@
 //! deliberately.
 
 pub(crate) mod account;
-pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod spend;
 pub(crate) mod transcript;
@@ -45,9 +44,9 @@ use super::context::{
     WindowSource,
 };
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
-    IntegrationCoverage, LifecycleCoverage, PlanLabel, RealtimeUsageChannel,
-    RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
@@ -94,13 +93,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        implicit_unlimited_windows: &[ImplicitUnlimitedWindow::sub_provider(
-            5 * 60,
-            "openai",
-            "oauth",
-        )],
         realtime_usage: RealtimeUsageChannel {
-            covers_account_while_live: false,
             windows_defer_to_fresh_realtime: false,
         },
         remote_control: RemoteControlCapability {
@@ -637,12 +630,12 @@ impl AgentAdapter for PiAdapter {
         account::probe()
     }
 
-    fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
-        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "pi")
+    fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
+        account::probe_usage()
     }
 
     fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
-        oauth_usage::account_usage_identity()
+        account::account_usage_identity()
     }
 }
 

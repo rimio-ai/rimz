@@ -171,9 +171,7 @@ fn capability_honesty() {
             );
         }
 
-        if capabilities.realtime_usage.covers_account_while_live
-            || capabilities.realtime_usage.windows_defer_to_fresh_realtime
-        {
+        if capabilities.realtime_usage.windows_defer_to_fresh_realtime {
             assert!(
                 adapter
                     .descriptor()

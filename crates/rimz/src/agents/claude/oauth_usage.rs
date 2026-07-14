@@ -20,9 +20,8 @@ use sha2::{Digest, Sha256};
 use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::credits::oauth_http_get;
+use crate::agents::payload::non_empty_trimmed;
 use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, transcript_fs::home_dir};
-
-use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate_limit_used_pct};
 
 const DEFAULT_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const URL_ENV: &str = "RIMZ_CLAUDE_OAUTH_USAGE_URL";
@@ -47,7 +46,7 @@ pub(crate) enum ClaudeOauthUsageErr {
     Http { kind: HttpErrKind, host: String },
 }
 
-impl crate::agents::credits::OauthReportable for ClaudeOauthUsageErr {
+impl crate::agents::credits::AccountUsageReportable for ClaudeOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent credentials, an
     /// expired token, and a missing usage scope are the normal state for an
     /// account that does not feed Rimz its usage, not a fault; a provider 401
@@ -109,9 +108,27 @@ struct ExtraUsageWire {
     monthly_limit: Option<f64>,
 }
 
-pub(crate) fn fetch_usage(cli_version: Option<&str>) -> Result<AccountUsageSnapshot> {
-    let credentials = load_credentials()?;
-    fetch_usage_with_url(&usage_url(), &credentials, cli_version)
+pub(crate) fn probe_usage(cli_version: Option<&str>) -> crate::agents::AccountUsageProbe {
+    let credentials_stamp = credentials_stamp();
+    match load_credentials() {
+        Ok(credentials) => crate::agents::credits::map_account_usage_probe(
+            fetch_usage_with_url(&usage_url(), &credentials, cli_version),
+            crate::agents::AccountUsageIdentity {
+                account_key: Some(credentials.account_key.clone()),
+                credentials_stamp,
+                ..Default::default()
+            },
+            "claude",
+        ),
+        Err(err) => crate::agents::credits::map_account_usage_probe(
+            Err(err),
+            crate::agents::AccountUsageIdentity {
+                credentials_stamp,
+                ..Default::default()
+            },
+            "claude",
+        ),
+    }
 }
 
 pub(crate) fn fetch_usage_with_token(
@@ -191,10 +208,10 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> 
     let Some(oauth) = parsed.claude_ai_oauth else {
         return Err(ClaudeOauthUsageErr::NoCredentials);
     };
-    let Some(access_token) = oauth.access_token.and_then(non_empty_trimmed) else {
+    let Some(access_token) = oauth.access_token.as_deref().and_then(non_empty_trimmed) else {
         return Err(ClaudeOauthUsageErr::NoCredentials);
     };
-    let refresh_token = oauth.refresh_token.and_then(non_empty_trimmed);
+    let refresh_token = oauth.refresh_token.as_deref().and_then(non_empty_trimmed);
     let scopes = oauth.scopes.unwrap_or_default();
     if !scopes.iter().any(|scope| scope == "user:profile") {
         return Err(ClaudeOauthUsageErr::MissingScope);
@@ -223,14 +240,7 @@ pub(crate) fn fetch_usage_with_url(
     cli_version: Option<&str>,
 ) -> Result<AccountUsageSnapshot> {
     let body = http_get(url, &credentials.access_token, cli_version)?;
-    let mut snapshot = parse_usage_response(&body)?;
-    snapshot.account_key = Some(credentials.account_key.clone());
-    Ok(snapshot)
-}
-
-fn non_empty_trimmed(value: String) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
+    parse_usage_response(&body)
 }
 
 fn account_key(secret_kind: &str, secret: &str) -> String {
@@ -281,12 +291,9 @@ pub(crate) fn parse_usage_response(body: &str) -> Result<AccountUsageSnapshot> {
 impl UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
         AccountUsageSnapshot {
-            account_key: None,
-            scope: Default::default(),
             rate_limits: collect_rate_limits(self.five_hour, self.seven_day),
             extra_credits: collect_extra_usage(self.extra_usage),
-            reset_credits: None,
-            plan: None,
+            ..Default::default()
         }
     }
 }
@@ -296,8 +303,8 @@ fn collect_rate_limits(
     seven_day: Option<WindowWire>,
 ) -> Option<AgentRateLimits> {
     let windows: Vec<RateLimitWindow> = [
-        window(five_hour, CLAUDE_FIVE_HOUR_MINS),
-        window(seven_day, CLAUDE_SEVEN_DAY_MINS),
+        window(five_hour, super::account::FIVE_HOUR_MINS),
+        window(seven_day, super::account::SEVEN_DAY_MINS),
     ]
     .into_iter()
     .flatten()
@@ -305,23 +312,18 @@ fn collect_rate_limits(
     (!windows.is_empty()).then_some(AgentRateLimits { windows })
 }
 
-fn window(field: Option<WindowWire>, duration_mins: u32) -> Option<RateLimitWindow> {
+fn window(field: Option<WindowWire>, duration_mins: u32) -> Option<crate::agents::RateLimitWindow> {
     let field = field?;
-    let used_percentage = clamp_rate_limit_used_pct(field.utilization);
     let resets_at = field
         .resets_at
         .as_deref()
         .and_then(|raw| raw.parse::<Timestamp>().ok());
-    (used_percentage.is_some() || resets_at.is_some()).then_some(RateLimitWindow {
-        used_percentage,
+    super::account::budget_window(
+        field.utilization,
         resets_at,
-        duration_mins: Some(duration_mins),
-        // The OAuth usage endpoint is the official API, so this reading is
-        // authoritative; `observed_at` is stamped to the fetch instant at merge.
-        observed_at: None,
-        source: WindowSource::Authoritative,
-        ..Default::default()
-    })
+        duration_mins,
+        WindowSource::Authoritative,
+    )
 }
 
 fn collect_extra_usage(field: Option<ExtraUsageWire>) -> Option<ExtraCredits> {

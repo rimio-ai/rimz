@@ -81,18 +81,18 @@ use super::AgentHookClass;
 use super::AskKind;
 use super::context::AgentContext;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, ImplicitUnlimitedWindow,
-    IntegrationCoverage, LifecycleCoverage, PlanLabel, RealtimeUsageChannel,
-    RemoteControlCapability, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::hook_types::{HookRecord, SessionSource, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr, AnswerStep, AskReply,
-    ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport,
-    LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RealtimeAccountUsage,
+    AccountUsageSnapshot, AgentAdapter, AgentLifecycleObservation, AgentTurnError, AnswerPlanErr,
+    AnswerStep, AskReply, ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport,
+    HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx,
     RefreshSpawn, RefreshTrigger, ResetCredits, Result, RootIdentity, SubagentIdentity,
     TranscriptMessage, TranscriptRole, non_empty_trimmed, optional_payload_string,
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
@@ -178,9 +178,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: false,
         daemon_hooked_sessions: true,
-        implicit_unlimited_windows: &[ImplicitUnlimitedWindow::kind_wide(5 * 60)],
         realtime_usage: RealtimeUsageChannel {
-            covers_account_while_live: true,
             windows_defer_to_fresh_realtime: false,
         },
         remote_control: RemoteControlCapability {
@@ -757,8 +755,8 @@ impl AgentAdapter for CodexAdapter {
         account::probe()
     }
 
-    fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
-        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch_usage(), "codex")
+    fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
+        oauth_usage::probe_usage()
     }
 
     fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
@@ -821,7 +819,7 @@ impl AgentAdapter for CodexAdapter {
     fn probe_realtime_account_usage(
         &self,
         runtime: &crate::RuntimePaths,
-    ) -> Option<RealtimeAccountUsage> {
+    ) -> Option<AccountUsageSnapshot> {
         refresh_app_server_enrichment(None, None, Some(&runtime.codex_app_server_socket_path()))
             .map(|enrichment| {
                 let plan = enrichment
@@ -829,7 +827,7 @@ impl AgentAdapter for CodexAdapter {
                     .account
                     .as_ref()
                     .and_then(|account| account.plan.clone());
-                RealtimeAccountUsage {
+                AccountUsageSnapshot {
                     plan,
                     rate_limits: enrichment.context.rate_limits,
                     extra_credits: enrichment.extra_credits,

@@ -3,7 +3,7 @@
 //! Spawned detached by the sidebar producer for one metered, logged-in provider.
 //! Every kind runs the same API-query channel — a direct OAuth read of its own
 //! quota surface through
-//! [`AgentAdapter::probe_oauth_usage`](rimz::agents::AgentAdapter::probe_oauth_usage),
+//! [`AgentAdapter::probe_account_usage`](rimz::agents::AgentAdapter::probe_account_usage),
 //! single-flighted and folded into the shared `credits.json`/`rate_limits.json`
 //! caches. An adapter may expose a pollable realtime account channel; the helper
 //! reads it first, then runs the OAuth channel on its own shared cadence.
@@ -15,12 +15,9 @@
 use anyhow::{Context, Result};
 use clap::Args;
 
-use rimz::ProviderAccountScope;
+use rimz::RuntimePaths;
 use rimz::ids::WorkspaceId;
-use rimz::sidebar::refresh::{
-    merge_account_rate_limits, merge_oauth_usage_if_due, merge_provider_realtime_usage,
-};
-use rimz::{RuntimePaths, agents};
+use rimz::sidebar::refresh::refresh_claimed_account_usage;
 
 use crate::cli::GlobalFlags;
 
@@ -37,6 +34,9 @@ pub(super) struct RefreshUsageArgs {
     /// rate-limit cache. Unset when a fresh realtime reading already owns them.
     #[arg(long)]
     merge_windows: bool,
+    /// Internal nonce of the producer's durable refresh claim.
+    #[arg(long, hide = true)]
+    claim_id: uuid::Uuid,
 }
 
 pub(super) fn run_refresh_usage(args: RefreshUsageArgs, _globals: &GlobalFlags) -> Result<()> {
@@ -44,46 +44,10 @@ pub(super) fn run_refresh_usage(args: RefreshUsageArgs, _globals: &GlobalFlags) 
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
-    if agents::credits::oauth_usage_offline() {
-        return Ok(());
-    }
-
-    let wrote = refresh_usage(&runtime, &args.kind, args.merge_windows);
+    let wrote =
+        refresh_claimed_account_usage(&runtime, &args.kind, args.claim_id, args.merge_windows);
     if wrote {
         let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     }
     Ok(())
-}
-
-fn refresh_usage(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> bool {
-    let Some(adapter) = agents::find_adapter(kind) else {
-        return false;
-    };
-    let Some(usage) = adapter.probe_realtime_account_usage(runtime) else {
-        let fallback_merge_windows = merge_windows
-            || adapter
-                .descriptor()
-                .capabilities
-                .realtime_usage
-                .covers_account_while_live;
-        return merge_oauth_usage_if_due(runtime, kind, fallback_merge_windows);
-    };
-    let mut wrote = false;
-    let windows_missing = usage.rate_limits.is_none();
-    if usage.plan.is_some() || usage.extra_credits.is_some() || usage.reset_credits.is_some() {
-        merge_provider_realtime_usage(
-            runtime,
-            kind,
-            usage.plan,
-            usage.extra_credits,
-            usage.reset_credits,
-        );
-        wrote = true;
-    }
-    if let Some(rate_limits) = usage.rate_limits {
-        merge_account_rate_limits(runtime, kind, ProviderAccountScope::KindWide, rate_limits);
-        wrote = true;
-    }
-    wrote |= merge_oauth_usage_if_due(runtime, kind, merge_windows || windows_missing);
-    wrote
 }

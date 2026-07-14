@@ -12,9 +12,12 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::agents::account::file_mtime_ms;
-use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
+use crate::agents::context::WindowSource;
 use crate::agents::credits::oauth_http_get;
-use crate::agents::{AccountUsageSnapshot, ExtraCredits, HttpErrKind, ResetCredits};
+use crate::agents::payload::non_empty_trimmed;
+use crate::agents::{AccountUsageSnapshot, HttpErrKind, ResetCredits};
+
+use super::account::{UsageCredits, UsageWindow, normalize_usage, parse_balance};
 
 use super::app_server::codex_home;
 
@@ -34,7 +37,7 @@ pub(crate) enum CodexOauthUsageErr {
     Http { kind: HttpErrKind, host: String },
 }
 
-impl crate::agents::credits::OauthReportable for CodexOauthUsageErr {
+impl crate::agents::credits::AccountUsageReportable for CodexOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent or API-key-only
     /// credentials are the normal state for an app-server or logged-out account,
     /// not a fault; provider 401 and 403 responses are settled auth verdicts
@@ -97,14 +100,38 @@ struct CreditsWire {
     overage_limit_reached: Option<bool>,
 }
 
-pub(crate) fn fetch_usage() -> Result<AccountUsageSnapshot> {
-    let home = codex_home().ok_or(CodexOauthUsageErr::NoCredentials)?;
-    let credentials = load_credentials_from(&home.join("auth.json"))?;
-    let base_url = configured_base_url(&home)?;
-    let mut snapshot = fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials)?;
-    snapshot.reset_credits =
-        fetch_reset_credits(&reset_credits_url(base_url.as_deref()), &credentials).ok();
-    Ok(snapshot)
+pub(crate) fn probe_usage() -> crate::agents::AccountUsageProbe {
+    let Some(home) = codex_home() else {
+        return crate::agents::AccountUsageProbe::NoCredentials(Default::default());
+    };
+    let credentials_stamp = file_mtime_ms(&home.join("auth.json"));
+    let credentials = match load_credentials_from(&home.join("auth.json")) {
+        Ok(credentials) => credentials,
+        Err(err) => {
+            return crate::agents::credits::map_account_usage_probe(
+                Err(err),
+                crate::agents::AccountUsageIdentity {
+                    credentials_stamp,
+                    ..Default::default()
+                },
+                "codex",
+            );
+        }
+    };
+    let identity = crate::agents::AccountUsageIdentity {
+        account_key: credentials.account_id.clone(),
+        credentials_stamp,
+        ..Default::default()
+    };
+    let result = configured_base_url(&home)
+        .map_err(CodexOauthUsageErr::Io)
+        .and_then(|base_url| {
+            let mut snapshot = fetch_usage_with_url(&usage_url(base_url.as_deref()), &credentials)?;
+            snapshot.reset_credits =
+                fetch_reset_credits(&reset_credits_url(base_url.as_deref()), &credentials).ok();
+            Ok(snapshot)
+        });
+    crate::agents::credits::map_account_usage_probe(result, identity, "codex")
 }
 
 pub(crate) fn credentials_stamp() -> Option<u64> {
@@ -163,12 +190,12 @@ pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<CodexOauthCredentials> {
     let Some(tokens) = auth.tokens else {
         return Err(CodexOauthUsageErr::NoCredentials);
     };
-    let Some(access_token) = tokens.access_token.and_then(non_empty_trimmed) else {
+    let Some(access_token) = tokens.access_token.as_deref().and_then(non_empty_trimmed) else {
         return Err(CodexOauthUsageErr::NoCredentials);
     };
     Ok(CodexOauthCredentials {
         access_token,
-        account_id: tokens.account_id.and_then(non_empty_trimmed),
+        account_id: tokens.account_id.as_deref().and_then(non_empty_trimmed),
     })
 }
 
@@ -211,9 +238,7 @@ pub(crate) fn fetch_usage_with_url(
     credentials: &CodexOauthCredentials,
 ) -> Result<AccountUsageSnapshot> {
     let body = http_get(url, credentials)?;
-    let mut snapshot = parse_usage_response(&body)?;
-    snapshot.account_key = credentials.account_id.clone();
-    Ok(snapshot)
+    parse_usage_response(&body)
 }
 
 fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
@@ -279,96 +304,31 @@ fn fetch_reset_credits(url: &str, credentials: &CodexOauthCredentials) -> Result
 
 impl UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
-        AccountUsageSnapshot {
-            account_key: None,
-            scope: Default::default(),
-            rate_limits: collect_windows(
-                self.rate_limit.primary_window,
-                self.rate_limit.secondary_window,
-            ),
-            extra_credits: self.credits.and_then(|credits| {
-                credits_to_extra(
-                    credits.has_credits,
-                    credits.unlimited,
-                    credits.overage_limit_reached,
-                    credits.balance.as_ref().and_then(parse_balance),
-                )
-            }),
-            reset_credits: None,
-            plan: self.plan_type.and_then(non_empty_trimmed),
-        }
-    }
-}
-
-fn non_empty_trimmed(value: String) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
-}
-
-pub(in crate::agents::codex) fn credits_to_extra(
-    has_credits: Option<bool>,
-    unlimited: Option<bool>,
-    overage_limit_reached: Option<bool>,
-    balance: Option<f64>,
-) -> Option<ExtraCredits> {
-    if overage_limit_reached == Some(true) {
-        return Some(ExtraCredits::known(None, Some(0.0), None));
-    }
-    if unlimited == Some(true) {
-        return Some(ExtraCredits::known(None, None, None));
-    }
-    if let Some(balance) = balance {
-        return Some(ExtraCredits::known(None, Some(balance), None));
-    }
-    if has_credits == Some(false) {
-        return Some(ExtraCredits::Disabled);
-    }
-    None
-}
-
-fn collect_windows(
-    primary: Option<WindowWire>,
-    secondary: Option<WindowWire>,
-) -> Option<AgentRateLimits> {
-    let mut windows: Vec<RateLimitWindow> = [primary, secondary]
+        let windows = [
+            self.rate_limit.primary_window,
+            self.rate_limit.secondary_window,
+        ]
         .into_iter()
         .flatten()
-        .map(|window| RateLimitWindow {
-            used_percentage: window.used_percent.map(clamp_pct),
+        .map(|window| UsageWindow {
+            used_percentage: window.used_percent,
             resets_at: window
                 .reset_at
-                .and_then(|secs| Timestamp::from_second(secs).ok()),
+                .and_then(|seconds| Timestamp::from_second(seconds).ok()),
             duration_mins: window
                 .limit_window_seconds
                 .and_then(|seconds| u32::try_from(seconds / 60).ok()),
-            // Refreshed straight from Codex's usage API: authoritative, with
-            // `observed_at` stamped to the fetch instant at merge.
-            observed_at: None,
+            scope: None,
             source: WindowSource::Authoritative,
-            ..Default::default()
-        })
-        .filter(|window| {
-            window.used_percentage.is_some()
-                || window.resets_at.is_some()
-                || window.duration_mins.is_some()
-        })
-        .collect();
-    windows.sort_by_key(|window| window.duration_mins.unwrap_or(u32::MAX));
-    (!windows.is_empty()).then_some(AgentRateLimits { windows })
-}
-
-fn clamp_pct(value: f64) -> u8 {
-    value.round().clamp(0.0, 100.0) as u8
-}
-
-pub(in crate::agents::codex) fn parse_balance(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(value) => value.as_f64().filter(|value| value.is_finite()),
-        Value::String(value) => value.trim().parse::<f64>().ok(),
-        _ => None,
+        });
+        let credits = self.credits.map(|credits| UsageCredits {
+            has_credits: credits.has_credits,
+            unlimited: credits.unlimited,
+            overage_limit_reached: credits.overage_limit_reached,
+            balance: credits.balance.as_ref().and_then(parse_balance),
+        });
+        normalize_usage(self.plan_type, windows, credits)
     }
-    .filter(|value| value.is_finite())
-    .map(|value| value.max(0.0))
 }
 
 #[cfg(test)]

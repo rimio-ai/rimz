@@ -316,7 +316,7 @@ RimZ's remote-control preflight and badge read the user-level Claude `settings.j
 
 ## Auth surface
 
-[`account.rs`](../../../crates/rimz/src/agents/account.rs) forks `claude auth status` (JSON) for the logged-in-but-idle probe. Fields it reads:
+[`claude/account.rs`](../../../crates/rimz/src/agents/claude/account.rs) forks `claude auth status` (JSON) for the logged-in-but-idle probe. Fields it reads:
 
 | Field | Meaning |
 | --- | --- |
