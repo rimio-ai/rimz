@@ -77,7 +77,7 @@ fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
     let file = match std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&path)
+        .open(path)
     {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
