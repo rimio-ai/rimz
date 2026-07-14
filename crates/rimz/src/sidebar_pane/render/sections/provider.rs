@@ -52,6 +52,7 @@ const PET_CAPTION_RIGHT_PAD: usize = 3;
 /// value.
 const PROVIDER_LABEL_WIDTH: usize = 3;
 const PROVIDER_VALUE_WIDTH: usize = 8;
+const PROVIDER_BAR_ROW_FRAME_WIDTH: usize = 13;
 const PROVIDER_RESET_COUNTDOWN_WIDTH: usize = 6;
 const PROVIDER_RESET_MARKER_PAD: usize =
     PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
@@ -1256,23 +1257,12 @@ fn metered_bar_row(
     let label = window_label(window);
     if !force_exhausted && window.lifted {
         let bar_width = provider_bar_width(region);
-        let mut spans = vec![
-            Span::styled(
-                format!("{label:<PROVIDER_LABEL_WIDTH$}"),
-                mana_style(theme, 100, zones),
-            ),
-            Span::raw(" "),
-        ];
-        spans.extend(mana_bar_spans(theme, 100, bar_width, zones));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            theme.glyph(GlyphRole::MeterUnlimited).to_owned(),
-            theme.body(),
-        ));
-        spans.push(Span::raw(
-            " ".repeat(PROVIDER_VALUE_WIDTH.saturating_sub(1)),
-        ));
-        return spans;
+        return bar_row(
+            &label,
+            mana_style(theme, 100, zones),
+            mana_bar_spans(theme, 100, bar_width, zones),
+            unlimited_value_spans(theme),
+        );
     }
     if !force_exhausted && window.used_percentage.is_none() {
         return unknown_bar_row(theme, &label, region);
@@ -1316,21 +1306,12 @@ fn metered_bar_row(
             .map(|reading| pace_style(theme, reading, &zones.burn_rate))
             .unwrap_or_else(|| theme.body())
     };
-    let mut spans = vec![
-        Span::styled(
-            format!("{label:<PROVIDER_LABEL_WIDTH$}"),
-            mana_style(theme, remaining, zones),
-        ),
-        Span::raw(" "),
-    ];
-    spans.extend(mana_bar_spans(theme, remaining, bar_width, zones));
-    spans.push(Span::raw(" "));
-    spans.extend(reset_value_spans(
-        theme,
-        reset.as_deref(),
-        reset_marker_style,
-    ));
-    spans
+    bar_row(
+        &label,
+        mana_style(theme, remaining, zones),
+        mana_bar_spans(theme, remaining, bar_width, zones),
+        reset_value_spans(theme, reset.as_deref(), reset_marker_style),
+    )
 }
 
 /// Unknown metered budget row: the same bar geometry as a reported window with
@@ -1338,14 +1319,42 @@ fn metered_bar_row(
 /// provider has not reported any windows yet.
 fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
+    bar_row(
+        label,
+        theme.muted(),
+        unknown_mana_bar_spans(theme, bar_width),
+        blank_value_spans(),
+    )
+}
+
+fn bar_row(
+    label: &str,
+    label_style: Style,
+    bar: Vec<Span<'static>>,
+    value: Vec<Span<'static>>,
+) -> Vec<Span<'static>> {
     let mut spans = vec![
-        Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), theme.muted()),
+        Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), label_style),
         Span::raw(" "),
     ];
-    spans.extend(unknown_mana_bar_spans(theme, bar_width));
+    spans.extend(bar);
     spans.push(Span::raw(" "));
-    spans.push(Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH)));
+    spans.extend(value);
     spans
+}
+
+fn blank_value_spans() -> Vec<Span<'static>> {
+    vec![Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH))]
+}
+
+fn unlimited_value_spans(theme: &Theme) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            theme.glyph(GlyphRole::MeterUnlimited).to_owned(),
+            theme.body(),
+        ),
+        Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH.saturating_sub(1))),
+    ]
 }
 
 /// The fixed-width reset value column. Only the reset marker carries a pace
@@ -1357,7 +1366,7 @@ fn reset_value_spans(
     marker_style: Style,
 ) -> Vec<Span<'static>> {
     let Some(countdown) = countdown.filter(|value| !value.is_empty()) else {
-        return vec![Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH))];
+        return blank_value_spans();
     };
     let countdown = pad_countdown(countdown);
     vec![
@@ -1387,18 +1396,12 @@ fn extra_credits_bar_row(
     let label_style = remaining
         .map(|remaining| mana_style(theme, remaining, zones))
         .unwrap_or_else(|| theme.muted());
-    let mut spans = vec![
-        Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), label_style),
-        Span::raw(" "),
-    ];
-    if let Some(remaining) = remaining {
-        spans.extend(mana_bar_spans(theme, remaining, bar_width, zones));
+    let bar = if let Some(remaining) = remaining {
+        mana_bar_spans(theme, remaining, bar_width, zones)
     } else {
-        spans.extend(unknown_mana_bar_spans(theme, bar_width));
-    }
-    spans.push(Span::raw(" "));
-    spans.extend(extra_value_spans(theme, credits));
-    spans
+        unknown_mana_bar_spans(theme, bar_width)
+    };
+    bar_row(label, label_style, bar, extra_value_spans(theme, credits))
 }
 
 fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<'static>> {
@@ -1459,7 +1462,5 @@ fn dollars_compact(usd: f64) -> String {
 /// the value column, and the two single-cell gaps that frame the bar. At least
 /// one cell, so a narrow sidebar still paints a (short) bar.
 fn provider_bar_width(region: usize) -> usize {
-    region
-        .saturating_sub(PROVIDER_LABEL_WIDTH + 1 + 1 + PROVIDER_VALUE_WIDTH)
-        .max(1)
+    region.saturating_sub(PROVIDER_BAR_ROW_FRAME_WIDTH).max(1)
 }
