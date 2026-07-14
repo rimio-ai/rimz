@@ -608,7 +608,7 @@ fn daemon_view() -> DaemonView {
 }
 
 #[test]
-fn missing_managed_panes_diffs_the_daemon_view_spec() {
+fn managed_pane_reconciliation_diffs_the_daemon_view_spec() {
     let present = [
         spawned_pane(
             "rimz",
@@ -641,7 +641,7 @@ fn missing_managed_panes_diffs_the_daemon_view_spec() {
 }
 
 #[test]
-fn missing_managed_panes_is_empty_when_every_managed_pane_is_present() {
+fn managed_pane_reconciliation_is_empty_when_every_managed_pane_is_present() {
     let present = [
         spawned_pane(
             "rimz",
