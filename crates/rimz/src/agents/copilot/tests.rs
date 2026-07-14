@@ -302,28 +302,7 @@ fn malformed_payloads_degrade_without_inventing_lifecycle_data() {
 }
 
 #[test]
-fn launch_resume_permissions_and_presets_are_pinned() {
-    assert_eq!(
-        CopilotAdapter.launch_command(&["--banner".to_owned()], Some("review this")),
-        Some(vec![
-            "copilot".to_owned(),
-            "--banner".to_owned(),
-            "--interactive".to_owned(),
-            "review this".to_owned()
-        ])
-    );
-    assert_eq!(
-        CopilotAdapter.launch_command(&[], None),
-        Some(vec!["copilot".to_owned()])
-    );
-    assert_eq!(CopilotAdapter.ping_args(), None);
-    assert_eq!(
-        CopilotAdapter.launch_env(),
-        vec![(
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
-            "false"
-        )]
-    );
+fn room_env_uses_private_defaults_and_preserves_user_exporters() {
     let temp = tempfile::tempdir().unwrap();
     let runtime = crate::store::RuntimePaths::under(
         crate::ids::WorkspaceId::from_project_root(temp.path()),
@@ -398,6 +377,31 @@ fn launch_resume_permissions_and_presets_are_pinned() {
         )
         .get("COPILOT_OTEL_FILE_EXPORTER_PATH"),
         Some(&runtime.copilot_otel_path().to_string_lossy().into_owned())
+    );
+}
+
+#[test]
+fn launch_resume_permissions_and_presets_are_pinned() {
+    assert_eq!(
+        CopilotAdapter.launch_command(&["--banner".to_owned()], Some("review this")),
+        Some(vec![
+            "copilot".to_owned(),
+            "--banner".to_owned(),
+            "--interactive".to_owned(),
+            "review this".to_owned()
+        ])
+    );
+    assert_eq!(
+        CopilotAdapter.launch_command(&[], None),
+        Some(vec!["copilot".to_owned()])
+    );
+    assert_eq!(CopilotAdapter.ping_args(), None);
+    assert_eq!(
+        CopilotAdapter.launch_env(),
+        vec![(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+            "false"
+        )]
     );
     assert_eq!(
         CopilotAdapter.resume_command("sess-1", Path::new("/tmp")),
