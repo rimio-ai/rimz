@@ -194,9 +194,12 @@ fn has_fresh_realtime_windows(snapshot: &SidebarSnapshot, kind: &str) -> bool {
 /// root: skip when the last attempt is younger than the OAuth TTL, touch it
 /// before spawning so a fetch that never publishes still backs off this kind.
 pub(crate) fn usage_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
-    let current_stamp =
-        crate::agents::find_adapter(kind).and_then(|adapter| adapter.oauth_credentials_stamp());
-    usage_probe_due_with_stamp(runtime, kind, current_stamp)
+    let Some(adapter) = crate::agents::find_adapter(kind) else {
+        return false;
+    };
+    let credentials_stamp = adapter.oauth_credentials_stamp();
+    let account_key = adapter.oauth_account_key();
+    usage_probe_due_with_identity(runtime, kind, credentials_stamp, account_key.as_deref())
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -205,12 +208,19 @@ struct UsageProbeMarker {
     credentials_stamp: Option<u64>,
 }
 
-fn usage_probe_due_with_stamp(
+fn usage_probe_due_with_identity(
     runtime: &RuntimePaths,
     kind: &str,
-    current_stamp: Option<u64>,
+    current_credentials_stamp: Option<u64>,
+    current_account_key: Option<&str>,
 ) -> bool {
     let path = usage_probe_marker(runtime, kind);
+    let account_changed = read_credits_cache(&runtime.shared_credits_path())
+        .entries
+        .get(kind)
+        .is_some_and(|entry| {
+            account_key_mismatch(entry.account_key.as_deref(), current_account_key)
+        });
     let age_due = std::fs::metadata(&path)
         .and_then(|meta| meta.modified())
         .ok()
@@ -220,10 +230,10 @@ fn usage_probe_due_with_stamp(
         .ok()
         .and_then(|bytes| serde_json::from_slice::<UsageProbeMarker>(&bytes).ok())
         .and_then(|marker| marker.credentials_stamp);
-    let due = age_due || stored_stamp != current_stamp;
+    let due = age_due || stored_stamp != current_credentials_stamp || account_changed;
     if due
         && let Ok(payload) = serde_json::to_vec(&UsageProbeMarker {
-            credentials_stamp: current_stamp,
+            credentials_stamp: current_credentials_stamp,
         })
     {
         let _ = std::fs::write(&path, payload);
@@ -279,6 +289,7 @@ fn spawn_usage_refresh(runtime: &RuntimePaths, kind: &str, merge_windows: bool) 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
     use jiff::Timestamp;
@@ -298,10 +309,14 @@ mod tests {
         let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
 
-        assert!(usage_probe_due(&runtime, "opencode"));
-        assert!(!usage_probe_due(&runtime, "opencode"));
+        assert!(usage_probe_due_with_identity(
+            &runtime, "opencode", None, None
+        ));
+        assert!(!usage_probe_due_with_identity(
+            &runtime, "opencode", None, None
+        ));
         // A different kind has its own marker.
-        assert!(usage_probe_due(&runtime, "pi"));
+        assert!(usage_probe_due_with_identity(&runtime, "pi", None, None));
 
         let old = SystemTime::now()
             .checked_sub(OAUTH_USAGE_TTL + Duration::from_secs(1))
@@ -310,7 +325,49 @@ mod tests {
             .unwrap()
             .set_modified(old)
             .unwrap();
-        assert!(usage_probe_due(&runtime, "opencode"));
+        assert!(usage_probe_due_with_identity(
+            &runtime, "opencode", None, None
+        ));
+    }
+
+    #[test]
+    fn account_key_switch_bypasses_a_fresh_spawn_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        crate::sidebar::refresh::credits::write_credits_cache(
+            &runtime.shared_credits_path(),
+            &crate::sidebar::refresh::credits::CreditsCache {
+                refreshed_at_ms: 1,
+                entries: BTreeMap::from([(
+                    "copilot".to_owned(),
+                    ProviderCreditsEntry {
+                        account_key: Some("old".to_owned()),
+                        ..ProviderCreditsEntry::default()
+                    },
+                )]),
+            },
+        );
+
+        assert!(usage_probe_due_with_identity(
+            &runtime,
+            "copilot",
+            None,
+            Some("old")
+        ));
+        assert!(!usage_probe_due_with_identity(
+            &runtime,
+            "copilot",
+            None,
+            Some("old")
+        ));
+        assert!(usage_probe_due_with_identity(
+            &runtime,
+            "copilot",
+            None,
+            Some("new")
+        ));
     }
 
     #[test]
@@ -320,18 +377,33 @@ mod tests {
             RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
         runtime.ensure_dirs().unwrap();
 
-        assert!(usage_probe_due_with_stamp(&runtime, "codex", Some(1)));
-        assert!(!usage_probe_due_with_stamp(&runtime, "codex", Some(1)));
-        assert!(usage_probe_due_with_stamp(&runtime, "codex", Some(2)));
+        assert!(usage_probe_due_with_identity(
+            &runtime,
+            "codex",
+            Some(1),
+            None
+        ));
+        assert!(!usage_probe_due_with_identity(
+            &runtime,
+            "codex",
+            Some(1),
+            None
+        ));
+        assert!(usage_probe_due_with_identity(
+            &runtime,
+            "codex",
+            Some(2),
+            None
+        ));
 
         let legacy = usage_probe_marker(&runtime, "claude");
         std::fs::write(&legacy, b"").unwrap();
         assert!(
-            !usage_probe_due_with_stamp(&runtime, "claude", None),
+            !usage_probe_due_with_identity(&runtime, "claude", None, None),
             "legacy markers still throttle sources without a file stamp"
         );
         assert!(
-            usage_probe_due_with_stamp(&runtime, "claude", Some(7)),
+            usage_probe_due_with_identity(&runtime, "claude", Some(7), None),
             "a known file stamp bypasses a legacy marker"
         );
     }
