@@ -15,6 +15,7 @@ use crate::agents::{
 use crate::ids::{AgentKind, AgentSessionId};
 
 const MAX_DISCOVERED_SESSIONS: usize = 512;
+const TRANSCRIPT_BASENAMES: [&str; 2] = ["transcript_full.jsonl", "transcript.jsonl"];
 
 #[derive(Deserialize)]
 struct TranscriptRecord {
@@ -91,8 +92,7 @@ pub(super) fn messages(lines: &str) -> Vec<TranscriptMessage> {
 pub(super) fn transcript_for_session(session_id: &str) -> Option<PathBuf> {
     valid_conversation_id(session_id).then_some(())?;
     let home = home()?;
-    let path = transcript_path(&home, session_id);
-    valid_transcript_under(&home, &path, session_id).then_some(path)
+    transcript_for_session_under(&home, session_id)
 }
 
 pub(super) fn valid_transcript(path: &Path, session_id: &str) -> bool {
@@ -100,6 +100,17 @@ pub(super) fn valid_transcript(path: &Path, session_id: &str) -> bool {
         return false;
     };
     valid_transcript_under(&home, path, session_id)
+}
+
+pub(super) fn latest_prompt(path: &Path, session_id: &str) -> Option<String> {
+    let home = home()?;
+    latest_prompt_under(&home, path, session_id)
+}
+
+pub(super) fn latest_prompt_under(home: &Path, path: &Path, session_id: &str) -> Option<String> {
+    valid_transcript_under(home, path, session_id).then_some(())?;
+    let lines = read_transcript_tail(path)?;
+    fold(&lines).latest_prompt
 }
 
 pub(super) fn resumed_session_id(cmdline: &str) -> Option<AgentSessionId> {
@@ -141,14 +152,14 @@ pub(super) fn valid_conversation_id(id: &str) -> bool {
 
 #[cfg(test)]
 pub(super) fn fixture_observation() -> LocalSessionObservation {
-    let lines = include_str!("tests/fixtures/transcript.jsonl");
+    let lines = include_str!("tests/fixtures/transcript_full.jsonl");
     let folded = fold(lines);
     let created_at = folded.first_event_at.unwrap();
     LocalSessionObservation {
         kind: AgentKind::new_unchecked("antigravity"),
         session_id: AgentSessionId::from("11111111-1111-4111-8111-111111111111"),
         workspace: PathBuf::from("/workspace/project"),
-        transcript_path: PathBuf::from("/provider/brain/11111111/transcript.jsonl"),
+        transcript_path: PathBuf::from("/provider/brain/11111111/transcript_full.jsonl"),
         created_at,
         fresh_binding_at: Some(created_at),
         first_event_at: Some(created_at),
@@ -211,16 +222,24 @@ fn transcript_files_under(home: &Path) -> Vec<PathBuf> {
                 .filter(|file_type| file_type.is_dir())?;
             let id = entry.file_name().into_string().ok()?;
             valid_conversation_id(&id).then_some(())?;
-            let path = transcript_path(home, &id);
-            valid_transcript_under(home, &path, &id).then_some(path)
+            transcript_for_session_under(home, &id)
         })
         .collect()
 }
 
-fn transcript_path(home: &Path, session_id: &str) -> PathBuf {
+fn transcript_for_session_under(home: &Path, session_id: &str) -> Option<PathBuf> {
+    valid_conversation_id(session_id).then_some(())?;
+    TRANSCRIPT_BASENAMES.iter().find_map(|basename| {
+        let path = transcript_path(home, session_id, basename);
+        valid_transcript_under(home, &path, session_id).then_some(path)
+    })
+}
+
+fn transcript_path(home: &Path, session_id: &str, basename: &str) -> PathBuf {
     home.join("brain")
         .join(session_id)
-        .join(".system_generated/logs/transcript.jsonl")
+        .join(".system_generated/logs")
+        .join(basename)
 }
 
 fn valid_transcript_under(home: &Path, path: &Path, session_id: &str) -> bool {
@@ -242,7 +261,12 @@ fn valid_transcript_under(home: &Path, path: &Path, session_id: &str) -> bool {
         return false;
     };
     canonical_session.parent() == Some(canonical_brain.as_path())
-        && canonical_path == canonical_session.join(".system_generated/logs/transcript.jsonl")
+        && TRANSCRIPT_BASENAMES.iter().any(|basename| {
+            canonical_path
+                == canonical_session
+                    .join(".system_generated/logs")
+                    .join(basename)
+        })
 }
 
 fn observation(

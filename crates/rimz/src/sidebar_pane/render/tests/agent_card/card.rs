@@ -103,6 +103,96 @@ fn render_agent_capability_uses_descriptor_default_window() {
 }
 
 #[test]
+fn reasoning_configuration_uses_live_then_carried_then_thinking() {
+    let render = |live_effort: Option<&str>, carried: Option<&str>, thinking, width| {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            Some("reasoning config"),
+        );
+        claude.model = Some("Opus".to_owned());
+        claude.effort = carried.map(ToOwned::to_owned);
+        let mut context = claude_context(fixed_now());
+        context.model_display_name = Some("Opus".to_owned());
+        context.effort = live_effort.map(ToOwned::to_owned);
+        context.thinking_enabled = thinking;
+        context.cost = None;
+        context.tokens = None;
+        claude.context = Some(context);
+        snapshot_to_screen(&snapshot_with(vec![claude]), width, 15)
+    };
+
+    let live = render(Some("medium"), Some("low"), Some(true), 54);
+    assert!(live.contains("Opus · medium"), "live effort wins:\n{live}");
+    assert!(!live.contains(" · low") && !live.contains("thinking"));
+
+    let carried = render(None, Some("high"), Some(true), 54);
+    assert!(
+        carried.contains("Opus · high"),
+        "carried effort precedes thinking:\n{carried}"
+    );
+    assert!(!carried.contains("thinking"));
+
+    let empty_live = render(Some(""), Some("high"), Some(false), 54);
+    assert!(
+        empty_live.contains("Opus · high"),
+        "an empty live value does not suppress carried effort:\n{empty_live}"
+    );
+
+    let thinking = render(None, None, Some(true), 54);
+    assert!(
+        thinking.contains("Opus · thinking"),
+        "thinking is the final fallback:\n{thinking}"
+    );
+
+    for disabled in [Some(false), None] {
+        let rendered = render(None, None, disabled, 54);
+        assert!(rendered.contains("Opus"));
+        assert!(!rendered.contains("thinking"), "disabled:\n{rendered}");
+    }
+}
+
+#[test]
+fn reasoning_configuration_keeps_existing_width_degradation() {
+    let render = |width| {
+        let mut claude = agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            Some("reasoning config"),
+        );
+        claude.model = Some("Opus".to_owned());
+        let mut context = claude_context(fixed_now());
+        context.model_display_name = Some("Opus".to_owned());
+        context.effort = None;
+        context.thinking_enabled = Some(true);
+        context.cost = None;
+        context.tokens = None;
+        claude.context = Some(context);
+        snapshot_to_screen(&snapshot_with(vec![claude]), width, 15)
+    };
+
+    let medium = render(40);
+    assert!(medium.contains("Opus"), "medium keeps the model:\n{medium}");
+    assert!(
+        !medium.contains("thinking"),
+        "medium drops reasoning configuration:\n{medium}"
+    );
+
+    let narrow = render(28);
+    assert!(
+        !narrow.contains("Opus"),
+        "narrow drops capability:\n{narrow}"
+    );
+    assert!(!narrow.contains("thinking"));
+}
+
+#[test]
 fn blank_idle_agent_renders_single_line() {
     let idle = agent(
         "idle-1",

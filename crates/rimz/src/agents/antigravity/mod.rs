@@ -328,7 +328,7 @@ impl AgentAdapter for AntigravityAdapter {
         let common = serde_json::json!({
             "conversationId": "11111111-1111-4111-8111-111111111111",
             "workspacePaths": ["/workspace/project"],
-            "transcriptPath": "/tmp/transcript.jsonl",
+            "transcriptPath": "/tmp/transcript_full.jsonl",
         });
         INSTALLED_EVENT_LABELS
             .iter()
@@ -359,37 +359,7 @@ impl AgentAdapter for AntigravityAdapter {
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        let (common, signal) = match event_name {
-            "PreInvocation" => {
-                let invocation = payloads::parse_invocation(payload)?;
-                (invocation.invocation_num == Some(0))
-                    .then_some((invocation.common, LifecycleSignal::TurnStarted))?
-            }
-            "PostToolUse:edit" | "PostToolUse:mutating" | "PostToolUse:observed" => {
-                let tool = payloads::parse_post_tool(payload)?;
-                let failed = tool.failed();
-                let (mutates, edits) = match event_name {
-                    "PostToolUse:edit" if !failed => (true, true),
-                    "PostToolUse:mutating" if !failed => (true, false),
-                    _ => (false, false),
-                };
-                (tool.common, LifecycleSignal::ToolUsed { mutates, edits })
-            }
-            "Stop" => {
-                let stop = payloads::parse_stop(payload)?;
-                let fully_idle = stop.fully_idle?;
-                let failed = stop.failed();
-                (
-                    stop.common,
-                    LifecycleSignal::TurnEnded {
-                        errored: failed,
-                        parked_on_background: !fully_idle && !failed,
-                    },
-                )
-            }
-            _ => return None,
-        };
-        observation(common, signal)
+        observe_lifecycle_with_prompt_reader(event_name, payload, session::latest_prompt)
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
@@ -541,23 +511,68 @@ impl AgentAdapter for AntigravityAdapter {
     }
 }
 
-fn observation(
+fn observe_lifecycle_with_prompt_reader(
+    event_name: &str,
+    payload: &Value,
+    prompt_reader: impl FnOnce(&Path, &str) -> Option<String>,
+) -> Option<AgentLifecycleObservation> {
+    let (common, signal) = match event_name {
+        "PreInvocation" => {
+            let invocation = payloads::parse_invocation(payload)?;
+            (invocation.invocation_num == Some(0))
+                .then_some((invocation.common, LifecycleSignal::TurnStarted))?
+        }
+        "PostToolUse:edit" | "PostToolUse:mutating" | "PostToolUse:observed" => {
+            let tool = payloads::parse_post_tool(payload)?;
+            let failed = tool.failed();
+            let (mutates, edits) = match event_name {
+                "PostToolUse:edit" if !failed => (true, true),
+                "PostToolUse:mutating" if !failed => (true, false),
+                _ => (false, false),
+            };
+            (tool.common, LifecycleSignal::ToolUsed { mutates, edits })
+        }
+        "Stop" => {
+            let stop = payloads::parse_stop(payload)?;
+            let fully_idle = stop.fully_idle?;
+            let failed = stop.failed();
+            (
+                stop.common,
+                LifecycleSignal::TurnEnded {
+                    errored: failed,
+                    parked_on_background: !fully_idle && !failed,
+                },
+            )
+        }
+        _ => return None,
+    };
+    observation_with_prompt_reader(common, signal, prompt_reader)
+}
+
+fn observation_with_prompt_reader(
     common: payloads::CommonPayload,
     signal: LifecycleSignal,
+    prompt_reader: impl FnOnce(&Path, &str) -> Option<String>,
 ) -> Option<AgentLifecycleObservation> {
     let agent_id = common
         .conversation_id
         .as_deref()
         .map(str::trim)
-        .filter(|id| !id.is_empty())?;
-    let mut observation = AgentLifecycleObservation::new(Some(agent_id.into()), signal);
+        .filter(|id| !id.is_empty())?
+        .to_owned();
+    let transcript_path = common
+        .transcript_path
+        .filter(|path| !path.trim().is_empty());
+    let prompt = matches!(signal, LifecycleSignal::TurnStarted)
+        .then(|| prompt_reader(Path::new(transcript_path.as_deref()?), agent_id.as_str()))
+        .flatten();
+    let mut observation = AgentLifecycleObservation::new(Some(agent_id.as_str().into()), signal);
     observation.worktree_path = common
         .workspace_paths
         .into_iter()
         .find(|path| !path.trim().is_empty());
-    observation.transcript_path = common
-        .transcript_path
-        .filter(|path| !path.trim().is_empty());
+    observation.prompt = prompt;
+    observation.transcript_path = transcript_path;
     observation.launch.model = common.model_name.filter(|model| !model.trim().is_empty());
     Some(observation)
 }

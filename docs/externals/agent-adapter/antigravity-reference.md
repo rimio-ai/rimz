@@ -235,6 +235,8 @@ Every hook input carries:
 
 The documented app-data roots are `~/.gemini/antigravity-cli` for CLI and `~/.gemini/antigravity` for Antigravity 2.0. Use the absolute hook path rather than reconstructing either root.
 
+The CLI 1.1.2 hook capture instead names `transcript_full.jsonl`. RimZ accepts that observed basename and the documented `transcript.jsonl`, validates either against the same conversation-root boundary, and prefers the observed full transcript when it must reconstruct a path.
+
 | Event | Fires | Event fields | Output |
 | --- | --- | --- | --- |
 | `PreToolUse` | before a tool executes | `toolCall.name`, `toolCall.args`, `stepIdx` | required `decision`; optional `reason`, `permissionOverrides[]` |
@@ -389,7 +391,7 @@ The statusline is a sidecar state feed, not a durable event log. RimZ persists m
   "fullyIdle": true,
   "conversationId": "...",
   "workspacePaths": ["/workspace/project"],
-  "transcriptPath": ".../transcript.jsonl",
+  "transcriptPath": ".../transcript_full.jsonl",
   "artifactDirectoryPath": ".../brain/<id>"
 }
 ```
@@ -450,9 +452,9 @@ For CLI, `<app_data_dir>` is `~/.gemini/antigravity-cli`; for Antigravity 2.0 it
 
 Google publishes no JSONL record schema, append/replace guarantee, retention rule, file-locking contract, rewind semantics, or relationship between a root transcript and child transcripts. The path is safe to retain as provider identity evidence. Keep context and spend disabled, and derive visible history only from record shapes captured against the one supported release.
 
-### Live 1.1.1 transcript probe
+### Live 1.1.2 transcript probe
 
-A stock root conversation confirms `transcript.jsonl` and `transcript_full.jsonl` as newline-delimited JSON with these top-level fields:
+A stock root conversation confirms `transcript.jsonl` and `transcript_full.jsonl` as newline-delimited JSON with these top-level fields; the 1.1.2 hook payload points at `transcript_full.jsonl` even though the hook documentation still names `transcript.jsonl`:
 
 | Field | Captured shape |
 | --- | --- |
@@ -507,9 +509,9 @@ Documented cache files relevant to identity are:
 
 ### Model and context
 
-The statusline is the authoritative live model/context surface. Preserve `model.id` as the pricing/display key and `model.display_name` as presentation. Model choice is sticky for the current turn: changing the selector while a turn runs applies after that turn finishes or is canceled.
+The statusline is the authoritative live model/context surface. Preserve `model.id` byte-for-byte as provider identity. A terminal case-insensitive `(Low)`, `(Medium)`, or `(High)` display qualifier supplies lowercase effort; `(Thinking)` supplies the thinking flag; unknown parenthetical suffixes remain presentation. Model choice is sticky for the current turn: changing the selector while a turn runs applies after that turn finishes or is canceled.
 
-Antigravity is multi-model. The model page at refresh lists Gemini 3.5 Flash, Gemini 3.1 Pro high/low, Gemini 3 Flash, Claude Sonnet/Opus 4.6 thinking, and GPT-OSS-120b. Availability changes by plan. Do not infer provider, context window, or pricing from the `antigravity` kind; use the exact live model and upstream-reported context limit.
+Antigravity is multi-model. The captured 1.1.2 selector lists `Gemini 3.5 Flash (Medium)`, `Gemini 3.1 Pro (High)`, `Gemini 3.1 Pro (Low)`, `Gemini 3 Flash (High)`, `Gemini 3 Flash (Low)`, `Claude Sonnet 4.6 (Thinking)`, `Claude Opus 4.6 (Thinking)`, and `GPT-OSS 120B (Medium)`. Availability changes by plan. Do not infer provider, context window, or pricing from the `antigravity` kind; use the exact live model and upstream-reported context limit.
 
 ### Account and authentication
 
@@ -604,7 +606,7 @@ These official sources disagree as of the refresh. Treat the pinned release as t
 | Plugin location | CLI plugin page shows `~/.gemini/antigravity-cli/plugins/` in places | 1.0.2 moves installed plugins to `~/.gemini/config/`; 1.1.0 fixes global agents to shared config | avoid plugin installation initially |
 | Pre-tool neutral result | hook page requires `decision` and lists only behavioral decisions | 1.0.16 accepts an empty decision string without the former error | live-verify exact neutral bytes |
 | Permission key spelling | permission page shows `permissions.{allow,deny,ask}` | 1.1.1 notes say `permission.allow` in one line | preserve unknown fields and capture the actual settings file |
-| Conversation record | hook page promises per-conversation `transcript.jsonl` | changelog says SQLite is the CLI conversation format; live capture confirms visible JSONL text records | retain hook path; parse only captured visible shapes and keep SQLite blobs opaque |
+| Conversation record | hook page promises per-conversation `transcript.jsonl` | 1.1.2 hooks point at `transcript_full.jsonl`; changelog says SQLite is the CLI conversation format; live capture confirms both visible JSONL text records | retain and validate either verified hook basename, prefer `transcript_full.jsonl` for reconstruction, parse only captured visible shapes, and keep SQLite blobs opaque |
 
 ## Adjacent surfaces kept out of the initial adapter
 
@@ -620,7 +622,7 @@ The landed adapter uses this conservative mapping:
 
 | Antigravity observation | RimZ signal/enrichment | Notes |
 | --- | --- | --- |
-| first `PreInvocation`, `invocationNum = 0` | `turn_started` | create-on-miss establishes identity and carries transcript/workspace/model enrichment |
+| first `PreInvocation`, `invocationNum = 0` | `turn_started` | create-on-miss establishes identity and carries transcript/workspace/model enrichment plus the latest completed visible user prompt from the bounded validated transcript tail |
 | later `PreInvocation` | activity only | do not reopen the turn after tool use |
 | successful edit-matcher `PostToolUse` | `tool_used { mutates: true, edits: true }` | acting begins only after execution succeeds |
 | successful `run_command` matcher `PostToolUse` | `tool_used { mutates: true, edits: false }` | durable proof of generic mutation |

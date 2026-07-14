@@ -83,13 +83,13 @@ The sidebar follows its attached view at the explicit `[theme.display].width_per
 Each agent is a small stacked card, four lines at rest:
 
 ```
-⢿ claude · Opus 4.8 · xhigh · 1m                $1.27    ← state · handle · model · effort · window · cost
+⢿ claude · Opus 4.8 · xhigh · 1m                $1.27    ← state · handle · model · reasoning config · window · cost
   store refactor                                         ← what it is working on
   ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context meter: how full the window is
   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m    ← tokens in the window · last activity
 ```
 
-- **The identity line.** The state glyph leads, animated while the agent works. Then the agent's handle (its team role, profile, or kind, so a team reads `planner` / `coder` / `reviewer`), the model and reasoning effort it runs, and the size of its context window. The session's dollar cost pins right and counts up live once the session has spent anything.
+- **The identity line.** The state glyph leads, animated while the agent works. Then the agent's handle (its team role, profile, or kind, so a team reads `planner` / `coder` / `reviewer`), the model, one reasoning-configuration token (effort or `thinking`), and the size of its context window. The session's dollar cost pins right and counts up live once the session has spent anything.
 - **What it is working on.** The session's name or task, falling back to its latest prompt so the card stays labelled between turns. When a turn dies on a provider error, this line quotes the error (`API Error: Overloaded`) so the card says why without a jump.
 - **The context meter.** How full the agent's context window is, as a bar and a percentage. The fill also shows where the window went: cache reads, cache writes, and fresh input paint as distinct runs, and the bar's tone shifts from calm toward red as the window fills.
 - **The token line.** The absolute companion: tokens currently in the window, the same composition as markers, a `↻ N` count of completed context compactions, and, once the agent has been quiet for five minutes, its last-activity age pinned right, heating toward red as an hour approaches.

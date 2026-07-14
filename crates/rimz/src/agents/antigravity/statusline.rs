@@ -41,6 +41,39 @@ struct CurrentUsage {
     cache_read_input_tokens: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReasoningQualifier {
+    Low,
+    Medium,
+    High,
+    Thinking,
+}
+
+impl ReasoningQualifier {
+    fn parse(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case("low") {
+            Some(Self::Low)
+        } else if value.eq_ignore_ascii_case("medium") {
+            Some(Self::Medium)
+        } else if value.eq_ignore_ascii_case("high") {
+            Some(Self::High)
+        } else if value.eq_ignore_ascii_case("thinking") {
+            Some(Self::Thinking)
+        } else {
+            None
+        }
+    }
+
+    const fn effort(self) -> Option<&'static str> {
+        match self {
+            Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High => Some("high"),
+            Self::Thinking => None,
+        }
+    }
+}
+
 fn non_empty(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -54,8 +87,36 @@ fn clamp_pct(value: Option<f64>) -> Option<u8> {
         .map(|value| value.round().clamp(0.0, 100.0) as u8)
 }
 
+fn normalize_model_display(
+    display_name: Option<String>,
+) -> (Option<String>, Option<String>, Option<bool>) {
+    let Some(display_name) = non_empty(display_name) else {
+        return (None, None, None);
+    };
+    let Some(without_close) = display_name.strip_suffix(')') else {
+        return (Some(display_name), None, None);
+    };
+    let Some(open) = without_close.rfind('(') else {
+        return (Some(display_name), None, None);
+    };
+    let Some(qualifier) = ReasoningQualifier::parse(&without_close[open + 1..]) else {
+        return (Some(display_name), None, None);
+    };
+    let base = without_close[..open].trim();
+    if base.is_empty() {
+        return (Some(display_name), None, None);
+    }
+    (
+        Some(base.to_owned()),
+        qualifier.effort().map(ToOwned::to_owned),
+        (qualifier == ReasoningQualifier::Thinking).then_some(true),
+    )
+}
+
 impl StatuslinePayload {
     pub(crate) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
+        let (model_display_name, effort, thinking_enabled) =
+            normalize_model_display(self.model.display_name);
         let native_permission_wait =
             (self.tool_confirmation_pending == Some(true)).then_some(observed_at);
         let has_current_usage = self.context_window.current_usage.input_tokens.is_some()
@@ -101,10 +162,10 @@ impl StatuslinePayload {
             source: source.to_owned(),
             session_name: None,
             session_preview: None,
-            model_id: non_empty(self.model.id),
-            model_display_name: non_empty(self.model.display_name),
-            effort: None,
-            thinking_enabled: None,
+            model_id: self.model.id.filter(|id| !id.trim().is_empty()),
+            model_display_name,
+            effort,
+            thinking_enabled,
             output_style: None,
             vim_mode: None,
             agent_version: non_empty(self.version),

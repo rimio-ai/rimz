@@ -24,7 +24,7 @@ fn safe_native_hooks_map_lifecycle_and_keep_pre_tool_policy_untouched() {
     let common = json!({
         "conversationId": SESSION_ID,
         "workspacePaths": ["/workspace/project"],
-        "transcriptPath": "/tmp/transcript.jsonl",
+        "transcriptPath": "/tmp/transcript_full.jsonl",
         "modelName": "Gemini 3.5 Flash",
     });
     for event in INSTALLED_EVENT_LABELS {
@@ -45,7 +45,7 @@ fn safe_native_hooks_map_lifecycle_and_keep_pre_tool_policy_untouched() {
     assert_eq!(started.worktree_path.as_deref(), Some("/workspace/project"));
     assert_eq!(
         started.transcript_path.as_deref(),
-        Some("/tmp/transcript.jsonl")
+        Some("/tmp/transcript_full.jsonl")
     );
     assert_eq!(started.launch.model.as_deref(), Some("Gemini 3.5 Flash"));
     assert!(
@@ -346,8 +346,103 @@ fn statusline_projects_model_account_and_context_usage() {
 }
 
 #[test]
+fn statusline_normalizes_captured_reasoning_qualifiers_and_preserves_model_id() {
+    for (display, expected_model, expected_effort, thinking) in [
+        (
+            "Gemini 3.5 Flash (Medium)",
+            "Gemini 3.5 Flash",
+            Some("medium"),
+            None,
+        ),
+        (
+            "Gemini 3.1 Pro (High)",
+            "Gemini 3.1 Pro",
+            Some("high"),
+            None,
+        ),
+        ("Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro", Some("low"), None),
+        (
+            "Gemini 3 Flash (High)",
+            "Gemini 3 Flash",
+            Some("high"),
+            None,
+        ),
+        ("Gemini 3 Flash (Low)", "Gemini 3 Flash", Some("low"), None),
+        (
+            "Claude Sonnet 4.6 (Thinking)",
+            "Claude Sonnet 4.6",
+            None,
+            Some(true),
+        ),
+        (
+            "Claude Opus 4.6 (Thinking)",
+            "Claude Opus 4.6",
+            None,
+            Some(true),
+        ),
+        (
+            "GPT-OSS 120B (Medium)",
+            "GPT-OSS 120B",
+            Some("medium"),
+            None,
+        ),
+    ] {
+        let context = AntigravityAdapter
+            .observe_context(
+                "antigravity",
+                &json!({
+                    "model": {
+                        "id": "  provider/model:id  ",
+                        "display_name": display,
+                    }
+                }),
+            )
+            .unwrap();
+        assert_eq!(context.model_id.as_deref(), Some("  provider/model:id  "));
+        assert_eq!(context.model_display_name.as_deref(), Some(expected_model));
+        assert_eq!(context.effort.as_deref(), expected_effort);
+        assert_eq!(context.thinking_enabled, thinking);
+    }
+
+    for (display, expected_model, effort, thinking) in [
+        (
+            "  Gemini 3.5 Flash (mEdIuM) \t",
+            "Gemini 3.5 Flash",
+            Some("medium"),
+            None,
+        ),
+        (
+            "Claude Sonnet 4.6 (THINKING)",
+            "Claude Sonnet 4.6",
+            None,
+            Some(true),
+        ),
+        (
+            "Gemini 3.5 Flash (Turbo)",
+            "Gemini 3.5 Flash (Turbo)",
+            None,
+            None,
+        ),
+        (
+            "Gemini 3.5 Flash (Low) preview",
+            "Gemini 3.5 Flash (Low) preview",
+            None,
+            None,
+        ),
+        ("Gemini 3.5 Flash (Low", "Gemini 3.5 Flash (Low", None, None),
+    ] {
+        let context = AntigravityAdapter
+            .observe_context("antigravity", &json!({"model": {"display_name": display}}))
+            .unwrap();
+        assert_eq!(context.model_display_name.as_deref(), Some(expected_model));
+        assert_eq!(context.effort.as_deref(), effort);
+        assert_eq!(context.thinking_enabled, thinking);
+    }
+}
+
+#[test]
 fn verified_visible_transcript_records_are_normalized_strictly() {
-    let transcript = include_str!("tests/fixtures/transcript.jsonl");
+    let transcript = include_str!("tests/fixtures/transcript_full.jsonl");
     let messages = AntigravityAdapter.parse_transcript_messages(transcript);
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].role, TranscriptRole::User);
@@ -444,6 +539,101 @@ fn discovery_uses_cache_only_for_fresh_pairing_and_keeps_exact_resume_available(
     );
 }
 
+#[test]
+fn transcript_selection_accepts_both_names_and_prefers_full_without_duplicates() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let full = write_transcript(dir.path(), SESSION_ID);
+    let legacy = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript.jsonl",
+        &include_str!("tests/fixtures/transcript_full.jsonl").replace("ping", "legacy prompt"),
+    );
+
+    assert_eq!(
+        session::latest_prompt_under(dir.path(), &full, SESSION_ID).as_deref(),
+        Some("ping")
+    );
+    assert_eq!(
+        session::latest_prompt_under(dir.path(), &legacy, SESSION_ID).as_deref(),
+        Some("legacy prompt")
+    );
+    let observations = session::discover_under(dir.path(), &workspace);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].transcript_path, full);
+    assert_eq!(observations[0].latest_prompt.as_deref(), Some("ping"));
+
+    let unknown = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_debug.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
+    assert!(session::latest_prompt_under(dir.path(), &unknown, SESSION_ID).is_none());
+    assert!(session::latest_prompt_under(dir.path(), &full, "other-conversation").is_none());
+}
+
+#[test]
+fn first_invocation_recovers_only_the_latest_completed_visible_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_full.jsonl",
+        concat!(
+            "not-json\n",
+            "{\"step_index\":0,\"source\":\"SYSTEM\",\"type\":\"CHECKPOINT\",\"status\":\"DONE\",\"created_at\":\"2026-07-13T23:23:08Z\",\"content\":\"internal description\"}\n",
+            "{\"step_index\":1,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-07-13T23:23:09Z\",\"content\":\"<command-name>synthetic\"}\n",
+            "{\"step_index\":2,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"IN_PROGRESS\",\"created_at\":\"2026-07-13T23:23:10Z\",\"content\":\"partial description\"}\n",
+            "{\"step_index\":3,\"source\":\"MODEL\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-07-13T23:23:11Z\",\"content\":\"wrong source\"}\n",
+            "{\"step_index\":4,\"source\":\"USER_EXPLICIT\",\"type\":\"USER_INPUT\",\"status\":\"DONE\",\"created_at\":\"2026-07-13T23:23:12Z\",\"content\":\"  label this turn  \"}\n",
+            "{\"step_index\":5,\"source\":\"USER_EXPLICIT\"",
+        ),
+    );
+    let payload = json!({
+        "conversationId": SESSION_ID,
+        "workspacePaths": ["/workspace/project"],
+        "transcriptPath": transcript,
+        "invocationNum": 0,
+    });
+
+    let started = observe_lifecycle_with_prompt_reader("PreInvocation", &payload, |path, id| {
+        session::latest_prompt_under(dir.path(), path, id)
+    })
+    .unwrap();
+    assert_eq!(started.prompt.as_deref(), Some("label this turn"));
+
+    let stopped = observe_lifecycle_with_prompt_reader(
+        "Stop",
+        &with(
+            &payload,
+            [
+                ("fullyIdle", json!(true)),
+                ("terminationReason", json!("model_stop")),
+            ],
+        ),
+        |_, _| panic!("later lifecycle events do not read transcripts"),
+    )
+    .unwrap();
+    assert!(stopped.prompt.is_none());
+
+    let unknown = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_debug.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
+    let rejected = observe_lifecycle_with_prompt_reader(
+        "PreInvocation",
+        &with(&payload, [("transcriptPath", json!(unknown))]),
+        |path, id| session::latest_prompt_under(dir.path(), path, id),
+    )
+    .unwrap();
+    assert!(rejected.prompt.is_none());
+}
+
 #[cfg(unix)]
 #[test]
 fn discovery_rejects_symlinked_conversation_directories() {
@@ -453,11 +643,11 @@ fn discovery_rejects_symlinked_conversation_directories() {
     let escaped = tempfile::tempdir().unwrap();
     let escaped_transcript = escaped
         .path()
-        .join(".system_generated/logs/transcript.jsonl");
+        .join(".system_generated/logs/transcript_full.jsonl");
     std::fs::create_dir_all(escaped_transcript.parent().unwrap()).unwrap();
     std::fs::write(
         &escaped_transcript,
-        include_str!("tests/fixtures/transcript.jsonl"),
+        include_str!("tests/fixtures/transcript_full.jsonl"),
     )
     .unwrap();
     std::fs::create_dir_all(dir.path().join("brain")).unwrap();
@@ -566,12 +756,27 @@ fn home_resolution_and_presence_are_exact() {
 }
 
 fn write_transcript(home: &Path, session_id: &str) -> std::path::PathBuf {
+    write_transcript_named(
+        home,
+        session_id,
+        "transcript_full.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    )
+}
+
+fn write_transcript_named(
+    home: &Path,
+    session_id: &str,
+    basename: &str,
+    contents: &str,
+) -> std::path::PathBuf {
     let path = home
         .join("brain")
         .join(session_id)
-        .join(".system_generated/logs/transcript.jsonl");
+        .join(".system_generated/logs")
+        .join(basename);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, include_str!("tests/fixtures/transcript.jsonl")).unwrap();
+    std::fs::write(&path, contents).unwrap();
     path
 }
 

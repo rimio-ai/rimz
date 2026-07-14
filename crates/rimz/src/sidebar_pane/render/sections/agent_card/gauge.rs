@@ -21,13 +21,22 @@ pub(super) fn display_model(row: &SidebarRow) -> Option<String> {
         .map(model_label)
 }
 
-/// Reasoning effort: the session's observed live value is preferred; the
-/// hook/store scalar falls back for the window before first observation.
-pub(super) fn display_effort(row: &SidebarRow) -> Option<&str> {
+/// Reasoning configuration: the session's observed live effort is preferred;
+/// the hook/store scalar falls back before the first observation, then an
+/// explicit live thinking flag supplies the provider-neutral fallback token.
+pub(super) fn display_reasoning(row: &SidebarRow) -> Option<&str> {
     ctx(row)
         .and_then(|context| context.effort.as_deref())
-        .or_else(|| agent(row).and_then(|agent| agent.effort.as_deref()))
         .filter(|effort| !effort.is_empty())
+        .or_else(|| {
+            agent(row)
+                .and_then(|agent| agent.effort.as_deref())
+                .filter(|effort| !effort.is_empty())
+        })
+        .or_else(|| {
+            (ctx(row).and_then(|context| context.thinking_enabled) == Some(true))
+                .then_some("thinking")
+        })
 }
 
 /// Column widths for the per-row context meter: a one-cell lead-glyph label

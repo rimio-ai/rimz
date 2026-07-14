@@ -111,17 +111,17 @@ pub(super) fn agent_lead_cell(
 
 /// Line 1 for an agent: the leading cell (the working fill or thinking head
 /// while active; attention rows use the card emphasis), the agent
-/// name, then the dim capability tokens (`· model · effort · window`) with the
+/// name, then the dim capability tokens (`· model · reasoning · window`) with the
 /// bold `$cost` (dollar green) pinned right — counting up through the row's
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
 /// The window token is the model's context window (`258k`, `1m`) — the
 /// context-sidecar reading first, the row's carried/default fallback second.
-/// It rides only non-idle cards; idle cards keep model and effort but drop the
+/// It rides only non-idle cards; idle cards keep model and reasoning configuration but drop the
 /// window until work starts.
 /// The whole capability cluster rides behind a resolved model: with none named,
-/// effort and window tokens drop too (a bare `272k` names nothing). Capability
-/// tokens then degrade by width tier: L2 carries model + effort + window, L1
-/// drops effort, L0 — and any model-less row — keeps just the name; cost always
+/// reasoning and window tokens drop too (a bare `272k` names nothing). Capability
+/// tokens then degrade by width tier: L2 carries model + reasoning + window, L1
+/// drops reasoning, L0 — and any model-less row — keeps just the name; cost always
 /// pins right. A blocked `?`/`!`/`⏸` glyph holds its fixed status tone — yellow,
 /// red, blue — with the unread attention effect, not age, drawing the eye to an
 /// unanswered ask.
@@ -174,8 +174,8 @@ pub(super) fn agent_identity_line(
         &row.name,
         attention,
     ));
-    // The capability cluster is the model and its properties: effort configures
-    // the model, and the window is the model's window. With no model resolved a
+    // The capability cluster is the model and its properties: effort or thinking
+    // configures the model, and the window is the model's window. With no model resolved a
     // bare `xhigh`/`272k` names nothing, so the whole cluster rides behind a
     // known model — a model-less row reads like L0, just the handle.
     if tier != Tier::L0
@@ -184,10 +184,10 @@ pub(super) fn agent_identity_line(
         left.push(Span::styled(" · ", theme.muted()));
         left.push(Span::styled(model, theme.muted()));
         if tier == Tier::L2
-            && let Some(effort) = display_effort(row)
+            && let Some(reasoning) = display_reasoning(row)
         {
             left.push(Span::styled(" · ", theme.muted()));
-            left.push(Span::styled(effort.to_owned(), theme.muted()));
+            left.push(Span::styled(reasoning.to_owned(), theme.muted()));
         }
         // The window token keeps the capability tokens' DIM weight — metadata,
         // not a status signal — but tints by size class (`window_style`) so
