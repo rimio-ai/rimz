@@ -811,7 +811,10 @@ fn claude_host_presence_requires_the_managed_pane_marker() {
         Some(VIEW_NAME),
     );
     let user_session = spawned_pane("claude", "claude", Some("work"));
+    let mut managed_after_churn = pane(Some("claude-sdk"), Some(VIEW_NAME));
+    managed_after_churn.title = Some("claude remote-control --spawn worktree".to_owned());
 
     assert!(claude_host_present(&[managed, user_session.clone()]));
+    assert!(claude_host_present(&[managed_after_churn]));
     assert!(!claude_host_present(&[user_session]));
 }

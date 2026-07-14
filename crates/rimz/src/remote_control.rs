@@ -1226,7 +1226,7 @@ pub fn pane_is_host(pane: &PaneRef) -> bool {
 
 /// Whether the managed Claude remote-control host pane is present in `panes`.
 pub fn claude_host_present(panes: &[PaneRef]) -> bool {
-    pane_listing_contains_marker(panes, &ManagedPaneMarker::ClaudeRemoteControl)
+    !matching_managed_panes(panes, &ManagedPaneMarker::ClaudeRemoteControl).is_empty()
 }
 
 #[cfg(test)]
