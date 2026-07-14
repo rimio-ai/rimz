@@ -135,7 +135,7 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
         write_untrusted_hooks_notice(name, &agent.untrusted_installed_hooks(), out)?;
     }
 
-    write_post_install_footer(out)
+    Ok(write_post_install_footer(out)?)
 }
 
 /// Stderr notice for hooks the agent's own trust gate still skips: the gate
@@ -145,14 +145,14 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
 /// fix rather than gating the start. No-op when `untrusted` is empty.
 fn warn_untrusted_hooks(kind: &str, untrusted: &[String]) -> Result<()> {
     let mut out = render::err();
-    write_untrusted_hooks_notice(kind, untrusted, &mut out)
+    Ok(write_untrusted_hooks_notice(kind, untrusted, &mut out)?)
 }
 
 pub(crate) fn write_untrusted_hooks_notice(
     kind: &str,
     untrusted: &[String],
     out: &mut dyn Write,
-) -> Result<()> {
+) -> std::io::Result<()> {
     if untrusted.is_empty() {
         return Ok(());
     }
@@ -198,7 +198,7 @@ fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> 
     Ok(())
 }
 
-fn write_agent_table(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
+fn write_agent_table(out: &mut dyn Write, previews: &[HookInstallPreview]) -> std::io::Result<()> {
     let layout = AgentTableLayout::from_previews(previews);
     for preview in previews {
         write_agent_table_entry(out, preview, &layout)?;
@@ -210,7 +210,7 @@ fn write_agent_table_entry(
     out: &mut dyn Write,
     preview: &HookInstallPreview,
     layout: &AgentTableLayout,
-) -> Result<()> {
+) -> std::io::Result<()> {
     for (index, file) in preview.files.iter().enumerate() {
         let name = if index == 0 { preview.agent } else { "" };
         let cell = agent_file_cell(preview, file, index);
@@ -253,7 +253,10 @@ fn write_prompt(out: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn render_dry_run(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
+pub(crate) fn render_dry_run(
+    out: &mut dyn Write,
+    previews: &[HookInstallPreview],
+) -> std::io::Result<()> {
     let layout = AgentTableLayout::from_previews(previews);
     for (idx, preview) in previews.iter().enumerate() {
         if idx > 0 {
@@ -287,7 +290,7 @@ pub(crate) fn write_install_result(
     out: &mut dyn Write,
     report: &HookInstallReport,
     disposition: InstallDisposition,
-) -> Result<()> {
+) -> std::io::Result<()> {
     let summary = match disposition {
         InstallDisposition::Installed => {
             format!("installed {} hooks", report.installed_events.len())
@@ -305,22 +308,27 @@ pub(crate) fn write_install_result(
         } else {
             "(new file)"
         };
+        let annotation = if disposition == InstallDisposition::Current {
+            String::new()
+        } else {
+            format!("  {}", render::paint(render::palette::MUTED, annotation))
+        };
         if index == 0 {
             writeln!(
                 out,
-                "{} {}  {} → {}  {}",
+                "{} {}  {} → {}{}",
                 render::paint(render::palette::GOOD.bold(), "✓"),
                 report.agent,
                 summary,
                 home_relative_path(&file.path),
-                render::paint(render::palette::MUTED, annotation),
+                annotation,
             )?;
         } else {
             writeln!(
                 out,
-                "       config → {}  {}",
+                "       config → {}{}",
                 home_relative_path(&file.path),
-                render::paint(render::palette::MUTED, annotation),
+                annotation,
             )?;
         }
     }
@@ -330,7 +338,7 @@ pub(crate) fn write_install_result(
 pub(crate) fn write_uninstall_result(
     out: &mut dyn Write,
     report: &rimz::agents::HookUninstallReport,
-) -> Result<()> {
+) -> std::io::Result<()> {
     if report.files.is_empty() {
         writeln!(out, "{} — no Rimz-managed hooks found", report.agent)?;
         return Ok(());
@@ -404,10 +412,10 @@ fn write_consent_footer(out: &mut dyn Write) -> Result<()> {
         out,
         "Each hook is one `rimz hooks feed` line — it reports events, never acts or answers for you."
     )?;
-    write_undo_preview_hints(out)
+    Ok(write_undo_preview_hints(out)?)
 }
 
-pub(crate) fn write_post_install_footer(out: &mut dyn Write) -> Result<()> {
+pub(crate) fn write_post_install_footer(out: &mut dyn Write) -> std::io::Result<()> {
     writeln!(out)?;
     write_undo_preview_hints(out)?;
     writeln!(
@@ -417,7 +425,7 @@ pub(crate) fn write_post_install_footer(out: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-fn write_undo_preview_hints(out: &mut dyn Write) -> Result<()> {
+fn write_undo_preview_hints(out: &mut dyn Write) -> std::io::Result<()> {
     writeln!(
         out,
         "  {}     rimz hooks uninstall",
@@ -530,7 +538,9 @@ mod tests {
         PathBuf::from(home).join(format!(".{agent}/settings.json"))
     }
 
-    fn strip(render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> Result<()>) -> String {
+    fn strip<E: std::fmt::Debug>(
+        render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> std::result::Result<(), E>,
+    ) -> String {
         let mut stream = anstream::StripStream::new(Vec::new());
         render_one(&mut stream).expect("render");
         String::from_utf8(stream.into_inner()).expect("utf8")
@@ -731,9 +741,14 @@ mod tests {
             let rendered = strip(|out| write_install_result(out, &report, disposition));
             assert!(rendered.contains(&format!("✓ cursor  {summary}")));
             assert!(rendered.contains("~/.cursor/hooks.json"));
-            assert!(rendered.contains("(updated existing config)"));
             assert!(rendered.contains("config → ~/.cursor/cli-config.json"));
-            assert!(rendered.contains("(new file)"));
+            if disposition == InstallDisposition::Current {
+                assert!(!rendered.contains("(updated existing config)"));
+                assert!(!rendered.contains("(new file)"));
+            } else {
+                assert!(rendered.contains("(updated existing config)"));
+                assert!(rendered.contains("(new file)"));
+            }
         }
 
         let uninstall = rimz::agents::HookUninstallReport {

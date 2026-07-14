@@ -17,14 +17,14 @@ pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {
     for integration in adapters {
         let disposition = install_disposition(integration);
         let report = integration.install_hooks()?;
-        write_install_result(&mut out, &report, disposition)?;
-        write_untrusted_hooks_notice(
+        crate::cli::render::finish(write_install_result(&mut out, &report, disposition))?;
+        crate::cli::render::finish(write_untrusted_hooks_notice(
             report.agent,
             &integration.untrusted_installed_hooks(),
             &mut out,
-        )?;
+        ))?;
     }
-    write_post_install_footer(&mut out)
+    crate::cli::render::finish(write_post_install_footer(&mut out))
 }
 
 fn run_install_dry_run(agent: Option<String>) -> Result<()> {
@@ -33,7 +33,7 @@ fn run_install_dry_run(agent: Option<String>) -> Result<()> {
         previews.push(integration.preview_hook_install()?);
     }
     let mut out = crate::cli::render::out();
-    render_dry_run(&mut out, &previews)
+    crate::cli::render::finish(render_dry_run(&mut out, &previews))
 }
 
 pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
@@ -43,14 +43,13 @@ pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
     };
     let mut out = crate::cli::render::out();
     if reports.is_empty() {
-        writeln!(
+        return crate::cli::render::finish(writeln!(
             out,
             "No Rimz-managed hooks are installed; nothing to uninstall."
-        )?;
-        return Ok(());
+        ));
     }
     for report in &reports {
-        write_uninstall_result(&mut out, report)?;
+        crate::cli::render::finish(write_uninstall_result(&mut out, report))?;
     }
     Ok(())
 }
