@@ -168,6 +168,38 @@ fn safe_native_hooks_map_lifecycle_and_keep_pre_tool_policy_untouched() {
 }
 
 #[test]
+fn untyped_stop_errors_stay_terminal_and_cannot_arm_recovery() {
+    for error in [
+        json!("rate limit reached; retry later"),
+        json!({"message": "quota exhausted", "retryAfterSeconds": 30}),
+        json!({"code": "rate_limit", "message": "too many requests"}),
+    ] {
+        let payload = json!({
+            "conversationId": SESSION_ID,
+            "workspacePaths": ["/workspace/project"],
+            "terminationReason": "error",
+            "fullyIdle": true,
+            "error": error,
+        });
+        assert!(
+            AntigravityAdapter
+                .observe_turn_error_from_hook("Stop", &payload)
+                .is_none()
+        );
+        assert_eq!(
+            AntigravityAdapter
+                .observe_lifecycle("Stop", &payload)
+                .unwrap()
+                .signal,
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            }
+        );
+    }
+}
+
+#[test]
 fn hook_install_merges_both_files_and_uninstall_restores_the_statusline() {
     let dir = tempfile::tempdir().unwrap();
     let hooks_path = dir.path().join("config/hooks.json");
@@ -1020,6 +1052,7 @@ mod local_account_api {
     use std::collections::BTreeSet;
     use std::ffi::OsStr;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::time::Duration;
 
     use jiff::Timestamp;
     use serde_json::json;
@@ -1187,6 +1220,54 @@ mod local_account_api {
     }
 
     #[test]
+    fn account_keys_are_normalized_domain_separated_digests() {
+        let expected =
+            "antigravity:v1:03036c73f6a2c8d3a1461c99f6f41c04e8b66e84d1d437f234387c73fd50a726";
+        for email in ["user@example.com", " USER@EXAMPLE.COM "] {
+            let key = local_api::wire::account_key(email).unwrap();
+            assert_eq!(key, expected);
+            assert_eq!(key.len(), "antigravity:v1:".len() + 64);
+            assert!(!key.contains("user@example.com"));
+        }
+        assert_ne!(
+            local_api::wire::account_key("user@example.com"),
+            local_api::wire::account_key("other@example.com")
+        );
+        assert_eq!(local_api::wire::account_key("  "), None);
+    }
+
+    #[test]
+    fn account_usage_identity_requires_an_owner_but_preserves_the_plan() {
+        let body = json!({
+            "userStatus": {
+                "email": " User@Example.com ",
+                "userTier": {"name": " Google AI Ultra "}
+            }
+        });
+        let (identity, plan) =
+            local_api::wire::parse_account_usage_identity(&body.to_string()).unwrap();
+        assert_eq!(
+            identity.account_key.as_deref(),
+            Some("antigravity:v1:03036c73f6a2c8d3a1461c99f6f41c04e8b66e84d1d437f234387c73fd50a726")
+        );
+        assert_eq!(
+            identity.scope,
+            crate::agents::ProviderAccountScope::KindWide
+        );
+        assert_eq!(plan.as_deref(), Some("Google AI Ultra"));
+
+        let plan_only = json!({"userStatus": {"userTier": {"name": "Pro"}}});
+        assert!(
+            local_api::wire::parse_identity(&plan_only.to_string()).is_ok(),
+            "the separate display probe accepts a plan-only response"
+        );
+        assert!(
+            local_api::wire::parse_account_usage_identity(&plan_only.to_string()).is_err(),
+            "quota publication requires an account owner"
+        );
+    }
+
+    #[test]
     fn quota_envelopes_and_fraction_shapes_normalize_to_two_windows() {
         let groups = json!([{
             "buckets": [
@@ -1308,17 +1389,152 @@ mod local_account_api {
         assert!(local_api::wire::parse_rate_limits(&unknown.to_string(), observed_at()).is_err());
     }
 
+    fn candidate(pid: u32, ports: &[u16]) -> local_api::Candidate {
+        local_api::Candidate {
+            pid,
+            uid: 501,
+            start_token: format!("start-{pid}"),
+            endpoints: ports
+                .iter()
+                .map(|port| LoopbackEndpoint {
+                    address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+                    port: *port,
+                })
+                .collect(),
+        }
+    }
+
+    fn status_body(email: Option<&str>, plan: &str) -> String {
+        json!({
+            "userStatus": {
+                "email": email,
+                "userTier": {"name": plan}
+            }
+        })
+        .to_string()
+    }
+
+    fn quota_body() -> String {
+        json!({"groups": [{"buckets": [
+            {
+                "bucketId": "gemini-5h",
+                "remainingFraction": 0.75,
+                "resetTime": "2099-06-15T12:00:00Z"
+            },
+            {
+                "bucketId": "gemini-weekly",
+                "remainingFraction": 0.5,
+                "resetTime": "2099-06-20T08:00:00Z"
+            }
+        ]}]})
+        .to_string()
+    }
+
     #[test]
-    fn adapter_keeps_dollars_credits_and_oauth_unsupported() {
+    fn paired_usage_probe_discovers_once_and_revalidates_one_endpoint_per_rpc() {
+        let mut discovery_calls = 0;
+        let mut revalidated = Vec::new();
+        let mut requests = Vec::new();
+        let probe = local_api::probe_account_usage_with(
+            |_| {
+                discovery_calls += 1;
+                Ok(vec![candidate(42, &[5000, 5001])])
+            },
+            |candidate| {
+                revalidated.push(candidate.pid);
+                Ok(())
+            },
+            |endpoint, path, body, timeout| {
+                requests.push((endpoint, path.to_owned(), body.to_owned(), timeout));
+                if path.ends_with("GetUserStatus") {
+                    Ok(status_body(Some("user@example.com"), "Pro"))
+                } else {
+                    Ok(quota_body())
+                }
+            },
+        );
+
+        let crate::agents::AccountUsageProbe::Found { identity, snapshot } = probe else {
+            panic!("expected paired account usage")
+        };
+        assert_eq!(discovery_calls, 1);
+        assert_eq!(revalidated, [42, 42]);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].0.port, 5000);
+        assert_eq!(requests[1].0.port, 5000);
+        assert_eq!(requests[0].2, "{}");
+        assert_eq!(requests[1].2, r#"{"forceRefresh":true}"#);
+        assert!(
+            requests
+                .iter()
+                .all(|(_, _, _, timeout)| *timeout <= Duration::from_millis(750))
+        );
+        assert_eq!(snapshot.plan.as_deref(), Some("Pro"));
+        assert_eq!(snapshot.extra_credits, None);
+        assert_eq!(snapshot.reset_credits, None);
+        assert_eq!(snapshot.rate_limits.unwrap().windows.len(), 2);
+        assert!(identity.account_key.is_some());
+    }
+
+    #[test]
+    fn known_owner_quota_failure_never_falls_back_or_mixes_endpoints() {
+        let mut requests = Vec::new();
+        let probe = local_api::probe_account_usage_with(
+            |_| Ok(vec![candidate(42, &[5000, 5001]), candidate(41, &[6000])]),
+            |_| Ok(()),
+            |endpoint, path, _, _| {
+                requests.push((endpoint.port, path.to_owned()));
+                if path.ends_with("GetUserStatus") {
+                    Ok(status_body(Some("new@example.com"), "Pro"))
+                } else {
+                    Err(local_api::LocalApiError::Transport)
+                }
+            },
+        );
+
+        let crate::agents::AccountUsageProbe::Failed(identity) = probe else {
+            panic!("known-owner partial failure must stay attributable")
+        };
+        assert!(identity.account_key.is_some());
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|(port, _)| *port == 5000));
+    }
+
+    #[test]
+    fn ownerless_discovery_and_status_failures_remain_unattributed() {
+        let discovery_failure = local_api::probe_account_usage_with(
+            |_| Err(local_api::LocalApiError::Unavailable),
+            |_| Ok(()),
+            |_, _, _, _| Ok(String::new()),
+        );
+        assert_eq!(
+            discovery_failure,
+            crate::agents::AccountUsageProbe::Failed(Default::default())
+        );
+
+        let mut status_requests = 0;
+        let status_failure = local_api::probe_account_usage_with(
+            |_| Ok(vec![candidate(42, &[5000, 5001])]),
+            |_| Ok(()),
+            |_, _, _, _| {
+                status_requests += 1;
+                Ok(status_body(None, "Pro"))
+            },
+        );
+        assert_eq!(status_requests, 2);
+        assert_eq!(
+            status_failure,
+            crate::agents::AccountUsageProbe::Failed(Default::default())
+        );
+    }
+
+    #[test]
+    fn adapter_keeps_dollars_credits_preflight_and_version_unsupported() {
         assert!(
             !AntigravityAdapter
                 .descriptor()
                 .has_authoritative_account_spend()
         );
-        assert!(matches!(
-            AntigravityAdapter.probe_account_usage(),
-            crate::agents::AccountUsageProbe::Unsupported
-        ));
         assert_eq!(
             AntigravityAdapter.account_usage_identity(),
             crate::agents::AccountUsageIdentity::default()

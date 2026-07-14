@@ -6,7 +6,8 @@ pub(super) mod wire;
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
-use crate::agents::context::{AgentAccount, AgentRateLimits};
+use crate::agents::context::AgentAccount;
+use crate::agents::{AccountUsageProbe, AccountUsageSnapshot};
 
 const GET_USER_STATUS_PATH: &str = "/exa.language_server_pb.LanguageServerService/GetUserStatus";
 const RETRIEVE_QUOTA_PATH: &str =
@@ -62,12 +63,64 @@ pub(super) fn probe_account() -> Result<AgentAccount, LocalApiError> {
     })
 }
 
-pub(super) fn probe_rate_limits() -> Result<AgentRateLimits, LocalApiError> {
-    query(
-        RETRIEVE_QUOTA_PATH,
-        r#"{"forceRefresh":true}"#,
-        wire::parse_rate_limits,
-    )
+pub(super) fn probe_account_usage() -> AccountUsageProbe {
+    probe_account_usage_with(process::discover, process::revalidate, post)
+}
+
+pub(in crate::agents::antigravity) fn probe_account_usage_with(
+    mut discover: impl FnMut(Instant) -> Result<Vec<Candidate>, LocalApiError>,
+    mut revalidate: impl FnMut(&Candidate) -> Result<(), LocalApiError>,
+    mut request: impl FnMut(LoopbackEndpoint, &str, &str, Duration) -> Result<String, LocalApiError>,
+) -> AccountUsageProbe {
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    let Ok(candidates) = discover(deadline) else {
+        return AccountUsageProbe::Failed(Default::default());
+    };
+    for candidate in candidates {
+        for endpoint in &candidate.endpoints {
+            if revalidate(&candidate).is_err() {
+                break;
+            }
+            let Some(timeout) = request_timeout(deadline) else {
+                return AccountUsageProbe::Failed(Default::default());
+            };
+            let Ok(status) = request(*endpoint, GET_USER_STATUS_PATH, "{}", timeout) else {
+                continue;
+            };
+            let Ok((identity, plan)) = wire::parse_account_usage_identity(&status) else {
+                continue;
+            };
+
+            if revalidate(&candidate).is_err() {
+                return AccountUsageProbe::Failed(identity);
+            }
+            let Some(timeout) = request_timeout(deadline) else {
+                return AccountUsageProbe::Failed(identity);
+            };
+            let quota = match request(
+                *endpoint,
+                RETRIEVE_QUOTA_PATH,
+                r#"{"forceRefresh":true}"#,
+                timeout,
+            ) {
+                Ok(body) => body,
+                Err(_) => return AccountUsageProbe::Failed(identity),
+            };
+            let rate_limits = match wire::parse_rate_limits(&quota, jiff::Timestamp::now()) {
+                Ok(rate_limits) => rate_limits,
+                Err(_) => return AccountUsageProbe::Failed(identity),
+            };
+            return AccountUsageProbe::Found {
+                identity,
+                snapshot: AccountUsageSnapshot {
+                    rate_limits: Some(rate_limits),
+                    plan,
+                    ..Default::default()
+                },
+            };
+        }
+    }
+    AccountUsageProbe::Failed(Default::default())
 }
 
 fn query<T>(
@@ -94,6 +147,12 @@ fn query<T>(
         }
     }
     Err(LocalApiError::Unavailable)
+}
+
+fn request_timeout(deadline: Instant) -> Option<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .map(|remaining| remaining.min(ATTEMPT_TIMEOUT))
 }
 
 fn post(

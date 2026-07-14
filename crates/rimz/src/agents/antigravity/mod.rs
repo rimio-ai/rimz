@@ -219,16 +219,8 @@ impl AgentAdapter for AntigravityAdapter {
             .unwrap_or(super::account::AccountProbe::Unavailable)
     }
 
-    fn probe_realtime_account_usage(
-        &self,
-        _runtime: &crate::RuntimePaths,
-    ) -> Option<super::AccountUsageSnapshot> {
-        local_api::probe_rate_limits()
-            .ok()
-            .map(|rate_limits| super::AccountUsageSnapshot {
-                rate_limits: Some(rate_limits),
-                ..Default::default()
-            })
+    fn probe_account_usage(&self) -> super::AccountUsageProbe {
+        local_api::probe_account_usage()
     }
 
     fn probe_version(&self) -> Option<String> {

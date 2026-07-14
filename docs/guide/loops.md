@@ -38,7 +38,7 @@ One scheduled turn earns its keep doing no project work at all: opening a provid
 
 Subscription providers meter usage in rolling windows: five hours that start with your first message and reset when they expire. Left to chance, the window lands at the worst offset from your day. Sit down at 9:00 and your first prompt opens a 9:00 to 14:00 window; on a heavy morning the budget is gone by 11:30, and you stall until 14:00, dead hours in the middle of the day.
 
-A `<kind>-ping` agent opens the window before you arrive:
+A `<kind>-ping` virtual agent opens the window before you arrive when that adapter supplies a generic low-cost priming command:
 
 ```sh
 rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
@@ -46,7 +46,7 @@ rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:
 
 Every weekday at 07:00 the task runs one lowest-effort turn, and the window runs 07:00 to 12:00. (Claude's ping pins Sonnet, so a flagship account does not prime at the flagship rate.) You sit down at 9:00 against an almost untouched budget, the reset lands at noon instead of mid-afternoon, and the next window carries you to 17:00. Same subscription, same limits. The resets just stop landing in the middle of your deep work.
 
-The ping is cheap insurance, not a wasted turn. Before it fires, RimZ reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex.
+The ping is cheap insurance, not a wasted turn. Before it fires, RimZ reads the provider's cached rate-limit state and skips when a window is already counting down. The window is account-scoped, so one ping primes every session of that provider: `codex-ping` does the same for Codex. Antigravity has no verified generic model-safe priming command, so `antigravity-ping` is rejected even though its account-owned `5h`/`7d` bars support display and surplus checks.
 
 To keep the windows back-to-back all day, let the window set its own schedule:
 
@@ -54,7 +54,7 @@ To keep the windows back-to-back all day, let the window set its own schedule:
 rimz loop add prime --agent claude-ping --prompt ping --every reset
 ```
 
-`--every reset` fires one minute after the provider's longest budget window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes.
+`--every reset` fires one minute after the provider's longest budget window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes. The shape requires a supported `<kind>-ping`; `--agent antigravity-ping --every reset` is rejected rather than turning an ordinary model selection into an undocumented primer.
 
 ## Wake a running agent
 
@@ -132,13 +132,13 @@ rimz config set resume.auto_continue true     # resume rate-limit and API-error 
 rimz config set harness.smart_compact "70%"   # compact before a message once context passes 70%
 ```
 
-**Auto-continue** picks a parked turn back up on its own. A rate-limit or spend-limit park resumes the moment the provider's budget window resets, and a transient overload or API error retries on a lengthening backoff ramp: the first retry a few minutes after the failure, then spaced further out, giving up after a bounded number of attempts. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
+**Auto-continue** picks a certified parked turn back up on its own. A provider-owned per-turn failure marker proves why the turn stopped; an authoritative account window then supplies the reset clock for a rate-limit or spend-limit park, while a certified transient overload or API error uses a lengthening backoff ramp. An exhausted window, error message, or stalled pane cannot arm recovery by itself. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. Antigravity has account-owned clocks but no certified recoverable 1.1.2 Stop class, so its error Stops remain terminal and a loop fire records the ordinary failure. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 
 **Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. For check-gated work, `rimz loop show` separates the agent attempts from cheap check passes and totals their costs across the recorded history; other tasks retain the last-run and rolling ten-run average cost. Fresh input/output tokens stay visible per run. The room-fleet and provider-account daily caps gate the same fires before launch; the whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
 
 **Smart compaction** rides the same loop. Past the threshold, RimZ submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
 
-Turn both on and a long-running agent keeps its footing through the five-hour wall, a flaky API, and a filling context window, with no babysitter process watching it.
+Turn both on and an adapter with certified failure evidence keeps a long-running agent's footing through the five-hour wall, a flaky API, and a filling context window, with no babysitter process watching it.
 
 ## Every schedule shape
 
@@ -212,7 +212,7 @@ run a codex -p subagent in its own worktree, review its diff, and open a PR."
 
 The nightly task is one scheduled turn, but its prompt hands the agent the room's own tools: it fans work out with [`-p` subagents](./scripting.md#agents-scripting-agents), isolates each fix in a [worktree](./worktrees.md), and could as easily launch a [team](./teams.md) and brief it over [messages](./messaging.md). The unit of automation stops being a prompt you type and becomes a standing cycle that checks, acts, and re-arms itself.
 
-The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#built-in-recovery) carries runs over rate limits, checks fire agent turns only when there is work, every fire appears in `rimz loop show` and stays inspectable through `rimz loop logs`, a question or failure trips a [notification handler](./notifications.md) that reaches your phone, and the [permission posture](#the-permission-posture-for-unattended-runs) is a per-task choice rather than a global switch. Leave the room open, detached on your workstation or on a server you reach with [`rimz remote`](./remote.md), and by morning `rimz loop list` and the PR queue show what the night produced.
+The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#built-in-recovery) carries certified recoverable runs over rate limits, checks fire agent turns only when there is work, every fire appears in `rimz loop show` and stays inspectable through `rimz loop logs`, a question or failure trips a [notification handler](./notifications.md) that reaches your phone, and the [permission posture](#the-permission-posture-for-unattended-runs) is a per-task choice rather than a global switch. Leave the room open, detached on your workstation or on a server you reach with [`rimz remote`](./remote.md), and by morning `rimz loop list` and the PR queue show what the night produced.
 
 ## See also
 

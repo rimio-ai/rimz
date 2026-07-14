@@ -292,11 +292,14 @@ fn spawn_usage_refresh(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use jiff::Timestamp;
 
-    use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow};
+    use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, read_rate_limits_cache};
     use crate::ids::WorkspaceId;
     use crate::sidebar::refresh::accounts::{AccountsCache, ProviderRecord};
+    use crate::sidebar::refresh::credits::{CreditsCache, ProviderCreditsEntry};
     use crate::sidebar::test_support::{provider_panel, snapshot_with_panels};
 
     use super::*;
@@ -348,6 +351,117 @@ mod tests {
             }),
             true,
         ));
+    }
+
+    fn owned_usage_runtime(owner: &str) -> (tempfile::TempDir, RuntimePaths) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        super::super::credits::write_credits_cache(
+            &runtime.shared_credits_path(),
+            &CreditsCache {
+                entries: BTreeMap::from([(
+                    "antigravity".to_owned(),
+                    ProviderCreditsEntry {
+                        account_key: Some(owner.to_owned()),
+                        plan: Some("old plan".to_owned()),
+                        ok: true,
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        super::super::merge_account_rate_limits(
+            &runtime,
+            "antigravity",
+            ProviderAccountScope::KindWide,
+            AgentRateLimits {
+                windows: vec![RateLimitWindow {
+                    duration_mins: Some(300),
+                    used_percentage: Some(88),
+                    source: crate::agents::context::WindowSource::Authoritative,
+                    ..Default::default()
+                }],
+            },
+        );
+        (dir, runtime)
+    }
+
+    fn usage_identity(owner: Option<&str>) -> AccountUsageIdentity {
+        AccountUsageIdentity {
+            account_key: owner.map(ToOwned::to_owned),
+            ..Default::default()
+        }
+    }
+
+    fn claim(runtime: &RuntimePaths) -> Uuid {
+        claim_provider_account_usage(runtime, "antigravity", Default::default()).unwrap()
+    }
+
+    fn windows(runtime: &RuntimePaths) -> Vec<RateLimitWindow> {
+        read_rate_limits_cache(&runtime.shared_rate_limits_path())
+            .entries
+            .get("antigravity")
+            .map(|entry| entry.limits.windows.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn direct_account_usage_completion_replaces_or_drops_windows_only_for_a_known_new_owner() {
+        let (_dir, runtime) = owned_usage_runtime("owner-a");
+        assert!(complete_direct_account_usage(
+            &runtime,
+            "antigravity",
+            claim(&runtime),
+            crate::agents::AccountUsageProbe::Found {
+                identity: usage_identity(Some("owner-b")),
+                snapshot: AccountUsageSnapshot {
+                    plan: Some("new plan".to_owned()),
+                    rate_limits: Some(AgentRateLimits {
+                        windows: vec![RateLimitWindow {
+                            duration_mins: Some(300),
+                            used_percentage: Some(12),
+                            source: crate::agents::context::WindowSource::Authoritative,
+                            ..Default::default()
+                        }],
+                    }),
+                    ..Default::default()
+                },
+            },
+            true,
+        ));
+        assert_eq!(windows(&runtime)[0].used_percentage, Some(12));
+        assert_eq!(
+            super::super::credits::read_credits_cache(&runtime.shared_credits_path()).entries
+                ["antigravity"]
+                .account_key
+                .as_deref(),
+            Some("owner-b")
+        );
+
+        let (_dir, runtime) = owned_usage_runtime("owner-a");
+        assert!(complete_direct_account_usage(
+            &runtime,
+            "antigravity",
+            claim(&runtime),
+            crate::agents::AccountUsageProbe::Failed(usage_identity(Some("owner-b"))),
+            true,
+        ));
+        assert!(windows(&runtime).is_empty());
+
+        for failed_identity in [usage_identity(None), usage_identity(Some("owner-a"))] {
+            let (_dir, runtime) = owned_usage_runtime("owner-a");
+            assert!(complete_direct_account_usage(
+                &runtime,
+                "antigravity",
+                claim(&runtime),
+                crate::agents::AccountUsageProbe::Failed(failed_identity),
+                true,
+            ));
+            assert_eq!(windows(&runtime)[0].used_percentage, Some(88));
+        }
     }
 
     #[test]

@@ -4,12 +4,16 @@ use std::cmp::Ordering;
 
 use jiff::Timestamp;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use super::LocalApiError;
 use crate::agents::context::{AgentAccount, AgentRateLimits, RateLimitWindow, WindowSource};
+use crate::agents::{AccountUsageIdentity, ProviderAccountScope};
 
 const FIVE_HOURS_MINS: u32 = 300;
 const WEEK_MINS: u32 = 7 * 24 * 60;
+const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz:antigravity-account:v1\0";
+const ACCOUNT_KEY_PREFIX: &str = "antigravity:v1:";
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -100,6 +104,41 @@ pub(in crate::agents::antigravity) fn parse_identity(
         metered: Some(true),
         ..AgentAccount::default()
     })
+}
+
+pub(in crate::agents::antigravity) fn parse_account_usage_identity(
+    body: &str,
+) -> Result<(AccountUsageIdentity, Option<String>), LocalApiError> {
+    let account = parse_identity(body)?;
+    let account_key = account_key(
+        account
+            .account_id
+            .as_deref()
+            .ok_or(LocalApiError::InvalidResponse)?,
+    )
+    .ok_or(LocalApiError::InvalidResponse)?;
+    Ok((
+        AccountUsageIdentity {
+            scope: ProviderAccountScope::KindWide,
+            account_key: Some(account_key),
+            credentials_stamp: None,
+        },
+        account.plan,
+    ))
+}
+
+pub(in crate::agents::antigravity) fn account_key(email: &str) -> Option<String> {
+    let normalized = email.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+    let mut digest = Sha256::new();
+    digest.update(ACCOUNT_KEY_DOMAIN);
+    digest.update(normalized.as_bytes());
+    Some(format!(
+        "{ACCOUNT_KEY_PREFIX}{}",
+        hex::encode(digest.finalize())
+    ))
 }
 
 #[derive(Debug, Deserialize)]

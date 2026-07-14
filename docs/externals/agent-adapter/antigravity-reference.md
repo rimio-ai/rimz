@@ -401,7 +401,7 @@ The initial mapping is:
 | Stop payload | RimZ signal |
 | --- | --- |
 | `terminationReason = model_stop`, empty error, `fullyIdle = true` | `turn_ended { errored: false }` |
-| `terminationReason = error` or non-empty error, `fullyIdle = true` | `turn_ended { errored: true }`; additionally classify a provider-limit/backoff marker only from verified labels |
+| `terminationReason = error` or non-empty error, `fullyIdle = true` | `turn_ended { errored: true }`; no current error shape supplies a recovery certificate |
 | clean stop with `fullyIdle = false` | clean `turn_ended` with background work in flight, leaving the row running/parked |
 | error with `fullyIdle = false` | foreground failure wins; do not paint a success-shaped park |
 | `max_steps_exceeded` | failed |
@@ -409,6 +409,22 @@ The initial mapping is:
 The stop hook can itself force another loop. RimZ returns the documented non-`continue` empty decision, so observation does not extend the execution.
 
 Antigravity documents no process/session-end hook. Pane process presence, shell reversion, and ordinary RimZ reaping remove the row. `Stop` ends an execution loop, not the conversation.
+
+### Recovery evidence gate
+
+The supported installed version reports `1.1.2`. A recoverable classifier requires two independent captures of the same provider-limit Stop with a stable provider-owned typed discriminator after removing conversation IDs, paths, account/model identity, user text, request metadata, and dynamic values. The available evidence does not satisfy that gate: no rate-limit, spend-limit, overload, or transient class has a repeated typed discriminator, and no sanitized positive recovery payload exists. Raw Stop bodies stay out of the repository and logs.
+
+The classification table is therefore closed:
+
+| 1.1.2 Stop shape | Classification |
+| --- | --- |
+| exact `model_stop`, empty error, required `fullyIdle` | terminal clean/background mapping |
+| `max_steps_exceeded`, required `fullyIdle` | terminal error |
+| `error` with a string, message-only object, code-like object, empty object, or another unverified value | terminal error according to the existing failure mapping; no turn-error marker |
+| missing `fullyIdle` or malformed payload | no lifecycle observation |
+| future typed rate-limit, spend-limit, overload, or transient discriminator | unclassified until the same supported-version shape is captured twice and sanitized |
+
+Account quota is timing evidence only. A `100%` window, a stalled pane, or a keyword-similar error cannot establish why the current turn stopped, so Antigravity supervised runs and loop attempts remain terminal on every current error Stop.
 
 ## Human waits and native answer surfaces
 
@@ -529,7 +545,9 @@ Plans provide baseline quota with plan-dependent five-hour and/or weekly refresh
 
 The distributed CLI exposes a private Connect-over-HTTPS service on process-owned loopback sockets. This surface is undocumented by Google and therefore version-sensitive; its wire and discovery were cross-checked against CodexBar commit [`b41715f`](https://github.com/steipete/CodexBar/tree/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8), specifically the pinned [`AntigravityStatusProbe`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe.swift), [`AntigravityStatusProbe+PortDetection`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityStatusProbe%2BPortDetection.swift), and [`AntigravityQuotaSummaryParser`](https://github.com/steipete/CodexBar/blob/b41715f3e3fb85d01d807b9bd7a64d9bf384c6f8/Sources/CodexBarCore/Providers/Antigravity/AntigravityQuotaSummaryParser.swift).
 
-RimZ POSTs `{}` to `/exa.language_server_pb.LanguageServerService/GetUserStatus` and `{"forceRefresh":true}` to `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`, with `Content-Type: application/json` and `Connect-Protocol-Version: 1`. It accepts only an exact current-uid `agy` executable and `argv[0]`, intersects that process's owned sockets with loopback listeners, and revalidates the process start identity immediately before connecting. The client starts no process, reads no credential, follows no redirect, applies bounded deadlines and body size, and accepts the service's self-signed certificate only after those process/socket checks.
+RimZ POSTs `{}` to `/exa.language_server_pb.LanguageServerService/GetUserStatus` and `{"forceRefresh":true}` to `/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary`, with `Content-Type: application/json` and `Connect-Protocol-Version: 1`. It accepts only an exact current-uid `agy` executable and `argv[0]`, intersects that process's owned sockets with loopback listeners, discovers candidates once newest-first, and revalidates the process start identity before each RPC. One direct usage attempt pairs status and quota on the same candidate endpoint; once status identifies an owner, quota failure returns that owner's failed result instead of falling back to another process or endpoint. The client starts no process, reads no credential, follows no redirect, applies bounded deadlines and body size, and accepts the service's self-signed certificate only after those process/socket checks.
+
+The direct usage owner key is SHA-256 over the trimmed ASCII-lowercased email under the versioned `rimz:antigravity-account:v1` domain, rendered with an `antigravity:v1:` prefix. Only that digest reaches the account-usage cache. A known owner switch invalidates the prior windows even when the paired quota call fails; an ownerless early failure retains prior truth. The separate display account probe may retain plan-only status and stays independently cached.
 
 The quota response can wrap its summary at the root, under `response`, or under `summary`, and can encode a remaining fraction directly, nested, or through an observed oneof shape. RimZ recognizes only explicit five-hour and weekly period labels/IDs; every enabled native model bucket in a period folds to the smallest remaining fraction, with later reset and stable model identity breaking ties. A missing or disabled recognized period stays an unknown window, unknown periods are ignored, and any malformed recognized fraction or nonfuture reset rejects the reading. The normalized `5h` and `7d` windows are authoritative account quota; AI credits and dollars remain unknown.
 
@@ -636,7 +654,7 @@ The landed adapter uses this conservative mapping:
 | failed `PostToolUse` | `tool_used { mutates: false, edits: false }` | failure does not claim a completed edit |
 | statusline `tool_confirmation_pending = true` | display card as waiting | read-only marker; native pane remains the answer surface |
 | `Stop`, clean and fully idle | `turn_ended { errored: false }` | terminal success |
-| `Stop`, error | `turn_ended { errored: true }` | classify provider-limit parks only from verified error labels |
+| `Stop`, error | `turn_ended { errored: true }` | no 1.1.2 error class passes the repeated typed-discriminator recovery gate |
 | `Stop`, clean and not fully idle | `turn_ended { errored: false, background work }` | shared fold leaves running/parked |
 | pane process exits/reverts | `ended` through presence reconciliation | no native session-end event |
 | statusline model/context/account | `AgentContext` sidecar | no event-log churn |
