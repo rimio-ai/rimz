@@ -138,7 +138,7 @@ fn attach_context_cost(
     prices: &PriceBook,
     context: &mut AgentContext,
 ) {
-    if let Some(cost) = agent.estimate_context_cost(payload, prices) {
+    if let Some(cost) = agent.context_cost(payload, prices) {
         context.cost = Some(cost);
     }
 }
@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn context_cost_estimate_attaches_only_when_the_payload_is_priceable() {
+    fn current_usage_cost_attaches_only_when_the_payload_is_priceable() {
         let prices = PriceBook::from_litellm_json(
             r#"{"gemini-3.5-flash": {"input_cost_per_token": 1.5e-6, "output_cost_per_token": 9e-6, "cache_read_input_token_cost": 0.15e-6}}"#,
         );
@@ -318,13 +318,13 @@ mod tests {
             .unwrap();
         attach_context_cost(&AntigravityAdapter, &priced, &prices, &mut context);
         let cost = context.cost.unwrap();
-        assert_eq!(cost.basis, rimz::agents::CostBasis::DisplayEstimate);
+        assert_eq!(cost.coverage, rimz::agents::CostCoverage::CurrentUsage);
         assert!((cost.total_cost_usd.unwrap() - 0.012_567).abs() < 1e-15);
         assert_eq!(
             cost,
             AgentCost {
                 total_cost_usd: cost.total_cost_usd,
-                basis: rimz::agents::CostBasis::DisplayEstimate,
+                coverage: rimz::agents::CostCoverage::CurrentUsage,
                 ..AgentCost::default()
             }
         );

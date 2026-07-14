@@ -110,8 +110,8 @@ pub fn write(
 ) -> Result<(), atomic::AtomicErr> {
     let _lock = RecordLock::acquire(runtime, kind, agent_id)?;
     let mut context = context.clone();
-    let provider_cost = context.cost.is_some();
-    // Statusline producers own their observed provider fields, while lifecycle
+    let observed_cost = context.cost.is_some();
+    // Statusline producers own their observed fields, while lifecycle
     // confirmation owns turn causality. Preserve that independently-written
     // field across whole-context statusline refreshes.
     let prior = read_one_unlocked(runtime, kind, agent_id);
@@ -127,7 +127,7 @@ pub fn write(
     let mut locally_priced_cost = prior
         .map(|record| record.locally_priced_cost)
         .unwrap_or_default();
-    if provider_cost {
+    if observed_cost {
         locally_priced_cost.owns_context_cost = false;
     }
     write_record_unlocked(
@@ -153,7 +153,7 @@ pub fn write_record(
 ) -> Result<(), atomic::AtomicErr> {
     let _lock = RecordLock::acquire(runtime, record.kind.as_str(), record.agent_id.as_str())?;
     let mut record = record.clone();
-    let provider_cost =
+    let observed_cost =
         record.context.cost.is_some() && !record.locally_priced_cost.owns_context_cost;
     if let Some(prior) = read_one_unlocked(runtime, record.kind.as_str(), record.agent_id.as_str())
     {
@@ -164,7 +164,7 @@ pub fn write_record(
             record.locally_priced_cost = prior.locally_priced_cost;
         }
     }
-    if provider_cost {
+    if observed_cost {
         record.locally_priced_cost.owns_context_cost = false;
     }
     write_record_unlocked(runtime, &record)
@@ -271,7 +271,7 @@ pub fn merge_local_context(
     // not that the already-spent session returned to zero.
     if kind == "droid" {
         // Exact pricing is re-derived with every parsed snapshot. An unknown or
-        // newly unpriced model clears the earlier local estimate.
+        // newly unpriced model clears the earlier local cost.
         record.context.cost = refresh.cost;
     } else if refresh.cost.is_some() {
         record.context.cost = refresh.cost;
@@ -459,7 +459,6 @@ pub fn merge_locally_priced_cost(
         record.locally_priced_cost.owns_context_cost = true;
         let cost = record.context.cost.get_or_insert_with(AgentCost::default);
         cost.total_cost_usd = Some(cumulative);
-        cost.basis = crate::agents::CostBasis::LocallyPriced;
     }
     write_record_unlocked(runtime, &record)?;
     Ok(true)
@@ -492,7 +491,7 @@ fn merge_observed_cost(
     let target = prior.get_or_insert_with(AgentCost::default);
     let before = target.clone();
     target.total_cost_usd = Some(total_cost_usd);
-    target.basis = incoming.basis;
+    target.coverage = incoming.coverage;
     if incoming.total_duration_ms.is_some() {
         target.total_duration_ms = incoming.total_duration_ms;
     }

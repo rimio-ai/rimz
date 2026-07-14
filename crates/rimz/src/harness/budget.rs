@@ -369,7 +369,7 @@ fn waiver_step(
 
 pub fn total_cost_usd(agent: &AgentState) -> Option<f64> {
     let cost = agent.context.as_ref()?.cost.as_ref()?;
-    if !cost.basis.counts_toward_live_budget() {
+    if !cost.coverage.contributes_to_live_spend() {
         return None;
     }
     cost.total_cost_usd

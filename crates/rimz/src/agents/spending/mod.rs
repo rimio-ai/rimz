@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::pricing::PriceBook;
-use super::{AgentAdapter, AgentCost, CostBasis};
+use super::{AgentAdapter, AgentCost};
 
 pub use crate::sidebar::timing::SPENDING_TTL;
 
@@ -406,11 +406,6 @@ pub fn session_cost_usd(
         .sum::<f64>();
     (total > 0.0).then_some(AgentCost {
         total_cost_usd: Some(total),
-        basis: if parsed.cost_estimated {
-            CostBasis::DisplayEstimate
-        } else {
-            CostBasis::ProviderReported
-        },
         ..AgentCost::default()
     })
 }

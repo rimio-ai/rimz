@@ -115,13 +115,13 @@ fn locally_priced_cost_deduplicates_accumulates_and_survives_statusline_refresh(
         Some(0.75)
     );
     assert_eq!(
-        record.context.cost.as_ref().map(|cost| cost.basis),
-        Some(crate::agents::CostBasis::LocallyPriced)
+        record.context.cost.as_ref().map(|cost| cost.coverage),
+        Some(crate::agents::CostCoverage::Session)
     );
 }
 
 #[test]
-fn provider_reported_cost_wins_over_later_estimates() {
+fn observed_cost_ownership_wins_over_later_local_accumulation() {
     let (_dir, runtime) = runtime();
     let first = crate::agents::LocallyPricedTurnCost {
         turn_id: "gen-1".to_owned(),
@@ -152,8 +152,8 @@ fn provider_reported_cost_wins_over_later_estimates() {
         Some(10.0)
     );
     assert_eq!(
-        record.context.cost.as_ref().map(|cost| cost.basis),
-        Some(crate::agents::CostBasis::ProviderReported)
+        record.context.cost.as_ref().map(|cost| cost.coverage),
+        Some(crate::agents::CostCoverage::Session)
     );
 }
 

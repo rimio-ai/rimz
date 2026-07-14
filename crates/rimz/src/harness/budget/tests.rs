@@ -35,35 +35,37 @@ fn budget_spec_accepts_canonical_forms_and_rejects_bad_values() {
 }
 
 #[test]
-fn display_estimate_cannot_trigger_budget_enforcement() {
+fn current_usage_cost_cannot_trigger_budget_enforcement() {
     let now = Timestamp::from_second(200).expect("timestamp");
-    let mut estimated = agent(99.0, AgentStatus::Idle, Some(now));
-    estimated
+    let mut current_usage = agent(99.0, AgentStatus::Idle, Some(now));
+    current_usage.kind = crate::ids::AgentKind::new_unchecked("antigravity");
+    current_usage
         .context
         .as_mut()
         .and_then(|context| context.cost.as_mut())
         .unwrap()
-        .basis = crate::agents::CostBasis::DisplayEstimate;
+        .coverage = crate::agents::CostCoverage::CurrentUsage;
     let mut ledger = BudgetLedger::new("1".parse().expect("spec"));
 
-    assert_eq!(total_cost_usd(&estimated), None);
+    assert_eq!(total_cost_usd(&current_usage), None);
     assert!(matches!(
-        evaluate(&estimated, &mut ledger, now, &TimeZone::UTC, None),
+        evaluate(&current_usage, &mut ledger, now, &TimeZone::UTC, None),
         BudgetVerdict::Under { spend_usd, .. } if spend_usd == 0.0
     ));
     assert!(ledger.parked.is_none());
 }
 
 #[test]
-fn locally_priced_cost_triggers_budget_enforcement() {
+fn session_cost_triggers_budget_enforcement() {
     let now = Timestamp::from_second(200).expect("timestamp");
     let mut priced = agent(99.0, AgentStatus::Idle, Some(now));
+    priced.kind = crate::ids::AgentKind::new_unchecked("droid");
     priced
         .context
         .as_mut()
         .and_then(|context| context.cost.as_mut())
         .unwrap()
-        .basis = crate::agents::CostBasis::LocallyPriced;
+        .coverage = crate::agents::CostCoverage::Session;
     let mut ledger = BudgetLedger::new("1".parse().expect("spec"));
 
     assert_eq!(total_cost_usd(&priced), Some(99.0));

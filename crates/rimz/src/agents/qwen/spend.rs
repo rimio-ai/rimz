@@ -88,7 +88,6 @@ pub(crate) fn parse_qwen_spend(
         origin,
         cursor: SpendCursor::default(),
         unknown_models,
-        cost_estimated: false,
         replace_entries: true,
     }
 }
@@ -173,10 +172,6 @@ mod tests {
             entry.model.as_deref() == Some("qwen3-coder-plus")
                 && entry.input + entry.cache_read + entry.output > 0
         }));
-        assert!(
-            !first.cost_estimated,
-            "local Qwen dollars remain eligible for the existing budget aggregate"
-        );
 
         use std::io::Write as _;
         let mut file = std::fs::OpenOptions::new()

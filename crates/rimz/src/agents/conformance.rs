@@ -711,7 +711,7 @@ fn realtime_cost_from_fixture(adapter: &dyn AgentAdapter) -> bool {
     let prices = PriceBook::embedded();
     if let Some(fixture) = adapter.context_cost_fixture() {
         return adapter
-            .estimate_context_cost(&fixture.payload, &prices)
+            .context_cost(&fixture.payload, &prices)
             .and_then(|cost| cost.total_cost_usd)
             .is_some_and(|cost| cost > 0.0);
     }

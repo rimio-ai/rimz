@@ -14,7 +14,6 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
     prior.context.model_display_name = Some("DeepSeek V4 Pro".to_owned());
     prior.context.cost = Some(AgentCost {
         total_cost_usd: Some(1.25),
-        basis: crate::agents::CostBasis::DisplayEstimate,
         ..AgentCost::default()
     });
     prior.context.tokens = Some(AgentTokenUsage {
@@ -71,7 +70,7 @@ fn droid_local_merge_preserves_context_truth_and_monotonic_session_usage() {
     assert_eq!(session.thinking_tokens, Some(7));
     assert!(
         merged.context.cost.is_none(),
-        "missing exact pricing clears an estimate"
+        "missing exact pricing clears the prior cost"
     );
 
     let unresolved_model = LocalContextRefresh {
@@ -265,7 +264,7 @@ fn turn_error(class: TurnErrorClass, label: &str, at: i64) -> AgentTurnError {
 }
 
 #[test]
-fn observed_context_merge_preserves_fields_and_keeps_cost_monotonic() {
+fn observed_context_merge_preserves_fields_cost_coverage_and_monotonicity() {
     let (_dir, runtime) = runtime();
 
     assert!(merge_observed(&runtime, "pi", "sess-1", observed_context()).unwrap());
@@ -282,6 +281,10 @@ fn observed_context_merge_preserves_fields_and_keeps_cost_monotonic() {
     assert_eq!(first.context.agent_version.as_deref(), Some("1.2.3"));
     assert_eq!(first.context.effort.as_deref(), Some("high"));
     assert_eq!(total_cost(&first), Some(0.5));
+    assert_eq!(
+        first.context.cost.as_ref().map(|cost| cost.coverage),
+        Some(crate::agents::CostCoverage::CurrentUsage)
+    );
     assert_eq!(
         first
             .context
@@ -698,7 +701,10 @@ fn observed_context() -> AgentContext {
         vim_mode: None,
         agent_version: Some("1.2.3".to_owned()),
         exceeds_200k_tokens: None,
-        cost: Some(cost(0.5)),
+        cost: Some(AgentCost {
+            coverage: crate::agents::CostCoverage::CurrentUsage,
+            ..cost(0.5)
+        }),
         tokens: Some(AgentTokenUsage {
             context_window_size: Some(272_000),
             used_percentage: Some(42),

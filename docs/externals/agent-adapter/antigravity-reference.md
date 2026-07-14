@@ -537,7 +537,7 @@ The quota response can wrap its summary at the root, under `response`, or under 
 
 The statusline exposes current input, output, cache-creation, and cache-read tokens plus a model value, but no dollars. Live 1.1.2 may express that value as the selected human label. Baseline plan quota and AI-credit overages are not equivalent to API-token billing, and Antigravity can route multiple model providers. No official per-session cost field or cumulative usage ledger is published.
 
-RimZ may price those four disjoint current-usage classes through its local public API price book. A canonical ID uses the shared resolver; a captured selector label must carry a recognized reasoning qualifier, and its qualifier-free normalized candidate must resolve by exact table key. Treat the result as a best-effort `≈$` live-card estimate: room/provider aggregates, budgets, full-history spend, provider/account totals, and `rimz stats` exclude it. Never present the estimate as subscription billing or synthesize a price from the plan or agent kind.
+RimZ may price those four disjoint current-usage classes through its local public API price book. A canonical ID uses the shared resolver; a captured selector label must carry a recognized reasoning qualifier, and its qualifier-free normalized candidate must resolve by exact table key. Render the result as an ordinary dollar value with current-usage coverage: room/provider aggregates, budgets, full-history spend, provider/account totals, and `rimz stats` exclude it because the replace-style value is non-additive. Never present the price as subscription billing or synthesize it from the plan or agent kind.
 
 ## Headless and supervised runs
 

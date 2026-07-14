@@ -415,17 +415,13 @@ impl AgentAdapter for AntigravityAdapter {
             .map(|payload| payload.into_context(source, Timestamp::now()))
     }
 
-    fn estimate_context_cost(
-        &self,
-        payload: &Value,
-        prices: &super::PriceBook,
-    ) -> Option<super::AgentCost> {
+    fn context_cost(&self, payload: &Value, prices: &super::PriceBook) -> Option<super::AgentCost> {
         if !payload.is_object() {
             return None;
         }
         serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
             .ok()?
-            .estimate_cost(prices)
+            .cost(prices)
     }
 
     fn last_assistant_message(

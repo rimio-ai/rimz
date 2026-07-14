@@ -54,7 +54,7 @@ rimz config set harness.budget 50/day              # this project's whole fleet
 rimz config set accounts.budget.claude 100/day     # one login, every room on the machine
 ```
 
-Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap requires wired authoritative account-spend history; subscription `5h`/`7d` quota bars and point-in-time or partial estimates do not qualify, so config edits, room start, and `rimz budget --account` reject unknown or ineligible kinds such as Antigravity instead of enforcing against incomplete dollars. Cursor still supports per-agent and room caps through its live local price, but it has no account-day cap. An eligible account cap sums one provider login across every room on the machine, while each room parks only the panes it owns.
+Both keys live in your per-machine `config.toml`, require the `/day` form, run no command, and stay outside the project trust hash. The room cap counts every agent under the project root, worktrees included. An account cap requires wired authoritative account-spend history; subscription `5h`/`7d` quota bars and point-in-time or partial prices do not qualify, so config edits, room start, and `rimz budget --account` reject unknown or ineligible kinds such as Antigravity instead of enforcing against incomplete dollars. Cursor and Droid still support per-agent and room caps through cumulative live local prices, but neither has an account-day cap. An eligible account cap sums one provider login across every room on the machine, while each room parks only the panes it owns.
 
 `rimz budget` reads and adjusts what config armed:
 
@@ -72,7 +72,7 @@ Adjustments are runtime state under RimZ's own state directory, never edits to y
 
 The enforcement is small enough to hold in your head:
 
-1. The room's sidebar process re-checks every scope on its regular tick, against the same transcript-derived spend that [Token Insight](./insight.md#how-the-numbers-are-calculated) reads, plus each eligible live card cost. `≈$` marks a non-provider value rather than deciding enforcement: Cursor's deterministic locally priced cost enters live agent and room caps, while display estimates from Antigravity and Droid remain visible without entering a cap or park decision.
+1. The room's sidebar process re-checks every scope on its regular tick, against the same transcript-derived spend that [Token Insight](./insight.md#how-the-numbers-are-calculated) reads, plus each eligible live card cost. Coverage decides eligibility rather than price source: cumulative session values from Cursor and Droid enter live agent and room caps, while Antigravity's replace-style current-usage price remains card-only and cannot trigger a cap or park decision.
 2. When a running turn crosses a cap, RimZ presses Esc in that agent's pane (the same interrupt you would type) and records the park.
 3. The card reads `⏸` with the reason. A crossed room or account cap also turns the cockpit or provider row alarm-red and explains itself as `$50.21 of $50/day`.
 

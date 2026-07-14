@@ -39,9 +39,9 @@ Droid exposes no machine-readable local auth, plan, quota, or account-usage surf
 
 ## Cost
 
-Droid exposes no authoritative transcript USD billing field. When a non-custom model or proven custom mapping has an exact price-book row, RimZ prices the cumulative root counters locally and renders the session-card value as `≈$`; fuzzy family matches never establish a rate. A positive configured `maxContextLimit` supplies capacity first, then exact price metadata supplies `max_input_tokens` when available.
+Droid exposes no authoritative transcript USD billing field. When a non-custom model or proven custom mapping has an exact price-book row, RimZ prices the cumulative root counters locally and renders the session-card value as ordinary dollars; fuzzy family matches never establish a rate. A positive configured `maxContextLimit` supplies capacity first, then exact price metadata supplies `max_input_tokens` when available.
 
-The settings parser is replace-style and live-session-only. Droid exposes no historical store discovery, so these estimates remain outside provider/workspace aggregates, `rimz stats`, and dollar-budget enforcement; account spend stays unsupported. A missing or changed exact price clears the earlier card estimate.
+The settings parser replaces its prior snapshot but the counters themselves are cumulative for the root session, so the value has session coverage and enters cockpit spend and live agent/room budget enforcement. Droid exposes no historical store discovery, so the value remains outside historical workspace/provider aggregates, `rimz stats`, provider/account totals, and account-day caps. Account spend stays unsupported. A missing or changed exact price clears the earlier card cost.
 
 ## Launch, resume, fork, and permissions
 

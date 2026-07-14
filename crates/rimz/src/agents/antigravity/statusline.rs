@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::agents::context::{
-    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage, CostBasis,
+    AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage, CostCoverage,
 };
 use crate::agents::pricing::PriceBook;
 
@@ -117,7 +117,7 @@ fn normalize_model_display(
 }
 
 impl StatuslinePayload {
-    pub(crate) fn estimate_cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+    pub(crate) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
         let model_id = self.model.id.as_deref()?.trim();
         (!model_id.is_empty()).then_some(())?;
         let usage = &self.context_window.current_usage;
@@ -142,7 +142,7 @@ impl StatuslinePayload {
         );
         (total_cost_usd.is_finite() && total_cost_usd > 0.0).then(|| AgentCost {
             total_cost_usd: Some(total_cost_usd),
-            basis: CostBasis::DisplayEstimate,
+            coverage: CostCoverage::CurrentUsage,
             ..AgentCost::default()
         })
     }
@@ -225,7 +225,7 @@ impl StatuslinePayload {
 /// (`Gemini 3.5 Flash (Medium)`) while hooks carry a canonical-shaped hint.
 /// Keep that provider identity untouched in `AgentContext`, but let a captured
 /// terminal reasoning qualifier expose conservative exact-table candidates for
-/// this point-in-time estimate. Exact lookup keeps an unknown selector from
+/// this point-in-time price. Exact lookup keeps an unknown selector from
 /// borrowing rates from a related model through the global fuzzy resolver.
 fn selector_price_keys(model_id: &str) -> Option<[String; 2]> {
     let (base, effort, thinking_enabled) = normalize_model_display(Some(model_id.to_owned()));

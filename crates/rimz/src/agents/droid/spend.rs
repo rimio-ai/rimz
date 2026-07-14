@@ -3,7 +3,7 @@
 //! Factory publishes cumulative token categories but no authoritative USD.
 //! This parser produces one replace-style live-session entry only when the raw
 //! selector has a proven canonical identity and the price book has an exact
-//! row. Fleet discovery remains disabled on the adapter, keeping estimates out
+//! row. Fleet discovery remains disabled on the adapter, keeping values out
 //! of historical/account spend.
 
 use std::collections::BTreeMap;
@@ -78,7 +78,6 @@ pub(super) fn parse(path: &Path, prices: &PriceBook) -> SpendParse {
         origin: transcript::session_cwd(&snapshot.settings_path),
         cursor: SpendCursor::default(),
         unknown_models: BTreeMap::new(),
-        cost_estimated: true,
         replace_entries: true,
     }
 }
@@ -116,7 +115,6 @@ mod tests {
         );
 
         let parsed = parse(&path, &prices);
-        assert!(parsed.cost_estimated);
         assert!(parsed.replace_entries);
         let entry = &parsed.entries[0];
         assert_eq!(
@@ -133,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_or_unknown_models_produce_no_estimate() {
+    fn fuzzy_or_unknown_models_produce_no_cost() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sess.settings.json");
         std::fs::write(

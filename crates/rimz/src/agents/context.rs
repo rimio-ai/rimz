@@ -242,42 +242,35 @@ pub struct AgentAccount {
     pub credentials_updated_at_ms: Option<u64>,
 }
 
-/// Provenance for a session-cost total. The basis independently controls
-/// approximate rendering and eligibility for live budget decisions.
+/// Temporal coverage for a cost total. Cumulative session totals are additive;
+/// point-in-time current-usage prices stay display-only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CostBasis {
-    /// A native provider total.
+pub enum CostCoverage {
+    /// A cumulative session total.
     #[default]
-    ProviderReported,
-    /// Provider-owned counters priced through Rimz's pinned price book.
-    LocallyPriced,
-    /// A lower-confidence projection retained for display only.
-    DisplayEstimate,
+    Session,
+    /// A price for replace-style current usage that cannot be added over time.
+    CurrentUsage,
 }
 
-impl CostBasis {
-    pub const fn is_approximate(self) -> bool {
-        !matches!(self, Self::ProviderReported)
+impl CostCoverage {
+    pub const fn contributes_to_live_spend(self) -> bool {
+        matches!(self, Self::Session)
     }
 
-    pub const fn counts_toward_live_budget(self) -> bool {
-        !matches!(self, Self::DisplayEstimate)
-    }
-
-    fn is_provider_reported(&self) -> bool {
-        matches!(self, Self::ProviderReported)
+    fn is_session(&self) -> bool {
+        matches!(self, Self::Session)
     }
 }
 
-/// Cumulative spend for the session, carrying the basis needed by display and
-/// live-budget policy.
+/// A USD cost total plus the temporal coverage needed by additive spend policy.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentCost {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "CostBasis::is_provider_reported")]
-    pub basis: CostBasis,
+    #[serde(default, skip_serializing_if = "CostCoverage::is_session")]
+    pub coverage: CostCoverage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -727,24 +720,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cost_basis_separates_rendering_from_live_budget_policy() {
-        for (basis, approximate, counts, wire) in [
-            (
-                CostBasis::ProviderReported,
-                false,
-                true,
-                "provider_reported",
-            ),
-            (CostBasis::LocallyPriced, true, true, "locally_priced"),
-            (CostBasis::DisplayEstimate, true, false, "display_estimate"),
-        ] {
-            assert_eq!(basis.is_approximate(), approximate);
-            assert_eq!(basis.counts_toward_live_budget(), counts);
-            assert_eq!(serde_json::to_value(basis).unwrap(), wire);
-        }
-        let legacy_without_basis: AgentCost =
-            serde_json::from_value(serde_json::json!({"total_cost_usd": 1.0})).unwrap();
-        assert_eq!(legacy_without_basis.basis, CostBasis::ProviderReported);
+    fn cost_coverage_controls_additive_spend_and_wire_shape() {
+        let session = AgentCost {
+            total_cost_usd: Some(1.0),
+            ..AgentCost::default()
+        };
+        assert!(session.coverage.contributes_to_live_spend());
+        assert_eq!(
+            serde_json::to_value(&session).unwrap(),
+            serde_json::json!({"total_cost_usd": 1.0})
+        );
+
+        let current_usage = AgentCost {
+            total_cost_usd: Some(1.0),
+            coverage: CostCoverage::CurrentUsage,
+            ..AgentCost::default()
+        };
+        assert!(!current_usage.coverage.contributes_to_live_spend());
+        assert_eq!(
+            serde_json::to_value(&current_usage).unwrap(),
+            serde_json::json!({"total_cost_usd": 1.0, "coverage": "current_usage"})
+        );
+
+        let legacy_with_basis: AgentCost = serde_json::from_value(
+            serde_json::json!({"total_cost_usd": 1.0, "basis": "locally_priced"}),
+        )
+        .unwrap();
+        assert_eq!(legacy_with_basis.coverage, CostCoverage::Session);
     }
 
     fn window(used: Option<u8>) -> RateLimitWindow {

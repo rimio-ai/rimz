@@ -188,7 +188,6 @@ pub(crate) fn parse_codex_spend(
             state: serde_json::to_value(&state).ok(),
         },
         unknown_models,
-        cost_estimated: false,
         replace_entries: false,
     }
 }

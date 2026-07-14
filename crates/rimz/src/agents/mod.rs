@@ -66,7 +66,7 @@ use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostBasis, ProviderAccountScope,
+    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostCoverage, ProviderAccountScope,
     RateLimitWindow, RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
@@ -673,8 +673,8 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Price current provider-reported context usage. The statusline command
     /// supplies the local price book and owns persistence; adapters only parse
-    /// their native payload and return the normalized estimate.
-    fn estimate_context_cost(&self, _payload: &Value, _prices: &PriceBook) -> Option<AgentCost> {
+    /// their native payload and return the normalized cost.
+    fn context_cost(&self, _payload: &Value, _prices: &PriceBook) -> Option<AgentCost> {
         None
     }
 

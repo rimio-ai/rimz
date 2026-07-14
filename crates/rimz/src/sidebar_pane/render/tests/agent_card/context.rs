@@ -4,7 +4,7 @@ use crate::sidebar_pane::render::theme::Component;
 use ratatui::text::Span;
 
 #[test]
-fn droid_card_renders_resolved_custom_model_session_usage_and_approximate_cost() {
+fn droid_card_renders_resolved_custom_model_session_usage_and_plain_cost() {
     let mut droid = agent(
         "droid-1",
         "droid",
@@ -22,7 +22,7 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_approximate_cost()
     context.effort = Some("high".to_owned());
     context.cost = Some(AgentCost {
         total_cost_usd: Some(0.42),
-        basis: crate::agents::CostBasis::DisplayEstimate,
+        coverage: crate::agents::CostCoverage::CurrentUsage,
         ..Default::default()
     });
     context.tokens = Some(AgentTokenUsage {
@@ -50,19 +50,19 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_approximate_cost()
         "session-lifetime categories use the shared token grammar:\n{rendered}"
     );
     assert!(
-        rendered.contains("≈$0.42"),
-        "display estimates stay visibly approximate:\n{rendered}"
+        rendered.contains("$0.42") && !rendered.contains('≈'),
+        "current-usage costs render as plain dollars:\n{rendered}"
     );
     droid
         .context
         .as_mut()
         .and_then(|context| context.cost.as_mut())
         .unwrap()
-        .basis = crate::agents::CostBasis::LocallyPriced;
-    let locally_priced = snapshot_to_screen(&snapshot_with(vec![droid]), 58, 17);
+        .coverage = crate::agents::CostCoverage::Session;
+    let session = snapshot_to_screen(&snapshot_with(vec![droid]), 58, 17);
     assert!(
-        locally_priced.contains("≈$0.42"),
-        "locally priced spend stays visibly approximate:\n{locally_priced}"
+        session.contains("$0.42") && !session.contains('≈'),
+        "session costs render as plain dollars:\n{session}"
     );
     assert!(
         !rendered.contains("custom:DeepSeek-V4-Pro-0")

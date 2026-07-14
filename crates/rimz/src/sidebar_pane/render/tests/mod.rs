@@ -240,11 +240,10 @@ fn claude_context(now: Timestamp) -> AgentContext {
         exceeds_200k_tokens: Some(false),
         cost: Some(AgentCost {
             total_cost_usd: Some(1.27),
-            basis: crate::agents::CostBasis::ProviderReported,
             total_duration_ms: Some(12 * 60 * 1_000),
-            total_api_duration_ms: None,
             total_lines_added: Some(214),
             total_lines_removed: Some(31),
+            ..AgentCost::default()
         }),
         tokens: Some(AgentTokenUsage {
             context_window_size: Some(200_000),

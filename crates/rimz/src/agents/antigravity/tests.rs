@@ -485,10 +485,8 @@ fn statusline_prices_canonical_ids_and_observed_selector_labels_with_usage() {
             }
         }
     });
-    let cost = AntigravityAdapter
-        .estimate_context_cost(&payload, &prices)
-        .unwrap();
-    assert_eq!(cost.basis, crate::agents::CostBasis::DisplayEstimate);
+    let cost = AntigravityAdapter.context_cost(&payload, &prices).unwrap();
+    assert_eq!(cost.coverage, crate::agents::CostCoverage::CurrentUsage);
     let total_cost_usd = cost.total_cost_usd.unwrap();
     assert!((total_cost_usd - 150e-6).abs() < 1e-15);
     assert!(total_cost_usd.is_finite() && total_cost_usd > 0.0);
@@ -507,12 +505,10 @@ fn statusline_prices_canonical_ids_and_observed_selector_labels_with_usage() {
             }
         }
     });
-    let captured_cost = AntigravityAdapter
-        .estimate_context_cost(&captured, &prices)
-        .unwrap();
+    let captured_cost = AntigravityAdapter.context_cost(&captured, &prices).unwrap();
     assert_eq!(
-        captured_cost.basis,
-        crate::agents::CostBasis::DisplayEstimate
+        captured_cost.coverage,
+        crate::agents::CostCoverage::CurrentUsage
     );
     assert!((captured_cost.total_cost_usd.unwrap() - 0.012_567).abs() < 1e-15);
 
@@ -535,11 +531,7 @@ fn statusline_prices_canonical_ids_and_observed_selector_labels_with_usage() {
             "context_window": {"current_usage": {"input_tokens": 10}}
         }),
     ] {
-        assert!(
-            AntigravityAdapter
-                .estimate_context_cost(&payload, &prices)
-                .is_none()
-        );
+        assert!(AntigravityAdapter.context_cost(&payload, &prices).is_none());
     }
 }
 
