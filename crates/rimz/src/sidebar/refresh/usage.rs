@@ -221,12 +221,12 @@ fn usage_probe_due_with_stamp(
         .and_then(|bytes| serde_json::from_slice::<UsageProbeMarker>(&bytes).ok())
         .and_then(|marker| marker.credentials_stamp);
     let due = age_due || stored_stamp != current_stamp;
-    if due {
-        if let Ok(payload) = serde_json::to_vec(&UsageProbeMarker {
+    if due
+        && let Ok(payload) = serde_json::to_vec(&UsageProbeMarker {
             credentials_stamp: current_stamp,
-        }) {
-            let _ = std::fs::write(&path, payload);
-        }
+        })
+    {
+        let _ = std::fs::write(&path, payload);
     }
     due
 }
