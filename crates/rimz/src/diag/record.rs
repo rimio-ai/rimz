@@ -636,6 +636,8 @@ pub enum AggregateKey {
     },
     ProviderMana {
         kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope_id: Option<String>,
         duration_mins: Option<u32>,
     },
 }
@@ -648,8 +650,12 @@ impl AggregateKey {
             Self::ProviderSpend { kind } => format!("provider_spend:{kind}"),
             Self::ProviderMana {
                 kind,
+                scope_id,
                 duration_mins,
             } => {
+                if let Some(scope_id) = scope_id {
+                    return format!("provider_mana:{kind}:scope:{scope_id}");
+                }
                 let duration = duration_mins
                     .map(|mins| mins.to_string())
                     .unwrap_or_else(|| "unknown".to_owned());

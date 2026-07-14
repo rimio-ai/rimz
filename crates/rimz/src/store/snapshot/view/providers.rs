@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
+use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
 use crate::config::{ProviderTabsMode, ThemeColor};
 
@@ -84,10 +85,10 @@ impl SidebarSnapshot {
             // window at slightly different instants, so "freshest wins" flips
             // between ticks and the bar flickers. Instead, reject content-stale
             // readings whole (an idle session re-emits a days-old payload with a
-            // fresh capture stamp; its shortest window's passed reset gives it
-            // away), drop individual windows whose own reset has passed, then keep
-            // the most-drained survivor per duration — within a live window usage
-            // only climbs, so this is both stable and the truest. Same inputs
+            // fresh capture stamp; its shortest applicable reset gives it away),
+            // drop individual windows whose own reset has passed, then keep the
+            // most-drained survivor per stable identity — within a live window
+            // usage only climbs, so this is both stable and the truest. Same inputs
             // always yield the same bars, regardless of which session reported
             // last; the enrich layer fuses this live reading with the cached and
             // authoritative truth.
@@ -319,27 +320,27 @@ fn display_rank(kind: &str) -> usize {
 }
 
 /// The content-fresh live budget windows across every session of a provider,
-/// one per [`duration_mins`](RateLimitWindow::duration_mins), tagged with the
+/// one per duration or provider-defined scope, tagged with the
 /// reading's `observed_at`/`source` for the enrich layer to fuse with cached and
 /// authoritative truth.
 ///
 /// Each `reading` is one session's whole window set. A reading is rejected
 /// wholesale by [`AgentRateLimits::content_stale_at`] — an idle session
 /// re-emits a days-old payload with a fresh capture stamp, so its longer windows
-/// look current even though they are not; the shortest window's passed reset
-/// gives the whole payload away. Among surviving readings, the most-drained value
-/// wins per duration: within one live window usage only climbs, so the highest
+/// look current even though they are not; the shortest applicable reset gives
+/// the whole payload away. Among surviving readings, the most-drained value wins
+/// per stable identity: within one live window usage only climbs, so the highest
 /// reading is the most current and the pick is stable against parallel sessions
 /// reporting the same budget at different instants. A surviving reading can
-/// still carry a longer window from a previous epoch while its shortest window is
-/// mid-cycle, so each expired window is dropped before this comparison. Output
-/// sorted short→long for a stable paint order; windows of unknown duration sort
-/// last.
+/// still carry a longer window from a previous epoch while its shortest window
+/// is mid-cycle, so each expired window is dropped before this comparison.
+/// Output keeps duration windows short→long, followed by scoped windows in
+/// stable scope-id order.
 pub(super) fn fresh_windows<'a>(
     readings: impl Iterator<Item = &'a AgentRateLimits>,
     now: Timestamp,
 ) -> Vec<RateLimitWindow> {
-    let mut by_duration: BTreeMap<Option<u32>, RateLimitWindow> = BTreeMap::new();
+    let mut by_window: BTreeMap<RateLimitWindowKey, RateLimitWindow> = BTreeMap::new();
     for reading in readings {
         if reading.content_stale_at(now) {
             continue;
@@ -351,8 +352,8 @@ pub(super) fn fresh_windows<'a>(
             if window.resets_at.is_some_and(|reset| reset <= now) {
                 continue;
             }
-            by_duration
-                .entry(window.duration_mins)
+            by_window
+                .entry(window.key())
                 .and_modify(|best| {
                     if window.used_percentage > best.used_percentage {
                         *best = window.clone();
@@ -361,9 +362,21 @@ pub(super) fn fresh_windows<'a>(
                 .or_insert_with(|| window.clone());
         }
     }
-    let mut windows: Vec<RateLimitWindow> = by_duration.into_values().collect();
-    windows.sort_by_key(|window| window.duration_mins.unwrap_or(u32::MAX));
+    let mut windows: Vec<RateLimitWindow> = by_window.into_values().collect();
+    sort_windows(&mut windows);
     windows
+}
+
+pub(crate) fn sort_windows(windows: &mut [RateLimitWindow]) {
+    windows.sort_by(|left, right| match (&left.scope, &right.scope) {
+        (None, None) => left
+            .duration_mins
+            .unwrap_or(u32::MAX)
+            .cmp(&right.duration_mins.unwrap_or(u32::MAX)),
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(_), Some(_)) => left.key().cmp(&right.key()),
+    });
 }
 
 /// Built-in provider style, read from the adapter's brand descriptor

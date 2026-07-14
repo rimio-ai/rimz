@@ -89,6 +89,21 @@ fn longest_window_surplus_fails_closed_without_a_running_complete_reading() {
 }
 
 #[test]
+fn durationless_scoped_quotas_do_not_drive_temporal_decisions() {
+    let now = Timestamp::from_second(1_000_000).unwrap();
+    let mut window = surplus_window(now, Some(50), 86_400, None);
+    window.scope = Some(crate::agents::RateLimitWindowScope {
+        id: "premium_interactions".to_owned(),
+        label: "prm".to_owned(),
+    });
+    let cache = rate_limits(vec![window]);
+
+    assert_eq!(shortest_window_running_in(&cache, "claude", now), None);
+    assert_eq!(longest_window_running_in(&cache, "claude", now), None);
+    assert_eq!(longest_window_surplus_in(&cache, "claude", now), None);
+}
+
+#[test]
 fn compacting_marker_expires_after_delivery_window() {
     let now = Timestamp::from_second(1_000).unwrap();
     let mut agent = AgentState::stub("claude", "sess-compact", AgentStatus::Idle);

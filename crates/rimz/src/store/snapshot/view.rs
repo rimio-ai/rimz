@@ -32,7 +32,7 @@ mod reap;
 mod rows;
 mod score;
 
-pub(crate) use providers::format_plan_label;
+pub(crate) use providers::{format_plan_label, sort_windows};
 
 pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use model::{

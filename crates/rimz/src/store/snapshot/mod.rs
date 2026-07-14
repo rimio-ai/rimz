@@ -45,7 +45,6 @@ pub use row::{
     AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarRow,
     SidebarSubAgent, compose_channel,
 };
-pub(crate) use view::format_plan_label;
 pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
     DailyBudgetView, PresenceSample, RuntimeReapInputs, SNAPSHOT_VERSION, SidebarLinkFreshness,
@@ -53,6 +52,7 @@ pub use view::{
     SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice, WorktreePrState, WorktreeTrunkSync,
     actionable_unread_count, lead_unread_row, triage_key,
 };
+pub(crate) use view::{format_plan_label, sort_windows};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotErr {

@@ -33,6 +33,112 @@ fn idle_window_projection_ages_only_known_elapsed_windows() {
     assert_eq!(project_window(no_duration.clone(), now), no_duration);
 }
 
+fn scoped_window(id: &str, label: &str, used: u8, reset: Timestamp) -> RateLimitWindow {
+    RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: id.to_owned(),
+            label: label.to_owned(),
+        }),
+        used_percentage: Some(used),
+        resets_at: Some(reset),
+        duration_mins: None,
+        source: WindowSource::Authoritative,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn scoped_windows_fuse_and_round_trip_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let reset = Timestamp::from_second(4_000_000_000).unwrap();
+    let mut snapshot = snapshot_with_panels(
+        workspace,
+        vec![provider_panel(
+            "copilot",
+            vec![
+                scoped_window("premium_interactions", "prm", 20, reset),
+                scoped_window("chat", "cht", 70, reset),
+            ],
+        )],
+    );
+    apply_rate_limit_cache(&mut snapshot, &runtime, true);
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let windows = &cache.windows["copilot"].windows;
+    assert_eq!(windows.len(), 2);
+    assert_eq!(
+        windows
+            .iter()
+            .find(|window| window
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope.id == "premium_interactions"))
+            .and_then(|window| window.used_percentage),
+        Some(20)
+    );
+    assert_eq!(
+        windows
+            .iter()
+            .find(|window| window
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope.id == "chat"))
+            .and_then(|window| window.used_percentage),
+        Some(70)
+    );
+
+    let encoded = serde_json::to_vec(&cache).unwrap();
+    let decoded: RateLimitsCache = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded.windows["copilot"].windows, *windows);
+}
+
+#[test]
+fn expired_durationless_scoped_cache_displays_unknown_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let passed = Timestamp::from_second(1_000_000_000).unwrap();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+    write_rate_limits_cache(
+        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache {
+            refreshed_at_ms: 1,
+            windows: BTreeMap::from([(
+                "copilot".to_owned(),
+                AgentRateLimits {
+                    windows: vec![
+                        scoped_window("premium_interactions", "prm", 100, passed),
+                        scoped_window("chat", "cht", 40, future),
+                    ],
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+    let mut snapshot = snapshot_with_panels(workspace, vec![provider_panel("copilot", Vec::new())]);
+    apply_rate_limit_cache(&mut snapshot, &runtime, false);
+
+    assert_eq!(snapshot.providers[0].windows.len(), 2);
+    let premium = &snapshot.providers[0].windows[1];
+    assert_eq!(
+        premium.scope.as_ref().map(|scope| scope.label.as_str()),
+        Some("prm")
+    );
+    assert_eq!(premium.used_percentage, None);
+    assert_eq!(premium.resets_at, None);
+    let chat = &snapshot.providers[0].windows[0];
+    assert_eq!(
+        chat.scope.as_ref().map(|scope| scope.label.as_str()),
+        Some("cht")
+    );
+    assert_eq!(chat.used_percentage, Some(40));
+    assert_eq!(chat.resets_at, Some(future));
+}
+
 /// The producer persists a live reading as ground truth; once the session is
 /// idle (no live window), a reader projects that reading back onto the panel,
 /// so the dashboard shows last-known budgets instead of an empty bar.
@@ -557,6 +663,42 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
 }
 
 #[test]
+fn authoritative_merge_does_not_fabricate_lifted_named_quotas() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let reset = Timestamp::from_second(4_000_000_000).unwrap();
+
+    merge_account_rate_limits(
+        &runtime,
+        "copilot",
+        AgentRateLimits {
+            windows: vec![
+                scoped_window("premium_interactions", "prm", 20, reset),
+                scoped_window("chat", "cht", 40, reset),
+            ],
+        },
+    );
+    merge_account_rate_limits(
+        &runtime,
+        "copilot",
+        AgentRateLimits {
+            windows: vec![scoped_window("chat", "cht", 41, reset)],
+        },
+    );
+
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    let windows = &cache.windows["copilot"].windows;
+    assert_eq!(windows.len(), 1);
+    assert_eq!(
+        windows[0].scope.as_ref().map(|scope| scope.id.as_str()),
+        Some("chat")
+    );
+    assert!(!windows[0].lifted);
+}
+
+#[test]
 fn codex_cold_cache_synthesizes_declared_omitted_window_as_lifted() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -671,6 +813,7 @@ fn drop_kind_rate_limits_removes_only_that_kinds_windows_and_pending() {
                 (
                     "codex".to_owned(),
                     vec![PendingRefill {
+                        scope_id: None,
                         duration_mins: Some(300),
                         used_percentage: 1,
                         first_seen_at,
@@ -679,6 +822,7 @@ fn drop_kind_rate_limits_removes_only_that_kinds_windows_and_pending() {
                 (
                     "claude".to_owned(),
                     vec![PendingRefill {
+                        scope_id: None,
                         duration_mins: Some(300),
                         used_percentage: 2,
                         first_seen_at,
@@ -790,6 +934,7 @@ fn fuse_climb_is_immediate_and_clears_any_pending() {
     let now = fuse_now();
     let reset = now + SignedDuration::from_secs(3_600);
     let parked = PendingRefill {
+        scope_id: None,
         duration_mins: Some(300),
         used_percentage: 2,
         first_seen_at: now,

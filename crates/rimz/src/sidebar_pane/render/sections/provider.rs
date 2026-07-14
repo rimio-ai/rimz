@@ -1214,6 +1214,9 @@ enum ProviderBar<'a> {
 }
 
 fn select_provider_bars(panel: &SidebarProviderPanel) -> Vec<ProviderBar<'_>> {
+    if panel.windows.iter().any(|window| window.scope.is_some()) {
+        return panel.windows.iter().map(ProviderBar::Window).collect();
+    }
     let Some(first) = panel.windows.first() else {
         return Vec::new();
     };
@@ -1263,9 +1266,17 @@ fn provider_window_pair<'a>(
 /// longer one resets), so the renderer paints the shorter row exhausted too (e.g.
 /// a spent 7-day cap gating the 5-hour bar).
 fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -> bool {
-    let mins = window.duration_mins.unwrap_or(0);
+    if window.scope.is_some() {
+        return false;
+    }
+    let Some(mins) = window.duration_mins.filter(|mins| *mins > 0) else {
+        return false;
+    };
     panel.windows.iter().any(|other| {
-        other.duration_mins.unwrap_or(0) > mins
+        other.scope.is_none()
+            && other
+                .duration_mins
+                .is_some_and(|other_mins| other_mins > mins)
             && other.used_percentage.is_some_and(|used| used >= 100)
     })
 }
@@ -1298,7 +1309,7 @@ fn metered_bar_row(
     zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Span<'static>> {
-    let label = window_label(window.duration_mins);
+    let label = window_label(window);
     if !force_exhausted && window.lifted {
         let bar_width = provider_bar_width(region);
         let mut spans = vec![

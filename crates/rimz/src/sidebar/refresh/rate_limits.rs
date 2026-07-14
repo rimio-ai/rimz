@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
+use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{
     AgentRateLimits, PendingRefill, RateLimitWindow, RateLimitsCache, descriptor_by_kind,
     read_rate_limits_cache,
@@ -22,8 +23,8 @@ mod tests;
 pub(crate) const REFILL_CONFIRM_SECS: i64 = 120;
 /// Coarse backstop: a live candidate captured longer ago than this is ignored.
 /// Content-staleness is already caught upstream — the snapshot view drops a
-/// reading whose shortest window has reset — so this only guards a wildly old
-/// reading slipping through.
+/// reading whose shortest applicable window has reset — so this only guards a
+/// wildly old reading slipping through.
 pub(crate) const LIVE_HORIZON_SECS: i64 = 6 * 3600;
 /// A later reset instant must beat the prior by more than this to count as a new
 /// window epoch; sub-second parse jitter between sessions never does.
@@ -77,6 +78,7 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
         let reported: BTreeSet<u32> = windows
             .windows
             .iter()
+            .filter(|window| window.scope.is_none())
             .filter_map(|window| window.duration_mins)
             .collect();
         let declared = descriptor_by_kind(kind)
@@ -90,6 +92,7 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
                 limits
                     .windows
                     .iter()
+                    .filter(|window| window.scope.is_none())
                     .filter_map(|window| window.duration_mins)
             })
             .chain(declared.iter().copied())
@@ -147,13 +150,22 @@ pub(crate) fn project_window(cached: RateLimitWindow, now: Timestamp) -> RateLim
 /// too. The cache remains ground truth for persistence, but display switches to
 /// unknown bars until a provider reading refreshes it.
 fn longest_cached_window_expired(
-    prev: &BTreeMap<Option<u32>, RateLimitWindow>,
+    prev: &BTreeMap<RateLimitWindowKey, RateLimitWindow>,
     now: Timestamp,
 ) -> bool {
-    prev.values()
+    let duration_reset = prev
+        .values()
         .filter_map(|window| Some((window.duration_mins?, window.resets_at?)))
         .max_by_key(|(mins, _)| *mins)
-        .is_some_and(|(_, resets_at)| resets_at <= now)
+        .map(|(_, resets_at)| resets_at);
+    duration_reset
+        .or_else(|| {
+            prev.values()
+                .filter(|window| window.scope.is_some())
+                .filter_map(|window| window.resets_at)
+                .max()
+        })
+        .is_some_and(|resets_at| resets_at <= now)
 }
 
 /// Preserve the cached window's identity while clearing the value, so the
@@ -161,6 +173,7 @@ fn longest_cached_window_expired(
 /// refreshed or exhausted budget.
 fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
     RateLimitWindow {
+        scope: cached.scope,
         used_percentage: None,
         resets_at: None,
         duration_mins: cached.duration_mins,
@@ -173,10 +186,10 @@ fn unknown_idle_window(cached: RateLimitWindow) -> RateLimitWindow {
 /// Fold the persisted account-scoped windows onto the resolved provider panels:
 /// a kind with no live reading this frame paints its last-known bars (projected
 /// through [`project_window`]'s reset-to-max rule) instead of an empty
-/// dashboard. Once the longest cached window has reset with no live reading, the
-/// display switches all cached windows to unknown bars until a provider refresh
-/// succeeds. Reconciled per window duration, so each budget is carried forward
-/// independently while the cache is still inside its long window. On the producer
+/// dashboard. Once the account freshness ceiling has reset with no live reading,
+/// the display switches all cached windows to unknown bars until a provider
+/// refresh succeeds. Reconciled per stable window identity, so each budget is
+/// carried forward independently while the cache remains current. On the producer
 /// (`persist`) the live readings are written back — and only the live ground
 /// truth, never the synthesized full or unknown windows — so budgets survive a
 /// session ending or going idle. The written cache tracks login: it is rebuilt
@@ -284,53 +297,55 @@ fn apply_rate_limit_cache_with(
 
     for panel in &mut snapshot.providers {
         // Index this kind's live (this-frame) and cached (last-known) readings by
-        // window duration, so each duration is fused independently.
-        let live: BTreeMap<Option<u32>, RateLimitWindow> = std::mem::take(&mut panel.windows)
-            .into_iter()
-            .map(|window| (window.duration_mins, window))
-            .collect();
-        let prev: BTreeMap<Option<u32>, RateLimitWindow> = cached
+        // stable window identity, so each duration or named quota is fused independently.
+        let live: BTreeMap<RateLimitWindowKey, RateLimitWindow> =
+            std::mem::take(&mut panel.windows)
+                .into_iter()
+                .map(|window| (window.key(), window))
+                .collect();
+        let prev: BTreeMap<RateLimitWindowKey, RateLimitWindow> = cached
             .windows
             .get(&panel.kind)
             .into_iter()
             .flat_map(|limits| limits.windows.iter())
-            .map(|window| (window.duration_mins, window.clone()))
+            .map(|window| (window.key(), window.clone()))
             .collect();
-        let prev_pending: BTreeMap<Option<u32>, PendingRefill> = cached
+        let prev_pending: BTreeMap<RateLimitWindowKey, PendingRefill> = cached
             .pending
             .get(&panel.kind)
             .into_iter()
             .flatten()
-            .map(|refill| (refill.duration_mins, refill.clone()))
+            .map(|refill| (refill.key(), refill.clone()))
             .collect();
-        let durations: BTreeSet<Option<u32>> = live.keys().chain(prev.keys()).copied().collect();
+        let window_keys: BTreeSet<RateLimitWindowKey> =
+            live.keys().chain(prev.keys()).cloned().collect();
 
         // Fuse each duration to its ground truth and carry or advance its
         // debounce marker. A live reading drives the fusion; absent one, the
         // prior truth is carried unchanged for the idle projection below.
-        let mut truth: BTreeMap<Option<u32>, RateLimitWindow> = BTreeMap::new();
+        let mut truth: BTreeMap<RateLimitWindowKey, RateLimitWindow> = BTreeMap::new();
         let mut pending: Vec<PendingRefill> = Vec::new();
         let mut kind_reset_advanced = false;
-        for duration in &durations {
+        for key in &window_keys {
             let (window, refill) = fuse_window(
-                prev.get(duration),
-                live.get(duration),
-                prev_pending.get(duration),
+                prev.get(key),
+                live.get(key),
+                prev_pending.get(key),
                 now,
                 persist,
             );
             if let (Some(window), Some(path)) = (window.as_ref(), trace) {
-                trace_rate_limits(path, &panel.kind, live.get(duration), window, now);
+                trace_rate_limits(path, &panel.kind, live.get(key), window, now);
             }
             if let Some(window) = window {
                 if persist
                     && prev
-                        .get(duration)
+                        .get(key)
                         .is_some_and(|prev| reset_advanced(prev.resets_at, window.resets_at))
                 {
                     kind_reset_advanced = true;
                 }
-                truth.insert(*duration, window);
+                truth.insert(key.clone(), window);
             }
             if let Some(refill) = refill {
                 pending.push(refill);
@@ -361,28 +376,31 @@ fn apply_rate_limit_cache_with(
         // Display: roll every fused window's reset-to-max projection forward to
         // `now` — a no-op while its reset is future, a refill once it has passed,
         // so a live reading carrying an expired longer window never freezes at
-        // `0h00m`. Once the longest window has aged out with no live reading, the
-        // cache shows unknown bars. Sorted short→long for a stable paint order.
+        // `0h00m`. Once the account freshness ceiling has aged out with no live
+        // reading, the cache shows unknown bars. Sorted for stable paint order.
         let mut display: Vec<RateLimitWindow> = truth
             .into_values()
             .map(|window| {
-                if cache_unknown {
+                let expired_named_quota = window.scope.is_some()
+                    && window.duration_mins.is_none()
+                    && window.resets_at.is_some_and(|reset| reset <= now);
+                if cache_unknown || expired_named_quota {
                     unknown_idle_window(window)
                 } else {
                     project_window(window, now)
                 }
             })
             .collect();
-        display.sort_by_key(|window| window.duration_mins.unwrap_or(u32::MAX));
+        crate::store::snapshot::sort_windows(&mut display);
         panel.windows = display;
     }
 
     (persist.then_some(next), reset_kinds.into_iter().collect())
 }
 
-/// Fuse one window duration's prior truth with this frame's live reading into
-/// the new ground truth, carrying or advancing the debounce marker that guards a
-/// best-effort refill.
+/// Fuse one stable window identity's prior truth with this frame's live reading
+/// into the new ground truth, carrying or advancing the debounce marker that
+/// guards a best-effort refill.
 ///
 /// Usage only climbs within a live window, so a reading at or above the prior is
 /// real consumption and is adopted at once — stable against parallel sessions
@@ -418,7 +436,7 @@ pub(crate) fn fuse_window(
         return (prior.cloned(), pending.cloned());
     }
     let Some(prior) = prior else {
-        // First reading for this duration: adopt it, nothing pending.
+        // First reading for this identity: adopt it, nothing pending.
         return (Some(live.clone()), None);
     };
     let prior_used = prior.used_percentage.unwrap_or(0);
@@ -472,6 +490,7 @@ pub(crate) fn fuse_window(
         (
             Some(prior.clone()),
             Some(PendingRefill {
+                scope_id: live.scope.as_ref().map(|scope| scope.id.clone()),
                 duration_mins: live.duration_mins,
                 used_percentage: live_used,
                 first_seen_at,
@@ -534,6 +553,7 @@ fn trace_rate_limits(
     let record = serde_json::json!({
         "ts": now.to_string(),
         "kind": kind,
+        "scope_id": truth.scope.as_ref().map(|scope| scope.id.as_str()),
         "duration_mins": truth.duration_mins,
         "live": live.map(|window| serde_json::json!({
             "used_percentage": window.used_percentage,

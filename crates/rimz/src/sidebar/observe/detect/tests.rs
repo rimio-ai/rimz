@@ -175,6 +175,7 @@ fn assert_lacks_kind(drafts: &[AnomalyDraft], key: &'static str, case: &str) {
 fn codex_mana_key() -> AggregateKey {
     AggregateKey::ProviderMana {
         kind: "codex".to_owned(),
+        scope_id: None,
         duration_mins: Some(300),
     }
 }

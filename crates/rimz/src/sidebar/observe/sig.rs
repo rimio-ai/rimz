@@ -238,7 +238,7 @@ fn extract_aggregates(
                 panel
                     .windows
                     .iter()
-                    .map(|window| (window.duration_mins, window.used_percentage))
+                    .map(|window| (window.key(), window.used_percentage))
                     .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
@@ -246,11 +246,12 @@ fn extract_aggregates(
             aggregates.push(AggregateSig {
                 key: AggregateKey::ProviderMana {
                     kind: panel.kind.clone(),
+                    scope_id: window.scope.as_ref().map(|scope| scope.id.clone()),
                     duration_mins: window.duration_mins,
                 },
                 committed: window.used_percentage.map(|pct| pct.to_string()),
                 pulled: pulled_windows
-                    .get(&window.duration_mins)
+                    .get(&window.key())
                     .copied()
                     .flatten()
                     .map(|pct| pct.to_string()),
@@ -308,4 +309,59 @@ fn extract_events(event_store: &EventStore, now_ms: u64) -> EventsSig {
         }
     }
     events
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agents::{RateLimitWindow, RateLimitWindowScope};
+    use crate::ids::WorkspaceId;
+    use crate::sidebar::test_support::{provider_panel, snapshot_with_panels};
+
+    fn scoped(id: &str, used: u8) -> RateLimitWindow {
+        RateLimitWindow {
+            scope: Some(RateLimitWindowScope {
+                id: id.to_owned(),
+                label: id[..3].to_owned(),
+            }),
+            used_percentage: Some(used),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pulled_named_quota_lookup_uses_scope_identity() {
+        let workspace = WorkspaceId::from_project_root(std::path::Path::new("/tmp/sig-scopes"));
+        let current = snapshot_with_panels(
+            workspace.clone(),
+            vec![provider_panel(
+                "copilot",
+                vec![scoped("premium", 20), scoped("chat", 70)],
+            )],
+        );
+        let pulled = snapshot_with_panels(
+            workspace,
+            vec![provider_panel(
+                "copilot",
+                vec![scoped("chat", 30), scoped("premium", 60)],
+            )],
+        );
+        let mana = extract_aggregates(&current, &pulled)
+            .into_iter()
+            .filter(|aggregate| matches!(aggregate.key, AggregateKey::ProviderMana { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(mana.len(), 2);
+        let premium = mana
+            .iter()
+            .find(|aggregate| aggregate.key.identity().ends_with(":premium"))
+            .unwrap();
+        assert_eq!(premium.committed.as_deref(), Some("20"));
+        assert_eq!(premium.pulled.as_deref(), Some("60"));
+        let chat = mana
+            .iter()
+            .find(|aggregate| aggregate.key.identity().ends_with(":chat"))
+            .unwrap();
+        assert_eq!(chat.committed.as_deref(), Some("70"));
+        assert_eq!(chat.pulled.as_deref(), Some("30"));
+    }
 }

@@ -52,6 +52,60 @@ fn fresh_windows_keep_most_drained_per_duration() {
 }
 
 #[test]
+fn fresh_windows_keep_named_quotas_and_same_duration_scopes_independent() {
+    let scoped = |id: &str, label: &str, used: u8, duration_mins| RateLimitWindow {
+        scope: Some(crate::agents::RateLimitWindowScope {
+            id: id.to_owned(),
+            label: label.to_owned(),
+        }),
+        used_percentage: Some(used),
+        resets_at: Some(epoch() + jiff::SignedDuration::from_secs(3_600)),
+        duration_mins,
+        ..Default::default()
+    };
+    let first = reading([
+        scoped("premium_interactions", "prm", 20, None),
+        scoped("chat", "cht", 70, None),
+    ]);
+    let second = reading([
+        scoped("premium_interactions", "prm", 60, None),
+        scoped("chat", "cht", 30, None),
+    ]);
+    let windows = fresh_windows([&first, &second].into_iter(), epoch());
+    assert_eq!(windows.len(), 2);
+    assert_eq!(
+        windows
+            .iter()
+            .find(|window| window
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope.id == "premium_interactions"))
+            .and_then(|window| window.used_percentage),
+        Some(60)
+    );
+    assert_eq!(
+        windows
+            .iter()
+            .find(|window| window
+                .scope
+                .as_ref()
+                .is_some_and(|scope| scope.id == "chat"))
+            .and_then(|window| window.used_percentage),
+        Some(70)
+    );
+
+    let same_duration = reading([
+        scoped("premium_interactions", "prm", 10, Some(300)),
+        scoped("chat", "cht", 20, Some(300)),
+    ]);
+    assert_eq!(
+        fresh_windows([&same_duration].into_iter(), epoch()).len(),
+        2,
+        "scope identity wins over a shared duration"
+    );
+}
+
+#[test]
 fn fresh_windows_reject_a_reading_whose_shortest_window_reset() {
     // An idle session re-emits a stale payload: its 5h window reset long ago,
     // but its 7d reset is still future. The whole reading is dropped, so its

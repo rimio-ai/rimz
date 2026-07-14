@@ -2,6 +2,9 @@
 
 use jiff::Timestamp;
 
+use crate::agents::RateLimitWindow;
+use crate::sidebar_pane::render::layout::clip;
+
 /// Seconds since `at`, clamped at zero — the shared input for [`age_short`] and
 /// the staleness color ramp, so a row reads the frame clock once and styles and
 /// labels its age from the same snapshot-derived number.
@@ -86,11 +89,14 @@ fn reset_secs(seconds: i64) -> String {
     }
 }
 
-/// A budget window's bar label from its length in minutes: hours under a day
-/// (`5h`), days at a day or more (`7d`, `30d`), each rounded to its nearest unit.
-/// `None` (an unknown length) yields an empty label.
-pub(super) fn window_label(duration_mins: Option<u32>) -> String {
-    let Some(mins) = duration_mins else {
+/// A budget window's compact bar label. Provider-defined named quotas use their
+/// explicit label, clipped on cell boundaries to the fixed three-cell slot;
+/// temporal windows retain the existing rounded hour/day label.
+pub(super) fn window_label(window: &RateLimitWindow) -> String {
+    if let Some(scope) = &window.scope {
+        return clip(&scope.label, 3);
+    }
+    let Some(mins) = window.duration_mins else {
         return String::new();
     };
     if mins < 24 * 60 {
@@ -322,10 +328,24 @@ mod tests {
             assert!(elapsed_label(seconds).chars().count() <= 3);
         }
 
-        assert_eq!(window_label(Some(5 * 60)), "5h");
-        assert_eq!(window_label(Some(7 * 24 * 60)), "7d");
-        assert_eq!(window_label(Some(43_800)), "30d");
-        assert_eq!(window_label(None), "");
+        let window = |duration_mins| RateLimitWindow {
+            duration_mins,
+            ..Default::default()
+        };
+        assert_eq!(window_label(&window(Some(5 * 60))), "5h");
+        assert_eq!(window_label(&window(Some(7 * 24 * 60))), "7d");
+        assert_eq!(window_label(&window(Some(43_800))), "30d");
+        assert_eq!(window_label(&window(None)), "");
+        assert_eq!(
+            window_label(&RateLimitWindow {
+                scope: Some(crate::agents::RateLimitWindowScope {
+                    id: "premium".to_owned(),
+                    label: "prmium".to_owned(),
+                }),
+                ..Default::default()
+            }),
+            "prm"
+        );
     }
 
     #[test]

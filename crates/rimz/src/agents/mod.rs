@@ -67,7 +67,7 @@ use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostBasis, RateLimitWindow,
-    SubagentContext, SubagentObservation, TurnErrorClass,
+    RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe, ResetCredits};

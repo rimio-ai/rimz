@@ -371,12 +371,11 @@ impl AgentCurrentUsage {
     }
 }
 
-/// The rate-limit windows the agent surfaces, ordered short→long by duration.
-/// Each window carries its own length, so a renderer derives its label (`5h`,
-/// `7d`, …) and its reset-to-max roll-forward from the window itself — no
-/// provider-shaped buckets. Both Claude and Codex report a 5-hour and a 7-day
-/// window; carrying the duration means a provider reporting a different count or
-/// length (a window kind changing, or a transient server bug) just works.
+/// The rate-limit windows the agent surfaces. Temporal windows carry their own
+/// length, so a renderer derives the label (`5h`, `7d`, …) and reset-to-max
+/// roll-forward without provider-shaped buckets. Named quotas carry a stable
+/// provider scope and compact label instead; their missing duration keeps them
+/// out of temporal calculations.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentRateLimits {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -395,45 +394,73 @@ impl AgentRateLimits {
         self
     }
 
-    /// Whether this reading's content predates its shortest window's reset, so
-    /// the whole payload is stale even where a longer window's own reset is
-    /// still future. An idle session re-emits a days-old payload with a fresh
-    /// capture stamp, so `observed_at` can't judge a best-effort reading's
-    /// freshness; the shortest window resets most often, so its passed reset is
-    /// the surest sign the session has stopped refreshing. A reading with no
-    /// dated window can't be aged out this way and is treated as fresh — a
-    /// last-resort backstop. Used wherever a stale statusline payload must not
-    /// shadow truth: the snapshot view's window selection and the OAuth-merge
-    /// suppression check.
+    /// Whether this reading's content predates its shortest temporal window's
+    /// reset, so the whole payload is stale even where a longer window remains
+    /// current. A payload with no dated temporal window falls back to its
+    /// earliest dated named quota. An idle session re-emits a days-old payload
+    /// with a fresh capture stamp, so `observed_at` cannot judge a best-effort
+    /// reading's freshness. A reading with no dated window remains fresh as a
+    /// last-resort backstop.
     pub fn content_stale_at(&self, now: Timestamp) -> bool {
-        self.windows
+        let duration_reset = self
+            .windows
             .iter()
             .filter_map(|window| Some((window.duration_mins?, window.resets_at?)))
             .min_by_key(|(mins, _)| *mins)
-            .is_some_and(|(_, resets_at)| resets_at <= now)
+            .map(|(_, resets_at)| resets_at);
+        duration_reset
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .filter(|window| window.scope.is_some())
+                    .filter_map(|window| window.resets_at)
+                    .min()
+            })
+            .is_some_and(|resets_at| resets_at <= now)
     }
+}
+
+/// Provider-defined identity and compact presentation label for a named quota.
+/// The stable `id` participates in fusion and cache identity; `label` is clipped
+/// by the renderer to its fixed three-cell window-label slot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateLimitWindowScope {
+    pub id: String,
+    pub label: String,
+}
+
+/// Stable provider-agnostic identity for one rate-limit lane. Existing temporal
+/// windows retain duration identity; named provider quotas use their scope id.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum RateLimitWindowKey {
+    Duration(Option<u32>),
+    Scope(String),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitWindow {
+    /// Optional provider-defined identity for quotas that are not temporal
+    /// windows. A scope id is stable across readings; its label is display-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<RateLimitWindowScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub used_percentage: Option<u8>,
     /// Reset instant, parsed to a typed timestamp on ingest so renderers format
     /// a countdown rather than re-parsing a raw value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<Timestamp>,
-    /// The window's length in minutes — its identity across sessions (the
-    /// fusion groups readings by it), the source of its bar label, and the
-    /// roll-forward length once it refills while idle. Providers stamp it:
-    /// Claude from the window kind it names, Codex from `windowDurationMins`.
+    /// The temporal window's length in minutes — its identity when `scope` is
+    /// absent, the source of its bar label, and the roll-forward length once it
+    /// refills while idle. Named quotas leave it absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mins: Option<u32>,
     /// When this reading was captured. Provenance for fusion, not display. For a
     /// [`WindowSource::BestEffort`] statusline this is *capture* time, not
     /// content time — an idle session re-emits a days-old payload with a fresh
-    /// stamp, so content freshness is judged by the shortest window's
-    /// `resets_at`, and this only breaks ties. For [`WindowSource::Authoritative`]
-    /// it is content time (the API was queried then), so it ranks recency directly.
+    /// stamp, so content freshness is judged by the shortest temporal reset or
+    /// the named-quota fallback, and this only breaks ties. For
+    /// [`WindowSource::Authoritative`] it is content time (the API was queried
+    /// then), so it ranks recency directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<Timestamp>,
     /// Where the reading came from, deciding how far the fusion trusts a drop.
@@ -488,12 +515,20 @@ impl WindowSource {
 const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 
 impl RateLimitWindow {
+    pub(crate) fn key(&self) -> RateLimitWindowKey {
+        self.scope.as_ref().map_or_else(
+            || RateLimitWindowKey::Duration(self.duration_mins),
+            |scope| RateLimitWindowKey::Scope(scope.id.clone()),
+        )
+    }
+
     /// Project this cached reading to `now`: before its reset the reading stands
     /// unchanged; once the reset passes, a dated sliding window refills and its
     /// next reset rolls forward by the window length.
     pub fn projected_at(self, now: Timestamp) -> Self {
         match (self.resets_at, self.duration_mins) {
             (Some(resets_at), Some(mins)) if resets_at <= now => Self {
+                scope: self.scope,
                 used_percentage: Some(0),
                 resets_at: now
                     .checked_add(SignedDuration::from_secs(i64::from(mins) * 60))
@@ -718,6 +753,80 @@ mod tests {
         );
         // An absent reset or duration can't be judged, so it reads as started.
         assert!(!window(Some(0)).not_started(now));
+    }
+
+    #[test]
+    fn scoped_window_identity_projection_and_wire_round_trip() {
+        let now = Timestamp::from_second(2_000_000_000).unwrap();
+        let scope = RateLimitWindowScope {
+            id: "premium_interactions".to_owned(),
+            label: "prm".to_owned(),
+        };
+        let window = RateLimitWindow {
+            scope: Some(scope.clone()),
+            used_percentage: Some(40),
+            resets_at: Some(now - SignedDuration::from_secs(1)),
+            duration_mins: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            window.key(),
+            RateLimitWindowKey::Scope("premium_interactions".to_owned())
+        );
+        assert_eq!(window.clone().projected_at(now), window);
+
+        let encoded = serde_json::to_value(&window).unwrap();
+        assert_eq!(encoded["scope"]["id"], "premium_interactions");
+        assert_eq!(encoded["scope"]["label"], "prm");
+        assert_eq!(
+            serde_json::from_value::<RateLimitWindow>(encoded).unwrap(),
+            window
+        );
+        assert_eq!(
+            serde_json::from_value::<RateLimitWindow>(serde_json::json!({
+                "used_percentage": 20,
+                "duration_mins": 300
+            }))
+            .unwrap()
+            .scope,
+            None,
+            "legacy duration-only windows remain wire-compatible"
+        );
+    }
+
+    #[test]
+    fn scoped_reset_is_content_staleness_fallback_only_without_a_duration_clock() {
+        let now = Timestamp::from_second(2_000_000_000).unwrap();
+        let scoped = |reset| RateLimitWindow {
+            scope: Some(RateLimitWindowScope {
+                id: "chat".to_owned(),
+                label: "cht".to_owned(),
+            }),
+            used_percentage: Some(20),
+            resets_at: Some(reset),
+            ..Default::default()
+        };
+        assert!(
+            AgentRateLimits {
+                windows: vec![scoped(now - SignedDuration::from_secs(1))]
+            }
+            .content_stale_at(now)
+        );
+
+        let limits = AgentRateLimits {
+            windows: vec![
+                scoped(now - SignedDuration::from_secs(1)),
+                RateLimitWindow {
+                    duration_mins: Some(300),
+                    resets_at: Some(now + SignedDuration::from_secs(60)),
+                    ..Default::default()
+                },
+            ],
+        };
+        assert!(
+            !limits.content_stale_at(now),
+            "a real duration clock remains the primary freshness signal"
+        );
     }
 
     #[test]

@@ -14,7 +14,8 @@ use crate::ids::{AgentKind, AgentSessionId, AskId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 use super::context::{
-    AgentContext, AgentRateLimits, AgentTokenUsage, AgentTurnError, RateLimitWindow, TurnErrorClass,
+    AgentContext, AgentRateLimits, AgentTokenUsage, AgentTurnError, RateLimitWindow,
+    RateLimitWindowKey, TurnErrorClass,
 };
 use super::lifecycle::{AskKind, LifecycleState, TurnPhase};
 
@@ -340,7 +341,7 @@ pub struct RateLimitsCache {
     pub refreshed_at_ms: u64,
     /// Last-known windows by agent kind.
     pub windows: BTreeMap<String, AgentRateLimits>,
-    /// In-flight best-effort refill candidates by kind, one per window duration.
+    /// In-flight best-effort refill candidates by kind and stable window identity.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pending: BTreeMap<String, Vec<PendingRefill>>,
 }
@@ -349,9 +350,20 @@ pub struct RateLimitsCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingRefill {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mins: Option<u32>,
     pub used_percentage: u8,
     pub first_seen_at: Timestamp,
+}
+
+impl PendingRefill {
+    pub(crate) fn key(&self) -> RateLimitWindowKey {
+        self.scope_id.as_ref().map_or_else(
+            || RateLimitWindowKey::Duration(self.duration_mins),
+            |scope| RateLimitWindowKey::Scope(scope.clone()),
+        )
+    }
 }
 
 /// Read the producer's published rate-limit window cache, or an empty cache on
@@ -435,7 +447,8 @@ fn shortest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestam
         .get(kind)?
         .windows
         .iter()
-        .min_by_key(|window| window.duration_mins.unwrap_or(u32::MAX))?;
+        .filter(|window| window.duration_mins.is_some_and(|mins| mins > 0))
+        .min_by_key(|window| window.duration_mins)?;
     window_running_verdict(shortest, now)
 }
 
@@ -475,7 +488,8 @@ fn longest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestamp
         .get(kind)?
         .windows
         .iter()
-        .max_by_key(|window| window.duration_mins.unwrap_or(0))?;
+        .filter(|window| window.duration_mins.is_some_and(|mins| mins > 0))
+        .max_by_key(|window| window.duration_mins)?;
     window_running_verdict(longest, now)
 }
 
@@ -489,7 +503,8 @@ fn longest_window_surplus_in(
         .get(kind)?
         .windows
         .iter()
-        .max_by_key(|window| window.duration_mins.unwrap_or(0))?
+        .filter(|window| window.duration_mins.is_some_and(|mins| mins > 0))
+        .max_by_key(|window| window.duration_mins)?
         .clone()
         .projected_at(now);
     let used_percentage = window.used_percentage?;
@@ -532,7 +547,7 @@ pub(crate) fn longest_window_reset_at(runtime: &RuntimePaths, kind: &str) -> Opt
         .get(kind)?
         .windows
         .iter()
-        .filter(|window| window.duration_mins.is_some())
+        .filter(|window| window.duration_mins.is_some_and(|mins| mins > 0))
         .max_by_key(|window| window.duration_mins)
         .and_then(|window| window.resets_at)
 }

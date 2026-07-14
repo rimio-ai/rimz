@@ -428,6 +428,73 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
 }
 
 #[test]
+fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
+    let theme = Theme::fixed(false);
+    let now = fixed_now();
+    let scope = |id: &str, label: &str| crate::agents::RateLimitWindowScope {
+        id: id.to_owned(),
+        label: label.to_owned(),
+    };
+    let mut panel = provider_panel("copilot", "Copilot", 140, true, false, None);
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        None,
+        Some(10.0),
+        Some(10.0),
+    ));
+    panel.windows = vec![
+        RateLimitWindow {
+            scope: Some(scope("premium_interactions", "prm")),
+            used_percentage: Some(100),
+            resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+            ..Default::default()
+        },
+        RateLimitWindow {
+            scope: Some(scope("chat", "cht")),
+            used_percentage: Some(20),
+            resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+            ..Default::default()
+        },
+    ];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2, "both provider-defined quotas stay visible");
+    let texts = rows
+        .iter()
+        .map(|row| {
+            row.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    assert!(texts[0].trim_start().starts_with("prm"), "{:?}", texts);
+    assert!(texts[1].trim_start().starts_with("cht"), "{:?}", texts);
+    assert!(
+        !texts[0].contains('▰'),
+        "spent premium has no fill: {:?}",
+        texts
+    );
+    assert!(
+        texts[1].contains('▰'),
+        "spent premium cannot paint chat exhausted: {:?}",
+        texts
+    );
+    assert!(texts.iter().all(|text| text.contains("↻  4h00m")));
+
+    panel.windows[0].lifted = true;
+    panel.windows[0].used_percentage = Some(0);
+    panel.windows[0].resets_at = None;
+    let rows = metered_bar_rows(&theme, &panel);
+    let unlimited = rows[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(unlimited.starts_with("prm"));
+    assert!(unlimited.contains('∞'));
+}
+
+#[test]
 fn api_key_provider_uses_month_spend_bar_with_optional_ceiling() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("codex", "Codex", 33, false, false, None);
