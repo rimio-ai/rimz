@@ -1276,6 +1276,7 @@ mod automation {
             verify: Some("cargo xtask test auth".to_owned()),
             max_attempts: Some(4),
             loop_zone: false,
+            loop_task: Some("auth-fix".to_owned()),
         });
         assert_eq!(
             (
@@ -1303,6 +1304,7 @@ mod automation {
                 args.stream_text,
                 args.verify.as_deref(),
                 args.max_attempts,
+                args.loop_task.as_deref(),
                 args.print,
                 args.bg,
                 args.passthrough.as_slice()
@@ -1314,6 +1316,7 @@ mod automation {
                 true,
                 Some("cargo xtask test auth"),
                 Some(4),
+                Some("auth-fix"),
                 true,
                 false,
                 &[] as &[String]
@@ -1334,6 +1337,7 @@ mod automation {
             verify: None,
             max_attempts: None,
             loop_zone: false,
+            loop_task: Some("status".to_owned()),
         });
         assert_eq!(unscoped.worktree, None);
         assert!(

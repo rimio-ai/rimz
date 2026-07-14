@@ -231,6 +231,9 @@ pub struct AgentsArgs {
     /// Internal loop-scheduler placement: target the rimzd loop zone.
     #[arg(skip)]
     loop_zone: bool,
+    /// Internal loop-task provenance for supervised run records.
+    #[arg(skip)]
+    loop_task: Option<String>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     passthrough: Vec<String>,
@@ -647,6 +650,7 @@ impl AgentsArgs {
             verify: None,
             max_attempts: None,
             loop_zone: false,
+            loop_task: None,
             passthrough: Vec::new(),
         }
     }
@@ -689,6 +693,7 @@ impl AgentsArgs {
             verify: task.verify,
             max_attempts: task.max_attempts,
             loop_zone: task.loop_zone,
+            loop_task: task.loop_task,
             passthrough: Vec::new(),
         }
     }
@@ -708,6 +713,7 @@ pub(crate) struct TaskRunArgs {
     pub(crate) verify: Option<String>,
     pub(crate) max_attempts: Option<u32>,
     pub(crate) loop_zone: bool,
+    pub(crate) loop_task: Option<String>,
 }
 
 fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {

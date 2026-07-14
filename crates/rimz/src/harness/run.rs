@@ -162,6 +162,8 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_of: Option<RunId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<RunVerify>,
     pub status: RunStatus,
     pub permission_mode: PermissionMode,
@@ -202,6 +204,7 @@ impl RunRecord {
             transcript_path: None,
             failure_tail: None,
             retry_of: None,
+            loop_task: None,
             verify: None,
             status: RunStatus::Pending,
             permission_mode,

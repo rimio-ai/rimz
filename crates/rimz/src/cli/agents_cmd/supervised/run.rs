@@ -366,6 +366,7 @@ fn execute_attempt(
     );
     record.budget = agent_cell.budget.map(ToOwned::to_owned);
     record.retry_of = retry_of.cloned();
+    record.loop_task.clone_from(&args.loop_task);
     let run_id = record.run_id.clone();
     let mut launch_requests = launch_identity_requests(
         &prepared.layout,
