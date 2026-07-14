@@ -509,7 +509,10 @@ fn statusline_prices_canonical_ids_and_observed_selector_labels_with_usage() {
     let captured_cost = AntigravityAdapter
         .estimate_context_cost(&captured, &prices)
         .unwrap();
-    assert!(captured_cost.estimated);
+    assert_eq!(
+        captured_cost.basis,
+        crate::agents::CostBasis::DisplayEstimate
+    );
     assert!((captured_cost.total_cost_usd.unwrap() - 0.012_567).abs() < 1e-15);
 
     for payload in [
