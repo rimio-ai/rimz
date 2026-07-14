@@ -1018,15 +1018,6 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         None
     };
     let records = run_log::task_records(&state_home(), &args.name);
-    let active = match acquire_run_lock(&args.name, &entry) {
-        Ok(RunLockAttempt::Held(Some(info))) => Some(format!(
-            "run in progress · pid {} · started {}",
-            info.pid,
-            ui::rel_age(info.started_at, now)
-        )),
-        Ok(RunLockAttempt::Held(None)) => Some("run in progress".to_owned()),
-        Ok(RunLockAttempt::Acquired(_)) | Err(_) => None,
-    };
 
     let mut out = ui::out();
     write_show_headline(
@@ -1046,7 +1037,6 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         &records,
         &now_zoned,
         active_pause.is_some(),
-        active.as_deref(),
     )?;
 
     if records.is_empty() {
@@ -1137,12 +1127,20 @@ fn write_show_facts(
     records: &[LoopRunRecord],
     now_zoned: &jiff::Zoned,
     is_paused: bool,
-    active: Option<&str>,
 ) -> std::io::Result<()> {
     let root = entry.resolved_root();
     let room_is_open = room_open(&root);
     let blocked_state = blocked_project_state(source);
     let strike_count = strikes::load().get(name).copied().unwrap_or(0);
+    let active = match acquire_run_lock(name, entry) {
+        Ok(RunLockAttempt::Held(Some(info))) => Some(format!(
+            "run in progress · pid {} · started {}",
+            info.pid,
+            ui::rel_age(info.started_at, Timestamp::now())
+        )),
+        Ok(RunLockAttempt::Held(None)) => Some("run in progress".to_owned()),
+        Ok(RunLockAttempt::Acquired(_)) | Err(_) => None,
+    };
     let mut kv = ui::KeyVals::new().indent(2);
     kv.push("task", ui::cell(task_subject(entry)));
     if let Some(check) = check_summary(entry) {
