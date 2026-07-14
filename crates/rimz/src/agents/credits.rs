@@ -12,7 +12,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::context::AgentRateLimits;
+use crate::agents::context::{AgentRateLimits, ProviderAccountScope};
 
 /// `true` when direct provider account-usage fetches are disabled for this
 /// process (tests, CI, air-gapped runs).
@@ -22,7 +22,7 @@ pub fn oauth_usage_offline() -> bool {
 
 /// Why an OAuth usage HTTP probe failed, carried structured (so a status code is
 /// a Sentry facet) without the request URL's path or query.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HttpErrKind {
     /// A response with this non-200 status code.
     Status(u16),
@@ -44,7 +44,7 @@ impl std::fmt::Display for HttpErrKind {
 
 impl HttpErrKind {
     pub(crate) fn is_auth_rejected(&self) -> bool {
-        matches!(self, Self::Status(401))
+        matches!(self, Self::Status(401 | 403))
     }
 
     fn is_transient(&self) -> bool {
@@ -116,6 +116,7 @@ fn oauth_http_get_once(
 ) -> std::result::Result<String, (HttpErrKind, String)> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS)))
+        .max_redirects(0)
         .build()
         .new_agent();
     let mut request = agent.get(url);
@@ -149,6 +150,76 @@ fn oauth_http_get_once(
         .map_err(|_| (HttpErrKind::Body, host()))
 }
 
+/// Bounded JSON POST for fixed provider account-usage endpoints. Secret-bearing
+/// requests refuse redirects and expose only the destination host and status
+/// class to callers.
+pub(crate) fn oauth_http_post_json<T: Serialize>(
+    url: &str,
+    headers: &[(&str, String)],
+    body: &T,
+    breadcrumb: &str,
+) -> std::result::Result<String, (HttpErrKind, String)> {
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        host = %url_host(url),
+        "{}",
+        breadcrumb,
+    );
+
+    let mut result = oauth_http_post_json_once(url, headers, body);
+    for attempt in 1..OAUTH_HTTP_ATTEMPTS {
+        match &result {
+            Err((kind, host)) if kind.is_transient() => {
+                tracing::debug!(host, attempt, %kind, "OAuth usage HTTP retry");
+                std::thread::sleep(OAUTH_HTTP_RETRY_BACKOFF * attempt);
+                result = oauth_http_post_json_once(url, headers, body);
+            }
+            _ => break,
+        }
+    }
+    result
+}
+
+fn oauth_http_post_json_once<T: Serialize>(
+    url: &str,
+    headers: &[(&str, String)],
+    body: &T,
+) -> std::result::Result<String, (HttpErrKind, String)> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS)))
+        .max_redirects(0)
+        .build()
+        .new_agent();
+    let mut request = agent.post(url);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    let host = || url_host(url).to_owned();
+    let body = serde_json::to_vec(body).map_err(|_| (HttpErrKind::Body, host()))?;
+    let mut response = request
+        .header("Content-Type", "application/json")
+        .send(body)
+        .map_err(|err| {
+            (
+                match err {
+                    ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
+                    _ => HttpErrKind::Transport,
+                },
+                host(),
+            )
+        })?;
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err((HttpErrKind::Status(status), host()));
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(OAUTH_HTTP_MAX_BYTES)
+        .read_to_string()
+        .map_err(|_| (HttpErrKind::Body, host()))
+}
+
 /// A provider account-usage reading normalized from a local out-of-band source:
 /// included subscription windows plus optional paid extra/API and reset-credit
 /// balances.
@@ -161,6 +232,7 @@ pub struct AccountUsageSnapshot {
     pub extra_credits: Option<ExtraCredits>,
     pub reset_credits: Option<ResetCredits>,
     pub plan: Option<String>,
+    pub scope: ProviderAccountScope,
 }
 
 /// A provider's raw OAuth usage response, normalized to the shared snapshot.
@@ -364,6 +436,62 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn serve_many(responses: Vec<String>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            responses
+                .into_iter()
+                .map(|response| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    loop {
+                        let count = stream.read(&mut buffer).unwrap();
+                        if count == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buffer[..count]);
+                        let Some(header_end) =
+                            request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                        else {
+                            continue;
+                        };
+                        let headers = String::from_utf8_lossy(&request[..header_end]);
+                        let content_length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")?
+                                    .trim()
+                                    .parse::<usize>()
+                                    .ok()
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= header_end + 4 + content_length {
+                            break;
+                        }
+                    }
+                    stream.write_all(response.as_bytes()).unwrap();
+                    String::from_utf8(request).unwrap()
+                })
+                .collect()
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn response(status: &str, body: &str, extra_headers: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
 
     #[test]
     fn http_error_transience() {
@@ -373,6 +501,93 @@ mod tests {
         assert!(!HttpErrKind::Status(401).is_transient());
         assert!(!HttpErrKind::Status(404).is_transient());
         assert!(!HttpErrKind::Status(429).is_transient());
+    }
+
+    #[test]
+    fn json_post_sends_exact_method_path_headers_and_body() {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            commodity: &'a str,
+        }
+        let (origin, server) = serve_many(vec![response("200 OK", "{}", "")]);
+        let result = oauth_http_post_json(
+            &format!("{origin}/data/api.json?region=cn"),
+            &[("Authorization", "Bearer sentinel-secret".to_owned())],
+            &Body { commodity: "plan" },
+            "test post",
+        );
+        assert_eq!(result.unwrap(), "{}");
+        let request = server.join().unwrap().pop().unwrap();
+        assert!(request.starts_with("POST /data/api.json?region=cn HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("content-type: application/json")
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer sentinel-secret")
+        );
+        assert!(request.ends_with(r#"{"commodity":"plan"}"#));
+    }
+
+    #[test]
+    fn secret_bearing_transports_refuse_redirects_and_classify_auth() {
+        let (origin, server) = serve_many(vec![response(
+            "302 Found",
+            "sentinel-response-body",
+            "Location: https://example.invalid/leak\r\n",
+        )]);
+        let error = oauth_http_get(
+            &format!("{origin}/redirect"),
+            &[("Authorization", "Bearer sentinel-secret".to_owned())],
+            "test redirect",
+        )
+        .unwrap_err();
+        assert_eq!(error.0, HttpErrKind::Status(302));
+        assert!(!format!("{error:?}").contains("sentinel-secret"));
+        assert!(!format!("{error:?}").contains("sentinel-response-body"));
+        server.join().unwrap();
+
+        let (origin, server) = serve_many(vec![response(
+            "403 Forbidden",
+            "sentinel-response-body",
+            "",
+        )]);
+        let error = oauth_http_post_json(
+            &format!("{origin}/quota"),
+            &[("X-Api-Key", "sentinel-secret".to_owned())],
+            &serde_json::json!({"request":"quota"}),
+            "test auth",
+        )
+        .unwrap_err();
+        assert!(error.0.is_auth_rejected());
+        assert!(!format!("{error:?}").contains("sentinel-response-body"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn retries_only_transient_failures_and_caps_response_bodies() {
+        let (origin, server) = serve_many(vec![
+            response("500 Internal Server Error", "", ""),
+            response("503 Service Unavailable", "", ""),
+            response("200 OK", "done", ""),
+        ]);
+        assert_eq!(
+            oauth_http_get(&format!("{origin}/retry"), &[], "test retry").unwrap(),
+            "done"
+        );
+        assert_eq!(server.join().unwrap().len(), 3);
+
+        let oversized = "x".repeat(OAUTH_HTTP_MAX_BYTES as usize + 1);
+        let responses = (0..OAUTH_HTTP_ATTEMPTS)
+            .map(|_| response("200 OK", &oversized, ""))
+            .collect();
+        let (origin, server) = serve_many(responses);
+        let error = oauth_http_get(&format!("{origin}/large"), &[], "test cap").unwrap_err();
+        assert_eq!(error.0, HttpErrKind::Body);
+        assert_eq!(server.join().unwrap().len(), OAUTH_HTTP_ATTEMPTS as usize);
     }
 
     #[test]

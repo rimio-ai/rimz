@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentStatus;
-use crate::agents::{ExtraCredits, RateLimitWindow, ResetCredits, SpendTally};
+use crate::agents::{
+    ExtraCredits, ProviderAccountScope, RateLimitWindow, ResetCredits, SpendTally,
+};
 use crate::config::PaletteRole;
 use crate::remote::link::LinkTier;
 use crate::store::snapshot::row::SidebarRow;
@@ -22,6 +24,9 @@ pub struct DailyBudgetView {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SidebarProviderPanel {
     pub kind: String,
+    /// Account cache identity selected by the adapter for this panel.
+    #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
+    pub account_scope: ProviderAccountScope,
     /// Header display name (`Claude`, `Codex`, …).
     pub product_name: String,
     /// Multi-line ASCII emblem, painted brand-colored at the block's left.

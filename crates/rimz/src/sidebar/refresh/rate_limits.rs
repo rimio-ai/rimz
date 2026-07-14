@@ -6,8 +6,8 @@ use jiff::Timestamp;
 
 use crate::agents::context::RateLimitWindowKey;
 use crate::agents::{
-    AgentRateLimits, PendingRefill, RateLimitWindow, RateLimitsCache, descriptor_by_kind,
-    read_rate_limits_cache,
+    AgentRateLimits, PendingRefill, ProviderAccountScope, RateLimitCacheEntry, RateLimitWindow,
+    RateLimitsCache, descriptor_by_kind, read_rate_limits_cache,
 };
 use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot};
@@ -62,7 +62,12 @@ pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
 /// producer carries the prior reading forward, and the out-of-band fetch is
 /// throttled — so a lost write is simply retried. Used by the detached
 /// `rimz agents refresh-usage` helper, never on the per-tick path.
-pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: AgentRateLimits) {
+pub fn merge_account_rate_limits(
+    runtime: &RuntimePaths,
+    kind: &str,
+    scope: ProviderAccountScope,
+    windows: AgentRateLimits,
+) {
     let path = runtime.shared_rate_limits_path();
     let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {
         return;
@@ -85,11 +90,13 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
             .map(|descriptor| descriptor.capabilities.implicit_unlimited_window_mins)
             .unwrap_or(&[]);
         let expected: BTreeSet<u32> = cache
-            .windows
+            .entries
             .get(kind)
+            .filter(|entry| entry.scope == scope)
             .into_iter()
-            .flat_map(|limits| {
-                limits
+            .flat_map(|entry| {
+                entry
+                    .limits
                     .windows
                     .iter()
                     .filter(|window| window.scope.is_none())
@@ -110,8 +117,14 @@ pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: Ag
                 }),
         );
     }
-    cache.windows.insert(kind.to_owned(), windows);
-    cache.pending.remove(kind);
+    cache.entries.insert(
+        kind.to_owned(),
+        RateLimitCacheEntry {
+            scope,
+            limits: windows,
+            pending: Vec::new(),
+        },
+    );
     write_rate_limits_cache(&path, &cache);
 }
 
@@ -124,9 +137,7 @@ pub fn drop_kind_rate_limits(runtime: &RuntimePaths, kind: &str) {
         return;
     };
     let mut cache = read_rate_limits_cache(&path);
-    let removed_windows = cache.windows.remove(kind).is_some();
-    let removed_pending = cache.pending.remove(kind).is_some();
-    if !(removed_windows || removed_pending) {
+    if cache.entries.remove(kind).is_none() {
         return;
     }
     cache.refreshed_at_ms = unix_now_ms();
@@ -252,7 +263,7 @@ fn reset_logged_out_rate_limits_cache(runtime: &RuntimePaths) {
         return;
     };
     let cached = read_rate_limits_cache(&path);
-    if cached.windows.is_empty() && cached.pending.is_empty() {
+    if cached.entries.is_empty() {
         return;
     }
     write_rate_limits_cache(
@@ -290,12 +301,15 @@ fn apply_rate_limit_cache_with(
     let now = snapshot.now;
     let mut next = RateLimitsCache {
         refreshed_at_ms: unix_now_ms(),
-        windows: BTreeMap::new(),
-        pending: BTreeMap::new(),
+        ..Default::default()
     };
     let mut reset_kinds = BTreeSet::new();
 
     for panel in &mut snapshot.providers {
+        if !panel.metered {
+            panel.windows.clear();
+            continue;
+        }
         // Index this kind's live (this-frame) and cached (last-known) readings by
         // stable window identity, so each duration or named quota is fused independently.
         let live: BTreeMap<RateLimitWindowKey, RateLimitWindow> =
@@ -303,18 +317,21 @@ fn apply_rate_limit_cache_with(
                 .into_iter()
                 .map(|window| (window.key(), window))
                 .collect();
-        let prev: BTreeMap<RateLimitWindowKey, RateLimitWindow> = cached
-            .windows
+        let prior_entry = cached
+            .entries
             .get(&panel.kind)
+            .filter(|entry| entry.scope == panel.account_scope);
+        let prev: BTreeMap<RateLimitWindowKey, RateLimitWindow> = prior_entry
             .into_iter()
-            .flat_map(|limits| limits.windows.iter())
+            .flat_map(|entry| entry.limits.windows.iter())
             .map(|window| (window.key(), window.clone()))
             .collect();
         let prev_pending: BTreeMap<RateLimitWindowKey, PendingRefill> = cached
-            .pending
+            .entries
             .get(&panel.kind)
+            .filter(|entry| entry.scope == panel.account_scope)
             .into_iter()
-            .flatten()
+            .flat_map(|entry| entry.pending.iter())
             .map(|refill| (refill.key(), refill.clone()))
             .collect();
         let window_keys: BTreeSet<RateLimitWindowKey> =
@@ -359,18 +376,17 @@ fn apply_rate_limit_cache_with(
         // Persist ground truth only: the fused readings and any in-flight refill.
         // The synthesized full or unknown windows below are never written — they
         // are recomputed each frame.
-        if persist {
-            if !truth.is_empty() {
-                next.windows.insert(
-                    panel.kind.clone(),
-                    AgentRateLimits {
+        if persist && (!truth.is_empty() || !pending.is_empty()) {
+            next.entries.insert(
+                panel.kind.clone(),
+                RateLimitCacheEntry {
+                    scope: panel.account_scope.clone(),
+                    limits: AgentRateLimits {
                         windows: truth.values().cloned().collect(),
                     },
-                );
-            }
-            if !pending.is_empty() {
-                next.pending.insert(panel.kind.clone(), pending);
-            }
+                    pending,
+                },
+            );
         }
 
         // Display: roll every fused window's reset-to-max projection forward to

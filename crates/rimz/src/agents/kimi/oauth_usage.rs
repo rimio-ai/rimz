@@ -22,6 +22,8 @@ pub enum Error {
     Parse(#[from] serde_json::Error),
     #[error("kimi OAuth usage unavailable")]
     Unavailable,
+    #[error("kimi OAuth usage schema drift ({shape})")]
+    Schema { shape: &'static str },
     #[error("kimi OAuth usage HTTP {kind} (host {host})")]
     Http { kind: HttpErrKind, host: String },
 }
@@ -37,22 +39,33 @@ impl crate::agents::credits::OauthReportable for Error {
 #[serde(default)]
 struct Credentials {
     access_token: Option<String>,
+    #[serde(rename = "refresh_token")]
+    _refresh_token: Option<String>,
+    expires_at: Option<f64>,
 }
 
 pub fn fetch() -> Result<AccountUsageSnapshot, Error> {
+    refuse_managed_base_override()?;
     let token = load_token(&super::account::credentials_path())?;
-    fetch_with(&usage_url(), &token)
+    fetch_with(USAGE_URL, &token)
 }
 
-fn usage_url() -> String {
+fn refuse_managed_base_override() -> Result<(), Error> {
     let base = std::env::var("KIMI_CODE_BASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(configured_managed_base);
-    match base {
-        Some(base) => format!("{}/usages", base.trim().trim_end_matches('/')),
-        None => USAGE_URL.to_owned(),
+    if base.is_some_and(|base| !official_managed_base(&base)) {
+        return Err(Error::Unavailable);
     }
+    Ok(())
+}
+
+fn official_managed_base(base: &str) -> bool {
+    matches!(
+        base.trim().trim_end_matches('/'),
+        "https://api.kimi.com/coding/v1" | USAGE_URL
+    )
 }
 
 fn configured_managed_base() -> Option<String> {
@@ -82,14 +95,21 @@ fn load_token(path: &Path) -> Result<String, Error> {
         }
         Err(error) => return Err(Error::Io(error)),
     };
-    serde_json::from_slice::<Credentials>(&bytes)?
+    let credentials = serde_json::from_slice::<Credentials>(&bytes)?;
+    let expires_at = credentials.expires_at.ok_or(Error::NoCredentials)?;
+    if !expires_at.is_finite()
+        || expires_at <= (Timestamp::now().as_second().saturating_add(60)) as f64
+    {
+        return Err(Error::NoCredentials);
+    }
+    credentials
         .access_token
-        .filter(|token| !token.is_empty())
+        .filter(|token| !token.trim().is_empty())
         .ok_or(Error::NoCredentials)
 }
 
 fn fetch_with(url: &str, token: &str) -> Result<AccountUsageSnapshot, Error> {
-    let headers = [("Authorization", format!("Bearer {token}"))];
+    let headers = usage_headers(token);
     let body =
         oauth_http_get(url, &headers, "Kimi OAuth usage fetch").map_err(|(kind, host)| {
             if matches!(kind, HttpErrKind::Status(404)) {
@@ -101,32 +121,56 @@ fn fetch_with(url: &str, token: &str) -> Result<AccountUsageSnapshot, Error> {
     parse_response(&body)
 }
 
+fn usage_headers(token: &str) -> [(&'static str, String); 2] {
+    [
+        ("Accept", "application/json".to_owned()),
+        ("Authorization", format!("Bearer {token}")),
+    ]
+}
+
 pub(crate) fn parse_response(body: &str) -> Result<AccountUsageSnapshot, Error> {
     let root: Value = serde_json::from_str(body)?;
     let mut rows = Vec::new();
     if let Some(usage) = root.get("usage") {
-        rows.push(usage);
+        rows.push((usage, Some(10_080)));
     }
     rows.extend(
         root.get("limits")
             .and_then(Value::as_array)
             .into_iter()
-            .flatten(),
+            .flatten()
+            .map(|row| (row, None)),
     );
     let now = Timestamp::now();
     let windows = rows
         .into_iter()
-        .filter_map(|row| parse_window(row, now))
+        .filter_map(|(row, duration)| parse_window(row, now, duration))
         .collect::<Vec<_>>();
+    let extra_credits = root.get("boosterWallet").and_then(parse_booster_wallet);
+    let reported_plan = ["plan", "planName"]
+        .into_iter()
+        .find_map(|key| root.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+        .map(ToOwned::to_owned);
+    if windows.is_empty() && extra_credits.is_none() && reported_plan.is_none() {
+        return Err(Error::Schema {
+            shape: "no-known-usage-fields",
+        });
+    }
     Ok(AccountUsageSnapshot {
         rate_limits: (!windows.is_empty()).then_some(AgentRateLimits { windows }),
-        extra_credits: root.get("boosterWallet").and_then(parse_booster_wallet),
-        plan: Some("Code".to_owned()),
+        extra_credits,
+        plan: reported_plan.or_else(|| Some("Code".to_owned())),
         ..AccountUsageSnapshot::default()
     })
 }
 
-fn parse_window(row: &Value, now: Timestamp) -> Option<RateLimitWindow> {
+fn parse_window(
+    row: &Value,
+    now: Timestamp,
+    fixed_duration_mins: Option<u32>,
+) -> Option<RateLimitWindow> {
     let detail = row.get("detail").unwrap_or(row);
     let limit = number(detail.get("limit")?)?;
     if !limit.is_finite() || limit <= 0.0 {
@@ -151,8 +195,10 @@ fn parse_window(row: &Value, now: Timestamp) -> Option<RateLimitWindow> {
                     Timestamp::from_second(now.as_second().saturating_add(seconds as i64)).ok()
                 })
         });
-    let duration_mins = duration_seconds(row, detail)
-        .and_then(|seconds| u32::try_from((seconds.max(0.0) / 60.0).round() as u64).ok());
+    let duration_mins = fixed_duration_mins.or_else(|| {
+        duration_minutes(row, detail)
+            .and_then(|minutes| u32::try_from(minutes.max(0.0).round() as u64).ok())
+    });
     Some(RateLimitWindow {
         used_percentage,
         resets_at,
@@ -163,13 +209,13 @@ fn parse_window(row: &Value, now: Timestamp) -> Option<RateLimitWindow> {
     })
 }
 
-fn duration_seconds(row: &Value, detail: &Value) -> Option<f64> {
+fn duration_minutes(row: &Value, detail: &Value) -> Option<f64> {
     if let Some(seconds) = detail
         .get("window")
         .or_else(|| row.get("window"))
         .and_then(number)
     {
-        return Some(seconds);
+        return Some(seconds / 60.0);
     }
     let window = row
         .get("window")
@@ -182,10 +228,11 @@ fn duration_seconds(row: &Value, detail: &Value) -> Option<f64> {
         .unwrap_or("seconds")
         .to_ascii_lowercase();
     let multiplier = match unit.as_str() {
-        "minute" | "minutes" | "m" => 60.0,
-        "hour" | "hours" | "h" => 3_600.0,
-        "day" | "days" | "d" => 86_400.0,
-        _ => 1.0,
+        "time_unit_second" | "second" | "seconds" | "s" => 1.0 / 60.0,
+        "time_unit_minute" | "minute" | "minutes" | "m" => 1.0,
+        "time_unit_hour" | "hour" | "hours" | "h" => 60.0,
+        "time_unit_day" | "day" | "days" | "d" => 1_440.0,
+        _ => return None,
     };
     Some(duration * multiplier)
 }
@@ -206,16 +253,14 @@ fn parse_booster_wallet(wallet: &Value) -> Option<ExtraCredits> {
         .map(|cents| cents as f64 / 100.0);
     let monthly_limit = parse_money(wallet.get("monthlyChargeLimit"));
     let monthly_used = parse_money(wallet.get("monthlyUsed"));
-    let currency = monthly_limit
-        .as_ref()
-        .and_then(|(_, currency)| currency.as_deref())
-        .or_else(|| {
-            monthly_used
-                .as_ref()
-                .and_then(|(_, currency)| currency.as_deref())
-        })
-        .unwrap_or("USD");
-    if !currency.eq_ignore_ascii_case("USD") {
+    let currencies = [monthly_limit.as_ref(), monthly_used.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, currency)| currency.as_deref());
+    if currencies
+        .into_iter()
+        .any(|currency| !currency.eq_ignore_ascii_case("USD"))
+    {
         return None;
     }
     let enabled = wallet
@@ -268,7 +313,8 @@ fn fixed_point_cents(value: i64) -> i64 {
 }
 
 fn number(value: &Value) -> Option<f64> {
-    value.as_f64().or_else(|| value.as_str()?.parse().ok())
+    let number = value.as_f64().or_else(|| value.as_str()?.parse().ok())?;
+    number.is_finite().then_some(number)
 }
 
 fn timestamp(value: &Value) -> Option<Timestamp> {
@@ -276,4 +322,96 @@ fn timestamp(value: &Value) -> Option<Timestamp> {
         return Timestamp::from_second(seconds).ok();
     }
     value.as_str()?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn token_requires_more_than_sixty_seconds_of_freshness() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.json");
+        for (offset, accepted) in [(3_600, true), (60, false), (-1, false)] {
+            std::fs::write(
+                &path,
+                json!({
+                    "access_token":"sentinel-secret",
+                    "refresh_token":"refresh-secret",
+                    "expires_at":Timestamp::now().as_second() + offset
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let result = load_token(&path);
+            assert_eq!(result.is_ok(), accepted);
+            if let Err(error) = result {
+                assert!(!error.to_string().contains("sentinel-secret"));
+                assert!(!error.to_string().contains("refresh-secret"));
+            }
+        }
+    }
+
+    #[test]
+    fn managed_oauth_host_and_headers_are_fixed() {
+        assert!(official_managed_base("https://api.kimi.com/coding/v1/"));
+        assert!(official_managed_base(USAGE_URL));
+        assert!(!official_managed_base("https://proxy.invalid/coding/v1"));
+        let headers = usage_headers("sentinel-secret");
+        assert_eq!(headers[0], ("Accept", "application/json".to_owned()));
+        assert_eq!(
+            headers[1],
+            ("Authorization", "Bearer sentinel-secret".to_owned())
+        );
+    }
+
+    #[test]
+    fn official_minute_enum_and_top_level_week_are_minutes() {
+        let snapshot = parse_response(
+            &json!({
+                "usage":{"limit":100,"used":25},
+                "limits":[{
+                    "detail":{"limit":100,"used":50},
+                    "window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"}
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let windows = snapshot.rate_limits.unwrap().windows;
+        assert_eq!(windows[0].duration_mins, Some(10_080));
+        assert_eq!(windows[1].duration_mins, Some(300));
+        assert_eq!(windows[1].used_percentage, Some(50));
+    }
+
+    #[test]
+    fn unknown_duration_units_do_not_fall_back_to_seconds() {
+        let window = parse_window(
+            &json!({
+                "detail":{"limit":10,"used":1},
+                "window":{"duration":300,"timeUnit":"FORTNIGHTS"}
+            }),
+            Timestamp::now(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(window.duration_mins, None);
+    }
+
+    #[test]
+    fn non_usd_booster_and_empty_success_are_rejected() {
+        let body = json!({
+            "boosterWallet":{
+                "balance":{"type":"BOOSTER","amount":1,"amountLeft":1},
+                "monthlyChargeLimitEnabled":true,
+                "monthlyChargeLimit":{"priceInCents":100,"currency":"EUR"}
+            }
+        });
+        assert!(matches!(
+            parse_response(&body.to_string()),
+            Err(Error::Schema { .. })
+        ));
+        assert!(matches!(parse_response("{}"), Err(Error::Schema { .. })));
+    }
 }

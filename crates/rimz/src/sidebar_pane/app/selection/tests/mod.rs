@@ -125,6 +125,7 @@ fn screen_row_for(map_index: usize) -> u16 {
 fn provider(kind: &str) -> crate::SidebarProviderPanel {
     crate::SidebarProviderPanel {
         kind: kind.to_owned(),
+        account_scope: Default::default(),
         product_name: kind.to_owned(),
         art: Vec::new(),
         color: 7,

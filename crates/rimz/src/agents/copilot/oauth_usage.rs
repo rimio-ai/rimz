@@ -338,6 +338,7 @@ pub(super) fn parse_response(body: &str) -> Result<AccountUsageSnapshot> {
     }
     Ok(AccountUsageSnapshot {
         account_key: None,
+        scope: Default::default(),
         rate_limits: (!windows.is_empty()).then_some(AgentRateLimits { windows }),
         extra_credits: None,
         reset_credits: None,

@@ -111,6 +111,7 @@ fn accounts() -> AccountsCache {
             probed_at_ms: now_ms,
             ok: true,
             account: Some(AgentAccount {
+                scope: Default::default(),
                 plan: Some("max".to_owned()),
                 account_id: None,
                 metered: Some(true),
@@ -126,6 +127,7 @@ fn accounts() -> AccountsCache {
             probed_at_ms: now_ms,
             ok: true,
             account: Some(AgentAccount {
+                scope: Default::default(),
                 plan: Some("pro".to_owned()),
                 account_id: None,
                 metered: Some(false),

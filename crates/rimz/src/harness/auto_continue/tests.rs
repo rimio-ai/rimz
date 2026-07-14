@@ -85,15 +85,18 @@ fn write_recovered_window(runtime: &RuntimePaths) {
         runtime,
         &RateLimitsCache {
             refreshed_at_ms: 0,
-            windows: [(
+            entries: [(
                 "claude".to_owned(),
-                AgentRateLimits {
-                    windows: vec![window(20, 9_000)],
+                crate::agents::RateLimitCacheEntry {
+                    limits: AgentRateLimits {
+                        windows: vec![window(20, 9_000)],
+                    },
+                    ..Default::default()
                 },
             )]
             .into_iter()
             .collect(),
-            pending: Default::default(),
+            ..Default::default()
         },
     );
 }

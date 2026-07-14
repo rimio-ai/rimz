@@ -14,8 +14,8 @@ use crate::ids::{AgentKind, AgentSessionId, AskId};
 use crate::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
 
 use super::context::{
-    AgentContext, AgentRateLimits, AgentTokenUsage, AgentTurnError, RateLimitWindow,
-    RateLimitWindowKey, TurnErrorClass,
+    AgentContext, AgentRateLimits, AgentTokenUsage, AgentTurnError, ProviderAccountScope,
+    RateLimitWindow, RateLimitWindowKey, TurnErrorClass,
 };
 use super::lifecycle::{AskKind, LifecycleState, TurnPhase};
 
@@ -334,16 +334,40 @@ impl AccountBudget {
 
 /// The producer's published per-provider rate-limit windows, account-scoped so
 /// the budgets outlive a session ending or going idle.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+const RATE_LIMITS_CACHE_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitsCache {
+    /// Rebuildable cache schema. An unknown or absent version is cold-dropped
+    /// rather than interpreting provider-scoped data as kind-wide.
+    pub version: u32,
     /// When the producer last refreshed this map. Observability only: reset
     /// projection ages windows on each `resets_at`, not this stamp.
     pub refreshed_at_ms: u64,
-    /// Last-known windows by agent kind.
-    pub windows: BTreeMap<String, AgentRateLimits>,
-    /// In-flight best-effort refill candidates by kind and stable window identity.
+    /// Last-known usage by agent kind, carrying its provider identity with the
+    /// windows and in-flight refill state it governs.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub pending: BTreeMap<String, Vec<PendingRefill>>,
+    pub entries: BTreeMap<String, RateLimitCacheEntry>,
+}
+
+impl Default for RateLimitsCache {
+    fn default() -> Self {
+        Self {
+            version: RATE_LIMITS_CACHE_VERSION,
+            refreshed_at_ms: 0,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RateLimitCacheEntry {
+    #[serde(default)]
+    pub scope: ProviderAccountScope,
+    #[serde(default)]
+    pub limits: AgentRateLimits,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<PendingRefill>,
 }
 
 /// A best-effort drop awaiting confirmation by the sidebar rate-limit fusion.
@@ -372,6 +396,7 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
     std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .filter(|cache: &RateLimitsCache| cache.version == RATE_LIMITS_CACHE_VERSION)
         .unwrap_or_default()
 }
 
@@ -381,13 +406,15 @@ pub(crate) fn account_budgets_from_caches(
 ) -> BTreeMap<AgentKind, AccountBudget> {
     let rate_limits = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     rate_limits
-        .windows
+        .entries
         .into_iter()
-        .map(|(kind, limits)| {
+        .filter(|(_, entry)| entry.scope.is_kind_wide())
+        .map(|(kind, entry)| {
             (
                 AgentKind::new_unchecked(kind),
                 AccountBudget {
-                    windows: limits
+                    windows: entry
+                        .limits
                         .windows
                         .into_iter()
                         .map(|window| window.projected_at(now))
@@ -442,9 +469,7 @@ pub(crate) fn shortest_window_running(
 }
 
 fn shortest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestamp) -> Option<bool> {
-    let shortest = cache
-        .windows
-        .get(kind)?
+    let shortest = kind_wide_limits(cache, kind)?
         .windows
         .iter()
         .filter(|window| window.duration_mins.is_some_and(|mins| mins > 0))
@@ -483,9 +508,7 @@ pub(crate) fn longest_window_surplus(
 }
 
 fn longest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestamp) -> Option<bool> {
-    let longest = cache
-        .windows
-        .get(kind)?
+    let longest = kind_wide_limits(cache, kind)?
         .windows
         .iter()
         .filter(|window| window.duration_mins.is_some_and(|mins| mins > 0))
@@ -498,9 +521,7 @@ fn longest_window_surplus_in(
     kind: &str,
     now: Timestamp,
 ) -> Option<WindowSurplus> {
-    let window = cache
-        .windows
-        .get(kind)?
+    let window = kind_wide_limits(cache, kind)?
         .windows
         .iter()
         .filter(|window| window.duration_mins.is_some_and(|mins| mins > 0))
@@ -542,14 +563,17 @@ fn window_running_verdict(window: &RateLimitWindow, now: Timestamp) -> Option<bo
 /// reset forward.
 pub(crate) fn longest_window_reset_at(runtime: &RuntimePaths, kind: &str) -> Option<Timestamp> {
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    cache
-        .windows
-        .get(kind)?
+    kind_wide_limits(&cache, kind)?
         .windows
         .iter()
         .filter(|window| window.duration_mins.is_some_and(|mins| mins > 0))
         .max_by_key(|window| window.duration_mins)
         .and_then(|window| window.resets_at)
+}
+
+fn kind_wide_limits<'a>(cache: &'a RateLimitsCache, kind: &str) -> Option<&'a AgentRateLimits> {
+    let entry = cache.entries.get(kind)?;
+    entry.scope.is_kind_wide().then_some(&entry.limits)
 }
 
 /// Each agent kind's rate-limit window standing, summarized from the fused

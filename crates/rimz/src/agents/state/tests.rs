@@ -2,9 +2,59 @@ use super::*;
 
 fn rate_limits(windows: Vec<RateLimitWindow>) -> RateLimitsCache {
     RateLimitsCache {
-        windows: BTreeMap::from([("claude".to_owned(), AgentRateLimits { windows })]),
+        entries: BTreeMap::from([(
+            "claude".to_owned(),
+            RateLimitCacheEntry {
+                limits: AgentRateLimits { windows },
+                ..Default::default()
+            },
+        )]),
         ..RateLimitsCache::default()
     }
+}
+
+#[test]
+fn sub_provider_windows_are_display_only_for_session_controls() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let cache = RateLimitsCache {
+        entries: BTreeMap::from([(
+            "qwen".to_owned(),
+            RateLimitCacheEntry {
+                scope: ProviderAccountScope::sub_provider("alibaba", "international"),
+                limits: AgentRateLimits {
+                    windows: vec![surplus_window(now, Some(100), 3_600, Some(300))],
+                },
+                pending: Vec::new(),
+            },
+        )]),
+        ..Default::default()
+    };
+    assert_eq!(shortest_window_running_in(&cache, "qwen", now), None);
+    assert_eq!(longest_window_running_in(&cache, "qwen", now), None);
+    assert_eq!(longest_window_surplus_in(&cache, "qwen", now), None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(dir.path()),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    crate::store::atomic::write_temp_then_rename_cache(&runtime.shared_rate_limits_path(), &cache)
+        .unwrap();
+    assert!(account_budgets_from_caches(&runtime, now).is_empty());
+    assert_eq!(longest_window_reset_at(&runtime, "qwen"), None);
+
+    let mut kind_wide = cache;
+    kind_wide.entries.get_mut("qwen").unwrap().scope = ProviderAccountScope::KindWide;
+    crate::store::atomic::write_temp_then_rename_cache(
+        &runtime.shared_rate_limits_path(),
+        &kind_wide,
+    )
+    .unwrap();
+    assert_eq!(longest_window_reset_at(&runtime, "qwen"), Some(reset));
+    assert!(account_budgets_from_caches(&runtime, now).contains_key("qwen"));
 }
 
 fn surplus_window(

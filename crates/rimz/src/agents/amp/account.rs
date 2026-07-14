@@ -23,6 +23,7 @@ fn probe_sources(api_key_present: bool, secret_path: Option<&Path>) -> AccountPr
 
 fn pay_per_use_account(credentials_updated_at_ms: Option<u64>) -> AgentAccount {
     AgentAccount {
+        scope: Default::default(),
         plan: None,
         account_id: None,
         metered: Some(false),

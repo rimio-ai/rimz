@@ -430,6 +430,7 @@ mod tests {
             }),
             pr: None,
             account: Some(AgentAccount {
+                scope: Default::default(),
                 plan: Some("pro".to_owned()),
                 account_id: None,
                 metered: Some(true),

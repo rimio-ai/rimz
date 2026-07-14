@@ -54,7 +54,7 @@ Tail `agents/main/wire.jsonl` as durable transcript and usage enrichment. Its re
 | Subagents | session `state.json` agent map plus child `wire.jsonl` | hooks name the profile but omit child id; live SDK events carry the exact id |
 | Model | `config.update` and `usage.record.model` | launch `--model` and effective config identify the alias |
 | Auth/account | configured provider plus credential presence | keep token bytes out of output, logs, and hashes |
-| Kimi Code quota | authenticated `GET <managed-base>/usages` | limits plus optional Booster balance/monthly cap |
+| Kimi Code quota | authenticated `GET https://api.kimi.com/coding/v1/usages` | fixed OAuth-token host; limits plus optional Booster balance/monthly cap |
 | Supervised run | `-p/--prompt --output-format stream-json` | prompt mode applies auto permission and rejects `--yolo`, `--auto`, and `--plan` |
 | Native resume | `--session <id>` / `--resume <id>` | `--continue` selects the worktree's most recent session |
 | Native fork | interactive `/fork` | no documented fork launch flag |
@@ -286,7 +286,7 @@ Background task records live under `<session>/tasks/`. Statuses are `running`, `
 
 ## Authentication, account, and quota
 
-`kimi login` and `/login` use the RFC 8628 device-code flow. The default managed provider is `managed:kimi-code`; its token is stored at `$KIMI_CODE_HOME/credentials/kimi-code.json`, with directory mode 0700 and file mode 0600. Writes use temp file, fsync, and rename. The JSON contains access and refresh tokens, expiry, scope, token type, and original lifetime. Treat file existence and parseable expiry as an auth hint; never log, render, hash, or copy token values.
+`kimi login` and `/login` use the RFC 8628 device-code flow. The default managed provider is `managed:kimi-code`; its token is stored at `$KIMI_CODE_HOME/credentials/kimi-code.json`, with directory mode 0700 and file mode 0600. Writes use temp file, fsync, and rename. The JSON contains access and refresh tokens, numeric epoch-seconds expiry, scope, token type, and original lifetime. A refresh token still proves a managed login after access expiry, while a read-only usage client sends the access token only when `expires_at` remains safely in the future and leaves refresh to Kimi Code. Never log, render, hash, or copy token values.
 
 For the managed provider, `/usage` calls:
 
@@ -296,7 +296,11 @@ Authorization: Bearer <resolved OAuth token>
 Accept: application/json
 ```
 
-The tolerant parser accepts a summary at `usage`, limit rows at `limits[]` or `limits[].detail`, and reset spelling variants. It also accepts `boosterWallet`: `balance.type == "BOOSTER"`, fixed-point balance and remaining amounts, monthly limit enablement, monthly limit/used money objects, and currency. Preserve source units and currencies; do not infer USD when the response declares another currency. HTTP 401 is an auth failure, 404 means usage is unavailable for the provider, and timeouts/network failures are enrichment failures.
+The tolerant parser accepts a summary at `usage`, limit rows at `limits[]` or `limits[].detail`, and reset spelling variants. It also accepts `boosterWallet`: `balance.type == "BOOSTER"`, fixed-point balance and remaining amounts, monthly limit enablement, monthly limit/used money objects, and currency. Preserve source units and currencies; do not infer USD when the response declares another currency. HTTP 401 or 403 is an auth failure, 404 means usage is unavailable for the provider, and timeouts/network failures are enrichment failures.
+
+The OAuth bearer's recipient is fixed to `api.kimi.com`; model-provider and managed-base overrides are model routing, not authority to receive this credential. Follow no redirects and refuse a non-official effective managed base before loading the token.
+
+The top-level `usage` object is Kimi Code's weekly bucket. Detail rows describe duration as `window.duration` plus `TIME_UNIT_SECOND`, `TIME_UNIT_MINUTE`, `TIME_UNIT_HOUR`, or `TIME_UNIT_DAY`; published payloads may retain the corresponding lowercase literal aliases. Map the enum explicitly, including 300 `TIME_UNIT_MINUTE` as five hours, and preserve the provider reset rather than deriving one.
 
 ## Headless and supervised runs
 

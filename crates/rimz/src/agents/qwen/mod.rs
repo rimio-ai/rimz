@@ -1,9 +1,11 @@
 //! Qwen Code hook, context, account, and spend adapter.
 
 pub(crate) mod account;
+mod alibaba_usage;
 mod ask;
 mod install;
 pub(crate) mod payloads;
+mod selection;
 pub(crate) mod spend;
 mod statusline;
 
@@ -195,8 +197,8 @@ const QWEN_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::AccountSpend,
         ConcernCoverage::Partial {
-            via: "credential presence/transcripts",
-            gap: "multi-provider billing; sidechain branch pruning is not reconstructed; subscription metering unknown",
+            via: "effective provider credentials/Alibaba quota/transcripts",
+            gap: "multi-provider billing; sidechain branch pruning is not reconstructed; Alibaba quota is experimental and display-only; other subscription metering is unknown",
         },
     ),
     (
@@ -557,6 +559,33 @@ impl AgentAdapter for QwenAdapter {
 
     fn probe_account(&self) -> super::account::AccountProbe {
         account::probe()
+    }
+    fn probe_oauth_usage(&self) -> super::OauthUsageProbe {
+        match selection::resolve() {
+            selection::SelectionState::Found(selection) => alibaba_usage::probe(selection),
+            selection::SelectionState::LoggedOut => super::OauthUsageProbe::NoCredentials,
+            selection::SelectionState::Unavailable => super::OauthUsageProbe::Failed,
+        }
+    }
+    fn oauth_credentials_stamp(&self) -> Option<u64> {
+        match selection::resolve() {
+            selection::SelectionState::Found(selection) => selection.credentials_stamp(),
+            selection::SelectionState::LoggedOut | selection::SelectionState::Unavailable => None,
+        }
+    }
+    fn oauth_account_key(&self) -> Option<String> {
+        match selection::resolve() {
+            selection::SelectionState::Found(selection) => Some(selection.account_key()),
+            selection::SelectionState::LoggedOut | selection::SelectionState::Unavailable => None,
+        }
+    }
+    fn oauth_account_scope(&self) -> super::ProviderAccountScope {
+        match selection::resolve() {
+            selection::SelectionState::Found(selection) => selection.scope(),
+            selection::SelectionState::LoggedOut | selection::SelectionState::Unavailable => {
+                super::ProviderAccountScope::KindWide
+            }
+        }
     }
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::all_jsonl_files()

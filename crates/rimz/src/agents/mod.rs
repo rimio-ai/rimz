@@ -66,8 +66,8 @@ use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
-    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostBasis, RateLimitWindow,
-    RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass,
+    AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostBasis, ProviderAccountScope,
+    RateLimitWindow, RateLimitWindowScope, SubagentContext, SubagentObservation, TurnErrorClass,
 };
 pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe, ResetCredits};
@@ -111,7 +111,7 @@ pub(crate) use state::{
     longest_window_surplus, rate_limit_window_kinds, read_rate_limits_cache, resume_gate_recovered,
     resume_park, shortest_window_running,
 };
-pub use state::{PendingRefill, RateLimitsCache};
+pub use state::{PendingRefill, RateLimitCacheEntry, RateLimitsCache};
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;
@@ -949,6 +949,12 @@ pub trait AgentAdapter: Send + Sync {
     /// has no cheap local identity.
     fn oauth_account_key(&self) -> Option<String> {
         None
+    }
+
+    /// Provider identity for account-usage cache entries. Single-provider
+    /// adapters share one kind-wide cache; multi-provider adapters override it.
+    fn oauth_account_scope(&self) -> ProviderAccountScope {
+        ProviderAccountScope::KindWide
     }
 
     /// Probe the provider's own realtime account channel while idle.

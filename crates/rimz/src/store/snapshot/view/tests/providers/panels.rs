@@ -237,6 +237,7 @@ fn recorded_spend_attaches_only_after_provider_discovery() {
     probed.insert(
         "claude".to_owned(),
         AgentAccount {
+            scope: Default::default(),
             plan: Some("max".to_owned()),
             account_id: None,
             metered: Some(true),

@@ -93,6 +93,7 @@ fn found_account(
     credentials_updated_at_ms: Option<u64>,
 ) -> AccountProbe {
     AccountProbe::Found(AgentAccount {
+        scope: Default::default(),
         plan: None,
         account_id,
         metered: Some(true),

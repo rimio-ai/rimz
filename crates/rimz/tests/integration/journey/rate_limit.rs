@@ -157,6 +157,7 @@ fn accounts() -> AccountsCache {
             probed_at_ms: now_ms,
             ok: true,
             account: Some(AgentAccount {
+                scope: Default::default(),
                 plan: Some("max".to_owned()),
                 account_id: None,
                 metered: Some(true),
@@ -172,8 +173,14 @@ fn accounts() -> AccountsCache {
 fn rate_cache(used: u8, resets_at: Timestamp) -> RateLimitsCache {
     RateLimitsCache {
         refreshed_at_ms: unix_now_ms(),
-        windows: BTreeMap::from([("claude".to_owned(), windows(used, resets_at))]),
-        pending: BTreeMap::new(),
+        entries: BTreeMap::from([(
+            "claude".to_owned(),
+            rimz::agents::RateLimitCacheEntry {
+                limits: windows(used, resets_at),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
     }
 }
 

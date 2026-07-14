@@ -57,6 +57,7 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
         return AccountProbe::LoggedOut;
     };
     AccountProbe::Found(AgentAccount {
+        scope: Default::default(),
         plan: Some(sub_label(provider, credential.kind.as_deref())),
         account_id: None,
         metered: match credential.kind.as_deref() {

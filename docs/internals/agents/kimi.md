@@ -68,9 +68,13 @@ Subscription limits remain account enrichment rather than token spend. The manag
 
 ## Account and balance
 
-The account probe reads only the shape of `${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json`; token bytes never enter output, logs, diagnostics, or hashes. The OAuth quota probe calls `$KIMI_CODE_BASE_URL`, then the configured `managed:kimi-code` base, then the official base, and tolerantly maps summary/limit rows, reset variants, and optional USD Booster wallet fields into provider windows and balances.
+The account probe parses the typed shape of `${KIMI_CODE_HOME:-~/.kimi-code}/credentials/kimi-code.json`; token bytes never enter output, logs, diagnostics, or hashes. A refresh token is enough to report a managed login, while the quota probe uses an access token only when its numeric `expires_at` remains more than 60 seconds in the future. RimZ leaves token refresh and credential-file writes to Kimi Code.
 
-An API-key provider may run Kimi Code without managed Kimi OAuth. The current kind-level account seam cannot attribute account and spend to the effective provider selected by the model, so `spend` remains partial. A future provider-aware account key should carry provider identity and declared money currency without changing the lifecycle adapter.
+The managed OAuth quota probe sends `Accept: application/json` and the bearer only to `https://api.kimi.com/coding/v1/usages`, with redirects disabled. An effective non-official `$KIMI_CODE_BASE_URL` or `managed:kimi-code` base makes the probe unavailable before it reads the token, so a custom model endpoint never receives the managed credential.
+
+The top-level `usage` summary is the weekly 10,080-minute window. Limit rows map the official `TIME_UNIT_SECOND`, `TIME_UNIT_MINUTE`, `TIME_UNIT_HOUR`, and `TIME_UNIT_DAY` enums plus their legacy literal aliases explicitly; unknown units produce no duration, and a 300-minute row therefore remains a five-hour window. Recognized plan-only responses remain useful, empty schemas fail observably, and Booster money reaches `ExtraCredits` only when every declared money value is USD.
+
+An API-key provider may run Kimi Code without managed Kimi OAuth. The managed account and quota cache remains kind-wide, while transcript spend can cover effective custom providers only where model attribution and the shared price book establish a local estimate; provider quota and local dollars remain separate facts.
 
 Binary discovery currently identifies an adapter from executable names and install directories. Add an adapter compatibility probe before relying on automatic rejection of the retired Python `kimi` executable; until then, the Kimi Code data root, hook protocol, and process title form the implemented product boundary, while legacy collision refusal remains deferred.
 

@@ -31,6 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+dotenvy = "0.15"
 # `rimz config` probes unknown keys through the serde model so the editable key
 # surface stays derived from the real config structs instead of a hand-mirrored
 # schema. The crate is a tiny visitor wrapper over serde deserializers and adds
@@ -103,6 +104,7 @@ similar = { version = "2", features = ["unicode"] }
 # small, synchronous, rustls-backed client — the right shape for a one-shot
 # background fetch and an xtask, with no async-runtime drag.
 ureq = "3"
+url = "2"
 # Codex app-server daemon control sockets speak RFC6455 WebSocket over a Unix
 # stream. `tungstenite` supplies the handshake, framing, ping/pong, close, and
 # fragmentation state machine over any `Read + Write`; hand-rolling that would

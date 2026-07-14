@@ -16,6 +16,7 @@ This mirror was refreshed against Qwen Code **0.19.10** at source commit [`095bd
 | Hook runner, registry, and trust | [`hookRunner.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/hookRunner.ts), [`hookRegistry.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/hookRegistry.ts), [`trustedHooks.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/hooks/trustedHooks.ts) |
 | Configuration layers, environment, settings | <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/settings/> |
 | Authentication and providers | <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/>, <https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/> |
+| Experimental Alibaba Coding Plan API-key quota request | [`AlibabaCodingPlanUsageFetcher.swift`](https://github.com/steipete/CodexBar/blob/c61e01e774c449b06324a1cc260af7c77cf17d47/Sources/CodexBarCore/Providers/Alibaba/AlibabaCodingPlanUsageFetcher.swift) inspected at CodexBar commit [`c61e01e774c449b06324a1cc260af7c77cf17d47`](https://github.com/steipete/CodexBar/tree/c61e01e774c449b06324a1cc260af7c77cf17d47) |
 | Session commands and machine-readable listing | <https://qwenlm.github.io/qwen-code-docs/en/users/features/commands/> |
 | Session JSONL writer and types | [`chatRecordingService.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/services/chatRecordingService.ts) |
 | Session loader and active-branch reconstruction | [`sessionService.ts`](https://github.com/QwenLM/qwen-code/blob/095bd160918086a3a33192133e7923635f08f973/packages/core/src/services/sessionService.ts) |
@@ -391,17 +392,17 @@ Definitions live in project `.qwen/agents/`, user `~/.qwen/agents/`, and extensi
 
 ## Authentication, account, quota, and spend
 
-Qwen is multi-provider. `security.auth.selectedType` selects a protocol/provider, `model.name` selects the model, and `modelProviders` defines endpoints and credential environment keys. Built-in types include `openai`, `anthropic`, `gemini`, `vertex-ai`, and discontinued `qwen-oauth`; custom provider ids map through `providerProtocol`.
+Qwen is multi-provider. `security.auth.selectedType` selects the SDK protocol, `model.name` selects the model, `model.baseUrl` disambiguates duplicate model ids, `modelProviders` defines provider membership, exact endpoints, and credential environment keys, and the top-level `providerProtocol` map routes custom provider ids through a built-in protocol. Built-in types include `openai`, `anthropic`, `gemini`, `vertex-ai`, and discontinued `qwen-oauth`. Resolve these fields together because `selectedType = "openai"` alone does not identify the biller.
 
-Credential resolution is provider-specific. CLI `--openai-api-key` wins for OpenAI-compatible providers, followed by process environment, the first discovered `.qwen/.env` or `.env`, then settings `env`. Common variables are `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`/`QWEN_MODEL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GOOGLE_API_KEY`, and `GOOGLE_MODEL`. Alibaba Coding Plan commonly uses `BAILIAN_CODING_PLAN_API_KEY` with its dedicated regional endpoint.
+Credential resolution is provider-specific. CLI `--openai-api-key` wins for OpenAI-compatible providers; for a passive settings probe, inspect process environment, `${QWEN_HOME:-~/.qwen}/.env`, then settings `env`. Common variables are `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`/`QWEN_MODEL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GOOGLE_API_KEY`, and `GOOGLE_MODEL`. Alibaba Coding Plan normally uses `BAILIAN_CODING_PLAN_API_KEY`, while manual provider entries may declare another `envKey`, with `https://coding-intl.dashscope.aliyuncs.com/v1` or `https://coding.dashscope.aliyuncs.com/v1`. Treat only an effective provider record with one of those exact endpoints and its declared key as Alibaba; a stray environment value, protocol name, or model label is insufficient.
 
 The removed `qwen auth status` prints a migration notice; `/doctor` is interactive. A first account probe reads only non-secret merged selection metadata and tests credential-source **presence**, never prints or persists key values. Report provider/model when determinable and fail soft for ADC, custom endpoints, and external secret managers.
 
 Qwen OAuth's browser-login free tier was discontinued on 2026-04-15 and is no longer selectable. Legacy `~/.qwen/oauth_creds.json` may exist but is not a basis for new support.
 
-Alibaba Coding Plan advertises weekly quota, but Qwen publishes no stable machine-readable remaining-quota API or CLI command. Other providers have different contracts. Omit balance/windows until implementing a provider-specific official API.
+Qwen publishes no stable native machine-readable remaining-quota API or CLI command. RimZ's Alibaba balance is an experimental provider-specific surface derived from the inspected CodexBar API-key request rather than a Qwen contract: it posts to the selected region's fixed Alibaba console `/data/api.json` host and normalizes an explicitly active instance's 5-hour, 7-day, and 30-day quotas. Keep International and China credentials region-isolated. Use neither browser-console cookies, arbitrary endpoint overrides, redirects, nor fallback replay against the other region.
 
-Local token insight is direct from statusline, headless results, and transcript. Dollar spend needs provider plus RimZ pricing; leave it unknown for subscription/quota plans, local models, unknown custom endpoints, and unclear billing categories.
+Local token insight is direct from statusline, headless results, and transcript. Provider-billed dollars need provider billing facts and remain unknown for subscription/quota plans, local models, unknown custom endpoints, and unclear billing categories; RimZ may still price a known model through its shared table as an explicitly local operational estimate for display and soft budget policy.
 
 ## Headless and supervised runs
 
@@ -477,7 +478,7 @@ They do not observe an independent stock TUI pane. Adoption changes RimZ into a 
 7. Use transcript context size plus newest total tokens for durable context and statusline for live context; never assume one limit across providers.
 8. Drive `-p --output-format stream-json`, preserve exits, and test stdin ordering, resume/fork, budgets, denials, and partial messages.
 9. Keep dual output optional: isolate paths, feature-detect v1, tolerate disablement, and add boolean answers only after security/race coverage.
-10. Report provider/model plus credential-source presence without secrets; omit quota/balance where no stable official API exists.
+10. Resolve provider/model/endpoint/credential-source presence without secrets; keep Alibaba's experimental fixed-host quota scoped to its selected region and omit quota where no inspected provider-specific surface exists.
 11. Live-capture canonical edit/question/plan tool ids; verify every native dialog, Esc cancellation, shell activity, background parking, and failure coverage.
 12. Verify subagent parent correlation, named/fork/background hook delivery, failure verdicts, transcript paths, depth, and parent tasks before enabling all capabilities.
 13. Verify sidecars across clear, branch, fork, worktree, cwd change, crash, PID reuse, and runtime-root overrides; require process liveness.

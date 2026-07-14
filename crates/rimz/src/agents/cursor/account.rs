@@ -86,6 +86,7 @@ fn probe_with(
         plan,
         version: non_blank(about.cli_version),
         sub_provider: None,
+        scope: Default::default(),
         credentials_updated_at_ms: None,
     })
 }

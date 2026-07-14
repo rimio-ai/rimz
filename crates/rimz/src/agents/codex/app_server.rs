@@ -266,6 +266,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         let windows = collect_windows(parsed.rate_limits.primary, parsed.rate_limits.secondary);
         let plan = parsed.rate_limits.plan_type.filter(|plan| !plan.is_empty());
         let account = (plan.is_some() || windows.is_some()).then_some(AgentAccount {
+            scope: Default::default(),
             metered: Some(true),
             plan,
             account_id: None,

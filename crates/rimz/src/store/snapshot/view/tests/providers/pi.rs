@@ -5,6 +5,7 @@ fn pi_uses_its_own_windows_without_sibling_borrowing() {
     let codex_reading = window(40, 3_600);
     let pi_reading = window(70, 3_600);
     let account = AgentAccount {
+        scope: Default::default(),
         plan: Some("OpenAI OAuth".to_owned()),
         account_id: None,
         metered: Some(true),

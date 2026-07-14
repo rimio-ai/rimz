@@ -160,6 +160,23 @@ mod tests {
         .unwrap();
         let first = parse_qwen_spend(&path, None, &PriceBook::embedded());
         assert_eq!(first.entries.len(), 2);
+        assert!(
+            first
+                .entries
+                .iter()
+                .map(|entry| entry.cost_usd)
+                .sum::<f64>()
+                > 0.0,
+            "known Qwen models keep non-zero local pricebook estimates"
+        );
+        assert!(first.entries.iter().all(|entry| {
+            entry.model.as_deref() == Some("qwen3-coder-plus")
+                && entry.input + entry.cache_read + entry.output > 0
+        }));
+        assert!(
+            !first.cost_estimated,
+            "local Qwen dollars remain eligible for the existing budget aggregate"
+        );
 
         use std::io::Write as _;
         let mut file = std::fs::OpenOptions::new()

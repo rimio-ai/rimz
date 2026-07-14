@@ -2,8 +2,8 @@
 //!
 //! Every metered provider has two account-usage channels: a *realtime* source
 //! (a live session's statusline/app-server/extension reading, folded per kind by
-//! the snapshot view) and an *API-query* source — a direct OAuth read of the
-//! provider's own quota surface using its own token
+//! the snapshot view) and an *API-query* source — a direct read of the
+//! provider's own quota surface using its local credential
 //! ([`AgentAdapter::probe_oauth_usage`](crate::agents::AgentAdapter::probe_oauth_usage)).
 //!
 //! This module owns the producer-side driver that schedules the API-query
@@ -21,7 +21,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimePaths;
-use crate::agents::OauthUsageProbe;
+use crate::agents::{OauthUsageProbe, ProviderAccountScope};
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{CREDITS_TTL, OAUTH_USAGE_TTL};
 
@@ -73,58 +73,81 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
     };
     let stamp = adapter.oauth_credentials_stamp();
     let account_key = adapter.oauth_account_key();
-    let prior_account_key = read_credits_cache(&runtime.shared_credits_path())
+    let account_scope = adapter.oauth_account_scope();
+    let prior_identity = read_credits_cache(&runtime.shared_credits_path())
         .entries
         .get(kind)
-        .map(|entry| entry.account_key.clone());
+        .map(|entry| (entry.scope.clone(), entry.account_key.clone()));
+    if prior_identity.as_ref().is_some_and(|(scope, key)| {
+        scope != &account_scope || account_key_mismatch(key.as_deref(), account_key.as_deref())
+    })
+    {
+        tracing::info!(
+            target: crate::observability::BREADCRUMB_TARGET,
+            kind,
+            "provider account changed; dropping cached windows",
+        );
+        drop_kind_rate_limits(runtime, kind);
+    }
     let mut fetched_windows = None;
-    let entry =
-        merge_provider_credits_entry_if_due(runtime, kind, stamp, account_key.clone(), || {
-            match adapter.probe_oauth_usage() {
-                OauthUsageProbe::Found(usage) => {
-                    fetched_windows = usage.rate_limits.clone();
-                    ProviderCreditsEntry {
-                        observed_at_ms: unix_now_ms(),
-                        oauth_read_at_ms: unix_now_ms(),
-                        auth_settled: false,
-                        credentials_stamp: None,
-                        account_key: usage.account_key,
-                        plan: usage.plan,
-                        ok: true,
-                        extra_credits: usage.extra_credits,
-                        reset_credits: usage.reset_credits,
-                    }
-                }
-                OauthUsageProbe::NoCredentials => ProviderCreditsEntry {
-                    observed_at_ms: unix_now_ms(),
-                    oauth_read_at_ms: unix_now_ms(),
-                    auth_settled: true,
-                    credentials_stamp: stamp,
-                    account_key: None,
-                    plan: None,
-                    ok: false,
-                    extra_credits: None,
-                    reset_credits: None,
-                },
-                OauthUsageProbe::Failed | OauthUsageProbe::Unsupported => ProviderCreditsEntry {
+    let entry = merge_provider_credits_entry_if_due(
+        runtime,
+        kind,
+        stamp,
+        account_key.clone(),
+        account_scope.clone(),
+        || match adapter.probe_oauth_usage() {
+            OauthUsageProbe::Found(usage) => {
+                fetched_windows = usage
+                    .rate_limits
+                    .clone()
+                    .map(|limits| (usage.scope.clone(), limits));
+                ProviderCreditsEntry {
+                    scope: usage.scope,
                     observed_at_ms: unix_now_ms(),
                     oauth_read_at_ms: unix_now_ms(),
                     auth_settled: false,
                     credentials_stamp: None,
-                    account_key: None,
-                    plan: None,
-                    ok: false,
-                    extra_credits: None,
-                    reset_credits: None,
-                },
+                    account_key: usage.account_key,
+                    plan: usage.plan,
+                    ok: true,
+                    extra_credits: usage.extra_credits,
+                    reset_credits: usage.reset_credits,
+                }
             }
-        });
+            OauthUsageProbe::NoCredentials => ProviderCreditsEntry {
+                scope: account_scope.clone(),
+                observed_at_ms: unix_now_ms(),
+                oauth_read_at_ms: unix_now_ms(),
+                auth_settled: true,
+                credentials_stamp: stamp,
+                account_key: None,
+                plan: None,
+                ok: false,
+                extra_credits: None,
+                reset_credits: None,
+            },
+            OauthUsageProbe::Failed | OauthUsageProbe::Unsupported => ProviderCreditsEntry {
+                scope: account_scope.clone(),
+                observed_at_ms: unix_now_ms(),
+                oauth_read_at_ms: unix_now_ms(),
+                auth_settled: false,
+                credentials_stamp: None,
+                account_key: None,
+                plan: None,
+                ok: false,
+                extra_credits: None,
+                reset_credits: None,
+            },
+        },
+    );
     let written = entry.is_some();
     if entry.as_ref().is_some_and(|entry| {
         drop_windows_on_account_change(
             runtime,
             kind,
-            prior_account_key.as_ref(),
+            prior_identity.as_ref(),
+            &entry.scope,
             entry.account_key.as_deref(),
         )
     }) {
@@ -134,8 +157,8 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
             "provider account changed; dropping cached windows",
         );
     }
-    if merge_windows && let Some(rate_limits) = fetched_windows {
-        merge_account_rate_limits(runtime, kind, rate_limits);
+    if merge_windows && let Some((scope, rate_limits)) = fetched_windows {
+        merge_account_rate_limits(runtime, kind, scope, rate_limits);
     }
     written
 }
@@ -143,11 +166,13 @@ pub fn merge_oauth_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_window
 fn drop_windows_on_account_change(
     runtime: &RuntimePaths,
     kind: &str,
-    prior_account_key: Option<&Option<String>>,
+    prior_identity: Option<&(ProviderAccountScope, Option<String>)>,
+    current_scope: &ProviderAccountScope,
     current_account_key: Option<&str>,
 ) -> bool {
-    let changed = prior_account_key
-        .is_some_and(|prior| account_key_mismatch(prior.as_deref(), current_account_key));
+    let changed = prior_identity.is_some_and(|(scope, account_key)| {
+        scope != current_scope || account_key_mismatch(account_key.as_deref(), current_account_key)
+    });
     if changed {
         drop_kind_rate_limits(runtime, kind);
     }
@@ -199,7 +224,14 @@ pub(crate) fn usage_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
     };
     let credentials_stamp = adapter.oauth_credentials_stamp();
     let account_key = adapter.oauth_account_key();
-    usage_probe_due_with_identity(runtime, kind, credentials_stamp, account_key.as_deref())
+    let account_scope = adapter.oauth_account_scope();
+    usage_probe_due_with_scope(
+        runtime,
+        kind,
+        credentials_stamp,
+        account_key.as_deref(),
+        &account_scope,
+    )
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -214,12 +246,29 @@ fn usage_probe_due_with_identity(
     current_credentials_stamp: Option<u64>,
     current_account_key: Option<&str>,
 ) -> bool {
+    usage_probe_due_with_scope(
+        runtime,
+        kind,
+        current_credentials_stamp,
+        current_account_key,
+        &ProviderAccountScope::KindWide,
+    )
+}
+
+fn usage_probe_due_with_scope(
+    runtime: &RuntimePaths,
+    kind: &str,
+    current_credentials_stamp: Option<u64>,
+    current_account_key: Option<&str>,
+    current_scope: &ProviderAccountScope,
+) -> bool {
     let path = usage_probe_marker(runtime, kind);
     let account_changed = read_credits_cache(&runtime.shared_credits_path())
         .entries
         .get(kind)
         .is_some_and(|entry| {
-            account_key_mismatch(entry.account_key.as_deref(), current_account_key)
+            &entry.scope != current_scope
+                || account_key_mismatch(entry.account_key.as_deref(), current_account_key)
         });
     let age_due = std::fs::metadata(&path)
         .and_then(|meta| meta.modified())
@@ -371,6 +420,52 @@ mod tests {
     }
 
     #[test]
+    fn account_scope_switch_bypasses_a_fresh_spawn_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let international = ProviderAccountScope::sub_provider("alibaba", "international");
+        let china = ProviderAccountScope::sub_provider("alibaba", "china");
+        crate::sidebar::refresh::credits::write_credits_cache(
+            &runtime.shared_credits_path(),
+            &crate::sidebar::refresh::credits::CreditsCache {
+                refreshed_at_ms: 1,
+                entries: BTreeMap::from([(
+                    "qwen".to_owned(),
+                    ProviderCreditsEntry {
+                        scope: international.clone(),
+                        account_key: Some("account".to_owned()),
+                        ..ProviderCreditsEntry::default()
+                    },
+                )]),
+            },
+        );
+
+        assert!(usage_probe_due_with_scope(
+            &runtime,
+            "qwen",
+            None,
+            Some("account"),
+            &international,
+        ));
+        assert!(!usage_probe_due_with_scope(
+            &runtime,
+            "qwen",
+            None,
+            Some("account"),
+            &international,
+        ));
+        assert!(usage_probe_due_with_scope(
+            &runtime,
+            "qwen",
+            None,
+            Some("account"),
+            &china,
+        ));
+    }
+
+    #[test]
     fn usage_probe_marker_tracks_credential_stamp_and_accepts_legacy_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let runtime =
@@ -417,6 +512,7 @@ mod tests {
         merge_account_rate_limits(
             &runtime,
             "codex",
+            ProviderAccountScope::KindWide,
             AgentRateLimits {
                 windows: vec![RateLimitWindow {
                     duration_mins: Some(300),
@@ -429,12 +525,13 @@ mod tests {
         assert!(drop_windows_on_account_change(
             &runtime,
             "codex",
-            Some(&None),
+            Some(&(ProviderAccountScope::KindWide, None)),
+            &ProviderAccountScope::KindWide,
             Some("acc")
         ));
         assert!(
             !crate::agents::read_rate_limits_cache(&runtime.shared_rate_limits_path())
-                .windows
+                .entries
                 .contains_key("codex")
         );
     }

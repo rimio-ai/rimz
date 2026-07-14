@@ -3502,15 +3502,18 @@ fn seed_rate_limit_budget(env: &Env, used_percentage: u8) {
     };
     let cache = rimz::agents::RateLimitsCache {
         refreshed_at_ms: 0,
-        windows: [(
+        entries: [(
             "claude".to_owned(),
-            AgentRateLimits {
-                windows: vec![window],
+            rimz::agents::RateLimitCacheEntry {
+                limits: AgentRateLimits {
+                    windows: vec![window],
+                },
+                ..Default::default()
             },
         )]
         .into_iter()
         .collect(),
-        pending: Default::default(),
+        ..Default::default()
     };
     rimz::store::atomic::write_temp_then_rename_cache(
         &env.runtime_paths().shared_rate_limits_path(),

@@ -45,8 +45,8 @@ pub mod workspace;
 pub mod worktree;
 
 pub use crate::agents::{
-    AccountUsageSnapshot, ExtraCredits, HeadlineSpec, ResetCredits, SpendTally, SpendWindow,
-    SpendWindowMode,
+    AccountUsageSnapshot, ExtraCredits, HeadlineSpec, ProviderAccountScope, ResetCredits,
+    SpendTally, SpendWindow, SpendWindowMode,
 };
 pub use crate::harness::run_wake::RunWakeErr;
 pub use crate::harness::target::TargetErr;

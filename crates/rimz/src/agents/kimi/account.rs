@@ -12,7 +12,7 @@ use crate::agents::context::AgentAccount;
 struct CredentialShape {
     access_token: Option<String>,
     refresh_token: Option<String>,
-    expires_at: Option<serde_json::Value>,
+    expires_at: Option<f64>,
 }
 
 pub fn credentials_path() -> PathBuf {
@@ -37,18 +37,23 @@ pub(crate) fn probe_at(path: &Path) -> AccountProbe {
     let has_access = shape
         .access_token
         .as_deref()
-        .is_some_and(|token| !token.is_empty());
+        .is_some_and(|token| !token.trim().is_empty());
     let refreshable = shape
         .refresh_token
         .as_deref()
-        .is_some_and(|token| !token.is_empty());
+        .is_some_and(|token| !token.trim().is_empty());
     if !has_access && !refreshable {
         return AccountProbe::LoggedOut;
     }
-    if !refreshable && shape.expires_at.as_ref().is_some_and(expired) {
+    let access_fresh = has_access
+        && shape.expires_at.is_some_and(|seconds| {
+            seconds.is_finite() && seconds > jiff::Timestamp::now().as_second() as f64
+        });
+    if !refreshable && !access_fresh {
         return AccountProbe::LoggedOut;
     }
     AccountProbe::Found(AgentAccount {
+        scope: Default::default(),
         plan: Some("Code".to_owned()),
         account_id: None,
         metered: Some(true),
@@ -56,19 +61,6 @@ pub(crate) fn probe_at(path: &Path) -> AccountProbe {
         sub_provider: None,
         credentials_updated_at_ms: crate::agents::account::credentials_updated_at_ms(path),
     })
-}
-
-fn expired(value: &serde_json::Value) -> bool {
-    let seconds = value
-        .as_i64()
-        .or_else(|| value.as_f64().map(|value| value as i64))
-        .or_else(|| {
-            value
-                .as_str()
-                .and_then(|value| value.parse::<jiff::Timestamp>().ok())
-                .map(|value| value.as_second())
-        });
-    seconds.is_some_and(|seconds| seconds <= jiff::Timestamp::now().as_second())
 }
 
 #[cfg(test)]
@@ -84,5 +76,28 @@ mod tests {
             panic!("refreshable credential must report an account");
         };
         assert!(account.credentials_updated_at_ms.is_some());
+    }
+
+    #[test]
+    fn refresh_token_preserves_login_after_access_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kimi-code.json");
+        let now = jiff::Timestamp::now().as_second();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"access_token":"expired","refresh_token":"refresh","expires_at":{}}}"#,
+                now - 1
+            ),
+        )
+        .unwrap();
+        assert!(matches!(probe_at(&path), AccountProbe::Found(_)));
+
+        std::fs::write(
+            &path,
+            format!(r#"{{"access_token":"expired","expires_at":{}}}"#, now - 1),
+        )
+        .unwrap();
+        assert!(matches!(probe_at(&path), AccountProbe::LoggedOut));
     }
 }

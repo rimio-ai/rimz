@@ -696,15 +696,18 @@ mod tests {
             .checked_add(jiff::SignedDuration::from_secs(60 * 60))
             .unwrap();
         let cache = crate::agents::RateLimitsCache {
-            windows: BTreeMap::from([(
+            entries: BTreeMap::from([(
                 "codex".to_owned(),
-                crate::agents::AgentRateLimits {
-                    windows: vec![crate::agents::RateLimitWindow {
-                        used_percentage: Some(100),
-                        resets_at: Some(reset),
-                        duration_mins: Some(300),
-                        ..Default::default()
-                    }],
+                crate::agents::RateLimitCacheEntry {
+                    limits: crate::agents::AgentRateLimits {
+                        windows: vec![crate::agents::RateLimitWindow {
+                            used_percentage: Some(100),
+                            resets_at: Some(reset),
+                            duration_mins: Some(300),
+                            ..Default::default()
+                        }],
+                    },
+                    ..Default::default()
                 },
             )]),
             ..Default::default()

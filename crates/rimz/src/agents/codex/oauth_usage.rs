@@ -288,6 +288,7 @@ impl OauthUsageResponse for UsageWire {
     fn into_account_usage(self) -> AccountUsageSnapshot {
         AccountUsageSnapshot {
             account_key: None,
+            scope: Default::default(),
             rate_limits: collect_windows(
                 self.rate_limit.primary_window,
                 self.rate_limit.secondary_window,

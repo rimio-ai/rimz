@@ -11,7 +11,7 @@ fn reportable_classifier_treats_unauthorized_as_settled_auth() {
         .should_report()
     );
     assert!(
-        ClaudeOauthUsageErr::Http {
+        !ClaudeOauthUsageErr::Http {
             kind: HttpErrKind::Status(403),
             host: "api.anthropic.com".to_owned(),
         }

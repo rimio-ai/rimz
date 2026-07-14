@@ -89,6 +89,7 @@ fn parse_login_status(text: &str) -> AccountProbe {
         return AccountProbe::Unavailable;
     };
     AccountProbe::Found(AgentAccount {
+        scope: Default::default(),
         plan: None,
         account_id: None,
         metered,
@@ -131,6 +132,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
         .is_some_and(|key| !key.is_empty())
     {
         return AccountProbe::Found(AgentAccount {
+            scope: Default::default(),
             plan: None,
             account_id: None,
             metered: Some(false),
@@ -143,6 +145,7 @@ fn parse_codex_auth(auth_json: &[u8]) -> AccountProbe {
         && tokens.access_token.is_some_and(|token| !token.is_empty())
     {
         return AccountProbe::Found(AgentAccount {
+            scope: Default::default(),
             plan: None,
             account_id: tokens.account_id.and_then(non_empty_trimmed),
             metered: Some(true),

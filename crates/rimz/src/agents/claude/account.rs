@@ -62,6 +62,7 @@ fn parse_claude_auth(stdout: &[u8]) -> AccountProbe {
     }
     let metered = auth_method.map(|method| method != "apiKey");
     AccountProbe::Found(AgentAccount {
+        scope: Default::default(),
         plan,
         account_id: None,
         metered,

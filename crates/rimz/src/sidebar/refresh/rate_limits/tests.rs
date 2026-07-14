@@ -1,9 +1,52 @@
 use super::*;
+
+fn merge_account_rate_limits(runtime: &crate::RuntimePaths, kind: &str, windows: AgentRateLimits) {
+    super::merge_account_rate_limits(runtime, kind, Default::default(), windows);
+}
 use crate::ids::WorkspaceId;
 use crate::sidebar::test_support::{
     provider_panel, rl_window, rl_window_mins, snapshot_with_panels,
 };
 use jiff::SignedDuration;
+
+fn kind_wide_cache(
+    refreshed_at_ms: u64,
+    windows: BTreeMap<String, AgentRateLimits>,
+    mut pending: BTreeMap<String, Vec<PendingRefill>>,
+) -> RateLimitsCache {
+    let mut entries = windows
+        .into_iter()
+        .map(|(kind, limits)| {
+            let pending = pending.remove(&kind).unwrap_or_default();
+            (
+                kind,
+                crate::agents::RateLimitCacheEntry {
+                    scope: Default::default(),
+                    limits,
+                    pending,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    entries.extend(pending.into_iter().map(|(kind, pending)| {
+        (
+            kind,
+            crate::agents::RateLimitCacheEntry {
+                pending,
+                ..Default::default()
+            },
+        )
+    }));
+    RateLimitsCache {
+        refreshed_at_ms,
+        entries,
+        ..Default::default()
+    }
+}
+
+fn cache_limits<'a>(cache: &'a RateLimitsCache, kind: &str) -> &'a AgentRateLimits {
+    &cache.entries[kind].limits
+}
 
 #[test]
 fn idle_window_projection_ages_only_known_elapsed_windows() {
@@ -67,7 +110,7 @@ fn scoped_windows_fuse_and_round_trip_independently() {
     apply_rate_limit_cache(&mut snapshot, &runtime, true);
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let windows = &cache.windows["copilot"].windows;
+    let windows = &cache.entries["copilot"].limits.windows;
     assert_eq!(windows.len(), 2);
     assert_eq!(
         windows
@@ -92,7 +135,7 @@ fn scoped_windows_fuse_and_round_trip_independently() {
 
     let encoded = serde_json::to_vec(&cache).unwrap();
     let decoded: RateLimitsCache = serde_json::from_slice(&encoded).unwrap();
-    assert_eq!(decoded.windows["copilot"].windows, *windows);
+    assert_eq!(decoded.entries["copilot"].limits.windows, *windows);
 }
 
 #[test]
@@ -107,13 +150,17 @@ fn expired_durationless_scoped_cache_displays_unknown_independently() {
         &runtime.shared_rate_limits_path(),
         &RateLimitsCache {
             refreshed_at_ms: 1,
-            windows: BTreeMap::from([(
+            entries: BTreeMap::from([(
                 "copilot".to_owned(),
-                AgentRateLimits {
-                    windows: vec![
-                        scoped_window("premium_interactions", "prm", 100, passed),
-                        scoped_window("chat", "cht", 40, future),
-                    ],
+                RateLimitCacheEntry {
+                    scope: Default::default(),
+                    limits: AgentRateLimits {
+                        windows: vec![
+                            scoped_window("premium_interactions", "prm", 100, passed),
+                            scoped_window("chat", "cht", 40, future),
+                        ],
+                    },
+                    pending: Vec::new(),
                 },
             )]),
             ..Default::default()
@@ -139,6 +186,20 @@ fn expired_durationless_scoped_cache_displays_unknown_independently() {
     assert_eq!(chat.resets_at, Some(future));
 }
 
+#[test]
+fn pre_scope_cache_schema_is_cold_dropped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rate_limits.json");
+    std::fs::write(
+        &path,
+        r#"{"refreshed_at_ms":1,"windows":{"qwen":{"windows":[]}},"pending":{}}"#,
+    )
+    .unwrap();
+    let cache = read_rate_limits_cache(&path);
+    assert!(cache.entries.is_empty());
+    assert_eq!(cache.version, RateLimitsCache::default().version);
+}
+
 /// The producer persists a live reading as ground truth; once the session is
 /// idle (no live window), a reader projects that reading back onto the panel,
 /// so the dashboard shows last-known budgets instead of an empty bar.
@@ -158,10 +219,9 @@ fn producer_persists_live_windows_for_idle_fallback() {
     apply_rate_limit_cache(&mut producing, &runtime, true);
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
-        cache
+        cache_limits(&cache, "claude")
             .windows
-            .get("claude")
-            .and_then(|limits| limits.windows.first())
+            .first()
             .and_then(|window| window.used_percentage),
         Some(60),
         "the live reading is persisted as ground truth"
@@ -182,6 +242,57 @@ fn producer_persists_live_windows_for_idle_fallback() {
 }
 
 #[test]
+fn scoped_windows_render_only_for_the_matching_provider_region() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.shared_rate_limits_path();
+    let international =
+        crate::agents::ProviderAccountScope::sub_provider("alibaba", "international");
+    write_rate_limits_cache(
+        &path,
+        &RateLimitsCache {
+            entries: BTreeMap::from([(
+                "qwen".to_owned(),
+                crate::agents::RateLimitCacheEntry {
+                    scope: international.clone(),
+                    limits: AgentRateLimits {
+                        windows: vec![
+                            rl_window_mins(20, None, 300),
+                            rl_window_mins(40, None, 10_080),
+                            rl_window_mins(60, None, 43_200),
+                        ],
+                    },
+                    pending: Vec::new(),
+                },
+            )]),
+            ..Default::default()
+        },
+    );
+
+    let mut matching =
+        snapshot_with_panels(workspace.clone(), vec![provider_panel("qwen", Vec::new())]);
+    matching.providers[0].account_scope = international;
+    apply_rate_limit_cache(&mut matching, &runtime, false);
+    assert_eq!(
+        matching.providers[0]
+            .windows
+            .iter()
+            .map(|window| window.duration_mins)
+            .collect::<Vec<_>>(),
+        [Some(300), Some(10_080), Some(43_200)]
+    );
+
+    let mut china = snapshot_with_panels(workspace, vec![provider_panel("qwen", Vec::new())]);
+    china.providers[0].account_scope =
+        crate::agents::ProviderAccountScope::sub_provider("alibaba", "china");
+    apply_rate_limit_cache(&mut china, &runtime, true);
+    assert!(china.providers[0].windows.is_empty());
+    assert!(read_rate_limits_cache(&path).entries.is_empty());
+}
+
+#[test]
 fn producer_reset_advance_invalidates_oauth_usage_throttle() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -191,21 +302,22 @@ fn producer_reset_advance_invalidates_oauth_usage_throttle() {
     let new_reset = old_reset + SignedDuration::from_secs(7_200);
     write_rate_limits_cache(
         &runtime.shared_rate_limits_path(),
-        &RateLimitsCache {
-            refreshed_at_ms: 1,
-            windows: BTreeMap::from([(
+        &kind_wide_cache(
+            1,
+            BTreeMap::from([(
                 "codex".to_owned(),
                 AgentRateLimits {
                     windows: vec![rl_window(80, Some(old_reset))],
                 },
             )]),
-            pending: BTreeMap::new(),
-        },
+            BTreeMap::new(),
+        ),
     );
     crate::sidebar::refresh::credits::merge_provider_credits_entry(
         &runtime,
         "codex",
         crate::sidebar::refresh::credits::ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 1,
             oauth_read_at_ms: 1234,
             auth_settled: false,
@@ -288,9 +400,9 @@ fn idle_short_window_past_reset_shows_full_without_persisting_the_synthetic_wind
     let path = runtime.shared_rate_limits_path();
     write_rate_limits_cache(
         &path,
-        &RateLimitsCache {
-            refreshed_at_ms: 0,
-            windows: BTreeMap::from([(
+        &kind_wide_cache(
+            0,
+            BTreeMap::from([(
                 "claude".to_owned(),
                 AgentRateLimits {
                     windows: vec![
@@ -299,8 +411,8 @@ fn idle_short_window_past_reset_shows_full_without_persisting_the_synthetic_wind
                     ],
                 },
             )]),
-            pending: BTreeMap::new(),
-        },
+            BTreeMap::new(),
+        ),
     );
 
     // An idle producer frame with no live window: the display projects to
@@ -321,10 +433,9 @@ fn idle_short_window_past_reset_shows_full_without_persisting_the_synthetic_wind
 
     let persisted = read_rate_limits_cache(&path);
     assert_eq!(
-        persisted
+        cache_limits(&persisted, "claude")
             .windows
-            .get("claude")
-            .and_then(|limits| limits.windows.first())
+            .first()
             .and_then(|window| window.used_percentage),
         Some(90),
         "the cache retains ground truth, not the synthesized full window"
@@ -374,7 +485,7 @@ fn live_reading_with_expired_longer_window_rolls_forward() {
     );
 
     let persisted = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let persisted_7d = persisted.windows["claude"]
+    let persisted_7d = cache_limits(&persisted, "claude")
         .windows
         .iter()
         .find(|window| window.duration_mins == Some(7 * 24 * 60))
@@ -400,9 +511,9 @@ fn idle_longest_window_past_reset_shows_unknown_without_persisting_it() {
     let path = runtime.shared_rate_limits_path();
     write_rate_limits_cache(
         &path,
-        &RateLimitsCache {
-            refreshed_at_ms: 0,
-            windows: BTreeMap::from([(
+        &kind_wide_cache(
+            0,
+            BTreeMap::from([(
                 "claude".to_owned(),
                 AgentRateLimits {
                     windows: vec![
@@ -411,8 +522,8 @@ fn idle_longest_window_past_reset_shows_unknown_without_persisting_it() {
                     ],
                 },
             )]),
-            pending: BTreeMap::new(),
-        },
+            BTreeMap::new(),
+        ),
     );
 
     let mut idle = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
@@ -437,7 +548,7 @@ fn idle_longest_window_past_reset_shows_unknown_without_persisting_it() {
     );
 
     let persisted = read_rate_limits_cache(&path);
-    let persisted_windows = &persisted.windows["claude"].windows;
+    let persisted_windows = &cache_limits(&persisted, "claude").windows;
     assert_eq!(persisted_windows[0].used_percentage, Some(90));
     assert_eq!(persisted_windows[1].used_percentage, Some(80));
 }
@@ -466,8 +577,8 @@ fn producer_drops_windows_for_a_logged_out_provider() {
     );
     apply_rate_limit_cache(&mut seeded, &runtime, true);
     let seeded_cache = read_rate_limits_cache(&path);
-    assert!(seeded_cache.windows.contains_key("claude"));
-    assert!(seeded_cache.windows.contains_key("codex"));
+    assert!(seeded_cache.entries.contains_key("claude"));
+    assert!(seeded_cache.entries.contains_key("codex"));
 
     // Codex logs out: only claude has a panel now. The next producer write
     // rebuilds the cache from the surviving panels, so codex drops out while
@@ -477,11 +588,11 @@ fn producer_drops_windows_for_a_logged_out_provider() {
     apply_rate_limit_cache(&mut codex_gone, &runtime, true);
     let after = read_rate_limits_cache(&path);
     assert!(
-        after.windows.contains_key("claude"),
+        after.entries.contains_key("claude"),
         "a still-logged-in provider keeps its windows"
     );
     assert!(
-        !after.windows.contains_key("codex"),
+        !after.entries.contains_key("codex"),
         "a logged-out provider's windows drop on the next write"
     );
 }
@@ -500,16 +611,16 @@ fn producer_reaps_cache_when_every_provider_logs_out() {
     let seed = || {
         write_rate_limits_cache(
             &path,
-            &RateLimitsCache {
-                refreshed_at_ms: 1,
-                windows: BTreeMap::from([(
+            &kind_wide_cache(
+                1,
+                BTreeMap::from([(
                     "claude".to_owned(),
                     AgentRateLimits {
                         windows: vec![rl_window(40, Some(future))],
                     },
                 )]),
-                pending: BTreeMap::new(),
-            },
+                BTreeMap::new(),
+            ),
         );
     };
 
@@ -518,7 +629,7 @@ fn producer_reaps_cache_when_every_provider_logs_out() {
     let mut consumer = snapshot_with_panels(workspace.clone(), Vec::new());
     apply_rate_limit_cache(&mut consumer, &runtime, false);
     assert!(
-        read_rate_limits_cache(&path).windows.contains_key("claude"),
+        read_rate_limits_cache(&path).entries.contains_key("claude"),
         "a consumer never reaps the cache"
     );
 
@@ -526,7 +637,7 @@ fn producer_reaps_cache_when_every_provider_logs_out() {
     let mut producer = snapshot_with_panels(workspace, Vec::new());
     apply_rate_limit_cache(&mut producer, &runtime, true);
     assert!(
-        read_rate_limits_cache(&path).windows.is_empty(),
+        read_rate_limits_cache(&path).entries.is_empty(),
         "a fully logged-out room reaps its stale windows so a re-login can't flash them"
     );
 }
@@ -545,16 +656,16 @@ fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
     // Claude already has cached windows from a live session this run.
     write_rate_limits_cache(
         &path,
-        &RateLimitsCache {
-            refreshed_at_ms: 1,
-            windows: BTreeMap::from([(
+        &kind_wide_cache(
+            1,
+            BTreeMap::from([(
                 "claude".to_owned(),
                 AgentRateLimits {
                     windows: vec![rl_window(20, None)],
                 },
             )]),
-            pending: BTreeMap::new(),
-        },
+            BTreeMap::new(),
+        ),
     );
 
     merge_account_rate_limits(
@@ -567,16 +678,15 @@ fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
 
     let cache = read_rate_limits_cache(&path);
     assert_eq!(
-        cache
+        cache_limits(&cache, "codex")
             .windows
-            .get("codex")
-            .and_then(|limits| limits.windows.first())
+            .first()
             .and_then(|w| w.used_percentage),
         Some(55),
         "the idle provider's windows are seeded"
     );
     assert!(
-        cache.windows.contains_key("claude"),
+        cache.entries.contains_key("claude"),
         "an existing kind's windows are preserved"
     );
 }
@@ -593,9 +703,9 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
 
     write_rate_limits_cache(
         &path,
-        &RateLimitsCache {
-            refreshed_at_ms: 1,
-            windows: BTreeMap::from([(
+        &kind_wide_cache(
+            1,
+            BTreeMap::from([(
                 "codex".to_owned(),
                 AgentRateLimits {
                     windows: vec![
@@ -604,8 +714,8 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
                     ],
                 },
             )]),
-            pending: BTreeMap::new(),
-        },
+            BTreeMap::new(),
+        ),
     );
 
     let only_week = AgentRateLimits {
@@ -615,7 +725,7 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
     merge_account_rate_limits(&runtime, "codex", only_week);
 
     let cache = read_rate_limits_cache(&path);
-    let windows = &cache.windows["codex"].windows;
+    let windows = &cache_limits(&cache, "codex").windows;
     assert_eq!(windows.len(), 2, "re-merging the omission is idempotent");
     let lifted = windows
         .iter()
@@ -646,7 +756,7 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
     );
     let cache = read_rate_limits_cache(&path);
     assert!(
-        cache.windows["codex"]
+        cache_limits(&cache, "codex")
             .windows
             .iter()
             .all(|window| !window.lifted),
@@ -655,7 +765,7 @@ fn authoritative_merge_marks_omitted_windows_lifted_until_reported_again() {
 
     merge_account_rate_limits(&runtime, "codex", AgentRateLimits::default());
     assert!(
-        read_rate_limits_cache(&path).windows["codex"]
+        cache_limits(&read_rate_limits_cache(&path), "codex")
             .windows
             .is_empty(),
         "an empty reading does not infer lifted windows"
@@ -689,7 +799,7 @@ fn authoritative_merge_does_not_fabricate_lifted_named_quotas() {
     );
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let windows = &cache.windows["copilot"].windows;
+    let windows = &cache.entries["copilot"].limits.windows;
     assert_eq!(windows.len(), 1);
     assert_eq!(
         windows[0].scope.as_ref().map(|scope| scope.id.as_str()),
@@ -715,7 +825,7 @@ fn codex_cold_cache_synthesizes_declared_omitted_window_as_lifted() {
     );
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let windows = &cache.windows["codex"].windows;
+    let windows = &cache_limits(&cache, "codex").windows;
     assert_eq!(windows.len(), 2);
     let five_hours = windows
         .iter()
@@ -751,7 +861,7 @@ fn codex_reported_declared_window_stays_real() {
     );
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let windows = &cache.windows["codex"].windows;
+    let windows = &cache_limits(&cache, "codex").windows;
     assert_eq!(windows.len(), 2);
     assert!(windows.iter().all(|window| !window.lifted));
     assert!(
@@ -778,7 +888,7 @@ fn undeclared_provider_cold_cache_does_not_synthesize_window() {
     );
 
     let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
-    let windows = &cache.windows["claude"].windows;
+    let windows = &cache_limits(&cache, "claude").windows;
     assert_eq!(windows.len(), 1);
     assert!(!windows[0].lifted);
 }
@@ -793,9 +903,9 @@ fn drop_kind_rate_limits_removes_only_that_kinds_windows_and_pending() {
     let first_seen_at = Timestamp::from_second(2_000_000_000).unwrap();
     write_rate_limits_cache(
         &path,
-        &RateLimitsCache {
-            refreshed_at_ms: 1,
-            windows: BTreeMap::from([
+        &kind_wide_cache(
+            1,
+            BTreeMap::from([
                 (
                     "codex".to_owned(),
                     AgentRateLimits {
@@ -809,7 +919,7 @@ fn drop_kind_rate_limits_removes_only_that_kinds_windows_and_pending() {
                     },
                 ),
             ]),
-            pending: BTreeMap::from([
+            BTreeMap::from([
                 (
                     "codex".to_owned(),
                     vec![PendingRefill {
@@ -829,16 +939,15 @@ fn drop_kind_rate_limits_removes_only_that_kinds_windows_and_pending() {
                     }],
                 ),
             ]),
-        },
+        ),
     );
 
     drop_kind_rate_limits(&runtime, "codex");
     let cache = read_rate_limits_cache(&path);
 
-    assert!(!cache.windows.contains_key("codex"));
-    assert!(!cache.pending.contains_key("codex"));
-    assert!(cache.windows.contains_key("claude"));
-    assert!(cache.pending.contains_key("claude"));
+    assert!(!cache.entries.contains_key("codex"));
+    assert!(cache.entries.contains_key("claude"));
+    assert!(!cache.entries["claude"].pending.is_empty());
 
     let refreshed_at_ms = cache.refreshed_at_ms;
     drop_kind_rate_limits(&runtime, "missing");
@@ -858,16 +967,16 @@ fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds
     let path = runtime.shared_rate_limits_path();
     write_rate_limits_cache(
         &path,
-        &RateLimitsCache {
-            refreshed_at_ms: 1,
-            windows: BTreeMap::from([(
+        &kind_wide_cache(
+            1,
+            BTreeMap::from([(
                 "claude".to_owned(),
                 AgentRateLimits {
                     windows: vec![rl_window(20, None)],
                 },
             )]),
-            pending: BTreeMap::new(),
-        },
+            BTreeMap::new(),
+        ),
     );
 
     let lock_file = std::fs::OpenOptions::new()
@@ -887,16 +996,15 @@ fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds
 
     let cache = read_rate_limits_cache(&path);
     assert_eq!(
-        cache
+        cache_limits(&cache, "claude")
             .windows
-            .get("claude")
-            .and_then(|limits| limits.windows.first())
+            .first()
             .and_then(|window| window.used_percentage),
         Some(20),
         "a producer that cannot get the RMW lock leaves existing kinds intact"
     );
     assert!(
-        !cache.windows.contains_key("codex"),
+        !cache.entries.contains_key("codex"),
         "the contending producer does not publish its partial provider set"
     );
     lock_file.unlock().unwrap();
@@ -1201,11 +1309,11 @@ fn runtime_with_windows(windows: Vec<RateLimitWindow>) -> (tempfile::TempDir, Ru
     runtime.ensure_dirs().unwrap();
     write_rate_limits_cache(
         &runtime.shared_rate_limits_path(),
-        &RateLimitsCache {
-            refreshed_at_ms: 0,
-            windows: BTreeMap::from([("claude".to_owned(), AgentRateLimits { windows })]),
-            pending: BTreeMap::new(),
-        },
+        &kind_wide_cache(
+            0,
+            BTreeMap::from([("claude".to_owned(), AgentRateLimits { windows })]),
+            BTreeMap::new(),
+        ),
     );
     (dir, runtime)
 }

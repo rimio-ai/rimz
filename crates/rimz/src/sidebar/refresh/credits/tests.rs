@@ -3,9 +3,27 @@ use crate::agents::SpendTally;
 use crate::ids::WorkspaceId;
 use crate::{SidebarProviderPanel, SpendWindow};
 
+fn merge_provider_credits_entry_if_due(
+    runtime: &crate::RuntimePaths,
+    kind: &str,
+    current_stamp: Option<u64>,
+    current_account_key: Option<String>,
+    entry: impl FnOnce() -> ProviderCreditsEntry,
+) -> Option<ProviderCreditsEntry> {
+    super::merge_provider_credits_entry_if_due(
+        runtime,
+        kind,
+        current_stamp,
+        current_account_key,
+        Default::default(),
+        entry,
+    )
+}
+
 fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
     SidebarProviderPanel {
         kind: kind.to_owned(),
+        account_scope: Default::default(),
         product_name: kind.to_owned(),
         art: Vec::new(),
         color: 1,
@@ -30,6 +48,65 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
 }
 
 #[test]
+fn scoped_plan_and_credits_require_a_matching_provider_panel() {
+    let now_ms = unix_now_ms();
+    let international =
+        crate::agents::ProviderAccountScope::sub_provider("alibaba", "international");
+    let cache = CreditsCache {
+        refreshed_at_ms: now_ms,
+        entries: BTreeMap::from([(
+            "qwen".to_owned(),
+            ProviderCreditsEntry {
+                scope: international.clone(),
+                observed_at_ms: now_ms,
+                oauth_read_at_ms: now_ms,
+                auth_settled: false,
+                credentials_stamp: None,
+                account_key: Some("alibaba-intl".to_owned()),
+                plan: Some("Pro".to_owned()),
+                ok: true,
+                extra_credits: Some(ExtraCredits::known(None, Some(5.0), None)),
+                reset_credits: None,
+            },
+        )]),
+    };
+    let workspace = crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp"));
+
+    let mut mismatch = crate::sidebar::test_support::snapshot_with_panels(
+        workspace.clone(),
+        vec![panel("qwen", true)],
+    );
+    mismatch.providers[0].account_scope =
+        crate::agents::ProviderAccountScope::sub_provider("alibaba", "china");
+    apply_credits_cache_with(
+        &mut mismatch,
+        &cache,
+        &crate::config::AccountsConfig::default(),
+        now_ms,
+    );
+    assert!(mismatch.providers[0].plan.is_none());
+    assert!(mismatch.providers[0].extra_credits.is_none());
+
+    let mut matching =
+        crate::sidebar::test_support::snapshot_with_panels(workspace, vec![panel("qwen", true)]);
+    matching.providers[0].account_scope = international;
+    apply_credits_cache_with(
+        &mut matching,
+        &cache,
+        &crate::config::AccountsConfig::default(),
+        now_ms,
+    );
+    assert_eq!(matching.providers[0].plan.as_deref(), Some("Pro"));
+    assert_eq!(
+        matching.providers[0]
+            .extra_credits
+            .as_ref()
+            .and_then(ExtraCredits::remaining_usd),
+        Some(5.0)
+    );
+}
+
+#[test]
 fn oauth_read_stamp_throttles_oauth_probe() {
     let dir = tempfile::tempdir().unwrap();
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
@@ -44,6 +121,7 @@ fn oauth_read_stamp_throttles_oauth_probe() {
             entries: BTreeMap::from([(
                 "codex".to_owned(),
                 ProviderCreditsEntry {
+                    scope: Default::default(),
                     observed_at_ms: 10,
                     oauth_read_at_ms: now,
                     auth_settled: false,
@@ -63,6 +141,7 @@ fn oauth_read_stamp_throttles_oauth_probe() {
         merge_provider_credits_entry_if_due(&runtime, "codex", None, None, || {
             calls += 1;
             ProviderCreditsEntry {
+                scope: Default::default(),
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
@@ -88,6 +167,7 @@ fn oauth_read_stamp_throttles_oauth_probe() {
         merge_provider_credits_entry_if_due(&runtime, "codex", None, None, || {
             calls += 1;
             ProviderCreditsEntry {
+                scope: Default::default(),
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
@@ -119,6 +199,7 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
             entries: BTreeMap::from([(
                 "codex".to_owned(),
                 ProviderCreditsEntry {
+                    scope: Default::default(),
                     observed_at_ms: 10,
                     oauth_read_at_ms: now,
                     auth_settled: true,
@@ -138,6 +219,7 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
         merge_provider_credits_entry_if_due(&runtime, "codex", Some(41), None, || {
             calls += 1;
             ProviderCreditsEntry {
+                scope: Default::default(),
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
@@ -158,6 +240,7 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
         merge_provider_credits_entry_if_due(&runtime, "codex", Some(42), None, || {
             calls += 1;
             ProviderCreditsEntry {
+                scope: Default::default(),
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
@@ -186,6 +269,7 @@ fn settled_oauth_read_uses_long_ttl_and_credential_stamp() {
         merge_provider_credits_entry_if_due(&runtime, "codex", Some(42), None, || {
             calls += 1;
             ProviderCreditsEntry {
+                scope: Default::default(),
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
@@ -218,6 +302,7 @@ fn account_key_change_bypasses_fresh_oauth_stamp() {
             entries: BTreeMap::from([(
                 "codex".to_owned(),
                 ProviderCreditsEntry {
+                    scope: Default::default(),
                     observed_at_ms: 10,
                     oauth_read_at_ms: now,
                     auth_settled: false,
@@ -242,6 +327,7 @@ fn account_key_change_bypasses_fresh_oauth_stamp() {
             || {
                 calls += 1;
                 ProviderCreditsEntry {
+                    scope: Default::default(),
                     observed_at_ms: unix_now_ms(),
                     oauth_read_at_ms: unix_now_ms(),
                     auth_settled: false,
@@ -281,6 +367,7 @@ fn identified_account_bypasses_fresh_unowned_entry() {
             entries: BTreeMap::from([(
                 "codex".to_owned(),
                 ProviderCreditsEntry {
+                    scope: Default::default(),
                     observed_at_ms: 10,
                     oauth_read_at_ms: now,
                     auth_settled: false,
@@ -305,6 +392,7 @@ fn identified_account_bypasses_fresh_unowned_entry() {
             || {
                 calls += 1;
                 ProviderCreditsEntry {
+                    scope: Default::default(),
                     observed_at_ms: unix_now_ms(),
                     oauth_read_at_ms: unix_now_ms(),
                     auth_settled: false,
@@ -336,6 +424,7 @@ fn failed_oauth_after_account_key_change_does_not_carry_prior_account() {
         &runtime,
         "codex",
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 42,
             oauth_read_at_ms: 1,
             auth_settled: false,
@@ -350,6 +439,7 @@ fn failed_oauth_after_account_key_change_does_not_carry_prior_account() {
 
     merge_provider_credits_entry_if_due(&runtime, "codex", None, Some("new".to_owned()), || {
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: unix_now_ms(),
             oauth_read_at_ms: unix_now_ms(),
             auth_settled: false,
@@ -383,6 +473,7 @@ fn failed_oauth_with_identified_account_clears_unowned_prior_display() {
         &runtime,
         "codex",
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 42,
             oauth_read_at_ms: 1,
             auth_settled: false,
@@ -401,6 +492,7 @@ fn failed_oauth_with_identified_account_clears_unowned_prior_display() {
         None,
         Some("current".to_owned()),
         || ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: unix_now_ms(),
             oauth_read_at_ms: unix_now_ms(),
             auth_settled: false,
@@ -483,6 +575,7 @@ fn oauth_merge_records_settled_auth_and_success_clears_it() {
 
     merge_provider_credits_entry_if_due(&runtime, "codex", Some(7), None, || {
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: unix_now_ms(),
             oauth_read_at_ms: unix_now_ms(),
             auth_settled: true,
@@ -503,6 +596,7 @@ fn oauth_merge_records_settled_auth_and_success_clears_it() {
 
     merge_provider_credits_entry_if_due(&runtime, "codex", Some(7), None, || {
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: unix_now_ms(),
             oauth_read_at_ms: unix_now_ms(),
             auth_settled: false,
@@ -538,6 +632,7 @@ fn fold_applies_cached_credits_and_api_spend_ceiling() {
     cache.entries.insert(
         "claude".to_owned(),
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 100,
             oauth_read_at_ms: 0,
             auth_settled: false,
@@ -606,6 +701,7 @@ fn extra_credits_only_merge_preserves_prior_oauth_and_reset_state() {
         &runtime,
         "codex",
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 1,
             oauth_read_at_ms: 1234,
             auth_settled: true,
@@ -676,6 +772,7 @@ fn realtime_reset_credit_merge_preserves_paid_credit_and_oauth_state() {
         &runtime,
         "codex",
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 1,
             oauth_read_at_ms: 1234,
             auth_settled: false,
@@ -747,6 +844,7 @@ fn failed_oauth_merge_preserves_prior_displayable_credits() {
         &runtime,
         "codex",
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 42,
             oauth_read_at_ms: 1,
             auth_settled: false,
@@ -760,6 +858,7 @@ fn failed_oauth_merge_preserves_prior_displayable_credits() {
     );
 
     merge_provider_credits_entry_if_due(&runtime, "codex", None, None, || ProviderCreditsEntry {
+        scope: Default::default(),
         observed_at_ms: unix_now_ms(),
         oauth_read_at_ms: unix_now_ms(),
         auth_settled: false,
@@ -795,6 +894,7 @@ fn invalidate_oauth_read_zeroes_attempt_stamp() {
         &runtime,
         "codex",
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 1,
             oauth_read_at_ms: 1234,
             auth_settled: true,
@@ -822,6 +922,7 @@ fn invalidate_oauth_read_zeroes_attempt_stamp() {
         merge_provider_credits_entry_if_due(&runtime, "codex", Some(9), None, || {
             calls += 1;
             ProviderCreditsEntry {
+                scope: Default::default(),
                 observed_at_ms: unix_now_ms(),
                 oauth_read_at_ms: unix_now_ms(),
                 auth_settled: false,
@@ -850,6 +951,7 @@ fn genuine_zero_reset_credits_replaces_prior_count() {
         &runtime,
         "codex",
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 1,
             oauth_read_at_ms: 0,
             auth_settled: false,
@@ -868,6 +970,7 @@ fn genuine_zero_reset_credits_replaces_prior_count() {
         &runtime,
         "codex",
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 2,
             oauth_read_at_ms: 0,
             auth_settled: false,
@@ -911,6 +1014,7 @@ fn fold_applies_displayable_reset_credits_to_metered_panel() {
     cache.entries.insert(
         "codex".to_owned(),
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: now_ms,
             oauth_read_at_ms: 0,
             auth_settled: false,
@@ -925,6 +1029,7 @@ fn fold_applies_displayable_reset_credits_to_metered_panel() {
     cache.entries.insert(
         "claude".to_owned(),
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 0,
             oauth_read_at_ms: 0,
             auth_settled: false,
@@ -964,6 +1069,7 @@ fn fold_fills_missing_plan_from_displayable_credits_entry() {
     cache.entries.insert(
         "codex".to_owned(),
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: now_ms,
             oauth_read_at_ms: 0,
             auth_settled: false,
@@ -978,6 +1084,7 @@ fn fold_fills_missing_plan_from_displayable_credits_entry() {
     cache.entries.insert(
         "claude".to_owned(),
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: now_ms,
             oauth_read_at_ms: 0,
             auth_settled: false,
@@ -992,6 +1099,7 @@ fn fold_fills_missing_plan_from_displayable_credits_entry() {
     cache.entries.insert(
         "pi".to_owned(),
         ProviderCreditsEntry {
+            scope: Default::default(),
             observed_at_ms: 0,
             oauth_read_at_ms: 0,
             auth_settled: false,

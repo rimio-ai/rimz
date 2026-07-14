@@ -1939,11 +1939,11 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
     let cache: Value = serde_json::from_slice(&std::fs::read(cache_path).expect("rate cache"))
         .expect("rate cache json");
     assert_eq!(
-        cache["windows"]["codex"]["windows"][0]["used_percentage"], 42,
+        cache["entries"]["codex"]["limits"]["windows"][0]["used_percentage"], 42,
         "the short window comes from the app-server primary window"
     );
     assert_eq!(
-        cache["windows"]["codex"]["windows"][1]["used_percentage"], 7,
+        cache["entries"]["codex"]["limits"]["windows"][1]["used_percentage"], 7,
         "the long window comes from the app-server secondary window"
     );
     let credits_path = env.runtime_paths().shared_credits_path();

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{ExtraCredits, ResetCredits};
+use crate::agents::{ExtraCredits, ProviderAccountScope, ResetCredits};
 use crate::config::AccountsConfig;
 use crate::sidebar::timing::unix_now_ms;
 use crate::sidebar::timing::{CREDITS_DISPLAY_MAX_AGE, OAUTH_USAGE_SETTLED_TTL, OAUTH_USAGE_TTL};
@@ -19,6 +19,8 @@ pub struct CreditsCache {
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderCreditsEntry {
+    #[serde(default)]
+    pub scope: ProviderAccountScope,
     pub observed_at_ms: u64,
     /// Last OAuth account-usage attempt. App-server/realtime credit writes
     /// preserve this stamp and its settled-auth state and never advance the
@@ -85,6 +87,7 @@ pub fn merge_provider_realtime_usage(
         runtime,
         kind,
         ProviderCreditsEntry {
+            scope: ProviderAccountScope::KindWide,
             observed_at_ms: unix_now_ms(),
             oauth_read_at_ms: 0,
             auth_settled: false,
@@ -107,6 +110,7 @@ pub fn merge_provider_credits_entry_if_due(
     kind: &str,
     current_stamp: Option<u64>,
     current_account_key: Option<String>,
+    current_scope: ProviderAccountScope,
     entry: impl FnOnce() -> ProviderCreditsEntry,
 ) -> Option<ProviderCreditsEntry> {
     let path = runtime.shared_credits_path();
@@ -115,7 +119,13 @@ pub fn merge_provider_credits_entry_if_due(
     let now_ms = unix_now_ms();
     let prior = cache.entries.get(kind).cloned();
     if prior.as_ref().is_some_and(|entry| {
-        oauth_read_is_fresh(entry, now_ms, current_stamp, current_account_key.as_deref())
+        oauth_read_is_fresh(
+            entry,
+            now_ms,
+            current_stamp,
+            current_account_key.as_deref(),
+            &current_scope,
+        )
     }) {
         return None;
     }
@@ -132,10 +142,11 @@ pub fn merge_provider_credits_entry_if_due(
         current_account_key
     };
     let prior_account_mismatch = prior.as_ref().is_some_and(|prior| {
-        account_key_mismatch(
-            prior.account_key.as_deref(),
-            effective_account_key.as_deref(),
-        )
+        prior.scope != entry.scope
+            || account_key_mismatch(
+                prior.account_key.as_deref(),
+                effective_account_key.as_deref(),
+            )
     });
     if !entry.ok {
         if !prior_account_mismatch && let Some(prior) = prior.as_ref() {
@@ -171,7 +182,10 @@ pub(crate) fn merge_provider_credits_entry(
     let mut cache = read_credits_cache(&path);
     let mut entry = entry;
     entry.plan = entry.plan.and_then(non_empty_trimmed);
-    let prior = cache.entries.get(kind);
+    let prior = cache
+        .entries
+        .get(kind)
+        .filter(|prior| prior.scope == entry.scope);
     if entry.oauth_read_at_ms == 0
         && let Some(prior) = prior
     {
@@ -215,11 +229,14 @@ fn oauth_read_is_fresh(
     now_ms: u64,
     current_stamp: Option<u64>,
     current_account_key: Option<&str>,
+    current_scope: &ProviderAccountScope,
 ) -> bool {
     if entry.oauth_read_at_ms == 0 {
         return false;
     }
-    if account_key_mismatch(entry.account_key.as_deref(), current_account_key) {
+    if &entry.scope != current_scope
+        || account_key_mismatch(entry.account_key.as_deref(), current_account_key)
+    {
         return false;
     }
     let ttl = if entry.auth_settled {
@@ -286,6 +303,7 @@ fn apply_credits_cache_with(
             let displayable_entry = cache
                 .entries
                 .get(&panel.kind)
+                .filter(|entry| entry.scope == panel.account_scope)
                 .filter(|entry| entry_is_displayable(entry, now_ms));
             if panel.plan.is_none() {
                 panel.plan = displayable_entry

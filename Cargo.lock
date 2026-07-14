@@ -973,6 +973,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3070,6 +3076,7 @@ dependencies = [
  "colorchoice",
  "crc32fast",
  "divan",
+ "dotenvy",
  "flate2",
  "foldhash",
  "glob",
@@ -3108,6 +3115,7 @@ dependencies = [
  "tungstenite",
  "unicode-width 0.2.2",
  "ureq",
+ "url",
  "uuid",
  "vt100",
  "which",

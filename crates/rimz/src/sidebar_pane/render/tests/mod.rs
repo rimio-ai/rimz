@@ -462,6 +462,7 @@ fn provider_panel(
     };
     crate::SidebarProviderPanel {
         kind: kind.to_owned(),
+        account_scope: Default::default(),
         product_name: product_name.to_owned(),
         art: vec![
             " ▐▛███▜▌".to_owned(),

@@ -99,11 +99,11 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
     assert_ne!(credits["entries"]["claude"]["account_key"], "claude-token");
     let limits = read_json(runtime.shared_rate_limits_path());
     assert_eq!(
-        limits["windows"]["claude"]["windows"][0]["used_percentage"],
+        limits["entries"]["claude"]["limits"]["windows"][0]["used_percentage"],
         13
     );
     assert_eq!(
-        limits["windows"]["claude"]["windows"][1]["duration_mins"],
+        limits["entries"]["claude"]["limits"]["windows"][1]["duration_mins"],
         10080
     );
 }
@@ -166,7 +166,7 @@ fn claude_refresh_usage_retries_transient_http_failures() {
 
     let limits = read_json(env.runtime_paths().shared_rate_limits_path());
     assert!(
-        limits["windows"]["claude"]["windows"]
+        limits["entries"]["claude"]["limits"]["windows"]
             .as_array()
             .is_some_and(|windows| !windows.is_empty())
     );
@@ -248,15 +248,15 @@ fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unrea
     assert_eq!(credits["entries"]["codex"]["account_key"], "acc_123");
     let limits = read_json(runtime.shared_rate_limits_path());
     assert_eq!(
-        limits["windows"]["codex"]["windows"][0]["used_percentage"],
+        limits["entries"]["codex"]["limits"]["windows"][0]["used_percentage"],
         42
     );
     assert_eq!(
-        limits["windows"]["codex"]["windows"][0]["duration_mins"],
+        limits["entries"]["codex"]["limits"]["windows"][0]["duration_mins"],
         300
     );
     assert_eq!(
-        limits["windows"]["codex"]["windows"][1]["duration_mins"],
+        limits["entries"]["codex"]["limits"]["windows"][1]["duration_mins"],
         10080
     );
 }

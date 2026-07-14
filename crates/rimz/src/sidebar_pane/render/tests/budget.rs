@@ -102,6 +102,7 @@ fn spend_window(usd: f64) -> SpendWindow {
 fn provider_panel(index: usize) -> SidebarProviderPanel {
     SidebarProviderPanel {
         kind: format!("provider{index}"),
+        account_scope: Default::default(),
         product_name: format!("Provider {index}"),
         art: vec!["▐███▌".to_owned(), "▝▜█▛▘".to_owned(), " ▘▝ ".to_owned()],
         color: 100 + index as u8,

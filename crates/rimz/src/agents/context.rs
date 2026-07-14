@@ -18,6 +18,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::MessageId;
 
+/// Cache identity for account facts exposed by an agent adapter.
+///
+/// Most agents authenticate one provider per agent kind. Multi-provider agents
+/// use `SubProvider` so a provider or region switch cannot reuse another
+/// account's usage reading.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProviderAccountScope {
+    #[default]
+    KindWide,
+    SubProvider {
+        provider: String,
+        variant: String,
+    },
+}
+
+impl ProviderAccountScope {
+    pub fn sub_provider(provider: impl Into<String>, variant: impl Into<String>) -> Self {
+        Self::SubProvider {
+            provider: provider.into(),
+            variant: variant.into(),
+        }
+    }
+
+    pub fn is_kind_wide(&self) -> bool {
+        matches!(self, Self::KindWide)
+    }
+}
+
 /// Rich per-session enrichment that has no first-class home on
 /// [`crate::agents::AgentState`]. Attached whole as `AgentState.context` and
 /// dropped whole when the session ends. The record is identity-free — the
@@ -175,6 +204,10 @@ pub struct SubagentObservation {
 /// plan type, Claude from `claude auth status`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentAccount {
+    /// Provider and variant identity used by account-usage caches. Kind-wide is
+    /// omitted so snapshots written before this field remain byte-compatible.
+    #[serde(default, skip_serializing_if = "ProviderAccountScope::is_kind_wide")]
+    pub scope: ProviderAccountScope,
     /// Raw plan/subscription tier the provider reports (`max`, `team`, `pro`);
     /// the renderer formats it into a brand label (`Claude Max`, `ChatGPT Pro`).
     #[serde(default, skip_serializing_if = "Option::is_none")]

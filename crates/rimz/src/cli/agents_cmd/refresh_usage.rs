@@ -15,6 +15,7 @@
 use anyhow::{Context, Result};
 use clap::Args;
 
+use rimz::ProviderAccountScope;
 use rimz::ids::WorkspaceId;
 use rimz::sidebar::refresh::{
     merge_account_rate_limits, merge_oauth_usage_if_due, merge_provider_realtime_usage,
@@ -26,7 +27,7 @@ use crate::cli::GlobalFlags;
 #[derive(Debug, Args)]
 pub(super) struct RefreshUsageArgs {
     /// The provider kind whose account usage is refreshed (`claude`, `codex`,
-    /// `pi`, `opencode`).
+    /// `kimi`, `pi`, `opencode`, `qwen`).
     #[arg(long)]
     kind: String,
     /// Workspace whose runtime cache the account usage is written into.
@@ -80,7 +81,7 @@ fn refresh_usage(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> boo
         wrote = true;
     }
     if let Some(rate_limits) = usage.rate_limits {
-        merge_account_rate_limits(runtime, kind, rate_limits);
+        merge_account_rate_limits(runtime, kind, ProviderAccountScope::KindWide, rate_limits);
         wrote = true;
     }
     wrote |= merge_oauth_usage_if_due(runtime, kind, merge_windows || windows_missing);

@@ -109,8 +109,12 @@ impl SidebarSnapshot {
                 .as_ref()
                 .and_then(|account| account.metered)
                 .unwrap_or(has_windows);
+            let account_scope = account
+                .as_ref()
+                .map(|account| account.scope.clone())
+                .unwrap_or_default();
             let plan = account
-                .and_then(|account| account.plan)
+                .and_then(|account| account.plan.clone())
                 .filter(|plan| !plan.is_empty())
                 .map(|raw| format_plan_label(&kind, &raw));
 
@@ -152,6 +156,7 @@ impl SidebarSnapshot {
             panels.push((
                 SidebarProviderPanel {
                     kind,
+                    account_scope,
                     product_name,
                     art,
                     color,

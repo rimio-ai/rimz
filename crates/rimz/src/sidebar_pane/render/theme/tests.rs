@@ -301,6 +301,7 @@ fn bundled_scheme_resolves_by_name() {
 fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
     let panel = crate::SidebarProviderPanel {
         kind: "claude".to_owned(),
+        account_scope: Default::default(),
         product_name: "Claude".to_owned(),
         art: Vec::new(),
         color: 173,
