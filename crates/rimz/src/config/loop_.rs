@@ -2,18 +2,25 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 /// `loop.toml`: scheduled and automated agent-loop helpers.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct LoopConfig {
+    #[serde(
+        rename = "default-timeout",
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_default_timeout"
+    )]
+    pub default_timeout: Option<String>,
     pub tasks: Tasks,
 }
 
 impl LoopConfig {
     pub fn is_empty(&self) -> bool {
-        self.tasks.0.is_empty()
+        self.default_timeout.is_none() && self.tasks.0.is_empty()
     }
 
     pub fn validate_budgets(&self) -> Result<(), TaskBudgetError> {
@@ -22,6 +29,21 @@ impl LoopConfig {
         }
         Ok(())
     }
+}
+
+fn deserialize_default_timeout<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    if let Some(value) = raw.as_deref() {
+        crate::harness::schedule::parse_duration_units(
+            value,
+            &[("s", 1), ("m", 60), ("h", 3_600), ("d", 86_400)],
+        )
+        .map_err(D::Error::custom)?;
+    }
+    Ok(raw)
 }
 
 /// Named loop tasks, ordered by name. A map keeps `rimz loop add/remove/run`
@@ -256,7 +278,10 @@ mod tests {
             ..TaskEntry::default()
         };
         let tasks = Tasks(BTreeMap::from([("ci".to_owned(), entry.clone())]));
-        let loop_config = LoopConfig { tasks };
+        let loop_config = LoopConfig {
+            tasks,
+            ..LoopConfig::default()
+        };
 
         let toml = toml::to_string(&loop_config).expect("toml");
         let toml_round: LoopConfig = toml::from_str(&toml).expect("toml round trip");
@@ -317,6 +342,17 @@ mod tests {
         let json = serde_json::to_string(&loop_config.tasks).expect("json");
         let json_round: Tasks = serde_json::from_str(&json).expect("json round trip");
         assert_eq!(json_round.0.get("ci"), Some(&entry));
+    }
+
+    #[test]
+    fn default_timeout_accepts_task_duration_units_and_rejects_invalid_values() {
+        let config: LoopConfig =
+            toml::from_str("default-timeout = \"2h\"\n").expect("valid default timeout");
+        assert_eq!(config.default_timeout.as_deref(), Some("2h"));
+
+        let err = toml::from_str::<LoopConfig>("default-timeout = \"forever\"\n")
+            .expect_err("invalid default timeout");
+        assert!(err.to_string().contains("duration"), "{err}");
     }
 
     #[test]

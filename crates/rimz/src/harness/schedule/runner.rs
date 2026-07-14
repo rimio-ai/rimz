@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
+use nix::errno::Errno;
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{
@@ -22,6 +25,7 @@ use crate::workspace::WorkspaceResolver;
 
 pub const CHECK_DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const RUN_LOCK_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const CHECK_OUTPUT_CAP: usize = 16 * 1024;
 const TASK_TIMEOUT_UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
 
@@ -49,6 +53,14 @@ pub enum RunLockAttempt {
 pub enum RunLockState {
     Available,
     Held(Option<RunLockInfo>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopAction {
+    Done,
+    CancelRun,
+    Signal(RunLockInfo),
+    Manual,
 }
 
 pub fn acquire_run_lock(name: &str, entry: &TaskEntry) -> Result<RunLockAttempt> {
@@ -90,11 +102,57 @@ fn probe_run_lock_path(path: &Path) -> Result<RunLockState> {
     probe_run_lock_file(file, path)
 }
 
-fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
+pub fn run_lock_path(name: &str, entry: &TaskEntry) -> Result<PathBuf> {
     let runtime =
         RuntimePaths::for_workspace(WorkspaceId::from_project_root(&entry.resolved_root()))
             .context("locating loop task runtime")?;
     Ok(runtime.root.join(format!("loop-run-{name}.lock")))
+}
+
+pub fn next_stop_action(
+    state: &RunLockState,
+    run_found: bool,
+    cancel_attempted: bool,
+    signal_attempted: bool,
+) -> StopAction {
+    match state {
+        RunLockState::Available => StopAction::Done,
+        RunLockState::Held(_) if run_found && !cancel_attempted => StopAction::CancelRun,
+        RunLockState::Held(Some(info)) if !signal_attempted => StopAction::Signal(*info),
+        RunLockState::Held(_) => StopAction::Manual,
+    }
+}
+
+pub fn signal_run_lock_holder(info: &RunLockInfo) -> Result<()> {
+    let pid = i32::try_from(info.pid).context("loop run lock holder pid is out of range")?;
+    if pid == 0 {
+        anyhow::bail!("loop run lock holder pid must be positive");
+    }
+    if info.pid == std::process::id() {
+        anyhow::bail!("refusing to signal the current process as a loop run lock holder");
+    }
+    match kill(Pid::from_raw(pid), Signal::SIGTERM) {
+        Ok(()) | Err(Errno::ESRCH) => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("signaling loop run lock holder pid {pid}")),
+    }
+}
+
+pub fn wait_for_run_lock_release(name: &str, entry: &TaskEntry, grace: Duration) -> Result<bool> {
+    wait_for_run_lock_release_path(&run_lock_path(name, entry)?, grace)
+}
+
+fn wait_for_run_lock_release_path(path: &Path, grace: Duration) -> Result<bool> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if matches!(probe_run_lock_path(path)?, RunLockState::Available) {
+            return Ok(true);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        std::thread::sleep(RUN_LOCK_RELEASE_POLL_INTERVAL.min(remaining));
+    }
 }
 
 fn acquire_run_lock_file(mut file: File, path: &Path) -> Result<RunLockAttempt> {
@@ -570,6 +628,61 @@ mod tests {
             probe_run_lock_file(contender, &empty_path).expect("probe empty lock"),
             RunLockState::Held(None)
         ));
+    }
+
+    #[test]
+    fn stop_ladder_cancels_then_signals_then_reports_manual_recovery() {
+        let info = RunLockInfo {
+            pid: 42,
+            started_at: Timestamp::from_second(1).expect("timestamp"),
+        };
+        assert_eq!(
+            next_stop_action(&RunLockState::Available, true, false, false),
+            StopAction::Done
+        );
+        assert_eq!(
+            next_stop_action(&RunLockState::Held(Some(info)), true, false, false),
+            StopAction::CancelRun
+        );
+        assert_eq!(
+            next_stop_action(&RunLockState::Held(Some(info)), true, true, false),
+            StopAction::Signal(info)
+        );
+        assert_eq!(
+            next_stop_action(&RunLockState::Held(Some(info)), true, true, true),
+            StopAction::Manual
+        );
+        assert_eq!(
+            next_stop_action(&RunLockState::Held(None), false, false, false),
+            StopAction::Manual
+        );
+    }
+
+    #[test]
+    fn wait_for_run_lock_release_observes_guard_drop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("task.lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .expect("open lock");
+        let guard = match acquire_run_lock_file(file, &path).expect("acquire lock") {
+            RunLockAttempt::Acquired(guard) => guard,
+            RunLockAttempt::Held(_) => panic!("fresh lock should be acquired"),
+        };
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(guard);
+        });
+
+        assert!(
+            wait_for_run_lock_release_path(&path, Duration::from_secs(1))
+                .expect("wait for release")
+        );
+        releaser.join().expect("release thread");
     }
 
     fn surplus_entry(surplus: Option<&str>, surplus_after: Option<&str>) -> TaskEntry {

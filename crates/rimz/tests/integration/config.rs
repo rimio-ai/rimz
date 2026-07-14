@@ -180,6 +180,23 @@ fn config_get_set_round_trip_preserves_template_comments() {
         .stdout("80\n");
 
     env.rimz()
+        .args(["config", "set", "loop.default-timeout", "3h"])
+        .assert()
+        .success()
+        .stdout(contains("set loop.default-timeout"));
+    env.rimz()
+        .args(["config", "get", "loop.default-timeout"])
+        .assert()
+        .success()
+        .stdout("3h\n");
+    let loop_text =
+        std::fs::read_to_string(loop_config_path(&env)).expect("read updated loop config");
+    assert!(
+        loop_text.contains("default-timeout = \"3h\""),
+        "{loop_text}"
+    );
+
+    env.rimz()
         .args(["config", "set", "theme.display.width_percent", "25"])
         .assert()
         .success()
@@ -326,6 +343,12 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .assert()
         .failure()
         .stderr(contains("invalid auto-compact threshold `abc`"));
+
+    env.rimz()
+        .args(["config", "set", "loop.default-timeout", "forever"])
+        .assert()
+        .failure()
+        .stderr(contains("validating `loop.default-timeout`"));
 
     let bad_scheme = env.home_root.join("bad-theme.toml");
     std::fs::write(&bad_scheme, "[colors.primary]\nbackground = 'nothex'\n")

@@ -71,6 +71,7 @@ use show::{focus_agent, show_agent};
 #[cfg(test)]
 use stop::run_stop_should_cancel;
 use stop::stop_agent;
+pub(crate) use stop::stop_run;
 #[cfg(test)]
 use supervised::run::{RunPlacement, run_placement, validate_supervised_output};
 use supervised::run::{run_print, run_supervised};

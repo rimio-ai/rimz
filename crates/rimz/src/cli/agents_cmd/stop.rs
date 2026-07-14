@@ -70,7 +70,7 @@ fn stop_live_agent(
     }
 }
 
-fn stop_run(
+pub(crate) fn stop_run(
     workspace: &rimz::ResolvedWorkspace,
     store: &rimz::Store,
     globals: &GlobalFlags,

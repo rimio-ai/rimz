@@ -3,6 +3,8 @@
 use super::*;
 
 const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
+pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+pub(super) const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
 
 // ---- run --------------------------------------------------------------------
 
@@ -201,7 +203,7 @@ fn finish_overlapped(
     started: Instant,
     info: Option<RunLockInfo>,
 ) -> Result<()> {
-    let detail = info.map(|info| {
+    let record_detail = info.map(|info| {
         format!(
             "previous run still active (pid {}, started {}) — skipped",
             info.pid,
@@ -209,22 +211,20 @@ fn finish_overlapped(
         )
     });
     let mut record = LoopRunRecord::new(name, LoopRunResult::Overlapped, mode, elapsed_ms(started));
-    record.error = detail.clone();
+    record.error = record_detail.clone();
     record_run(name, entry, record);
+    let stop_hint = format!("stop it with `rimz loop stop {name}`");
     if mode == LoopRunMode::Manual {
-        write_manual_verdict(
-            &mut ui::out(),
-            LoopRunResult::Overlapped,
-            detail
-                .as_deref()
-                .unwrap_or("previous run still active — skipped"),
-        )?;
-    } else if let Some(detail) = detail {
-        writeln!(ui::out(), "loop `{name}`: {detail}")?;
+        let detail = record_detail
+            .map(|detail| format!("{detail}; {stop_hint}"))
+            .unwrap_or_else(|| format!("previous run still active — skipped; {stop_hint}"));
+        write_manual_verdict(&mut ui::out(), LoopRunResult::Overlapped, &detail)?;
+    } else if let Some(detail) = record_detail {
+        writeln!(ui::out(), "loop `{name}`: {detail}; {stop_hint}")?;
     } else {
         writeln!(
             ui::out(),
-            "loop `{name}`: previous run still active; skipping"
+            "loop `{name}`: previous run still active; skipping; {stop_hint}"
         )?;
     }
     Ok(())
@@ -554,12 +554,20 @@ fn execute_spawn_task(
         .filter(|mode| !mode.trim().is_empty())
         .map(parse_mode_value)
         .transpose()?;
-    let timeout = entry
+    let task_timeout = entry
         .timeout
         .as_deref()
         .map(parse_task_timeout)
         .transpose()
         .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let configured_timeout = MachineConfig::load_lenient()
+        .r#loop
+        .default_timeout
+        .as_deref()
+        .map(parse_task_timeout)
+        .transpose()
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let timeout = effective_spawn_timeout(execution.mode, task_timeout, configured_timeout);
     let mut run_globals = execution.globals.clone();
     run_globals.root = Some(entry.resolved_root());
     if execution.mode == LoopRunMode::Scheduled && instances::is_ephemeral(entry) {
@@ -615,6 +623,17 @@ fn execute_spawn_task(
         }
         Err(err) => Err(err),
     }
+}
+
+fn effective_spawn_timeout(
+    mode: LoopRunMode,
+    task_timeout: Option<Duration>,
+    configured_timeout: Option<Duration>,
+) -> Option<Duration> {
+    task_timeout.or_else(|| {
+        (mode == LoopRunMode::Scheduled)
+            .then_some(configured_timeout.unwrap_or(SCHEDULED_RUN_DEFAULT_TIMEOUT))
+    })
 }
 
 fn execute_delivery_task(
@@ -1158,6 +1177,28 @@ pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduled_spawn_timeout_prefers_task_then_config_then_builtin() {
+        let task = Duration::from_secs(30);
+        let configured = Duration::from_secs(60);
+        assert_eq!(
+            effective_spawn_timeout(LoopRunMode::Scheduled, Some(task), Some(configured)),
+            Some(task)
+        );
+        assert_eq!(
+            effective_spawn_timeout(LoopRunMode::Scheduled, None, Some(configured)),
+            Some(configured)
+        );
+        assert_eq!(
+            effective_spawn_timeout(LoopRunMode::Scheduled, None, None),
+            Some(SCHEDULED_RUN_DEFAULT_TIMEOUT)
+        );
+        assert_eq!(
+            effective_spawn_timeout(LoopRunMode::Manual, None, Some(configured)),
+            None
+        );
+    }
 
     #[test]
     fn manual_tty_prompts_for_blocked_project_trust() {

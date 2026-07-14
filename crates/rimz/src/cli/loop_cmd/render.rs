@@ -1018,6 +1018,12 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         None
     };
     let records = run_log::task_records(&state_home(), &args.name);
+    let lock_state = probe_run_lock(&args.name, &entry).ok();
+    let active_run = if matches!(lock_state.as_ref(), Some(RunLockState::Held(_))) {
+        stop::newest_active_run_for_entry(&args.name, &entry)?
+    } else {
+        None
+    };
 
     let mut out = ui::out();
     write_show_headline(
@@ -1035,8 +1041,12 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         &entry,
         source,
         &records,
-        &now_zoned,
-        active_pause.is_some(),
+        ShowFactsContext {
+            now_zoned: &now_zoned,
+            is_paused: active_pause.is_some(),
+            lock_state: lock_state.as_ref(),
+            active_run: active_run.as_ref(),
+        },
     )?;
 
     if records.is_empty() {
@@ -1119,28 +1129,57 @@ fn write_show_headline(
     Ok(())
 }
 
+struct ShowFactsContext<'a> {
+    now_zoned: &'a jiff::Zoned,
+    is_paused: bool,
+    lock_state: Option<&'a RunLockState>,
+    active_run: Option<&'a RunRecord>,
+}
+
 fn write_show_facts(
     out: &mut impl Write,
     name: &str,
     entry: &TaskEntry,
     source: TaskSource,
     records: &[LoopRunRecord],
-    now_zoned: &jiff::Zoned,
-    is_paused: bool,
+    context: ShowFactsContext<'_>,
 ) -> std::io::Result<()> {
     let root = entry.resolved_root();
     let room_is_open = room_open(&root);
     let blocked_state = blocked_project_state(source);
     let strike_count = strikes::load().get(name).copied().unwrap_or(0);
-    let active = match probe_run_lock(name, entry) {
-        Ok(RunLockState::Held(Some(info))) => Some(format!(
-            "run in progress · pid {} · started {}",
+    let run_id = context.active_run.map(|record| record.run_id.as_str());
+    let active = match context.lock_state {
+        Some(RunLockState::Held(Some(info))) => Some(format!(
+            "run in progress{} · pid {} · started {}",
+            run_id
+                .map(|run_id| format!(" · run {run_id}"))
+                .unwrap_or_default(),
             info.pid,
             ui::rel_age(info.started_at, Timestamp::now())
         )),
-        Ok(RunLockState::Held(None)) => Some("run in progress".to_owned()),
-        Ok(RunLockState::Available) | Err(_) => None,
+        Some(RunLockState::Held(None)) => Some(
+            run_id
+                .map(|run_id| format!("run in progress · run {run_id}"))
+                .unwrap_or_else(|| "run in progress".to_owned()),
+        ),
+        Some(RunLockState::Available) | None => None,
     };
+    let has_active_run = active.is_some();
+    let timeout = entry.timeout.clone().or_else(|| {
+        entry.agent.as_ref().map(|_| {
+            format!(
+                "{} (default)",
+                MachineConfig::load_lenient()
+                    .r#loop
+                    .default_timeout
+                    .clone()
+                    .unwrap_or_else(|| {
+                        run_tasks::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned()
+                    })
+            )
+        })
+    });
     let mut kv = ui::KeyVals::new().indent(2);
     kv.push("task", ui::cell(task_subject(entry)));
     if let Some(check) = check_summary(entry) {
@@ -1172,10 +1211,10 @@ fn write_show_facts(
     if let Some(surplus) = surplus_label(entry) {
         kv.push("surplus", ui::cell(surplus));
     }
-    if let Some(spend) = spend_label(entry, records, now_zoned) {
+    if let Some(spend) = spend_label(entry, records, context.now_zoned) {
         kv.push("spend", ui::cell(spend));
     }
-    if !is_paused
+    if !context.is_paused
         && strike_count > 0
         && let Some(max) = strikes::threshold(entry)
     {
@@ -1184,7 +1223,14 @@ fn write_show_facts(
             ui::cell(format!("{strike_count}/{max}")).fg(ui::palette::MUTED),
         );
     }
-    kv.render(out)
+    kv.render(out)?;
+    if let Some(timeout) = timeout {
+        writeln!(out, "  timeout: {timeout}")?;
+    }
+    if has_active_run {
+        writeln!(out, "  stop with `rimz loop stop {name}`")?;
+    }
+    Ok(())
 }
 
 fn write_runs_table(

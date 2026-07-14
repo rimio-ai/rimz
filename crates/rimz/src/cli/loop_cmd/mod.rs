@@ -29,15 +29,16 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 
 use rimz::agents::{HookPreflightErr, TurnLifecycleNeed, find_adapter, preflight_hooks};
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
-use rimz::harness::run::PermissionMode;
+use rimz::harness::run::{PermissionMode, RunRecord};
 use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunRecord, LoopRunResult,
 };
 use rimz::harness::schedule::runner::{
-    CHECK_DEFAULT_TIMEOUT, CheckEcho, RunLockAttempt, RunLockInfo, RunLockState, acquire_run_lock,
-    augment_prompt, check_only_result, check_record, check_timeout, deadline_expired,
-    polarity_fires, probe_run_lock, reset_window_already_running, run_check, surplus_gate,
-    tail_output, window_already_running, window_reset_at,
+    CHECK_DEFAULT_TIMEOUT, CheckEcho, RunLockAttempt, RunLockInfo, RunLockState, StopAction,
+    acquire_run_lock, augment_prompt, check_only_result, check_record, check_timeout,
+    deadline_expired, next_stop_action, polarity_fires, probe_run_lock,
+    reset_window_already_running, run_check, run_lock_path, signal_run_lock_holder, surplus_gate,
+    tail_output, wait_for_run_lock_release, window_already_running, window_reset_at,
 };
 use rimz::harness::schedule::{
     self,
@@ -61,6 +62,7 @@ mod add;
 mod render;
 #[path = "run.rs"]
 mod run_tasks;
+mod stop;
 
 pub(crate) use run_tasks::reap_dead_delivery_schedules;
 
@@ -82,6 +84,8 @@ enum LoopSubcmd {
     Pause(PauseArgs),
     /// Resume a paused task without replaying missed fires.
     Resume(NameArgs),
+    /// Stop a task's active run, releasing its overlap lock.
+    Stop(NameArgs),
     /// List configured tasks and whether their room is open.
     List,
     /// Hold a live loop dashboard open and repaint countdowns.
@@ -246,6 +250,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::Rename(args) => add::rename(&args.name, &args.new_name, globals),
         LoopSubcmd::Pause(args) => add::pause(args, globals),
         LoopSubcmd::Resume(args) => add::resume(&args.name, globals),
+        LoopSubcmd::Stop(args) => stop::stop(&args.name, globals),
         LoopSubcmd::List => render::list(globals),
         LoopSubcmd::Watch(args) => render::watch(args, globals),
         LoopSubcmd::Show(args) => render::show(args, globals),

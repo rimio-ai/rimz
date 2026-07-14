@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -1624,7 +1624,8 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
 
     let stdout = loop_ok(&env, &["loop", "run", "busy"]);
     assert!(
-        stdout.contains("previous run still active (pid 42424, started 25m ago) — skipped"),
+        stdout.contains("previous run still active (pid 42424, started 25m ago) — skipped")
+            && stdout.contains("stop it with `rimz loop stop busy`"),
         "overlap should print skip message: {stdout}"
     );
     assert!(
@@ -1643,13 +1644,27 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
 
     let stdout = loop_ok(&env, &["loop", "fire", "busy"]);
     assert!(
-        stdout.contains("previous run still active (pid 42424, started 25m ago) — skipped"),
+        stdout.contains("previous run still active (pid 42424, started 25m ago) — skipped")
+            && stdout.contains("stop it with `rimz loop stop busy`"),
         "manual overlap should print holder details: {stdout}"
     );
+
+    let mut linked_run = RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        PermissionMode::Auto,
+        "busy loop task".to_owned(),
+        env.project_root.clone(),
+    );
+    linked_run.status = RunStatus::Running;
+    linked_run.loop_task = Some("busy".to_owned());
+    rimz::harness::run::create(env.store().paths(), &linked_run).expect("create linked run");
 
     let stdout = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
         stdout.contains("overlapped")
+            && stdout.contains(linked_run.run_id.as_str())
+            && stdout.contains("stop with `rimz loop stop busy`")
             && stdout.lines().any(|line| {
                 line.contains("active:")
                     && line.contains("run in progress")
@@ -1659,6 +1674,85 @@ fn loop_run_overlapped_records_skip_and_keeps_task_state() {
         "show should display overlapped record and active holder: {stdout}"
     );
     lock_file.unlock().expect("unlock loop run lock");
+}
+
+#[test]
+fn loop_show_displays_the_effective_scheduled_timeout() {
+    let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "default-timeout = \"3h\"\n\
+             [tasks.bounded]\n\
+             agent = \"codex\"\n\
+             prompt = \"bounded work\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let stdout = loop_ok(&env, &["loop", "show", "bounded"]);
+    assert!(stdout.contains("timeout: 3h (default)"), "{stdout}");
+}
+
+#[test]
+fn loop_stop_reports_when_no_run_is_active() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &["loop", "add", "idle", "--check", "true", "--every", "15m"],
+    );
+
+    let stdout = loop_ok(&env, &["loop", "stop", "idle"]);
+    assert!(stdout.contains("loop `idle`: no active run"), "{stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn loop_stop_sigterms_an_unlinked_holder_and_records_cancellation() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "stuck",
+            "--check",
+            "parent=$PPID; while kill -0 \"$parent\" 2>/dev/null; do sleep 1; done",
+            "--every",
+            "15m",
+        ],
+    );
+    let mut runner = env
+        .rimz()
+        .args(["loop", "run", "stuck"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn stuck loop runner");
+    let info = wait_for_held_loop_lock(&mut runner, &loop_run_lock_path(&env, "stuck"));
+    assert_eq!(info.pid, runner.id());
+
+    let stdout = loop_ok(&env, &["loop", "stop", "stuck"]);
+    assert!(
+        stdout.contains("loop `stuck`: stopped") && stdout.contains("SIGTERM"),
+        "{stdout}"
+    );
+    let released = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(loop_run_lock_path(&env, "stuck"))
+        .expect("open released loop lock");
+    released.try_lock().expect("loop lock released");
+    let status = runner.wait().expect("wait for stopped runner");
+    assert!(!status.success(), "SIGTERMed runner should not succeed");
+
+    let records = read_loop_run_records(&env);
+    let stopped = records.last().expect("stopped history record");
+    assert_eq!(stopped.task, "stuck");
+    assert_eq!(stopped.result, LoopRunResult::Canceled);
+    assert_eq!(stopped.error.as_deref(), Some("stopped by rimz loop stop"));
 }
 
 #[test]
@@ -2019,6 +2113,33 @@ fn loop_run_lock_path(env: &Env, name: &str) -> std::path::PathBuf {
     env.runtime_paths()
         .root
         .join(format!("loop-run-{name}.lock"))
+}
+
+#[cfg(unix)]
+fn wait_for_held_loop_lock(child: &mut std::process::Child, path: &Path) -> RunLockInfo {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            && matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+            && let Ok(bytes) = std::fs::read(path)
+            && let Ok(info) = serde_json::from_slice(&bytes)
+        {
+            return info;
+        }
+        assert!(
+            child.try_wait().expect("poll loop runner").is_none(),
+            "loop runner exited before holding its lock"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for loop run lock {}",
+            path.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
 
 fn append_legacy_loop_record(env: &Env, task: &str, result: LoopRunResult) {
