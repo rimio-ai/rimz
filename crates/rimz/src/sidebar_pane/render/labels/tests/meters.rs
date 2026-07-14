@@ -667,11 +667,29 @@ fn no_color_shape_contracts_keep_budget_and_diff_readable() {
 #[test]
 fn token_breakdown_keeps_shape_and_marker_styles() {
     let plain = Theme::fixed(true);
-    let spans = token_breakdown_spans(&plain, 76_000, 12_000, 64_000, 68_000, fmt::tokens_int);
+    let spans = token_breakdown_spans(
+        &plain,
+        76_000,
+        12_000,
+        64_000,
+        68_000,
+        fmt::tokens_int,
+        TokenDetail::Full,
+        &TokenColumns::default(),
+    );
     assert_eq!(text(&spans), "◇ 76k ↘ 12k ↗ 64k ◌ 68k");
 
     let lit = Theme::fixed(false);
-    let spans = token_breakdown_spans(&lit, 76_000, 12_000, 64_000, 68_000, fmt::tokens_int);
+    let spans = token_breakdown_spans(
+        &lit,
+        76_000,
+        12_000,
+        64_000,
+        68_000,
+        fmt::tokens_int,
+        TokenDetail::Full,
+        &TokenColumns::default(),
+    );
     let marker = |glyph: &str| {
         spans
             .iter()
@@ -717,7 +735,16 @@ fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
         },
     );
 
-    let spans = token_breakdown_spans(&theme, 76_000, 12_000, 64_000, 68_000, fmt::tokens_int);
+    let spans = token_breakdown_spans(
+        &theme,
+        76_000,
+        12_000,
+        64_000,
+        68_000,
+        fmt::tokens_int,
+        TokenDetail::Full,
+        &TokenColumns::default(),
+    );
     assert_eq!(
         text(&spans),
         "\u{ed58} 76k \u{f103} 12k \u{f102} 64k \u{f1978} 68k"

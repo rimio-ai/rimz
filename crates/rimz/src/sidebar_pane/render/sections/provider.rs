@@ -13,8 +13,8 @@ use crate::sidebar_pane::render::fmt::{
     dollars_cap, dollars2, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    mana_bar_spans, mana_style, pace_reading, pace_style, token_breakdown_spans,
-    unknown_mana_bar_spans,
+    TokenColumns, TokenDetail, mana_bar_spans, mana_style, pace_reading, pace_style,
+    token_breakdown_spans, unknown_mana_bar_spans,
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -81,12 +81,6 @@ impl ProviderLayout {
     fn inline_art(self) -> bool {
         self != Self::Wide
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TokenDetail {
-    Full,
-    Summary,
 }
 
 /// The fallback fleet store rows pinned below no-table dashboards: the trailing
@@ -237,6 +231,15 @@ impl WmColumns {
         }
         cols
     }
+
+    fn token_columns(&self) -> TokenColumns {
+        TokenColumns {
+            total: self.total,
+            input: self.input,
+            output: self.output,
+            cache_read: self.cache_read,
+        }
+    }
 }
 
 fn total_delimiter_row(theme: &Theme, width: usize) -> Vec<Span<'static>> {
@@ -370,53 +373,16 @@ fn spend_token_metric_spans(
     token_detail: TokenDetail,
     cols: &WmColumns,
 ) -> Vec<Span<'static>> {
-    let value = theme.body();
-    let marker = |color: Color| theme.style(color, Modifier::empty());
-    let mut spans = vec![
-        Span::styled(
-            theme.glyph(GlyphRole::TokensTotal).to_owned(),
-            marker(theme.component(Component::TokenTotal)),
-        ),
-        Span::styled(
-            format!(" {:>w$}", token_format(window.tokens), w = cols.total),
-            value,
-        ),
-    ];
-    if token_detail == TokenDetail::Full {
-        spans.extend([
-            Span::styled(
-                format!(" {} ", theme.glyph(GlyphRole::TokensInput)),
-                marker(theme.component(Component::Input)),
-            ),
-            Span::styled(
-                format!("{:>w$}", token_format(window.input), w = cols.input),
-                value,
-            ),
-            Span::styled(
-                format!(" {} ", theme.glyph(GlyphRole::TokensOutput)),
-                marker(theme.component(Component::Output)),
-            ),
-            Span::styled(
-                format!("{:>w$}", token_format(window.output), w = cols.output),
-                value,
-            ),
-        ]);
-    }
-    spans.extend([
-        Span::styled(
-            format!(" {} ", theme.glyph(GlyphRole::TokensCacheRead)),
-            marker(theme.component(Component::CacheRead)),
-        ),
-        Span::styled(
-            format!(
-                "{:>w$}",
-                token_format(window.cache_read),
-                w = cols.cache_read
-            ),
-            value,
-        ),
-    ]);
-    spans
+    token_breakdown_spans(
+        theme,
+        window.tokens,
+        window.input,
+        window.output,
+        window.cache_read,
+        token_format,
+        token_detail,
+        &cols.token_columns(),
+    )
 }
 
 fn spend_token_spans(
@@ -1105,7 +1071,7 @@ fn provider_stats_left_spans(
         Span::styled(format!(" {}", headline.sessions), theme.body()),
         Span::raw("  "),
     ];
-    let token_breakdown = provider_token_breakdown_spans(
+    let token_breakdown = token_breakdown_spans(
         theme,
         headline.tokens,
         headline.input,
@@ -1113,6 +1079,7 @@ fn provider_stats_left_spans(
         headline.cache_read,
         tokens_int,
         detail,
+        &TokenColumns::default(),
     );
     left.extend(token_breakdown);
     left
@@ -1139,34 +1106,6 @@ fn provider_token_detail(
     } else {
         TokenDetail::Summary
     }
-}
-
-fn provider_token_breakdown_spans(
-    theme: &Theme,
-    total: u64,
-    input: u64,
-    output: u64,
-    cache_read: u64,
-    format: fn(u64) -> String,
-    detail: TokenDetail,
-) -> Vec<Span<'static>> {
-    if detail == TokenDetail::Full {
-        return token_breakdown_spans(theme, total, input, output, cache_read, format);
-    }
-    let value = theme.body();
-    let marker = |color: Color| theme.style(color, Modifier::empty());
-    vec![
-        Span::styled(
-            theme.glyph(GlyphRole::TokensTotal).to_owned(),
-            marker(theme.component(Component::TokenTotal)),
-        ),
-        Span::styled(format!(" {}", format(total)), value),
-        Span::styled(
-            format!(" {} ", theme.glyph(GlyphRole::TokensCacheRead)),
-            marker(theme.component(Component::CacheRead)),
-        ),
-        Span::styled(format(cache_read), value),
-    ]
 }
 
 /// The provider's budget bars within `region`: a metered account drains one

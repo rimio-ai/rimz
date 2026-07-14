@@ -18,6 +18,20 @@ pub(in crate::sidebar_pane::render) fn token_total_glyph(theme: &Theme) -> Strin
     theme.glyph(GlyphRole::TokensTotal).to_owned()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sidebar_pane::render) enum TokenDetail {
+    Full,
+    Summary,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::sidebar_pane::render) struct TokenColumns {
+    pub(in crate::sidebar_pane::render) total: usize,
+    pub(in crate::sidebar_pane::render) input: usize,
+    pub(in crate::sidebar_pane::render) output: usize,
+    pub(in crate::sidebar_pane::render) cache_read: usize,
+}
+
 /// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
 /// token line shares (cockpit headline line, provider headline line, W/M store
 /// rows). Each marker wears its one color everywhere: the `◇` total in blue,
@@ -35,19 +49,45 @@ pub(in crate::sidebar_pane::render) fn token_breakdown_spans(
     output: u64,
     cache_read: u64,
     fmt: fn(u64) -> String,
+    detail: TokenDetail,
+    cols: &TokenColumns,
 ) -> Vec<Span<'static>> {
-    let mut spans = tokens_total_spans(theme, total, fmt);
-    let mut field = |role: GlyphRole, component: Component, value: u64| {
+    let mut spans = vec![
+        Span::styled(
+            token_total_glyph(theme),
+            theme.styled(Component::TokenTotal, Modifier::empty()),
+        ),
+        Span::styled(
+            format!(" {:>width$}", fmt(total), width = cols.total),
+            theme.body(),
+        ),
+    ];
+    let mut field = |role: GlyphRole, component: Component, value: u64, width: usize| {
         let glyph = theme.glyph(role);
         spans.push(Span::styled(
             format!(" {glyph} "),
             theme.styled(component, Modifier::empty()),
         ));
-        spans.push(Span::styled(fmt(value), theme.body()));
+        spans.push(Span::styled(
+            format!("{:>width$}", fmt(value), width = width),
+            theme.body(),
+        ));
     };
-    field(GlyphRole::TokensInput, Component::Input, input);
-    field(GlyphRole::TokensOutput, Component::Output, output);
-    field(GlyphRole::TokensCacheRead, Component::CacheRead, cache_read);
+    if detail == TokenDetail::Full {
+        field(GlyphRole::TokensInput, Component::Input, input, cols.input);
+        field(
+            GlyphRole::TokensOutput,
+            Component::Output,
+            output,
+            cols.output,
+        );
+    }
+    field(
+        GlyphRole::TokensCacheRead,
+        Component::CacheRead,
+        cache_read,
+        cols.cache_read,
+    );
     spans
 }
 

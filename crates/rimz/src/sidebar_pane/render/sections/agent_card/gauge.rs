@@ -403,6 +403,8 @@ pub(super) fn context_tokens_line(
             usage.displayed_output_tokens(),
             usage.cache_read_tokens(),
             tokens_int,
+            TokenDetail::Full,
+            &TokenColumns::default(),
         ));
     } else if let Some(split) = row.call_split() {
         // The row-level split — the lifecycle rail's per-call composition.
