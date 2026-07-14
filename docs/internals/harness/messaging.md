@@ -85,7 +85,7 @@ A record stores:
 | `compacted_context_tokens` | baseline reading that suppresses duplicate compaction |
 | `batch_id` | records sent in one batched paste share the head's id; one turn start confirms them all |
 
-The full record is the field catalog; the [lifecycle](#message-lifecycle) below is the contract. Domain model: [`message.rs`](../../../crates/rimz/src/message.rs); live sends, park-vs-live dispatch, and queued delivery live in [`message/send.rs`](../../../crates/rimz/src/message/send.rs), [`message/dispatch.rs`](../../../crates/rimz/src/message/dispatch.rs), and [`message/deliver.rs`](../../../crates/rimz/src/message/deliver.rs).
+The full record is the field catalog; the [lifecycle](#message-lifecycle) below is the contract. Domain model: [`message.rs`](../../../crates/rimz/src/message.rs); live sends, park-vs-live dispatch, queued delivery, and synchronous reply semantics live in [`message/send.rs`](../../../crates/rimz/src/message/send.rs), [`message/dispatch.rs`](../../../crates/rimz/src/message/dispatch.rs), [`message/deliver.rs`](../../../crates/rimz/src/message/deliver.rs), and [`message/reply.rs`](../../../crates/rimz/src/message/reply.rs).
 
 ## Message lifecycle
 

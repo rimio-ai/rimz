@@ -1,4 +1,4 @@
-//! Durable per-agent message queue domain model and delivery pipeline.
+//! Durable message records, owned dispatch, reply waits, and queued delivery.
 
 use std::time::Duration;
 
@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 pub mod deliver;
 pub mod dispatch;
 pub(crate) mod fire;
+pub mod reply;
 pub mod send;
-pub mod wait_guard;
 
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::agents::{AgentState, AgentStatus};

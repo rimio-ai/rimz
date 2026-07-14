@@ -1,11 +1,15 @@
-//! Park-vs-live target resolution and add-message dispatch.
+//! Resolve one owned message request and dispatch it durably.
+//!
+//! This module owns live-plus-durable target resolution, rollup-only selection,
+//! context folding, condition binding, hook preflight, reply causality, record
+//! construction, and park-vs-live delivery.
 
 use std::collections::BTreeSet;
 
 use jiff::Timestamp;
 
-use crate::agents::AgentState;
-use crate::ids::MessageId;
+use crate::agents::{AgentState, AgentStatus};
+use crate::ids::{AgentKind, MessageId, MuxName};
 use crate::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
     WhenCondition, gate_open_for_agent, message_interval_from_env, queue_head,
@@ -13,67 +17,97 @@ use crate::message::{
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, SidebarSnapshot, Store, TargetErr};
 
+use super::reply::{PreparationTarget, ReplyJoin, ReplyPreparation, ReplyPrepareErr, ReplyWait};
 use super::{deliver, send};
 
-#[derive(Clone, Copy)]
-pub struct QueueTarget<'a> {
-    pane: Option<&'a PaneAgent>,
-    agent: Option<&'a AgentState>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AfterRequest {
+    pub address: String,
 }
 
-pub struct SendMode {
-    steer: bool,
-    enter: bool,
-    force: bool,
-    auto_compact: Option<AutoCompact>,
-    gate: DeliveryGate,
-    not_before: Option<Timestamp>,
-    after: Vec<AfterCondition>,
-    when: Vec<WhenCondition>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WhenRequest {
+    pub address: String,
+    pub status: AgentStatus,
+    pub dwell_secs: u64,
+    pub expression: String,
 }
 
-impl SendMode {
-    pub fn steer(enter: bool, force: bool, auto_compact: Option<AutoCompact>) -> Self {
-        Self {
-            steer: true,
-            enter,
-            force,
-            auto_compact,
-            gate: DeliveryGate::Any,
-            not_before: None,
-            after: Vec::new(),
-            when: Vec::new(),
-        }
-    }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplyRequest {
+    pub join: ReplyJoin,
+    pub caller_identity: Option<(AgentKind, String)>,
+}
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn boundary(
+#[derive(Clone, Debug)]
+pub enum DispatchMode {
+    Steer {
+        enter: bool,
+        force: bool,
+        auto_compact: Option<AutoCompact>,
+    },
+    Boundary {
         enter: bool,
         gate: DeliveryGate,
         force: bool,
         auto_compact: Option<AutoCompact>,
         not_before: Option<Timestamp>,
-        after: Vec<AfterCondition>,
-        when: Vec<WhenCondition>,
-    ) -> Self {
-        Self {
-            steer: false,
-            enter,
-            force,
-            auto_compact,
-            gate,
-            not_before,
-            after,
-            when,
+        after: Vec<AfterRequest>,
+        when: Vec<WhenRequest>,
+    },
+}
+
+impl DispatchMode {
+    fn steer(&self) -> bool {
+        matches!(self, Self::Steer { .. })
+    }
+
+    fn gate(&self) -> DeliveryGate {
+        match self {
+            Self::Steer { .. } => DeliveryGate::Any,
+            Self::Boundary { gate, .. } => *gate,
         }
     }
+
+    fn force(&self) -> bool {
+        match self {
+            Self::Steer { force, .. } | Self::Boundary { force, .. } => *force,
+        }
+    }
+
+    fn needs_agent_context(&self) -> bool {
+        match self {
+            Self::Steer { auto_compact, .. } => auto_compact.is_some(),
+            Self::Boundary {
+                auto_compact,
+                after,
+                when,
+                ..
+            } => auto_compact.is_some() || !after.is_empty() || !when.is_empty(),
+        }
+    }
+}
+
+pub struct DispatchRequest {
+    pub target: String,
+    pub text: String,
+    pub target_scope: Option<String>,
+    pub current_channel: Option<String>,
+    pub sender: MessageSender,
+    pub automated: bool,
+    pub allow_fanout: bool,
+    pub reply: Option<ReplyRequest>,
+    pub mux: Option<MuxName>,
+    pub mode: DispatchMode,
 }
 
 pub struct DispatchResult {
     pub outcomes: Vec<DispatchOutcome>,
     pub compacted: Vec<String>,
+    pub reply: Option<ReplyWait>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DispatchOutcome {
     Sent {
         label: String,
@@ -93,16 +127,43 @@ pub enum DispatchOutcome {
     },
 }
 
-pub struct DispatchContext<'a> {
-    pub workspace: &'a ResolvedWorkspace,
-    pub store: &'a Store,
-    pub snapshot: &'a SidebarSnapshot,
-    pub pending: Option<&'a mut Vec<MessageRecord>>,
-    pub scope_channel: Option<&'a str>,
-    pub sender: &'a MessageSender,
-    pub automated: bool,
-    pub reply_wait: bool,
-    pub in_reply_to: &'a [MessageId],
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConditionKind {
+    After,
+    When,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConditionErr {
+    #[error("condition target `{address}` cannot be a broadcast")]
+    Broadcast {
+        kind: ConditionKind,
+        address: String,
+        expression: String,
+    },
+    #[error("condition target `{address}` resolved to {matched} agents")]
+    Arity {
+        kind: ConditionKind,
+        address: String,
+        expression: String,
+        matched: usize,
+    },
+    #[error("condition target `{address}` has no lifecycle state")]
+    NoLifecycle {
+        kind: ConditionKind,
+        address: String,
+        expression: String,
+    },
+    #[error("after condition names the message recipient")]
+    RecipientSelfReference { address: String },
+    #[error("cannot resolve condition target `{address}`: {source}")]
+    Target {
+        kind: ConditionKind,
+        address: String,
+        expression: String,
+        #[source]
+        source: Box<TargetErr>,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, DispatchErr>;
@@ -110,20 +171,36 @@ pub type Result<T> = std::result::Result<T, DispatchErr>;
 #[derive(Debug, thiserror::Error)]
 pub enum DispatchErr {
     #[error(transparent)]
+    Recipient(#[from] TargetErr),
+    #[error("target `{target}` matched multiple agents")]
+    Fanout {
+        target: String,
+        labels: Vec<String>,
+        steer: bool,
+    },
+    #[error(transparent)]
+    Condition(#[from] ConditionErr),
+    #[error(transparent)]
+    ReplyPreparation(#[from] ReplyPrepareErr),
+    #[error(transparent)]
+    Reply(#[from] super::reply::ReplyErr),
+    #[error(transparent)]
+    Resolution(#[from] crate::sidebar::produce::ProduceErr),
+    #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
     #[error(transparent)]
     Send(#[from] send::SendErr),
     #[error(transparent)]
     Deliver(#[from] deliver::DeliverErr),
     #[error("unknown agent kind `{0}`")]
-    UnknownAgentKind(crate::ids::AgentKind),
+    UnknownAgentKind(AgentKind),
     #[error(
         "queued delivery requires {kind} hooks so messages can deliver at turn boundaries; run `rimz hooks install {kind}`"
     )]
-    HooksMissing { kind: crate::ids::AgentKind },
+    HooksMissing { kind: AgentKind },
     #[error("{kind} hooks are installed but not trusted ({hooks}); {fix}")]
     HooksUntrusted {
-        kind: crate::ids::AgentKind,
+        kind: AgentKind,
         hooks: String,
         fix: String,
     },
@@ -131,31 +208,150 @@ pub enum DispatchErr {
     NoDurableSession { label: String },
 }
 
-enum LiveAttempt {
-    Sent {
-        message_id: MessageId,
-        compacted: bool,
-    },
-    SkippedWaiting {
-        message_id: MessageId,
-    },
-    CompactionPending {
-        message_id: MessageId,
-    },
-    ParkInstead,
+pub fn dispatch(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    request: DispatchRequest,
+) -> Result<DispatchResult> {
+    let boundary = !request.mode.steer();
+    let mut pending = if boundary {
+        store.list_messages()?
+    } else {
+        Vec::new()
+    };
+    let needs_context = request.mode.needs_agent_context()
+        || matches!(request.sender, MessageSender::Agent { .. })
+        || request.reply.is_some();
+    let agent_context =
+        needs_context.then(|| crate::store::agent_context::read_all(store.runtime_paths()));
+
+    let mut cached_snapshot = boundary.then(|| store.snapshot_cached()).transpose()?;
+    if let (Some(snapshot), Some(context)) = (&mut cached_snapshot, agent_context.as_ref()) {
+        *snapshot = snapshot.clone().with_agent_context(context.clone());
+    }
+    let rollup_only = cached_snapshot.as_ref().is_some_and(|snapshot| {
+        targets_all_park_without_live(
+            snapshot,
+            &request.target,
+            request.target_scope.as_deref(),
+            request.current_channel.as_deref(),
+            &pending,
+            request.mode.gate(),
+            request.mode.force(),
+        )
+    });
+    let mut snapshot = if rollup_only {
+        cached_snapshot.expect("rollup-only proof requires cached snapshot")
+    } else {
+        crate::sidebar::produce::resolution_snapshot(workspace, store, request.mux)?
+    };
+    if !rollup_only && let Some(context) = agent_context {
+        snapshot = snapshot.with_agent_context(context);
+    }
+
+    let durable_agents = durable_target_agents(store)?;
+    let targets = resolve_targets(
+        &snapshot,
+        Some(&durable_agents),
+        &request.target,
+        request.target_scope.as_deref(),
+        request.current_channel.as_deref(),
+        rollup_only,
+    )?;
+    if targets.len() > 1
+        && !request.allow_fanout
+        && !crate::harness::target::is_broadcast(&request.target)
+    {
+        return Err(DispatchErr::Fanout {
+            target: request.target,
+            labels: targets
+                .iter()
+                .map(|target| target.label(&snapshot))
+                .collect(),
+            steer: request.mode.steer(),
+        });
+    }
+
+    let resolution = ResolutionView {
+        snapshot: &snapshot,
+        durable_agents: &durable_agents,
+        scope: request.target_scope.as_deref(),
+        channel: request.current_channel.as_deref(),
+        rollup_only,
+    };
+    let mode = prepare_mode(request.mode, resolution, &targets, &pending)?;
+    let reply_join = request.reply.as_ref().map(|reply| reply.join);
+    let reply_preparation = request
+        .reply
+        .map(|reply| {
+            ReplyPreparation::new(
+                store,
+                &snapshot,
+                targets.iter().map(|target| PreparationTarget {
+                    agent: target.agent.as_ref(),
+                    label: target.label(&snapshot),
+                }),
+                reply.caller_identity,
+            )
+        })
+        .transpose()?;
+    let text = if targets.len() > 1 || crate::harness::target::is_broadcast(&request.target) {
+        crate::harness::target::group_prefixed(&request.target, &request.text)
+    } else {
+        request.text
+    };
+    let in_reply_to = turn_openers_for_sender(&snapshot, &request.sender);
+    let mut state = DispatchState {
+        workspace,
+        store,
+        snapshot: &snapshot,
+        pending: &mut pending,
+        track_pending: boundary,
+        scope_channel: request.current_channel.as_deref(),
+        sender: &request.sender,
+        automated: request.automated,
+        reply_wait: reply_preparation.is_some(),
+        in_reply_to: &in_reply_to,
+    };
+    let (outcomes, compacted) = dispatch_targets(&mut state, &targets, &text, &mode)?;
+    let reply = reply_preparation
+        .map(|preparation| {
+            preparation.attach(
+                &outcomes,
+                mode.steer,
+                reply_join.expect("reply preparation carries join mode"),
+            )
+        })
+        .transpose()?;
+    Ok(DispatchResult {
+        outcomes,
+        compacted,
+        reply,
+    })
 }
 
-impl QueueTarget<'_> {
-    pub fn label(&self, snapshot: &SidebarSnapshot) -> String {
-        handle_for_target(snapshot, self)
+#[derive(Clone, Debug)]
+struct ResolvedTarget {
+    pane: Option<PaneAgent>,
+    agent: Option<AgentState>,
+}
+
+impl ResolvedTarget {
+    fn label(&self, snapshot: &SidebarSnapshot) -> String {
+        if let Some(agent) = self.agent.as_ref() {
+            let peers = snapshot.root_agents().collect::<Vec<_>>();
+            crate::harness::target::agent_handle(agent, &peers, true)
+        } else if let Some(pane) = self.pane.as_ref() {
+            send::handle_for_pane_target(snapshot, pane, None)
+        } else {
+            "@agent".to_owned()
+        }
     }
 
-    pub fn bound<'a>(&self, snapshot: &'a SidebarSnapshot) -> Option<&'a AgentState> {
-        self.pane.and_then(|pane| send::bound_agent(snapshot, pane))
-    }
-
-    pub fn agent(&self) -> Option<&AgentState> {
-        self.agent
+    fn bound<'a>(&self, snapshot: &'a SidebarSnapshot) -> Option<&'a AgentState> {
+        self.pane
+            .as_ref()
+            .and_then(|pane| send::bound_agent(snapshot, pane))
     }
 
     fn receivable_now(
@@ -179,7 +375,7 @@ impl QueueTarget<'_> {
         if !open {
             return false;
         }
-        self.agent.is_none_or(|agent| {
+        self.agent.as_ref().is_none_or(|agent| {
             queue_head(
                 pending.iter(),
                 &agent.kind,
@@ -192,33 +388,31 @@ impl QueueTarget<'_> {
     }
 }
 
-/// Resolve queue targets. `rollup_only` selects the cheap path after
-/// [`rollup_targets_all_park_without_live`] proves no live pane is needed.
-pub fn queue_targets<'a>(
-    snapshot: &'a SidebarSnapshot,
-    durable_agents: Option<&'a [AgentState]>,
+fn resolve_targets(
+    snapshot: &SidebarSnapshot,
+    durable_agents: Option<&[AgentState]>,
     raw: &str,
-    worktree: Option<&str>,
+    scope: Option<&str>,
     channel: Option<&str>,
     rollup_only: bool,
-) -> std::result::Result<Vec<QueueTarget<'a>>, TargetErr> {
+) -> std::result::Result<Vec<ResolvedTarget>, TargetErr> {
     if rollup_only {
-        let agents = crate::harness::target::resolve_many(snapshot, raw, worktree, channel)
-            .or_else(|err| durable_targets(durable_agents, raw, worktree, channel, err))?;
-        return Ok(combine_queue_targets(snapshot, agents, Vec::new()));
+        let agents = crate::harness::target::resolve_many(snapshot, raw, scope, channel)
+            .or_else(|err| durable_targets(durable_agents, raw, scope, channel, err))?;
+        return Ok(combine_targets(snapshot, agents, Vec::new()));
     }
-    let agent_result = crate::harness::target::resolve_many(snapshot, raw, worktree, channel);
-    let pane_result = crate::harness::target::resolve_targets(snapshot, raw, worktree, channel);
+    let agent_result = crate::harness::target::resolve_many(snapshot, raw, scope, channel);
+    let pane_result = crate::harness::target::resolve_targets(snapshot, raw, scope, channel);
     match (agent_result, pane_result) {
-        (Ok(agents), Ok(panes)) => Ok(combine_queue_targets(snapshot, agents, panes)),
-        (Ok(agents), Err(_)) => Ok(combine_queue_targets(snapshot, agents, Vec::new())),
-        (Err(_), Ok(panes)) => Ok(combine_queue_targets(snapshot, Vec::new(), panes)),
-        (Err(err), Err(_)) => durable_targets(durable_agents, raw, worktree, channel, err)
-            .map(|agents| combine_queue_targets(snapshot, agents, Vec::new())),
+        (Ok(agents), Ok(panes)) => Ok(combine_targets(snapshot, agents, panes)),
+        (Ok(agents), Err(_)) => Ok(combine_targets(snapshot, agents, Vec::new())),
+        (Err(_), Ok(panes)) => Ok(combine_targets(snapshot, Vec::new(), panes)),
+        (Err(err), Err(_)) => durable_targets(durable_agents, raw, scope, channel, err)
+            .map(|agents| combine_targets(snapshot, agents, Vec::new())),
     }
 }
 
-pub fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
+fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
     Ok(store
         .runtime_projection(crate::RuntimeScope::Audit)?
         .agents
@@ -230,7 +424,7 @@ pub fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
 fn durable_targets<'a>(
     durable_agents: Option<&'a [AgentState]>,
     raw: &str,
-    worktree: Option<&str>,
+    scope: Option<&str>,
     channel: Option<&str>,
     live_err: TargetErr,
 ) -> std::result::Result<Vec<&'a AgentState>, TargetErr> {
@@ -238,25 +432,14 @@ fn durable_targets<'a>(
         return Err(live_err);
     };
     let candidates = durable_agents.iter().collect::<Vec<_>>();
-    crate::harness::target::resolve_agents(raw, worktree, channel, &candidates)
+    crate::harness::target::resolve_agents(raw, scope, channel, &candidates)
 }
 
-pub fn handle_for_target(snapshot: &SidebarSnapshot, target: &QueueTarget<'_>) -> String {
-    if let Some(agent) = target.agent {
-        let peers: Vec<&AgentState> = snapshot.root_agents().collect();
-        crate::harness::target::agent_handle(agent, &peers, true)
-    } else if let Some(pane) = target.pane {
-        send::handle_for_pane_target(snapshot, pane, None)
-    } else {
-        "@agent".to_owned()
-    }
-}
-
-fn combine_queue_targets<'a>(
-    snapshot: &'a SidebarSnapshot,
-    agents: Vec<&'a AgentState>,
-    panes: Vec<&'a PaneAgent>,
-) -> Vec<QueueTarget<'a>> {
+fn combine_targets(
+    snapshot: &SidebarSnapshot,
+    agents: Vec<&AgentState>,
+    panes: Vec<&PaneAgent>,
+) -> Vec<ResolvedTarget> {
     let mut used_panes = vec![false; panes.len()];
     let mut targets = Vec::new();
     for agent in agents {
@@ -267,21 +450,22 @@ fn combine_queue_targets<'a>(
             .map(|(index, _)| index);
         let pane = pane_index.map(|index| {
             used_panes[index] = true;
-            panes[index]
+            panes[index].clone()
         });
-        targets.push(QueueTarget {
+        targets.push(ResolvedTarget {
             pane,
-            agent: Some(agent),
+            agent: Some(agent.clone()),
         });
     }
     for (index, pane) in panes.into_iter().enumerate() {
         if used_panes[index] {
             continue;
         }
-        targets.push(QueueTarget {
-            pane: Some(pane),
+        targets.push(ResolvedTarget {
+            pane: Some(pane.clone()),
             agent: send::bound_agent(snapshot, pane)
-                .or_else(|| provisional_agent_for_pane(snapshot, pane)),
+                .or_else(|| provisional_agent_for_pane(snapshot, pane))
+                .cloned(),
         });
     }
     targets
@@ -310,10 +494,10 @@ fn provisional_agent_for_pane<'a>(
     })
 }
 
-pub fn rollup_targets_all_park_without_live(
+fn targets_all_park_without_live(
     snapshot: &SidebarSnapshot,
     raw: &str,
-    worktree: Option<&str>,
+    scope: Option<&str>,
     channel: Option<&str>,
     pending: &[MessageRecord],
     gate: DeliveryGate,
@@ -322,17 +506,16 @@ pub fn rollup_targets_all_park_without_live(
     if crate::harness::target::is_broadcast(raw) {
         return false;
     }
-    let Ok(agents) = crate::harness::target::resolve_many(snapshot, raw, worktree, channel) else {
+    let Ok(agents) = crate::harness::target::resolve_many(snapshot, raw, scope, channel) else {
         return false;
     };
     let now = Timestamp::now();
     agents
         .iter()
-        .all(|agent| !agent_needs_live_queue_resolution(snapshot, pending, agent, gate, force, now))
+        .all(|agent| !agent_needs_live_resolution(pending, agent, gate, force, now))
 }
 
-fn agent_needs_live_queue_resolution(
-    _snapshot: &SidebarSnapshot,
+fn agent_needs_live_resolution(
     pending: &[MessageRecord],
     agent: &AgentState,
     gate: DeliveryGate,
@@ -340,7 +523,8 @@ fn agent_needs_live_queue_resolution(
     now: Timestamp,
 ) -> bool {
     agent.agent_id.is_provisional()
-        || agent_kind_registers_lazily(agent)
+        || crate::agents::descriptor_by_kind(agent.kind.as_str())
+            .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
         || (gate_open_for_agent(gate, agent, force, now)
             && (force || !agent.is_awaiting_input())
             && queue_head(
@@ -353,123 +537,341 @@ fn agent_needs_live_queue_resolution(
             .is_none())
 }
 
-fn agent_kind_registers_lazily(agent: &AgentState) -> bool {
-    crate::agents::descriptor_by_kind(agent.kind.as_str())
-        .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
+struct PreparedMode {
+    steer: bool,
+    enter: bool,
+    force: bool,
+    auto_compact: Option<AutoCompact>,
+    gate: DeliveryGate,
+    not_before: Option<Timestamp>,
+    after: Vec<AfterCondition>,
+    when: Vec<WhenCondition>,
 }
 
-pub fn dispatch_for_targets(
-    mut ctx: DispatchContext<'_>,
-    targets: &[QueueTarget<'_>],
+#[derive(Clone, Copy)]
+struct ResolutionView<'a> {
+    snapshot: &'a SidebarSnapshot,
+    durable_agents: &'a [AgentState],
+    scope: Option<&'a str>,
+    channel: Option<&'a str>,
+    rollup_only: bool,
+}
+
+fn prepare_mode(
+    mode: DispatchMode,
+    resolution: ResolutionView<'_>,
+    recipients: &[ResolvedTarget],
+    pending: &[MessageRecord],
+) -> Result<PreparedMode> {
+    match mode {
+        DispatchMode::Steer {
+            enter,
+            force,
+            auto_compact,
+        } => Ok(PreparedMode {
+            steer: true,
+            enter,
+            force,
+            auto_compact,
+            gate: DeliveryGate::Any,
+            not_before: None,
+            after: Vec::new(),
+            when: Vec::new(),
+        }),
+        DispatchMode::Boundary {
+            enter,
+            gate,
+            force,
+            auto_compact,
+            not_before,
+            after,
+            when,
+        } => Ok(PreparedMode {
+            steer: false,
+            enter,
+            force,
+            auto_compact,
+            gate,
+            not_before,
+            after: resolve_after(resolution, recipients, &after, gate, pending)?,
+            when: resolve_when(resolution, &when)?,
+        }),
+    }
+}
+
+fn resolve_after(
+    resolution: ResolutionView<'_>,
+    recipients: &[ResolvedTarget],
+    requests: &[AfterRequest],
+    gate: DeliveryGate,
+    pending: &[MessageRecord],
+) -> Result<Vec<AfterCondition>> {
+    let now = Timestamp::now();
+    requests
+        .iter()
+        .map(|request| {
+            let target = resolve_condition_target(
+                resolution,
+                ConditionKind::After,
+                &request.address,
+                &request.address,
+            )?;
+            let agent = target.agent.as_ref().expect("condition target validated");
+            if recipients.iter().any(|recipient| {
+                recipient.agent.as_ref().is_some_and(|recipient| {
+                    crate::message::card_matches(
+                        &agent.kind,
+                        &agent.agent_id,
+                        agent.name.as_deref(),
+                        &recipient.kind,
+                        &recipient.agent_id,
+                        recipient.name.as_deref(),
+                    )
+                })
+            }) {
+                return Err(ConditionErr::RecipientSelfReference {
+                    address: request.address.clone(),
+                }
+                .into());
+            }
+            let mut condition = AfterCondition {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                agent_name: agent.name.clone(),
+                address: target.label(resolution.snapshot),
+                met_at: None,
+            };
+            if crate::message::after_condition_open(
+                &condition,
+                gate,
+                &resolution.snapshot.agents,
+                pending,
+                now,
+            ) {
+                condition.met_at = Some(now);
+            }
+            Ok(condition)
+        })
+        .collect()
+}
+
+fn resolve_when(
+    resolution: ResolutionView<'_>,
+    requests: &[WhenRequest],
+) -> Result<Vec<WhenCondition>> {
+    let now = Timestamp::now();
+    requests
+        .iter()
+        .map(|request| {
+            let target = resolve_condition_target(
+                resolution,
+                ConditionKind::When,
+                &request.address,
+                &request.expression,
+            )?;
+            let agent = target.agent.as_ref().expect("condition target validated");
+            let mut condition = WhenCondition {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                agent_name: agent.name.clone(),
+                address: target.label(resolution.snapshot),
+                status: request.status,
+                dwell_secs: request.dwell_secs,
+                met_at: None,
+            };
+            if crate::message::when_condition_state(&condition, &resolution.snapshot.agents, now)
+                == crate::message::WhenState::Met
+            {
+                condition.met_at = Some(now);
+            }
+            Ok(condition)
+        })
+        .collect()
+}
+
+fn resolve_condition_target(
+    resolution: ResolutionView<'_>,
+    kind: ConditionKind,
+    address: &str,
+    expression: &str,
+) -> Result<ResolvedTarget> {
+    if crate::harness::target::is_broadcast(address) {
+        return Err(ConditionErr::Broadcast {
+            kind,
+            address: address.to_owned(),
+            expression: expression.to_owned(),
+        }
+        .into());
+    }
+    let targets = resolve_targets(
+        resolution.snapshot,
+        Some(resolution.durable_agents),
+        address,
+        resolution.scope,
+        resolution.channel,
+        resolution.rollup_only,
+    )
+    .map_err(|source| ConditionErr::Target {
+        kind,
+        address: address.to_owned(),
+        expression: expression.to_owned(),
+        source: Box::new(source),
+    })?;
+    if targets.len() != 1 {
+        return Err(ConditionErr::Arity {
+            kind,
+            address: address.to_owned(),
+            expression: expression.to_owned(),
+            matched: targets.len(),
+        }
+        .into());
+    }
+    let target = targets.into_iter().next().expect("one condition target");
+    if target.agent.is_none() {
+        return Err(ConditionErr::NoLifecycle {
+            kind,
+            address: address.to_owned(),
+            expression: expression.to_owned(),
+        }
+        .into());
+    }
+    Ok(target)
+}
+
+struct DispatchState<'a> {
+    workspace: &'a ResolvedWorkspace,
+    store: &'a Store,
+    snapshot: &'a SidebarSnapshot,
+    pending: &'a mut Vec<MessageRecord>,
+    track_pending: bool,
+    scope_channel: Option<&'a str>,
+    sender: &'a MessageSender,
+    automated: bool,
+    reply_wait: bool,
+    in_reply_to: &'a [MessageId],
+}
+
+enum LiveAttempt {
+    Sent {
+        message_id: MessageId,
+        compacted: bool,
+    },
+    SkippedWaiting {
+        message_id: MessageId,
+    },
+    CompactionPending {
+        message_id: MessageId,
+    },
+    ParkInstead,
+}
+
+fn dispatch_targets(
+    state: &mut DispatchState<'_>,
+    targets: &[ResolvedTarget],
     text: &str,
-    mode: SendMode,
-) -> Result<DispatchResult> {
+    mode: &PreparedMode,
+) -> Result<(Vec<DispatchOutcome>, Vec<String>)> {
+    let now = Timestamp::now();
+    let parks = targets
+        .iter()
+        .map(|target| should_park(state, target, mode, now))
+        .collect::<Vec<_>>();
+    let mut kinds = BTreeSet::new();
+    for (target, park) in targets.iter().zip(&parks) {
+        if !park {
+            continue;
+        }
+        let agent = target
+            .agent
+            .as_ref()
+            .ok_or_else(|| DispatchErr::NoDurableSession {
+                label: target.label(state.snapshot),
+            })?;
+        if kinds.insert(agent.kind.clone()) {
+            preflight_queue_hooks(agent)?;
+        }
+    }
+
     let mut live_send = send::LiveSend {
         force: mode.force,
         steer: mode.steer,
         pacer: send::Pacer::new(message_interval_from_env()),
     };
     let mut outcomes = Vec::with_capacity(targets.len());
-    let mut kinds_seen = BTreeSet::new();
     let mut compacted = Vec::new();
-    let now = Timestamp::now();
-    for target in targets {
-        let handle = handle_for_target(ctx.snapshot, target);
-        let park = should_park(&ctx, target, &mode, now);
+    for (target, park) in targets.iter().zip(parks) {
         outcomes.push(dispatch_one(
-            &mut ctx,
+            state,
             &mut live_send,
-            &mut kinds_seen,
             &mut compacted,
             target,
             text,
-            &mode,
-            handle,
+            mode,
             park,
         )?);
     }
-    deliver::register_message_wake(ctx.workspace, ctx.store)?;
-    Ok(DispatchResult {
-        outcomes,
-        compacted,
-    })
+    deliver::register_message_wake(state.workspace, state.store)?;
+    Ok((outcomes, compacted))
 }
 
 fn should_park(
-    ctx: &DispatchContext<'_>,
-    target: &QueueTarget<'_>,
-    mode: &SendMode,
+    state: &DispatchState<'_>,
+    target: &ResolvedTarget,
+    mode: &PreparedMode,
     now: Timestamp,
 ) -> bool {
     if mode.steer {
         return target.pane.is_none();
     }
-    let pending = ctx
-        .pending
-        .as_ref()
-        .map_or(&[][..], |pending| pending.as_slice());
     mode.not_before.is_some()
         || !mode
             .after
             .iter()
             .all(|condition| condition.met_at.is_some())
         || !mode.when.iter().all(|condition| condition.met_at.is_some())
-        || !target.receivable_now(ctx.snapshot, pending, mode.gate, mode.force, now)
+        || !target.receivable_now(state.snapshot, state.pending, mode.gate, mode.force, now)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn dispatch_one(
-    ctx: &mut DispatchContext<'_>,
+    state: &mut DispatchState<'_>,
     live_send: &mut send::LiveSend,
-    kinds_seen: &mut BTreeSet<String>,
     compacted: &mut Vec<String>,
-    target: &QueueTarget<'_>,
+    target: &ResolvedTarget,
     text: &str,
-    mode: &SendMode,
-    handle: String,
+    mode: &PreparedMode,
     park: bool,
 ) -> Result<DispatchOutcome> {
+    let handle = target.label(state.snapshot);
     if park {
-        return dispatch_parked(ctx, kinds_seen, target, text, mode, handle);
+        return dispatch_parked(state, target, text, mode, handle);
     }
-    let Some(pane) = target.pane else {
+    let Some(pane) = target.pane.as_ref() else {
         return Err(DispatchErr::NoDurableSession { label: handle });
     };
-    let bound = target.bound(ctx.snapshot);
+    let bound = target.bound(state.snapshot);
     let recipient = target
         .agent
+        .as_ref()
         .map_or(send::Recipient::Pane { pane, bound }, |agent| {
             send::Recipient::Agent {
                 agent,
                 pane: Some(pane),
             }
         });
-    let message = send::MessageDraft {
-        text: text.to_owned(),
-        body: MessageBody::Prompt,
-        address: Some(handle.clone()),
-        enter: mode.enter,
-        gate: mode.gate,
-        sender: ctx.sender.clone(),
-        automated: ctx.automated,
-        force: mode.force,
-        auto_compact: mode.auto_compact,
-        not_before: mode.not_before,
-        after: mode.after.clone(),
-        when: mode.when.clone(),
-    }
-    .into_record(
-        ctx.workspace.workspace_id.clone(),
-        recipient,
-        ctx.scope_channel,
-    )
-    .with_reply_wait(ctx.reply_wait)
-    .with_in_reply_to(ctx.in_reply_to.to_vec());
+    let message = draft(state, text, mode, &handle)
+        .into_record(
+            state.workspace.workspace_id.clone(),
+            recipient,
+            state.scope_channel,
+        )
+        .with_reply_wait(state.reply_wait)
+        .with_in_reply_to(state.in_reply_to.to_vec());
     let message_id = message.message_id.clone();
-    ctx.store
-        .queue_message(&message, &ctx.workspace.session_name)?;
+    state
+        .store
+        .queue_message(&message, &state.workspace.session_name)?;
     match send_live_with_recovery(
-        ctx,
+        state,
         live_send,
         target.agent.is_some(),
         pane,
@@ -489,10 +891,10 @@ fn dispatch_one(
             })
         }
         LiveAttempt::SkippedWaiting { message_id } if mode.steer => {
-            ctx.store.record_send_error(
+            state.store.record_send_error(
                 &message,
                 "agent is waiting on input in its pane",
-                &ctx.workspace.session_name,
+                &state.workspace.session_name,
             )?;
             Ok(DispatchOutcome::SkippedWaiting {
                 label: handle,
@@ -500,36 +902,34 @@ fn dispatch_one(
             })
         }
         LiveAttempt::SkippedWaiting { message_id } => {
-            ctx.store.record_message_delivery_failure(
+            state.store.record_message_delivery_failure(
                 &message_id,
                 "agent is waiting on input in its pane",
-                &ctx.workspace.session_name,
+                &state.workspace.session_name,
             )?;
-            push_pending(&mut ctx.pending, message);
+            push_pending(state, message);
             Ok(DispatchOutcome::Queued {
                 label: handle,
                 message_id,
             })
         }
         LiveAttempt::ParkInstead => {
-            if !mode.steer {
-                push_pending(&mut ctx.pending, message);
-            }
+            push_pending(state, message);
             Ok(DispatchOutcome::Queued {
                 label: handle,
                 message_id,
             })
         }
         LiveAttempt::CompactionPending { message_id } => {
-            let released = ctx
+            let released = state
                 .store
                 .release_message_claim(
                     &message_id,
                     "parked: waiting for compaction to finish",
-                    &ctx.workspace.session_name,
+                    &state.workspace.session_name,
                 )?
                 .unwrap_or(message);
-            push_pending(&mut ctx.pending, released);
+            push_pending(state, released);
             Ok(DispatchOutcome::CompactionPending {
                 label: handle,
                 message_id,
@@ -539,58 +939,64 @@ fn dispatch_one(
 }
 
 fn dispatch_parked(
-    ctx: &mut DispatchContext<'_>,
-    kinds_seen: &mut BTreeSet<String>,
-    target: &QueueTarget<'_>,
+    state: &mut DispatchState<'_>,
+    target: &ResolvedTarget,
     text: &str,
-    mode: &SendMode,
+    mode: &PreparedMode,
     handle: String,
 ) -> Result<DispatchOutcome> {
-    let Some(agent) = target.agent else {
+    let Some(agent) = target.agent.as_ref() else {
         return Err(DispatchErr::NoDurableSession { label: handle });
     };
-    if kinds_seen.insert(agent.kind.as_str().to_owned()) {
-        preflight_queue_hooks(agent)?;
-    }
-    let message = send::MessageDraft {
-        text: text.to_owned(),
-        body: MessageBody::Prompt,
-        address: Some(handle.clone()),
-        enter: mode.enter,
-        gate: mode.gate,
-        sender: ctx.sender.clone(),
-        automated: ctx.automated,
-        force: mode.force,
-        auto_compact: mode.auto_compact,
-        not_before: mode.not_before,
-        after: mode.after.clone(),
-        when: mode.when.clone(),
-    }
-    .into_record(
-        ctx.workspace.workspace_id.clone(),
-        send::Recipient::Agent { agent, pane: None },
-        ctx.scope_channel,
-    )
-    .with_reply_wait(ctx.reply_wait)
-    .with_in_reply_to(ctx.in_reply_to.to_vec());
+    let message = draft(state, text, mode, &handle)
+        .into_record(
+            state.workspace.workspace_id.clone(),
+            send::Recipient::Agent { agent, pane: None },
+            state.scope_channel,
+        )
+        .with_reply_wait(state.reply_wait)
+        .with_in_reply_to(state.in_reply_to.to_vec());
     let message_id = message.message_id.clone();
-    ctx.store
-        .queue_message(&message, &ctx.workspace.session_name)?;
-    push_pending(&mut ctx.pending, message);
+    state
+        .store
+        .queue_message(&message, &state.workspace.session_name)?;
+    push_pending(state, message);
     Ok(DispatchOutcome::Queued {
         label: handle,
         message_id,
     })
 }
 
-fn push_pending(pending: &mut Option<&mut Vec<MessageRecord>>, message: MessageRecord) {
-    if let Some(pending) = pending.as_mut() {
-        pending.push(message);
+fn draft(
+    state: &DispatchState<'_>,
+    text: &str,
+    mode: &PreparedMode,
+    handle: &str,
+) -> send::MessageDraft {
+    send::MessageDraft {
+        text: text.to_owned(),
+        body: MessageBody::Prompt,
+        address: Some(handle.to_owned()),
+        enter: mode.enter,
+        gate: mode.gate,
+        sender: state.sender.clone(),
+        automated: state.automated,
+        force: mode.force,
+        auto_compact: mode.auto_compact,
+        not_before: mode.not_before,
+        after: mode.after.clone(),
+        when: mode.when.clone(),
+    }
+}
+
+fn push_pending(state: &mut DispatchState<'_>, message: MessageRecord) {
+    if state.track_pending {
+        state.pending.push(message);
     }
 }
 
 fn send_live_with_recovery(
-    ctx: &DispatchContext<'_>,
+    state: &DispatchState<'_>,
     live_send: &mut send::LiveSend,
     park_on_failure: bool,
     pane: &PaneAgent,
@@ -598,9 +1004,9 @@ fn send_live_with_recovery(
     message: &MessageRecord,
 ) -> Result<LiveAttempt> {
     let sent = match send::send_batch_to_live_pane(
-        ctx.workspace,
-        ctx.store,
-        ctx.snapshot,
+        state.workspace,
+        state.store,
+        state.snapshot,
         pane,
         bound,
         std::slice::from_ref(message),
@@ -608,24 +1014,27 @@ fn send_live_with_recovery(
     ) {
         Ok(sent) => sent,
         Err(err) => {
-            if deliver::message_recorded_as_sent(ctx.store, &message.message_id)? {
+            if deliver::message_recorded_as_sent(state.store, &message.message_id)? {
                 return Ok(LiveAttempt::Sent {
                     message_id: message.message_id.clone(),
                     compacted: false,
                 });
             }
             if park_on_failure {
-                ctx.store.record_message_delivery_failure(
+                state.store.record_message_delivery_failure(
                     &message.message_id,
                     &err.to_string(),
-                    &ctx.workspace.session_name,
+                    &state.workspace.session_name,
                 )?;
-                deliver::register_message_wake(ctx.workspace, ctx.store)?;
+                deliver::register_message_wake(state.workspace, state.store)?;
                 return Ok(LiveAttempt::ParkInstead);
             }
-            ctx.store
-                .record_send_error(message, &err.to_string(), &ctx.workspace.session_name)?;
-            deliver::register_message_wake(ctx.workspace, ctx.store)?;
+            state.store.record_send_error(
+                message,
+                &err.to_string(),
+                &state.workspace.session_name,
+            )?;
+            deliver::register_message_wake(state.workspace, state.store)?;
             return Err(err.into());
         }
     };
@@ -665,6 +1074,23 @@ fn preflight_queue_hooks(agent: &AgentState) -> Result<()> {
     }
 }
 
+fn turn_openers_for_sender(snapshot: &SidebarSnapshot, sender: &MessageSender) -> Vec<MessageId> {
+    let MessageSender::Agent {
+        kind,
+        name: Some(name),
+        ..
+    } = sender
+    else {
+        return Vec::new();
+    };
+    snapshot
+        .root_agents()
+        .find(|agent| agent.kind == *kind && agent.name.as_deref() == Some(name))
+        .and_then(|agent| agent.context.as_ref())
+        .map(|context| context.turn_opened_by.clone())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,17 +1110,16 @@ mod tests {
             snapshot_with_panes(vec![idle.clone(), running.clone()], vec![pane.clone()]);
 
         assert!(
-            QueueTarget {
-                pane: Some(&lazy),
+            ResolvedTarget {
+                pane: Some(lazy),
                 agent: None,
             }
             .receivable_now(&idle_snapshot, &[], DeliveryGate::Done, false, timestamp)
         );
-
         assert!(
-            QueueTarget {
-                pane: Some(&pane),
-                agent: Some(&idle),
+            ResolvedTarget {
+                pane: Some(pane.clone()),
+                agent: Some(idle.clone()),
             }
             .receivable_now(&idle_snapshot, &[], DeliveryGate::Done, false, timestamp)
         );
@@ -703,9 +1128,9 @@ mod tests {
         let running_snapshot =
             snapshot_with_panes(vec![running.clone()], vec![running_pane.clone()]);
         assert!(
-            !QueueTarget {
-                pane: Some(&running_pane),
-                agent: Some(&running),
+            !ResolvedTarget {
+                pane: Some(running_pane),
+                agent: Some(running),
             }
             .receivable_now(
                 &running_snapshot,
@@ -717,20 +1142,18 @@ mod tests {
         );
 
         let ask_snapshot = snapshot_with_ask(idle.clone(), pane.clone());
-        assert!(
-            !QueueTarget {
-                pane: Some(&pane),
-                agent: Some(&idle),
-            }
-            .receivable_now(&ask_snapshot, &[], DeliveryGate::Done, false, timestamp)
-        );
-        assert!(
-            QueueTarget {
-                pane: Some(&pane),
-                agent: Some(&idle),
-            }
-            .receivable_now(&ask_snapshot, &[], DeliveryGate::Done, true, timestamp)
-        );
+        let ask_target = ResolvedTarget {
+            pane: Some(pane.clone()),
+            agent: Some(idle.clone()),
+        };
+        assert!(!ask_target.receivable_now(
+            &ask_snapshot,
+            &[],
+            DeliveryGate::Done,
+            false,
+            timestamp
+        ));
+        assert!(ask_target.receivable_now(&ask_snapshot, &[], DeliveryGate::Done, true, timestamp));
 
         let future = MessageRecord::new(
             workspace_id(),
@@ -740,20 +1163,17 @@ mod tests {
             DeliveryGate::Done,
         )
         .with_not_before(Some(timestamp + jiff::SignedDuration::from_secs(60)));
-        assert!(
-            QueueTarget {
-                pane: Some(&pane),
-                agent: Some(&idle),
-            }
-            .receivable_now(
-                &idle_snapshot,
-                &[future],
-                DeliveryGate::Done,
-                false,
-                timestamp
-            )
-        );
-
+        let target = ResolvedTarget {
+            pane: Some(pane),
+            agent: Some(idle.clone()),
+        };
+        assert!(target.receivable_now(
+            &idle_snapshot,
+            &[future],
+            DeliveryGate::Done,
+            false,
+            timestamp
+        ));
         let older = MessageRecord::new(
             workspace_id(),
             &idle,
@@ -761,19 +1181,58 @@ mod tests {
             true,
             DeliveryGate::Done,
         );
-        assert!(
-            !QueueTarget {
-                pane: Some(&pane),
-                agent: Some(&idle),
-            }
-            .receivable_now(
-                &idle_snapshot,
-                &[older],
-                DeliveryGate::Done,
-                false,
-                timestamp
-            )
-        );
+        assert!(!target.receivable_now(
+            &idle_snapshot,
+            &[older],
+            DeliveryGate::Done,
+            false,
+            timestamp
+        ));
+    }
+
+    #[test]
+    fn condition_broadcast_is_typed_before_resolution() {
+        let snapshot = snapshot_with_panes(Vec::new(), Vec::new());
+        let err = resolve_condition_target(
+            ResolutionView {
+                snapshot: &snapshot,
+                durable_agents: &[],
+                scope: None,
+                channel: None,
+                rollup_only: false,
+            },
+            ConditionKind::When,
+            "@all",
+            "@all idle 1m",
+        )
+        .expect_err("broadcast condition must fail");
+        assert!(matches!(
+            err,
+            DispatchErr::Condition(ConditionErr::Broadcast {
+                kind: ConditionKind::When,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn agent_sender_inherits_exact_named_sessions_turn_openers() {
+        let opener = MessageId::parse("msg_0123456789abcdef").unwrap();
+        let mut agent = agent("sess-1", AgentStatus::Running);
+        agent.name = Some("coder".to_owned());
+        let mut context = crate::store::agent_context::empty_context("codex", now());
+        context.turn_opened_by = vec![opener.clone()];
+        agent.context = Some(context);
+        let snapshot = SidebarSnapshot::build_with_agents(workspace_id(), vec![agent], now());
+        let sender = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("claude"),
+            name: Some("coder".to_owned()),
+            profile: None,
+            role: None,
+            channel: Some("chat".to_owned()),
+        };
+        assert_eq!(turn_openers_for_sender(&snapshot, &sender), vec![opener]);
+        assert!(turn_openers_for_sender(&snapshot, &MessageSender::Human).is_empty());
     }
 
     fn workspace_id() -> WorkspaceId {
@@ -840,7 +1299,7 @@ mod tests {
         }
     }
 
-    fn now() -> jiff::Timestamp {
-        jiff::Timestamp::UNIX_EPOCH
+    fn now() -> Timestamp {
+        Timestamp::UNIX_EPOCH
     }
 }

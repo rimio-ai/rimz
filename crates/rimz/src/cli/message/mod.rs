@@ -1,7 +1,7 @@
 //! `rimz message` — parse command input, call message domain, and render output.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -11,18 +11,18 @@ use serde::Serialize;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::address;
-use super::send::{self, SendFlags, WaitSpec, resolve_message};
+use super::send::{self, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::SidebarSnapshot;
 use rimz::agents::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
-use rimz::message::dispatch::{DispatchContext, DispatchOutcome, SendMode};
+use rimz::message::deliver;
+use rimz::message::dispatch::WhenRequest;
 use rimz::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
     MessageStatus, WhenCondition, parse_schedule_at,
 };
-use rimz::message::{deliver, dispatch as message_dispatch};
 use rimz::store::event::{EventEnvelope, EventKind, MessageEventPayload};
 use rimz::store::{EditOutcome, MessageEdit};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
@@ -57,7 +57,8 @@ pub struct MessageArgs {
         value_name = "'ADDR STATUS DUR'",
         conflicts_with_all = ["steer", "wait"]
     )]
-    when: Vec<String>,
+    #[arg(value_parser = parse_when_request)]
+    when: Vec<WhenRequest>,
     #[command(flatten)]
     send: SendFlags,
 }
@@ -289,43 +290,6 @@ use edit::*;
 use list::*;
 use show::*;
 
-pub(crate) fn to_session(
-    root: &Path,
-    kind: &str,
-    session: &str,
-    text: String,
-    gate: DeliveryGate,
-    globals: &GlobalFlags,
-) -> Result<()> {
-    let mut globals = globals.clone();
-    globals.root = Some(root.to_path_buf());
-    tracing::debug!(kind, session, "queueing loop wake-up");
-    dispatch_message(
-        format!("@{session}"),
-        None,
-        None,
-        text,
-        MessageDispatchMode::Boundary,
-        MessageSpec {
-            enter: true,
-            gate,
-            force: false,
-            auto_compact: None,
-            no_from: false,
-            automated: true,
-            wait: WaitSpec::OFF,
-            not_before: None,
-            after: Vec::new(),
-            when: Vec::new(),
-        },
-        FanoutFlags {
-            all: false,
-            create: false,
-        },
-        &globals,
-    )
-}
-
 fn workspace_store_snapshot(
     globals: &GlobalFlags,
 ) -> Result<(ResolvedWorkspace, rimz::Store, rimz::SidebarSnapshot)> {
@@ -343,6 +307,22 @@ pub(crate) fn parse_gate(raw: &str) -> std::result::Result<DeliveryGate, String>
             "unknown delivery gate `{other}`; expected done or any"
         )),
     }
+}
+
+fn parse_when_request(expression: &str) -> std::result::Result<WhenRequest, String> {
+    let fields = expression.split_whitespace().collect::<Vec<_>>();
+    let [address, status, duration] = fields.as_slice() else {
+        return Err(format!(
+            "invalid --when `{expression}`; use `@handle <status> <duration>` (for example `@coder idle 58m`)"
+        ));
+    };
+    rimz::harness::target::require_mention(address).map_err(|err| err.to_string())?;
+    Ok(WhenRequest {
+        address: (*address).to_owned(),
+        status: rimz::message::parse_when_status(status)?,
+        dwell_secs: rimz::message::parse_when_duration(duration)?,
+        expression: expression.to_owned(),
+    })
 }
 
 fn parse_status(raw: &str) -> std::result::Result<MessageStatus, String> {

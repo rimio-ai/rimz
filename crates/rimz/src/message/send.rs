@@ -1,8 +1,7 @@
 //! Live-pane message send engine.
 
-use std::path::PathBuf;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::agents::AgentState;
 use crate::ids::{AgentSessionId, MessageId, WorkspaceId};
@@ -11,8 +10,6 @@ use crate::message::{
     MessageStatus, WhenCondition,
 };
 use crate::mux::{NamedKey, paste_into_pane, press_pane_key, type_into_pane};
-use crate::store::event::EventKind;
-use crate::store::event_log;
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, SidebarSnapshot, Store};
 
@@ -22,16 +19,8 @@ pub type Result<T> = std::result::Result<T, SendErr>;
 pub enum SendErr {
     #[error(transparent)]
     Store(#[from] crate::store::StoreErr),
-    #[error(transparent)]
-    EventLog(#[from] crate::store::event_log::EventLogErr),
     #[error("{0}")]
     Mux(#[from] crate::mux::MuxErr),
-    #[error("cannot access {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
 }
 
 /// What happened to one live-pane send in a fan-out. Every resolved pane target
@@ -428,93 +417,16 @@ pub fn bound_agent<'a>(
         .find(|agent| agent.kind == target.kind && &agent.agent_id == agent_id)
 }
 
-pub fn wait_for_message_until(
-    store: &Store,
-    message_id: &MessageId,
-    session_name: &str,
-    mut base: u64,
-    deadline: Option<Instant>,
-) -> Result<MessageStatus> {
-    const POLL: Duration = Duration::from_millis(500);
-
-    loop {
-        if let Some(message) = store
-            .list_messages()?
-            .into_iter()
-            .find(|message| message.message_id == *message_id)
-        {
-            if message.status == MessageStatus::Sent
-                && deadline.is_some_and(|deadline| Instant::now() >= deadline)
-            {
-                let timed_out =
-                    store.mark_message_timed_out(message_id, session_name, Some("wait"))?;
-                return Ok(timed_out
-                    .map(|message| message.status)
-                    .unwrap_or(MessageStatus::TimedOut));
-            }
-        } else if let Some(status) = latest_terminal_message_status(store, message_id, &mut base)? {
-            return Ok(status);
-        }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Ok(MessageStatus::TimedOut);
-        }
-        let sleep = deadline.map_or(POLL, |deadline| {
-            deadline.saturating_duration_since(Instant::now()).min(POLL)
-        });
-        std::thread::sleep(sleep);
-    }
-}
-
-pub fn latest_terminal_message_status(
-    store: &Store,
-    message_id: &MessageId,
-    base: &mut u64,
-) -> Result<Option<MessageStatus>> {
-    let mut latest = None;
-    let path = &store.paths().events_log;
-    let log_len = match std::fs::metadata(path) {
-        Ok(meta) => meta.len(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(err) => {
-            return Err(SendErr::Io {
-                path: path.clone(),
-                source: err,
-            });
-        }
-    };
-    if log_len < *base {
-        *base = 0;
-    }
-    let (events, end) = event_log::read_from_offset(path, *base)?;
-    *base = end;
-    for event in events {
-        let EventKind::Message { payload, .. } = event.kind() else {
-            continue;
-        };
-        if payload.message_id == *message_id && payload.status.is_terminal() {
-            latest = Some(payload.status);
-        }
-    }
-    Ok(latest)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::agents::AgentStatus;
     use crate::ids::{MuxName, PaneId, WorkspaceId};
-    use crate::store::event::{EventEnvelope, MessageEventMethod};
-    use crate::store::{RuntimePaths, StatePaths};
     fn agent() -> AgentState {
         let mut agent = AgentState::stub("claude", "sess-a", AgentStatus::Idle);
         agent.name = Some("lucid-atlas".to_owned());
         agent
-    }
-
-    fn delivered_message_event(message: &mut MessageRecord) -> EventEnvelope {
-        message.status = MessageStatus::Delivered;
-        EventEnvelope::message_event(message, "session", MessageEventMethod::Delivered, None)
     }
 
     fn draft(not_before: Option<jiff::Timestamp>) -> MessageDraft {
@@ -577,53 +489,6 @@ mod tests {
         assert_eq!(live.not_before, Some(not_before));
         assert_eq!(parked.pane_id, None);
         assert_eq!(parked.channel, None);
-    }
-
-    #[test]
-    fn terminal_message_poll_reads_only_appended_bytes_after_base() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-        paths.ensure_dirs().unwrap();
-        runtime.ensure_dirs().unwrap();
-        let store = Store::open(paths.clone(), runtime).unwrap();
-        let agent = agent();
-        let mut old = MessageRecord::new(
-            workspace_id.clone(),
-            &agent,
-            "old".to_owned(),
-            true,
-            DeliveryGate::Any,
-        );
-        event_log::append(&paths.events_log, &delivered_message_event(&mut old)).unwrap();
-        let mut base = store.wait_fold_base().unwrap();
-
-        let before = event_log::testkit::bytes_read();
-        assert_eq!(
-            latest_terminal_message_status(&store, &old.message_id, &mut base).unwrap(),
-            None
-        );
-        assert_eq!(event_log::testkit::bytes_read() - before, 0);
-
-        let mut message = MessageRecord::new(
-            workspace_id,
-            &agent,
-            "new".to_owned(),
-            true,
-            DeliveryGate::Any,
-        );
-        event_log::append(&paths.events_log, &delivered_message_event(&mut message)).unwrap();
-        let log_len = std::fs::metadata(&paths.events_log).unwrap().len();
-        let appended = log_len - base;
-        let before = event_log::testkit::bytes_read();
-
-        assert_eq!(
-            latest_terminal_message_status(&store, &message.message_id, &mut base).unwrap(),
-            Some(MessageStatus::Delivered)
-        );
-        assert_eq!(event_log::testkit::bytes_read() - before, appended);
-        assert_eq!(base, log_len);
     }
 
     #[test]

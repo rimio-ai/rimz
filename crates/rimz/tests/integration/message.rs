@@ -1785,6 +1785,65 @@ fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
 }
 
 #[test]
+fn message_wait_timeout_marks_only_sent_leg_and_keeps_queued_leg() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let sent_transcript = env.runtime_root.join("message-wait-mixed-sent.jsonl");
+    let queued_transcript = env.runtime_root.join("message-wait-mixed-queued.jsonl");
+    std::fs::write(&sent_transcript, "").expect("seed sent transcript");
+    std::fs::write(&queued_transcript, "").expect("seed queued transcript");
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-mixed-sent",
+        "feature-mixed-sent",
+        &sent_transcript,
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    register_idle_agent_with_transcript(
+        &env,
+        "sess-wait-mixed-queued",
+        "feature-mixed-queued",
+        &queued_transcript,
+        &[("ZELLIJ_PANE_ID", "4")],
+    );
+    push_pending_agent_ask(&env, "sess-wait-mixed-queued");
+
+    let trace_log = env.project_root.join("zellij-wait-mixed-timeout.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["message", "@all", "--wait=0s", "--json", "status?"])
+        .output()
+        .expect("mixed-state fanout wait deadline");
+
+    assert_eq!(out.status.code(), Some(124));
+    let replies: serde_json::Value = serde_json::from_slice(&out.stdout).expect("reply JSON");
+    let sent_label = "@claude#feature-mixed-sent";
+    let queued_label = "@claude#feature-mixed-queued";
+    assert_eq!(replies[sent_label]["status"], "timed_out");
+    assert_eq!(replies[queued_label]["status"], "timed_out");
+
+    let timed_out = env
+        .read_events()
+        .into_iter()
+        .filter(|event| event.method == "message.timed_out")
+        .collect::<Vec<_>>();
+    assert_eq!(timed_out.len(), 1, "only sent durable record times out");
+    assert_eq!(
+        timed_out[0].params_value()["message_id"],
+        replies[sent_label]["message_id"]
+    );
+    let pending = env.store().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1, "queued reply leg remains deliverable");
+    assert_eq!(pending[0].status, MessageStatus::Queued);
+    assert_eq!(
+        pending[0].message_id.as_str(),
+        replies[queued_label]["message_id"]
+    );
+}
+
+#[test]
 fn message_wait_rejects_invalid_modes_pane_targets_and_missing_hooks() {
     let env = Env::new();
     for args in [

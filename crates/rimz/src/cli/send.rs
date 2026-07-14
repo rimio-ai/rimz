@@ -1,5 +1,4 @@
-//! Command-side send flags, prompt sources shared by `rimz message` and
-//! supervised runs, and sender attribution.
+//! Shared send flags, prompt sources, sender attribution, and outcome presentation.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -8,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use rimz::ids::AgentKind;
+use rimz::message::dispatch::DispatchOutcome;
 use rimz::message::{AutoCompact, MessageSender};
 
 const AGENT_WAIT_DEADLINE: Duration = Duration::from_secs(3600);
@@ -101,7 +101,8 @@ pub(crate) struct WaitSpec {
 }
 
 impl WaitSpec {
-    pub(crate) const OFF: Self = Self {
+    #[cfg(test)]
+    const OFF: Self = Self {
         mode: ReplyWait::Off,
         any: false,
         json: false,
@@ -260,6 +261,136 @@ pub(crate) fn validate_reply_wait(
         bail!("--wait sends now or parks for a turn boundary; remove --schedule");
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ReportMode {
+    Steer,
+    Boundary,
+}
+
+pub(crate) fn render_dispatch_outcome(outcome: &DispatchOutcome) -> Option<String> {
+    match outcome {
+        DispatchOutcome::Sent { label, message_id } => {
+            Some(format!("sent to {label} ({message_id})"))
+        }
+        DispatchOutcome::Queued { label, message_id } => {
+            Some(format!("queued for {label} ({message_id})"))
+        }
+        DispatchOutcome::CompactionPending { label, message_id } => Some(format!(
+            "compacting {label}; queued {message_id} (delivers when compaction completes)"
+        )),
+        DispatchOutcome::SkippedWaiting { .. } => None,
+    }
+}
+
+/// Present dispatch outcomes shared by direct messages and loop delivery.
+pub(crate) fn report_dispatch(
+    mode: ReportMode,
+    target: &str,
+    outcomes: &[DispatchOutcome],
+    compacted: &[String],
+) -> Result<()> {
+    match mode {
+        ReportMode::Boundary => report_boundary(outcomes, compacted),
+        ReportMode::Steer => report_steer(target, outcomes, compacted),
+    }
+}
+
+fn report_boundary(outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {
+    for label in compacted {
+        #[expect(clippy::print_stdout, reason = "command result")]
+        {
+            println!("compacted {label}");
+        }
+    }
+    for outcome in outcomes {
+        if let Some(line) = render_dispatch_outcome(outcome) {
+            #[expect(clippy::print_stdout, reason = "command result")]
+            {
+                println!("{line}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]) -> Result<()> {
+    let mut sent = Vec::new();
+    let mut sent_labels = Vec::new();
+    let mut queued = Vec::new();
+    let mut pending = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            DispatchOutcome::Sent { label, message_id } => {
+                sent.push(format!("{label} ({message_id})"));
+                sent_labels.push(label.as_str());
+            }
+            DispatchOutcome::Queued { label, message_id } => {
+                queued.push(format!("{label} ({message_id})"));
+            }
+            DispatchOutcome::CompactionPending { label, message_id } => {
+                queued.push(format!("{label} ({message_id}; waiting for compaction)"));
+            }
+            DispatchOutcome::SkippedWaiting { label, message_id } => {
+                pending.push(format!("{label} ({message_id})"));
+            }
+        }
+    }
+    if outcomes.len() == 1 {
+        if !sent.is_empty() {
+            let label = sent_labels[0];
+            print_compacted_if_needed(label, compacted);
+            #[expect(clippy::print_stdout, reason = "message confirmation")]
+            {
+                println!("sent to {}", sent[0]);
+            }
+            return Ok(());
+        }
+        if !queued.is_empty() {
+            #[expect(clippy::print_stdout, reason = "message confirmation")]
+            {
+                println!("queued for {}", queued[0]);
+            }
+            return Ok(());
+        }
+        match outcomes.first() {
+            Some(DispatchOutcome::SkippedWaiting { label, message_id }) => bail!(
+                "{label} ({message_id}) is waiting on your input in its pane; answer it or pass --force"
+            ),
+            Some(DispatchOutcome::CompactionPending { .. }) => {
+                unreachable!("compaction-pending outcomes are included in queued summary")
+            }
+            _ => bail!("no agent matches `{target}`"),
+        }
+    }
+    let mut line = format!("sent {} agent(s)", sent.len());
+    if !sent.is_empty() {
+        line.push_str(&format!(": {}", sent.join(", ")));
+    }
+    if !queued.is_empty() {
+        line.push_str(&format!("; queued: {}", queued.join(", ")));
+    }
+    if !compacted.is_empty() {
+        line.push_str(&format!("; compacted: {}", compacted.join(", ")));
+    }
+    if !pending.is_empty() {
+        line.push_str(&format!("; waiting in pane: {}", pending.join(", ")));
+    }
+    #[expect(clippy::print_stdout, reason = "message fan-out summary")]
+    {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn print_compacted_if_needed(label: &str, compacted: &[String]) {
+    if compacted.iter().any(|compacted| compacted == label) {
+        #[expect(clippy::print_stdout, reason = "message compact confirmation")]
+        {
+            println!("compacted {label}");
+        }
+    }
 }
 
 fn parse_wait_duration(raw: &str) -> std::result::Result<Duration, String> {

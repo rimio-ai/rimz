@@ -663,21 +663,55 @@ fn execute_delivery_task(
         let _ = remove_loaded_task(name, entry, execution.source)?;
     }
     let root = entry.resolved_root();
-    match crate::cli::message::to_session(
-        &root,
-        &target.kind,
-        &target.session,
-        prompt,
-        DeliveryGate::Done,
-        execution.globals,
-    ) {
-        Ok(()) => {
+    let workspace = WorkspaceResolver::resolve_participant(".", Some(root.clone()))?;
+    let store = crate::cli::open_store(&workspace)?;
+    let channel = crate::cli::current_channel(&workspace);
+    let sender = crate::cli::send::sender_from_env(channel.as_deref(), false);
+    tracing::debug!(
+        kind = target.kind,
+        session = target.session,
+        "queueing loop wake-up"
+    );
+    let dispatched = rimz::message::dispatch::dispatch(
+        &workspace,
+        &store,
+        rimz::message::dispatch::DispatchRequest {
+            target: format!("@{}", target.session),
+            text: prompt,
+            target_scope: None,
+            current_channel: channel,
+            sender,
+            automated: true,
+            allow_fanout: false,
+            reply: None,
+            mux: execution.globals.mux,
+            mode: rimz::message::dispatch::DispatchMode::Boundary {
+                enter: true,
+                gate: DeliveryGate::Done,
+                force: false,
+                auto_compact: None,
+                not_before: None,
+                after: Vec::new(),
+                when: Vec::new(),
+            },
+        },
+    );
+    match dispatched {
+        Ok(result) => {
+            crate::cli::send::report_dispatch(
+                crate::cli::send::ReportMode::Boundary,
+                &target.handle,
+                &result.outcomes,
+                &result.compacted,
+            )?;
             let mut run = RunOutcome::new(LoopRunResult::Delivered);
             run.check = check_record;
             run.target = Some(target.handle.clone());
             Ok(run)
         }
-        Err(err) if queue_resolution_miss(&err) => {
+        Err(rimz::message::dispatch::DispatchErr::Recipient(
+            rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. },
+        )) => {
             if execution.mode == LoopRunMode::Scheduled {
                 writeln!(
                     ui::out(),
@@ -688,7 +722,7 @@ fn execute_delivery_task(
             }
             Ok(target_gone_outcome(target, check_record))
         }
-        Err(err) => Err(err),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -1140,13 +1174,6 @@ fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool>
             && agent.kind.as_str() == target.kind.as_str()
             && agent.agent_id.as_str() == target.session
     }))
-}
-
-fn queue_resolution_miss(err: &anyhow::Error) -> bool {
-    matches!(
-        err.downcast_ref::<rimz::TargetErr>(),
-        Some(rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. })
-    )
 }
 
 pub(crate) fn reap_dead_delivery_schedules() -> Result<usize> {
