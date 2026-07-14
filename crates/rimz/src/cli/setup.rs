@@ -5,11 +5,12 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Args;
+use rimz::config::{ConfigEditor, MergeAction, MergeReport};
 use rimz::ids::MuxName;
 use rimz::trust::TrustState;
 use rimz::workspace::WorkspaceResolver;
 
-use super::{GlobalFlags, config, first_run, room};
+use super::{GlobalFlags, first_run, room};
 use crate::cli::render;
 
 #[derive(Debug, Args)]
@@ -32,7 +33,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
 
     if args.yes {
         print_report(&report)?;
-        render_merge_report(&config::merge_default_config()?)?;
+        render_merge_report(&ConfigEditor::machine().merge_defaults()?)?;
         report_remote_template()?;
         print_line("No hooks or trust grants were changed by --yes.")?;
         print_line("Run `rimz start` when ready.")?;
@@ -44,11 +45,11 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     let exists = paths.iter().any(|path| path.exists());
     if exists {
         if super::confirm_with_default("Keep your current config?", true)? {
-            let merge = config::merge_default_config()?;
+            let merge = ConfigEditor::machine().merge_defaults()?;
             let left_unparseable = merge
                 .files
                 .iter()
-                .any(|file| matches!(file.action, config::MergeAction::LeftUnparseable { .. }));
+                .any(|file| matches!(file.action, MergeAction::LeftUnparseable { .. }));
             render_merge_report(&merge)?;
             if left_unparseable {
                 print_line("Fix the unparseable file(s), then rerun `rimz setup`.")?;
@@ -72,7 +73,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
 /// First-run config bootstrap: write the default config set and remote.toml
 /// when absent. Idempotent; returns whether anything was written.
 pub(crate) fn ensure_default_config() -> Result<bool> {
-    let wrote_core = config::write_default_config(false)?;
+    let wrote_core = ConfigEditor::machine().write_defaults(false)?;
     let wrote_remote = rimz::remote::aliases::RemoteAliases::ensure_template()?;
     Ok(wrote_core || wrote_remote)
 }
@@ -173,7 +174,7 @@ fn default_config_paths() -> [PathBuf; 3] {
 }
 
 fn write_fresh_config() -> Result<()> {
-    config::write_default_config(true)?;
+    ConfigEditor::machine().write_defaults(true)?;
     for path in default_config_paths() {
         print_line(&format!("Wrote {}", path.display()))?;
     }
@@ -190,22 +191,23 @@ fn report_remote_template() -> Result<()> {
     Ok(())
 }
 
-fn render_merge_report(report: &config::MergeReport) -> Result<()> {
+fn render_merge_report(report: &MergeReport) -> Result<()> {
     for file in &report.files {
         match file.action {
-            config::MergeAction::Wrote => {
+            MergeAction::Wrote => {
                 print_line(&format!("Wrote {}", file.path.display()))?;
             }
-            config::MergeAction::Merged { kept } => {
+            MergeAction::Merged { kept } => {
                 print_line(&format!(
                     "Merged {} - kept {kept} setting(s)",
                     file.path.display()
                 ))?;
             }
-            config::MergeAction::LeftUnparseable { ref error } => {
+            MergeAction::LeftUnparseable { ref error } => {
                 print_line(&format!(
-                    "Left {} untouched - unparseable: {error}; fix the file and rerun rimz setup",
+                    "Left {} untouched - unparseable: {}; fix the file and rerun rimz setup",
                     file.path.display(),
+                    render::one_line(&error.to_string()),
                 ))?;
             }
         }

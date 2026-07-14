@@ -3,11 +3,11 @@
 use std::io::{BufRead, Write};
 
 use anyhow::Result;
-use rimz::config::{CellAspect, ColorDepth, MachineConfig, PetsConfig};
+use rimz::config::{CellAspect, ColorDepth, ConfigEditor, MachineConfig, PetsConfig};
 use rimz::sidebar_pane::pets::{self, PetRenderTier};
 
 use super::list_pets::{LiveGraphicsPacer, write_pet_row, write_pixel_pet_row_with_pacer};
-use super::{config, render};
+use super::render;
 
 const HEADER_RULE_WIDTH: usize = 48;
 const CONSENT_INTRO: &str = "Rimz routes attention across your coding agents into one sidebar.";
@@ -158,8 +158,9 @@ pub(crate) fn ask(
 }
 
 pub(crate) fn apply(answers: &Answers, out: &mut dyn Write) -> Result<()> {
+    let editor = ConfigEditor::machine();
     if answers.truecolor != answers.defaults.truecolor {
-        config::set_config_key(
+        editor.set(
             "theme.mode",
             if answers.truecolor {
                 "truecolor"
@@ -179,7 +180,7 @@ pub(crate) fn apply(answers: &Answers, out: &mut dyn Write) -> Result<()> {
     }
 
     if answers.nerd_font != answers.defaults.nerd_font {
-        config::set_config_key(
+        editor.set(
             "theme.glyphs.set",
             if answers.nerd_font {
                 "nerd_font"
@@ -199,10 +200,10 @@ pub(crate) fn apply(answers: &Answers, out: &mut dyn Write) -> Result<()> {
     }
 
     if answers.pet_enabled {
-        config::set_config_key("theme.pets.enabled", "true")?;
+        editor.set("theme.pets.enabled", "true")?;
         writeln!(out, "✓ rocky joins the room (rimz list-pets: more)")?;
     } else if answers.defaults.pet_enabled {
-        config::set_config_key("theme.pets.enabled", "false")?;
+        editor.set("theme.pets.enabled", "false")?;
         writeln!(out, "✓ pet disabled")?;
     }
     Ok(())

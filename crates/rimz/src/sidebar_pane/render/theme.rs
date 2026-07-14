@@ -66,7 +66,8 @@ const VALUE_FLASH_INK: Color = Color::Indexed(150);
 /// The scheme that ships as the default look, drawn from the bundled Alacritty
 /// catalog. `[theme] scheme` left unset resolves to this. The baked-in
 /// tones live in [`Semantic::DEFAULT`].
-pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
+#[cfg(test)]
+pub(crate) const DEFAULT_SCHEME: &str = crate::config::DEFAULT_SCHEME;
 
 pub(crate) fn nerd_font_probe_glyphs() -> [&'static str; 8] {
     [

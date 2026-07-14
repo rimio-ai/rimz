@@ -16,7 +16,6 @@ mod animation;
 mod ansi;
 mod chrome;
 mod compose;
-mod embedded_themes;
 mod fmt;
 mod labels;
 mod layout;

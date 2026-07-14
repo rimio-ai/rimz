@@ -325,7 +325,7 @@ pub(crate) fn sessions() -> Vec<CompletionCandidate> {
 }
 
 pub(crate) fn config_keys() -> Vec<CompletionCandidate> {
-    let Ok(value) = super::config::config_value(&MachineConfig::load_lenient()) else {
+    let Ok(value) = MachineConfig::load_lenient().to_toml_value() else {
         return Vec::new();
     };
     let mut leaves = Vec::new();

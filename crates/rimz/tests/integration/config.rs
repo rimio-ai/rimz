@@ -213,6 +213,81 @@ fn config_init_prints_and_writes_the_template() {
 }
 
 #[test]
+fn config_init_refuses_a_lone_existing_loop_file() {
+    let env = Env::new();
+    let path = loop_config_path(&env);
+    let original = b"# keep this loop file\n[tasks]\n";
+    write_machine_file(&path, std::str::from_utf8(original).expect("utf-8 fixture"));
+
+    env.rimz()
+        .args(["config", "init"])
+        .assert()
+        .failure()
+        .stderr(contains(format!("{} already exists", path.display())));
+
+    assert_eq!(std::fs::read(path).expect("read loop file"), original);
+}
+
+#[test]
+fn config_editor_non_force_defaults_write_nothing_when_one_file_exists() {
+    let env = Env::new();
+    let files = rimz::config::MachineConfigFiles::from_paths(
+        machine_config_path(&env),
+        env.home_root.join(".agents"),
+    );
+    let editor = rimz::config::ConfigEditor::new(files);
+    let existing = editor.files().ordered()[2].path().to_path_buf();
+    write_machine_file(&existing, "# existing agents config\n[agents]\n");
+
+    assert!(!editor.write_defaults(false).expect("write defaults"));
+    for file in editor.files().ordered() {
+        assert_eq!(file.path().exists(), file.path() == existing);
+    }
+}
+
+#[test]
+fn config_get_json_distinguishes_unset_and_unknown_keys() {
+    let env = Env::new();
+
+    env.rimz()
+        .args(["config", "get", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"notifications\""));
+    env.rimz()
+        .args(["config", "get", "notifications", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"enabled\""));
+    env.rimz()
+        .args(["config", "get", "timezone"])
+        .assert()
+        .failure()
+        .stderr(contains("config key `timezone` is unset"));
+    env.rimz()
+        .args(["config", "get", "not_a_config_key"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown config key `not_a_config_key`"));
+}
+
+#[test]
+fn invalid_config_edit_preserves_existing_file_bytes() {
+    let env = Env::new();
+    let path = theme_config_path(&env);
+    let original = b"# keep this comment\n[theme.display]\nmax_cols = 72\n";
+    write_machine_file(&path, std::str::from_utf8(original).expect("utf-8 fixture"));
+
+    env.rimz()
+        .args(["config", "set", "theme.display.max_cols", "0"])
+        .assert()
+        .failure()
+        .stderr(contains("validating `theme.display.max_cols`"));
+
+    assert_eq!(std::fs::read(path).expect("read theme file"), original);
+}
+
+#[test]
 fn config_get_set_round_trip_preserves_template_comments() {
     let env = Env::new();
     env.rimz().args(["config", "init"]).assert().success();

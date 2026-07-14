@@ -12,6 +12,7 @@ use clap::Args;
 
 use super::GlobalFlags;
 use crate::cli::render;
+use rimz::config;
 use rimz::sidebar_pane::render::scheme;
 
 const GROUP_GAP: usize = 3;
@@ -24,7 +25,7 @@ pub struct ListThemesArgs {
 }
 
 pub fn run(args: ListThemesArgs, _globals: &GlobalFlags) -> Result<()> {
-    let names = scheme::available_scheme_names();
+    let names = config::available_scheme_names();
     if args.json {
         let rendered = serde_json::to_string_pretty(&names).expect("theme name vec serializes");
         #[expect(clippy::print_stdout, reason = "json emitter")]

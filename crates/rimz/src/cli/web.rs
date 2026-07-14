@@ -13,7 +13,6 @@ use crate::cli::room;
 use rimz::config::MachineConfig;
 use rimz::ids::MuxName;
 use rimz::mux::CommandSpec;
-use rimz::sidebar_pane::render::scheme;
 use rimz::store::{atomic, paths};
 use rimz::web::{
     ParsedWebStatus, WebClientColors, WebEngine, WebOpenPayload, WebServerStatus, WebStartOptions,
@@ -627,14 +626,14 @@ fn web_client_config_file(config: &MachineConfig) -> Option<PathBuf> {
     if !config.web.enabled || !config.web.zellij.style_client {
         return None;
     }
-    let colors = match WebClientColors::from_palette(&scheme::resolve_inline_palette(&config.theme))
-    {
-        Some(colors) => colors,
-        None => {
-            note_browser_theme_skip("scheme palette is incomplete or malformed");
-            return None;
-        }
-    };
+    let colors =
+        match WebClientColors::from_palette(&rimz::config::resolve_inline_palette(&config.theme)) {
+            Some(colors) => colors,
+            None => {
+                note_browser_theme_skip("scheme palette is incomplete or malformed");
+                return None;
+            }
+        };
     let existing = match active_zellij_config_path() {
         Some(path) => match std::fs::read_to_string(&path) {
             Ok(text) => Some(text),

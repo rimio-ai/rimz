@@ -66,6 +66,21 @@ fn dynamic_completion_reads_live_handles_and_message_ids() {
     );
 }
 
+#[test]
+fn config_key_completion_uses_lenient_defaults_for_malformed_config() {
+    let env = Env::new();
+    let path = env.config_root().join("rimz/config.toml");
+    std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir config");
+    std::fs::write(path, "[notifications\nenabled = false\n").expect("write malformed config");
+
+    let keys = complete(&env, 3, ["rimz", "config", "get", ""]);
+    assert!(
+        keys.lines()
+            .any(|line| line.starts_with("notifications.enabled")),
+        "{keys}"
+    );
+}
+
 fn complete<const N: usize>(env: &Env, index: usize, words: [&str; N]) -> String {
     let output = env
         .rimz()

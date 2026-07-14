@@ -148,7 +148,10 @@ fn broken_machine_files_reports_only_the_unparseable_file() {
     .expect("write broken theme config");
     std::fs::write(dir.path().join(AGENTS_FILE), "").expect("write agents config");
 
-    let errors = broken_machine_files_in(dir.path());
+    let errors = broken_machine_files_in(&MachineConfigFiles::from_paths(
+        dir.path().join(CONFIG_FILE),
+        dir.path().join("agents-home"),
+    ));
 
     assert_eq!(errors.len(), 1, "only theme.toml is broken: {errors:?}");
     match &errors[0] {

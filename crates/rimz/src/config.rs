@@ -1,8 +1,6 @@
-//! Per-machine settings, loaded from `~/.config/rimz/config.toml`,
-//! `theme.toml`, `agents.toml`, and `loop.toml`. Agent and team fragments
-//! discovered under `~/.agents/{agents,teams}` are the base layer for
-//! `agents.toml`, whose entries take precedence on name clashes. Strict and
-//! lenient load paths merge fragments before validating the agents view.
+//! Per-machine settings, loaded from `~/.config/rimz/config.toml`, `theme.toml`, `agents.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
+//!
+//! Agent and team fragments discovered under `~/.agents/{agents,teams}` are the base layer for `agents.toml`, whose entries take precedence on name clashes. Strict and lenient load paths merge fragments before validating the agents view.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in
@@ -36,6 +34,7 @@ mod attention;
 mod color;
 mod daemon;
 mod display;
+mod edit;
 pub mod effective;
 mod glyphs;
 mod harness;
@@ -45,6 +44,7 @@ mod notifications;
 mod pets;
 mod remote_control;
 mod resume;
+mod scheme;
 mod sentry;
 mod sidebar;
 mod theme;
@@ -70,6 +70,9 @@ pub use display::{
     BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
     DisplayConfig, HighlightStepsConfig, PixelMode, ProviderTabsMode, ScrollbarMode,
 };
+pub use edit::{
+    ConfigEditErr, ConfigEditor, FileMergeOutcome, MergeAction, MergeReport, SkippedKey,
+};
 pub use glyphs::{
     GlyphOverrides, GlyphRole, ThemeGlyphsConfig, glyph_lookup_hint, is_named_glyph_set,
     validate_glyph_source,
@@ -88,6 +91,10 @@ pub use notifications::{
 pub use pets::{CellAspect, PetsConfig, PetsGlyphMode};
 pub use remote_control::RemoteControlConfig;
 pub use resume::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
+#[cfg(test)]
+pub(crate) use scheme::parse_scheme_text;
+pub(crate) use scheme::{DEFAULT_SCHEME, ParsedScheme, explicit_scheme, parsed_inline_palette};
+pub use scheme::{available_scheme_names, resolve_inline_palette, theme_lookup_hint};
 pub use sentry::SentryConfig;
 pub use sidebar::{DEFAULT_AFK_AFTER_SECS, SidebarConfig, SidebarKeys};
 pub use theme::{
@@ -110,6 +117,115 @@ pub const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config/templates/config.
 pub const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.template.toml");
 pub const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.template.toml");
 pub const MACHINE_LOOP_TEMPLATE: &str = include_str!("config/templates/loop.template.toml");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MachineConfigFileKind {
+    Core,
+    Theme,
+    Agents,
+    Loop,
+}
+
+impl MachineConfigFileKind {
+    const ALL: [Self; 4] = [Self::Core, Self::Theme, Self::Agents, Self::Loop];
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Core => CONFIG_FILE,
+            Self::Theme => THEME_FILE,
+            Self::Agents => AGENTS_FILE,
+            Self::Loop => LOOP_FILE,
+        }
+    }
+
+    fn template(self) -> &'static str {
+        match self {
+            Self::Core => MACHINE_CONFIG_TEMPLATE,
+            Self::Theme => MACHINE_THEME_TEMPLATE,
+            Self::Agents => MACHINE_AGENTS_TEMPLATE,
+            Self::Loop => MACHINE_LOOP_TEMPLATE,
+        }
+    }
+}
+
+/// One file in the ordered per-machine config set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MachineConfigFile {
+    path: PathBuf,
+    template: &'static str,
+}
+
+impl MachineConfigFile {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn template(&self) -> &'static str {
+        self.template
+    }
+}
+
+/// Canonical paths and templates for the four per-machine config files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MachineConfigFiles {
+    core_path: PathBuf,
+    agents_home: PathBuf,
+}
+
+impl MachineConfigFiles {
+    /// Resolve the current machine's config roots.
+    pub fn machine() -> Self {
+        Self::from_paths(
+            config_home().join(RIMZ_CONFIG_SUBDIR).join(CONFIG_FILE),
+            paths::agents_home(),
+        )
+    }
+
+    /// Build an explicit config set for tests and tooling.
+    pub fn from_paths(core_path: impl Into<PathBuf>, agents_home: impl Into<PathBuf>) -> Self {
+        Self {
+            core_path: core_path.into(),
+            agents_home: agents_home.into(),
+        }
+    }
+
+    pub fn core_path(&self) -> &Path {
+        &self.core_path
+    }
+
+    pub fn agents_home(&self) -> &Path {
+        &self.agents_home
+    }
+
+    /// Files in persistence and display order: core, theme, agents, loop.
+    pub fn ordered(&self) -> [MachineConfigFile; 4] {
+        MachineConfigFileKind::ALL.map(|kind| MachineConfigFile {
+            path: self.path(kind),
+            template: kind.template(),
+        })
+    }
+
+    pub fn ordered_paths(&self) -> [PathBuf; 4] {
+        MachineConfigFileKind::ALL.map(|kind| self.path(kind))
+    }
+
+    fn path(&self, kind: MachineConfigFileKind) -> PathBuf {
+        if kind == MachineConfigFileKind::Core {
+            return self.core_path.clone();
+        }
+        self.core_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(kind.file_name())
+    }
+
+    fn file(&self, kind: MachineConfigFileKind) -> MachineConfigFile {
+        MachineConfigFile {
+            path: self.path(kind),
+            template: kind.template(),
+        }
+    }
+}
 
 const CONFIG_STAMP_TTL: Duration = Duration::from_secs(2);
 /// Re-reads allowed before a config load stops chasing an in-place rewrite and
@@ -220,54 +336,57 @@ pub struct MachineConfig {
 impl MachineConfig {
     /// The generated core per-machine config reference.
     pub fn template_core() -> &'static str {
-        MACHINE_CONFIG_TEMPLATE
+        MachineConfigFileKind::Core.template()
     }
 
     /// The generated theme per-machine config reference.
     pub fn template_theme() -> &'static str {
-        MACHINE_THEME_TEMPLATE
+        MachineConfigFileKind::Theme.template()
     }
 
     /// The generated agents per-machine config reference.
     pub fn template_agents() -> &'static str {
-        MACHINE_AGENTS_TEMPLATE
+        MachineConfigFileKind::Agents.template()
     }
 
     /// The generated loop per-machine config reference.
     pub fn template_loop() -> &'static str {
-        MACHINE_LOOP_TEMPLATE
+        MachineConfigFileKind::Loop.template()
     }
 
     /// The core per-machine config path: `$XDG_CONFIG_HOME/rimz/config.toml`.
     pub fn config_path() -> PathBuf {
-        config_home().join(RIMZ_CONFIG_SUBDIR).join(CONFIG_FILE)
+        MachineConfigFiles::machine().path(MachineConfigFileKind::Core)
     }
 
     /// The theme per-machine config path: `$XDG_CONFIG_HOME/rimz/theme.toml`.
     pub fn theme_path() -> PathBuf {
-        config_home().join(RIMZ_CONFIG_SUBDIR).join(THEME_FILE)
+        MachineConfigFiles::machine().path(MachineConfigFileKind::Theme)
     }
 
     /// The agents per-machine config path: `$XDG_CONFIG_HOME/rimz/agents.toml`.
     pub fn agents_path() -> PathBuf {
-        config_home().join(RIMZ_CONFIG_SUBDIR).join(AGENTS_FILE)
+        MachineConfigFiles::machine().path(MachineConfigFileKind::Agents)
     }
 
     /// The loop per-machine config path: `$XDG_CONFIG_HOME/rimz/loop.toml`.
     pub fn loop_path() -> PathBuf {
-        config_home().join(RIMZ_CONFIG_SUBDIR).join(LOOP_FILE)
+        MachineConfigFiles::machine().path(MachineConfigFileKind::Loop)
     }
 
     /// Load from the default per-machine paths. Missing files are defaults —
     /// never an error.
     pub fn load() -> Result<Self> {
-        Self::load_from(&Self::config_path(), &paths::agents_home())
+        let files = MachineConfigFiles::machine();
+        Self::load_from(files.core_path(), files.agents_home())
     }
 
     /// Strictly load only the per-machine loop task file. Missing file is the
     /// default loop config.
     pub fn load_loop() -> Result<LoopConfig> {
-        load_optional(&Self::loop_path(), parse_loop_text).map(|loop_| loop_.unwrap_or_default())
+        let files = MachineConfigFiles::machine();
+        load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text)
+            .map(|loop_| loop_.unwrap_or_default())
     }
 
     /// Load per-machine config for a runtime entry point. A file that fails to
@@ -275,51 +394,52 @@ impl MachineConfig {
     /// aborting the room; the strict [`Self::load`] and [`Self::load_from`]
     /// report the precise error for `rimz config` and `rimz doctor`.
     pub fn load_lenient() -> Arc<Self> {
-        Self::load_lenient_with_memo(&Self::config_path(), &paths::agents_home())
+        let files = MachineConfigFiles::machine();
+        Self::load_lenient_with_memo(files.core_path(), files.agents_home())
     }
 
-    /// Load from an explicit config.toml path and its sibling theme.toml and
-    /// agents.toml files, merging fragments from the explicit agents-home root
-    /// before validation — the test and tooling seam. A nonexistent fragment
-    /// root means no fragments.
+    /// Load from an explicit config.toml path and its sibling theme.toml,
+    /// agents.toml, and loop.toml files, merging fragments from the explicit
+    /// agents-home root before validation — the test and tooling seam. A
+    /// nonexistent fragment root means no fragments.
     pub fn load_from(config_path: &Path, agents_home: &Path) -> Result<Self> {
-        let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-        let theme_path = dir.join(THEME_FILE);
-        let agents_path = dir.join(AGENTS_FILE);
-        let loop_path = dir.join(LOOP_FILE);
+        let files = MachineConfigFiles::from_paths(config_path, agents_home);
+        let theme_path = files.path(MachineConfigFileKind::Theme);
+        let agents_path = files.path(MachineConfigFileKind::Agents);
+        let loop_path = files.path(MachineConfigFileKind::Loop);
 
-        let core = load_optional(config_path, parse_core_text)?.unwrap_or_default();
-        validate_account_budgets(&core.accounts, config_path)?;
+        let core = load_optional(files.core_path(), parse_core_text)?.unwrap_or_default();
+        validate_account_budgets(&core.accounts, files.core_path())?;
         let theme = load_optional(&theme_path, parse_theme_text)?.unwrap_or_default();
         let agents = load_optional(&agents_path, parse_agents_text)?.unwrap_or_default();
         let loop_ = load_optional(&loop_path, parse_loop_text)?.unwrap_or_default();
 
         let mut config = Self::assemble(core, theme, agents, loop_);
-        validate_notifications_config(&config.notifications, config_path)?;
-        apply_agents_home(&mut config.agents, agents_home, &agents_path)?;
+        validate_notifications_config(&config.notifications, files.core_path())?;
+        apply_agents_home(&mut config.agents, files.agents_home(), &agents_path)?;
         Ok(config)
     }
 
     fn load_lenient_from(config_path: &Path, agents_home: &Path) -> Self {
-        let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-        let theme_path = dir.join(THEME_FILE);
-        let agents_path = dir.join(AGENTS_FILE);
-        let loop_path = dir.join(LOOP_FILE);
+        let files = MachineConfigFiles::from_paths(config_path, agents_home);
+        let theme_path = files.path(MachineConfigFileKind::Theme);
+        let agents_path = files.path(MachineConfigFileKind::Agents);
+        let loop_path = files.path(MachineConfigFileKind::Loop);
 
-        let core = recover(load_optional(config_path, parse_core_text)).unwrap_or_default();
+        let core = recover(load_optional(files.core_path(), parse_core_text)).unwrap_or_default();
         let theme = recover(load_optional(&theme_path, parse_theme_text)).unwrap_or_default();
         let agents = recover(load_optional(&agents_path, parse_agents_text)).unwrap_or_default();
         let loop_ = recover(load_optional(&loop_path, parse_loop_text)).unwrap_or_default();
 
         let mut config = Self::assemble(core, theme, agents, loop_);
-        if let Err(err) = validate_notifications_config(&config.notifications, config_path) {
+        if let Err(err) = validate_notifications_config(&config.notifications, files.core_path()) {
             tracing::warn!(
                 error = %err,
                 "per-machine notifications config invalid; using built-in defaults",
             );
             config.notifications = NotificationsPrefs::default();
         }
-        let fragment = match discover_agents_home(agents_home) {
+        let fragment = match discover_agents_home(files.agents_home()) {
             Ok(fragment) => fragment,
             Err(err) => {
                 tracing::warn!(
@@ -395,7 +515,7 @@ impl MachineConfig {
 
     /// Parse one per-machine config file's text and return the key paths serde
     /// ignored, dotted, in the file's own table coordinates.
-    pub fn parse_text_unknown_keys(path: &Path, text: &str) -> Result<Vec<String>> {
+    fn parse_text_unknown_keys(path: &Path, text: &str) -> Result<Vec<String>> {
         match path.file_name().and_then(|name| name.to_str()) {
             Some(THEME_FILE) => parse_unknown_keys::<ThemeFile>(path, text),
             Some(AGENTS_FILE) => parse_unknown_keys::<AgentsFile>(path, text),
@@ -432,6 +552,11 @@ impl MachineConfig {
 
     pub fn time_zone(&self) -> jiff::tz::TimeZone {
         resolve_time_zone(self.timezone.as_deref())
+    }
+
+    /// Serialize the effective config into a traversable TOML value.
+    pub fn to_toml_value(&self) -> std::result::Result<toml::Value, toml::ser::Error> {
+        toml::Value::try_from(self)
     }
 
     pub fn headline_spec(&self) -> crate::agents::spending::HeadlineSpec {
@@ -532,16 +657,19 @@ impl MachineConfig {
 /// file that exists but cannot load. Runtime loading remains lenient; this
 /// feeds the start notice and `rimz doctor`.
 pub fn broken_machine_files() -> Vec<ConfigErr> {
-    let config_path = MachineConfig::config_path();
-    broken_machine_files_in(config_path.parent().unwrap_or_else(|| Path::new(".")))
+    broken_machine_files_in(&MachineConfigFiles::machine())
 }
 
-fn broken_machine_files_in(dir: &Path) -> Vec<ConfigErr> {
+fn broken_machine_files_in(files: &MachineConfigFiles) -> Vec<ConfigErr> {
     let checks = [
-        load_optional(&dir.join(CONFIG_FILE), parse_core_text_strict).map(|_| ()),
-        load_optional(&dir.join(THEME_FILE), parse_theme_text).map(|_| ()),
-        load_optional(&dir.join(AGENTS_FILE), parse_agents_text).map(|_| ()),
-        load_optional(&dir.join(LOOP_FILE), parse_loop_text).map(|_| ()),
+        load_optional(files.core_path(), parse_core_text_strict).map(|_| ()),
+        load_optional(&files.path(MachineConfigFileKind::Theme), parse_theme_text).map(|_| ()),
+        load_optional(
+            &files.path(MachineConfigFileKind::Agents),
+            parse_agents_text,
+        )
+        .map(|_| ()),
+        load_optional(&files.path(MachineConfigFileKind::Loop), parse_loop_text).map(|_| ()),
     ];
     checks.into_iter().filter_map(Result::err).collect()
 }
@@ -563,6 +691,7 @@ struct ConfigStamp {
 
 impl ConfigStamp {
     fn from_inputs(config_path: &Path, agents_home: &Path) -> Result<Self> {
+        let files = MachineConfigFiles::from_paths(config_path, agents_home);
         let mut fragments = Vec::new();
         collect_agents_home_fragment_stamps(
             agents_home,
@@ -578,10 +707,10 @@ impl ConfigStamp {
         )?;
         fragments.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(Self {
-            core: StampedPath::of(config_path),
-            theme: StampedPath::of(&sibling_path(config_path, THEME_FILE)),
-            agents: StampedPath::of(&sibling_path(config_path, AGENTS_FILE)),
-            loop_: StampedPath::of(&sibling_path(config_path, LOOP_FILE)),
+            core: StampedPath::of(files.core_path()),
+            theme: StampedPath::of(&files.path(MachineConfigFileKind::Theme)),
+            agents: StampedPath::of(&files.path(MachineConfigFileKind::Agents)),
+            loop_: StampedPath::of(&files.path(MachineConfigFileKind::Loop)),
             fragments,
         })
     }
@@ -607,10 +736,6 @@ fn stamped_path_modified_within(path: &StampedPath, now: Duration, quiet: Durati
         Some(age) => age < quiet,
         None => true,
     }
-}
-
-fn sibling_path(path: &Path, file: &str) -> PathBuf {
-    path.parent().unwrap_or_else(|| Path::new(".")).join(file)
 }
 
 fn collect_agents_home_fragment_stamps(

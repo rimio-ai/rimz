@@ -92,6 +92,21 @@ impl AnimationRole {
     ];
 
     pub const COUNT: usize = Self::ALL.len();
+
+    pub(crate) const fn config_key(self) -> &'static str {
+        match self {
+            Self::Thinking => "thinking",
+            Self::Working => "working",
+            Self::Compacting => "compacting",
+            Self::Delegating => "delegating",
+            Self::Resolving => "resolving",
+            Self::Idle => "idle",
+            Self::Success => "success",
+            Self::Paused => "paused",
+            Self::Waiting => "waiting",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 /// One role override under `[theme.animations.<role>]`.
