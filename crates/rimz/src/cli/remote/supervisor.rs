@@ -364,6 +364,8 @@ pub(super) fn wait_before_retry(
             };
         }
         if now >= next_dial {
+            // Unknown reachability keeps the backoff deadline so the first dial cannot delay
+            // an otherwise-ready retry; an unreachable result extends later dials to the hold.
             let timeout =
                 DIAL_TIMEOUT.min(gate.effective_deadline().saturating_duration_since(now));
             let reachable = dial_with_timeout(plan, timeout);
