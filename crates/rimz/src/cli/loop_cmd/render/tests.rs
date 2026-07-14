@@ -260,10 +260,95 @@ fn spend_label_renders_today_last_and_cost_window() {
     }
 
     assert_eq!(
-        spend_label(&entry, &records, &now).as_deref(),
+        spend_label(&entry, &records, &now, true).as_deref(),
         Some("$0.70 today of $20 · $0.42 last · ø $0.35 over 2 runs")
     );
-    assert_eq!(spend_label(&TaskEntry::default(), &[], &now), None);
+    assert_eq!(
+        spend_label(&entry, &records, &now, false).as_deref(),
+        Some("$0.70 today of $20")
+    );
+    assert_eq!(spend_label(&TaskEntry::default(), &[], &now, true), None);
+}
+
+#[test]
+fn verdict_uses_the_latest_conclusive_streak() {
+    let now = Timestamp::from_second(50).unwrap();
+    let failed = record(10, LoopRunResult::Failed);
+    let mut passed_check = record(20, LoopRunResult::CheckSkipped);
+    passed_check.check = Some(CheckRecord {
+        code: Some(0),
+        timed_out: false,
+        output: "ok".to_owned(),
+    });
+    let neutral = record(30, LoopRunResult::Overlapped);
+    let completed = record(40, LoopRunResult::Completed);
+
+    let (healthy, style) = verdict_line(
+        &[failed, passed_check, neutral.clone(), completed.clone()],
+        now,
+    )
+    .unwrap();
+    assert_eq!(healthy, "✓ healthy · completed ×2 since 30s ago");
+    assert_eq!(style, ui::palette::GOOD);
+
+    let errored = record(40, LoopRunResult::Errored);
+    let failed = record(20, LoopRunResult::Failed);
+    let (failing, style) =
+        verdict_line(&[completed, failed, neutral.clone(), errored], now).unwrap();
+    assert_eq!(failing, "✗ failing · error ×2 since 30s ago");
+    assert_eq!(style, ui::palette::ALARM);
+    assert!(verdict_line(&[neutral], now).is_none());
+}
+
+#[test]
+fn agent_run_predicate_counts_spawn_and_delivery_attempts() {
+    let mut spawned = record(1, LoopRunResult::Completed);
+    spawned.run_id = Some("run_0123456789abcdef01234567".to_owned());
+    assert!(is_agent_run(&spawned));
+    assert!(is_agent_run(&record(2, LoopRunResult::Delivered)));
+    assert!(is_agent_run(&record(3, LoopRunResult::TargetGone)));
+    for result in [
+        LoopRunResult::CheckSkipped,
+        LoopRunResult::BudgetSkipped,
+        LoopRunResult::SurplusSkipped,
+        LoopRunResult::SkippedWindow,
+        LoopRunResult::Overlapped,
+        LoopRunResult::Expired,
+    ] {
+        assert!(!is_agent_run(&record(4, result)), "{result:?}");
+    }
+}
+
+#[test]
+fn agent_runs_heading_aggregates_all_valid_costs() {
+    let now = Timestamp::from_second(50).unwrap();
+    let mut costed = record(10, LoopRunResult::Completed);
+    costed.run_id = Some("run_0123456789abcdef01234567".to_owned());
+    costed.cost_usd = Some(0.25);
+    let mut delivered = record(20, LoopRunResult::Delivered);
+    delivered.cost_usd = Some(0.75);
+    let skipped = record(30, LoopRunResult::CheckSkipped);
+    let mut out = Vec::new();
+    write_agent_runs(&mut out, &[costed, delivered, skipped.clone()], now).unwrap();
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(
+        out.contains("AGENT RUNS — 2 of 3 runs · $1.00 total · ø $0.50"),
+        "{out}"
+    );
+
+    let mut cost_free = record(10, LoopRunResult::Delivered);
+    cost_free.cost_usd = Some(f64::NAN);
+    let mut out = Vec::new();
+    write_agent_runs(&mut out, &[cost_free], now).unwrap();
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(out.contains("AGENT RUNS — 1 of 1 runs"), "{out}");
+    assert!(!out.contains("total"), "{out}");
+
+    let mut out = Vec::new();
+    write_agent_runs(&mut out, &[skipped], now).unwrap();
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(out.contains("AGENT RUNS — none in 1 runs"), "{out}");
+    assert!(!out.contains("WHEN"), "{out}");
 }
 
 #[test]
@@ -544,4 +629,26 @@ fn render_record_detail_marks_failed_check_output() {
     let out = anstream::adapter::strip_str(&raw).to_string();
     assert!(out.contains("LAST FAILURE — ✗ failed (exit 2)"));
     assert!(out.contains("  │ first line\n  │ second line"));
+}
+
+#[test]
+fn failure_pointer_links_to_filtered_logs_without_full_forensics() {
+    let mut failure = record(20, LoopRunResult::Errored);
+    failure.mode = Some(LoopRunMode::Scheduled);
+    failure.error = Some("outer error\ninner detail".to_owned());
+    let mut out = Vec::new();
+
+    write_failure_pointer(
+        &mut out,
+        "wake",
+        &failure,
+        Timestamp::from_second(30).unwrap(),
+    )
+    .unwrap();
+
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(out.contains(
+        "last failure — ✗ error · 10s ago · scheduled · dig in: rimz loop logs wake --failed"
+    ));
+    assert!(!out.contains("outer error"));
 }

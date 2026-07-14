@@ -981,6 +981,57 @@ fn loop_check_failure_show_prints_exit_and_output() {
 }
 
 #[test]
+fn loop_logs_prints_full_forensics_and_filters_failures() {
+    let env = Env::new();
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "history",
+            "--check",
+            "printf broken; exit 1",
+            "--every",
+            "15m",
+        ],
+    );
+    loop_ok(&env, &["loop", "fire", "history"]);
+    loop_ok(
+        &env,
+        &[
+            "loop",
+            "add",
+            "history",
+            "--check",
+            "printf healthy",
+            "--every",
+            "15m",
+        ],
+    );
+    loop_ok(&env, &["loop", "fire", "history"]);
+
+    let logs = loop_ok(&env, &["loop", "logs", "history"]);
+    assert!(
+        logs.contains("✗ failed (exit 1)")
+            && logs.contains("  │ broken")
+            && logs.contains("✓ completed")
+            && logs.contains("  │ healthy"),
+        "{logs}"
+    );
+    assert!(logs.find("broken").unwrap() < logs.find("healthy").unwrap());
+
+    let failed = loop_ok(&env, &["loop", "logs", "history", "--failed"]);
+    assert!(
+        failed.contains("✗ failed (exit 1)") && failed.contains("  │ broken"),
+        "{failed}"
+    );
+    assert!(!failed.contains("healthy"), "{failed}");
+
+    let (_stdout, stderr) = loop_fail(&env, &["loop", "logs", "missing"]);
+    assert!(stderr.contains("no loop task named `missing`"), "{stderr}");
+}
+
+#[test]
 fn loop_run_check_guard_skips_or_delivers_with_output() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -1142,6 +1193,8 @@ fn loop_show_displays_shadowed_error_and_run_tail() {
         &env,
         &format!(
             "[tasks.forensics]\n\
+             agent = \"codex\"\n\
+             prompt = \"go\"\n\
              check = \"true\"\n\
              root = \"{}\"\n\
              every = \"15m\"\n",
@@ -1213,13 +1266,14 @@ fn loop_show_displays_shadowed_error_and_run_tail() {
         stdout.contains("  transcript: /tmp/rimz-transcript.jsonl"),
         "{stdout}"
     );
-    assert!(stdout.contains("LAST FAILURE — ✗ error"), "{stdout}");
+    assert!(stdout.contains("AGENT RUNS — 1 of 2 runs"), "{stdout}");
     assert!(
-        stdout.contains(
-            "  error:\n  │ reading system-prompt-file `/missing.md`\n  │ caused by: not found"
-        ),
+        stdout.contains("last failure — ✗ error")
+            && stdout.contains("dig in: rimz loop logs forensics --failed"),
         "{stdout}"
     );
+    assert!(!stdout.contains("  error:"), "{stdout}");
+    assert!(!stdout.contains("caused by: not found"), "{stdout}");
 }
 
 #[test]

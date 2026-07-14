@@ -15,7 +15,7 @@ But cron and a hand-rolled `while` loop only know one move: start a fresh proces
 - `--check` runs a shell command before any agent action and spends a turn only on its result, so a scheduled agent never starts just to find nothing to do.
 - `--verify` runs a shell command after a spawned agent turn and re-prompts that same session until the task is actually done.
 
-Whichever action fires, the turn is a full room citizen: a live card in the sidebar, a permission question that routes to you instead of hanging the job, and a line in the run log that `rimz loop show` reads back.
+Whichever action fires, the turn is a full room citizen: a live card in the sidebar, a permission question that routes to you instead of hanging the job, and a line in the run log that `rimz loop show` summarizes and `rimz loop logs` opens in full.
 
 One rule governs every schedule: a task repeats only when `--every` or `--cron` says so. A bare time (`--at 07:00` or `--in 30m`) fires once and then removes itself. And `rimz loop add` prints back exactly what it armed: the action, the schedule in plain words, and the concrete next fire time. You read the schedule instead of guessing at it.
 
@@ -119,7 +119,7 @@ There is no scheduler daemon; the room keeps time. While a room for the task's p
 
 A scheduled `--agent` fire lands in the `rimzd` loop zone: the runtime column's live loop panel stays open, and transient run panes stack under it instead of splitting the sidebar or a working tab. If the panel pane was closed while the `rimzd` view remains, RimZ recreates the panel at fire time and stacks the run under it; if the whole view is gone or the split fails, it falls back to a new run tab. Manual `rimz loop fire` keeps splitting beside the caller so its foreground stream stays local.
 
-A fire leaves two things behind: whatever the task did (one transient supervised pane for `--agent`, one delivered message for `--wake`), and one line of run history that `rimz loop show <name>` reads back. Everything reverses in one move. `rimz loop remove <name>` deletes the entry; a project removal shows the surface diff and offers the refreshed grant in a terminal, or prints the review and approve commands elsewhere. Both files are plain TOML you can read and edit by hand.
+A fire leaves two things behind: whatever the task did (one transient supervised pane for `--agent`, one delivered message for `--wake`), and one line of run history. `rimz loop show <name>` gives that history a health verdict and, for check-gated work, a separate agent-run rollup; `rimz loop logs <name>` prints the complete stored forensics. Everything reverses in one move. `rimz loop remove <name>` deletes the entry; a project removal shows the surface diff and offers the refreshed grant in a terminal, or prints the review and approve commands elsewhere. Both files are plain TOML you can read and edit by hand.
 
 ## Built-in recovery
 
@@ -134,7 +134,7 @@ rimz config set harness.smart_compact "70%"   # compact before a message once co
 
 **Auto-continue** picks a parked turn back up on its own. A rate-limit or spend-limit park resumes the moment the provider's budget window resets, and a transient overload or API error retries on a lengthening backoff ramp: the first retry a few minutes after the failure, then spaced further out, giving up after a bounded number of attempts. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 
-**Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap, while `rimz loop show` reads back each run's cost and fresh input/output tokens plus the last-run and rolling ten-run average cost. The room-fleet and provider-account daily caps gate the same fires before launch; the whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
+**Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. For check-gated work, `rimz loop show` separates the agent attempts from cheap check passes and totals their costs across the recorded history; other tasks retain the last-run and rolling ten-run average cost. Fresh input/output tokens stay visible per run. The room-fleet and provider-account daily caps gate the same fires before launch; the whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
 
 **Smart compaction** rides the same loop. Past the threshold, RimZ submits `/compact` ahead of your text, so the prompt lands against a fresh context window instead of dying mid-turn. Set a default with `harness.smart_compact`, or leave it unset and pass `--smart-compact` per message. Details in [messaging.md](./messaging.md).
 
@@ -162,7 +162,8 @@ The turn itself takes the launch-shaping flags you already know from [agents.md]
 ```sh
 rimz loop list                 # every task, grouped by project, with next-fire and last-run
 rimz loop watch                # live dashboard with countdowns and running tasks
-rimz loop show pr-watch        # one task's schedule, next fire, and recent run forensics
+rimz loop show pr-watch        # health, next fire, agent-run rollup, and recent runs
+rimz loop logs pr-watch        # full forensics for recent runs
 rimz loop fire pr-watch        # fire now in the foreground for testing; the schedule stays put
 rimz loop fire pr-watch --keep # leave the transient pane open to inspect
 rimz loop pause pr-watch --for 2h
@@ -211,7 +212,7 @@ run a codex -p subagent in its own worktree, review its diff, and open a PR."
 
 The nightly task is one scheduled turn, but its prompt hands the agent the room's own tools: it fans work out with [`-p` subagents](./scripting.md#agents-scripting-agents), isolates each fix in a [worktree](./worktrees.md), and could as easily launch a [team](./teams.md) and brief it over [messages](./messaging.md). The unit of automation stops being a prompt you type and becomes a standing cycle that checks, acts, and re-arms itself.
 
-The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#built-in-recovery) carries runs over rate limits, checks fire agent turns only when there is work, every fire lands in `rimz loop show`, a question or failure trips a [notification handler](./notifications.md) that reaches your phone, and the [permission posture](#the-permission-posture-for-unattended-runs) is a per-task choice rather than a global switch. Leave the room open, detached on your workstation or on a server you reach with [`rimz remote`](./remote.md), and by morning `rimz loop list` and the PR queue show what the night produced.
+The rest of the harness keeps that cycle safe while you sleep: [auto-continue](#built-in-recovery) carries runs over rate limits, checks fire agent turns only when there is work, every fire appears in `rimz loop show` and stays inspectable through `rimz loop logs`, a question or failure trips a [notification handler](./notifications.md) that reaches your phone, and the [permission posture](#the-permission-posture-for-unattended-runs) is a per-task choice rather than a global switch. Leave the room open, detached on your workstation or on a server you reach with [`rimz remote`](./remote.md), and by morning `rimz loop list` and the PR queue show what the night produced.
 
 ## See also
 

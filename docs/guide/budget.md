@@ -43,7 +43,7 @@ A supervised `-p` run treats its `--budget` as a run outcome instead of a park: 
 
 ### Cap a loop task
 
-A scheduled task takes the same `--budget` to cap each fired run, and adds `--budget-per-day`: the scheduler sums that task's completed run costs for the local day and skips a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap, and `rimz loop show` reads back per-run costs and the rolling average. The schedule grammar and run forensics are the [loops guide](./loops.md); the flag semantics are the [loop reference](../reference/cli/loop.md).
+A scheduled task takes the same `--budget` to cap each fired run, and adds `--budget-per-day`: the scheduler sums that task's completed run costs for the local day and skips a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. `rimz loop show` reads back per-run costs; check-gated tasks aggregate every recorded agent attempt, while other task shapes keep the rolling ten-run average. The schedule grammar and run forensics are the [loops guide](./loops.md); the flag semantics are the [loop reference](../reference/cli/loop.md).
 
 ### Cap the room, cap the login
 

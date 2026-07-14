@@ -892,9 +892,13 @@ fn list_cost_label(entry: &TaskEntry, spend_today_usd: f64) -> Option<String> {
     (spend_today_usd > 0.0).then(|| format!("${spend_today_usd:.2}"))
 }
 
-fn spend_label(entry: &TaskEntry, records: &[LoopRunRecord], now: &jiff::Zoned) -> Option<String> {
+fn spend_label(
+    entry: &TaskEntry,
+    records: &[LoopRunRecord],
+    now: &jiff::Zoned,
+    full: bool,
+) -> Option<String> {
     let spend_today_usd = run_log::spend_on_local_day(records, now);
-    let summary = run_log::cost_summary(records);
     let mut segments = Vec::new();
     if entry.budget_per_day.is_some() || run_log::has_cost_on_local_day(records, now) {
         let mut today = format!("${spend_today_usd:.2} today");
@@ -904,13 +908,16 @@ fn spend_label(entry: &TaskEntry, records: &[LoopRunRecord], now: &jiff::Zoned) 
         }
         segments.push(today);
     }
-    if let Some(last_usd) = summary.last_usd {
-        segments.push(format!("${last_usd:.2} last"));
-    }
-    if summary.costed_runs >= 2
-        && let Some(avg_usd) = summary.avg_usd
-    {
-        segments.push(format!("ø ${avg_usd:.2} over {} runs", summary.costed_runs));
+    if full {
+        let summary = run_log::cost_summary(records);
+        if let Some(last_usd) = summary.last_usd {
+            segments.push(format!("${last_usd:.2} last"));
+        }
+        if summary.costed_runs >= 2
+            && let Some(avg_usd) = summary.avg_usd
+        {
+            segments.push(format!("ø ${avg_usd:.2} over {} runs", summary.costed_runs));
+        }
     }
     (!segments.is_empty()).then(|| segments.join(" · "))
 }
@@ -985,6 +992,10 @@ fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
     window_reset_at(entry, kind).ok().flatten()
 }
 
+fn has_agent_runs_section(entry: &TaskEntry) -> bool {
+    entry.check.is_some() && (entry.agent.is_some() || entry.wake.is_some())
+}
+
 pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let (entry, source) = load_task(&args.name, globals)?.ok_or_else(|| {
         anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
@@ -1018,6 +1029,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         None
     };
     let records = run_log::task_records(&state_home(), &args.name);
+    let show_agent_runs = has_agent_runs_section(&entry);
     let lock_state = probe_run_lock(&args.name, &entry).ok();
     let active_run = if matches!(lock_state.as_ref(), Some(RunLockState::Held(_))) {
         stop::newest_active_run_for_entry(&args.name, &entry)?
@@ -1035,6 +1047,9 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         next.as_deref(),
         now,
     )?;
+    if let Some((verdict, style)) = verdict_line(&records, now) {
+        writeln!(out, "  {}", ui::paint(style, &verdict))?;
+    }
     write_show_facts(
         &mut out,
         &args.name,
@@ -1046,8 +1061,13 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
             is_paused: active_pause.is_some(),
             lock_state: lock_state.as_ref(),
             active_run: active_run.as_ref(),
+            full_spend: !show_agent_runs,
         },
     )?;
+
+    if show_agent_runs {
+        write_agent_runs(&mut out, &records, now)?;
+    }
 
     if records.is_empty() {
         writeln!(out)?;
@@ -1062,8 +1082,53 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         render_record_detail(&mut out, &entry, detail, "LAST RUN", now)?;
     }
     if let Some(failure) = failure_idx.and_then(|idx| records.get(idx)) {
+        write_failure_pointer(&mut out, &args.name, failure, now)?;
+    }
+    Ok(())
+}
+
+pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
+    let (entry, _source) = load_task(&args.name, globals)?.ok_or_else(|| {
+        anyhow::anyhow!("no loop task named `{}`; see `rimz loop list`", args.name)
+    })?;
+    let records = run_log::task_records(&state_home(), &args.name);
+    let visible = records
+        .iter()
+        .filter(|record| !args.failed || record_is_failure(record))
+        .rev()
+        .take(args.runs)
+        .collect::<Vec<_>>();
+    let mut out = ui::out();
+    if visible.is_empty() {
+        if args.failed {
+            writeln!(out, "no failed runs recorded")?;
+        } else {
+            writeln!(out, "no runs recorded; try `rimz loop fire {}`", args.name)?;
+        }
+        return Ok(());
+    }
+    let now = Timestamp::now();
+    for (idx, record) in visible.iter().rev().enumerate() {
+        if idx > 0 {
+            writeln!(out)?;
+        }
+        let status = run_status(record);
+        write!(
+            out,
+            "{}",
+            ui::paint(status.style, &format!("{} {}", status.glyph, status.label))
+        )?;
+        write!(
+            out,
+            " · {} · {}",
+            ui::rel_age(record.at, now),
+            record.mode.map_or("legacy", LoopRunMode::label)
+        )?;
+        if let Some(exit) = detail_exit_segment(record) {
+            write!(out, " · {exit}")?;
+        }
         writeln!(out)?;
-        render_record_detail(&mut out, &entry, failure, "LAST FAILURE", now)?;
+        write_record_forensics(&mut out, &entry, record)?;
     }
     Ok(())
 }
@@ -1134,6 +1199,7 @@ struct ShowFactsContext<'a> {
     is_paused: bool,
     lock_state: Option<&'a RunLockState>,
     active_run: Option<&'a RunRecord>,
+    full_spend: bool,
 }
 
 fn write_show_facts(
@@ -1211,7 +1277,7 @@ fn write_show_facts(
     if let Some(surplus) = surplus_label(entry) {
         kv.push("surplus", ui::cell(surplus));
     }
-    if let Some(spend) = spend_label(entry, records, context.now_zoned) {
+    if let Some(spend) = spend_label(entry, records, context.now_zoned, context.full_spend) {
         kv.push("spend", ui::cell(spend));
     }
     if !context.is_paused
@@ -1231,6 +1297,69 @@ fn write_show_facts(
         writeln!(out, "  stop with `rimz loop stop {name}`")?;
     }
     Ok(())
+}
+
+fn write_agent_runs(
+    out: &mut impl Write,
+    records: &[LoopRunRecord],
+    now: Timestamp,
+) -> std::io::Result<()> {
+    let agent_runs = records
+        .iter()
+        .filter(|record| is_agent_run(record))
+        .collect::<Vec<_>>();
+    writeln!(out)?;
+    let heading = if agent_runs.is_empty() {
+        format!("AGENT RUNS — none in {} runs", records.len())
+    } else {
+        let costs = agent_runs
+            .iter()
+            .filter_map(|record| valid_cost(record))
+            .collect::<Vec<_>>();
+        let mut heading = format!(
+            "AGENT RUNS — {} of {} runs",
+            agent_runs.len(),
+            records.len()
+        );
+        if !costs.is_empty() {
+            let total = costs.iter().sum::<f64>();
+            let average = total / costs.len() as f64;
+            heading.push_str(&format!(" · ${total:.2} total · ø ${average:.2}"));
+        }
+        heading
+    };
+    writeln!(out, "{}", ui::paint(ui::palette::HEADER, &heading))?;
+    if agent_runs.is_empty() {
+        return Ok(());
+    }
+
+    let start = agent_runs.len().saturating_sub(5);
+    let visible = &agent_runs[start..];
+    let show_note = visible.iter().any(|record| record_note(record).is_some());
+    let mut headers = vec!["WHEN", "STATUS", "TOOK", "COST"];
+    if show_note {
+        headers.push("NOTE");
+    }
+    let mut table = ui::Table::new(headers).right(&[2, 3]).indent(2);
+    for record in visible {
+        let mut cells = vec![
+            ui::cell(ui::rel_age(record.at, now)),
+            run_status_cell(record, 1),
+            ui::cell(
+                record
+                    .duration_ms
+                    .map(format_duration_ms)
+                    .unwrap_or_else(|| "-".to_owned()),
+            )
+            .dash(),
+            cost_cell(record),
+        ];
+        if show_note {
+            cells.push(ui::cell(record_note(record).as_deref().unwrap_or("-")).dash());
+        }
+        table.row(cells);
+    }
+    table.render(out)
 }
 
 fn write_runs_table(
@@ -1276,14 +1405,7 @@ fn write_runs_table(
                     .unwrap_or_else(|| "-".to_owned()),
             )
             .dash(),
-            ui::cell(
-                record
-                    .cost_usd
-                    .filter(|cost| cost.is_finite() && *cost >= 0.0)
-                    .map(|cost| format!("${cost:.2}"))
-                    .unwrap_or_else(|| "-".to_owned()),
-            )
-            .dash(),
+            cost_cell(record),
         ];
         if show_tokens {
             cells.push(
@@ -1425,6 +1547,64 @@ fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
     }
 }
 
+fn record_is_good(record: &LoopRunRecord) -> bool {
+    matches!(
+        record.result,
+        LoopRunResult::Completed | LoopRunResult::Delivered
+    ) || matches!(record.result, LoopRunResult::CheckSkipped)
+        && record
+            .check
+            .as_ref()
+            .is_some_and(|check| check.code == Some(0))
+}
+
+fn verdict_line(records: &[LoopRunRecord], now: Timestamp) -> Option<(String, anstyle::Style)> {
+    let (decisive_idx, healthy) = records.iter().enumerate().rev().find_map(|(idx, record)| {
+        if record_is_failure(record) {
+            Some((idx, false))
+        } else if record_is_good(record) {
+            Some((idx, true))
+        } else {
+            None
+        }
+    })?;
+    let boundary = records[..decisive_idx]
+        .iter()
+        .rposition(|record| {
+            if healthy {
+                record_is_failure(record)
+            } else {
+                record_is_good(record)
+            }
+        })
+        .map_or(0, |idx| idx + 1);
+    let matching = |record: &&LoopRunRecord| {
+        if healthy {
+            record_is_good(record)
+        } else {
+            record_is_failure(record)
+        }
+    };
+    let mut streak = records[boundary..=decisive_idx].iter().filter(matching);
+    let oldest = streak.next()?;
+    let count = 1 + streak.count();
+    let status = run_status(&records[decisive_idx]);
+    let state = if healthy { "healthy" } else { "failing" };
+    Some((
+        format!(
+            "{} {state} · {} ×{count} since {}",
+            status.glyph,
+            status.label,
+            ui::rel_age(oldest.at, now)
+        ),
+        if healthy {
+            ui::palette::GOOD
+        } else {
+            ui::palette::ALARM
+        },
+    ))
+}
+
 pub(super) fn check_skip_display(check: Option<&CheckRecord>) -> (&'static str, anstyle::Style) {
     match check {
         Some(check) if check.timed_out => ("○", ui::palette::WARN),
@@ -1510,6 +1690,21 @@ pub(super) fn format_duration_ms(ms: u64) -> String {
     } else {
         format!("{}m", ms / 60_000)
     }
+}
+
+fn valid_cost(record: &LoopRunRecord) -> Option<f64> {
+    record
+        .cost_usd
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
+}
+
+fn cost_cell(record: &LoopRunRecord) -> ui::Cell {
+    ui::cell(
+        valid_cost(record)
+            .map(|cost| format!("${cost:.2}"))
+            .unwrap_or_else(|| "-".to_owned()),
+    )
+    .dash()
 }
 
 fn record_exit(record: &LoopRunRecord) -> Option<String> {
@@ -1603,6 +1798,14 @@ fn record_is_failure(record: &LoopRunRecord) -> bool {
     )
 }
 
+fn is_agent_run(record: &LoopRunRecord) -> bool {
+    record.run_id.is_some()
+        || matches!(
+            record.result,
+            LoopRunResult::Delivered | LoopRunResult::TargetGone
+        )
+}
+
 fn detail_indices(records: &[LoopRunRecord]) -> (Option<usize>, Option<usize>) {
     let detail_idx = records.iter().rposition(record_has_detail);
     let failure_idx = records
@@ -1640,6 +1843,45 @@ fn render_record_detail(
         write!(out, " · {exit}")?;
     }
     writeln!(out)?;
+    write_record_forensics(out, entry, record)
+}
+
+fn write_failure_pointer(
+    out: &mut impl Write,
+    name: &str,
+    record: &LoopRunRecord,
+    now: Timestamp,
+) -> std::io::Result<()> {
+    write!(
+        out,
+        "{}",
+        ui::paint(ui::palette::MUTED, "  last failure — ")
+    )?;
+    let status = run_status(record);
+    write!(
+        out,
+        "{}",
+        ui::paint(status.style, &format!("{} {}", status.glyph, status.label))
+    )?;
+    writeln!(
+        out,
+        "{}",
+        ui::paint(
+            ui::palette::MUTED,
+            &format!(
+                " · {} · {} · dig in: rimz loop logs {name} --failed",
+                ui::rel_age(record.at, now),
+                record.mode.map_or("legacy", LoopRunMode::label)
+            )
+        )
+    )
+}
+
+fn write_record_forensics(
+    out: &mut impl Write,
+    entry: &TaskEntry,
+    record: &LoopRunRecord,
+) -> std::io::Result<()> {
     let run_record = record
         .run_id
         .as_deref()

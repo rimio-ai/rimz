@@ -53,6 +53,7 @@ rimz answer @coder 2                 # answer the current supported prompt in it
 rimz pane list                       # every pane, labelled with @handles
 rimz pane capture @coder             # what the agent's pane shows right now
 rimz loop show <task>                # schedule, next fire, run forensics
+rimz loop logs <task>                # full forensics for recent runs
 ```
 
 ## Implementation rules

@@ -92,6 +92,8 @@ enum LoopSubcmd {
     Watch(WatchArgs),
     /// Show one task's schedule, next fire, and recent run forensics.
     Show(ShowArgs),
+    /// Print full forensics for a task's recent runs.
+    Logs(LogsArgs),
     /// Fire one task now in the foreground for testing; one-shots and schedules stay put.
     Fire(FireArgs),
     /// Run one task now. The sidebar elder calls this; humans rarely do.
@@ -237,6 +239,20 @@ struct ShowArgs {
 }
 
 #[derive(Debug, Args)]
+struct LogsArgs {
+    #[arg(add = clap_complete::ArgValueCandidates::new(
+        crate::cli::complete::loop_tasks
+    ))]
+    name: String,
+    /// Number of recent runs to print.
+    #[arg(short = 'n', long = "runs", default_value_t = 10)]
+    runs: usize,
+    /// Print only runs that failed.
+    #[arg(long)]
+    failed: bool,
+}
+
+#[derive(Debug, Args)]
 struct WatchArgs {
     /// Lock the rimzd dashboard in place by ignoring quit keys.
     #[arg(long, hide = true)]
@@ -254,6 +270,7 @@ pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
         LoopSubcmd::List => render::list(globals),
         LoopSubcmd::Watch(args) => render::watch(args, globals),
         LoopSubcmd::Show(args) => render::show(args, globals),
+        LoopSubcmd::Logs(args) => render::logs(args, globals),
         LoopSubcmd::Fire(args) => {
             run_tasks::run_one(&args.name, LoopRunMode::Manual, args.keep, globals)
         }
