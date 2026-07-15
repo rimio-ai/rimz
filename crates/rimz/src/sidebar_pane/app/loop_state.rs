@@ -1546,16 +1546,8 @@ impl LoopState {
         // carrying neither leaves the roll untouched, so a transient missing
         // snapshot never snaps the figure to zero. The serve loop paints the
         // folded state on its next frame boundary; this path never draws.
-        let today_usd = self.current.today_spend_live_usd.or(self
-            .current
-            .workspace_value_tally
-            .as_ref()
-            .map(|tally| tally.headline.usd));
-        if let Some(usd) = today_usd {
-            let shown = self
-                .ui
-                .spend_ratchet
-                .observe(self.current.today_spend_epoch_secs, usd);
+        if let Some((usd, epoch)) = render::cockpit_spend_target(&self.current) {
+            let shown = self.ui.spend_ratchet.observe(epoch, usd);
             self.ui.tally.observe(shown, self.ui.animation_phase);
         }
         // The per-card cost rolls fold beside it: observe each agent row's session

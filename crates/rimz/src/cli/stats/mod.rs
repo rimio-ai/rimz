@@ -311,7 +311,6 @@ fn compute_stats_from_files(
     };
     let origin_overrides = HashMap::new();
     let user_inputs = user_input::load();
-    let live_excluded = BTreeSet::new();
     let spec = MachineConfig::load_lenient().headline_spec();
     let req = WalkRequest {
         files: &files,
@@ -320,7 +319,6 @@ fn compute_stats_from_files(
         origin_overrides: &origin_overrides,
         user_inputs: &user_inputs,
         scope: None,
-        live_excluded: &live_excluded,
         spec: &spec,
     };
     let result = match (publish, progress) {

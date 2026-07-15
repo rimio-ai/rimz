@@ -1,6 +1,6 @@
 //! Published provider and workspace spending cache shapes.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -37,8 +37,9 @@ pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 10;
 /// v4: live headline carry and baselines publish atomically with the scoped
 /// walk. v5: live card sessions are excluded from walked headline USD and
 /// added back from live cards. v6: a local-day window supports room daily caps
-/// independently of the configured headline.
-pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 6;
+/// independently of the configured headline. v7: walked per-session baselines
+/// replace live-session exclusion for exact flush-lag overlays.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 7;
 
 /// The published provider-spending cache: the aggregated [`Spending`] plus the
 /// stamp the producer's [`SPENDING_TTL`] gate reads. A wrapper rather than a
@@ -198,8 +199,7 @@ pub struct WorkspaceSpendingCache {
     pub scope_hash: String,
     #[serde(default)]
     pub tally: SpendTally,
-    /// Workspace-local calendar-day spend with live sessions excluded for
-    /// add-back from current cards.
+    /// Workspace-local calendar-day spend.
     #[serde(default)]
     pub day: SpendWindow,
     #[serde(default)]
@@ -207,7 +207,7 @@ pub struct WorkspaceSpendingCache {
     #[serde(default)]
     pub headline_cutoff_secs: u64,
     #[serde(default)]
-    pub live_excluded: BTreeSet<String>,
+    pub live_baselines: BTreeMap<String, f64>,
 }
 
 impl WorkspaceSpendingCache {

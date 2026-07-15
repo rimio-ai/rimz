@@ -14,7 +14,7 @@
 //! `SPENDING_TTL` of the published stamp serves the cache verbatim and runs
 //! zero transcript IO — no discovery, no stat, no parse.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -135,7 +135,6 @@ macro_rules! walk_spending {
     ($walker:expr, $method:ident, $cache_path:expr, $files:expr, $prices:expr, $now_secs:expr) => {{
         let origin_overrides = HashMap::new();
         let user_inputs = Vec::new();
-        let live_excluded = BTreeSet::new();
         let spec = HeadlineSpec::default();
         let req = WalkRequest {
             files: $files,
@@ -144,7 +143,6 @@ macro_rules! walk_spending {
             origin_overrides: &origin_overrides,
             user_inputs: &user_inputs,
             scope: None,
-            live_excluded: &live_excluded,
             spec: &spec,
         };
         $walker.$method($cache_path, &req, &mut SilentWalk)

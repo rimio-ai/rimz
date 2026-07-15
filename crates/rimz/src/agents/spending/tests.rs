@@ -1,6 +1,6 @@
 use super::*;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Write as _;
 
 use tempfile::TempDir;
@@ -74,16 +74,11 @@ fn compute_spending_with_origins_and_scope(
     );
     let counted = dedup_cached_entries(files, cache).into_counted();
     let user_inputs = user_inputs_from_counted(&counted);
-    let live_excluded = BTreeSet::new();
-    let workspace = scope.map(|scope| WorkspaceRollupScope {
-        scope,
-        live_excluded: &live_excluded,
-    });
     let aggregate = aggregate_counted_rollups(
         files,
         cache,
         &counted,
-        workspace,
+        scope,
         HeadlineContext {
             user_inputs: &user_inputs,
             now_secs,
@@ -202,16 +197,7 @@ fn compute_scoped_tally(
 ) -> SpendTally {
     let counted = dedup_cached_entries(files, cache).into_counted();
     let user_inputs = user_inputs_from_counted(&counted);
-    compute_scoped_spending(
-        files,
-        cache,
-        &user_inputs,
-        scope,
-        &BTreeSet::new(),
-        now_secs,
-        spec,
-    )
-    .tally
+    compute_scoped_spending(files, cache, &user_inputs, scope, now_secs, spec).tally
 }
 
 macro_rules! walk_spending {
@@ -219,7 +205,6 @@ macro_rules! walk_spending {
         let prices = $prices;
         let origin_overrides = HashMap::new();
         let user_inputs = Vec::new();
-        let live_excluded = BTreeSet::new();
         let spec = HeadlineSpec::default();
         let req = WalkRequest {
             files: $files,
@@ -228,7 +213,6 @@ macro_rules! walk_spending {
             origin_overrides: &origin_overrides,
             user_inputs: &user_inputs,
             scope: None,
-            live_excluded: &live_excluded,
             spec: &spec,
         };
         $walker.walk($cache_path, &req, $observer)

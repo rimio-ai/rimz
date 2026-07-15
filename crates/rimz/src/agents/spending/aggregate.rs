@@ -73,9 +73,9 @@ pub enum SpendWindowMode {
     Trailing24h,
     /// The local calendar day, using the global `timezone` when set.
     Today,
-    /// The current user-prompt burst since the last five-hour idle gap. Only
-    /// recorded user prompt submits open or bridge the burst; loop-fired turns
-    /// and agent-to-agent messages still count when they fall inside it.
+    /// The current activity burst since the last five-hour idle gap. A recorded
+    /// user prompt opens the burst; priced activity, including loop-fired turns
+    /// and agent-to-agent messages, keeps an open burst alive.
     #[default]
     Session,
 }
@@ -88,6 +88,9 @@ pub struct HeadlineSpec {
 }
 
 pub(crate) const SESSION_GAP_SECS: u64 = 5 * 3_600;
+
+/// Stable sentinel for a session headline with no user-opened burst.
+pub(crate) const NO_BURST_CUTOFF: u64 = u64::MAX;
 
 /// Rolling spend and token tally over the configured headline window plus three
 /// trailing store windows: 7 days, 30 days, and 365 days. The store windows
@@ -142,17 +145,12 @@ pub(crate) struct CountedRollups {
     pub(crate) spending: Spending,
     pub(crate) workspace_tally: SpendTally,
     pub(crate) workspace_headline_cutoff_secs: u64,
+    pub(crate) workspace_live_baselines: BTreeMap<String, f64>,
     pub(crate) workspace_day: SpendWindow,
     pub(crate) provider_day: BTreeMap<String, SpendWindow>,
     pub(crate) day_cutoff_secs: u64,
     pub(crate) days: BTreeMap<i64, DaySpend>,
     pub(crate) models: BTreeMap<String, SpendTally>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct WorkspaceRollupScope<'a> {
-    pub(crate) scope: &'a SpendScope,
-    pub(crate) live_excluded: &'a BTreeSet<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -166,7 +164,7 @@ pub(crate) fn aggregate_counted_rollups(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
     counted: &[impl CountedPayload],
-    workspace: Option<WorkspaceRollupScope<'_>>,
+    workspace: Option<&SpendScope>,
     headline: HeadlineContext<'_>,
     include_history_rollups: bool,
 ) -> CountedRollups {
@@ -175,13 +173,8 @@ pub(crate) fn aggregate_counted_rollups(
         now_secs,
         spec,
     } = headline;
-    let workspace = workspace.filter(|workspace| !workspace.scope.is_empty());
-    let cutoffs = CountedCutoffs::from_user_inputs(
-        user_inputs,
-        workspace.map(|workspace| workspace.scope),
-        now_secs,
-        spec,
-    );
+    let workspace = workspace.filter(|scope| !scope.is_empty());
+    let cutoffs = CountedCutoffs::from_events(counted, user_inputs, workspace, now_secs, spec);
     let mut spending = Spending::default();
     let mut workspace_tally = SpendTally::default();
     let day_cutoff_secs = local_day_start_secs(now_secs, spec.timezone.as_deref())
@@ -189,6 +182,7 @@ pub(crate) fn aggregate_counted_rollups(
     let mut workspace_day = SpendWindow::default();
     let mut provider_day = BTreeMap::<String, SpendWindow>::new();
     let mut workspace_day_sessions = BTreeSet::new();
+    let mut workspace_session_totals = BTreeMap::<String, (u64, f64)>::new();
     let mut provider_day_sessions = BTreeMap::<String, BTreeSet<String>>::new();
     let mut days = BTreeMap::<i64, DaySpend>::new();
     let mut models = BTreeMap::<&str, SpendTally>::new();
@@ -213,22 +207,24 @@ pub(crate) fn aggregate_counted_rollups(
                 .or_default()
                 .insert(counted.session_key().to_owned());
         }
-        if let Some(workspace) = workspace
+        if let Some(scope) = workspace
             && counted
                 .origin()
-                .is_some_and(|origin| workspace.scope.contains(origin))
+                .is_some_and(|origin| scope.contains(origin))
         {
-            let live_excluded = workspace.live_excluded.contains(counted.session_key());
-            accum_scoped(
-                &mut workspace_tally,
-                entry,
-                now_secs,
-                cutoffs.scoped(),
-                live_excluded,
-            );
+            accum(&mut workspace_tally, entry, now_secs, cutoffs.scoped());
             if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
-                workspace_day.add(if live_excluded { 0.0 } else { entry.cost_usd }, entry);
+                workspace_day.add(entry.cost_usd, entry);
                 workspace_day_sessions.insert(counted.session_key().to_owned());
+            }
+            if within_widest_window(entry.ts_secs, now_secs) {
+                workspace_session_totals
+                    .entry(counted.session_key().to_owned())
+                    .and_modify(|(youngest, usd)| {
+                        *youngest = (*youngest).max(entry.ts_secs);
+                        *usd += entry.cost_usd;
+                    })
+                    .or_insert((entry.ts_secs, entry.cost_usd));
             }
         }
 
@@ -250,12 +246,12 @@ pub(crate) fn aggregate_counted_rollups(
     }
 
     add_spending_sessions(&mut spending, files, cache, now_secs, &cutoffs);
-    if let Some(workspace) = workspace {
+    if let Some(scope) = workspace {
         add_scoped_sessions(
             &mut workspace_tally,
             files,
             cache,
-            workspace.scope,
+            scope,
             now_secs,
             cutoffs.scoped(),
         );
@@ -270,6 +266,12 @@ pub(crate) fn aggregate_counted_rollups(
         spending,
         workspace_tally,
         workspace_headline_cutoff_secs: workspace.map(|_| cutoffs.scoped()).unwrap_or_default(),
+        workspace_live_baselines: workspace_session_totals
+            .into_iter()
+            .filter_map(|(session, (youngest, usd))| {
+                within_raw_retain_window(youngest, now_secs).then_some((session, usd))
+            })
+            .collect(),
         workspace_day,
         provider_day,
         day_cutoff_secs,
@@ -290,37 +292,57 @@ struct CountedCutoffs {
     total: u64,
     provider: HashMap<String, u64>,
     scoped: Option<u64>,
-    empty_session_cutoff: u64,
+    no_burst_cutoff: u64,
 }
 
 impl CountedCutoffs {
-    fn from_user_inputs(
+    fn from_events(
+        counted: &[impl CountedPayload],
         user_inputs: &[UserInputRecord],
         scope: Option<&SpendScope>,
         now_secs: u64,
         spec: &HeadlineSpec,
     ) -> Self {
         let uniform = uniform_headline_cutoff(spec, now_secs);
-        let empty_session_cutoff = session_cutoff_secs(&[], now_secs);
+        let no_burst_cutoff = NO_BURST_CUTOFF;
         if let Some(cutoff) = uniform {
             return Self {
                 uniform,
                 total: cutoff,
                 provider: HashMap::new(),
                 scoped: scope.map(|_| cutoff),
-                empty_session_cutoff,
+                no_burst_cutoff,
             };
         }
 
-        let mut total_timestamps = Vec::new();
-        let mut provider_timestamps: HashMap<String, Vec<u64>> = HashMap::new();
-        let mut scoped_timestamps = Vec::new();
+        let mut total_activity = Vec::new();
+        let mut provider_activity: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut scoped_activity = Vec::new();
+        for counted in counted {
+            let ts_secs = counted.entry().ts_secs;
+            total_activity.push(ts_secs);
+            provider_activity
+                .entry(counted.kind().to_owned())
+                .or_default()
+                .push(ts_secs);
+            if let Some(scope) = scope
+                && counted
+                    .origin()
+                    .is_some_and(|origin| scope.contains(origin))
+            {
+                scoped_activity.push(ts_secs);
+            }
+        }
+
+        let mut total_prompts = Vec::new();
+        let mut provider_prompts: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut scoped_prompts = Vec::new();
         for record in user_inputs {
             let Ok(ts_secs) = u64::try_from(record.at.as_second()) else {
                 continue;
             };
-            total_timestamps.push(ts_secs);
-            provider_timestamps
+            total_prompts.push(ts_secs);
+            provider_prompts
                 .entry(record.kind.as_str().to_owned())
                 .or_default()
                 .push(ts_secs);
@@ -330,35 +352,45 @@ impl CountedCutoffs {
                     .as_deref()
                     .is_some_and(|origin| scope.contains(origin))
             {
-                scoped_timestamps.push(ts_secs);
+                scoped_prompts.push(ts_secs);
             }
         }
 
+        let providers = provider_activity
+            .keys()
+            .chain(provider_prompts.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
         Self {
             uniform: None,
-            total: session_cutoff_secs(total_timestamps.as_slice(), now_secs),
-            provider: provider_timestamps
+            total: burst_cutoff(&total_prompts, &total_activity, now_secs),
+            provider: providers
                 .into_iter()
-                .map(|(provider, timestamps)| {
-                    (
-                        provider,
-                        session_cutoff_secs(timestamps.as_slice(), now_secs),
-                    )
+                .map(|provider| {
+                    let prompts = provider_prompts
+                        .get(&provider)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    let activity = provider_activity
+                        .get(&provider)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    (provider, burst_cutoff(prompts, activity, now_secs))
                 })
                 .collect(),
-            scoped: scope.map(|_| session_cutoff_secs(scoped_timestamps.as_slice(), now_secs)),
-            empty_session_cutoff,
+            scoped: scope.map(|_| burst_cutoff(&scoped_prompts, &scoped_activity, now_secs)),
+            no_burst_cutoff,
         }
     }
 
     fn provider(&self, provider: &str) -> u64 {
         self.uniform
             .or_else(|| self.provider.get(provider).copied())
-            .unwrap_or(self.empty_session_cutoff)
+            .unwrap_or(self.no_burst_cutoff)
     }
 
     fn scoped(&self) -> u64 {
-        self.scoped.unwrap_or(self.empty_session_cutoff)
+        self.scoped.unwrap_or(self.no_burst_cutoff)
     }
 }
 
@@ -752,39 +784,30 @@ fn local_day_start_secs(now_secs: u64, tz: Option<&str>) -> Option<u64> {
     u64::try_from(start.as_second()).ok()
 }
 
-fn session_cutoff_secs(timestamps: &[u64], now_secs: u64) -> u64 {
-    let mut sorted = timestamps.to_vec();
-    sorted.sort_unstable();
-    let Some(&newest) = sorted.last() else {
-        return now_secs.saturating_add(1);
-    };
-    if now_secs.saturating_sub(newest) >= SESSION_GAP_SECS {
-        return now_secs.saturating_add(1);
-    }
+fn burst_cutoff(prompts: &[u64], activity: &[u64], now_secs: u64) -> u64 {
+    let mut events = prompts
+        .iter()
+        .copied()
+        .map(|ts| (ts, true))
+        .chain(activity.iter().copied().map(|ts| (ts, false)))
+        .collect::<Vec<_>>();
+    events.sort_unstable();
 
-    let mut oldest = newest;
-    let mut newer = newest;
-    for &ts_secs in sorted[..sorted.len() - 1].iter().rev() {
+    let mut newer = now_secs;
+    let mut oldest_prompt = None;
+    for (ts_secs, is_prompt) in events.into_iter().rev() {
         if newer.saturating_sub(ts_secs) >= SESSION_GAP_SECS {
             break;
         }
-        oldest = ts_secs;
+        if is_prompt {
+            oldest_prompt = Some(ts_secs);
+        }
         newer = ts_secs;
     }
-    oldest
+    oldest_prompt.unwrap_or(NO_BURST_CUTOFF)
 }
 
 fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64, headline_cutoff: u64) {
-    accum_scoped(tally, entry, now_secs, headline_cutoff, false);
-}
-
-fn accum_scoped(
-    tally: &mut SpendTally,
-    entry: &CachedEntry,
-    now_secs: u64,
-    headline_cutoff: u64,
-    suppress_headline_usd: bool,
-) {
     let usd = entry.cost_usd;
     // Store-window bucketing: an entry counts toward each trailing window whose
     // span it still falls within. The configured headline window is independent
@@ -801,9 +824,7 @@ fn accum_scoped(
         tally.week.add(usd, entry);
     }
     if entry.ts_secs >= headline_cutoff {
-        tally
-            .headline
-            .add(if suppress_headline_usd { 0.0 } else { usd }, entry);
+        tally.headline.add(usd, entry);
     }
 }
 

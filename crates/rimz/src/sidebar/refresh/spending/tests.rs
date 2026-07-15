@@ -14,7 +14,7 @@ use crate::sidebar::timing::{SPENDING_STALE_GRACE, SPENDING_TTL};
 use crate::store::single_flight::{Coalesced, coalesce};
 
 use jiff::Timestamp;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -323,7 +323,7 @@ fn walk_local_builds_workspace_cache_without_publishing() {
     let previous = crate::agents::spending::WorkspaceSpendingCache {
         refreshed_at_ms: 10_000,
         scope_hash: scope_hash.clone(),
-        live_excluded: BTreeSet::from(["claude:old".to_owned()]),
+        live_baselines: BTreeMap::from([("claude:old".to_owned(), 1.0)]),
         ..Default::default()
     };
     let workspace_path = runtime.workspace_spending_path(&scope_hash);
@@ -340,7 +340,7 @@ fn walk_local_builds_workspace_cache_without_publishing() {
     let local = super::walk_fleet_spending(&mut walker, &runtime, &snapshot, &spec, false);
 
     assert!((local.workspace.tally.headline.usd - 2.5).abs() < 1e-9);
-    assert!(local.workspace.live_excluded.is_empty());
+    assert_eq!(local.workspace.live_baselines.len(), 1);
     assert_eq!(
         std::fs::read(&workspace_path).expect("workspace cache"),
         before_bytes,
@@ -349,7 +349,7 @@ fn walk_local_builds_workspace_cache_without_publishing() {
 }
 
 #[test]
-fn publishing_walk_observer_checkpoints_workspace_live_exclusions() {
+fn publishing_walk_observer_checkpoints_workspace_live_baselines() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("repo");
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
@@ -397,7 +397,6 @@ fn publishing_walk_observer_checkpoints_workspace_live_exclusions() {
         mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
     };
-    let live_excluded = BTreeSet::from(["claude:agent".to_owned()]);
     let provider_path = runtime.shared_provider_spending_path();
     let user_inputs = Vec::new();
     let mut observer = super::PublishingWalkObserver {
@@ -409,14 +408,17 @@ fn publishing_walk_observer_checkpoints_workspace_live_exclusions() {
         scope: Some(&scope),
         scope_hash: Some(scope_hash.clone()),
         spec: &spec,
-        live_excluded: &live_excluded,
     };
 
     crate::agents::spending::WalkObserver::on_interval(&mut observer, &raw);
 
     let workspace = read_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash));
     assert!((workspace.tally.headline.usd - 1.25).abs() < 1e-9);
-    assert_eq!(workspace.live_excluded, live_excluded);
+    assert_eq!(workspace.live_baselines.len(), 1);
+    assert_eq!(
+        workspace.live_baselines.values().copied().sum::<f64>(),
+        1.25
+    );
 }
 
 #[test]
@@ -500,7 +502,6 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
             mode: SpendWindowMode::Today,
             timezone: Some("UTC".to_owned()),
         },
-        &BTreeSet::new(),
     )
     .expect("workspace cache derives from the shared cursor cache");
 
@@ -567,7 +568,6 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
         &raw,
         &[],
         &scope,
-        &BTreeSet::from(["claude:agent".to_owned()]),
         now_secs,
         &spec,
     );
@@ -580,8 +580,6 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
         spending,
         ..ProviderSpendingCache::default()
     };
-    let live_excluded = BTreeSet::from(["claude:agent".to_owned()]);
-
     let workspace = workspace_cache_from_shared_entries(
         &runtime,
         &provider,
@@ -589,20 +587,19 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
         Some(&scope_hash),
         &files,
         &spec,
-        &live_excluded,
     )
     .expect("workspace cache derives from the shared cursor cache");
 
     assert!((workspace.tally.headline.usd - 1.25).abs() < 1e-9);
     assert_eq!(workspace.headline_cutoff_secs, scoped.headline_cutoff_secs);
-    assert_eq!(workspace.live_excluded, live_excluded);
+    assert_eq!(workspace.live_baselines, scoped.live_baselines);
     let fresh = super::fresh_workspace_cache(&runtime, Some(&scope_hash), unix_now_ms())
         .expect("fresh workspace cache");
     assert_eq!(fresh, workspace);
 }
 
 #[test]
-fn derive_workspace_spending_memo_keys_live_exclusions() {
+fn derive_workspace_spending_publishes_walked_baselines() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("repo");
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
@@ -655,28 +652,12 @@ fn derive_workspace_spending_memo_keys_live_exclusions() {
         scope_hash.clone(),
         1_000,
         &files,
-        &BTreeSet::new(),
-        &spec,
-    );
-    let live_excluded = crate::agents::spending::live_session_keys(
-        &crate::agents::ClaudeAdapter,
-        "session",
-        &transcript,
-    )
-    .into_iter()
-    .collect::<BTreeSet<_>>();
-    let excluded = super::derive_workspace_spending(
-        &runtime,
-        &scope,
-        scope_hash,
-        1_000,
-        &files,
-        &live_excluded,
         &spec,
     );
 
     assert!((included.tally.headline.usd - 1.25).abs() < 1e-9);
-    assert_eq!(excluded.tally.headline.usd, 0.0);
+    assert_eq!(included.live_baselines.len(), 1);
+    assert_eq!(included.live_baselines.values().copied().sum::<f64>(), 1.25);
 }
 
 #[test]
@@ -718,8 +699,8 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
     let mut prev_tally = crate::agents::spending::SpendTally::default();
     prev_tally.headline.usd = 5.0;
     let spec = HeadlineSpec {
+        mode: SpendWindowMode::Today,
         timezone: Some("UTC".to_owned()),
-        ..Default::default()
     };
     let day_cutoff_secs = Timestamp::now()
         .to_zoned(jiff::tz::TimeZone::UTC)
@@ -731,8 +712,9 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
         refreshed_at_ms: unix_now_ms(),
         scope_hash: scope_hash.clone(),
         tally: prev_tally.clone(),
+        headline_cutoff_secs: day_cutoff_secs,
         day_cutoff_secs,
-        live_excluded: BTreeSet::from(["claude:old".to_owned()]),
+        live_baselines: BTreeMap::from([("claude:old".to_owned(), 1.0)]),
         ..Default::default()
     };
     write_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash), &prev);
@@ -744,12 +726,11 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
         Some(&scope_hash),
         &files,
         &spec,
-        &BTreeSet::new(),
     )
     .expect("workspace cache derives from shared entries");
 
     assert_eq!(served.tally, prev_tally);
-    assert_eq!(served.live_excluded, prev.live_excluded);
+    assert_eq!(served.live_baselines, prev.live_baselines);
 
     let old = crate::agents::spending::WorkspaceSpendingCache {
         refreshed_at_ms: unix_now_ms()
@@ -764,12 +745,11 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
         Some(&scope_hash),
         &files,
         &spec,
-        &BTreeSet::new(),
     )
     .expect("workspace cache derives from shared entries");
 
     assert_eq!(reset.tally.headline.usd, 0.0);
-    assert!(reset.live_excluded.is_empty());
+    assert!(reset.live_baselines.is_empty());
 }
 
 #[test]
@@ -804,12 +784,38 @@ fn workspace_regression_guard_never_carries_spend_across_local_midnight() {
     };
 
     assert_eq!(
-        super::serve_prev_on_young_regression(
-            prev,
-            next.clone(),
-            now_ms + 1,
-            &HeadlineSpec::default(),
-        ),
+        super::serve_prev_on_young_regression(prev, next.clone(), now_ms + 1),
+        next
+    );
+}
+
+#[test]
+fn workspace_regression_guard_propagates_a_genuine_burst_end() {
+    let now_ms = unix_now_ms();
+    let prev = crate::agents::spending::WorkspaceSpendingCache {
+        version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
+        refreshed_at_ms: now_ms,
+        scope_hash: "scope".to_owned(),
+        tally: crate::agents::spending::SpendTally {
+            headline: crate::agents::spending::SpendWindow {
+                usd: 5.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        headline_cutoff_secs: 100,
+        day_cutoff_secs: 50,
+        ..Default::default()
+    };
+    let next = crate::agents::spending::WorkspaceSpendingCache {
+        refreshed_at_ms: now_ms + 1,
+        tally: Default::default(),
+        headline_cutoff_secs: crate::agents::spending::NO_BURST_CUTOFF,
+        ..prev.clone()
+    };
+
+    assert_eq!(
+        super::serve_prev_on_young_regression(prev, next.clone(), now_ms + 1),
         next
     );
 }

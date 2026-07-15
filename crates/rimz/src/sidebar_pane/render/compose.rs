@@ -19,8 +19,8 @@ use super::sections::{
 };
 use super::theme::Theme;
 use super::{
-    Alert, BodyFilter, MoreHit, UiState, active_dashboard_tab, dashboard_present, dashboard_tabbed,
-    group_visible_rows, labels,
+    Alert, BodyFilter, MoreHit, UiState, active_dashboard_tab, cockpit_spend_target,
+    dashboard_present, dashboard_tabbed, group_visible_rows, labels,
 };
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
@@ -718,20 +718,7 @@ pub(super) fn top_lines(
         .fleet_budget
         .as_ref()
         .filter(|budget| budget.parked);
-    let today_usd = tripped.map_or_else(
-        || {
-            snapshot
-                .today_spend_live_usd
-                .or(headline.map(|window| window.usd))
-                .unwrap_or(0.0)
-        },
-        |budget| budget.spend_usd,
-    );
-    let spend_epoch = if tripped.is_some() {
-        snapshot.fleet_day_spend_epoch_secs
-    } else {
-        snapshot.today_spend_epoch_secs
-    };
+    let (today_usd, spend_epoch) = cockpit_spend_target(snapshot).unwrap_or((0.0, None));
     let today_usd = ui.spend_ratchet.display(spend_epoch, today_usd);
     let spend_line = header.len();
     let unread_picked = ui.make_up_filter == Some(BodyFilter::Unread);

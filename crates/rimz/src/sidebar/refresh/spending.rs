@@ -2,18 +2,17 @@
 //! walk feeding the enrichment spine's global `value_tally`, per-workspace
 //! `workspace_value_tally`, and per-provider dashboard folds.
 
-use std::collections::{BTreeSet, HashMap, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::agents::spending::{
-    HeadlineSpec, ProviderSpendingCache, SESSION_GAP_SECS, SpendScope, SpendWindowMode,
-    SpendingCaches, WorkspaceSpendingCache, compute_scoped_spending, discover_spending_files,
+    HeadlineSpec, ProviderSpendingCache, SESSION_GAP_SECS, SpendScope, SpendingCaches,
+    WorkspaceSpendingCache, compute_scoped_spending, discover_spending_files,
     read_provider_spending_cache, read_spending_cache, unix_secs_now, user_input,
 };
-use crate::sidebar::refresh::live_spend::{live_card_sessions, live_excluded_sessions};
 use crate::sidebar::timing::SPENDING_STALE_GRACE;
 use crate::sidebar::timing::unix_now_ms;
 use crate::store::parse_cache::FileStamp;
@@ -60,8 +59,6 @@ pub(crate) fn compute_fleet_spending_with_walker(
         snapshot.worktree_home.as_deref(),
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
-    let live_cards = live_card_sessions(snapshot);
-    let live_excluded = live_excluded_sessions(&live_cards);
     let provider_path = runtime.shared_provider_spending_path();
     // Fresh stamp: the published walk is young enough — serve it back with the
     // same single small read a consumer tab pays.
@@ -81,7 +78,6 @@ pub(crate) fn compute_fleet_spending_with_walker(
             scope_hash.as_deref(),
             &files,
             spec,
-            &live_excluded,
         ) {
             return crate::agents::spending::SpendingCaches {
                 provider: published,
@@ -110,7 +106,6 @@ pub(crate) fn compute_fleet_spending_with_walker(
             scope_hash.as_deref(),
             &files,
             spec,
-            &live_excluded,
         )
         .map(|workspace| crate::agents::spending::SpendingCaches {
             provider,
@@ -148,8 +143,6 @@ pub(crate) fn consumer_spending_caches(
         &snapshot.worktree_roots,
         snapshot.worktree_home.as_deref(),
     );
-    let live_cards = live_card_sessions(snapshot);
-    let live_excluded = live_excluded_sessions(&live_cards);
     let workspace = if scope.is_empty() {
         WorkspaceSpendingCache::default()
     } else {
@@ -166,7 +159,6 @@ pub(crate) fn consumer_spending_caches(
                 scope_hash,
                 provider.refreshed_at_ms,
                 &discover_spending_files(),
-                &live_excluded,
                 spec,
             )
         }
@@ -192,18 +184,15 @@ fn derive_workspace_spending(
     scope_hash: String,
     source_refreshed_at_ms: u64,
     files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
-    live_excluded: &BTreeSet<String>,
     spec: &HeadlineSpec,
 ) -> WorkspaceSpendingCache {
     let cursor_path = runtime.shared_spending_cursor_path();
     let user_input_signature = user_input::signature();
-    let live_excluded_signature = live_excluded_signature(live_excluded);
     let key = WorkspaceDeriveKey {
         cursor_path: cursor_path.clone(),
         cursor_stamp: FileStamp::of(&cursor_path),
         files_signature: discovered_files_signature(files),
         user_input_signature,
-        live_excluded_signature,
         scope_hash: scope_hash.clone(),
         source_refreshed_at_ms,
         headline: spec.clone(),
@@ -217,15 +206,8 @@ fn derive_workspace_spending(
 
     let cursor = read_spending_cache(&cursor_path);
     let user_inputs = user_input::load();
-    let scoped = compute_scoped_spending(
-        files,
-        &cursor,
-        &user_inputs,
-        scope,
-        live_excluded,
-        unix_secs_now(),
-        spec,
-    );
+    let scoped =
+        compute_scoped_spending(files, &cursor, &user_inputs, scope, unix_secs_now(), spec);
     let workspace = WorkspaceSpendingCache {
         version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
         refreshed_at_ms: source_refreshed_at_ms,
@@ -234,13 +216,12 @@ fn derive_workspace_spending(
         headline_cutoff_secs: scoped.headline_cutoff_secs,
         day: scoped.day,
         day_cutoff_secs: scoped.day_cutoff_secs,
-        live_excluded: live_excluded.clone(),
+        live_baselines: scoped.live_baselines,
     };
     let workspace = serve_prev_on_young_regression(
         matching_workspace_cache(runtime, Some(&workspace.scope_hash)),
         workspace,
         unix_now_ms(),
-        spec,
     );
     if let Ok(mut memo) = workspace_derive_memo().lock() {
         *memo = Some(WorkspaceDeriveMemo {
@@ -263,7 +244,6 @@ struct WorkspaceDeriveKey {
     cursor_stamp: FileStamp,
     files_signature: u64,
     user_input_signature: u64,
-    live_excluded_signature: u64,
     scope_hash: String,
     source_refreshed_at_ms: u64,
     headline: HeadlineSpec,
@@ -285,29 +265,16 @@ fn discovered_files_signature(
     hasher.finish()
 }
 
-fn live_excluded_signature(live_excluded: &BTreeSet<String>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    live_excluded.hash(&mut hasher);
-    hasher.finish()
-}
-
 fn serve_prev_on_young_regression(
     prev: WorkspaceSpendingCache,
     next: WorkspaceSpendingCache,
     now_ms: u64,
-    spec: &HeadlineSpec,
 ) -> WorkspaceSpendingCache {
-    let same_window = match spec.mode {
-        SpendWindowMode::Session => true,
-        SpendWindowMode::Trailing24h | SpendWindowMode::Today => {
-            prev.headline_cutoff_secs == next.headline_cutoff_secs
-        }
-    };
     if prev.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
         && prev.scope_hash == next.scope_hash
         && next.tally.headline.usd < prev.tally.headline.usd
         && now_ms.saturating_sub(prev.refreshed_at_ms) < SESSION_GAP_SECS * 1_000
-        && same_window
+        && prev.headline_cutoff_secs == next.headline_cutoff_secs
         && prev.day_cutoff_secs == next.day_cutoff_secs
     {
         prev
@@ -338,8 +305,6 @@ fn walk_fleet_spending(
         snapshot.worktree_home.as_deref(),
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
-    let live_cards = live_card_sessions(snapshot);
-    let live_excluded = live_excluded_sessions(&live_cards);
     // Tag each file with its adapter at discovery — the source knows the kind,
     // so pricing/bucketing never has to guess it from the path.
     let files = discover_spending_files();
@@ -356,15 +321,24 @@ fn walk_fleet_spending(
         }
         let refreshed_at_ms = unix_now_ms();
         let spending = Spending::default();
+        let user_inputs = user_input::load();
+        let scoped = compute_scoped_spending(
+            &files,
+            &Default::default(),
+            &user_inputs,
+            &scope,
+            unix_secs_now(),
+            spec,
+        );
         let workspace = WorkspaceSpendingCache {
             version: WORKSPACE_SPENDING_VERSION,
             refreshed_at_ms,
             scope_hash: scope_hash.clone().unwrap_or_default(),
-            tally: Default::default(),
-            headline_cutoff_secs: 0,
-            day: Default::default(),
-            day_cutoff_secs: 0,
-            live_excluded: live_excluded.clone(),
+            tally: scoped.tally,
+            headline_cutoff_secs: scoped.headline_cutoff_secs,
+            day: scoped.day,
+            day_cutoff_secs: scoped.day_cutoff_secs,
+            live_baselines: scoped.live_baselines,
         };
         if publish {
             // Stamp the empty result too: an agentless machine must not re-run
@@ -416,7 +390,6 @@ fn walk_fleet_spending(
         origin_overrides: &origin_overrides,
         user_inputs: &user_inputs,
         scope: Some(&scope),
-        live_excluded: &live_excluded,
         spec,
     };
     let result = if publish {
@@ -429,7 +402,6 @@ fn walk_fleet_spending(
             scope: Some(&scope),
             scope_hash: scope_hash.clone(),
             spec,
-            live_excluded: &live_excluded,
         };
         walker.walk(&cache_path, &req, &mut observer)
     } else {
@@ -445,7 +417,7 @@ fn walk_fleet_spending(
             result.workspace_headline_cutoff_secs,
             result.workspace_day,
             result.day_cutoff_secs,
-            &live_excluded,
+            result.workspace_live_baselines,
         )
     } else {
         WorkspaceSpendingCache {
@@ -495,7 +467,6 @@ struct PublishingWalkObserver<'a> {
     scope: Option<&'a crate::agents::spending::SpendScope>,
     scope_hash: Option<String>,
     spec: &'a crate::agents::spending::HeadlineSpec,
-    live_excluded: &'a BTreeSet<String>,
 }
 
 impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
@@ -506,7 +477,6 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
             self.user_inputs,
             self.now_secs,
             self.scope,
-            self.live_excluded,
             self.spec,
         );
         let refreshed_at_ms = unix_now_ms();
@@ -527,7 +497,7 @@ impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
                 result.workspace_headline_cutoff_secs,
                 result.workspace_day,
                 result.day_cutoff_secs,
-                self.live_excluded,
+                result.workspace_live_baselines,
             );
             crate::agents::spending::write_workspace_spending_cache(
                 &self.runtime.workspace_spending_path(scope_hash),
@@ -545,7 +515,7 @@ fn reconciled_workspace_cache(
     headline_cutoff_secs: u64,
     day: crate::agents::spending::SpendWindow,
     day_cutoff_secs: u64,
-    live_excluded: &BTreeSet<String>,
+    live_baselines: BTreeMap<String, f64>,
 ) -> crate::agents::spending::WorkspaceSpendingCache {
     use crate::agents::spending::{WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache};
 
@@ -557,7 +527,7 @@ fn reconciled_workspace_cache(
         headline_cutoff_secs,
         day,
         day_cutoff_secs,
-        live_excluded: live_excluded.clone(),
+        live_baselines,
     }
 }
 
@@ -568,7 +538,6 @@ fn workspace_cache_from_shared_entries(
     scope_hash: Option<&str>,
     files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
     spec: &crate::agents::spending::HeadlineSpec,
-    live_excluded: &BTreeSet<String>,
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
     use crate::agents::spending::{
         compute_scoped_spending, read_spending_cache, unix_secs_now, write_workspace_spending_cache,
@@ -586,15 +555,7 @@ fn workspace_cache_from_shared_entries(
     if !provider.spending.total.is_zero() && !has_discovered_cache {
         return None;
     }
-    let scoped = compute_scoped_spending(
-        files,
-        &cache,
-        &user_inputs,
-        scope,
-        live_excluded,
-        unix_secs_now(),
-        spec,
-    );
+    let scoped = compute_scoped_spending(files, &cache, &user_inputs, scope, unix_secs_now(), spec);
     let workspace = reconciled_workspace_cache(
         scope_hash,
         provider.refreshed_at_ms,
@@ -602,13 +563,12 @@ fn workspace_cache_from_shared_entries(
         scoped.headline_cutoff_secs,
         scoped.day,
         scoped.day_cutoff_secs,
-        live_excluded,
+        scoped.live_baselines,
     );
     let workspace = serve_prev_on_young_regression(
         matching_workspace_cache(runtime, Some(scope_hash)),
         workspace,
         unix_now_ms(),
-        spec,
     );
     if workspace.refreshed_at_ms != provider.refreshed_at_ms {
         return Some(workspace);

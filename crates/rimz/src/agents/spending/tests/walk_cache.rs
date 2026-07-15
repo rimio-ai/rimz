@@ -79,7 +79,6 @@ fn spending_walk_threads_user_inputs_into_session_headline() {
         kind: crate::ids::AgentKind::new_unchecked("claude"),
         origin: None,
     }];
-    let live_excluded = BTreeSet::new();
     let spec = HeadlineSpec::default();
     let mut req = WalkRequest {
         files: &files,
@@ -88,7 +87,6 @@ fn spending_walk_threads_user_inputs_into_session_headline() {
         origin_overrides: &origin_overrides,
         user_inputs: &user_inputs,
         scope: None,
-        live_excluded: &live_excluded,
         spec: &spec,
     };
     let mut walker = SpendingWalker::new();

@@ -196,7 +196,7 @@ fn headline_cutoffs_are_global_scoped_and_provider_local() {
 }
 
 #[test]
-fn local_day_rollups_ignore_headline_mode_and_exclude_live_workspace_usd() {
+fn local_day_rollups_ignore_headline_mode_and_publish_live_baselines() {
     let now: Timestamp = "2025-06-01T04:30:00Z".parse().expect("now");
     let before: Timestamp = "2025-06-01T03:59:00Z".parse().expect("before midnight");
     let after: Timestamp = "2025-06-01T04:01:00Z".parse().expect("after midnight");
@@ -216,7 +216,6 @@ fn local_day_rollups_ignore_headline_mode_and_exclude_live_workspace_usd() {
     };
     let counted = dedup_cached_entries(&files, &cache).into_counted();
     let user_inputs = user_inputs_from_counted(&counted);
-    let live_excluded = BTreeSet::from(["claude:live".to_owned()]);
     let scope = SpendScope::from_roots(Some(&project), &[]);
     let spec = HeadlineSpec {
         mode: SpendWindowMode::Session,
@@ -226,10 +225,7 @@ fn local_day_rollups_ignore_headline_mode_and_exclude_live_workspace_usd() {
         &files,
         &cache,
         &counted,
-        Some(WorkspaceRollupScope {
-            scope: &scope,
-            live_excluded: &live_excluded,
-        }),
+        Some(&scope),
         HeadlineContext {
             user_inputs: &user_inputs,
             now_secs: now.as_second() as u64,
@@ -246,13 +242,20 @@ fn local_day_rollups_ignore_headline_mode_and_exclude_live_workspace_usd() {
             .as_second() as u64
     );
     assert!((rollups.provider_day["claude"].usd - 2.0).abs() < 1e-9);
-    assert_eq!(rollups.workspace_day.usd, 0.0);
+    assert_eq!(rollups.workspace_day.usd, 2.0);
     assert_eq!(rollups.workspace_day.tokens, 15);
-    assert!((rollups.workspace_tally.headline.usd - 1.0).abs() < 1e-9);
+    assert!((rollups.workspace_tally.headline.usd - 3.0).abs() < 1e-9);
+    assert_eq!(
+        rollups.workspace_live_baselines,
+        BTreeMap::from([
+            ("claude:before".to_owned(), 1.0),
+            ("claude:live".to_owned(), 2.0),
+        ])
+    );
 }
 
 #[test]
-fn live_exclusion_suppresses_workspace_headline_usd_only() {
+fn scoped_spending_publishes_full_walked_session_baselines() {
     let project = PathBuf::from("/repo/project");
     let file = PathBuf::from("/tmp/rimz/live.jsonl");
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
@@ -265,21 +268,22 @@ fn live_exclusion_suppresses_workspace_headline_usd_only() {
         ..Default::default()
     };
     let scope = SpendScope::from_roots(Some(&project), &[]);
-    let live_excluded = BTreeSet::from(["claude:live".to_owned()]);
     let scoped = compute_scoped_spending(
         &files,
         &cache,
         &user_inputs_from_cache(&files, &cache),
         &scope,
-        &live_excluded,
         NOW_SECS,
         &HeadlineSpec::default(),
-    )
-    .tally;
-    assert_eq!(scoped.headline.usd, 0.0);
-    assert_eq!(scoped.headline.tokens, 15);
-    assert_eq!(scoped.headline.sessions, 1);
-    assert!((scoped.week.usd - 1.25).abs() < 1e-9);
+    );
+    assert_eq!(scoped.tally.headline.usd, 1.25);
+    assert_eq!(scoped.tally.headline.tokens, 15);
+    assert_eq!(scoped.tally.headline.sessions, 1);
+    assert!((scoped.tally.week.usd - 1.25).abs() < 1e-9);
+    assert_eq!(
+        scoped.live_baselines,
+        BTreeMap::from([("claude:live".to_owned(), 1.25)])
+    );
 
     let session = PathBuf::from("/tmp/claude/sess-1");
     let main = session.join("chat.jsonl");
@@ -299,23 +303,22 @@ fn live_exclusion_suppresses_workspace_headline_usd_only() {
         ]),
         ..Default::default()
     };
-    let live_excluded = live_session_keys(claude_adapter(), "sess-1", &main)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
     let scoped = compute_scoped_spending(
         &files,
         &cache,
         &user_inputs_from_cache(&files, &cache),
         &scope,
-        &live_excluded,
         NOW_SECS,
         &HeadlineSpec::default(),
-    )
-    .tally;
-    assert_eq!(scoped.headline.usd, 0.0);
-    assert_eq!(scoped.headline.tokens, 30);
-    assert_eq!(scoped.headline.sessions, 1);
-    assert!((scoped.week.usd - 0.60).abs() < 1e-9);
+    );
+    assert_eq!(scoped.tally.headline.usd, 0.60);
+    assert_eq!(scoped.tally.headline.tokens, 30);
+    assert_eq!(scoped.tally.headline.sessions, 1);
+    assert!((scoped.tally.week.usd - 0.60).abs() < 1e-9);
+    assert_eq!(
+        scoped.live_baselines,
+        BTreeMap::from([(session.to_string_lossy().into_owned(), 0.60)])
+    );
 
     let codex_file = PathBuf::from("/tmp/codex/rollout.jsonl");
     let files: Vec<(&'static dyn AgentAdapter, PathBuf)> =
@@ -331,26 +334,64 @@ fn live_exclusion_suppresses_workspace_headline_usd_only() {
         )]),
         ..Default::default()
     };
-    let live_excluded = live_session_keys(codex_adapter(), "live", &codex_file)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
     let scoped = compute_scoped_spending(
         &files,
         &cache,
         &user_inputs_from_cache(&files, &cache),
         &scope,
-        &live_excluded,
         NOW_SECS,
         &HeadlineSpec::default(),
-    )
-    .tally;
-    assert!((scoped.headline.usd - 3.00).abs() < 1e-9);
-    assert_eq!(scoped.headline.tokens, 30);
-    assert!((scoped.week.usd - 5.00).abs() < 1e-9);
+    );
+    assert!((scoped.tally.headline.usd - 5.00).abs() < 1e-9);
+    assert_eq!(scoped.tally.headline.tokens, 30);
+    assert!((scoped.tally.week.usd - 5.00).abs() < 1e-9);
+    assert_eq!(
+        scoped.live_baselines,
+        BTreeMap::from([
+            ("codex:live".to_owned(), 2.0),
+            ("codex:sibling".to_owned(), 3.0),
+        ])
+    );
 }
 
 #[test]
-fn priced_entries_never_open_or_bridge_a_session() {
+fn live_baselines_sum_year_entries_only_for_recent_sessions() {
+    const DAY: u64 = 86_400;
+    let project = PathBuf::from("/repo/project");
+    let file = PathBuf::from("/tmp/rimz/baselines.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file_with_origin(
+            &file,
+            &project,
+            vec![
+                cached_entry(NOW_SECS, 1.0, "recent"),
+                cached_entry(NOW_SECS - 10 * DAY, 3.0, "recent"),
+                cached_entry(NOW_SECS - RAW_RETAIN_SECS, 5.0, "stale"),
+                cached_entry(NOW_SECS - 20 * DAY, 7.0, "stale"),
+                cached_entry(NOW_SECS - WIDEST_SPEND_WINDOW_SECS - DAY, 11.0, "recent"),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let scoped = compute_scoped_spending(
+        &files,
+        &cache,
+        &[user_input(NOW_SECS, "claude", Some(&project))],
+        &scope,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    );
+
+    assert_eq!(
+        scoped.live_baselines,
+        BTreeMap::from([("claude:recent".to_owned(), 4.0)])
+    );
+}
+
+#[test]
+fn priced_entries_bridge_but_never_open_a_session() {
     const HOUR: u64 = 3_600;
     let first_file = PathBuf::from("/tmp/rimz/first.jsonl");
     let chatter_file = PathBuf::from("/tmp/rimz/chatter.jsonl");
@@ -394,9 +435,83 @@ fn priced_entries_never_open_or_bridge_a_session() {
     );
 
     assert_eq!(empty.total.headline, SpendWindow::default());
-    assert!((bounded.total.headline.usd - 2.0).abs() < 1e-9);
-    assert_eq!(bounded.total.headline.tokens, 15);
+    assert!((bounded.total.headline.usd - 3.5).abs() < 1e-9);
+    assert_eq!(bounded.total.headline.tokens, 45);
     assert!((bounded.total.week.usd - 3.5).abs() < 1e-9);
+}
+
+#[test]
+fn session_burst_resets_at_an_exact_activity_gap() {
+    const HOUR: u64 = 3_600;
+    let file = PathBuf::from("/tmp/rimz/activity-gap.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file(
+            &file,
+            vec![
+                cached_entry(NOW_SECS - 10 * HOUR, 1.0, "old"),
+                cached_entry(NOW_SECS - 5 * HOUR, 2.0, "bridge"),
+                cached_entry(NOW_SECS, 3.0, "current"),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let counted = dedup_cached_entries(&files, &cache).into_counted();
+    let prompts = [
+        user_input(NOW_SECS - 10 * HOUR, "claude", None),
+        user_input(NOW_SECS, "claude", None),
+    ];
+    let spending = aggregate_spending_with_user_inputs(
+        &files,
+        &cache,
+        &counted,
+        &prompts,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    );
+
+    assert_eq!(spending.total.headline.usd, 3.0);
+}
+
+#[test]
+fn bridged_session_cutoff_stays_stable_while_activity_is_current() {
+    const HOUR: u64 = 3_600;
+    let project = PathBuf::from("/repo/project");
+    let file = PathBuf::from("/tmp/rimz/stable-cutoff.jsonl");
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(claude_adapter(), file.clone())];
+    let cache = SpendingDiskCache {
+        files: HashMap::from([cached_file_with_origin(
+            &file,
+            &project,
+            vec![
+                cached_entry(NOW_SECS - 8 * HOUR, 1.0, "opened"),
+                cached_entry(NOW_SECS - 4 * HOUR, 2.0, "bridge"),
+                cached_entry(NOW_SECS, 3.0, "current"),
+            ],
+        )]),
+        ..Default::default()
+    };
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let prompts = [user_input(NOW_SECS - 8 * HOUR, "claude", Some(&project))];
+    let first = compute_scoped_spending(
+        &files,
+        &cache,
+        &prompts,
+        &scope,
+        NOW_SECS,
+        &HeadlineSpec::default(),
+    );
+    let later = compute_scoped_spending(
+        &files,
+        &cache,
+        &prompts,
+        &scope,
+        NOW_SECS + HOUR,
+        &HeadlineSpec::default(),
+    );
+
+    assert_eq!(first.headline_cutoff_secs, NOW_SECS - 8 * HOUR);
+    assert_eq!(later.headline_cutoff_secs, first.headline_cutoff_secs);
 }
 
 #[test]
@@ -508,28 +623,13 @@ fn workspace_session_cutoff_uses_only_scoped_user_inputs() {
     let project_prompt = [user_input(NOW_SECS, "claude", Some(&project))];
     let outside_prompt = [user_input(NOW_SECS, "claude", Some(&other))];
 
-    let included = compute_scoped_spending(
-        &files,
-        &cache,
-        &project_prompt,
-        &scope,
-        &BTreeSet::new(),
-        NOW_SECS,
-        &spec,
-    );
-    let empty = compute_scoped_spending(
-        &files,
-        &cache,
-        &outside_prompt,
-        &scope,
-        &BTreeSet::new(),
-        NOW_SECS,
-        &spec,
-    );
+    let included =
+        compute_scoped_spending(&files, &cache, &project_prompt, &scope, NOW_SECS, &spec);
+    let empty = compute_scoped_spending(&files, &cache, &outside_prompt, &scope, NOW_SECS, &spec);
 
     assert!((included.tally.headline.usd - 1.0).abs() < 1e-9);
     assert_eq!(empty.tally.headline, SpendWindow::default());
-    assert_eq!(empty.headline_cutoff_secs, NOW_SECS + 1);
+    assert_eq!(empty.headline_cutoff_secs, NO_BURST_CUTOFF);
 }
 
 #[test]

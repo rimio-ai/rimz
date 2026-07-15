@@ -1394,13 +1394,13 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
             tally.headline.sessions,
             tally.headline.tokens
         )),
-        Some((0.0, 1, 27)),
+        Some((3.75, 1, 27)),
         "consumer folds derive the cockpit tally from the shared cursor cache"
     );
     assert_eq!(
         snapshot.today_spend_live_usd,
-        Some(0.25),
-        "the derived cache excludes live-card headline USD and adds the card cost"
+        Some(3.75),
+        "the derived cache clamps a regressed live-card cost to its walked baseline"
     );
     assert!(
         !runtime.workspace_spending_path(&hash).exists(),

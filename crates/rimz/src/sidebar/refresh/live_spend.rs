@@ -1,27 +1,30 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::SidebarSnapshot;
 use crate::agents::find_adapter;
 use crate::agents::spending::{
-    SESSION_GAP_SECS, SpendScope, WorkspaceSpendingCache, live_session_keys, origin_path,
+    NO_BURST_CUTOFF, SESSION_GAP_SECS, SpendScope, WorkspaceSpendingCache, live_session_keys,
+    origin_path,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LiveCardSpend {
-    pub(crate) row_id: String,
     pub(crate) session_keys: Vec<String>,
     pub(crate) cost_usd: f64,
-    pub(crate) registered_at_ms: Option<u64>,
 }
 
 /// Stamp the cockpit's live headline spend onto the snapshot from the single
-/// workspace cache: walked headline USD with live card sessions excluded, plus
-/// the full current cost of those cards and cards born after the cache publish.
-/// Shared by the producing CLI and consumer folds, so every tab in a room
-/// paints the same figure; zero is explicit so the cockpit can render `$0.00`.
+/// workspace cache: walked headline USD plus each live card's cost since its
+/// walked session baseline. Shared by the producing CLI and consumer folds, so
+/// every tab in a room paints the same figure; zero is explicit so the cockpit
+/// can render `$0.00`.
 pub fn apply_live_today_spend(snapshot: &mut SidebarSnapshot, workspace: &WorkspaceSpendingCache) {
-    let live = live_spend_addback(snapshot, workspace);
+    let live = if workspace.headline_cutoff_secs == NO_BURST_CUTOFF {
+        0.0
+    } else {
+        live_spend_addback(snapshot, workspace)
+    };
     snapshot.today_spend_live_usd = Some(workspace.tally.headline.usd + live);
     snapshot.today_spend_epoch_secs = Some(workspace.headline_cutoff_secs);
 }
@@ -37,30 +40,21 @@ pub fn apply_live_day_spend(snapshot: &mut SidebarSnapshot, workspace: &Workspac
 fn live_spend_addback(snapshot: &SidebarSnapshot, workspace: &WorkspaceSpendingCache) -> f64 {
     live_card_sessions(snapshot)
         .into_iter()
-        .filter(|card| {
-            card.session_keys
+        .map(|card| {
+            let baseline = card
+                .session_keys
                 .iter()
-                .any(|key| workspace.live_excluded.contains(key))
-                || card
-                    .registered_at_ms
-                    .is_some_and(|at| at > workspace.refreshed_at_ms)
+                .filter_map(|key| workspace.live_baselines.get(key).copied())
+                .fold(0.0_f64, f64::max);
+            (card.cost_usd - baseline).max(0.0)
         })
-        .map(|card| card.cost_usd.max(0.0))
         .sum::<f64>()
 }
 
-pub(crate) fn live_excluded_sessions(cards: &[LiveCardSpend]) -> BTreeSet<String> {
-    cards
-        .iter()
-        .flat_map(|card| card.session_keys.iter().cloned())
-        .collect()
-}
-
-/// Every active in-scope agent row's live statusline cost and the transcript
-/// session keys the walker can exclude. Rows without an absolute worktree path,
-/// a matching agent state, an absolute transcript path, or a finite cost are
-/// omitted so the overlay stays aligned with the workspace-scoped transcript
-/// tally.
+/// Every active in-scope agent row's live statusline cost and candidate walked
+/// baseline keys. Rows without an absolute worktree path, a matching agent
+/// state, an absolute transcript path, or a finite cost are omitted so the
+/// overlay stays aligned with the workspace-scoped transcript tally.
 pub(crate) fn live_card_sessions(snapshot: &SidebarSnapshot) -> Vec<LiveCardSpend> {
     let scope = SpendScope::for_workspace(
         snapshot.project_root.as_deref(),
@@ -104,15 +98,9 @@ pub(crate) fn live_card_sessions(snapshot: &SidebarSnapshot) -> Vec<LiveCardSpen
             }
             let session_keys =
                 live_session_keys(adapter, agent.agent_id.as_str(), &transcript_path);
-            let registered_at_ms = card
-                .registered_at
-                .or(agent.registered_at)
-                .map(|at| at.as_millisecond().max(0) as u64);
             Some(LiveCardSpend {
-                row_id: row.id.clone(),
                 session_keys,
                 cost_usd: usd,
-                registered_at_ms,
             })
         })
         .collect()
@@ -213,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn consumer_enrich_reads_live_excluded_workspace_cache_without_writing() {
+    fn consumer_enrich_reads_live_baseline_workspace_cache_without_writing() {
         let dir = tempfile::tempdir().unwrap();
         let workspace = WorkspaceId::from_project_root(dir.path());
         let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -265,7 +253,7 @@ mod tests {
             refreshed_at_ms: walk_ms,
             scope_hash: scope_hash.clone(),
             tally,
-            live_excluded: BTreeSet::from(["claude:baselined".to_owned()]),
+            live_baselines: BTreeMap::from([("claude:baselined".to_owned(), 1.0)]),
             ..Default::default()
         };
         let workspace_path = runtime.workspace_spending_path(&scope_hash);
@@ -282,11 +270,11 @@ mod tests {
             &crate::diag::DiagSink::disabled(),
         );
         assert_eq!(std::fs::read(&workspace_path).unwrap(), before_bytes);
-        assert_eq!(enriched.today_spend_live_usd, Some(12.0));
+        assert_eq!(enriched.today_spend_live_usd, Some(11.0));
     }
 
     #[test]
-    fn apply_live_today_spend_adds_excluded_cards_and_newborns() {
+    fn live_spend_adds_only_the_unflushed_delta_and_clamps_regressions() {
         let published = Timestamp::from_second(1_750_000_000).unwrap();
         let published_ms = published.as_millisecond() as u64;
         let before = published - SignedDuration::from_secs(600);
@@ -305,6 +293,7 @@ mod tests {
             "unbaselined",
             "costless",
             "stale",
+            "regressed",
             "linked-newborn",
         ]
         .into_iter()
@@ -322,6 +311,7 @@ mod tests {
                     cost_row("unbaselined", Some(2.00), Some(before)),
                     cost_row("costless", None, Some(before)),
                     cost_row_at("stale", Some(9.00), Some(before), wt, Some(stale)),
+                    cost_row("regressed", Some(4.00), Some(before)),
                 ],
             ),
             worktree_group(
@@ -348,18 +338,28 @@ mod tests {
             headline_cutoff_secs: 123,
             day,
             day_cutoff_secs: 100,
-            live_excluded: BTreeSet::from(["claude:baselined".to_owned()]),
+            live_baselines: BTreeMap::from([
+                ("claude:baselined".to_owned(), 5.0),
+                ("claude:regressed".to_owned(), 6.0),
+            ]),
             ..Default::default()
         };
 
         apply_live_today_spend(&mut snapshot, &workspace);
         let live = snapshot.today_spend_live_usd.expect("live spend stamps");
-        assert!((live - 16.00).abs() < 1e-9);
+        assert!((live - 13.00).abs() < 1e-9);
         assert_eq!(snapshot.today_spend_epoch_secs, Some(123));
 
         apply_live_day_spend(&mut snapshot, &workspace);
-        assert_eq!(snapshot.fleet_day_spend_usd, Some(14.0));
+        assert_eq!(snapshot.fleet_day_spend_usd, Some(11.0));
         assert_eq!(snapshot.fleet_day_spend_epoch_secs, Some(100));
+
+        let mut no_burst = workspace.clone();
+        no_burst.headline_cutoff_secs = NO_BURST_CUTOFF;
+        apply_live_today_spend(&mut snapshot, &no_burst);
+        assert_eq!(snapshot.today_spend_live_usd, Some(10.0));
+        apply_live_day_spend(&mut snapshot, &no_burst);
+        assert_eq!(snapshot.fleet_day_spend_usd, Some(11.0));
 
         let mut empty =
             SidebarSnapshot::build(WorkspaceId::from_project_root(wt), Vec::new(), published)
@@ -409,7 +409,7 @@ mod tests {
 
         let workspace = WorkspaceSpendingCache {
             refreshed_at_ms: published_ms,
-            live_excluded: BTreeSet::from(["claude:external-baselined".to_owned()]),
+            live_baselines: BTreeMap::from([("claude:external-baselined".to_owned(), 1.0)]),
             ..Default::default()
         };
 
@@ -476,7 +476,6 @@ mod tests {
         assert_eq!(cards.len(), 1);
         let workspace = WorkspaceSpendingCache {
             refreshed_at_ms: now.as_millisecond() as u64,
-            live_excluded: live_excluded_sessions(&cards),
             ..WorkspaceSpendingCache::default()
         };
         apply_live_today_spend(&mut snapshot, &workspace);

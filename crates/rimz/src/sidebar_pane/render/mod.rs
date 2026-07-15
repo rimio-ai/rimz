@@ -43,6 +43,7 @@ pub(crate) use self::ui_state::MoreHit;
 pub use self::ui_state::{Alert, UiState};
 pub(crate) use self::ui_state::{
     BodyFilter, Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
+    cockpit_spend_target,
 };
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub use oklab::blend;

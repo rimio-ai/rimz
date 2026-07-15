@@ -1,3 +1,4 @@
+use crate::SidebarSnapshot;
 use crate::agents::AgentStatus;
 use crate::config::ThemeConfig;
 use crate::diag::record::GateRule;
@@ -197,6 +198,26 @@ impl UiState {
 pub(crate) struct SpendRatchet {
     epoch: Option<u64>,
     max_usd: f64,
+}
+
+/// Select the value and epoch the cockpit spend line displays and ratchets.
+pub(crate) fn cockpit_spend_target(snapshot: &SidebarSnapshot) -> Option<(f64, Option<u64>)> {
+    if let Some(budget) = snapshot
+        .fleet_budget
+        .as_ref()
+        .filter(|budget| budget.parked)
+    {
+        return Some((budget.spend_usd, snapshot.fleet_day_spend_epoch_secs));
+    }
+    snapshot
+        .today_spend_live_usd
+        .or_else(|| {
+            snapshot
+                .workspace_value_tally
+                .as_ref()
+                .map(|tally| tally.headline.usd)
+        })
+        .map(|usd| (usd, snapshot.today_spend_epoch_secs))
 }
 
 impl SpendRatchet {

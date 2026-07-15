@@ -176,6 +176,33 @@ fn spend_ratchet_holds_within_epoch_and_resets_across_epochs() {
     assert_eq!(state.ui.spend_ratchet.display(Some(11), 2.0), 2.0);
 }
 
+#[test]
+fn tripped_budget_ratchet_observes_the_day_spend_epoch_it_displays() {
+    let ws = workspace();
+    let (_dir, mut state) = loop_state(&ws);
+    let config = serve_config(&ws);
+    let (mut fetch, _rx) = fetch_dispatcher();
+
+    let capped = |spend_usd| {
+        let mut snapshot = agent_snapshot(&ws);
+        snapshot.today_spend_live_usd = Some(1.0);
+        snapshot.today_spend_epoch_secs = Some(10);
+        snapshot.fleet_day_spend_epoch_secs = Some(20);
+        snapshot.fleet_budget = Some(crate::DailyBudgetView {
+            cap_usd: 10.0,
+            spend_usd,
+            parked: true,
+        });
+        snapshot
+    };
+    fold_snapshot(&mut state, &config, &mut fetch, capped(5.0), true);
+    fold_snapshot(&mut state, &config, &mut fetch, capped(3.0), true);
+
+    let (usd, epoch) = render::cockpit_spend_target(&state.current).expect("tripped spend");
+    assert_eq!((usd, epoch), (3.0, Some(20)));
+    assert_eq!(state.ui.spend_ratchet.display(epoch, usd), 5.0);
+}
+
 fn fixed_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
     let viewport = ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24));
     Terminal::with_options(

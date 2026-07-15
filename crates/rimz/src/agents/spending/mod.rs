@@ -32,7 +32,7 @@ use super::{AgentAdapter, AgentCost};
 pub use crate::sidebar::timing::SPENDING_TTL;
 
 pub(crate) use aggregate::{
-    CountedPayload, HeadlineContext, OwnedCounted, SESSION_GAP_SECS, WorkspaceRollupScope,
+    CountedPayload, HeadlineContext, NO_BURST_CUTOFF, OwnedCounted, SESSION_GAP_SECS,
     aggregate_counted_rollups, dedup_cached_entries, dedup_cached_entries_owned, live_session_keys,
     origin_path, spending_files_signature,
 };
@@ -99,6 +99,7 @@ pub struct SpendingWalkResult {
     pub spending: Spending,
     pub workspace_tally: SpendTally,
     pub workspace_headline_cutoff_secs: u64,
+    pub workspace_live_baselines: BTreeMap<String, f64>,
     pub workspace_day: SpendWindow,
     pub provider_day: BTreeMap<String, SpendWindow>,
     pub day_cutoff_secs: u64,
@@ -192,7 +193,6 @@ pub struct WalkRequest<'a> {
     pub origin_overrides: &'a HashMap<PathBuf, PathBuf>,
     pub user_inputs: &'a [user_input::UserInputRecord],
     pub scope: Option<&'a SpendScope>,
-    pub live_excluded: &'a BTreeSet<String>,
     pub spec: &'a HeadlineSpec,
 }
 
@@ -334,10 +334,7 @@ impl SpendingWalker {
             req.files,
             &self.cache,
             counted,
-            req.scope.map(|scope| WorkspaceRollupScope {
-                scope,
-                live_excluded: req.live_excluded,
-            }),
+            req.scope,
             HeadlineContext {
                 user_inputs: req.user_inputs,
                 now_secs: req.now_secs,
@@ -472,7 +469,6 @@ pub(crate) fn aggregate_walk_publish(
     user_inputs: &[user_input::UserInputRecord],
     now_secs: u64,
     scope: Option<&SpendScope>,
-    live_excluded: &BTreeSet<String>,
     spec: &HeadlineSpec,
 ) -> SpendingWalkResult {
     let counted = dedup_cached_entries(files, cache).into_counted();
@@ -480,10 +476,7 @@ pub(crate) fn aggregate_walk_publish(
         files,
         cache,
         &counted,
-        scope.map(|scope| WorkspaceRollupScope {
-            scope,
-            live_excluded,
-        }),
+        scope,
         HeadlineContext {
             user_inputs,
             now_secs,
@@ -497,7 +490,7 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
     counted: &[C],
-    workspace: Option<WorkspaceRollupScope<'_>>,
+    workspace: Option<&SpendScope>,
     headline: HeadlineContext<'_>,
     stats: WalkStats,
 ) -> SpendingWalkResult {
@@ -507,6 +500,7 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
         spending: aggregate.spending,
         workspace_tally: aggregate.workspace_tally,
         workspace_headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
+        workspace_live_baselines: aggregate.workspace_live_baselines,
         workspace_day: aggregate.workspace_day,
         provider_day: aggregate.provider_day,
         day_cutoff_secs: aggregate.day_cutoff_secs,
@@ -520,6 +514,7 @@ fn aggregate_walk_publish_from_counted<C: CountedPayload>(
 pub struct ScopedSpending {
     pub tally: SpendTally,
     pub headline_cutoff_secs: u64,
+    pub live_baselines: BTreeMap<String, f64>,
     pub day: SpendWindow,
     pub day_cutoff_secs: u64,
 }
@@ -531,7 +526,6 @@ pub fn compute_scoped_spending(
     cache: &SpendingDiskCache,
     user_inputs: &[user_input::UserInputRecord],
     scope: &SpendScope,
-    live_excluded: &BTreeSet<String>,
     now_secs: u64,
     spec: &HeadlineSpec,
 ) -> ScopedSpending {
@@ -540,15 +534,11 @@ pub fn compute_scoped_spending(
     }
     let deduped = dedup_cached_entries(files, cache);
     let counted = deduped.into_counted();
-    let workspace = Some(WorkspaceRollupScope {
-        scope,
-        live_excluded,
-    });
     let aggregate = aggregate_counted_rollups(
         files,
         cache,
         &counted,
-        workspace,
+        Some(scope),
         HeadlineContext {
             user_inputs,
             now_secs,
@@ -559,6 +549,7 @@ pub fn compute_scoped_spending(
     ScopedSpending {
         tally: aggregate.workspace_tally,
         headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
+        live_baselines: aggregate.workspace_live_baselines,
         day: aggregate.workspace_day,
         day_cutoff_secs: aggregate.day_cutoff_secs,
     }
