@@ -53,7 +53,7 @@ RUN tmp="$(mktemp -d)" \
  && mkdir "$tmp/src" \
  && : > "$tmp/src/lib.rs" \
  && ( cd "$tmp" && cargo deny fetch db ) \
- && ( cd "$tmp" && cargo deny check advisories --disable-fetch ) \
+ && ( cd "$tmp" && cargo deny check --disable-fetch advisories ) \
  && rm -rf "$tmp" \
  && find /usr/local/cargo/advisory-dbs -maxdepth 1 -type d -name 'advisory-db-*' | grep -q .
 
