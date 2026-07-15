@@ -42,7 +42,7 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 2 --retry-all-
  && cargo install --locked cargo-vet@${CARGO_VET_VERSION}
 
 # Bake a warm RustSec advisory DB so the Gitea deny gate reads it locally
-# (`cargo deny check --disable-fetch`) instead of cloning per run. The per-run
+# (`cargo deny --offline check`) instead of cloning per run. The per-run
 # clone is the source of flaky FETCH_HEAD failures. CARGO_HOME above puts it at
 # /usr/local/cargo/advisory-dbs, where the runtime gate resolves it.
 # `cargo deny fetch db` requires a manifest in cwd, so use a throwaway crate;
@@ -53,7 +53,7 @@ RUN tmp="$(mktemp -d)" \
  && mkdir "$tmp/src" \
  && : > "$tmp/src/lib.rs" \
  && ( cd "$tmp" && cargo deny fetch db ) \
- && ( cd "$tmp" && cargo deny check --disable-fetch advisories ) \
+ && ( cd "$tmp" && cargo deny --offline check advisories ) \
  && rm -rf "$tmp" \
  && find /usr/local/cargo/advisory-dbs -maxdepth 1 -type d -name 'advisory-db-*' | grep -q .
 

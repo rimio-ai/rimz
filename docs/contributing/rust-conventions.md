@@ -253,7 +253,7 @@ The individual gates:
 - `cargo nextest archive --workspace --all-features --locked --archive-file <path>` — the `test-archive` task; compiles and packages the workspace test binaries for portable execution.
 - `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
 - `cargo xtask invariants` — the [architectural invariants](#architectural-invariants).
-- `cargo deny check -D warnings` — license, advisory, ban, and yanked-crate check. In CI it runs offline (`RIMZ_DENY_OFFLINE=1` adds `--disable-fetch`) against the image's baked advisory DB and a local crates.io index prepared at the canonical cache path.
+- `cargo deny check -D warnings` — license, advisory, ban, and yanked-crate check. In CI it runs offline (`RIMZ_DENY_OFFLINE=1` adds the global `--offline` option) against the image's baked advisory DB and a local crates.io index prepared at the canonical cache path.
 - `cargo machete` — unused-dependency check (the `deps` task).
 - `cargo vet --locked` — supply-chain audit; fetches the crates.io index directly, bypassing the runners' nexus mirror.
 - `cargo semver-checks` — API check against the published baseline; skips only while the workspace version is `0.0.0` or while crates.io has no published `rimz` baseline to compare against.

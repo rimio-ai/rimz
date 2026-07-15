@@ -55,14 +55,22 @@ pub(crate) fn lint(root: &Path) -> Result<()> {
 }
 
 pub(crate) fn deny(root: &Path) -> Result<()> {
-    let mut args = vec!["deny", "check", "-D", "warnings"];
-    if deny_offline(std::env::var("RIMZ_DENY_OFFLINE").ok().as_deref()) {
+    let args = deny_args(deny_offline(
+        std::env::var("RIMZ_DENY_OFFLINE").ok().as_deref(),
+    ));
+    run(root, "cargo", args)
+}
+
+fn deny_args(offline: bool) -> Vec<&'static str> {
+    let mut args = vec!["deny"];
+    if offline {
         // CI bakes the advisory DB into the image and prepares a local index at
         // the canonical crates.io cache path, so read both locally. Unset
         // elsewhere keeps the public-upstream fetch.
-        args.push("--disable-fetch");
+        args.push("--offline");
     }
-    run(root, "cargo", args)
+    args.extend(["check", "-D", "warnings"]);
+    args
 }
 
 fn deny_offline(raw: Option<&str>) -> bool {
@@ -543,6 +551,15 @@ mod tests {
         assert!(!deny_offline(Some("0")));
         assert!(!deny_offline(Some("")));
         assert!(!deny_offline(None));
+    }
+
+    #[test]
+    fn deny_offline_is_a_global_option() {
+        assert_eq!(
+            deny_args(true),
+            vec!["deny", "--offline", "check", "-D", "warnings"]
+        );
+        assert_eq!(deny_args(false), vec!["deny", "check", "-D", "warnings"]);
     }
 
     #[test]
