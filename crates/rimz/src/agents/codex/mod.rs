@@ -1023,22 +1023,35 @@ fn codex_transcript_path(payload: &Value) -> Option<PathBuf> {
         })
 }
 
-fn codex_child_transcript_path(payload: &Value, child_id: &str) -> Option<PathBuf> {
+struct CodexChildTranscript {
+    path: PathBuf,
+    validated_header: Option<CodexRolloutHeader>,
+}
+
+fn codex_child_transcript_path(payload: &Value, child_id: &str) -> Option<CodexChildTranscript> {
     optional_payload_string(payload, &["agent_transcript_path"])
         .map(PathBuf::from)
         .filter(|path| path.is_file())
-        .or_else(|| {
-            optional_payload_string(payload, &["transcript_path"])
-                .map(PathBuf::from)
-                .filter(|path| path.is_file())
-                .filter(|path| {
-                    read_rollout_header(path)
-                        .and_then(|header| header.session_id)
-                        .as_deref()
-                        == Some(child_id)
-                })
+        .map(|path| CodexChildTranscript {
+            path,
+            validated_header: None,
         })
-        .or_else(|| find_session_transcript(child_id))
+        .or_else(|| {
+            let path = optional_payload_string(payload, &["transcript_path"])
+                .map(PathBuf::from)
+                .filter(|path| path.is_file())?;
+            let header = read_rollout_header(&path)?;
+            (header.session_id.as_deref() == Some(child_id)).then_some(CodexChildTranscript {
+                path,
+                validated_header: Some(header),
+            })
+        })
+        .or_else(|| {
+            find_session_transcript(child_id).map(|path| CodexChildTranscript {
+                path,
+                validated_header: None,
+            })
+        })
 }
 
 struct CodexTranscriptObservation {
@@ -1054,12 +1067,14 @@ fn codex_transcript_observation(
     child_id: Option<&str>,
     detect_turn_death: bool,
 ) -> CodexTranscriptObservation {
-    let path = match child_id {
-        Some(child_id) => codex_child_transcript_path(payload, child_id),
-        None => codex_transcript_path(payload),
+    let (path, validated_header) = match child_id {
+        Some(child_id) => codex_child_transcript_path(payload, child_id)
+            .map(|transcript| (Some(transcript.path), transcript.validated_header))
+            .unwrap_or_default(),
+        None => (codex_transcript_path(payload), None),
     };
     let header = child_id.and_then(|child_id| {
-        let header = path.as_deref().and_then(read_rollout_header)?;
+        let header = validated_header.or_else(|| path.as_deref().and_then(read_rollout_header))?;
         (header.session_id.as_deref() == Some(child_id)).then_some(header)
     });
     let tail = path.as_deref().and_then(read_transcript_tail);
