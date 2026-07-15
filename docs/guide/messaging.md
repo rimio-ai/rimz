@@ -118,7 +118,7 @@ A long turn can hit the context limit mid-message. Smart compaction sends `/comp
 rimz message --smart-compact 70% @claude "now write the migration guide"   # compact first if context ≥ 70% full
 ```
 
-Give a percentage of the window (`70%`) or an occupied-token count (`120000` or `180k`). Omit the flag and RimZ uses the `[harness] smart_compact` default from your config — set it once and every message inherits the behavior ([configuration → smart compaction](./configuration.md#smart-compaction), [setup guide](./setup.md)).
+Give an occupied-token count (`200k` or `120000`) or a percentage of the window (`70%`). Omit the flag and RimZ uses the `[harness] smart_compact` default from your config — set it once and every message inherits the behavior ([configuration → smart compaction](./configuration.md#smart-compaction), [setup guide](./setup.md)).
 
 ## Ask and wait for the reply
 

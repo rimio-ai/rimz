@@ -15,7 +15,7 @@ rimz config set theme "Catppuccin Mocha"       # sidebar palette; `rimz list-the
 rimz config set theme.style modern             # truecolor plus Nerd Font glyphs
 rimz config set theme.pets.enabled true        # an animated companion on the provider dashboard
 rimz config set resume.auto_continue true      # resume rate-limit and API-error parks on their own
-rimz config set harness.smart_compact "70%"    # compact before a message once context passes 70%
+rimz config set harness.smart_compact 200k     # compact before a message once context passes 200k tokens
 rimz config set notifications.triggers '["waiting", "failed"]'   # which rows raise a banner
 rimz config set sidebar.focus_key "Alt+p"      # the chord that jumps to the sidebar from any pane
 rimz config set timezone "America/New_York"    # transcript times, scheduling, and the "today" cutoff
@@ -166,10 +166,10 @@ These keys are the on-switch; `rimz budget` inspects and adjusts an armed cap at
 
 ```toml
 [harness]
-smart_compact = "70%"
+smart_compact = "200k"
 ```
 
-`smart_compact` sets the default threshold for compact-first `message` sends, a percentage (`"70%"`) or an occupied-token count (`"120000"` or `"180k"`). When an agent's context window has reached the threshold, RimZ submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
+`smart_compact` sets the default threshold for compact-first `message` sends, an occupied-token count (`"200k"` or `"120000"`) or a percentage of the window (`"70%"`). When an agent's context window has reached the threshold, RimZ submits its `/compact` ahead of your text so the prompt lands against a fresh window. Leave it unset to keep compaction opt-in through the per-command `--smart-compact` flag, which overrides this value. The mechanics are in [messaging.md](../internals/harness/messaging.md#smart-compaction).
 
 ### rtk output compression
 

@@ -36,7 +36,7 @@ The split reads like it should multiply cost; in practice it divides it. Buildin
 
 <p align="center">
   <img src="../rimz-team.png" alt="A RimZ room running forge teams: the coder messages the planner about a gap in the plan, and the planner takes the design call" width="100%">
-  <br/><sub>The loop mid-conversation: <code>@coder</code> finds a gap in the plan and messages <code>@planner</code> with <code>file:line</code> evidence; the planner (center pane) verifies before ruling, while the sidebar tracks each forge team as one block.</sub>
+  <br/><sub>The loop mid-conversation: <code>@coder</code> finds a gap in the plan and messages <code>@planner</code> with evidence; the planner (center pane) verifies and updates the plan.</sub>
 </p>
 
 ## Set up forge
