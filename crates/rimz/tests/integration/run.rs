@@ -468,6 +468,27 @@ fn print_json_flag_points_at_output_format() {
 }
 
 #[test]
+fn multi_cell_print_name_reports_print_cardinality() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args(["agents", "claude,codex", "summarize", "-p", "--name", "one"])
+        .output()
+        .expect("spawn named multi-cell print run");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(!out.status.success(), "multi-cell print run should fail");
+    assert!(
+        stderr.contains("--print requires a layout with exactly one agent cell"),
+        "unexpected stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("--name requires"),
+        "interactive name validation must not replace print validation:\n{stderr}"
+    );
+}
+
+#[test]
 fn print_stream_json_input_refuses_a_positional_prompt() {
     let env = Env::new();
     let out = env

@@ -281,6 +281,7 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
         &effective,
         &machine_config.agents.commands,
         &resolved.layout,
+        false,
     )?;
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,

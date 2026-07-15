@@ -261,6 +261,7 @@ fn resolve_restart_profile_cell(
     commands: &rimz::config::CommandsConfig,
 ) -> Result<Cell> {
     let resolved = rimz::harness::plan::resolve_launch(launch, commands, Some(profile))?;
+    rimz::harness::plan::validate_profile_prompt_files(&resolved.layout)?;
     let mut cells = resolved.layout.agent_cells();
     let cell = cells
         .next()
@@ -404,6 +405,8 @@ mod tests {
     #[test]
     fn restart_profile_without_model_stays_unfinalized() {
         let dir = tempfile::tempdir().expect("temp dir");
+        let prompt_file = dir.path().join("prompt.md");
+        std::fs::write(&prompt_file, "follow project rules").expect("write prompt file");
         let mut machine = rimz::config::MachineConfig::default();
         machine.agents.profiles.0.insert(
             "codex-plain".to_owned(),
@@ -413,7 +416,7 @@ mod tests {
                 model: None,
                 effort: None,
                 budget: None,
-                system_prompt_file: Some(dir.path().join("missing.md")),
+                system_prompt_file: Some(prompt_file),
                 append_system_prompt_file: None,
                 args: Some("--search".to_owned()),
             },
@@ -435,8 +438,39 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "--search"));
         assert!(
             args.iter()
-                .any(|arg| arg.contains("model_instructions_file=") && arg.ends_with("missing.md"))
+                .any(|arg| arg.contains("model_instructions_file=") && arg.ends_with("prompt.md"))
         );
         assert!(!args.iter().any(|arg| arg == "-m" || arg == "--model"));
+    }
+
+    #[test]
+    fn restart_profile_rejects_missing_prompt_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.agents.profiles.0.insert(
+            "codex-plain".to_owned(),
+            rimz::config::Profile {
+                agent: "codex".to_owned(),
+                mode: None,
+                model: None,
+                effort: None,
+                budget: None,
+                system_prompt_file: Some(dir.path().join("missing.md")),
+                append_system_prompt_file: None,
+                args: Some("--search".to_owned()),
+            },
+        );
+        let launch = rimz::config::effective::load(
+            &machine.agents,
+            dir.path(),
+            &dir.path().join("config-home"),
+        )
+        .expect("effective launch");
+
+        let err = resolve_restart_profile_cell("codex-plain", &launch, &machine.agents.commands)
+            .expect_err("missing prompt file must fail restart");
+
+        assert!(err.to_string().contains("system-prompt-file"), "{err:#}");
+        assert!(err.to_string().contains("not found"), "{err:#}");
     }
 }

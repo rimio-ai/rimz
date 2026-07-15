@@ -26,6 +26,7 @@ pub(super) fn launch_layout(
         &effective,
         &machine_config.agents.commands,
         &resolved.layout,
+        true,
     )?;
     let warnings = rimz::harness::plan::finalize_launch_layout(
         &mut resolved.layout,
@@ -735,6 +736,7 @@ pub(super) fn validate_resolved_launch_inputs(
     effective: &rimz::config::effective::LaunchAgents,
     commands: &rimz::config::CommandsConfig,
     layout: &LayoutSpec,
+    enforce_name_cardinality: bool,
 ) -> Result<rimz::agents::LaunchPreset> {
     reject_prompt_that_looks_like_spec(
         args.spec.as_deref(),
@@ -744,7 +746,7 @@ pub(super) fn validate_resolved_launch_inputs(
         &effective.teams,
     )?;
     rimz::harness::plan::validate_profile_prompt_files(layout)?;
-    if args.name.is_some() && layout.agent_kinds().count() != 1 {
+    if enforce_name_cardinality && args.name.is_some() && layout.agent_kinds().count() != 1 {
         bail!("--name requires a layout with exactly one agent cell");
     }
     launch_override_preset(args)

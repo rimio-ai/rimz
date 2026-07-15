@@ -600,6 +600,7 @@ mod launch_options {
             &effective,
             &machine.agents.commands,
             &resolved.layout,
+            true,
         )?;
         Ok((resolved, preset))
     }
@@ -740,6 +741,7 @@ mod launch_options {
             &effective,
             &machine.agents.commands,
             &resolved.layout,
+            true,
         )
         .expect_err("name cardinality wins");
         assert_eq!(
