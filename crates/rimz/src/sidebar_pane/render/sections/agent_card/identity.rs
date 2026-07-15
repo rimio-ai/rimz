@@ -124,11 +124,7 @@ pub(super) fn agent_identity_line(
     // idle agent that has spent nothing yet — is omitted, not printed as zero
     // (the filter reads the authoritative target, never a mid-climb value).
     let mut right: Vec<Span<'static>> = Vec::new();
-    if let Some(target) = ctx(row)
-        .and_then(|context| context.cost.as_ref())
-        .and_then(|cost| cost.total_cost_usd)
-        .filter(|usd| *usd >= 0.005)
-    {
+    if let Some(target) = session_cost_usd(row).filter(|usd| *usd >= 0.005) {
         let usd = row_ctx
             .cost_rolls
             .display(&row.id, target, row_ctx.animation_phase);

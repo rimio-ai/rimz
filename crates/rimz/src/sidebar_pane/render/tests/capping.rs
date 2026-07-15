@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::fmt::dollars2;
 use std::collections::HashSet;
 
 #[test]
@@ -239,7 +240,103 @@ fn finished_group_collapses_unread_success_until_revealed() {
 
     assert_eq!(lines.len(), 2, "header plus terminal toggle: {texts:?}");
     assert!(texts.iter().any(|line| line.contains("+2 done")));
-    assert_eq!(more_hits.len(), 1);
+    assert!(
+        texts.iter().all(|line| !line.contains(" · $")),
+        "absent costs keep the terminal toggle bare: {texts:?}"
+    );
+    assert_eq!(more_hits.len(), 2);
+    assert_eq!(more_hits[0].rows, 0..1);
+    assert_eq!(
+        more_hits[0].target,
+        HitTarget::ToggleGroup(group.key.clone())
+    );
+    assert_eq!(map[0], None, "finished header has only the toggle meaning");
+}
+
+#[test]
+fn finished_group_toggle_carries_the_member_cost_receipt() {
+    let total = 0.42 + 0.58;
+    let mut finished = group(vec![
+        agent_row_with_cost("first", 0.42),
+        agent_row_with_cost("second", 0.58),
+    ]);
+    finished.finished = true;
+
+    let (texts, _, _) = render_group(&finished, false);
+
+    let receipt = format!("+2 done · {}", dollars2(total));
+    assert!(
+        texts.iter().any(|line| line.contains(&receipt)),
+        "finished toggle carries the accepted work's cost: {texts:?}"
+    );
+
+    let mut no_cost = group(vec![
+        agent_row_with_cost("zero", 0.0),
+        agent_row("absent", AgentStatus::Success),
+    ]);
+    no_cost.finished = true;
+    let (texts, _, _) = render_group(&no_cost, false);
+    assert!(texts.iter().any(|line| line.contains("+2 done")));
+    assert!(
+        texts.iter().all(|line| !line.contains(" · $")),
+        "zero and absent costs keep the terminal toggle bare: {texts:?}"
+    );
+}
+
+#[test]
+fn finished_header_toggles_both_directions_while_live_header_jumps_to_a_row() {
+    let mut finished = group(idle_rows(2));
+    finished.finished = true;
+    let (_, map, hits) = render_group(&finished, true);
+    assert_eq!(map[0], None);
+    assert!(hits.iter().any(|hit| {
+        hit.rows == (0..1) && hit.target == HitTarget::ToggleGroup(finished.key.clone())
+    }));
+
+    let live = group(idle_rows(2));
+    let (_, map, hits) = render_group(&live, false);
+    assert_eq!(map[0], Some(0));
+    assert!(
+        hits.iter().all(|hit| !matches!(
+            hit.target,
+            HitTarget::ToggleGroup(ref key) if key == &live.key
+        )),
+        "live header retains only its row-jump behavior"
+    );
+}
+
+fn render_group(
+    group: &crate::SidebarWorktreeGroup,
+    expanded: bool,
+) -> (Vec<String>, Vec<Option<usize>>, Vec<HitRegion>) {
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut more_hits = Vec::new();
+    let mut row_index = 0;
+    let snapshot = snapshot_with(Vec::new());
+    let theme = Theme::fixed(true);
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    worktree_group_lines(
+        &ctx,
+        group,
+        expanded,
+        &mut row_index,
+        None,
+        &mut lines,
+        &mut map,
+        &mut more_hits,
+    );
+    let texts = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+    (texts, map, more_hits)
 }
 
 fn assert_visible(
@@ -323,6 +420,17 @@ fn agent_row(id: &str, status: AgentStatus) -> crate::SidebarRow {
             ..crate::AgentCard::default()
         })),
     }
+}
+
+fn agent_row_with_cost(id: &str, cost: f64) -> crate::SidebarRow {
+    let mut row = agent_row(id, AgentStatus::Success);
+    let mut context = claude_context(fixed_now());
+    context.cost = Some(AgentCost {
+        total_cost_usd: Some(cost),
+        ..AgentCost::default()
+    });
+    row.as_agent_mut().expect("agent row").context = Some(context);
+    row
 }
 
 fn process_row(id: &str) -> crate::SidebarRow {

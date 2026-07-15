@@ -11,6 +11,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
+use crate::sidebar_pane::render::fmt::dollars2;
 use crate::sidebar_pane::render::labels::{
     branch_delta_spans, diff_spans, status_glyph, trunk_glyph_spans,
 };
@@ -19,7 +20,7 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 use crate::sidebar_pane::render::{HitRegion, HitTarget};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
-use super::agent_card::row_lines;
+use super::agent_card::{row_lines, session_cost_usd};
 use super::{Gutter, RowCtx, content_width, with_gutter};
 
 /// Compose one worktree group's lines, appending to `lines`, and tag each
@@ -62,13 +63,19 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
     let header = group_header(ctx.theme, group, ctx.width, group_selected);
+    if group.finished {
+        more_hits.push(HitRegion::whole_line(
+            lines.len(),
+            HitTarget::ToggleGroup(group.key.clone()),
+        ));
+    }
     lines.push(with_gutter(ctx.theme, header, lane, None, ctx.width));
-    // The worktree name is itself a click target: it lands on the group's first
-    // row — the agent adjacent to the header — so clicking the pod name jumps
-    // straight into it. The `external` divider is not a worktree name, so it
-    // stays inert chrome.
+    // A finished worktree's name toggles its collapsed roster. A live worktree's
+    // name lands on the first row — the adjacent agent — while the `external`
+    // divider stays inert chrome.
     let header_target =
-        (group.kind != SidebarWorktreeKind::External && passing > 0).then_some(first_row);
+        (!group.finished && group.kind != SidebarWorktreeKind::External && passing > 0)
+            .then_some(first_row);
     map.push(header_target);
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
@@ -84,19 +91,23 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
             lines.len(),
             HitTarget::ToggleGroup(group.key.clone()),
         ));
-        lines.push(with_gutter(
-            ctx.theme,
+        let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
+        let toggle = if group.finished && cost >= 0.005 {
+            Line::from(vec![
+                Span::styled(format!("  +{hidden} done"), ctx.theme.muted()),
+                Span::styled(" · ", ctx.theme.muted()),
+                Span::styled(dollars2(cost), ctx.theme.money_style(Modifier::empty())),
+            ])
+        } else {
             Line::styled(
                 format!(
                     "  +{hidden} {}",
                     if group.finished { "done" } else { "more" }
                 ),
                 ctx.theme.muted(),
-            ),
-            lane,
-            None,
-            ctx.width,
-        ));
+            )
+        };
+        lines.push(with_gutter(ctx.theme, toggle, lane, None, ctx.width));
         map.push(None);
     } else if natural_hidden > 0 && visible_group.expanded() {
         more_hits.push(HitRegion::whole_line(
