@@ -134,16 +134,20 @@ A session's life traces one loop through those states:
 
 Two states are RimZ's own judgment rather than an agent report. **Paused** is derived: when a turn stops because the provider's budget window is spent or the API is overloaded, the card parks at `⏸` instead of pretending to fail, and with [auto-continue](./configuration.md#resume) enabled it resumes by itself the moment the window resets or the backoff clears. **Stall** is the safety net: a running agent silent past the stall window (30 minutes by default) escalates to `!`, because silence that long usually means something needs a look; a parent quietly waiting on its subagents is exempt.
 
-## Attention: what needs you
+## Attention: the funnel
 
-An agent earns your attention when you are its blocker or its beneficiary. Four signals carry that, in descending pull:
+With two agents you watch panes; with ten lines of work you cannot, and the sidebar is built for the day you cannot. At that scale the unit of attention stops being the agent and becomes the **line of work** — a worktree and the team inside it — and the column reads as a triage list, not a status dump. Every glance answers three questions: who is blocked on me, what has delivered and waits on my verdict, and is anything burning silently.
 
-- **An ask (`?`).** The agent stopped mid-task for your answer. A whole loaded context sits idle and cooling until you reply, so asks carry the most weight.
-- **A failure (`!`).** The turn ended in an error, or a running agent has gone silent past the stall window, and the work needs a look before it continues. A failure weighs nearly as much as an ask, so the two interleave by how long each has waited rather than by kind.
-- **A park (`⏸`).** The agent stopped mid-turn on a provider limit. The task is blocked, but there is nothing to answer until the limit recovers, so a park ranks below asks and failures and above all calm work.
-- **Calm work, ranked by what it offers.** `done` leads the calm states because it holds a result; `running` needs nothing right now; `idle` is spare capacity and reads last, so a freshly launched agent appends at the bottom instead of reshuffling the list.
+The tiers, by distance from your next action:
 
-Only the ask, the failure, and the park call for you. Everything else is context: how the fleet is doing while nothing needs a hand.
+1. **Blocked on you.** Asks (`?`) and failures (`!`), interleaved oldest-first: your work queue. Every minute an ask waits idles a loaded context — a whole team's, when the asker leads one — so these carry the most weight and climb as they age.
+2. **Parked (`⏸`).** Blocked on the provider, not on you. There is nothing to answer until the limit recovers, and with [auto-continue](./loops.md#built-in-recovery) on, nothing to do at all; parks rank below the queue and above every calm card.
+3. **Delivered, awaiting your verdict.** A `done` card leads the calm cards in its line of work because it holds a result: your review queue. This queue rots while it waits — the trunk moves on and the group header's behind count (`⇣`) climbs — so the header tells you when a delivered branch is getting more expensive to land.
+4. **In flight, healthy.** Needs nothing and wants stable positions so your eyes can track it: running cards keep a flat weight and hold their place, with live cost and last-activity age as the cheap progress cues.
+5. **Idle.** Spare capacity, relevant only when you have work to hand out. It reads last, and a freshly launched agent appends at the bottom instead of reshuffling the list.
+6. **Merged or closed.** Zero attention, so it gets out of the way entirely: a non-dirty merged or closed line skips every clock, archives immediately, and collapses to its header plus a `+K done` line; a fresh run or ask revives it.
+
+The third question — burning silently — is the one no status dump answers, because a zombie run wears the same spinner as a healthy one. The column watches for you: a running agent silent past the stall window escalates to `!` and enters the work queue ([the lifecycle](#the-agent-lifecycle)), and a turn that dies on a provider error quotes the error on its own card, so quiet trouble surfaces in the same queue as loud trouble.
 
 ### From a glance to the pane
 
@@ -159,7 +163,7 @@ A card turns *unread* the moment it enters `waiting`, `failed`, `paused`, or `do
 
 ## How the column is ordered
 
-Within a worktree, agent cards lead and process rows form a quiet tail. In one line: asks and failures first, interleaved oldest-first, then parked agents, then calm work — done, running, idle. The exact ranking contract lives in [the internals](../internals/sidebar/sidebar.md#attention-ranking-and-the-cap).
+The funnel above is the contract; the rules below implement it and settle the ties. Within a worktree, agent cards lead and process rows form a quiet tail. The exact ranking contract lives in [the internals](../internals/sidebar/sidebar.md#attention-ranking-and-the-cap).
 
 ### Time reshapes the order
 
@@ -177,7 +181,7 @@ A co-launched team is one line of work, so it holds one contiguous block and tak
 
 ### Activity decides among the calm
 
-Attention always outranks git: a git-backed group with a blocked agent leads whatever its diff looks like. Among calm groups, activity answers *is this line moving?* first: **working** groups lead, **semi-finished** groups whose agents all succeeded follow, then **idle** agent groups, then process-only groups. Git refines groups at the same activity rung: **dirty** leads, **clean** follows, an unknown verdict follows clean, and **done** sinks. Done requires a merged or closed pull request or work that the trunk comparison classifies as merged; a pristine fork stays clean rather than reading as landed work.
+Attention always outranks git: a git-backed group with a blocked agent leads whatever its diff looks like. Among calm groups, activity answers *is this line moving?* first: **working** groups lead, **delivered** groups whose agents all succeeded follow, then **idle** agent groups, then process-only groups. Git refines groups at the same activity rung: **dirty** leads, **clean** follows, an unknown verdict follows clean, and **done** sinks. Done requires a merged or closed pull request or work that the trunk comparison classifies as merged; a pristine fork stays clean rather than reading as landed work.
 
 ### The shape that always holds
 
