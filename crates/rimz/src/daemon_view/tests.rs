@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{DaemonConfig, RemoteControlConfig};
+use crate::config::DaemonConfig;
 use crate::ids::MuxName;
 use std::path::PathBuf;
 
@@ -67,49 +67,55 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
     let rimz_bin = Path::new("/usr/bin/rimz");
     let project_root = Path::new("/proj");
     let worktree_root = Path::new("/proj/wt");
-    let spec = |remote_control: &RemoteControlConfig, claude_present, codex_present| {
+    let spec = |claude: crate::remote_control::HostState, codex_present| {
+        let remote_control = crate::remote_control::ReadinessSnapshot::from_states(
+            claude,
+            crate::remote_control::HostState::Disabled,
+        );
         daemon_view_spec(DaemonViewSpecParams {
-            remote_control,
+            remote_control: &remote_control,
             daemon: &DaemonConfig::default(),
             rimz_bin,
             workspace_id: &workspace_id,
             session_name: "rimz-demo",
             project_root,
             worktree_root,
-            claude_present,
             codex_present,
         })
     };
 
     assert!(
-        spec(&RemoteControlConfig::default(), true, false)
+        spec(crate::remote_control::HostState::Disabled, false)
             .hosts
             .is_empty()
     );
-    let codex = spec(&RemoteControlConfig::default(), false, true);
+    let codex = spec(crate::remote_control::HostState::Disabled, true);
     assert_eq!(codex.hosts.len(), 1);
     assert_eq!(codex.hosts[0].argv[0], "/usr/bin/rimz");
     assert!(codex.hosts[0].argv.iter().any(|arg| arg == "app-server"));
     assert_eq!(codex.hosts[0].cwd, worktree_root);
 
-    let claude_only = RemoteControlConfig {
-        claude: true,
-        codex: false,
-    };
-    assert!(spec(&claude_only, false, false).hosts.is_empty());
-    let claude = spec(&claude_only, true, false);
+    assert!(
+        spec(
+            crate::remote_control::HostState::Uninstalled(
+                crate::remote_control::PreflightError::Claude(
+                    crate::agents::claude::remote_control::Issue::Uninstalled,
+                )
+            ),
+            false,
+        )
+        .hosts
+        .is_empty()
+    );
+    let claude = spec(crate::remote_control::HostState::Ready, false);
     assert_eq!(claude.hosts.len(), 1);
     assert_eq!(
         claude.hosts[0].argv,
-        crate::remote_control::claude_host_argv()
+        crate::agents::claude::remote_control::host_argv()
     );
     assert_eq!(claude.hosts[0].cwd, project_root);
 
-    let both = RemoteControlConfig {
-        claude: true,
-        codex: true,
-    };
-    let pair = spec(&both, true, true);
+    let pair = spec(crate::remote_control::HostState::Ready, true);
     assert_eq!(pair.hosts.len(), 2);
     assert!(pair.hosts[0].argv.iter().any(|arg| arg == "app-server"));
     assert_eq!(pair.hosts[1].argv[0], "claude");
@@ -118,15 +124,18 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
 #[test]
 fn daemon_view_spec_keeps_content_and_loop_panel_without_hosts() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("valid id");
+    let remote_control = crate::remote_control::ReadinessSnapshot::from_states(
+        crate::remote_control::HostState::Disabled,
+        crate::remote_control::HostState::Disabled,
+    );
     let view = daemon_view_spec(DaemonViewSpecParams {
-        remote_control: &RemoteControlConfig::default(),
+        remote_control: &remote_control,
         daemon: &DaemonConfig::default(),
         rimz_bin: Path::new("/usr/bin/rimz"),
         workspace_id: &workspace_id,
         session_name: "rimz-demo",
         project_root: Path::new("/proj"),
         worktree_root: Path::new("/proj/wt"),
-        claude_present: false,
         codex_present: false,
     });
 

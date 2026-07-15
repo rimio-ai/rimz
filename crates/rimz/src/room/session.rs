@@ -1,5 +1,7 @@
-//! Session-record lookup, mux choice, and renamed-session retirement.
+//! Session-record lookup, one-shot cross-mux live sets, mux choice, and
+//! renamed-session retirement.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
@@ -33,6 +35,41 @@ pub struct MuxPickErr {
     pub notices: Vec<String>,
     #[source]
     pub source: crate::mux::MuxErr,
+}
+
+/// Both backends' live session names, probed once for batch operations.
+/// Missing backends and transient list failures contribute an empty set.
+pub struct LiveSessions {
+    zellij: HashSet<String>,
+    tmux: HashSet<String>,
+}
+
+impl LiveSessions {
+    pub fn probe() -> Self {
+        let names = |mux| -> HashSet<String> {
+            crate::mux::backend_for(mux)
+                .list_sessions()
+                .unwrap_or_default()
+                .into_iter()
+                .collect()
+        };
+        Self {
+            zellij: names(MuxName::Zellij),
+            tmux: names(MuxName::Tmux),
+        }
+    }
+
+    /// Resolve a live session with Zellij-first precedence. An absent session
+    /// maps to `None`, preserving best-effort empty-set fallback.
+    pub fn mux_of(&self, session: &str) -> Option<MuxName> {
+        if self.zellij.contains(session) {
+            Some(MuxName::Zellij)
+        } else if self.tmux.contains(session) {
+            Some(MuxName::Tmux)
+        } else {
+            None
+        }
+    }
 }
 
 pub fn session_probe_timeout() -> Duration {
@@ -320,6 +357,19 @@ fn matching_sidebar_heartbeat_mtime(
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+
+    #[test]
+    fn live_sessions_resolve_with_zellij_first_precedence() {
+        let live = LiveSessions {
+            zellij: HashSet::from(["shared".to_owned(), "zellij".to_owned()]),
+            tmux: HashSet::from(["shared".to_owned(), "tmux".to_owned()]),
+        };
+
+        assert_eq!(live.mux_of("shared"), Some(MuxName::Zellij));
+        assert_eq!(live.mux_of("zellij"), Some(MuxName::Zellij));
+        assert_eq!(live.mux_of("tmux"), Some(MuxName::Tmux));
+        assert_eq!(live.mux_of("missing"), None);
+    }
 
     #[test]
     fn list_sessions_retrying_follows_retry_policy() {

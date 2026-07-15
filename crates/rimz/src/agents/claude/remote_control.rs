@@ -1,7 +1,7 @@
-//! Claude Code remote-control settings and version gates.
+//! Claude Code remote-control readiness, host argv, settings, and version gates.
 //!
-//! This module owns upstream facts so `rimz start` preflight, doctor, and the
-//! sidebar badge all read one source.
+//! This module owns provider probing and setup guidance so room start, doctor,
+//! daemon views, and runtime toggles consume one native readiness result.
 
 use serde_json::{Map, Value};
 use std::ffi::OsStr;
@@ -207,6 +207,185 @@ fn endpoint_is_conflicting(value: &str) -> bool {
     !value.trim().is_empty() && !is_anthropic_api_url(value)
 }
 
+/// Claude-native readiness plus the host argv when launchable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Readiness {
+    Disabled,
+    Ready { host_argv: Vec<String> },
+    Uninstalled(Issue),
+    Blocked(Issue),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Issue {
+    Uninstalled,
+    TooOld { found: CliVersion },
+    RemoteControlDisabled { settings_path: PathBuf },
+    AuthConflict { sources: Vec<AuthConflictSource> },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthConflictSource {
+    ApiKeyEnv,
+    AuthTokenEnv,
+    ApiKeyHelperSetting,
+    SettingsEnv,
+    EndpointEnv,
+    SettingsEndpoint,
+}
+
+impl std::fmt::Display for AuthConflictSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ApiKeyEnv => write!(f, "ANTHROPIC_API_KEY in the launch environment"),
+            Self::AuthTokenEnv => write!(f, "ANTHROPIC_AUTH_TOKEN in the launch environment"),
+            Self::ApiKeyHelperSetting => write!(f, "apiKeyHelper in Claude settings"),
+            Self::SettingsEnv => write!(
+                f,
+                "ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN in Claude settings env"
+            ),
+            Self::EndpointEnv => write!(
+                f,
+                "a custom Anthropic endpoint or third-party provider in the launch environment"
+            ),
+            Self::SettingsEndpoint => write!(
+                f,
+                "a custom Anthropic endpoint or third-party provider in Claude settings env"
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for Issue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Uninstalled => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but `claude` is not on PATH."
+            ),
+            Self::TooOld { found } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 `claude --version` reports {found}; remote control requires Claude Code \
+                 >= {MIN_REMOTE_CONTROL}.\n\n\
+                 Upgrade Claude Code, then re-run, or set `[remote_control] claude = false` \
+                 to disable the Claude host."
+            ),
+            Self::RemoteControlDisabled { settings_path } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 `disableRemoteControl: true` in {} blocks it.\n\n\
+                 Remove that setting or set it to false, then re-run, or set \
+                 `[remote_control] claude = false` to disable the Claude host.",
+                settings_path.display(),
+            ),
+            Self::AuthConflict { sources } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 Claude Code disables remote control with the configured authentication \
+                 or API endpoint on this version. Conflicting source(s): {}.\n\n\
+                 Remove those auth sources and use a claude.ai login for remote control, \
+                 then re-run, or set `[remote_control] claude = false` to disable the \
+                 Claude host.",
+                sources
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Issue {}
+
+/// Probe configured Claude readiness once and return launch argv with success.
+pub fn readiness(enabled: bool) -> Readiness {
+    if !enabled {
+        return Readiness::Disabled;
+    }
+    if which::which("claude").is_err() {
+        return Readiness::Uninstalled(Issue::Uninstalled);
+    }
+    let (settings_path, settings) = read_rc_settings();
+    let version = (!settings.disable_remote_control)
+        .then(probed_version)
+        .flatten();
+    match readiness_from(
+        version,
+        settings_path,
+        settings,
+        env_value_present(ANTHROPIC_API_KEY),
+        env_value_present(ANTHROPIC_AUTH_TOKEN),
+        launch_endpoint_conflict(),
+    ) {
+        Ok(host_argv) => Readiness::Ready { host_argv },
+        Err(issue) => Readiness::Blocked(issue),
+    }
+}
+
+pub(crate) fn host_argv() -> Vec<String> {
+    vec![
+        "claude".to_owned(),
+        "remote-control".to_owned(),
+        "--spawn".to_owned(),
+        "worktree".to_owned(),
+    ]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn readiness_from(
+    version: Option<CliVersion>,
+    settings_path: PathBuf,
+    settings: ClaudeRcSettings,
+    env_api_key: bool,
+    env_auth_token: bool,
+    env_endpoint_conflict: bool,
+) -> Result<Vec<String>, Issue> {
+    if settings.disable_remote_control {
+        return Err(Issue::RemoteControlDisabled { settings_path });
+    }
+    let Some(found) = version else {
+        tracing::warn!(
+            "Claude remote-control preflight could not determine `claude --version`; applying version-independent gates only"
+        );
+        return Ok(host_argv());
+    };
+    if found < MIN_REMOTE_CONTROL {
+        return Err(Issue::TooOld { found });
+    }
+
+    let mut sources = Vec::new();
+    if env_api_key {
+        sources.push(AuthConflictSource::ApiKeyEnv);
+    }
+    if env_auth_token {
+        sources.push(AuthConflictSource::AuthTokenEnv);
+    }
+    if settings.api_key_helper {
+        sources.push(AuthConflictSource::ApiKeyHelperSetting);
+    }
+    if settings.env_auth_conflict {
+        sources.push(AuthConflictSource::SettingsEnv);
+    }
+    if found < AUTH_ENV_BLOCKS_RC_SINCE {
+        sources.clear();
+    }
+    if found >= CUSTOM_ENDPOINT_BLOCKS_RC_SINCE {
+        if env_endpoint_conflict {
+            sources.push(AuthConflictSource::EndpointEnv);
+        }
+        if settings.env_endpoint_conflict {
+            sources.push(AuthConflictSource::SettingsEndpoint);
+        }
+    }
+    if sources.is_empty() {
+        Ok(host_argv())
+    } else {
+        Err(Issue::AuthConflict { sources })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -338,5 +517,143 @@ mod tests {
             &conflict,
             Some(CliVersion::new(2, 1, 157))
         ));
+    }
+
+    fn readiness_settings() -> ClaudeRcSettings {
+        ClaudeRcSettings::default()
+    }
+
+    fn settings_path() -> PathBuf {
+        PathBuf::from("/home/u/.claude/settings.json")
+    }
+
+    fn v(patch: u64) -> Option<CliVersion> {
+        Some(CliVersion::new(2, 1, patch))
+    }
+
+    fn decision(
+        version: Option<CliVersion>,
+        settings: ClaudeRcSettings,
+        env_api_key: bool,
+        env_auth_token: bool,
+    ) -> Result<Vec<String>, Issue> {
+        readiness_from(
+            version,
+            settings_path(),
+            settings,
+            env_api_key,
+            env_auth_token,
+            false,
+        )
+    }
+
+    #[test]
+    fn host_argv_uses_worktree_spawn() {
+        let argv = host_argv();
+        assert_eq!(
+            argv,
+            vec!["claude", "remote-control", "--spawn", "worktree"]
+        );
+        assert!(crate::daemon_view::command_is_host(&argv.join(" ")));
+    }
+
+    #[test]
+    fn issues_keep_claude_setup_guidance() {
+        let issue = Issue::TooOld {
+            found: CliVersion::new(2, 1, 50),
+        }
+        .to_string();
+        assert!(issue.contains("[remote_control] claude"));
+        assert!(issue.contains(">= 2.1.51"));
+    }
+
+    #[test]
+    fn readiness_blocks_old_versions_and_disabled_settings() {
+        assert_eq!(
+            decision(v(50), readiness_settings(), false, false),
+            Err(Issue::TooOld {
+                found: CliVersion::new(2, 1, 50)
+            })
+        );
+
+        let settings = ClaudeRcSettings {
+            disable_remote_control: true,
+            ..readiness_settings()
+        };
+        assert_eq!(
+            decision(v(173), settings, false, false),
+            Err(Issue::RemoteControlDisabled {
+                settings_path: settings_path()
+            })
+        );
+    }
+
+    #[test]
+    fn readiness_auth_conflict_gate_starts_at_2_1_157() {
+        let settings = ClaudeRcSettings {
+            api_key_helper: true,
+            env_auth_conflict: true,
+            ..readiness_settings()
+        };
+        assert!(decision(v(156), settings.clone(), true, true).is_ok());
+        assert_eq!(
+            decision(v(157), settings, true, true),
+            Err(Issue::AuthConflict {
+                sources: vec![
+                    AuthConflictSource::ApiKeyEnv,
+                    AuthConflictSource::AuthTokenEnv,
+                    AuthConflictSource::ApiKeyHelperSetting,
+                    AuthConflictSource::SettingsEnv,
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn readiness_custom_endpoint_gate_starts_at_2_1_196() {
+        let settings = ClaudeRcSettings {
+            env_endpoint_conflict: true,
+            ..readiness_settings()
+        };
+        assert!(
+            readiness_from(
+                v(195),
+                settings_path(),
+                settings.clone(),
+                false,
+                false,
+                true,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            readiness_from(v(196), settings_path(), settings, false, false, true,),
+            Err(Issue::AuthConflict {
+                sources: vec![
+                    AuthConflictSource::EndpointEnv,
+                    AuthConflictSource::SettingsEndpoint,
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_version_applies_only_settings_independent_gate() {
+        let settings = ClaudeRcSettings {
+            api_key_helper: true,
+            ..readiness_settings()
+        };
+        assert!(decision(None, settings, true, false).is_ok());
+
+        let settings = ClaudeRcSettings {
+            disable_remote_control: true,
+            ..readiness_settings()
+        };
+        assert_eq!(
+            decision(None, settings, false, false),
+            Err(Issue::RemoteControlDisabled {
+                settings_path: settings_path()
+            })
+        );
     }
 }

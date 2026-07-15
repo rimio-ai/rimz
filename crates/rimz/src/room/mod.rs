@@ -117,6 +117,7 @@ pub struct RoomContext {
     detected_size: Option<(u16, u16)>,
     rimz_bin: PathBuf,
     runtime: RuntimePaths,
+    remote_control_readiness: Option<crate::remote_control::ReadinessSnapshot>,
 }
 
 impl RoomContext {
@@ -194,6 +195,7 @@ impl RoomContext {
             detected_size,
             rimz_bin,
             runtime,
+            remote_control_readiness: None,
         })
     }
 
@@ -224,6 +226,13 @@ impl RoomContext {
 
     pub fn backend(&self) -> &dyn MuxBackend {
         self.backend.as_ref()
+    }
+
+    pub fn set_remote_control_readiness(
+        &mut self,
+        readiness: crate::remote_control::ReadinessSnapshot,
+    ) {
+        self.remote_control_readiness = Some(readiness);
     }
 
     /// Probe a selected backend before first-run config can construct final context.
@@ -402,16 +411,18 @@ impl RoomContext {
     /// Assemble configured daemon view for a normal start flow.
     fn background_view(&self, refresh_ms: Option<u16>) -> BackgroundViewOptions {
         let rimz_bin = self.rimz_bin.clone();
+        let remote_control = self.remote_control_readiness.clone().unwrap_or_else(|| {
+            crate::remote_control::ReadinessSnapshot::probe(&self.machine_config.remote_control)
+        });
         BackgroundViewOptions {
             view: crate::daemon_view::daemon_view_spec(crate::daemon_view::DaemonViewSpecParams {
-                remote_control: &self.machine_config.remote_control,
+                remote_control: &remote_control,
                 daemon: &self.machine_config.daemon,
                 rimz_bin: &rimz_bin,
                 workspace_id: &self.workspace.workspace_id,
                 session_name: &self.workspace.session_name,
                 project_root: &self.workspace.project_root,
                 worktree_root: &self.workspace.worktree_root,
-                claude_present: which::which("claude").is_ok(),
                 codex_present: which::which("codex").is_ok(),
             }),
             sidebar: self.sidebar_options(&self.workspace.worktree_root, Vec::new(), refresh_ms),

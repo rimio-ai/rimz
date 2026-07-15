@@ -16,9 +16,9 @@
 //! Connection preference (warmest first): this session's broker
 //! ([`crate::agents::codex::broker`]) over its unix socket — a held, already
 //! handshaked `codex app-server` that amortizes the per-datapoint handshake;
-//! then the per-user daemon `codex remote-control start` brings up (which
-//! [`crate::remote_control`] can auto-launch), re-used over its WebSocket control
-//! socket; then a fresh cold-spawned `codex app-server`. The cold-spawn is
+//! then the per-user daemon `codex remote-control start` brings up (managed by
+//! [`daemon`]), re-used over its WebSocket control socket; then a fresh
+//! cold-spawned `codex app-server`. The cold-spawn is
 //! always the final fallback, so enrichment never depends on either being up
 //! (headless / no-mux just cold-spawns). Set `RIMZ_CODEX_APP_SERVER_SOCK` to an
 //! empty value to drop the daemon from the order.
@@ -44,6 +44,7 @@ use serde_json::{Value, json};
 use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits};
 use crate::agents::{ExtraCredits, ResetCredits};
 
+pub mod daemon;
 #[cfg(test)]
 mod tests;
 mod transport;

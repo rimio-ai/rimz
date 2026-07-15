@@ -387,14 +387,20 @@ enum ReadyRoom {
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
     let mut machine_config = machine_config();
-    if matches!(entry, RoomEntry::Start { .. } | RoomEntry::StartWeb { .. }) {
-        preflight_account_budgets(rimz::config::MachineConfig::load())?;
-        // Fail-fast precondition for installed agents: fixable host misconfiguration
-        // aborts the launch here with the fix, before hook-install or session side
-        // effects. An enabled host whose agent is not installed is an inert toggle,
-        // skipped here so the room still starts; `rimz doctor` surfaces it.
-        rimz::remote_control::preflight(&machine_config.remote_control)?;
-    }
+    let remote_control_readiness =
+        if matches!(entry, RoomEntry::Start { .. } | RoomEntry::StartWeb { .. }) {
+            preflight_account_budgets(rimz::config::MachineConfig::load())?;
+            // Fail-fast precondition for installed agents: fixable host misconfiguration
+            // aborts the launch here with the fix, before hook-install or session side
+            // effects. An enabled host whose agent is not installed is an inert toggle,
+            // skipped here so the room still starts; `rimz doctor` surfaces it.
+            let readiness =
+                rimz::remote_control::ReadinessSnapshot::probe(&machine_config.remote_control);
+            readiness.start_gate()?;
+            Some(readiness)
+        } else {
+            None
+        };
 
     let mux = match &entry {
         RoomEntry::Start { mux, .. } | RoomEntry::StartWeb { mux, .. } => *mux,
@@ -484,6 +490,9 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                 mux,
                 RoomSizing::Birth,
             )?;
+            if let Some(readiness) = remote_control_readiness.clone() {
+                context.set_remote_control_readiness(readiness);
+            }
             context.claim_owner()?;
             birth_managed_room(
                 &mut context,

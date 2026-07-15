@@ -154,29 +154,9 @@ fn remote_control_transition(
 }
 
 fn preflight_remote_control_toggle(host: rimz::remote_control::RemoteControlHost) -> Result<()> {
-    let config = match host {
-        rimz::remote_control::RemoteControlHost::Claude => rimz::config::RemoteControlConfig {
-            claude: true,
-            codex: false,
-        },
-        rimz::remote_control::RemoteControlHost::Codex => rimz::config::RemoteControlConfig {
-            claude: false,
-            codex: true,
-        },
-    };
-    let result = match host {
-        rimz::remote_control::RemoteControlHost::Claude => {
-            rimz::remote_control::preflight_claude(&config)
-        }
-        rimz::remote_control::RemoteControlHost::Codex => {
-            rimz::remote_control::preflight_codex(&config)
-        }
-    };
-    match result {
-        Ok(()) => Ok(()),
-        Err(err) if err.is_uninstalled_host() => Ok(()),
-        Err(err) => Err(err.into()),
-    }
+    rimz::remote_control::ReadinessSnapshot::probe_transition(host)
+        .start_gate()
+        .map_err(Into::into)
 }
 
 fn render_value(value: &toml::Value) -> Result<String> {

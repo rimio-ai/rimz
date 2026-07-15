@@ -597,21 +597,18 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
         return model::RemoteControl::Off;
     }
 
-    let claude_preflight = config
-        .claude
-        .then(|| rimz::remote_control::preflight_claude(&config));
-    let codex_preflight = config
-        .codex
-        .then(|| rimz::remote_control::preflight_codex(&config));
+    let readiness = rimz::remote_control::ReadinessSnapshot::probe(&config);
     let mut agents = Vec::new();
     if config.claude {
-        let claude_present = which::which("claude").is_ok();
-        let (detail, ready) = if !claude_present {
-            ("enabled, not on PATH".to_owned(), false)
-        } else if claude_preflight.as_ref().is_some_and(Result::is_ok) {
-            ("ready".to_owned(), true)
-        } else {
-            ("enabled, blocked".to_owned(), false)
+        let (detail, ready) = match readiness
+            .for_host(rimz::remote_control::RemoteControlHost::Claude)
+        {
+            rimz::remote_control::HostState::Ready => ("ready".to_owned(), true),
+            rimz::remote_control::HostState::Uninstalled(_) => {
+                ("enabled, not on PATH".to_owned(), false)
+            }
+            rimz::remote_control::HostState::Blocked(_) => ("enabled, blocked".to_owned(), false),
+            rimz::remote_control::HostState::Disabled => ("ready".to_owned(), true),
         };
         agents.push(model::RemoteAgent {
             kind: "claude",
@@ -620,11 +617,17 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
         });
     }
     if config.codex {
-        let (detail, ready) = if codex_preflight.as_ref().is_some_and(Result::is_err) {
-            ("enabled, standalone install missing".to_owned(), false)
-        } else {
-            ("ready".to_owned(), true)
-        };
+        let (detail, ready) =
+            match readiness.for_host(rimz::remote_control::RemoteControlHost::Codex) {
+                rimz::remote_control::HostState::Uninstalled(_) => {
+                    ("enabled, standalone install missing".to_owned(), false)
+                }
+                rimz::remote_control::HostState::Ready
+                | rimz::remote_control::HostState::Disabled => ("ready".to_owned(), true),
+                rimz::remote_control::HostState::Blocked(_) => {
+                    ("enabled, standalone install missing".to_owned(), false)
+                }
+            };
         agents.push(model::RemoteAgent {
             kind: "codex",
             detail,
@@ -632,14 +635,14 @@ pub(super) fn collect_remote_control() -> model::RemoteControl {
         });
     }
 
-    let (skipped, refusals): (Vec<_>, Vec<_>) =
-        [codex_preflight.as_ref(), claude_preflight.as_ref()]
-            .into_iter()
-            .flatten()
-            .filter_map(|result| result.as_ref().err())
-            .partition(|err| err.is_uninstalled_host());
-    let skipped = skipped.into_iter().map(ToString::to_string).collect();
-    let refusals = refusals.into_iter().map(ToString::to_string).collect();
+    let skipped = match readiness.for_host(rimz::remote_control::RemoteControlHost::Codex) {
+        rimz::remote_control::HostState::Uninstalled(issue) => vec![issue.to_string()],
+        _ => Vec::new(),
+    };
+    let refusals = match readiness.for_host(rimz::remote_control::RemoteControlHost::Claude) {
+        rimz::remote_control::HostState::Blocked(issue) => vec![issue.to_string()],
+        _ => Vec::new(),
+    };
     model::RemoteControl::On {
         agents,
         refusals,

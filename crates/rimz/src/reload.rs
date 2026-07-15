@@ -24,6 +24,7 @@ use crate::mux::recovery;
 use crate::mux::{
     MuxBackend, PaneListOptions, SidebarLiveness, SidebarPaneOptions, SidebarWidth, backend_for,
 };
+use crate::room::session::LiveSessions;
 use crate::sidebar::heartbeat::SidebarHeartbeat;
 use crate::sidebar::timing::{
     RECONCILE_LIST_TIMEOUT, RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT, unix_now_ms,
@@ -631,39 +632,6 @@ fn young_sidebar_panes(mux: MuxName, ws: &KnownWorkspace, now: jiff::Timestamp) 
 fn born_recently(start: jiff::Timestamp, now: jiff::Timestamp, grace: Duration) -> bool {
     let grace = i64::try_from(grace.as_secs()).unwrap_or(0);
     now.as_second().saturating_sub(start.as_second()) <= grace
-}
-
-/// Both backends' live session names, so a workspace maps to the mux actually
-/// running it (or to neither, meaning its session is gone).
-struct LiveSessions {
-    zellij: HashSet<String>,
-    tmux: HashSet<String>,
-}
-
-impl LiveSessions {
-    fn probe() -> Self {
-        let names = |mux| -> HashSet<String> {
-            backend_for(mux)
-                .list_sessions()
-                .unwrap_or_default()
-                .into_iter()
-                .collect()
-        };
-        Self {
-            zellij: names(MuxName::Zellij),
-            tmux: names(MuxName::Tmux),
-        }
-    }
-
-    fn mux_of(&self, session: &str) -> Option<MuxName> {
-        if self.zellij.contains(session) {
-            Some(MuxName::Zellij)
-        } else if self.tmux.contains(session) {
-            Some(MuxName::Tmux)
-        } else {
-            None
-        }
-    }
 }
 
 #[cfg(test)]

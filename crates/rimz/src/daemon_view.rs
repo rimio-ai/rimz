@@ -14,7 +14,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::config::{DaemonConfig, RemoteControlConfig};
+use crate::config::DaemonConfig;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::mux::{
     DaemonView, HostPane, MuxBackend, PaneListOptions, PaneListing, SplitDirection,
@@ -33,14 +33,13 @@ const SETTLE_POLL: Duration = Duration::from_millis(100);
 
 /// Inputs that determine the managed panes in one workspace's daemon view.
 pub struct DaemonViewSpecParams<'a> {
-    pub remote_control: &'a RemoteControlConfig,
+    pub remote_control: &'a crate::remote_control::ReadinessSnapshot,
     pub daemon: &'a DaemonConfig,
     pub rimz_bin: &'a Path,
     pub workspace_id: &'a WorkspaceId,
     pub session_name: &'a str,
     pub project_root: &'a Path,
     pub worktree_root: &'a Path,
-    pub claude_present: bool,
     pub codex_present: bool,
 }
 
@@ -71,9 +70,9 @@ fn daemon_hosts(params: &DaemonViewSpecParams<'_>) -> Vec<HostPane> {
             cwd: params.worktree_root.to_path_buf(),
         });
     }
-    if params.remote_control.claude && params.claude_present {
+    if let Some(argv) = params.remote_control.claude_host_argv() {
         hosts.push(HostPane {
-            argv: crate::remote_control::claude_host_argv(),
+            argv: argv.to_vec(),
             cwd: params.project_root.to_path_buf(),
         });
     }
@@ -645,29 +644,38 @@ pub(crate) fn ensure_daemon_view_with_config(
     record: &workspace_record::WorkspaceRecord,
     machine: &crate::config::MachineConfig,
 ) {
+    let readiness = crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
+    ensure_daemon_view_with_readiness(
+        backend,
+        workspace_id,
+        session_name,
+        record,
+        machine,
+        &readiness,
+    );
+}
+
+pub(crate) fn ensure_daemon_view_with_readiness(
+    backend: &dyn MuxBackend,
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    record: &workspace_record::WorkspaceRecord,
+    machine: &crate::config::MachineConfig,
+    readiness: &crate::remote_control::ReadinessSnapshot,
+) {
     let rimz_bin = crate::proc::rimz_exe();
     let worktree_root = record
         .worktree_root
         .as_deref()
         .unwrap_or(&record.project_root);
-    let mut remote_control = machine.remote_control.clone();
-    if let Err(err) = crate::remote_control::preflight_claude(&remote_control) {
-        tracing::debug!(
-            workspace = %workspace_id,
-            error = &err as &dyn std::error::Error,
-            "Claude remote-control runtime toggle refused",
-        );
-        remote_control.claude = false;
-    }
     let view = daemon_view_spec(DaemonViewSpecParams {
-        remote_control: &remote_control,
+        remote_control: readiness,
         daemon: &machine.daemon,
         rimz_bin: &rimz_bin,
         workspace_id,
         session_name,
         project_root: &record.project_root,
         worktree_root,
-        claude_present: which::which("claude").is_ok(),
         codex_present: which::which("codex").is_ok(),
     });
     repair_daemon_view(backend, session_name, workspace_id, &view);

@@ -37,16 +37,17 @@ pub(crate) fn split_into_loop_zone(
         None => {
             let machine = rimz::config::MachineConfig::load_lenient();
             let rimz_bin = rimz::proc::rimz_exe();
+            let remote_control =
+                rimz::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
             let view =
                 rimz::daemon_view::daemon_view_spec(rimz::daemon_view::DaemonViewSpecParams {
-                    remote_control: &machine.remote_control,
+                    remote_control: &remote_control,
                     daemon: &machine.daemon,
                     rimz_bin: &rimz_bin,
                     workspace_id: &workspace.workspace_id,
                     session_name: &workspace.session_name,
                     project_root: &workspace.project_root,
                     worktree_root: &workspace.worktree_root,
-                    claude_present: which::which("claude").is_ok(),
                     codex_present: which::which("codex").is_ok(),
                 });
             match rimz::daemon_view::ensure_loop_panel(
