@@ -63,12 +63,19 @@ use wire::{
 /// caller is a detached background helper with no user waiting, so this is
 /// generous enough for `model/list` to fetch its catalog, but bounded so a
 /// wedged app-server is killed rather than lingering.
-const APP_SERVER_DEADLINE: Duration = Duration::from_secs(6);
+const APP_SERVER_DEADLINE_SECS: u64 = 6;
+const APP_SERVER_DEADLINE: Duration = Duration::from_secs(APP_SERVER_DEADLINE_SECS);
 
 /// Short budget for warm unix-socket probes. A stale broker or daemon socket
 /// costs little before the cold-spawn fallback takes over; the sidebar's daemon
 /// ghost reap pays this only from the cache refresher, behind its own TTL.
-const DAEMON_PROBE_DEADLINE: Duration = Duration::from_secs(2);
+const DAEMON_PROBE_DEADLINE_SECS: u64 = 2;
+const DAEMON_PROBE_DEADLINE: Duration = Duration::from_secs(DAEMON_PROBE_DEADLINE_SECS);
+
+/// Longest ordered broker, daemon, and cold-spawn account-usage fallback.
+#[cfg(test)]
+pub(crate) const MAX_REALTIME_ACCOUNT_USAGE_DURATION: Duration =
+    Duration::from_secs(DAEMON_PROBE_DEADLINE_SECS * 2 + APP_SERVER_DEADLINE_SECS);
 
 /// Override for the daemon control socket. A path re-uses that daemon directly;
 /// an empty value forces the cold-spawn path (tests, opt-out).

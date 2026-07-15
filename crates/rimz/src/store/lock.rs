@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 // Writers are short-lived CLI processes; matching the mux command timeout bounds
 // a wedged holder without interrupting legitimate cold snapshot rebuilds.
-const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_LOCK_BACKOFF: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]

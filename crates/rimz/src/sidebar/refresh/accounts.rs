@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -9,14 +12,51 @@ use crate::agents::AgentAccount;
 use crate::agents::account::AccountProbe;
 use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, unix_now_ms};
 
-use super::SidebarSnapshot;
+use super::trace::TraceEvent;
+use super::{SidebarSnapshot, trace};
 
 /// Poll cadence and budget for the accounts single-flight: a loser waits up to
-/// `STEP * STEPS` for the elected prober's publish before forking its own probe.
-/// Matched to the diff-stats single-flight, leaning long enough to ride the
-/// elder's `claude auth status` fork rather than racing it.
+/// `STEP * STEPS` for the elected prober's publish, then serves current cache
+/// truth while the elder finishes.
 const ACCOUNTS_WAIT_STEP: Duration = Duration::from_millis(20);
 const ACCOUNTS_WAIT_STEPS: u32 = 15;
+
+/// Most independent provider account/version chains probed concurrently.
+const MAX_PARALLEL_ACCOUNT_PROBES: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeOutcomeClass {
+    Success,
+    LoggedOut,
+    Unavailable,
+}
+
+impl ProbeOutcomeClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::LoggedOut => "logged_out",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ProviderProbeResult {
+    kind: String,
+    outcome: AccountProbe,
+    outcome_class: ProbeOutcomeClass,
+    version: Option<String>,
+    account_ms: u64,
+    version_ms: u64,
+    total_ms: u64,
+}
+
+struct ProbeBatch {
+    results: Vec<ProviderProbeResult>,
+    worker_count: usize,
+    total_ms: u64,
+}
 
 /// The producer's published account probe state, keyed by provider so one
 /// transient failure retries without expiring every provider's successful read.
@@ -42,6 +82,14 @@ pub(crate) fn produce_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
 ) -> BTreeMap<String, AgentAccount> {
+    produce_accounts_with(snapshot, runtime, probe_accounts)
+}
+
+fn produce_accounts_with(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    probe: impl Fn(&SidebarSnapshot, &RuntimePaths, &BTreeSet<String>, &AccountsCache) -> AccountsCache,
+) -> BTreeMap<String, AgentAccount> {
     let path = runtime.shared_accounts_path();
     let context_versions = context_versions(snapshot);
     let cache = read_accounts_cache(&path);
@@ -56,30 +104,47 @@ pub(crate) fn produce_accounts(
             .is_empty()
             .then(|| accounts_with_context_versions(&cache, &context_versions))
     };
-    match crate::store::single_flight::coalesce(
+    let coordination_started = Instant::now();
+    match crate::store::single_flight::coordinate(
         &lock_path,
         ACCOUNTS_WAIT_STEP,
         ACCOUNTS_WAIT_STEPS,
         fresh,
     ) {
-        crate::store::single_flight::Coalesced::Shared(accounts) => accounts,
-        crate::store::single_flight::Coalesced::Produce(_guard) => {
+        crate::store::single_flight::Coordination::Shared(accounts) => accounts,
+        crate::store::single_flight::Coordination::Produce(_guard) => {
             let cache = read_accounts_cache(&path);
             let due = due_provider_kinds(&cache, snapshot, unix_now_ms());
             if due.is_empty() {
                 return accounts_with_context_versions(&cache, &context_versions);
             }
-            let cache = probe_accounts(snapshot, &due, &cache);
+            let cache = probe(snapshot, runtime, &due, &cache);
             write_accounts_cache(&path, &cache);
             accounts_with_context_versions(&cache, &context_versions)
         }
-        // A wedged elder cannot block this frame. Probe only the still-due
-        // providers locally and leave publishing to the lock holder.
-        crate::store::single_flight::Coalesced::ProduceLocal => {
+        // A missing coordination path cannot protect a shared publication.
+        // Probe locally for this frame without writing the cache.
+        crate::store::single_flight::Coordination::Unavailable => {
             let cache = read_accounts_cache(&path);
             let due = due_provider_kinds(&cache, snapshot, unix_now_ms());
-            let cache = probe_accounts(snapshot, &due, &cache);
+            let cache = probe(snapshot, runtime, &due, &cache);
             accounts_with_context_versions(&cache, &context_versions)
+        }
+        // A live producer still owns publication. Serve current cache truth and
+        // let the next tick observe its atomic write instead of duplicating the
+        // cold subprocess batch.
+        crate::store::single_flight::Coordination::ContentionTimeout => {
+            let wait_ms = duration_ms(coordination_started.elapsed());
+            trace::record(runtime, || TraceEvent::Contention {
+                outcome: "served_stale",
+                wait_ms,
+            });
+            tracing::debug!(
+                wait_ms,
+                tags.operation = "accounts.probe_contention",
+                "account probe producer still running; serving current cache",
+            );
+            accounts_with_context_versions(&read_accounts_cache(&path), &context_versions)
         }
     }
 }
@@ -150,54 +215,150 @@ fn provider_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
 /// per-kind record merge and is exercised without subprocesses in unit tests.
 fn probe_accounts(
     snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
     due_kinds: &BTreeSet<String>,
     previous: &AccountsCache,
 ) -> AccountsCache {
     let active_version_kinds = active_version_probe_kinds(snapshot);
-    probe_accounts_with(
-        due_kinds,
-        previous,
-        &active_version_kinds,
-        unix_now_ms(),
-        |kind, active| {
-            let adapter = crate::agents::find_adapter(kind)?;
-            let outcome = adapter.probe_account();
-            let version = match &outcome {
-                AccountProbe::Found(account) if account_version(Some(account)).is_none() => {
-                    adapter.probe_version()
-                }
-                AccountProbe::LoggedOut | AccountProbe::Unavailable if active => {
-                    adapter.probe_version()
-                }
-                _ => None,
-            };
-            if matches!(&outcome, AccountProbe::Unavailable) {
-                tracing::warn!(
-                    kind,
-                    tags.operation = "accounts.probe_unavailable",
-                    "provider account probe unavailable",
-                );
-            }
-            Some((outcome, version))
-        },
-    )
+    let probed_at_ms = unix_now_ms();
+    let batch = execute_account_probes(due_kinds, &active_version_kinds, probe_one_account);
+    let success_count = batch
+        .results
+        .iter()
+        .filter(|result| result.outcome_class != ProbeOutcomeClass::Unavailable)
+        .count();
+    let unavailable_count = batch.results.len().saturating_sub(success_count);
+    for result in &batch.results {
+        if result.outcome_class == ProbeOutcomeClass::Unavailable {
+            tracing::warn!(
+                kind = result.kind.as_str(),
+                tags.operation = "accounts.probe_unavailable",
+                "provider account probe unavailable",
+            );
+        }
+        trace::record(runtime, || TraceEvent::ProviderProbe {
+            kind: &result.kind,
+            outcome: result.outcome_class.as_str(),
+            account_ms: result.account_ms,
+            version_ms: result.version_ms,
+            total_ms: result.total_ms,
+        });
+    }
+    trace::record(runtime, || TraceEvent::ProbeBatch {
+        due_count: due_kinds.len(),
+        worker_count: batch.worker_count,
+        total_ms: batch.total_ms,
+        success_count,
+        unavailable_count,
+    });
+    merge_probe_results(previous, &active_version_kinds, probed_at_ms, batch.results)
 }
 
-fn probe_accounts_with(
+fn probe_one_account(kind: &str, active: bool) -> Option<ProviderProbeResult> {
+    let started = Instant::now();
+    let adapter = crate::agents::find_adapter(kind)?;
+    let account_started = Instant::now();
+    let outcome = adapter.probe_account();
+    let account_ms = duration_ms(account_started.elapsed());
+    let outcome_class = match &outcome {
+        AccountProbe::Found(_) => ProbeOutcomeClass::Success,
+        AccountProbe::LoggedOut => ProbeOutcomeClass::LoggedOut,
+        AccountProbe::Unavailable => ProbeOutcomeClass::Unavailable,
+    };
+    let version_started = Instant::now();
+    let version = match &outcome {
+        AccountProbe::Found(account) if account_version(Some(account)).is_none() => {
+            adapter.probe_version()
+        }
+        AccountProbe::LoggedOut | AccountProbe::Unavailable if active => adapter.probe_version(),
+        _ => None,
+    };
+    let version_ms = duration_ms(version_started.elapsed());
+    Some(ProviderProbeResult {
+        kind: kind.to_owned(),
+        outcome,
+        outcome_class,
+        version,
+        account_ms,
+        version_ms,
+        total_ms: duration_ms(started.elapsed()),
+    })
+}
+
+fn execute_account_probes(
     due_kinds: &BTreeSet<String>,
+    active_version_kinds: &BTreeSet<String>,
+    probe: impl Fn(&str, bool) -> Option<ProviderProbeResult> + Sync,
+) -> ProbeBatch {
+    if due_kinds.is_empty() {
+        return ProbeBatch {
+            results: Vec::new(),
+            worker_count: 0,
+            total_ms: 0,
+        };
+    }
+    let started = Instant::now();
+    let lane = crate::lane::current();
+    let jobs: Vec<_> = due_kinds.iter().cloned().collect();
+    let next = AtomicUsize::new(0);
+    let worker_count = MAX_PARALLEL_ACCOUNT_PROBES.min(jobs.len());
+    let results = Mutex::new((0..jobs.len()).map(|_| None).collect::<Vec<_>>());
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..worker_count)
+            .map(|_| {
+                scope.spawn(|| {
+                    crate::lane::set(lane);
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(kind) = jobs.get(index) else {
+                            break;
+                        };
+                        let active = active_version_kinds.contains(kind);
+                        let Some(result) = probe(kind, active) else {
+                            continue;
+                        };
+                        if let Ok(mut results) = results.lock() {
+                            results[index] = Some(result);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            let _ = worker.join();
+        }
+    });
+    let mut results: Vec<_> = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .into_iter()
+        .flatten()
+        .collect();
+    results.sort_by(|left, right| left.kind.cmp(&right.kind));
+    ProbeBatch {
+        results,
+        worker_count,
+        total_ms: duration_ms(started.elapsed()),
+    }
+}
+
+fn merge_probe_results(
     previous: &AccountsCache,
     active_version_kinds: &BTreeSet<String>,
     probed_at_ms: u64,
-    mut probe: impl FnMut(&str, bool) -> Option<(AccountProbe, Option<String>)>,
+    results: impl IntoIterator<Item = ProviderProbeResult>,
 ) -> AccountsCache {
     let mut providers = previous.providers.clone();
-    for kind in due_kinds {
-        let active = active_version_kinds.contains(kind);
-        let Some((outcome, probed_version)) = probe(kind, active) else {
-            continue;
-        };
+    for result in results {
+        let ProviderProbeResult {
+            kind,
+            outcome,
+            version: probed_version,
+            ..
+        } = result;
+        let active = active_version_kinds.contains(&kind);
         let ok = !matches!(&outcome, AccountProbe::Unavailable);
-        let previous_record = previous.providers.get(kind);
+        let previous_record = previous.providers.get(&kind);
         let account = match outcome {
             AccountProbe::Found(mut account) => {
                 if account_version(Some(&account)).is_none() {
@@ -229,7 +390,7 @@ fn probe_accounts_with(
             }
         };
         providers.insert(
-            kind.clone(),
+            kind,
             ProviderRecord {
                 probed_at_ms,
                 ok,
@@ -238,6 +399,39 @@ fn probe_accounts_with(
         );
     }
     AccountsCache { providers }
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+fn probe_accounts_with(
+    due_kinds: &BTreeSet<String>,
+    previous: &AccountsCache,
+    active_version_kinds: &BTreeSet<String>,
+    probed_at_ms: u64,
+    mut probe: impl FnMut(&str, bool) -> Option<(AccountProbe, Option<String>)>,
+) -> AccountsCache {
+    let results = due_kinds.iter().filter_map(|kind| {
+        let active = active_version_kinds.contains(kind);
+        let (outcome, version) = probe(kind, active)?;
+        let outcome_class = match &outcome {
+            AccountProbe::Found(_) => ProbeOutcomeClass::Success,
+            AccountProbe::LoggedOut => ProbeOutcomeClass::LoggedOut,
+            AccountProbe::Unavailable => ProbeOutcomeClass::Unavailable,
+        };
+        Some(ProviderProbeResult {
+            kind: kind.clone(),
+            outcome,
+            outcome_class,
+            version,
+            account_ms: 0,
+            version_ms: 0,
+            total_ms: 0,
+        })
+    });
+    merge_probe_results(previous, active_version_kinds, probed_at_ms, results)
 }
 
 fn account_version(account: Option<&AgentAccount>) -> Option<String> {
@@ -340,6 +534,8 @@ pub(super) fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{Arc, Barrier, Mutex};
 
     use jiff::Timestamp;
 
@@ -378,6 +574,115 @@ mod tests {
             Vec::new(),
             Timestamp::now(),
         )
+    }
+
+    fn successful_probe(kind: &str) -> ProviderProbeResult {
+        ProviderProbeResult {
+            kind: kind.to_owned(),
+            outcome: AccountProbe::Found(AgentAccount {
+                plan: Some(kind.to_owned()),
+                ..Default::default()
+            }),
+            outcome_class: ProbeOutcomeClass::Success,
+            version: None,
+            account_ms: 1,
+            version_ms: 0,
+            total_ms: 1,
+        }
+    }
+
+    #[test]
+    fn account_probe_pool_runs_each_kind_once_with_four_worker_ceiling() {
+        let due: BTreeSet<_> = (0..8).map(|index| format!("kind-{index}")).collect();
+        let barrier = Arc::new(Barrier::new(MAX_PARALLEL_ACCOUNT_PROBES));
+        let first_wave = AtomicUsize::new(0);
+        let active = AtomicUsize::new(0);
+        let maximum = AtomicUsize::new(0);
+        let calls = Mutex::new(BTreeMap::<String, usize>::new());
+
+        let batch = execute_account_probes(&due, &BTreeSet::new(), |kind, _active| {
+            *calls.lock().unwrap().entry(kind.to_owned()).or_default() += 1;
+            let live = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(live, Ordering::SeqCst);
+            if first_wave.fetch_add(1, Ordering::SeqCst) < MAX_PARALLEL_ACCOUNT_PROBES {
+                barrier.wait();
+            }
+            active.fetch_sub(1, Ordering::SeqCst);
+            Some(successful_probe(kind))
+        });
+
+        assert_eq!(batch.worker_count, MAX_PARALLEL_ACCOUNT_PROBES);
+        assert_eq!(batch.results.len(), due.len());
+        assert_eq!(maximum.load(Ordering::SeqCst), MAX_PARALLEL_ACCOUNT_PROBES);
+        assert_eq!(
+            calls.into_inner().unwrap(),
+            due.into_iter().map(|kind| (kind, 1)).collect()
+        );
+
+        let merged = merge_probe_results(
+            &AccountsCache::default(),
+            &BTreeSet::new(),
+            10,
+            batch.results,
+        );
+        let serialized = serde_json::to_string(&merged).unwrap();
+        assert!(
+            serialized.find("kind-0") < serialized.find("kind-7"),
+            "BTreeMap publication is deterministic regardless of worker completion order"
+        );
+    }
+
+    #[test]
+    fn missing_worker_result_preserves_prior_record() {
+        let due = BTreeSet::from(["ok".to_owned(), "panic".to_owned()]);
+        let prior = record(
+            7,
+            true,
+            Some(AgentAccount {
+                plan: Some("prior".to_owned()),
+                ..Default::default()
+            }),
+        );
+        let previous = AccountsCache {
+            providers: BTreeMap::from([("panic".to_owned(), prior.clone())]),
+        };
+        let batch = execute_account_probes(&due, &BTreeSet::new(), |kind, _active| {
+            assert_ne!(kind, "panic", "injected worker failure");
+            Some(successful_probe(kind))
+        });
+        let merged = merge_probe_results(&previous, &BTreeSet::new(), 20, batch.results);
+
+        assert_eq!(merged.providers["panic"], prior);
+        assert_eq!(merged.providers["ok"].probed_at_ms, 20);
+    }
+
+    #[test]
+    fn contending_account_caller_serves_cache_without_adapter_probes() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let _producer = match crate::store::single_flight::coordinate::<()>(
+            &runtime.shared_accounts_lock(),
+            Duration::ZERO,
+            0,
+            || None,
+        ) {
+            crate::store::single_flight::Coordination::Produce(guard) => guard,
+            _ => panic!("test must hold the account producer lock"),
+        };
+        let probes = AtomicUsize::new(0);
+
+        assert!(
+            produce_accounts_with(&empty_snapshot(), &runtime, |_, _, _, cache| {
+                probes.fetch_add(1, Ordering::SeqCst);
+                cache.clone()
+            })
+            .is_empty()
+        );
+
+        assert_eq!(probes.load(Ordering::SeqCst), 0);
+        assert!(!runtime.shared_accounts_path().exists());
     }
 
     #[test]

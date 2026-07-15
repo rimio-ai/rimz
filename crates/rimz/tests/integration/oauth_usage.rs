@@ -1,11 +1,123 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::common::{CommandTimeoutExt, Env};
+use crate::common::{CommandTimeoutExt, Env, path_with_front};
+
+#[test]
+fn one_cold_snapshot_discovers_claude_and_publishes_first_usage_windows() {
+    let env = Env::new();
+    let (origin, server) = serve_after_failures(
+        0,
+        r#"{
+            "five_hour": {
+                "utilization": 12.5,
+                "resets_at": "2026-09-21T14:13:20Z"
+            },
+            "seven_day": {
+                "utilization": 7,
+                "resets_at": "2026-09-27T09:06:40Z"
+            }
+        }"#,
+    );
+    let claude_home = env.home_root.join(".claude");
+    std::fs::create_dir_all(&claude_home).expect("mkdir claude home");
+    std::fs::write(
+        claude_home.join(".credentials.json"),
+        r#"{
+            "claudeAiOauth": {
+                "accessToken": "claude-token",
+                "expiresAt": 4102444800000,
+                "scopes": ["user:profile"]
+            }
+        }"#,
+    )
+    .expect("write claude credentials");
+    let bin_dir = env.home_root.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("mkdir fake bin");
+    let claude = bin_dir.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\n\
+         if [ \"${1:-}\" = \"auth\" ] && [ \"${2:-}\" = \"status\" ]; then\n\
+           printf '%s\\n' '{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"subscriptionType\":\"max\"}'\n\
+           exit 0\n\
+         fi\n\
+         if [ \"${1:-}\" = \"--version\" ]; then\n\
+           printf '%s\\n' '2.1.173 (Claude Code)'\n\
+           exit 0\n\
+         fi\n\
+         exit 1\n",
+    )
+    .expect("write fake claude");
+    let mut permissions = std::fs::metadata(&claude).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&claude, permissions).expect("chmod fake claude");
+    let panes = env.write_pane_fixture(&[]);
+
+    let output = env
+        .rimz()
+        .args([
+            "sidebar",
+            "snapshot",
+            "--workspace-id",
+            env.workspace_id.as_str(),
+            "--mux",
+            "tmux",
+            "--session-name",
+            "rimz-test",
+            "--json",
+        ])
+        .env("RIMZ_TEST_PANE_LIST", panes)
+        .env("PATH", path_with_front(&bin_dir))
+        .env(
+            "RIMZ_CLAUDE_OAUTH_USAGE_URL",
+            format!("{origin}/api/oauth/usage"),
+        )
+        .bounded_output()
+        .expect("one cold sidebar snapshot");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runtime = env.runtime_paths();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let credits = std::fs::read(runtime.shared_credits_path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        let limits = std::fs::read(runtime.shared_rate_limits_path())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        let settled = credits.as_ref().is_some_and(|credits| {
+            credits["entries"]["claude"]["oauth_read_at_ms"]
+                .as_u64()
+                .is_some_and(|stamp| stamp > 0)
+                && credits["entries"]["claude"]["direct_query_claim"].is_null()
+        });
+        let window_count = limits
+            .as_ref()
+            .and_then(|limits| limits["entries"]["claude"]["limits"]["windows"].as_array())
+            .map_or(0, Vec::len);
+        if settled && window_count == 2 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "first snapshot did not settle Claude usage: credits={credits:?}, limits={limits:?}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    let requests = server.join().expect("server request");
+    assert_eq!(requests.len(), 1);
+}
 
 #[test]
 fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint() {

@@ -329,6 +329,17 @@ fn competing_claim_waits_and_expired_claim_is_replaced() {
         claim_provider_account_usage_at(&runtime, "codex", hint.clone(), 101, second),
         None
     );
+    assert_eq!(
+        claim_provider_account_usage_at(
+            &runtime,
+            "codex",
+            hint.clone(),
+            100 + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64,
+            second,
+        ),
+        None,
+        "the lease remains live at its exact boundary"
+    );
     let expired = 100 + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64 + 1;
     assert_eq!(
         claim_provider_account_usage_at(&runtime, "codex", hint, expired, second),
@@ -336,6 +347,49 @@ fn competing_claim_waits_and_expired_claim_is_replaced() {
     );
     assert!(!account_usage_claim_matches(&runtime, "codex", first));
     assert!(account_usage_claim_matches(&runtime, "codex", second));
+}
+
+#[test]
+fn renewal_requires_the_matching_live_nonce() {
+    let (_dir, runtime) = runtime();
+    let first = nonce(1);
+    claim_provider_account_usage_at(&runtime, "codex", Default::default(), 100, first).unwrap();
+
+    assert!(renew_provider_account_usage_claim_at(
+        &runtime, "codex", first, 200
+    ));
+    assert_eq!(
+        read_credits_cache(&runtime.shared_credits_path()).entries["codex"]
+            .direct_query_claim
+            .as_ref()
+            .map(|claim| claim.claimed_at_ms),
+        Some(200)
+    );
+    assert!(!renew_provider_account_usage_claim_at(
+        &runtime,
+        "codex",
+        nonce(2),
+        300
+    ));
+
+    let second = nonce(2);
+    claim_provider_account_usage_at(
+        &runtime,
+        "codex",
+        Default::default(),
+        200 + ACCOUNT_USAGE_CLAIM_TTL.as_millis() as u64 + 1,
+        second,
+    )
+    .unwrap();
+    assert!(!renew_provider_account_usage_claim_at(
+        &runtime, "codex", first, 400
+    ));
+    let claim = read_credits_cache(&runtime.shared_credits_path()).entries["codex"]
+        .direct_query_claim
+        .clone()
+        .unwrap();
+    assert_eq!(claim.nonce, second);
+    assert_ne!(claim.claimed_at_ms, 400);
 }
 
 #[test]

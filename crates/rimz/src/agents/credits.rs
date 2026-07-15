@@ -69,7 +69,17 @@ pub(crate) fn url_host(url: &str) -> &str {
 pub(crate) const OAUTH_HTTP_TIMEOUT_SECS: u64 = 5;
 pub(crate) const OAUTH_HTTP_MAX_BYTES: u64 = 512 * 1024;
 const OAUTH_HTTP_ATTEMPTS: u32 = 3;
-const OAUTH_HTTP_RETRY_BACKOFF: Duration = Duration::from_millis(300);
+const OAUTH_HTTP_RETRY_BACKOFF_MS: u64 = 300;
+const OAUTH_HTTP_RETRY_BACKOFF: Duration = Duration::from_millis(OAUTH_HTTP_RETRY_BACKOFF_MS);
+/// Longest valid wall time for one fully retried OAuth request.
+#[cfg(test)]
+pub(crate) const OAUTH_HTTP_MAX_DURATION: Duration = Duration::from_millis(
+    OAUTH_HTTP_TIMEOUT_SECS * 1_000 * OAUTH_HTTP_ATTEMPTS as u64
+        + OAUTH_HTTP_RETRY_BACKOFF_MS
+            * OAUTH_HTTP_ATTEMPTS as u64
+            * (OAUTH_HTTP_ATTEMPTS as u64 - 1)
+            / 2,
+);
 
 /// Bounded GET for provider OAuth usage endpoints: 5s timeout per attempt, 512
 /// KiB body cap, host-only breadcrumb. Returns the body, or the error kind plus

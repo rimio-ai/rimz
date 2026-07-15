@@ -178,6 +178,41 @@ pub fn account_usage_claim_matches(runtime: &RuntimePaths, kind: &str, nonce: Uu
         .is_some_and(|claim| claim.nonce == nonce)
 }
 
+/// Renew the matching live direct-query lease immediately before direct
+/// provider work. A replaced claim or contended credits lock cannot be renewed.
+pub(crate) fn renew_provider_account_usage_claim(
+    runtime: &RuntimePaths,
+    kind: &str,
+    nonce: Uuid,
+) -> bool {
+    renew_provider_account_usage_claim_at(runtime, kind, nonce, unix_now_ms())
+}
+
+fn renew_provider_account_usage_claim_at(
+    runtime: &RuntimePaths,
+    kind: &str,
+    nonce: Uuid,
+    now_ms: u64,
+) -> bool {
+    let path = runtime.shared_credits_path();
+    let Some(_guard) = try_credits_cache_lock(&runtime.shared_credits_lock()) else {
+        return false;
+    };
+    let mut cache = read_credits_cache(&path);
+    let Some(claim) = cache
+        .entries
+        .get_mut(kind)
+        .and_then(|entry| entry.direct_query_claim.as_mut())
+        .filter(|claim| claim.nonce == nonce)
+    else {
+        return false;
+    };
+    claim.claimed_at_ms = now_ms;
+    cache.refreshed_at_ms = now_ms;
+    write_credits_cache(&path, &cache);
+    true
+}
+
 pub fn cancel_provider_account_usage_claim(
     runtime: &RuntimePaths,
     kind: &str,

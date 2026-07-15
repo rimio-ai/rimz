@@ -5,6 +5,8 @@
 //! publish the result. Realtime and direct readings share one snapshot shape
 //! and one cache-publication path.
 
+use std::time::{Duration, Instant};
+
 use uuid::Uuid;
 
 use crate::agents::{AccountUsageIdentity, AccountUsageSnapshot, ProviderAccountScope};
@@ -14,7 +16,10 @@ use super::accounts::cached_account_usage_hint;
 use super::credits::{
     account_usage_claim_matches, cancel_provider_account_usage_claim, claim_provider_account_usage,
     complete_provider_account_usage, merge_provider_realtime_usage,
+    renew_provider_account_usage_claim,
 };
+use super::trace;
+use super::trace::TraceEvent;
 use super::{drop_kind_rate_limits, merge_account_rate_limits};
 
 /// Claim and spawn each metered provider's direct account-usage refresh.
@@ -34,20 +39,41 @@ fn refresh_account_usage_with(
         if !panel.metered {
             continue;
         }
+        let started = Instant::now();
         let kind = panel.kind.as_str();
         let Some(adapter) = crate::agents::find_adapter(kind) else {
+            trace_claim(runtime, kind, "adapter_missing", started.elapsed());
             continue;
         };
         let Some(identity) = scheduling_identity(runtime, kind, adapter) else {
+            trace_claim(runtime, kind, "unsupported", started.elapsed());
             continue;
         };
         let Some(claim_id) = claim_provider_account_usage(runtime, kind, identity) else {
+            trace_claim(runtime, kind, "not_due", started.elapsed());
             continue;
         };
-        if !spawn(runtime, kind, merge_windows_hint(snapshot, kind), claim_id) {
+        trace_claim(runtime, kind, "claimed", started.elapsed());
+        let spawn_started = Instant::now();
+        let spawned = spawn(runtime, kind, merge_windows_hint(snapshot, kind), claim_id);
+        trace::record(runtime, || TraceEvent::HelperSpawn {
+            kind,
+            outcome: if spawned { "spawned" } else { "failed" },
+            elapsed_ms: duration_ms(spawn_started.elapsed()),
+        });
+        if !spawned {
             cancel_provider_account_usage_claim(runtime, kind, claim_id);
         }
     }
+}
+
+fn trace_claim(runtime: &RuntimePaths, kind: &str, outcome: &str, elapsed: Duration) {
+    let elapsed_ms = duration_ms(elapsed);
+    trace::record(runtime, || TraceEvent::Claim {
+        kind,
+        outcome,
+        elapsed_ms,
+    });
 }
 
 fn scheduling_identity(
@@ -82,18 +108,24 @@ pub fn refresh_claimed_account_usage(
     claim_id: Uuid,
     merge_windows: bool,
 ) -> bool {
+    let started = Instant::now();
     if crate::agents::credits::oauth_usage_offline() {
         cancel_provider_account_usage_claim(runtime, kind, claim_id);
+        trace_usage_helper(runtime, kind, "offline", 0, 0, 0, started.elapsed());
         return false;
     }
     if !account_usage_claim_matches(runtime, kind, claim_id) {
+        trace_usage_helper(runtime, kind, "superseded", 0, 0, 0, started.elapsed());
         return false;
     }
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         cancel_provider_account_usage_claim(runtime, kind, claim_id);
+        trace_usage_helper(runtime, kind, "adapter_missing", 0, 0, 0, started.elapsed());
         return false;
     };
+    let realtime_started = Instant::now();
     let realtime = adapter.probe_realtime_account_usage(runtime);
+    let realtime_ms = duration_ms(realtime_started.elapsed());
     let publish_direct_windows = direct_windows_should_publish(
         merge_windows,
         realtime.as_ref(),
@@ -104,10 +136,21 @@ pub fn refresh_claimed_account_usage(
             .windows_defer_to_fresh_realtime,
     );
     if !account_usage_claim_matches(runtime, kind, claim_id) {
+        trace_usage_helper(
+            runtime,
+            kind,
+            "superseded",
+            realtime_ms,
+            0,
+            0,
+            started.elapsed(),
+        );
         return false;
     }
     let mut wrote = false;
+    let mut cache_publication_ms = 0;
     if let Some(usage) = realtime {
+        let publication_started = Instant::now();
         wrote |= publish_account_usage_snapshot(
             runtime,
             kind,
@@ -115,15 +158,76 @@ pub fn refresh_claimed_account_usage(
             usage,
             true,
         );
+        cache_publication_ms += duration_ms(publication_started.elapsed());
     }
+    if !renew_provider_account_usage_claim(runtime, kind, claim_id) {
+        trace_usage_helper(
+            runtime,
+            kind,
+            "renewal_failed",
+            realtime_ms,
+            0,
+            cache_publication_ms,
+            started.elapsed(),
+        );
+        return wrote;
+    }
+    let direct_started = Instant::now();
+    let direct_probe = adapter.probe_account_usage();
+    let direct_ms = duration_ms(direct_started.elapsed());
+    let outcome = account_usage_outcome(&direct_probe);
+    let publication_started = Instant::now();
     wrote |= complete_direct_account_usage(
         runtime,
         kind,
         claim_id,
-        adapter.probe_account_usage(),
+        direct_probe,
         publish_direct_windows,
     );
+    cache_publication_ms += duration_ms(publication_started.elapsed());
+    trace_usage_helper(
+        runtime,
+        kind,
+        outcome,
+        realtime_ms,
+        direct_ms,
+        cache_publication_ms,
+        started.elapsed(),
+    );
     wrote
+}
+
+fn account_usage_outcome(probe: &crate::agents::AccountUsageProbe) -> &'static str {
+    match probe {
+        crate::agents::AccountUsageProbe::Found { .. } => "success",
+        crate::agents::AccountUsageProbe::NoCredentials(_) => "no_credentials",
+        crate::agents::AccountUsageProbe::Failed(_) => "failed",
+        crate::agents::AccountUsageProbe::Unsupported => "unsupported",
+    }
+}
+
+fn trace_usage_helper(
+    runtime: &RuntimePaths,
+    kind: &str,
+    outcome: &str,
+    realtime_ms: u64,
+    direct_ms: u64,
+    cache_publication_ms: u64,
+    total: Duration,
+) {
+    let total_ms = duration_ms(total);
+    trace::record(runtime, || TraceEvent::UsageHelper {
+        kind,
+        outcome,
+        realtime_ms,
+        direct_ms,
+        cache_publication_ms,
+        total_ms,
+    });
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 fn direct_windows_should_publish(
@@ -562,5 +666,55 @@ mod tests {
             )
             .is_some()
         );
+    }
+
+    #[test]
+    fn simultaneous_schedulers_spawn_once_per_provider_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        super::super::accounts::write_accounts_cache(
+            &runtime.shared_accounts_path(),
+            &AccountsCache {
+                providers: BTreeMap::from([(
+                    "claude".to_owned(),
+                    ProviderRecord {
+                        probed_at_ms: 1,
+                        ok: true,
+                        account: Some(AgentAccount {
+                            metered: Some(true),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            },
+        );
+        let snapshot = snapshot_with_panels(workspace, vec![provider_panel("claude", Vec::new())]);
+        let spawns = std::sync::atomic::AtomicUsize::new(0);
+
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+                        spawns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        true
+                    });
+                });
+            }
+        });
+
+        assert_eq!(spawns.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn account_usage_segments_fit_strictly_inside_the_renewed_lease() {
+        let realtime_segment = crate::agents::codex::app_server::MAX_REALTIME_ACCOUNT_USAGE_DURATION
+            + crate::store::lock::LOCK_TIMEOUT;
+        let direct_segment =
+            crate::agents::credits::OAUTH_HTTP_MAX_DURATION * 2 + crate::store::lock::LOCK_TIMEOUT;
+
+        assert!(realtime_segment < crate::sidebar::timing::ACCOUNT_USAGE_CLAIM_TTL);
+        assert!(direct_segment < crate::sidebar::timing::ACCOUNT_USAGE_CLAIM_TTL);
     }
 }

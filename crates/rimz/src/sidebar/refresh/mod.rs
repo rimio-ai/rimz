@@ -24,6 +24,7 @@ pub mod pr;
 pub mod rate_limits;
 pub mod sessions;
 pub mod spending;
+mod trace;
 pub mod usage;
 
 pub use accounts::{AccountsCache, ProviderRecord};
@@ -77,35 +78,34 @@ pub fn refresh_heavy_lanes(
         config.remote_control.codex,
     );
 
+    let accounts = produce_accounts(base, runtime);
     let spending = spending::compute_fleet_spending_with_walker(
         walker,
         runtime,
         base,
         &config.headline_spec(),
     );
-    let accounts = produce_accounts(base, runtime);
-    let pr_states = produce_pr_states(base, runtime);
-    let lanes = RefreshedLanes {
-        spending,
-        accounts,
-        pr_states,
-    };
-
     // Rate-limit persistence is rebuilt from resolved provider panels, not the
     // bare rollup. Build that scoped panel view once, write the cache, and drop
     // it; final folds merge the just-written cache read-only.
     let mut panels = fold_machine_config_with(
         base.clone(),
         config,
-        lanes.accounts.clone(),
-        &lanes.spending.provider.spending.by_provider,
+        accounts.clone(),
+        &spending.provider.spending.by_provider,
         // This throwaway fold only rebuilds rate-limit persistence.
         RemoteControlServerHealth::default(),
     );
     apply_rate_limit_cache(&mut panels, runtime, true);
 
     refresh_live_sessions(base, runtime);
-    refresh_account_usage(base, runtime);
+    refresh_account_usage(&panels, runtime);
+    let pr_states = produce_pr_states(base, runtime);
+    let lanes = RefreshedLanes {
+        spending,
+        accounts,
+        pr_states,
+    };
     let resume_messages = read_auto_continue_resume_messages(
         Some(state_messages_dir),
         &config.resume,

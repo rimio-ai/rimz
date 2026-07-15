@@ -39,6 +39,15 @@ pub enum Coalesced<T> {
     ProduceLocal,
 }
 
+/// Cause-aware election outcome for callers whose contention fallback differs
+/// from a genuinely unavailable coordination path.
+pub(crate) enum Coordination<T> {
+    Shared(T),
+    Produce(ProducerGuard),
+    Unavailable,
+    ContentionTimeout,
+}
+
 /// Holds the exclusive single-flight lock for the elected producer. Releases on
 /// drop (the flock also auto-releases when the fd closes or the process exits),
 /// so the producer keeps it alive across its produce-and-write.
@@ -73,29 +82,49 @@ pub fn coalesce<T>(
     wait_steps: u32,
     fresh: impl Fn() -> Option<T>,
 ) -> Coalesced<T> {
+    match coordinate(lock_path, wait_step, wait_steps, fresh) {
+        Coordination::Shared(value) => Coalesced::Shared(value),
+        Coordination::Produce(guard) => Coalesced::Produce(guard),
+        Coordination::Unavailable | Coordination::ContentionTimeout => Coalesced::ProduceLocal,
+    }
+}
+
+/// Elect one producer while preserving why coordination could not return a
+/// shared value. Account discovery uses this to serve stale cache truth behind
+/// a live producer without multiplying the cold probe batch.
+pub(crate) fn coordinate<T>(
+    lock_path: &Path,
+    wait_step: Duration,
+    wait_steps: u32,
+    fresh: impl Fn() -> Option<T>,
+) -> Coordination<T> {
     let Some(file) = open_lock(lock_path) else {
         // Nowhere to coordinate (e.g. the runtime dir is missing on a bare CLI
         // call): just produce, uncached.
-        return Coalesced::ProduceLocal;
+        return Coordination::Unavailable;
     };
     match file.try_lock() {
         // We are the single producer. A peer may have published between our
         // miss and acquiring the lock, so re-check before doing the work.
         Ok(()) => match fresh() {
-            Some(value) => Coalesced::Shared(value),
-            None => Coalesced::Produce(ProducerGuard { file }),
+            Some(value) => Coordination::Shared(value),
+            None => Coordination::Produce(ProducerGuard { file }),
         },
         // A peer is producing: poll briefly for its write, then fall back to an
         // uncached local produce rather than block on a wedged producer.
-        Err(_) => {
+        Err(std::fs::TryLockError::WouldBlock) => {
             for _ in 0..wait_steps {
                 std::thread::sleep(wait_step);
                 if let Some(value) = fresh() {
-                    return Coalesced::Shared(value);
+                    return Coordination::Shared(value);
                 }
             }
-            Coalesced::ProduceLocal
+            Coordination::ContentionTimeout
         }
+        // The file opened but the platform could not coordinate through it.
+        // Preserve the legacy local fallback instead of treating an advisory
+        // lock error as proof that a peer is producing.
+        Err(std::fs::TryLockError::Error(_)) => Coordination::Unavailable,
     }
 }
 
@@ -182,5 +211,29 @@ mod tests {
             matches!(outcome, Coalesced::ProduceLocal),
             "an unopenable lock falls back to a local, uncached produce",
         );
+    }
+
+    #[test]
+    fn cause_aware_election_distinguishes_unavailable_from_contention() {
+        let missing = Path::new("/nonexistent-rimz-single-flight-dir/x.lock");
+        assert!(matches!(
+            coordinate::<()>(missing, STEP, STEPS, || None),
+            Coordination::Unavailable
+        ));
+
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("x.lock");
+        let _guard = match coordinate::<()>(&lock, STEP, STEPS, || None) {
+            Coordination::Produce(guard) => guard,
+            _ => panic!("first caller must produce"),
+        };
+        assert!(matches!(
+            coordinate::<()>(&lock, STEP, STEPS, || None),
+            Coordination::ContentionTimeout
+        ));
+        assert!(matches!(
+            coalesce::<()>(&lock, STEP, STEPS, || None),
+            Coalesced::ProduceLocal
+        ));
     }
 }
