@@ -373,12 +373,15 @@ impl Cell {
     }
 }
 
-/// One body entry: a row of cells, or a section label spanning the table to
-/// head a group of following rows.
+/// One body entry: a row of cells, a full-width follow-on block belonging to
+/// the preceding row, or a section label heading a group of following rows.
 enum Body {
     Row(Vec<Cell>),
+    Sub(Cell),
     Section(Vec<Cell>),
 }
+
+const SUB_MAX_LINES: usize = 3;
 
 /// A borderless table whose columns auto-fit their widest cell. Headers render
 /// in the [`palette::HEADER`] tone; every body cell keeps its own style. Cells
@@ -391,7 +394,8 @@ pub(crate) struct Table {
     align: Vec<Align>,
     rows: Vec<Body>,
     indent: usize,
-    clip_last_width: Option<usize>,
+    max_width: Option<usize>,
+    card_rows: bool,
 }
 
 impl Table {
@@ -407,7 +411,8 @@ impl Table {
             align,
             rows: Vec::new(),
             indent: 0,
-            clip_last_width: None,
+            max_width: None,
+            card_rows: false,
         }
     }
 
@@ -431,10 +436,23 @@ impl Table {
         self.rows.push(Body::Row(cells.into_iter().collect()));
     }
 
-    /// Clip the trailing column so rendered rows fit within `max_total_width`
-    /// whenever the fixed columns leave any budget for it.
-    pub(crate) fn clip_last(mut self, max_total_width: usize) -> Self {
-        self.clip_last_width = Some(max_total_width);
+    /// Add a full-width follow-on block to the preceding row. Its text must be
+    /// pre-collapsed to one line; [`Self::max_width`] wraps it when configured.
+    pub(crate) fn sub(&mut self, cell: Cell) {
+        self.rows.push(Body::Sub(cell));
+    }
+
+    /// Bound every rendered line to `max_total_width` where the table shape
+    /// permits it. Plain rows clip their trailing column; sub-blocks wrap.
+    pub(crate) fn max_width(mut self, max_total_width: usize) -> Self {
+        self.max_width = Some(max_total_width);
+        self
+    }
+
+    /// Separate each row and its optional sub-block as a visual card. Dense
+    /// tables retain their compact default spacing.
+    pub(crate) fn card_rows(mut self) -> Self {
+        self.card_rows = true;
         self
     }
 
@@ -459,7 +477,7 @@ impl Table {
                 }
             }
         }
-        if let Some(max_total_width) = self.clip_last_width
+        if let Some(max_total_width) = self.max_width
             && cols > 0
         {
             let last = cols - 1;
@@ -476,9 +494,16 @@ impl Table {
             .map(|h| cell(h.clone()).fg(palette::HEADER))
             .collect();
         self.write_row(w, &header_cells, &widths)?;
+        let mut previous: Option<&Body> = None;
         for body in &self.rows {
             match body {
-                Body::Row(row) => self.write_row(w, row, &widths)?,
+                Body::Row(row) => {
+                    if self.card_rows && matches!(previous, Some(Body::Row(_) | Body::Sub(_))) {
+                        writeln!(w)?;
+                    }
+                    self.write_row(w, row, &widths)?;
+                }
+                Body::Sub(cell) => self.write_sub(w, cell)?,
                 Body::Section(cells) => {
                     writeln!(w)?;
                     for (idx, cell) in cells.iter().enumerate() {
@@ -490,6 +515,40 @@ impl Table {
                     writeln!(w)?;
                 }
             }
+            previous = Some(body);
+        }
+        Ok(())
+    }
+
+    fn write_sub(&self, w: &mut impl Write, cell: &Cell) -> std::io::Result<()> {
+        let indent = self.indent + 2;
+        let Some(max_width) = self.max_width else {
+            write!(w, "{:indent$}", "", indent = indent)?;
+            cell.write_styled(w)?;
+            writeln!(w)?;
+            return Ok(());
+        };
+        let budget = max_width.saturating_sub(indent);
+        let mut lines = wrap_words(&cell.text, budget);
+        let truncated = lines.len() > SUB_MAX_LINES;
+        lines.truncate(SUB_MAX_LINES);
+        if truncated
+            && budget > 0
+            && let Some(last) = lines.last_mut()
+        {
+            while last.width() > budget - 1 {
+                last.pop();
+            }
+            last.push('…');
+        }
+        for line in lines {
+            write!(w, "{:indent$}", "", indent = indent)?;
+            Cell {
+                text: line,
+                style: cell.style,
+            }
+            .write_styled(w)?;
+            writeln!(w)?;
         }
         Ok(())
     }
@@ -509,7 +568,7 @@ impl Table {
             }
             let c = cells.get(col).unwrap_or(&blank);
             let clipped;
-            let c = if self.clip_last_width.is_some() && col + 1 == cols {
+            let c = if self.max_width.is_some() && col + 1 == cols {
                 clipped = c.clipped(width);
                 &clipped
             } else {
@@ -524,6 +583,54 @@ impl Table {
         }
         writeln!(w)
     }
+}
+
+/// Greedily wrap pre-collapsed single-line text to `width` display columns.
+/// Tokens wider than the budget are hard-split on character boundaries.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if !current.is_empty() && current.width() + 1 + word.width() <= width {
+            current.push(' ');
+            current.push_str(word);
+            continue;
+        }
+        if !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+        if word.width() <= width {
+            current.push_str(word);
+            continue;
+        }
+
+        let mut used = 0;
+        for ch in word.chars() {
+            let char_width = ch.width().unwrap_or(0);
+            if char_width > width {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                    used = 0;
+                }
+                lines.push(clip_to_width(&ch.to_string(), width));
+                continue;
+            }
+            if !current.is_empty() && used + char_width > width {
+                lines.push(std::mem::take(&mut current));
+                used = 0;
+            }
+            current.push(ch);
+            used += char_width;
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 fn clip_to_width(text: &str, max_width: usize) -> String {
@@ -768,14 +875,81 @@ mod tests {
     }
 
     #[test]
-    fn table_clip_last_limits_trailing_column() {
-        let mut table = Table::new(["NAME", "DESC"]).clip_last(20);
+    fn table_max_width_limits_trailing_column() {
+        let mut table = Table::new(["NAME", "DESC"]).max_width(20);
         table.row([cell("agent"), cell("unicode wide 文字 tail")]);
 
         let rendered = strip(|w| table.render(w));
 
         assert_eq!(rendered, "NAME   DESC\nagent  unicode wide…\n");
         assert!(rendered.lines().all(|line| line.width() <= 20));
+    }
+
+    #[test]
+    fn table_sub_wraps_with_an_aligned_indent() {
+        let mut table = Table::new(["NAME"]).indent(2).max_width(20);
+        table.row([cell("agent")]);
+        table.sub(cell("one two three four five"));
+
+        assert_eq!(
+            strip(|w| table.render(w)),
+            "  NAME\n  agent\n    one two three\n    four five\n"
+        );
+    }
+
+    #[test]
+    fn table_sub_caps_lines_and_marks_truncation() {
+        let mut table = Table::new(["NAME"]).max_width(10);
+        table.row([cell("agent")]);
+        table.sub(cell("one two three four five six seven eight"));
+
+        let rendered = strip(|w| table.render(w));
+
+        assert_eq!(rendered, "NAME\nagent\n  one two\n  three\n  four…\n");
+        assert!(rendered.lines().all(|line| line.width() <= 10));
+    }
+
+    #[test]
+    fn table_sub_without_max_width_stays_on_one_line() {
+        let mut table = Table::new(["NAME"]);
+        table.row([cell("agent")]);
+        table.sub(cell("one two three"));
+
+        assert_eq!(strip(|w| table.render(w)), "NAME\nagent\n  one two three\n");
+    }
+
+    #[test]
+    fn table_card_rows_separate_cards_without_section_gaps() {
+        let mut table = Table::new(["NAME"]).card_rows().max_width(20);
+        table.section("first");
+        table.row([cell("one")]);
+        table.sub(cell("detail"));
+        table.row([cell("two")]);
+        table.section("second");
+        table.row([cell("three")]);
+
+        assert_eq!(
+            strip(|w| table.render(w)),
+            "NAME\n\nfirst\none\n  detail\n\ntwo\n\nsecond\nthree\n"
+        );
+    }
+
+    #[test]
+    fn table_rows_remain_dense_by_default() {
+        let mut table = Table::new(["NAME"]);
+        table.row([cell("one")]);
+        table.row([cell("two")]);
+
+        assert_eq!(strip(|w| table.render(w)), "NAME\none\ntwo\n");
+    }
+
+    #[test]
+    fn wrap_words_respects_wide_unicode_and_splits_long_tokens() {
+        let wrapped = wrap_words("ab 文字列 abcdefgh", 4);
+
+        assert_eq!(wrapped, ["ab", "文字", "列", "abcd", "efgh"]);
+        assert!(wrapped.iter().all(|line| line.width() <= 4));
+        assert_eq!(wrap_words("文", 1), ["…"]);
     }
 
     #[test]

@@ -88,7 +88,7 @@ pub(crate) fn render_agents_table(
     let mut table =
         render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE", "DESC"])
             .right(&[3, 4, 5])
-            .clip_last(max_width);
+            .max_width(max_width);
     for group in groups {
         table.section_cells(group_header_cells(&group, snapshot, &glyph));
         for &agent in &group.agents {

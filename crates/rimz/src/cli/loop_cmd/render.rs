@@ -521,7 +521,7 @@ fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> s
     } else {
         vec!["", "task", "next", "last run", "status"]
     };
-    let mut table = ui::Table::new(headers).indent(2).clip_last(cols);
+    let mut table = ui::Table::new(headers).indent(2).max_width(cols);
     for row in rows {
         let next_style = match row.state {
             RowState::Running => ui::palette::ACCENT,

@@ -78,7 +78,7 @@ fn render_history(
 ) -> std::io::Result<()> {
     let mut table = render::Table::new(["START", "DUR", "TOKENS", "COST", "OUTCOME", "PROMPT"])
         .right(&[1, 2, 3])
-        .clip_last(max_width);
+        .max_width(max_width);
     for turn in turns {
         let duration =
             turn.ended_at.map_or_else(
