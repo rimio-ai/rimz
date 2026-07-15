@@ -4,6 +4,7 @@ use super::*;
 use crate::cli::render;
 use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::run_wake::{self, ExpectedRunFrame, SocketGuard};
+use std::io::IsTerminal as _;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::cli::agents_cmd) enum RunPlacement {
@@ -174,7 +175,9 @@ fn open_attempt_pane(
     pane: &PaneCmd,
 ) -> Result<()> {
     let target = own_pane_id(room.mux_name());
-    let direction = room.split_direction();
+    let direction = rimz::mux::detect_terminal_size()
+        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
+        .unwrap_or_default();
     let tab = || -> Result<()> {
         let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
         room.backend()
@@ -597,11 +600,27 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
         mux,
         rimz::room::RoomSizing::Birth,
     )?;
-    room.birth(rimz::room::RoomBirth::Supervised(
+    let outcome = match room.birth(rimz::room::RoomBirth::Supervised(
         rimz::room::SupervisedBirth {
             cwd: prepared.launch.cwd.clone(),
+            recovery: if std::io::stdin().is_terminal() {
+                rimz::room::AttendedRecovery::Reset
+            } else {
+                rimz::room::AttendedRecovery::RequireExplicitReset
+            },
         },
-    ))?;
+    )) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            if let Some(reset) = err.downcast_ref::<rimz::room::ResetRecoveryError>() {
+                render::room::print_automatic_reset(room.session_name(), &reset.report)?;
+            }
+            return Err(err);
+        }
+    };
+    if let Some(reset) = outcome.reset.as_ref() {
+        render::room::print_automatic_reset(room.session_name(), reset)?;
+    }
     let retries = args.retries.unwrap_or(0);
     let owns_worktree = args.worktree.is_some() || args.from_pr.is_some();
     let base_prompt = prepared.prompt.clone();

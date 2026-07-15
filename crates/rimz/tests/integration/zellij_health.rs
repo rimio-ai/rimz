@@ -89,6 +89,37 @@ fn attach_retries_transient_zellij_session_listing_before_default_mux_fallback()
 }
 
 #[test]
+fn named_attach_preserves_recorded_room_owner() {
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");
+    let recorded_owner = PathBuf::from("/previous/rimz");
+    let store = env.store();
+    store
+        .record_room_bin(&workspace, recorded_owner.clone())
+        .expect("record room owner");
+    let shim = FakeZellij::new().with_tmux();
+
+    let output = env
+        .rimz()
+        .args(["attach", workspace.session_name.as_str(), "--print"])
+        .env("PATH", shim.bin_dir.path())
+        .env("RIMZ_ZELLIJ_BIN", &shim.bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
+        .env("RIMZ_TEST_SESSION_NAME", &workspace.session_name)
+        .bounded_output()
+        .expect("run rimz attach");
+
+    assert!(
+        output.status.success(),
+        "named attach should succeed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let record = rimz::store::workspace_record::read(&store.paths().workspace_record)
+        .expect("read workspace record");
+    assert_eq!(record.rimz_bin, Some(recorded_owner));
+}
+
+#[test]
 fn tmux_start_skips_wedged_rival_zellij_session_probe() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");

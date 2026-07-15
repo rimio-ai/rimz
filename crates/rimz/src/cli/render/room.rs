@@ -4,6 +4,17 @@ use std::io::Write;
 
 use anyhow::Result;
 
+pub(crate) fn print_automatic_reset(
+    session_name: &str,
+    report: &rimz::room::RoomResetReport,
+) -> Result<()> {
+    writeln!(
+        std::io::stderr().lock(),
+        "rimz: resetting the '{session_name}' room to clear a wedged mux session...",
+    )?;
+    print_reset_report(report)
+}
+
 pub(crate) fn print_reset_report(report: &rimz::room::RoomResetReport) -> Result<()> {
     let teardown = &report.teardown;
     let records = &report.records;

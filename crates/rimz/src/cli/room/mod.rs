@@ -542,7 +542,6 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                     mux,
                     RoomSizing::Birth,
                 )?;
-                context.claim_owner()?;
                 birth_managed_room(
                     &mut context,
                     was_live,
@@ -633,28 +632,16 @@ fn birth_managed_room(
         Ok(outcome) => outcome,
         Err(err) => {
             if let Some(reset) = err.downcast_ref::<rimz::room::ResetRecoveryError>() {
-                render_automatic_reset(context, &reset.report)?;
+                render::room::print_automatic_reset(context.session_name(), &reset.report)?;
             }
             return Err(err);
         }
     };
     if let Some(reset) = outcome.reset.as_ref() {
-        render_automatic_reset(context, reset)?;
+        render::room::print_automatic_reset(context.session_name(), reset)?;
     }
     report_resume(&outcome.resume);
     Ok(())
-}
-
-fn render_automatic_reset(
-    context: &RoomContext,
-    reset: &rimz::room::RoomResetReport,
-) -> Result<()> {
-    writeln!(
-        std::io::stderr().lock(),
-        "rimz: resetting the '{}' room to clear a wedged mux session...",
-        context.session_name(),
-    )?;
-    render::room::print_reset_report(reset)
 }
 
 fn preflight_account_budgets(

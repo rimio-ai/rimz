@@ -12,7 +12,7 @@ use crate::harness::rebirth::RebirthPlan;
 use crate::ids::{MuxName, WorkspaceId};
 use crate::mux::{
     BackgroundViewOptions, CommandSpec, MuxBackend, PresencePluginOptions, SessionHealth,
-    SessionOptions, SidebarPaneOptions, SidebarWidth, SplitDirection,
+    SessionOptions, SidebarPaneOptions, SidebarWidth,
 };
 use crate::store::workspace_record;
 use crate::workspace::{ResolvedWorkspace, RootClass};
@@ -269,13 +269,6 @@ impl RoomContext {
             detected_size: self.detected_size,
             truecolor: crate::tui::truecolor(),
         }
-    }
-
-    /// Direction derived from the birth/gallery terminal probe.
-    pub fn split_direction(&self) -> SplitDirection {
-        self.detected_size
-            .map(|(cols, rows)| crate::mux::split_along_longer_edge(cols, rows))
-            .unwrap_or_default()
     }
 
     /// Build and return attach command after clearing stale resurrection state.

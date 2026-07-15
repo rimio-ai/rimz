@@ -50,6 +50,7 @@ pub struct NormalBirth {
 /// Supervised-run birth inputs.
 pub struct SupervisedBirth {
     pub cwd: PathBuf,
+    pub recovery: AttendedRecovery,
 }
 
 /// Two real room birth policies.
@@ -126,7 +127,7 @@ impl RoomContext {
                 None,
                 None,
                 BackgroundViewBirth::Skip,
-                AttendedRecovery::RequireExplicitReset,
+                supervised.recovery,
                 true,
             ),
         };
