@@ -2,9 +2,18 @@ use super::exec::*;
 use super::launch::*;
 use super::*;
 use clap::{CommandFactory, Parser};
+use jiff::Timestamp;
+use rimz::agents::{
+    AgentState, AgentStatus, AgentTurnError, LaunchParams, LaunchPreset, TurnErrorClass, TurnPhase,
+};
+use rimz::config::{MachineConfig, Profile, ProfilesConfig, ThemeConfig, ThemeGlyphsConfig};
+use rimz::forge::Forge;
+use rimz::harness::launch::{ExecAction, ExecIdentity, ExecInvocation};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::run_wake::{ExpectedRunFrame, RunWakeOutcome};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
+use rimz::pane::{PaneRef, RuntimeOwner, RuntimeOwnerKind};
+use rimz::sidebar::refresh::CodexDaemonReap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -21,25 +30,28 @@ struct AgentsHarness {
     args: AgentsArgs,
 }
 
-fn agent_profile(
-    system_prompt_file: Option<&Path>,
-    append_system_prompt_file: Option<&Path>,
-) -> rimz::config::ProfilesConfig {
-    let mut profiles = rimz::config::ProfilesConfig::default();
+fn planner_profiles() -> ProfilesConfig {
+    let mut profiles = ProfilesConfig::default();
     profiles.0.insert(
         "planner".to_owned(),
-        rimz::config::Profile {
+        Profile {
             agent: "claude".to_owned(),
             mode: None,
             model: None,
             effort: None,
             budget: None,
-            system_prompt_file: system_prompt_file.map(Path::to_path_buf),
-            append_system_prompt_file: append_system_prompt_file.map(Path::to_path_buf),
+            system_prompt_file: None,
+            append_system_prompt_file: None,
             args: None,
         },
     );
     profiles
+}
+
+fn parse_agents(argv: &[&str]) -> AgentsArgs {
+    AgentsHarness::try_parse_from(argv)
+        .expect("parse agents command")
+        .args
 }
 
 fn parse_exec(argv: &[&str]) -> ExecArgs {
@@ -48,6 +60,46 @@ fn parse_exec(argv: &[&str]) -> ExecArgs {
         panic!("expected exec subcommand");
     };
     *args
+}
+
+fn parse_exec_invocation(input: &ExecInvocation<'_>) -> ExecArgs {
+    let argv = rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), input);
+    let parsed = crate::cli::Cli::try_parse_from(argv).expect("parse rendered exec argv");
+    let Some(crate::cli::Subcmd::Agents(args)) = parsed.subcommand else {
+        panic!("expected agents subcommand");
+    };
+    let Some(AgentsSubcmd::Exec(args)) = args.command else {
+        panic!("expected exec subcommand");
+    };
+    *args
+}
+
+fn minimal_exec_invocation<'a>(kind: &'a str, action: ExecAction<'a>) -> ExecInvocation<'a> {
+    ExecInvocation {
+        kind,
+        action,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: ExecIdentity::default(),
+    }
+}
+
+fn resume_or_fork_contract(action: ExecAction<'_>) -> (&str, &str, &[String]) {
+    use ExecAction::{Fork, Launch, Resume};
+
+    match action {
+        Resume {
+            session_id,
+            extra_args,
+        } => ("resume", session_id, extra_args),
+        Fork {
+            session_id,
+            extra_args,
+        } => ("fork", session_id, extra_args),
+        Launch { .. } => panic!("expected resume or fork"),
+    }
 }
 
 fn assert_clap_error(argv: &[&str], kind: clap::error::ErrorKind) {
@@ -79,104 +131,88 @@ mod parse {
 
     #[test]
     fn launch_forms_parse_public_contract() {
-        let parsed = AgentsHarness::try_parse_from(
-            "rimz claude,codex+term fix-tests --worktree=docs --bg".split_ascii_whitespace(),
-        )
-        .expect("parse agents launch");
+        let argv: Vec<_> = "rimz claude,codex+term fix-tests --worktree=docs --bg"
+            .split_ascii_whitespace()
+            .collect();
+        let args = parse_agents(&argv);
         assert_eq!(
-            (
-                parsed.args.spec.as_deref(),
-                parsed.args.prompt.as_deref(),
-                parsed.args.worktree.as_deref(),
-                parsed.args.bg
-            ),
-            (
-                Some("claude,codex+term"),
-                Some("fix-tests"),
-                Some("docs"),
-                true
-            )
+            [
+                args.spec.as_deref(),
+                args.prompt.as_deref(),
+                args.worktree.as_deref()
+            ],
+            [Some("claude,codex+term"), Some("fix-tests"), Some("docs")]
         );
+        assert!(args.bg);
 
-        let parsed = AgentsHarness::try_parse_from(
-            "rimz claude fix-auth --from-pr https://gitlab.com/org/repo/-/merge_requests/12 --worktree review-12 --model opus --description port-auth --effort high --system-prompt-file /abs/prompt.md --append-system-prompt-file /abs/append.md -p --max-turns 3 --retries 2 --verify true --max-attempts 4 -n swift-otter"
-                .split_ascii_whitespace(),
-        )
-        .expect("parse maximal supervised launch");
+        let argv: Vec<_> = "rimz claude fix-auth --from-pr https://gitlab.com/org/repo/-/merge_requests/12 --worktree review-12 --model opus --description port-auth --effort high --system-prompt-file /abs/prompt.md --append-system-prompt-file /abs/append.md -p --max-turns 3 --retries 2 --verify true --max-attempts 4 -n swift-otter"
+            .split_ascii_whitespace()
+            .collect();
+        let args = parse_agents(&argv);
         assert_eq!(
             (
-                parsed.args.spec.as_deref(),
-                parsed.args.prompt.as_deref(),
-                parsed.args.worktree.as_deref()
-            ),
-            (Some("claude"), Some("fix-auth"), Some("review-12"))
-        );
-        assert_eq!(
-            (
-                parsed.args.model.as_deref(),
-                parsed.args.description.as_deref(),
-                parsed.args.effort.as_deref()
-            ),
-            (Some("opus"), Some("port-auth"), Some("high"))
-        );
-        assert_eq!(
-            (
-                parsed.args.system_prompt_file.as_deref(),
-                parsed.args.append_system_prompt_file.as_deref()
+                args.spec.as_deref(),
+                args.prompt.as_deref(),
+                args.worktree.as_deref(),
+                args.model.as_deref(),
+                args.description.as_deref(),
+                args.effort.as_deref(),
+                args.system_prompt_file.as_deref(),
+                args.append_system_prompt_file.as_deref(),
+                args.max_turns,
             ),
             (
+                Some("claude"),
+                Some("fix-auth"),
+                Some("review-12"),
+                Some("opus"),
+                Some("port-auth"),
+                Some("high"),
                 Some(Path::new("/abs/prompt.md")),
-                Some(Path::new("/abs/append.md"))
+                Some(Path::new("/abs/append.md")),
+                Some(3),
             )
         );
         assert_eq!(
-            (parsed.args.max_turns, parsed.args.retries),
-            (Some(3), Some(2))
-        );
-        assert_eq!(
             (
-                parsed.args.verify.as_deref(),
-                parsed.args.max_attempts,
-                parsed.args.name.as_deref()
+                args.retries,
+                args.verify.as_deref(),
+                args.max_attempts,
+                args.name.as_deref(),
             ),
-            (Some("true"), Some(4), Some("swift-otter"))
+            (Some(2), Some("true"), Some(4), Some("swift-otter"),)
         );
-        assert_eq!(
-            parsed.args.from_pr.unwrap().forge,
-            Some(rimz::forge::Forge::GitLab)
-        );
+        assert_eq!(args.from_pr.unwrap().forge, Some(Forge::GitLab));
 
-        let resume =
-            AgentsHarness::try_parse_from("rimz forge --resume".split_ascii_whitespace()).unwrap();
-        let alias = AgentsHarness::try_parse_from("rimz forge --continue".split_ascii_whitespace())
-            .unwrap();
-        let scoped = AgentsHarness::try_parse_from(
-            "rimz forge --worktree=restore-living-team --resume".split_ascii_whitespace(),
-        )
-        .unwrap();
-        assert!(resume.args.resume && alias.args.resume && scoped.args.resume);
-        assert_eq!(scoped.args.worktree.as_deref(), Some("restore-living-team"));
+        let resume = parse_agents(&["rimz", "forge", "--resume"]);
+        let alias = parse_agents(&["rimz", "forge", "--continue"]);
+        let scoped = parse_agents(&[
+            "rimz",
+            "forge",
+            "--worktree=restore-living-team",
+            "--resume",
+        ]);
+        assert!(resume.resume && alias.resume && scoped.resume);
+        assert_eq!(scoped.worktree.as_deref(), Some("restore-living-team"));
     }
 
     #[test]
     fn lane_resume_forms_parse_public_contract() {
-        let scoped = AgentsHarness::try_parse_from(["rimz", "resume", "#docs"])
-            .expect("parse scoped resume");
-        let pr = AgentsHarness::try_parse_from([
+        let scoped = parse_agents(&["rimz", "resume", "#docs"]);
+        let pr = parse_agents(&[
             "rimz",
             "resume",
             "--from-pr",
             "https://github.com/rimz/rimz/pull/69",
             "--bg",
-        ])
-        .expect("parse PR resume");
+        ]);
         assert!(matches!(
-            scoped.args.command,
+            scoped.command,
             Some(AgentsSubcmd::Resume { scope: Some(scope), from_pr: None, bg: false })
                 if scope == "#docs"
         ));
         assert!(matches!(
-            pr.args.command,
+            pr.command,
             Some(AgentsSubcmd::Resume {
                 scope: None,
                 from_pr: Some(rimz::forge::PrTarget { number: 69, .. }),
@@ -294,18 +330,10 @@ mod parse {
                 "at least 1",
             ),
         ] {
-            let parsed = AgentsHarness::try_parse_from(argv).expect("parse runtime-invalid form");
-            let err = validate_supervised_output(&parsed.args, output).expect_err("reject output");
+            let args = parse_agents(argv);
+            let err = validate_supervised_output(&args, output).expect_err("reject output");
             assert!(err.to_string().contains(fragment), "{argv:?}: {err:#}");
         }
-
-        let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p"])
-            .expect("parse attempts without verify");
-        let mut args = parsed.args;
-        args.max_attempts = Some(2);
-        let err =
-            validate_supervised_output(&args, OutputFormat::Text).expect_err("require verify");
-        assert!(err.to_string().contains("requires --verify"), "{err:#}");
     }
 
     #[test]
@@ -317,114 +345,26 @@ mod parse {
             (&["rimz", "--model", "opus"], "require an agent spec"),
             (&["rimz", "-p", "--max-turns", "3"], "require an agent spec"),
         ] {
-            let parsed = AgentsHarness::try_parse_from(argv.iter().copied()).expect("parse flag");
-            let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject flag");
+            let args = parse_agents(argv);
+            let err = reject_launch_flags_without_spec(&args).expect_err("reject flag");
             assert!(err.to_string().contains(fragment), "{err:#}");
         }
     }
 
     #[test]
-    fn exec_actions_parse_identity_and_conflicts() {
-        let args = parse_exec(&[
-            "rimz",
-            "exec",
-            "codex",
-            "--run-id",
-            "run_0123456789abcdef0123456789abcdef",
-            "--agent-name",
-            "lucid-atlas",
-            "--agent-mode",
-            "yolo",
-            "--agent-role",
-            "coder",
-            "--agent-team",
-            "forge",
-            "--launch-group",
-            "launch_group_1",
-            "--launch-ordinal",
-            "2",
-            "--agent-channel",
-            "design",
-            "--agent-model",
-            "gpt-5.5",
-            "--agent-effort",
-            "xhigh",
-            "--launch-id",
-            "launch_0123456789abcdef0123456789abcdef",
-            "--exit-on-run-completion",
-            "--close-pane-on-exit",
-            "--worktree-path",
-            "/x",
-            "--prompt",
-            "hi",
-            "--",
-            "--model",
-            "gpt-5-codex",
-        ]);
-        assert_eq!(args.kind, "codex");
-        assert_eq!(
-            args.run_id.as_ref().map(rimz::RunId::as_str),
-            Some("run_0123456789abcdef0123456789abcdef")
-        );
-        assert_eq!(args.agent_name.as_deref(), Some("lucid-atlas"));
-        assert_eq!(args.agent_mode, Some(PermissionMode::Yolo));
-        assert_eq!(
-            (args.agent_role.as_deref(), args.agent_team.as_deref()),
-            (Some("coder"), Some("forge"))
-        );
-        assert_eq!(
-            (args.launch_group.as_deref(), args.launch_ordinal),
-            (Some("launch_group_1"), Some(2))
-        );
-        assert_eq!(args.agent_channel.as_deref(), Some("design"));
-        assert_eq!(
-            (args.agent_model.as_deref(), args.agent_effort.as_deref()),
-            (Some("gpt-5.5"), Some("xhigh"))
-        );
-        assert_eq!(
-            args.launch_id.as_deref(),
-            Some("launch_0123456789abcdef0123456789abcdef")
-        );
-        assert!(args.exit_on_run_completion && args.close_pane_on_exit);
-        assert_eq!(
-            (args.worktree_path.as_deref(), args.prompt.as_deref()),
-            (Some(Path::new("/x")), Some("hi"))
-        );
-        assert_eq!(args.extra_args, ["--model", "gpt-5-codex"]);
-
-        let fork = parse_exec(&["rimz", "exec", "codex", "--fork", "sess-2"]);
-        let resume = parse_exec(&["rimz", "exec", "claude", "--resume", "sess-1"]);
-        assert_eq!(fork.fork.as_deref(), Some("sess-2"));
-        assert_eq!(resume.resume.as_deref(), Some("sess-1"));
-        for argv in [
-            &[
-                "rimz", "exec", "claude", "--resume", "sess-1", "--prompt", "hi",
-            ][..],
-            &[
-                "rimz", "exec", "codex", "--fork", "sess-2", "--resume", "sess-1",
-            ],
-            &[
-                "rimz", "exec", "codex", "--fork", "sess-2", "--prompt", "hi",
-            ],
-        ] {
-            assert!(ExecHarness::try_parse_from(argv).is_err(), "{argv:?}");
-        }
-    }
-
-    #[test]
-    fn exec_identity_argv_round_trips_through_cli() {
-        let extra_args = vec!["--dangerously-skip-permissions".to_owned()];
-        let input = rimz::harness::launch::ExecInvocation {
+    fn exec_argv_round_trips_identity_actions_and_conflicts() {
+        let launch_extra = vec!["--dangerously-skip-permissions".to_owned()];
+        let input = ExecInvocation {
             kind: "claude",
-            action: rimz::harness::launch::ExecAction::Launch {
+            action: ExecAction::Launch {
                 prompt: Some("fix it"),
-                extra_args: &extra_args,
+                extra_args: &launch_extra,
             },
             run_id: Some("run_0123456789abcdef0123456789abcdef"),
             worktree_path: Some(Path::new("/repo/worktree")),
             close_pane_on_exit: true,
             exit_on_run_completion: true,
-            identity: rimz::harness::launch::ExecIdentity {
+            identity: ExecIdentity {
                 name: Some("swift-otter"),
                 name_explicit: true,
                 launch_id: Some("launch_0123456789abcdef0123456789abcdef"),
@@ -441,80 +381,104 @@ mod parse {
             },
         };
 
-        let argv = rimz::harness::launch::exec_argv(Path::new("/bin/rimz"), &input);
-        let parsed = crate::cli::Cli::try_parse_from(argv).expect("parse rendered exec argv");
-        let Some(crate::cli::Subcmd::Agents(args)) = parsed.subcommand else {
-            panic!("expected agents subcommand");
-        };
-        let Some(AgentsSubcmd::Exec(args)) = args.command else {
-            panic!("expected exec subcommand");
-        };
-        let args = *args;
+        let args = parse_exec_invocation(&input);
         let action = exec_action(&args);
         let actual = exec_invocation(&args, action);
-        let actual_identity = rimz::harness::launch::ExecIdentity {
-            launch_id: args.launch_id.as_deref(),
-            ..actual.identity
-        };
-
-        assert_eq!(actual.kind, input.kind);
-        assert_eq!(actual.run_id, input.run_id);
-        assert_eq!(actual.worktree_path, input.worktree_path);
-        assert_eq!(actual.close_pane_on_exit, input.close_pane_on_exit);
-        assert_eq!(actual.exit_on_run_completion, input.exit_on_run_completion);
-        let (
-            rimz::harness::launch::ExecAction::Launch {
-                prompt: actual_prompt,
-                extra_args: actual_extra_args,
-            },
-            rimz::harness::launch::ExecAction::Launch {
-                prompt: input_prompt,
-                extra_args: input_extra_args,
-            },
-        ) = (actual.action, input.action)
-        else {
+        assert_eq!(
+            (
+                actual.kind,
+                actual.run_id,
+                actual.worktree_path,
+                actual.close_pane_on_exit,
+                actual.exit_on_run_completion,
+            ),
+            (
+                "claude",
+                Some("run_0123456789abcdef0123456789abcdef"),
+                Some(Path::new("/repo/worktree")),
+                true,
+                true,
+            )
+        );
+        let ExecAction::Launch { prompt, extra_args } = actual.action else {
             panic!("expected launch actions");
         };
-        assert_eq!(actual_prompt, input_prompt);
-        assert_eq!(actual_extra_args, input_extra_args);
-        assert_eq!(actual_identity.name, input.identity.name);
-        assert_eq!(actual_identity.name_explicit, input.identity.name_explicit);
-        assert_eq!(actual_identity.launch_id, input.identity.launch_id);
-        assert_eq!(actual_identity.profile, input.identity.profile);
-        assert_eq!(actual_identity.mode, input.identity.mode);
-        assert_eq!(actual_identity.role, input.identity.role);
-        assert_eq!(actual_identity.team, input.identity.team);
-        assert_eq!(actual_identity.launch_group, input.identity.launch_group);
         assert_eq!(
-            actual_identity.launch_ordinal,
-            input.identity.launch_ordinal
+            (prompt, extra_args),
+            (Some("fix it"), launch_extra.as_slice())
         );
-        assert_eq!(actual_identity.channel, input.identity.channel);
-        assert_eq!(actual_identity.model, input.identity.model);
-        assert_eq!(actual_identity.effort, input.identity.effort);
-        assert_eq!(actual_identity.budget, input.identity.budget);
+        assert_eq!(
+            (
+                actual.identity.name,
+                actual.identity.name_explicit,
+                args.launch_id.as_deref(),
+            ),
+            (
+                Some("swift-otter"),
+                true,
+                Some("launch_0123456789abcdef0123456789abcdef"),
+            )
+        );
         assert_eq!(
             launch_params(&args),
-            rimz::agents::LaunchParams {
-                profile: input.identity.profile.map(str::to_owned),
-                mode: input.identity.mode,
-                role: input.identity.role.map(str::to_owned),
-                model: input.identity.model.map(str::to_owned),
-                effort: input.identity.effort.map(str::to_owned),
-                budget: input.identity.budget.map(str::to_owned),
-                team: input.identity.team.map(str::to_owned),
-                launch_group: input.identity.launch_group.map(str::to_owned),
-                launch_ordinal: input.identity.launch_ordinal,
-                channel: input.identity.channel.map(str::to_owned),
+            LaunchParams {
+                profile: Some("planner".to_owned()),
+                mode: Some(PermissionMode::Yolo),
+                role: Some("coder".to_owned()),
+                model: Some("opus".to_owned()),
+                effort: Some("high".to_owned()),
+                budget: Some("$12.50/day".to_owned()),
+                team: Some("forge".to_owned()),
+                launch_group: Some("launch_group_1".to_owned()),
+                launch_ordinal: Some(2),
+                channel: Some("design".to_owned()),
                 kind_ordinal: None,
             }
         );
+
+        let resume_extra = vec!["--verbose".to_owned()];
+        let fork_extra = vec!["--branch".to_owned()];
+        for input in [
+            minimal_exec_invocation(
+                "claude",
+                ExecAction::Resume {
+                    session_id: "sess-1",
+                    extra_args: &resume_extra,
+                },
+            ),
+            minimal_exec_invocation(
+                "codex",
+                ExecAction::Fork {
+                    session_id: "sess-2",
+                    extra_args: &fork_extra,
+                },
+            ),
+        ] {
+            let args = parse_exec_invocation(&input);
+            let actual = exec_invocation(&args, exec_action(&args));
+            assert_eq!(actual.kind, input.kind);
+            assert_eq!(
+                resume_or_fork_contract(actual.action),
+                resume_or_fork_contract(input.action)
+            );
+        }
+
+        for command in [
+            "rimz exec claude --resume sess-1 --prompt hi",
+            "rimz exec codex --fork sess-2 --resume sess-1",
+            "rimz exec codex --fork sess-2 --prompt hi",
+        ] {
+            assert!(
+                ExecHarness::try_parse_from(command.split_ascii_whitespace()).is_err(),
+                "{command}"
+            );
+        }
     }
 }
 
 #[test]
 fn refresh_targets_honor_channel_filter() {
-    let now = jiff::Timestamp::from_second(2_000).unwrap();
+    let now = Timestamp::from_second(2_000).unwrap();
     let mut auth = rimz::testkit::agent_state("claude", "auth", now);
     auth.channel = Some("auth-refresh".to_owned());
     auth.worktree_path = Some("/repo/worktrees/auth-refresh".to_owned());
@@ -572,9 +536,9 @@ mod launch_options {
 
     fn resolve_and_validate(
         args: &AgentsArgs,
-        machine: &rimz::config::MachineConfig,
+        machine: &MachineConfig,
         root: &Path,
-    ) -> Result<(ResolvedLaunch, rimz::agents::LaunchPreset)> {
+    ) -> Result<(ResolvedLaunch, LaunchPreset)> {
         let effective =
             rimz::config::effective::load(&machine.agents, root, &root.join("config-home"))?;
         let resolved = rimz::harness::plan::resolve_launch(
@@ -594,11 +558,10 @@ mod launch_options {
 
     #[test]
     fn supervised_launch_normalizes_model_and_effort_overrides() {
-        let parsed = AgentsHarness::try_parse_from([
+        let args = parse_agents(&[
             "rimz", "codex", "fix-it", "--model", " gpt-5 ", "--effort", " low ", "-p",
-        ])
-        .expect("parse supervised launch");
-        let (request, _) = into_supervised_request(parsed.args).expect("build supervised request");
+        ]);
+        let (request, _) = into_supervised_request(args).expect("build supervised request");
         let dir = tempfile::tempdir().expect("temp dir");
         let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None)
             .expect("resolve workspace");
@@ -606,7 +569,7 @@ mod launch_options {
         let prepared = crate::cli::supervised::run::prepare_supervised_launch_layout(
             &request,
             &workspace,
-            &rimz::config::MachineConfig::default(),
+            &MachineConfig::default(),
         )
         .expect("prepare supervised launch");
         let [Cell::Agent(rimz::harness::spec::AgentCell { model, effort, .. })] =
@@ -625,17 +588,10 @@ mod launch_options {
         let append = dir.path().join("append.md");
         std::fs::write(&prompt, "be concise").expect("write prompt");
         std::fs::write(&append, "follow project rules").expect("write append");
-        let parsed = AgentsHarness::try_parse_from([
-            "rimz",
-            "claude",
-            "hi",
-            "--system-prompt-file",
-            prompt.to_str().unwrap(),
-            "--append-system-prompt-file",
-            append.to_str().unwrap(),
-        ])
-        .expect("parse prompt files");
-        let preset = launch_override_preset(&parsed.args).expect("resolve prompt files");
+        let system_flag = format!("--system-prompt-file={}", prompt.display());
+        let append_flag = format!("--append-system-prompt-file={}", append.display());
+        let args = parse_agents(&["rimz", "claude", "hi", &system_flag, &append_flag]);
+        let preset = launch_override_preset(&args).expect("resolve prompt files");
         assert_eq!(
             (preset.system_prompt_file, preset.append_system_prompt_file),
             (
@@ -645,28 +601,17 @@ mod launch_options {
         );
 
         for flag in ["--system-prompt-file", "--append-system-prompt-file"] {
-            let parsed = AgentsHarness::try_parse_from([
-                "rimz",
-                "claude",
-                "hi",
-                flag,
-                dir.path().to_str().expect("utf8 dir path"),
-            ])
-            .expect("parse prompt directory");
-            let err = launch_override_preset(&parsed.args).expect_err("reject a directory");
+            let dir_path = dir.path().to_str().expect("utf8 dir path");
+            let args = parse_agents(&["rimz", "claude", "hi", flag, dir_path]);
+            let err = launch_override_preset(&args).expect_err("reject a directory");
             assert!(err.to_string().contains("is not a regular file"), "{err:#}");
         }
 
         let missing = dir.path().join("missing-append.md");
-        let parsed = AgentsHarness::try_parse_from([
-            "rimz",
-            "claude",
-            "hi",
-            "--append-system-prompt-file",
-            missing.to_str().expect("utf8 missing path"),
-        ])
-        .expect("parse missing append prompt");
-        let err = launch_override_preset(&parsed.args).expect_err("reject missing append path");
+        let missing_path = missing.to_str().expect("utf8 missing path");
+        let missing_flag = format!("--append-system-prompt-file={missing_path}");
+        let args = parse_agents(&["rimz", "claude", "hi", &missing_flag]);
+        let err = launch_override_preset(&args).expect_err("reject missing append path");
         assert!(
             err.to_string()
                 .contains("reading --append-system-prompt-file"),
@@ -675,52 +620,30 @@ mod launch_options {
     }
 
     #[test]
-    fn unknown_spec_wins_over_prompt_ambiguity() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let parsed = AgentsHarness::try_parse_from(["rimz", "missing-agent", "claude"])
-            .expect("parse malformed launch");
-
-        let err = resolve_and_validate(
-            &parsed.args,
-            &rimz::config::MachineConfig::default(),
-            dir.path(),
-        )
-        .expect_err("unknown spec wins");
-
-        assert!(err.to_string().contains("missing-agent"), "{err:#}");
-        assert!(
-            !err.to_string().contains("looks like another spec"),
-            "{err:#}"
-        );
-    }
-
-    #[test]
-    fn unknown_spec_wins_over_missing_cli_prompt_file() {
+    fn unknown_spec_errors_precede_secondary_launch_validation() {
         let dir = tempfile::tempdir().expect("temp dir");
         let missing = dir.path().join("missing.md");
-        let parsed = AgentsHarness::try_parse_from([
-            "rimz",
-            "missing-agent",
-            "--system-prompt-file",
-            missing.to_str().expect("utf8 path"),
-        ])
-        .expect("parse malformed launch");
-
-        let err = resolve_and_validate(
-            &parsed.args,
-            &rimz::config::MachineConfig::default(),
-            dir.path(),
-        )
-        .expect_err("unknown spec wins");
-
-        assert!(err.to_string().contains("missing-agent"), "{err:#}");
-        assert!(!err.to_string().contains("system-prompt-file"), "{err:#}");
+        let missing_path = missing.to_str().expect("utf8 path");
+        let ambiguous = ["rimz", "missing-agent", "claude"];
+        let missing_flag = format!("--system-prompt-file={missing_path}");
+        let missing_file = ["rimz", "missing-agent", &missing_flag];
+        for (argv, secondary_error) in [
+            (&ambiguous[..], "looks like another spec"),
+            (&missing_file[..], "system-prompt-file"),
+        ] {
+            let args = parse_agents(argv);
+            let err = resolve_and_validate(&args, &MachineConfig::default(), dir.path())
+                .expect_err("unknown spec wins");
+            let message = err.to_string();
+            assert!(message.contains("missing-agent"), "{err:#}");
+            assert!(!message.contains(secondary_error), "{err:#}");
+        }
     }
 
     #[test]
     fn multi_cell_name_fails_before_finalize_warnings() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let mut machine = rimz::config::MachineConfig::default();
+        let mut machine = MachineConfig::default();
         machine.agents.profiles.0.insert(
             "warn".to_owned(),
             rimz::config::Profile {
@@ -734,8 +657,7 @@ mod launch_options {
                 args: Some("--model raw".to_owned()),
             },
         );
-        let parsed = AgentsHarness::try_parse_from(["rimz", "warn,codex", "--name", "one"])
-            .expect("parse named multi-cell launch");
+        let args = parse_agents(&["rimz", "warn,codex", "--name", "one"]);
         let effective = rimz::config::effective::load(
             &machine.agents,
             dir.path(),
@@ -745,12 +667,12 @@ mod launch_options {
         let resolved = rimz::harness::plan::resolve_launch(
             &effective,
             &machine.agents.commands,
-            parsed.args.spec.as_deref(),
+            args.spec.as_deref(),
         )
         .expect("resolve warning-capable layout");
 
         let err = validate_resolved_launch_inputs(
-            &parsed.args,
+            &args,
             &effective,
             &machine.agents.commands,
             &resolved.layout,
@@ -767,7 +689,7 @@ mod launch_options {
             &mut warning_layout,
             LaunchFinalizeOptions {
                 permission_mode: None,
-                preset: &rimz::agents::LaunchPreset::default(),
+                preset: &LaunchPreset::default(),
                 passthrough: &[],
                 budget: None,
                 max_turns: None,
@@ -928,14 +850,14 @@ mod render {
         let pane_id = PaneId::from_parts(MuxName::Tmux, "%1");
         let mut codex = agent_with_status(
             "live-pane",
-            rimz::agents::AgentStatus::Running,
-            rimz::agents::TurnPhase::Reasoning,
+            AgentStatus::Running,
+            TurnPhase::Reasoning,
             1_000,
         );
         codex.kind = AgentKind::new_unchecked("codex");
-        codex.pane = Some(rimz::pane::PaneRef::from_id(pane_id.clone()));
-        codex.runtime_owner = Some(rimz::RuntimeOwner::new(
-            rimz::RuntimeOwnerKind::Daemon,
+        codex.pane = Some(PaneRef::from_id(pane_id.clone()));
+        codex.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Daemon,
             "live-pane",
             77,
             None,
@@ -943,22 +865,19 @@ mod render {
         let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
             workspace_id,
             vec![codex],
-            jiff::Timestamp::from_second(1_020).unwrap(),
+            Timestamp::from_second(1_020).unwrap(),
         );
         rimz::sidebar::refresh::write_codex_daemon_reap(
             &runtime,
-            &rimz::sidebar::refresh::CodexDaemonReap {
+            &CodexDaemonReap {
                 produced_at_ms: 1,
                 daemon_pids: BTreeSet::from([77]),
                 loaded: Some(BTreeSet::new()),
             },
         )
         .unwrap();
-        let frame = rimz::sidebar::frame::assemble_frame(
-            vec![rimz::pane::PaneRef::from_id(pane_id)],
-            1,
-            "rimz-test",
-        );
+        let frame =
+            rimz::sidebar::frame::assemble_frame(vec![PaneRef::from_id(pane_id)], 1, "rimz-test");
         rimz::store::atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame)
             .unwrap();
 
@@ -968,36 +887,36 @@ mod render {
 
     #[test]
     fn agents_table_projects_public_row_contract() {
-        let now = jiff::Timestamp::from_second(2_000).unwrap();
-        let mut failed = agent_with_status(
-            "failed-sess",
-            rimz::agents::AgentStatus::Running,
-            rimz::agents::TurnPhase::Reasoning,
-            1_000,
-        )
-        .with_turn_error(
-            rimz::agents::TurnErrorClass::Failed,
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut failed = agent_with_turn_error(
+            agent_with_status(
+                "failed-sess",
+                AgentStatus::Running,
+                TurnPhase::Reasoning,
+                1_000,
+            ),
+            TurnErrorClass::Failed,
             1_010,
             "API Error: Bad Request",
         );
         failed.name = Some("writer".to_owned());
         failed.name_explicit = true;
         failed.description = Some("fix failing auth flow".to_owned());
-        let paused = agent_with_status(
-            "paused-sess",
-            rimz::agents::AgentStatus::Running,
-            rimz::agents::TurnPhase::Reasoning,
-            1_000,
-        )
-        .with_turn_error(
-            rimz::agents::TurnErrorClass::PausedOverloaded,
+        let paused = agent_with_turn_error(
+            agent_with_status(
+                "paused-sess",
+                AgentStatus::Running,
+                TurnPhase::Reasoning,
+                1_000,
+            ),
+            TurnErrorClass::PausedOverloaded,
             1_010,
             "API Error: Overloaded",
         );
         let running = agent_with_status(
             "running-sess",
-            rimz::agents::AgentStatus::Running,
-            rimz::agents::TurnPhase::Reasoning,
+            AgentStatus::Running,
+            TurnPhase::Reasoning,
             1_000,
         );
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
@@ -1007,34 +926,24 @@ mod render {
         );
         let text = render_agents_text(&snapshot, now, 120);
 
-        assert!(
-            text.contains("@writer") && !text.contains("@claude"),
-            "{text}"
-        );
         let header = text.lines().next().unwrap_or_default();
-        assert!(!header.contains("DESC"), "{text}");
         assert!(
-            text.lines().any(|line| line == "  fix failing auth flow"),
+            text.contains("@writer")
+                && !text.contains("@claude")
+                && !header.contains("DESC")
+                && text.lines().any(|line| line == "  fix failing auth flow")
+                && ["failed", "paused", "running"]
+                    .into_iter()
+                    .all(|status| text.contains(status))
+                && !text.contains(":reasoning"),
             "{text}"
-        );
-        assert!(text.contains("failed"), "{text}");
-        assert!(text.contains("paused"), "{text}");
-        assert!(text.contains("running"), "{text}");
-        assert!(
-            !text.contains(":reasoning"),
-            "agent rows drop phase suffixes:\n{text}"
         );
     }
 
     #[test]
     fn agents_table_wraps_collapsed_description_to_width() {
-        let now = jiff::Timestamp::from_second(2_000).unwrap();
-        let mut agent = agent_with_status(
-            "long-desc",
-            rimz::agents::AgentStatus::Idle,
-            rimz::agents::TurnPhase::Idle,
-            1_000,
-        );
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut agent = agent_with_status("long-desc", AgentStatus::Idle, TurnPhase::Idle, 1_000);
         agent.description = Some(
             "this description starts\nwith pasted\tcontent and keeps going across enough words to fill the first line, then the second line, then the third line, and finally more preview text that must be truncated because agent cards only show a bounded activity summary instead of the entire prompt or attached reference content"
                 .to_owned(),
@@ -1044,60 +953,32 @@ mod render {
             vec![agent],
             now,
         );
-        let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
+        let text = render_agents_text(&snapshot, now, 72);
 
-        let mut out = anstream::StripStream::new(Vec::new());
-        render_agents_table(
-            &mut out,
-            &snapshot,
-            &agents,
-            now,
-            72,
-            &rimz::config::ThemeConfig::default(),
-        )
-        .expect("render agents table");
-        let text = String::from_utf8(out.into_inner()).expect("utf8");
-
-        assert!(
-            text.lines()
-                .all(|line| unicode_width::UnicodeWidthStr::width(line) <= 72),
-            "{text}"
-        );
         let description_lines: Vec<_> =
             text.lines().filter(|line| line.starts_with("  ")).collect();
-        assert!(!description_lines.is_empty(), "{text}");
-        assert!(description_lines.len() <= 3, "{text}");
         assert!(
-            description_lines
-                .join(" ")
-                .contains("this description starts with pasted content"),
-            "{text}"
-        );
-        assert!(
-            description_lines
-                .last()
-                .is_some_and(|line| line.ends_with('…')),
+            text.lines()
+                .all(|line| unicode_width::UnicodeWidthStr::width(line) <= 72)
+                && !description_lines.is_empty()
+                && description_lines.len() <= 3
+                && description_lines
+                    .join(" ")
+                    .contains("this description starts with pasted content")
+                && description_lines
+                    .last()
+                    .is_some_and(|line| line.ends_with('…')),
             "{text}"
         );
     }
 
     #[test]
     fn agents_table_separates_descriptionless_cards() {
-        let now = jiff::Timestamp::from_second(2_000).unwrap();
-        let mut first = agent_with_status(
-            "first",
-            rimz::agents::AgentStatus::Idle,
-            rimz::agents::TurnPhase::Idle,
-            1_000,
-        );
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut first = agent_with_status("first", AgentStatus::Idle, TurnPhase::Idle, 1_000);
         first.name = Some("alpha".to_owned());
         first.name_explicit = true;
-        let mut second = agent_with_status(
-            "second",
-            rimz::agents::AgentStatus::Idle,
-            rimz::agents::TurnPhase::Idle,
-            1_000,
-        );
+        let mut second = agent_with_status("second", AgentStatus::Idle, TurnPhase::Idle, 1_000);
         second.name = Some("beta".to_owned());
         second.name_explicit = true;
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
@@ -1125,10 +1006,10 @@ mod render {
 
     #[test]
     fn agents_table_groups_lanes_with_theme_and_team_context() {
-        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let now = Timestamp::from_second(2_000).unwrap();
         let auth_path = Some("/repo/worktrees/auth-refresh");
         let mut external = agent_in_lane("external", None, None, None);
-        external.status = rimz::agents::AgentStatus::Failed;
+        external.status = AgentStatus::Failed;
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/repo/main")),
             vec![
@@ -1172,12 +1053,12 @@ mod render {
             assert!(!header.contains("team"), "{text}");
         }
 
-        let theme = rimz::config::ThemeConfig {
-            glyphs: rimz::config::ThemeGlyphsConfig {
+        let theme = ThemeConfig {
+            glyphs: ThemeGlyphsConfig {
                 set: Some("nerd_font".to_owned()),
-                ..rimz::config::ThemeGlyphsConfig::default()
+                ..ThemeGlyphsConfig::default()
             },
-            ..rimz::config::ThemeConfig::default()
+            ..ThemeConfig::default()
         };
         let text = render_agents_text_with_theme(&snapshot, now, 120, &theme);
         assert!(text.contains("\u{f126} auth-refresh"), "{text}");
@@ -1186,20 +1067,11 @@ mod render {
 
     #[test]
     fn show_activity_projects_phase_only_for_active_turns() {
-        let now = jiff::Timestamp::from_second(2_000).unwrap();
-        let mut active = agent_with_status(
-            "active",
-            rimz::agents::AgentStatus::Running,
-            rimz::agents::TurnPhase::Acting,
-            1_000,
-        );
+        let now = Timestamp::from_second(2_000).unwrap();
+        let mut active =
+            agent_with_status("active", AgentStatus::Running, TurnPhase::Acting, 1_000);
         active.description = Some("ship\nwide\tfix".to_owned());
-        let idle = agent_with_status(
-            "idle",
-            rimz::agents::AgentStatus::Idle,
-            rimz::agents::TurnPhase::Idle,
-            1_000,
-        );
+        let idle = agent_with_status("idle", AgentStatus::Idle, TurnPhase::Idle, 1_000);
 
         let mut active_out = anstream::StripStream::new(Vec::new());
         super::show::render_activity_section(&mut active_out, &active, None, false, now)
@@ -1208,17 +1080,11 @@ mod render {
         assert!(
             active_text
                 .lines()
-                .any(|line| line.contains("status:") && line.contains("running")),
-            "{active_text}"
-        );
-        assert!(
-            active_text
-                .lines()
-                .any(|line| line.contains("phase:") && line.contains("acting")),
-            "{active_text}"
-        );
-        assert!(
-            active_text.contains("description:   ship wide fix"),
+                .any(|line| line.contains("status:") && line.contains("running"))
+                && active_text
+                    .lines()
+                    .any(|line| line.contains("phase:") && line.contains("acting"))
+                && active_text.contains("description:   ship wide fix"),
             "{active_text}"
         );
 
@@ -1231,12 +1097,12 @@ mod render {
 
         let mut native_wait = agent_with_status(
             "droid-wait",
-            rimz::agents::AgentStatus::Running,
-            rimz::agents::TurnPhase::Reasoning,
+            AgentStatus::Running,
+            TurnPhase::Reasoning,
             1_000,
         );
         let mut context = rimz::store::agent_context::empty_context("droid", now);
-        context.native_permission_wait = Some(jiff::Timestamp::from_second(1_010).unwrap());
+        context.native_permission_wait = Some(Timestamp::from_second(1_010).unwrap());
         native_wait.context = Some(context);
         let mut native_out = anstream::StripStream::new(Vec::new());
         super::show::render_activity_section(&mut native_out, &native_wait, None, false, now)
@@ -1252,7 +1118,7 @@ mod automation {
 
     #[test]
     fn create_on_miss_launches_kinds_and_agent_profiles_but_not_commands() {
-        let profiles = agent_profile(None, None);
+        let profiles = planner_profiles();
 
         assert!(is_launchable_type("codex", &profiles));
         assert!(is_launchable_type("planner", &profiles));
@@ -1262,100 +1128,48 @@ mod automation {
 }
 
 fn bare_exec_args() -> ExecArgs {
-    ExecArgs {
-        kind: "codex".to_owned(),
-        fork: None,
-        resume: None,
-        run_id: None,
-        agent_name: Some("lucid-atlas".to_owned()),
-        agent_name_explicit: false,
-        agent_profile: None,
-        agent_mode: None,
-        agent_role: None,
-        agent_team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        agent_channel: None,
-        agent_model: None,
-        agent_effort: None,
-        agent_budget: None,
-        launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
-        exit_on_run_completion: false,
-        close_pane_on_exit: false,
-        worktree_path: None,
-        prompt: None,
-        extra_args: Vec::new(),
-    }
+    let argv: Vec<_> = "rimz exec codex --agent-name lucid-atlas --launch-id launch_0123456789abcdef0123456789abcdef"
+        .split_ascii_whitespace()
+        .collect();
+    parse_exec(&argv)
 }
 
 fn render_agents_text(
     snapshot: &rimz::SidebarSnapshot,
-    now: jiff::Timestamp,
+    now: Timestamp,
     max_width: usize,
 ) -> String {
-    render_agents_text_with_theme(
-        snapshot,
-        now,
-        max_width,
-        &rimz::config::ThemeConfig::default(),
-    )
+    render_agents_text_with_theme(snapshot, now, max_width, &ThemeConfig::default())
 }
 
 fn render_agents_text_with_theme(
     snapshot: &rimz::SidebarSnapshot,
-    now: jiff::Timestamp,
+    now: Timestamp,
     max_width: usize,
-    theme: &rimz::config::ThemeConfig,
+    theme: &ThemeConfig,
 ) -> String {
-    let agents: Vec<&rimz::agents::AgentState> = snapshot.agents.iter().collect();
+    let agents: Vec<&AgentState> = snapshot.agents.iter().collect();
     let mut out = anstream::StripStream::new(Vec::new());
     render_agents_table(&mut out, snapshot, &agents, now, max_width, theme)
         .expect("render agents table");
     String::from_utf8(out.into_inner()).expect("utf8")
 }
 
-trait AgentTurnErrorFixture {
-    fn with_turn_error(self, class: rimz::agents::TurnErrorClass, at: i64, label: &str) -> Self;
-}
-
-impl AgentTurnErrorFixture for rimz::agents::AgentState {
-    fn with_turn_error(
-        mut self,
-        class: rimz::agents::TurnErrorClass,
-        at: i64,
-        label: &str,
-    ) -> Self {
-        self.context = Some(rimz::agents::AgentContext {
-            source: self.kind.to_string(),
-            session_name: None,
-            session_preview: None,
-            model_id: None,
-            model_display_name: None,
-            effort: None,
-            thinking_enabled: None,
-            output_style: None,
-            vim_mode: None,
-            agent_version: None,
-            exceeds_200k_tokens: None,
-            cost: None,
-            tokens: None,
-            rate_limits: None,
-            pr: None,
-            account: None,
-            turn_opened_by: Vec::new(),
-            turn_error: Some(rimz::agents::AgentTurnError {
-                class,
-                at: jiff::Timestamp::from_second(at).unwrap(),
-                label: Some(label.to_owned()),
-            }),
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
-            observed_at: jiff::Timestamp::from_second(at).unwrap(),
-        });
-        self
-    }
+fn agent_with_turn_error(
+    mut agent: AgentState,
+    class: TurnErrorClass,
+    at: i64,
+    label: &str,
+) -> AgentState {
+    let at = Timestamp::from_second(at).unwrap();
+    let mut context = rimz::store::agent_context::empty_context(&agent.kind.to_string(), at);
+    context.turn_error = Some(AgentTurnError {
+        class,
+        at,
+        label: Some(label.to_owned()),
+    });
+    agent.context = Some(context);
+    agent
 }
 
 fn agent_in_lane(
@@ -1363,13 +1177,8 @@ fn agent_in_lane(
     channel: Option<&str>,
     worktree: Option<&str>,
     team: Option<&str>,
-) -> rimz::agents::AgentState {
-    let mut agent = agent_with_status(
-        id,
-        rimz::agents::AgentStatus::Idle,
-        rimz::agents::TurnPhase::Idle,
-        1_000,
-    );
+) -> AgentState {
+    let mut agent = agent_with_status(id, AgentStatus::Idle, TurnPhase::Idle, 1_000);
     agent.channel = channel.map(ToOwned::to_owned);
     agent.worktree_path = worktree.map(ToOwned::to_owned);
     agent.worktree_branch = worktree.map(|_| "main".to_owned());
@@ -1377,14 +1186,9 @@ fn agent_in_lane(
     agent
 }
 
-fn agent_with_status(
-    id: &str,
-    status: rimz::agents::AgentStatus,
-    phase: rimz::agents::TurnPhase,
-    activity: i64,
-) -> rimz::agents::AgentState {
-    let at = jiff::Timestamp::from_second(activity).unwrap();
-    rimz::agents::AgentState {
+fn agent_with_status(id: &str, status: AgentStatus, phase: TurnPhase, activity: i64) -> AgentState {
+    let at = Timestamp::from_second(activity).unwrap();
+    AgentState {
         status,
         phase,
         worktree_path: Some("/tmp/rimz-agents-table".to_owned()),
