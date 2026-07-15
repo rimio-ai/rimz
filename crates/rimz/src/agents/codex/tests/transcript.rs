@@ -93,7 +93,7 @@ fn shared_scan_keeps_latest_usage_and_same_turn_plan_past_older_recovery() {
         r#"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"#,
     );
 
-    let (usage, outcome) =
+    let (usage, outcome, raw_error) =
         scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_parts();
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
     assert_eq!(usage.effort.as_deref(), Some("high"));
@@ -104,6 +104,23 @@ fn shared_scan_keeps_latest_usage_and_same_turn_plan_past_older_recovery() {
     };
     assert_eq!(plan.text, "Ship shared scan");
     assert_eq!(plan.at, "2026-07-13T10:00:03Z".parse().unwrap());
+    assert_eq!(raw_error, None);
+}
+
+#[test]
+fn raw_error_scan_looks_past_newer_abort() {
+    let tail = concat!(
+        r#"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"stream_error","message":"provider failed"}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-failed"}}"#,
+    );
+
+    let error = detect_turn_error(tail).expect("abort does not hide raw provider error");
+    assert_eq!(error.label.as_deref(), Some("provider failed"));
+    assert_eq!(
+        detect_turn_interrupted(tail),
+        Some("2026-07-13T10:00:02Z".parse().unwrap())
+    );
 }
 
 #[test]

@@ -175,6 +175,40 @@ fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
 }
 
 #[test]
+fn messageless_stop_keeps_raw_turn_error_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-messageless.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-messageless","last_agent_message":null}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let observation = CodexAdapter
+        .observe_lifecycle(
+            "Stop",
+            &json!({
+                "session_id": "sess-messageless",
+                "turn_id": "turn-messageless",
+                "transcript_path": path,
+            }),
+        )
+        .expect("messageless Stop observation");
+
+    assert_eq!(
+        observation.signal,
+        LifecycleSignal::TurnEnded {
+            errored: false,
+            parked_on_background: false,
+        }
+    );
+    assert_eq!(observation.turn_error, None);
+}
+
+#[test]
 fn root_and_child_lifecycle_events_keep_identity_boundaries() {
     let prompt = CodexAdapter
         .observe_lifecycle(

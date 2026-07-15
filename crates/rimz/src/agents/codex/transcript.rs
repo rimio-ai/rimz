@@ -153,7 +153,7 @@ pub fn refresh_transcript_context(
 
     let prices = pricing::cached_book(pricing_cache_path);
     let tail = read_transcript_tail(&path);
-    let (usage, outcome) = tail
+    let (usage, outcome, _) = tail
         .as_deref()
         .map(|tail| scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_parts())
         .unwrap_or_default();
@@ -563,10 +563,7 @@ pub(super) fn detect_plan_proposed(tail: &str) -> Option<PlanProposal> {
 }
 
 pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
-    match scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_outcome() {
-        Some(RestingTurnOutcome::Died(error)) => Some(error),
-        _ => None,
-    }
+    scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_raw_error()
 }
 
 #[cfg(test)]
@@ -947,12 +944,20 @@ enum OutcomeScan {
 }
 
 #[derive(Default)]
+enum RawErrorScan {
+    #[default]
+    Searching,
+    Resolved(Option<AgentTurnError>),
+}
+
+#[derive(Default)]
 pub(super) struct TranscriptScan {
     latest_model: Option<String>,
     latest_effort: Option<String>,
     latest_usage: Option<LastUsage>,
     latest_cumulative: Option<(u64, u64, u64)>,
     outcome: OutcomeScan,
+    raw_error: RawErrorScan,
 }
 
 impl TranscriptScan {
@@ -965,7 +970,8 @@ impl TranscriptScan {
     fn complete(&self, need: TranscriptScanNeed) -> bool {
         self.usage_complete()
             && (need == TranscriptScanNeed::UsageOnly
-                || matches!(self.outcome, OutcomeScan::Resolved(_)))
+                || matches!(self.outcome, OutcomeScan::Resolved(_))
+                    && matches!(self.raw_error, RawErrorScan::Resolved(_)))
     }
 
     pub(super) fn into_usage(self) -> TranscriptUsage {
@@ -1002,13 +1008,30 @@ impl TranscriptScan {
         }
     }
 
-    pub(super) fn into_parts(mut self) -> (TranscriptUsage, Option<RestingTurnOutcome>) {
+    pub(super) fn into_raw_error(self) -> Option<AgentTurnError> {
+        match self.raw_error {
+            RawErrorScan::Resolved(error) => error,
+            RawErrorScan::Searching => None,
+        }
+    }
+
+    pub(super) fn into_parts(
+        mut self,
+    ) -> (
+        TranscriptUsage,
+        Option<RestingTurnOutcome>,
+        Option<AgentTurnError>,
+    ) {
         let outcome = match std::mem::take(&mut self.outcome) {
             OutcomeScan::Resolved(outcome) => outcome,
             OutcomeScan::SeekingPlan { fallback, .. } => fallback,
             OutcomeScan::Searching => None,
         };
-        (self.into_usage(), outcome)
+        let raw_error = match std::mem::take(&mut self.raw_error) {
+            RawErrorScan::Resolved(error) => error,
+            RawErrorScan::Searching => None,
+        };
+        (self.into_usage(), outcome, raw_error)
     }
 }
 
@@ -1032,6 +1055,9 @@ pub(super) fn scan_transcript_tail(text: &str, need: TranscriptScanNeed) -> Tran
         OutcomeScan::Searching => OutcomeScan::Resolved(None),
         resolved => resolved,
     };
+    if matches!(scan.raw_error, RawErrorScan::Searching) {
+        scan.raw_error = RawErrorScan::Resolved(None);
+    }
     scan
 }
 
@@ -1056,6 +1082,18 @@ fn scan_transcript_record(value: &Value, scan: &mut TranscriptScan, need: Transc
     }
     if need == TranscriptScanNeed::UsageAndOutcome {
         scan_outcome_record(value, &mut scan.outcome);
+        scan_raw_error_record(value, &mut scan.raw_error);
+    }
+}
+
+fn scan_raw_error_record(value: &Value, state: &mut RawErrorScan) {
+    if !matches!(state, RawErrorScan::Searching) {
+        return;
+    }
+    if transcript_record_proves_recovery(value) {
+        *state = RawErrorScan::Resolved(None);
+    } else if let Some(error) = turn_error_from_record(value) {
+        *state = RawErrorScan::Resolved(Some(error));
     }
 }
 

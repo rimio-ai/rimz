@@ -1085,16 +1085,18 @@ fn codex_transcript_observation(
     } else {
         TranscriptScanNeed::UsageOnly
     };
-    let (usage, outcome) = tail
+    let (usage, outcome, turn_error) = tail
         .as_deref()
         .map(|tail| scan_transcript_tail(tail, need).into_parts())
         .unwrap_or_default();
-    let (turn_error, plan_proposed) = match outcome {
-        Some(RestingTurnOutcome::Died(error)) => (Some(error), None),
-        Some(RestingTurnOutcome::PlanProposed(plan)) => (None, Some(plan)),
-        Some(RestingTurnOutcome::Complete(_) | RestingTurnOutcome::Interrupted(_)) | None => {
-            (None, None)
-        }
+    let plan_proposed = match outcome {
+        Some(RestingTurnOutcome::PlanProposed(plan)) => Some(plan),
+        Some(
+            RestingTurnOutcome::Complete(_)
+            | RestingTurnOutcome::Interrupted(_)
+            | RestingTurnOutcome::Died(_),
+        )
+        | None => None,
     };
     CodexTranscriptObservation {
         path,
