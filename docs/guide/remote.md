@@ -1,6 +1,6 @@
 # Remote
 
-Remote is your multiplexer attach, run over SSH. A RimZ room is a plain Zellij or tmux session that lives on one host: a fleet on a server, or the room you left running on the machine at home. It keeps working headless while no one is attached. `rimz remote connect` opens an SSH session to that host and attaches to the room there, so your local terminal renders exactly what the host is running, sidebar and agent panes alike. The room, its agents, and its state never leave the host; SSH just carries the screen. To open a remote room in a browser instead of a terminal, see [Web](./web.md).
+Remote is your multiplexer attach, run over SSH. A RimZ room is a plain Zellij or tmux session that lives on one host: a fleet on a server, or the room you left running on the machine at home. It keeps working headless while no one is attached. `rimz remote connect` opens an SSH session to that host and attaches to the room there, so your local terminal renders exactly what the host is running, sidebar and agent panes alike. The room, its agents, and its state never leave the host; SSH just carries the screen. To open a remote room in a browser instead of a terminal, see [Web](./web.md); to answer an agent's questions from the provider's mobile app without attaching at all, see [answer asks from your phone](#answer-asks-from-your-phone).
 
 ## Connect to a room on another host
 
@@ -82,6 +82,32 @@ rimz reset --hard        # rebuild without seeding prior agents
 ```
 
 Keeping the agent processes alive across a reboot belongs to the host. Reach for systemd, tmux-resurrect, or Zellij resurrect to carry them across a restart, and RimZ reattaches to whatever is still running ([DESIGN.md → Non-goals](../../DESIGN.md#non-goals)).
+
+## Answer asks from your phone
+
+A fleet that runs while you are out still stops to ask: a permission prompt, a plan approval, a question only you can decide. Claude Code and Codex each ship **remote control** (`claude remote-control` and `codex remote-control`), the bridge behind their official mobile apps: it links a machine to your account so the app can see and drive the sessions running on it. The feature is entirely the provider's; what RimZ adds is the remembering — the bridge only helps if it is already up when an agent stops to ask, and starting infrastructure with the room is a room's job.
+
+Two per-machine toggles opt in. Both are off by default:
+
+```sh
+rimz config set remote_control.claude true    # keep `claude remote-control` up with the room
+rimz config set remote_control.codex true     # keep Codex's remote-control daemon up, once per machine
+```
+
+With a toggle on, the ask reaches your phone as a push from the provider's own app, your answer lands in the same session on the machine running the room, and the turn continues in its pane as if you had typed it there. Leave the room on a server, go to dinner, and a 9 p.m. question is one tap instead of a fleet stalled until morning.
+
+RimZ stays out of the path: each toggle starts the provider's own command with the room and nothing more. Exactly what runs:
+
+- **Claude.** `claude remote-control --spawn worktree`, as a long-lived pane in the room's background `rimzd` tab, run from the project root — so a session you start from the phone is carved into its own on-demand worktree instead of touching your checkout. While the host is up, the Claude block on the [provider dashboard](./sidebar.md#the-provider-dashboard) wears a `⇅ rc` flag.
+- **Codex.** `codex remote-control start`, which brings up Codex's own per-user daemon with remote control enabled — one per machine, shared by every room, and the same daemon Codex's TUI already routes through.
+
+The RimZ toggle covers the machine-level Claude host; Claude's own `remoteControlAtStartup: true` (in `~/.claude/settings.json`) additionally makes every session you type into a pane reachable from the app, and RimZ lights the `⇅ rc` flag for that setting too.
+
+`rimz start` checks the preconditions. An enabled toggle whose agent is missing is skipped so the room still opens, and `rimz doctor` names the install fix; an installed host with a fixable misconfiguration (a Claude older than remote control, `disableRemoteControl` set) refuses at start with the fix spelled out, so an enabled toggle always means a working bridge.
+
+Undo is the same toggle set back to `false`: it closes the RimZ-managed Claude host panes in every running room, or stops the Codex daemon. One known gap: a session you spawn from the phone runs headless in its worktree with no local pane, and the sidebar does not yet render these remote agents.
+
+Key detail and the daemon-view placement live in [configuration → remote control](./configuration.md#remote-control); which providers carry the surface is the `remote` row of the [coverage matrix](../reference/agent-support.md#the-coverage-matrix).
 
 ## See also
 

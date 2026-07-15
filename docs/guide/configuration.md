@@ -61,8 +61,6 @@ You rarely open these by hand: `rimz config set` writes to them for you, and `ri
 
 Two more things share the directory but are managed for you: `remote.toml` (named SSH room aliases, written by `rimz remote`) and a handful of machine-managed sidecars (trust grants, notification state), which you reach through their own commands rather than by hand ([Sidecars and privacy](#sidecars-and-privacy)).
 
-`agents.d/<kind>/agent.toml` is the machine-tier library for [third-party agent plugins](../reference/agent-plugins.md). Each bundle may also carry a shim, setup guide, and executable probes. `rimz agents register <kind>` creates the directory; `rimz agents register --check` validates every bundle.
-
 ### How the layers combine
 
 RimZ reads configuration in four layers, and a later layer wins:
@@ -77,8 +75,6 @@ Today the per-machine layer is live, CLI and env overrides apply where each comm
 ### A broken file never blocks the room
 
 Per-machine settings load leniently. A missing file is the default config, unknown keys are ignored so an older binary tolerates a newer file, and a file RimZ cannot parse falls back to built-in defaults with a startup warning. The room still opens, and `rimz config` and `rimz doctor` report the precise error and the fix.
-
-Agent plugin manifests are the deliberate exception because they declare executable launch and probe commands. A malformed `agents.d/*/agent.toml` makes `rimz start` refuse before room side effects; read-only commands skip it, and `rimz doctor` reports its path and validation error.
 
 ## Generate and refresh the files
 
@@ -192,7 +188,7 @@ claude = false
 codex = false
 ```
 
-Remote control is the bridge the providers' official mobile apps drive: with a host up, an agent's ask pushes to your phone and you answer it in the official app ([agents.md → Answer asks from your phone](./agents.md#answer-asks-from-your-phone)). These opt this machine into the background remote-control infrastructure shown in the `rimzd` daemon view. `rimz config set remote_control.claude true` adds `claude remote-control` to every running room's live `rimzd` view immediately when `claude` is on `PATH`, and `false` closes those managed host panes; a deliberately closed whole view stays closed until the next room start. `rimz config set remote_control.codex true` starts the managed standalone Codex daemon immediately, and `false` stops it. Each change wakes the running sidebars so the provider-dashboard flag follows the saved value. Direct file edits converge Claude hosts on the daemon-view repair pass. Direct Codex edits change future auto-start decisions; use `rimz config set` to transition an already-running daemon. A `codex` CLI on `PATH` already adds the per-session app-server broker independently of this toggle. `rimz start` and the live Claude enable path refuse when an installed, enabled host has a fixable misconfiguration such as an incompatible Claude version or settings. An enabled host whose agent is not installed is skipped so the room still starts, and `rimz doctor` reports that advisory with the install fix. The mechanics are in [providers.md](../internals/agents/providers.md), and the security boundary in [security.md](./security.md).
+Remote control is the bridge the providers' official mobile apps drive: with a host up, an agent's ask pushes to your phone and you answer it in the official app ([remote.md → Answer asks from your phone](./remote.md#answer-asks-from-your-phone)). These opt this machine into the background remote-control infrastructure shown in the `rimzd` daemon view. `rimz config set remote_control.claude true` adds `claude remote-control` to every running room's live `rimzd` view immediately when `claude` is on `PATH`, and `false` closes those managed host panes; a deliberately closed whole view stays closed until the next room start. `rimz config set remote_control.codex true` starts the managed standalone Codex daemon immediately, and `false` stops it. Each change wakes the running sidebars so the provider-dashboard flag follows the saved value. Direct file edits converge Claude hosts on the daemon-view repair pass. Direct Codex edits change future auto-start decisions; use `rimz config set` to transition an already-running daemon. A `codex` CLI on `PATH` already adds the per-session app-server broker independently of this toggle. `rimz start` and the live Claude enable path refuse when an installed, enabled host has a fixable misconfiguration such as an incompatible Claude version or settings. An enabled host whose agent is not installed is skipped so the room still starts, and `rimz doctor` reports that advisory with the install fix. The mechanics are in [providers.md](../internals/agents/providers.md), and the security boundary in [security.md](./security.md).
 
 ### Web access
 

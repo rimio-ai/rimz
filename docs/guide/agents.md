@@ -1,6 +1,6 @@
 # Agents
 
-RimZ watches the agents you already run. Type `claude` into any pane and it joins the room; `rimz agents` earns its keystrokes later, when you want an agent tuned for one job or several agents launched in one line. This page covers both ways in, and the commands that read and drive the fleet once it is working.
+RimZ watches the agents you already run. Type `claude` into any pane and it joins the room; `rimz agents` earns its keystrokes later, when you want an agent tuned for one job or several agents launched in one line. This page covers both ways in and the commands that read and drive the fleet once it is working; the field-level detail behind profiles and permission modes waits at the [end of the page](#profiles-shape-an-agent-for-one-job).
 
 ## Run the CLI you already run
 
@@ -43,92 +43,9 @@ Beyond the preset, the launcher carries three habits that build on it, each with
 - **an isolated [worktree](./worktrees.md)** per line of work, one `-w` flag away,
 - **a named [team](./teams.md)** of profiles, launched, messaged, and resumed as a unit.
 
-## Add a third-party agent
-
-Rimz loads external agent bundles from `$XDG_CONFIG_HOME/rimz/agents.d/<kind>/`. Scaffold one, implement its native-to-canonical shim, and validate it before opening a room:
-
-```sh
-rimz agents register mybot
-rimz agents register --check
-rimz coverage
-rimz doctor
-rimz agents mybot "take the first task"
-```
-
-The bundle controls launch flags, branding, tool classification, transcript discovery, and optional spend, account, and version probes. Its declared events derive the same coverage grid as a built-in adapter. Hook installation stays with the bundle because only the agent vendor knows its extension surface; `rimz doctor` points at the bundle's setup document.
-
-See the [agent plugin reference](../reference/agent-plugins.md) for the manifest and JSON contracts, or copy the runnable [ScriptBot example](../../examples/agent-plugin/README.md).
-
-## Profiles: shape an agent for one job
-
-A **profile** is a named preset in `agents.toml`: the base CLI plus the fields that shape it — model, reasoning effort, system prompt, permission mode, and raw flags. Define it once, launch it by name:
-
-```toml
-[agents.profiles.planner]
-agent = "claude"                                           # the base CLI, or another profile
-model = "opus"
-effort = "high"
-budget = "20/day"                                        # local-calendar-day cap
-system-prompt-file = "~/.config/rimz/prompts/planner.md"   # its role, craft, and boundaries
-args = "--allowed-tools Read Grep Glob"                    # read and search only, no edits
-```
-
-```sh
-rimz agents planner           # launches Claude under the planner preset, as @planner
-```
-
-Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't. The one exception is `budget`, which RimZ itself enforces:
-
-| Field | What it sets | Renders as (Claude) |
-| --- | --- | --- |
-| `model` | the model to run | `--model opus` |
-| `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
-| `budget` | dollar cap for the session, or per local day with `/day` | kept and enforced by RimZ ([budgets](./budget.md)) |
-| `system-prompt-file` | replace the system prompt with the role's craft and rules | `--system-prompt-file …` |
-| `append-system-prompt-file` | keep the base prompt and add rules on top | `--append-system-prompt-file …` |
-| `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
-| `args` | raw flags handed to the stock CLI | verbatim |
-
-The system prompt and `args` are what make a profile targeted. There is no RimZ-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--allowed-tools` for Claude, `--sandbox` for Codex — and a narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
-
-When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
-
-Override any field for one launch with the matching flag, which wins over the profile:
-
-```sh
-rimz agents claude --model opus --effort xhigh --budget 5 --system-prompt-file ./review.md
-```
-
-Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi to `xhigh`. The full profile shape, inheritance between profiles, and per-field rules are in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams); pairing several profiles by role is a [team](./teams.md).
-
-## Cap what an agent can spend
-
-`--budget 5` parks an agent when its session cost reaches $5, and `--budget 20/day` caps each local calendar day instead; `rimz agents budget @coder` inspects or changes the cap while the agent runs. The same dollar-cap model scales up to loop tasks, the whole room, and a provider login, and the [budgets guide](./budget.md) owns it: what a park does, what resumes it, and the room and account scopes.
-
-## Set a permission mode
-
-A suffix sets how much the agent may do before it stops to ask. Like every profile field, it renders into the provider's own flags — the suffix is shorthand for a flag you already know:
-
-| Suffix | What it does | For example |
-| --- | --- | --- |
-| `-auto` | the provider's auto-accept mode for routine actions | `claude --permission-mode auto` |
-| `-ask` | keep the provider's native permission prompts | no flag at all |
-| `-plan` | start in plan mode | `claude --permission-mode plan` |
-| `-yolo` | pass the provider's bypass flag, skipping its prompts | `claude --dangerously-skip-permissions` |
-
-```sh
-rimz agents codex-yolo      # codex --dangerously-bypass-approvals-and-sandbox
-rimz agents claude-plan     # start in plan mode
-rimz agents claude --yolo   # the same mode as a flag
-```
-
-Not every provider defines every mode: the built-in set is `claude-{auto,ask,plan,yolo}`, `codex-{auto,ask,plan,yolo}`, `cursor-{auto,ask,plan,yolo}`, `antigravity-{auto,ask,plan,yolo}`, `opencode-{plan,yolo}`, and `pi-{ask,plan}`, and a mode a given provider has no equivalent for keeps that provider's default behavior. Cursor's Auto posture uses its classifier-backed `--auto-review` mode; Antigravity maps Auto to `--mode accept-edits` and keeps sandboxing a separate provider flag. On the command line the same choice is a flag, `--ask` or `--yolo`, and in a profile it is the `mode` field. The exact flag each mode becomes, per provider, is in [agent support](../reference/agent-support.md).
-
-One more suffix sits outside permissions: `-ping` opens the agent at its lowest effort to warm the provider's budget window, the building block behind scheduled window-priming ([loops](./loops.md)). The built-in pings are `claude-ping` and `codex-ping`.
-
 ## Compose a layout
 
-Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell, a profile, a configured command, or `term` for a plain shell; suffix an agent cell with `:role` to give it an ad-hoc role handle. An optional trailing prompt goes to one leader: a named team's configured `leader` role, its first declared role by default, or otherwise the first agent cell. Give a repeated first cell an inline role to make that target unambiguous; use `rimz message @all` after launch when every agent needs the same text.
+Launching three agents by hand is three pane splits and three commands typed. One spec does it in one line: **commas split columns, plus signs tile rows, slashes stack rows** (a Zellij stack; tmux tiles them). Each cell is an agent kind, a `<kind>-<mode>` cell ([permission modes](#set-a-permission-mode)), a [profile](#profiles-shape-an-agent-for-one-job), a configured command, or `term` for a plain shell; suffix an agent cell with `:role` to give it an ad-hoc role handle. An optional trailing prompt goes to one leader: a named team's configured `leader` role, its first declared role by default, or otherwise the first agent cell. Give a repeated first cell an inline role to make that target unambiguous; use `rimz message @all` after launch when every agent needs the same text.
 
 ```sh
 rimz agents claude,codex                     # two agents, side by side
@@ -290,31 +207,72 @@ Two everyday tasks have their own guides, with the depth this page leaves out:
 
 The complete `rimz agents` surface, every verb and flag, is the [agent-control reference](../reference/cli/agents.md).
 
-## Answer asks from your phone
+That is the whole daily workflow. The two sections below are the detail it names — the profile fields and the permission-mode suffixes — here for when you need a specific field rather than on your way in.
 
-Claude Code and Codex each ship **remote control** (`claude remote-control` and `codex remote-control`), which links a machine to your account so the provider's official mobile app can see and drive the sessions on it. The feature is entirely the provider's; what the room adds is the remembering: the bridge only helps if it is already up when an agent stops to ask, on every machine you work from, and starting infrastructure with the room is exactly a room's job.
+## Profiles: shape an agent for one job
 
-Two toggles in your per-machine `config.toml` opt in. Both are off by default; RimZ links your account and starts a remote-control host only after you switch it on:
+A **profile** is a named preset in `agents.toml`: the base CLI plus the fields that shape it — model, reasoning effort, system prompt, permission mode, and raw flags. Define it once, launch it by name:
 
-```sh
-rimz config set remote_control.claude true
-rimz config set remote_control.codex true
+```toml
+[agents.profiles.planner]
+agent = "claude"                                           # the base CLI, or another profile
+model = "opus"
+effort = "high"
+budget = "20/day"                                        # local-calendar-day cap
+system-prompt-file = "~/.config/rimz/prompts/planner.md"   # its role, craft, and boundaries
+args = "--allowed-tools Read Grep Glob"                    # read and search only, no edits
 ```
 
-The `config set` command applies either value to running rooms immediately; a deliberately closed whole `rimzd` view remains closed until the next room start. Future `rimz start` calls preserve the configured state. This is exactly what runs:
+```sh
+rimz agents planner           # launches Claude under the planner preset, as @planner
+```
 
-- **Claude.** `claude remote-control --spawn worktree` runs as a long-lived pane in the room's background `rimzd` tab, from the project root, so a session you start from the phone is carved into its own on-demand worktree instead of touching your checkout. While the host is up, the Claude block on the [provider dashboard](./sidebar.md#the-provider-dashboard) wears a `⇅ rc` flag.
-- **Codex.** `codex remote-control start` brings up Codex's per-user app-server daemon with remote control enabled and returns. Room startup invokes it detached from the durable Codex home, so removing the worktree that requested startup cannot invalidate the daemon's cwd; a live `config set` waits for the control command to finish so consecutive on/off changes stay ordered. The daemon is one per machine, shared by every room, and is the same daemon Codex's own TUI already routes through.
+Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't. The one exception is `budget`, which RimZ itself enforces:
 
-The payoff is one session, continuous across surfaces: you start the turn at the terminal, the ask catches you on the phone through the provider's own app, and your answer lands in the same session on your machine. By the time you sit back down, the turn has moved on as if you had answered in the pane, with nothing to hand off and nothing to resume. A fleet that runs while you commute, cook, or sleep stays a fleet you can unblock.
+| Field | What it sets | Renders as (Claude) |
+| --- | --- | --- |
+| `model` | the model to run | `--model opus` |
+| `effort` | reasoning effort, on the provider's own ladder | `--effort high` |
+| `budget` | dollar cap for the session, or per local day with `/day` | kept and enforced by RimZ ([budgets](./budget.md)) |
+| `system-prompt-file` | replace the system prompt with the role's craft and rules | `--system-prompt-file …` |
+| `append-system-prompt-file` | keep the base prompt and add rules on top | `--append-system-prompt-file …` |
+| `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
+| `args` | raw flags handed to the stock CLI | verbatim |
 
-The RimZ toggle covers the machine-level Claude host; Claude's own `remoteControlAtStartup: true` (in `~/.claude/settings.json`) additionally makes every session you type into a pane reachable from the app, and RimZ lights the `⇅ rc` flag for that setting too.
+The system prompt and `args` are what make a profile targeted. There is no RimZ-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--allowed-tools` for Claude, `--sandbox` for Codex — and a narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
 
-Preconditions check both ways at start. An enabled host whose agent is missing is skipped so the room still opens; Codex remote control boots from Codex's managed standalone install, so a `codex` merely on `PATH` is skipped and `rimz doctor` prints the install fix. An installed host with a fixable misconfiguration (a Claude older than remote control, `disableRemoteControl` set, API-key auth on releases where it disables the surface) refuses at `rimz start` with the fix spelled out, so an enabled toggle always means a working bridge.
+When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
 
-Undo is the same toggle: `rimz config set remote_control.claude false` closes RimZ-managed Claude host panes in every running room, while `rimz config set remote_control.codex false` runs the managed standalone's `codex remote-control stop`. Each command also wakes the sidebars so the `⇅ rc` flag follows the saved value. The Claude host is still an ordinary pane you can close directly, and the Codex daemon remains the provider's own per-user daemon. One known gap: a session you spawn from the phone runs headless in its worktree with no local pane, and the sidebar does not yet render these remote agents.
+Override any field for one launch with the matching flag, which wins over the profile:
 
-Key detail and the daemon-view placement live in [configuration → remote control](./configuration.md#remote-control); which providers carry the surface is the `remote` row of the [coverage matrix](../reference/agent-support.md#the-coverage-matrix).
+```sh
+rimz agents claude --model opus --effort xhigh --budget 5 --system-prompt-file ./review.md
+```
+
+On budgets specifically: `--budget 5` parks the agent when its session cost reaches $5, `--budget 20/day` caps each local calendar day instead, and `rimz agents budget @coder` inspects or changes the cap while the agent runs. The same dollar-cap model scales up to loop tasks, the room, and a provider login: the [budgets guide](./budget.md) owns it.
+
+Effort ladders are provider-specific — Claude runs up to `max`, Codex and Pi to `xhigh`. The full profile shape, inheritance between profiles, and per-field rules are in [configuration → agent profiles, commands, and teams](./configuration.md#agent-profiles-commands-and-teams); pairing several profiles by role is a [team](./teams.md).
+
+## Set a permission mode
+
+A suffix sets how much the agent may do before it stops to ask. Like every profile field, it renders into the provider's own flags — the suffix is shorthand for a flag you already know:
+
+| Suffix | What it does | For example |
+| --- | --- | --- |
+| `-auto` | the provider's auto-accept mode for routine actions | `claude --permission-mode auto` |
+| `-ask` | keep the provider's native permission prompts | no flag at all |
+| `-plan` | start in plan mode | `claude --permission-mode plan` |
+| `-yolo` | pass the provider's bypass flag, skipping its prompts | `claude --dangerously-skip-permissions` |
+
+```sh
+rimz agents codex-yolo      # codex --dangerously-bypass-approvals-and-sandbox
+rimz agents claude-plan     # start in plan mode
+rimz agents claude --yolo   # the same mode as a flag
+```
+
+Not every provider defines every mode: the built-in set is `claude-{auto,ask,plan,yolo}`, `codex-{auto,ask,plan,yolo}`, `cursor-{auto,ask,plan,yolo}`, `antigravity-{auto,ask,plan,yolo}`, `opencode-{plan,yolo}`, and `pi-{ask,plan}`, and a mode a given provider has no equivalent for keeps that provider's default behavior. Cursor's Auto posture uses its classifier-backed `--auto-review` mode; Antigravity maps Auto to `--mode accept-edits` and keeps sandboxing a separate provider flag. On the command line the same choice is a flag, `--ask` or `--yolo`, and in a profile it is the `mode` field. The exact flag each mode becomes, per provider, is in [agent support](../reference/agent-support.md).
+
+One more suffix sits outside permissions: `-ping` opens the agent at its lowest effort to warm the provider's budget window, the building block behind scheduled window-priming ([loops](./loops.md)). The built-in pings are `claude-ping` and `codex-ping`.
 
 ## See also
 
@@ -325,6 +283,7 @@ Key detail and the daemon-view placement live in [configuration → remote contr
 - [Token Insight](./insight.md) — fleet-wide token and dollar insight: the cockpit, the provider dashboard, and `rimz stats`.
 - [Budgets](./budget.md) — dollar caps on an agent, a task, a room, or a provider login, and what a park means.
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
+- [Remote → answer asks from your phone](./remote.md#answer-asks-from-your-phone) — the provider mobile-app bridge, kept up with the room.
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.
 - [Agent support](../reference/agent-support.md) — which agents RimZ drives and what each integration adds.

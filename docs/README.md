@@ -13,10 +13,10 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 ## Working with agents
 
 - [Sidebar](./guide/sidebar.md): read the zones, the agent cards and their lifecycle, and the process rows, and follow how RimZ decides which agent needs you.
-- [Agents](./guide/agents.md): run the stock CLIs in the room, shape an agent for one job with a profile, compose several into one layout, and bridge Claude and Codex to their official mobile apps with remote control.
+- [Agents](./guide/agents.md): run the stock CLIs in the room, shape an agent for one job with a profile, compose several into one layout, and read and drive the running fleet.
 - [Token Insight](./guide/insight.md): read what the fleet costs and how hard it is working, from the live cockpit to `rimz stats`, and how every figure is calculated.
 - [Budgets](./guide/budget.md): enforce dollar caps at four scopes, one agent, one loop task, a room's fleet, a provider login, and resume the work a cap parked.
-- [Remote](./guide/remote.md): attach to a room on another host over SSH, a multiplexer attach with a self-healing link, kept alive across reboots.
+- [Remote](./guide/remote.md): attach to a room on another host over SSH with a self-healing link, kept alive across reboots, and answer agent asks from the providers' own mobile apps.
 - [Web](./guide/web.md): open a room in the browser, on the host or tunnelled from a server, gated by a login token.
 
 ## Harness Engineering
@@ -44,7 +44,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 
 - [CLI](./reference/cli.md): the command map and conventions, with a page per scene: [getting started](./reference/cli/getting-started.md), [remote](./reference/cli/remote.md), [web](./reference/cli/web.md), [agents](./reference/cli/agents.md), [message](./reference/cli/message.md), [transcript](./reference/cli/transcript.md), [pane](./reference/cli/pane.md), [stats](./reference/cli/stats.md), [channels](./reference/cli/channel.md), [worktrees](./reference/cli/worktree.md), [loop](./reference/cli/loop.md), [hooks and trust](./reference/cli/hooks-trust.md), [config](./reference/cli/config.md), and [maintenance](./reference/cli/maintenance.md).
 - [Agent support](./reference/agent-support.md): per-agent status, integration surface, and permission-mode mapping for every built-in adapter, including Kimi Code.
-- [Agent plugins](./reference/agent-plugins.md): the external bundle manifest, canonical lifecycle wire, launch templates, and probe contracts for third-party agents.
+- [Agent plugins](./reference/agent-plugins.md): the external bundle manifest, canonical lifecycle wire, launch templates, and probe contracts for third-party agents. The plugin surface is early and still shifting.
 
 ## How it works
 
