@@ -125,6 +125,14 @@ pub fn read_published_snapshot(
 ) -> crate::store::snapshot::Result<SidebarSnapshot> {
     let base = rollup_snapshot(state, cursor)?;
     let cache = read_snapshot_cache(&runtime.pane_frame_path(), session);
+    let local_sessions = cache
+        .as_deref()
+        .map(|frame| {
+            let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude);
+            let inputs = super::local_sessions::LocalSessionInputs::from_panes(&panes);
+            super::local_sessions::read_published(runtime, session, &inputs)
+        })
+        .unwrap_or_default();
     Ok(enrich(
         base,
         cache.as_deref(),
@@ -136,6 +144,7 @@ pub fn read_published_snapshot(
             fresh_roots: None,
             config: None,
             lanes: None,
+            local_sessions,
         },
         &crate::diag::DiagSink::disabled(),
     ))
@@ -166,7 +175,7 @@ pub fn consumer_fold_inputs_stamp(
         runtime.shared_rate_limits_path(),
         runtime.shared_credits_path(),
         runtime.shared_provider_spending_path(),
-        runtime.shared_spending_cursor_path(),
+        runtime.local_sessions_path(),
         runtime.root.join("metrics-sample.json"),
         super::refresh::daemon_reap::codex_daemon_reap_path(runtime),
     ];

@@ -4,6 +4,8 @@
 //! daemon protocol. This module probes each provider once per operation, maps
 //! their native readiness through explicit matches, and coordinates effects.
 
+use std::path::PathBuf;
+
 use crate::agents::claude::remote_control as claude;
 use crate::agents::codex::app_server::daemon as codex;
 use crate::config::RemoteControlConfig;
@@ -221,6 +223,12 @@ pub fn apply_runtime_toggle(
         }
     }
     Ok(())
+}
+
+/// Claude settings input used by readiness and daemon repair invalidation.
+/// Resolving the path performs no parsing or CLI probe.
+pub(crate) fn claude_settings_path() -> PathBuf {
+    claude::settings_path()
 }
 
 #[cfg(test)]

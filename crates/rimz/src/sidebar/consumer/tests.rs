@@ -17,6 +17,7 @@ fn cached_opts() -> FoldOpts<'static> {
         fresh_roots: None,
         config: None,
         lanes: None,
+        local_sessions: Vec::new(),
     }
 }
 
@@ -72,7 +73,7 @@ fn file_stamp_inputs(state: &StatePaths, runtime: &RuntimePaths) -> Vec<(&'stati
         ("rate_limits", runtime.shared_rate_limits_path()),
         ("credits", runtime.shared_credits_path()),
         ("provider_spending", runtime.shared_provider_spending_path()),
-        ("spending_cursor", runtime.shared_spending_cursor_path()),
+        ("local_sessions", runtime.local_sessions_path()),
         ("metrics_sample", runtime.root.join("metrics-sample.json")),
         (
             "codex_daemon_reap",
@@ -110,6 +111,23 @@ fn consumer_fold_inputs_stamp_is_stable_for_unchanged_inputs() {
 }
 
 #[test]
+fn consumer_fold_inputs_stamp_ignores_account_global_spending_cursor() {
+    let fixture = StampFixture::new();
+    let before = consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime);
+
+    std::fs::write(
+        fixture.runtime.shared_spending_cursor_path(),
+        b"replaced account-global cursor with a longer body",
+    )
+    .unwrap();
+
+    assert_eq!(
+        consumer_fold_inputs_stamp(&fixture.state, &fixture.runtime),
+        before,
+    );
+}
+
+#[test]
 fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
     for name in [
         "events_log",
@@ -127,7 +145,7 @@ fn consumer_fold_inputs_stamp_changes_for_each_file_input() {
         "rate_limits",
         "credits",
         "provider_spending",
-        "spending_cursor",
+        "local_sessions",
         "metrics_sample",
         "codex_daemon_reap",
     ] {
@@ -360,6 +378,65 @@ fn read_published_snapshot_folds_caches_without_forking() {
                     .is_none_or(|pane| pane.pane_id.as_str() != own.as_str())
             }),
         "the renderer's own pane is never a row"
+    );
+}
+
+#[test]
+fn read_published_snapshot_binds_exact_local_session_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let worktree = dir.path().join("wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let wt = worktree.to_string_lossy().into_owned();
+    let panes = vec![pane("terminal_kiro", "kiro-cli", &wt)];
+    let frame = assemble_frame(panes.clone(), unix_now_ms(), "rimz-test");
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &frame).unwrap();
+
+    let state = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    state.ensure_dirs().unwrap();
+    let rollup = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
+        .with_project_root(Some(worktree.clone()));
+    atomic::write_temp_then_rename(&state.latest_snapshot, &rollup).unwrap();
+
+    let inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&panes);
+    let now = Timestamp::now();
+    let session_id = crate::ids::AgentSessionId::from("kiro-session");
+    let observation = crate::agents::LocalSessionObservation {
+        kind: crate::ids::AgentKind::new_unchecked("kiro"),
+        session_id: session_id.clone(),
+        workspace: worktree.clone(),
+        transcript_path: worktree.join("kiro-session.json"),
+        created_at: now,
+        fresh_binding_at: Some(now),
+        first_event_at: Some(now),
+        last_activity: now,
+        projection: crate::agents::LocalSessionProjection::IdentityOnly,
+    };
+    atomic::write_temp_then_rename_cache(
+        &runtime.local_sessions_path(),
+        &crate::sidebar::local_sessions::PublishedLocalSessions {
+            session_name: "rimz-test".to_owned(),
+            inputs,
+            observations: vec![observation],
+        },
+    )
+    .unwrap();
+
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        "rimz-test",
+        None,
+    )
+    .expect("published snapshot");
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .any(|agent| agent.kind == "kiro" && agent.agent_id == session_id),
     );
 }
 

@@ -304,6 +304,11 @@ impl RuntimePaths {
         self.root.join("snapshot.json")
     }
 
+    /// Producer-published provider-local session observations for this room.
+    pub fn local_sessions_path(&self) -> PathBuf {
+        self.root.join("local-sessions.json")
+    }
+
     pub fn diff_stats_path(&self) -> PathBuf {
         self.root.join("diff-stats.json")
     }

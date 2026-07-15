@@ -339,6 +339,7 @@ fn enrich_cached(bencher: Bencher) {
                     fresh_roots: None,
                     config: None,
                     lanes: None,
+                    local_sessions: Vec::new(),
                 },
                 &rimz::diag::DiagSink::disabled(),
             ));

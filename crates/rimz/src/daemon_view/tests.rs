@@ -413,3 +413,148 @@ fn claude_host_presence_requires_the_managed_pane_marker() {
     assert!(claude_host_present(&[managed_after_churn]));
     assert!(!claude_host_present(&[user_session]));
 }
+
+fn healthy_daemon_frame(now_ms: u64, mux: MuxName) -> crate::sidebar::frame::PaneFrame {
+    let mut panes = vec![
+        spawned_pane_with_id("%2", "rimz daemon content --slot 0", Some(VIEW_NAME)),
+        spawned_pane_with_id("%3", "rimz codex app-server serve", Some(VIEW_NAME)),
+        spawned_pane_with_id(
+            "%4",
+            "claude remote-control --spawn worktree",
+            Some(VIEW_NAME),
+        ),
+        spawned_pane_with_id("%5", "rimz loop watch --hold", Some(VIEW_NAME)),
+    ];
+    for (index, pane) in panes.iter_mut().enumerate() {
+        pane.pane_id = PaneId::from_parts(mux, format!("{}", index + 2));
+        pane.session_name = "rimz-demo".to_owned();
+    }
+    crate::sidebar::frame::assemble_frame(panes, now_ms, "rimz-demo".to_owned())
+}
+
+fn tracker_stamp(root: &Path, generation: u64) -> DaemonViewInputsStamp {
+    DaemonViewInputsStamp {
+        config_generation: generation,
+        workspace_record: StampedPath::of(&root.join("workspace.json")),
+        rimz_bin: StampedPath::of(&root.join("rimz")),
+        claude_bin: Some(StampedPath::of(&root.join("claude"))),
+        codex_bin: Some(StampedPath::of(&root.join("codex"))),
+        claude_settings: StampedPath::of(&root.join("settings.json")),
+    }
+}
+
+#[test]
+fn daemon_tracker_skips_stable_healthy_frames_and_retries_failures() {
+    use std::cell::Cell;
+
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
+    let mut tracker = DaemonRepairTracker::new(workspace_id, "rimz-demo".to_owned());
+    let now_ms = crate::sidebar::timing::unix_now_ms();
+    let healthy = healthy_daemon_frame(now_ms, MuxName::Tmux);
+    let builds = Cell::new(0);
+    let repairs = Cell::new(0);
+    let stamp = tracker_stamp(dir.path(), 1);
+
+    tracker.maintain_with(
+        stamp.clone(),
+        Some(&healthy),
+        now_ms,
+        || {
+            builds.set(builds.get() + 1);
+            Some(daemon_view())
+        },
+        |_| {
+            repairs.set(repairs.get() + 1);
+            RepairOutcome::Converged
+        },
+    );
+    assert_eq!((builds.get(), repairs.get()), (1, 1));
+
+    let spawns = crate::proc::testkit::spawn_count();
+    tracker.maintain_with(
+        stamp.clone(),
+        Some(&healthy),
+        now_ms,
+        || {
+            builds.set(builds.get() + 1);
+            Some(daemon_view())
+        },
+        |_| {
+            repairs.set(repairs.get() + 1);
+            RepairOutcome::Converged
+        },
+    );
+    assert_eq!((builds.get(), repairs.get()), (1, 1));
+    assert_eq!(crate::proc::testkit::spawn_count(), spawns);
+
+    tracker.maintain_with(
+        tracker_stamp(dir.path(), 2),
+        Some(&healthy),
+        now_ms,
+        || {
+            builds.set(builds.get() + 1);
+            Some(daemon_view())
+        },
+        |_| {
+            repairs.set(repairs.get() + 1);
+            RepairOutcome::Retry
+        },
+    );
+    assert_eq!((builds.get(), repairs.get()), (2, 2));
+
+    tracker.maintain_with(
+        tracker_stamp(dir.path(), 2),
+        Some(&healthy),
+        now_ms,
+        || panic!("unchanged inputs must not rebuild"),
+        |_| {
+            repairs.set(repairs.get() + 1);
+            RepairOutcome::Converged
+        },
+    );
+    assert_eq!((builds.get(), repairs.get()), (2, 3));
+}
+
+#[test]
+fn daemon_frame_classifier_repairs_bad_truth_and_preserves_closed_view() {
+    let now_ms = crate::sidebar::timing::unix_now_ms();
+    for mux in [MuxName::Tmux, MuxName::Zellij] {
+        let healthy = healthy_daemon_frame(now_ms, mux);
+        assert_eq!(
+            classify_daemon_frame(Some(&healthy), "rimz-demo", &daemon_view(), now_ms),
+            DaemonFrameAction::Skip,
+        );
+
+        let mut missing = healthy.clone();
+        // Removing one pane directly is the backend-neutral missing case.
+        missing.tabs[0].panes.pop();
+        assert_eq!(
+            classify_daemon_frame(Some(&missing), "rimz-demo", &daemon_view(), now_ms),
+            DaemonFrameAction::Repair,
+        );
+        assert_eq!(
+            classify_daemon_frame(Some(&healthy), "other", &daemon_view(), now_ms),
+            DaemonFrameAction::Repair,
+        );
+        assert_eq!(
+            classify_daemon_frame(
+                Some(&healthy),
+                "rimz-demo",
+                &daemon_view(),
+                now_ms + crate::sidebar::timing::EVENT_PANE_TTL.as_millis() as u64 + 1,
+            ),
+            DaemonFrameAction::Repair,
+        );
+
+        let closed = crate::sidebar::frame::assemble_frame(
+            vec![pane(Some("zsh"), Some("work"))],
+            now_ms,
+            "rimz-demo".to_owned(),
+        );
+        assert_eq!(
+            classify_daemon_frame(Some(&closed), "rimz-demo", &daemon_view(), now_ms),
+            DaemonFrameAction::Skip,
+        );
+    }
+}

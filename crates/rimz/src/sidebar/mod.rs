@@ -19,6 +19,7 @@ pub mod focus_anchor;
 pub mod frame;
 pub mod fuse;
 pub mod heartbeat;
+pub mod local_sessions;
 pub mod meter;
 pub mod notify;
 pub mod observe;

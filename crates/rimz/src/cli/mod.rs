@@ -690,7 +690,8 @@ pub(crate) fn alive_snapshot(
         rimz::sidebar::cache::read_snapshot_cache(&runtime.pane_frame_path(), session)
     {
         let panes = rimz::SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), None);
-        let observations = rimz::sidebar::enrich::discover_local_sessions_for_panes(&panes);
+        let inputs = rimz::sidebar::local_sessions::LocalSessionInputs::from_panes(&panes);
+        let observations = rimz::sidebar::local_sessions::read_published(runtime, session, &inputs);
         snapshot = snapshot.with_local_sessions(&panes, observations);
     }
     Ok(snapshot)

@@ -127,6 +127,7 @@ mod tests {
             fresh_roots: None,
             config: None,
             lanes: None,
+            local_sessions: Vec::new(),
         }
     }
 

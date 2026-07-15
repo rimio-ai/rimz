@@ -11,7 +11,7 @@
 //! makes every newly restored pane available as the next spec-order anchor and
 //! preserves one runtime column when several panes disappear together.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::DaemonConfig;
@@ -21,6 +21,7 @@ use crate::mux::{
     SplitPaneOptions,
 };
 use crate::pane::PaneRef;
+use crate::store::parse_cache::StampedPath;
 use crate::store::{paths::StatePaths, workspace_record};
 
 /// View name for the managed daemon tab. Shared by the launcher and pane
@@ -174,6 +175,12 @@ enum RepairStep {
     Done,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RepairOutcome {
+    Converged,
+    Retry,
+}
+
 /// Plan the next daemon-view mutation from one authoritative pane listing.
 fn next_repair_step(panes: &[PaneRef], view: &DaemonView) -> RepairStep {
     if !panes
@@ -213,15 +220,20 @@ pub fn repair_daemon_view(
     session_name: &str,
     workspace_id: &WorkspaceId,
     view: &DaemonView,
-) {
+) -> RepairOutcome {
     let Some(mut listing) = list_daemon_panes(backend, session_name, workspace_id) else {
-        return;
+        return RepairOutcome::Retry;
     };
+    if next_repair_step(&listing.panes, view) == RepairStep::Done {
+        return RepairOutcome::Converged;
+    }
     let reconciliation = managed_pane_reconciliation(view, &listing.panes);
     let missing_count = reconciliation.spawn.len();
 
     if let RepairStep::Close(pane_ids) = next_repair_step(&listing.panes, view) {
-        close_surplus_panes(backend, session_name, &pane_ids);
+        if !close_surplus_panes(backend, session_name, &pane_ids) {
+            return RepairOutcome::Retry;
+        }
         listing
             .panes
             .retain(|pane| !pane_ids.contains(&pane.pane_id));
@@ -235,10 +247,10 @@ pub fn repair_daemon_view(
             direction,
         } = next_spawn_step(&listing.panes, view, reconciliation.spawn.first())
         else {
-            break;
+            return RepairOutcome::Retry;
         };
         let Some(marker) = host_marker(&pane) else {
-            break;
+            return RepairOutcome::Retry;
         };
         if !split_managed_pane(
             backend,
@@ -248,7 +260,7 @@ pub fn repair_daemon_view(
             &anchor_pane_id,
             direction,
         ) {
-            break;
+            return RepairOutcome::Retry;
         }
         let Some(settled) = settle_managed_pane(backend, session_name, workspace_id, &marker)
         else {
@@ -257,9 +269,14 @@ pub fn repair_daemon_view(
                 argv = ?pane.argv,
                 "daemon view repair stopped; spawned pane did not settle",
             );
-            break;
+            return RepairOutcome::Retry;
         };
         listing = settled;
+    }
+    if next_repair_step(&listing.panes, view) == RepairStep::Done {
+        RepairOutcome::Converged
+    } else {
+        RepairOutcome::Retry
     }
 }
 
@@ -316,9 +333,11 @@ fn list_daemon_panes(
     }
 }
 
-fn close_surplus_panes(backend: &dyn MuxBackend, session_name: &str, pane_ids: &[PaneId]) {
+fn close_surplus_panes(backend: &dyn MuxBackend, session_name: &str, pane_ids: &[PaneId]) -> bool {
+    let mut converged = true;
     for pane_id in pane_ids {
         if let Err(err) = backend.close_pane(session_name, pane_id) {
+            converged = false;
             tracing::warn!(
                 session = %session_name,
                 view = VIEW_NAME,
@@ -328,6 +347,7 @@ fn close_surplus_panes(backend: &dyn MuxBackend, session_name: &str, pane_ids: &
             );
         }
     }
+    converged
 }
 
 fn split_managed_pane(
@@ -598,6 +618,178 @@ pub fn claude_host_present(panes: &[PaneRef]) -> bool {
     !matching_managed_panes(panes, &ManagedPaneMarker::ClaudeRemoteControl).is_empty()
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DaemonViewInputsStamp {
+    config_generation: u64,
+    workspace_record: StampedPath,
+    rimz_bin: StampedPath,
+    claude_bin: Option<StampedPath>,
+    codex_bin: Option<StampedPath>,
+    claude_settings: StampedPath,
+}
+
+struct ResolvedDaemonInputs {
+    stamp: DaemonViewInputsStamp,
+    rimz_bin: PathBuf,
+    codex_present: bool,
+}
+
+impl ResolvedDaemonInputs {
+    fn read(state: &StatePaths) -> Self {
+        let rimz_bin = crate::proc::rimz_exe();
+        let claude_bin = which::which("claude").ok();
+        let codex_bin = which::which("codex").ok();
+        let claude_settings = crate::remote_control::claude_settings_path();
+        Self {
+            stamp: DaemonViewInputsStamp {
+                config_generation: crate::config::MachineConfig::load_stamp_generation(),
+                workspace_record: StampedPath::of(&state.workspace_record),
+                rimz_bin: StampedPath::of(&rimz_bin),
+                claude_bin: claude_bin.as_deref().map(StampedPath::of),
+                codex_bin: codex_bin.as_deref().map(StampedPath::of),
+                claude_settings: StampedPath::of(&claude_settings),
+            },
+            rimz_bin,
+            codex_present: codex_bin.is_some(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DaemonFrameAction {
+    Skip,
+    Repair,
+}
+
+fn classify_daemon_frame(
+    frame: Option<&crate::sidebar::frame::PaneFrame>,
+    session_name: &str,
+    view: &DaemonView,
+    now_ms: u64,
+) -> DaemonFrameAction {
+    let Some(frame) = frame else {
+        return DaemonFrameAction::Repair;
+    };
+    if frame.session_name != session_name
+        || !crate::sidebar::cache::snapshot_cache_is_fresh(
+            frame,
+            now_ms,
+            None,
+            crate::sidebar::timing::EVENT_PANE_TTL,
+        )
+    {
+        return DaemonFrameAction::Repair;
+    }
+    if next_repair_step(&frame.to_pane_refs(), view) == RepairStep::Done {
+        DaemonFrameAction::Skip
+    } else {
+        DaemonFrameAction::Repair
+    }
+}
+
+/// Long-lived elder maintenance state. Stable inputs and a healthy published
+/// frame take the pure zero-child path; changed inputs rebuild the effective
+/// specification, while stale or unhealthy frame truth falls back to the
+/// authoritative backend repair path.
+pub struct DaemonRepairTracker {
+    workspace_id: WorkspaceId,
+    session_name: String,
+    inputs: Option<DaemonViewInputsStamp>,
+    view: Option<DaemonView>,
+    repair_pending: bool,
+}
+
+impl DaemonRepairTracker {
+    pub fn new(workspace_id: WorkspaceId, session_name: String) -> Self {
+        Self {
+            workspace_id,
+            session_name,
+            inputs: None,
+            view: None,
+            repair_pending: false,
+        }
+    }
+
+    pub fn maintain(&mut self, backend: &dyn MuxBackend, runtime: &crate::RuntimePaths) {
+        let state = match StatePaths::for_workspace(self.workspace_id.clone()) {
+            Ok(state) => state,
+            Err(err) => {
+                tracing::debug!(
+                    workspace = %self.workspace_id,
+                    error = &err as &dyn std::error::Error,
+                    "daemon view maintenance skipped; state paths unavailable",
+                );
+                return;
+            }
+        };
+        let resolved = ResolvedDaemonInputs::read(&state);
+        let frame = crate::sidebar::cache::read_snapshot_cache(
+            &runtime.pane_frame_path(),
+            &self.session_name,
+        );
+        let workspace_id = self.workspace_id.clone();
+        let session_name = self.session_name.clone();
+        self.maintain_with(
+            resolved.stamp,
+            frame.as_deref(),
+            crate::sidebar::timing::unix_now_ms(),
+            || {
+                let record = match workspace_record::read(&state.workspace_record) {
+                    Ok(record) => record,
+                    Err(err) => {
+                        tracing::debug!(
+                            workspace = %workspace_id,
+                            error = &err as &dyn std::error::Error,
+                            "daemon view maintenance skipped; workspace record unavailable",
+                        );
+                        return None;
+                    }
+                };
+                let machine = crate::config::MachineConfig::load_lenient();
+                let readiness =
+                    crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
+                Some(effective_daemon_view(
+                    &workspace_id,
+                    &session_name,
+                    &record,
+                    machine.as_ref(),
+                    &resolved.rimz_bin,
+                    &readiness,
+                    resolved.codex_present,
+                ))
+            },
+            |view| repair_daemon_view(backend, &session_name, &workspace_id, view),
+        );
+    }
+
+    fn maintain_with(
+        &mut self,
+        inputs: DaemonViewInputsStamp,
+        frame: Option<&crate::sidebar::frame::PaneFrame>,
+        now_ms: u64,
+        build: impl FnOnce() -> Option<DaemonView>,
+        repair: impl FnOnce(&DaemonView) -> RepairOutcome,
+    ) {
+        if self.inputs.as_ref() != Some(&inputs) || self.view.is_none() {
+            let Some(view) = build() else {
+                return;
+            };
+            self.view = Some(view);
+            self.inputs = Some(inputs);
+            self.repair_pending = true;
+        }
+
+        let view = self.view.as_ref().expect("view rebuilt above");
+        if !self.repair_pending
+            && classify_daemon_frame(frame, &self.session_name, view, now_ms)
+                == DaemonFrameAction::Skip
+        {
+            return;
+        }
+        self.repair_pending = repair(view) == RepairOutcome::Retry;
+    }
+}
+
 /// Best-effort elder duty that reconstructs the daemon-view spec from durable
 /// workspace metadata and current machine configuration, then repairs it.
 pub fn ensure_daemon_view(
@@ -664,21 +856,41 @@ pub(crate) fn ensure_daemon_view_with_readiness(
     readiness: &crate::remote_control::ReadinessSnapshot,
 ) {
     let rimz_bin = crate::proc::rimz_exe();
+    let view = effective_daemon_view(
+        workspace_id,
+        session_name,
+        record,
+        machine,
+        &rimz_bin,
+        readiness,
+        which::which("codex").is_ok(),
+    );
+    let _ = repair_daemon_view(backend, session_name, workspace_id, &view);
+}
+
+fn effective_daemon_view(
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    record: &workspace_record::WorkspaceRecord,
+    machine: &crate::config::MachineConfig,
+    rimz_bin: &Path,
+    readiness: &crate::remote_control::ReadinessSnapshot,
+    codex_present: bool,
+) -> DaemonView {
     let worktree_root = record
         .worktree_root
         .as_deref()
         .unwrap_or(&record.project_root);
-    let view = daemon_view_spec(DaemonViewSpecParams {
+    daemon_view_spec(DaemonViewSpecParams {
         claude_host_argv: readiness.claude_host_argv(),
         daemon: &machine.daemon,
-        rimz_bin: &rimz_bin,
+        rimz_bin,
         workspace_id,
         session_name,
         project_root: &record.project_root,
         worktree_root,
-        codex_present: which::which("codex").is_ok(),
-    });
-    repair_daemon_view(backend, session_name, workspace_id, &view);
+        codex_present,
+    })
 }
 
 #[cfg(test)]

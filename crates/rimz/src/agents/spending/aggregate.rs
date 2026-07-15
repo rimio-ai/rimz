@@ -182,8 +182,8 @@ pub(crate) fn aggregate_counted_rollups(
     let mut workspace_day = SpendWindow::default();
     let mut provider_day = BTreeMap::<String, SpendWindow>::new();
     let mut workspace_day_sessions = BTreeSet::new();
-    let mut workspace_session_totals = BTreeMap::<String, (u64, f64)>::new();
-    let mut provider_day_sessions = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut workspace_session_totals = BTreeMap::<SessionKey<'_>, (u64, f64)>::new();
+    let mut provider_day_sessions = BTreeMap::<String, BTreeSet<SessionKey<'_>>>::new();
     let mut days = BTreeMap::<i64, DaySpend>::new();
     let mut models = BTreeMap::<&str, SpendTally>::new();
 
@@ -205,7 +205,7 @@ pub(crate) fn aggregate_counted_rollups(
             provider_day_sessions
                 .entry(provider.to_owned())
                 .or_default()
-                .insert(counted.session_key().to_owned());
+                .insert(counted.session_key());
         }
         if let Some(scope) = workspace
             && counted
@@ -215,11 +215,11 @@ pub(crate) fn aggregate_counted_rollups(
             accum(&mut workspace_tally, entry, now_secs, cutoffs.scoped());
             if entry.ts_secs >= day_cutoff_secs && within_widest_window(entry.ts_secs, now_secs) {
                 workspace_day.add(entry.cost_usd, entry);
-                workspace_day_sessions.insert(counted.session_key().to_owned());
+                workspace_day_sessions.insert(counted.session_key());
             }
             if within_widest_window(entry.ts_secs, now_secs) {
                 workspace_session_totals
-                    .entry(counted.session_key().to_owned())
+                    .entry(counted.session_key())
                     .and_modify(|(youngest, usd)| {
                         *youngest = (*youngest).max(entry.ts_secs);
                         *usd += entry.cost_usd;
@@ -269,7 +269,7 @@ pub(crate) fn aggregate_counted_rollups(
         workspace_live_baselines: workspace_session_totals
             .into_iter()
             .filter_map(|(session, (youngest, usd))| {
-                within_raw_retain_window(youngest, now_secs).then_some((session, usd))
+                within_raw_retain_window(youngest, now_secs).then_some((session.materialize(), usd))
             })
             .collect(),
         workspace_day,
@@ -408,7 +408,7 @@ fn add_spending_sessions(
     now_secs: u64,
     cutoffs: &CountedCutoffs,
 ) {
-    let mut threads: HashMap<String, (&'static str, u64)> = HashMap::new();
+    let mut threads: HashMap<SessionKey<'_>, (&'static str, u64)> = HashMap::new();
     for (adapter, file) in files {
         let cache_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&cache_key) else {
@@ -443,7 +443,7 @@ fn add_scoped_sessions(
     now_secs: u64,
     headline_cutoff: u64,
 ) {
-    let mut threads: HashMap<String, u64> = HashMap::new();
+    let mut threads: HashMap<SessionKey<'_>, u64> = HashMap::new();
     for (adapter, file) in files {
         let cache_key = file.to_string_lossy().into_owned();
         let Some(cached_file) = cache.files.get(&cache_key) else {
@@ -554,7 +554,7 @@ pub(crate) trait DedupPayload {
 pub(crate) trait CountedPayload: DedupPayload {
     fn kind(&self) -> &'static str;
     fn origin(&self) -> Option<&Path>;
-    fn session_key(&self) -> &str;
+    fn session_key(&self) -> SessionKey<'_>;
 }
 
 pub(crate) struct SidechainDedup<P> {
@@ -652,10 +652,28 @@ fn entry_token_total(entry: &CachedEntry) -> u64 {
         .saturating_add(entry.cache_read)
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum SessionKey<'a> {
+    Native {
+        kind: &'static str,
+        thread_id: &'a str,
+    },
+    File(&'a Path),
+}
+
+impl SessionKey<'_> {
+    fn materialize(self) -> String {
+        match self {
+            Self::Native { kind, thread_id } => format!("{kind}:{thread_id}"),
+            Self::File(path) => path.to_string_lossy().into_owned(),
+        }
+    }
+}
+
 pub(crate) struct Counted<'a> {
     kind: &'static str,
     origin: Option<&'a Path>,
-    session_key: String,
+    session_key: SessionKey<'a>,
     entry: &'a CachedEntry,
 }
 
@@ -674,41 +692,59 @@ impl CountedPayload for Counted<'_> {
         self.origin
     }
 
-    fn session_key(&self) -> &str {
-        &self.session_key
+    fn session_key(&self) -> SessionKey<'_> {
+        self.session_key
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct OwnedCounted {
-    kind: &'static str,
-    origin: Option<PathBuf>,
-    session_key: String,
-    entry: CachedEntry,
+/// Exact position of one dedup winner in the file table keyed by the walker's
+/// cache generation and spending-file signature.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CountedLocation {
+    pub(crate) file_index: usize,
+    pub(crate) entry_index: usize,
 }
 
-impl DedupPayload for OwnedCounted {
+struct LocatedCounted<'a> {
+    location: CountedLocation,
+    entry: &'a CachedEntry,
+}
+
+impl DedupPayload for LocatedCounted<'_> {
     fn entry(&self) -> &CachedEntry {
-        &self.entry
+        self.entry
     }
 }
 
-impl CountedPayload for OwnedCounted {
+pub(crate) struct IndexedCounted<'a> {
+    kind: &'static str,
+    origin: Option<&'a Path>,
+    session_key: SessionKey<'a>,
+    entry: &'a CachedEntry,
+}
+
+impl DedupPayload for IndexedCounted<'_> {
+    fn entry(&self) -> &CachedEntry {
+        self.entry
+    }
+}
+
+impl CountedPayload for IndexedCounted<'_> {
     fn kind(&self) -> &'static str {
         self.kind
     }
 
     fn origin(&self) -> Option<&Path> {
-        self.origin.as_deref()
+        self.origin
     }
 
-    fn session_key(&self) -> &str {
-        &self.session_key
+    fn session_key(&self) -> SessionKey<'_> {
+        self.session_key
     }
 }
 
 pub(crate) fn dedup_cached_entries<'a>(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &'a [(&'static dyn AgentAdapter, PathBuf)],
     cache: &'a SpendingDiskCache,
 ) -> SidechainDedup<Counted<'a>> {
     dedup_cached_entries_with(files, cache, |adapter, file, kind, cached_file, entry| {
@@ -721,26 +757,87 @@ pub(crate) fn dedup_cached_entries<'a>(
     })
 }
 
-pub(crate) fn dedup_cached_entries_owned(
+pub(crate) fn dedup_cached_entry_locations(
     files: &[(&'static dyn AgentAdapter, PathBuf)],
     cache: &SpendingDiskCache,
-) -> SidechainDedup<OwnedCounted> {
-    dedup_cached_entries_with(files, cache, |adapter, file, kind, cached_file, entry| {
-        OwnedCounted {
-            kind,
-            origin: cached_file.origin_path.clone(),
-            session_key: session_key(adapter, file, entry),
-            entry: entry.clone(),
+) -> Vec<CountedLocation> {
+    let mut deduped = SidechainDedup::default();
+    for (file_index, (_, file)) in files.iter().enumerate() {
+        let key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&key) else {
+            continue;
+        };
+        for (entry_index, entry) in cached_file.entries.iter().enumerate() {
+            deduped.insert(LocatedCounted {
+                location: CountedLocation {
+                    file_index,
+                    entry_index,
+                },
+                entry,
+            });
         }
-    })
+    }
+    deduped
+        .into_counted()
+        .into_iter()
+        .map(|counted| counted.location)
+        .collect()
+}
+
+pub(crate) fn indexed_counted_entries<'a>(
+    files: &'a [(&'static dyn AgentAdapter, PathBuf)],
+    cache: &'a SpendingDiskCache,
+    locations: &[CountedLocation],
+) -> Vec<IndexedCounted<'a>> {
+    struct IndexedFile<'a> {
+        adapter: &'static dyn AgentAdapter,
+        path: &'a Path,
+        cache: &'a FileCacheEntry,
+    }
+
+    let table = files
+        .iter()
+        .map(|(adapter, file)| {
+            let key = file.to_string_lossy().into_owned();
+            cache.files.get(&key).map(|cached| IndexedFile {
+                adapter: *adapter,
+                path: file,
+                cache: cached,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    locations
+        .iter()
+        .map(|location| {
+            // The memo key includes the exact file signature and cache
+            // generation that built these locations, so invalid indices are
+            // an impossible internal state rather than recoverable input.
+            let file = table
+                .get(location.file_index)
+                .and_then(Option::as_ref)
+                .expect("counted location must resolve under its memo key");
+            let entry = file
+                .cache
+                .entries
+                .get(location.entry_index)
+                .expect("counted entry must resolve under its memo key");
+            IndexedCounted {
+                kind: file.adapter.descriptor().kind,
+                origin: file.cache.origin_path.as_deref(),
+                session_key: session_key(file.adapter, file.path, entry),
+                entry,
+            }
+        })
+        .collect()
 }
 
 fn dedup_cached_entries_with<'a, P: DedupPayload>(
-    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    files: &'a [(&'static dyn AgentAdapter, PathBuf)],
     cache: &'a SpendingDiskCache,
     make: impl Fn(
         &'static dyn AgentAdapter,
-        &Path,
+        &'a Path,
         &'static str,
         &'a FileCacheEntry,
         &'a CachedEntry,
@@ -869,14 +966,21 @@ pub(crate) fn within_raw_retain_window(ts_secs: u64, now_secs: u64) -> bool {
 /// `…/<session_id>/subagents/*.jsonl` files, so both fold under the
 /// `<session_id>` directory and one thread counts once; a per-file provider
 /// (Codex, Pi) keys on the file path.
-fn session_key(adapter: &dyn AgentAdapter, path: &Path, entry: &CachedEntry) -> String {
+fn session_key<'a>(
+    adapter: &'static dyn AgentAdapter,
+    path: &'a Path,
+    entry: &'a CachedEntry,
+) -> SessionKey<'a> {
     if let Some(thread_id) = entry.thread_id.as_deref().map(str::trim)
         && !thread_id.is_empty()
     {
-        return format!("{}:{thread_id}", adapter.descriptor().kind);
+        return SessionKey::Native {
+            kind: adapter.descriptor().kind,
+            thread_id,
+        };
     }
 
-    file_grouping_session_key(adapter, path)
+    SessionKey::File(file_grouping_session_path(adapter, path))
 }
 
 pub(crate) fn live_session_keys(
@@ -887,15 +991,21 @@ pub(crate) fn live_session_keys(
     let mut keys = Vec::new();
     let session_id = session_id.trim();
     if !session_id.is_empty() {
-        keys.push(format!("{}:{session_id}", adapter.descriptor().kind));
+        keys.push(
+            SessionKey::Native {
+                kind: adapter.descriptor().kind,
+                thread_id: session_id,
+            }
+            .materialize(),
+        );
     }
-    keys.push(file_grouping_session_key(adapter, transcript_path));
+    keys.push(SessionKey::File(file_grouping_session_path(adapter, transcript_path)).materialize());
     keys.sort();
     keys.dedup();
     keys
 }
 
-fn file_grouping_session_key(adapter: &dyn AgentAdapter, path: &Path) -> String {
+fn file_grouping_session_path<'a>(adapter: &dyn AgentAdapter, path: &'a Path) -> &'a Path {
     let dir = match adapter.descriptor().thread_key {
         ThreadKey::SessionDir => {
             let parent = path.parent();
@@ -908,7 +1018,7 @@ fn file_grouping_session_key(adapter: &dyn AgentAdapter, path: &Path) -> String 
         }
         ThreadKey::PerFile => None,
     };
-    dir.unwrap_or(path).to_string_lossy().into_owned()
+    dir.unwrap_or(path)
 }
 
 pub(crate) fn spending_files_signature(files: &[(&'static dyn AgentAdapter, PathBuf)]) -> u64 {

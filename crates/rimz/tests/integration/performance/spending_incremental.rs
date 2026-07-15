@@ -278,6 +278,46 @@ fn spending_walk_warm_skips_parse_dedup_and_write() {
 }
 
 #[test]
+fn spending_memo_rebuilds_once_per_cache_generation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache_path = dir.path().join("spending.json");
+    let files = seed_spending_cache(dir.path(), &cache_path, 10);
+    let transcript = files[0].1.clone();
+    let prices = PriceBook::default();
+    let mut walker = SpendingWalker::new();
+
+    let cold = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
+    assert_eq!(cold.stats.dedup_passes, 1);
+    let stable = walk_spending!(walker, walk, &cache_path, &files, &prices, NOW_SECS);
+    assert_eq!(stable.stats.dedup_passes, 0);
+
+    let compacted_at = NOW_SECS + 10 * 86_400;
+    let compacted = walk_spending!(walker, walk, &cache_path, &files, &prices, compacted_at);
+    assert_eq!(
+        compacted.stats.dedup_passes, 1,
+        "raw-entry compaction changes the cache generation once"
+    );
+    let stable_after_compaction =
+        walk_spending!(walker, walk, &cache_path, &files, &prices, compacted_at);
+    assert_eq!(stable_after_compaction.stats.dedup_passes, 0);
+
+    std::fs::write(&transcript, format!("{}\n", claude_line(10_000)))
+        .expect("append replacement turn");
+    let appended = walk_spending!(walker, walk, &cache_path, &files, &prices, compacted_at);
+    assert_eq!(appended.stats.dedup_passes, 1);
+    let stable_after_append =
+        walk_spending!(walker, walk, &cache_path, &files, &prices, compacted_at);
+    assert_eq!(stable_after_append.stats.dedup_passes, 0);
+
+    std::fs::write(&transcript, b"").expect("truncate transcript");
+    let truncated = walk_spending!(walker, walk, &cache_path, &files, &prices, compacted_at);
+    assert_eq!(truncated.stats.dedup_passes, 1);
+    let stable_after_truncate =
+        walk_spending!(walker, walk, &cache_path, &files, &prices, compacted_at);
+    assert_eq!(stable_after_truncate.stats.dedup_passes, 0);
+}
+
+#[test]
 fn spending_walk_warm_keeps_trailing_windows_fresh() {
     let dir = tempfile::tempdir().expect("tempdir");
     let cache_path = dir.path().join("spending.json");

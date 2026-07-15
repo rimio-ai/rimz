@@ -33,6 +33,7 @@ fn cached_opts() -> FoldOpts<'static> {
         fresh_roots: None,
         config: None,
         lanes: None,
+        local_sessions: Vec::new(),
     }
 }
 
@@ -42,6 +43,7 @@ fn producing_opts() -> FoldOpts<'static> {
         fresh_roots: None,
         config: Some(std::sync::Arc::new(crate::config::MachineConfig::default())),
         lanes: None,
+        local_sessions: Vec::new(),
     }
 }
 
@@ -1292,7 +1294,7 @@ fn cached_enrich_ignores_old_provider_spending_version() {
 }
 
 #[test]
-fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
+fn cached_enrich_waits_for_producer_workspace_publication() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
@@ -1341,10 +1343,13 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
         },
     );
     crate::agents::spending::write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
+    let mut provider_spending = crate::agents::spending::Spending::default();
+    provider_spending.total.headline.usd = 9.0;
+    provider_spending.total.year.usd = 9.0;
     crate::agents::spending::write_provider_spending_cache(
         &runtime.shared_provider_spending_path(),
         published_ms,
-        &crate::agents::spending::Spending::default(),
+        &provider_spending,
     );
 
     let hash = workspace_scope_hash(&project);
@@ -1353,10 +1358,6 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
         "test starts without the per-scope workspace cache"
     );
 
-    let _discovered = crate::agents::spending::override_discovered_spending_files_for_test(vec![(
-        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
-        transcript.clone(),
-    )]);
     let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Timestamp::now())
         .with_project_root(Some(project));
     let project = snapshot.project_root.clone().unwrap();
@@ -1375,7 +1376,46 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
     )];
     let mut config = crate::config::MachineConfig::default();
     config.sidebar.spend_window = crate::agents::spending::SpendWindowMode::Today;
-    let snapshot = enrich(
+    let missing = enrich(
+        snapshot.clone(),
+        None,
+        &runtime,
+        None,
+        None,
+        FoldOpts {
+            config: Some(std::sync::Arc::new(config.clone())),
+            ..cached_opts()
+        },
+        &crate::diag::DiagSink::disabled(),
+    );
+
+    assert_eq!(missing.value_tally.unwrap().headline.usd, 9.0);
+    assert_eq!(missing.workspace_value_tally, None);
+    assert!(
+        !runtime.workspace_spending_path(&hash).exists(),
+        "consumer never creates a missing workspace sidecar"
+    );
+
+    let mut tally = crate::agents::spending::SpendTally::default();
+    tally.headline = crate::agents::spending::SpendWindow {
+        usd: 3.75,
+        tokens: 27,
+        sessions: 1,
+        ..Default::default()
+    };
+    tally.year = tally.headline;
+    crate::agents::spending::write_workspace_spending_cache(
+        &runtime.workspace_spending_path(&hash),
+        &crate::agents::spending::WorkspaceSpendingCache {
+            version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
+            refreshed_at_ms: published_ms,
+            scope_hash: hash,
+            tally,
+            live_baselines: BTreeMap::from([(transcript.display().to_string(), 3.75)]),
+            ..Default::default()
+        },
+    );
+    let published = enrich(
         snapshot,
         None,
         &runtime,
@@ -1387,23 +1427,5 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
         },
         &crate::diag::DiagSink::disabled(),
     );
-
-    assert_eq!(
-        snapshot.workspace_value_tally.as_ref().map(|tally| (
-            tally.headline.usd,
-            tally.headline.sessions,
-            tally.headline.tokens
-        )),
-        Some((3.75, 1, 27)),
-        "consumer folds derive the cockpit tally from the shared cursor cache"
-    );
-    assert_eq!(
-        snapshot.today_spend_live_usd,
-        Some(3.75),
-        "the derived cache clamps a regressed live-card cost to its walked baseline"
-    );
-    assert!(
-        !runtime.workspace_spending_path(&hash).exists(),
-        "the consumer derive path stays read-only"
-    );
+    assert_eq!(published.workspace_value_tally.unwrap().headline.usd, 3.75);
 }

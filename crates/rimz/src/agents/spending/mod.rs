@@ -32,9 +32,9 @@ use super::{AgentAdapter, AgentCost};
 pub use crate::sidebar::timing::SPENDING_TTL;
 
 pub(crate) use aggregate::{
-    CountedPayload, HeadlineContext, NO_BURST_CUTOFF, OwnedCounted, SESSION_GAP_SECS,
-    aggregate_counted_rollups, dedup_cached_entries, dedup_cached_entries_owned, live_session_keys,
-    origin_path, spending_files_signature,
+    CountedLocation, CountedPayload, HeadlineContext, NO_BURST_CUTOFF, SESSION_GAP_SECS,
+    aggregate_counted_rollups, dedup_cached_entries, dedup_cached_entry_locations,
+    indexed_counted_entries, live_session_keys, origin_path, spending_files_signature,
 };
 pub use aggregate::{
     DaySpend, HeadlineSpec, SpendScope, SpendTally, SpendWindow, SpendWindowMode, Spending,
@@ -177,7 +177,7 @@ pub struct SpendingWalker {
 #[derive(Clone, Debug)]
 struct SpendingMemo {
     key: SpendingMemoKey,
-    counted: Vec<OwnedCounted>,
+    counted: Box<[CountedLocation]>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -317,23 +317,13 @@ impl SpendingWalker {
             self.memo = None;
         }
 
-        let key = SpendingMemoKey {
-            generation: self.cache.generation,
-            files_signature: spending_files_signature(req.files),
-        };
-        if self.memo.as_ref().is_none_or(|memo| memo.key != key) {
-            self.memo = Some(SpendingMemo {
-                key,
-                counted: dedup_cached_entries_owned(req.files, &self.cache).into_counted(),
-            });
-            stats.dedup_passes = 1;
-        }
-
-        let counted = &self.memo.as_ref().expect("memo seeded above").counted;
+        self.ensure_memo(req.files, &mut stats);
+        let locations = &self.memo.as_ref().expect("memo seeded above").counted;
+        let counted = indexed_counted_entries(req.files, &self.cache, locations);
         aggregate_walk_publish_from_counted(
             req.files,
             &self.cache,
-            counted,
+            &counted,
             req.scope,
             HeadlineContext {
                 user_inputs: req.user_inputs,
@@ -353,6 +343,70 @@ impl SpendingWalker {
         self.cache_stamp = stamp;
         self.memo = None;
         stats.cache_parsed = stamp.is_some();
+    }
+
+    fn ensure_memo(
+        &mut self,
+        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        stats: &mut WalkStats,
+    ) {
+        let key = SpendingMemoKey {
+            generation: self.cache.generation,
+            files_signature: spending_files_signature(files),
+        };
+        if self.memo.as_ref().is_none_or(|memo| memo.key != key) {
+            self.memo = Some(SpendingMemo {
+                key,
+                counted: dedup_cached_entry_locations(files, &self.cache).into_boxed_slice(),
+            });
+            stats.dedup_passes = 1;
+        }
+    }
+
+    /// Compute one scope from the synchronized cursor cache without refreshing
+    /// transcripts or persisting shared state. The producer uses this when the
+    /// provider publication is fresh but its room sidecar is missing, retaining
+    /// the same parsed cache and dedup memo for the next due global walk.
+    pub(crate) fn scoped_from_cache(
+        &mut self,
+        cache_path: &Path,
+        files: &[(&'static dyn AgentAdapter, PathBuf)],
+        user_inputs: &[user_input::UserInputRecord],
+        scope: &SpendScope,
+        now_secs: u64,
+        spec: &HeadlineSpec,
+    ) -> CachedScopedSpending {
+        let mut stats = WalkStats::default();
+        self.sync_from_disk(cache_path, &mut stats);
+        self.ensure_memo(files, &mut stats);
+        let locations = &self.memo.as_ref().expect("memo seeded above").counted;
+        let counted = indexed_counted_entries(files, &self.cache, locations);
+        let aggregate = aggregate_counted_rollups(
+            files,
+            &self.cache,
+            &counted,
+            Some(scope),
+            HeadlineContext {
+                user_inputs,
+                now_secs,
+                spec,
+            },
+            false,
+        );
+        CachedScopedSpending {
+            has_discovered_file: files.iter().any(|(_, file)| {
+                self.cache
+                    .files
+                    .contains_key(&file.to_string_lossy().into_owned())
+            }),
+            scoped: ScopedSpending {
+                tally: aggregate.workspace_tally,
+                headline_cutoff_secs: aggregate.workspace_headline_cutoff_secs,
+                live_baselines: aggregate.workspace_live_baselines,
+                day: aggregate.workspace_day,
+                day_cutoff_secs: aggregate.day_cutoff_secs,
+            },
+        }
     }
 }
 
@@ -517,6 +571,11 @@ pub struct ScopedSpending {
     pub live_baselines: BTreeMap<String, f64>,
     pub day: SpendWindow,
     pub day_cutoff_secs: u64,
+}
+
+pub(crate) struct CachedScopedSpending {
+    pub(crate) has_discovered_file: bool,
+    pub(crate) scoped: ScopedSpending,
 }
 
 /// Compute the cockpit's workspace-scoped tally plus the headline epoch cutoff

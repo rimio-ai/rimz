@@ -386,7 +386,16 @@ fn enrich_producing_projecting(
 ) -> SidebarSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
-    enrich_producing_with(snapshot, frame, opts, config, roots, None, true)
+    let local_sessions = refresh_local_sessions(frame.as_ref(), &opts);
+    enrich_producing_with(
+        snapshot,
+        frame,
+        opts,
+        config,
+        roots,
+        ProducerFold::Project,
+        &local_sessions,
+    )
 }
 
 fn enrich_with_refresh(
@@ -396,14 +405,15 @@ fn enrich_with_refresh(
 ) -> SidebarSnapshot {
     let config = crate::config::MachineConfig::load_lenient();
     let roots = producer_roots(&snapshot, opts.runtime, opts.min_pane_cache_ms);
+    let local_sessions = refresh_local_sessions(frame.as_ref(), &opts);
     let folded = enrich_producing_with(
         snapshot.clone(),
         frame.clone(),
         opts,
         config.clone(),
         roots.clone(),
-        None,
-        false,
+        ProducerFold::Intermediate,
+        &local_sessions,
     );
     let mut walker = crate::agents::spending::SpendingWalker::new();
     // The intermediate fold applies the published daemon-reap cache. Probe from
@@ -418,7 +428,27 @@ fn enrich_with_refresh(
         &config,
         &mut walker,
     );
-    enrich_producing_with(snapshot, frame, opts, config, roots, Some(&refreshed), true)
+    enrich_producing_with(
+        snapshot,
+        frame,
+        opts,
+        config,
+        roots,
+        ProducerFold::Refreshed(&refreshed),
+        &local_sessions,
+    )
+}
+
+fn refresh_local_sessions(
+    frame: Option<&PaneFrame>,
+    opts: &ProducerEnrich<'_>,
+) -> Vec<crate::agents::LocalSessionObservation> {
+    let Some(frame) = frame else {
+        return Vec::new();
+    };
+    let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), opts.exclude);
+    let inputs = crate::sidebar::local_sessions::LocalSessionInputs::from_panes(&panes);
+    crate::sidebar::local_sessions::refresh_published(opts.runtime, &frame.session_name, inputs)
 }
 
 fn producer_roots(
@@ -431,15 +461,26 @@ fn producer_roots(
     })
 }
 
+enum ProducerFold<'a> {
+    Project,
+    Intermediate,
+    Refreshed(&'a RefreshedLanes),
+}
+
 fn enrich_producing_with(
     snapshot: SidebarSnapshot,
     frame: Option<PaneFrame>,
     opts: ProducerEnrich<'_>,
     config: Arc<crate::config::MachineConfig>,
     roots: Option<Vec<PathBuf>>,
-    lanes: Option<&RefreshedLanes>,
-    producing: bool,
+    fold: ProducerFold<'_>,
+    local_sessions: &[crate::agents::LocalSessionObservation],
 ) -> SidebarSnapshot {
+    let (producing, lanes) = match fold {
+        ProducerFold::Project => (true, None),
+        ProducerFold::Intermediate => (false, None),
+        ProducerFold::Refreshed(lanes) => (true, Some(lanes)),
+    };
     enrich(
         snapshot,
         frame.as_ref(),
@@ -451,6 +492,7 @@ fn enrich_producing_with(
             fresh_roots: roots,
             config: Some(config),
             lanes,
+            local_sessions: local_sessions.to_vec(),
         },
         opts.diag,
     )

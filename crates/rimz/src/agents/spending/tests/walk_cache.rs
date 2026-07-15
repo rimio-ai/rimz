@@ -102,6 +102,63 @@ fn spending_walk_threads_user_inputs_into_session_headline() {
 }
 
 #[test]
+fn spending_walker_retains_only_winner_locations() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let padding = "x".repeat(32 * 1024);
+    let first = claude_line(&today, 1.0, "msg-a", "req-a").replace(
+        "{\"timestamp\"",
+        &format!("{{\"unused\":\"{padding}\",\"timestamp\""),
+    );
+    let second = claude_line(&today, 2.0, "msg-b", "req-b").replace(
+        "{\"timestamp\"",
+        &format!("{{\"unused\":\"{padding}\",\"timestamp\""),
+    );
+    let file = write_jsonl(dir.path(), "large.jsonl", &[&first, &second]);
+    let files = vec![(claude_adapter(), file)];
+    let cache_path = dir.path().join("spending.json");
+    let mut walker = SpendingWalker::new();
+
+    let cold = walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS,
+        &mut SilentWalk
+    );
+    let memo = walker.memo.as_ref().expect("dedup memo");
+    assert_eq!(
+        memo.counted.as_ref(),
+        &[
+            CountedLocation {
+                file_index: 0,
+                entry_index: 0,
+            },
+            CountedLocation {
+                file_index: 0,
+                entry_index: 1,
+            },
+        ]
+    );
+    assert_eq!(
+        std::mem::size_of_val(memo.counted.as_ref()),
+        2 * std::mem::size_of::<CountedLocation>()
+    );
+
+    let warm = walk_spending!(
+        walker,
+        &cache_path,
+        &files,
+        PriceBook::default(),
+        NOW_SECS + 1,
+        &mut SilentWalk
+    );
+    assert_eq!(warm.spending, cold.spending);
+    assert_eq!(warm.stats.dedup_passes, 0);
+}
+
+#[test]
 fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);

@@ -586,7 +586,7 @@ pub struct LocalContextRefresh {
 }
 
 /// Lifecycle fields projected by a provider-owned local session store.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalSessionState {
     pub status: AgentStatus,
     pub phase: TurnPhase,
@@ -597,7 +597,7 @@ pub struct LocalSessionState {
 }
 
 /// The lifecycle authority carried by a local session observation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LocalSessionProjection {
     /// The provider store proves identity and activity bounds only. Snapshot
     /// merge preserves exact durable lifecycle truth and synthesizes idle only
@@ -610,7 +610,7 @@ pub enum LocalSessionProjection {
 /// Provider-owned local session binding evidence normalized for transient
 /// sidebar projection. Adapters validate native paths and payloads before
 /// constructing this shape; snapshot code never sees provider wire records.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalSessionObservation {
     pub kind: crate::ids::AgentKind,
     pub session_id: crate::ids::AgentSessionId,

@@ -91,16 +91,7 @@ pub(crate) struct ClaudeRcSettings {
 }
 
 pub(crate) fn read_rc_settings() -> (PathBuf, ClaudeRcSettings) {
-    let path = match claude_settings_path() {
-        Ok(path) => path,
-        Err(err) => {
-            tracing::warn!(error = %err, "Claude settings path unavailable for remote-control read");
-            return (
-                PathBuf::from(FALLBACK_SETTINGS_PATH),
-                ClaudeRcSettings::default(),
-            );
-        }
-    };
+    let path = settings_path();
     let settings = match read_existing_json(&path) {
         Ok(root) => rc_settings_from(&root),
         Err(err) => {
@@ -113,6 +104,16 @@ pub(crate) fn read_rc_settings() -> (PathBuf, ClaudeRcSettings) {
         }
     };
     (path, settings)
+}
+
+pub(crate) fn settings_path() -> PathBuf {
+    match claude_settings_path() {
+        Ok(path) => path,
+        Err(err) => {
+            tracing::warn!(error = %err, "Claude settings path unavailable for remote-control read");
+            PathBuf::from(FALLBACK_SETTINGS_PATH)
+        }
+    }
 }
 
 pub(crate) fn rc_settings_from(root: &Map<String, Value>) -> ClaudeRcSettings {

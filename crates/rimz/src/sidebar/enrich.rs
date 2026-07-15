@@ -4,7 +4,7 @@
 //! caches and sidecars; it forks no subprocess and writes no cache files.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -247,6 +247,7 @@ pub struct FoldOpts<'a> {
     pub fresh_roots: Option<Vec<PathBuf>>,
     pub config: Option<Arc<crate::config::MachineConfig>>,
     pub lanes: Option<&'a crate::sidebar::refresh::RefreshedLanes>,
+    pub local_sessions: Vec<crate::agents::LocalSessionObservation>,
 }
 
 /// Probed managed-server liveness for the rc badge. `None` means no probe was
@@ -353,14 +354,12 @@ pub fn enrich(
     snapshot.wired_kinds = wired_kinds();
     snapshot.wired_default_models = wired_default_models();
 
-    // Pull provider-owned local sessions before context/activity enrichment so
-    // a hookless Kiro session joins the same downstream projection as durable
-    // rollup agents. Binding is strict and transient; paneless observations are
-    // discarded by `with_local_sessions`.
+    // Bind caller-supplied provider-local observations before context/activity
+    // enrichment. Discovery belongs to the room producer; every renderer keeps
+    // the strict live-pane binding and discards paneless observations.
     if let Some(frame) = frame {
         let panes = SidebarSnapshot::card_admitted_live_panes(frame.to_pane_refs(), exclude);
-        let observations = discover_local_sessions_for_panes(&panes);
-        snapshot = snapshot.with_local_sessions(&panes, observations);
+        snapshot = snapshot.with_local_sessions(&panes, opts.local_sessions);
     }
 
     // Fold each session's rich statusline context onto its agent state
@@ -519,40 +518,6 @@ pub fn enrich(
     snapshot
 }
 
-#[doc(hidden)]
-pub fn discover_local_sessions_for_panes(
-    panes: &[crate::pane::PaneRef],
-) -> Vec<crate::agents::LocalSessionObservation> {
-    let mut candidates = BTreeMap::<String, BTreeSet<PathBuf>>::new();
-    for pane in panes {
-        let Some(kind) = crate::store::snapshot::pane_agent_kind(pane) else {
-            continue;
-        };
-        let Some(adapter) = crate::agents::find_adapter(kind) else {
-            continue;
-        };
-        if !adapter.descriptor().capabilities.local_session_discovery {
-            continue;
-        }
-        let Some(workspace) = crate::store::snapshot::pane_worktree_path(pane) else {
-            continue;
-        };
-        candidates
-            .entry(kind.to_owned())
-            .or_default()
-            .insert(PathBuf::from(workspace));
-    }
-    candidates
-        .into_iter()
-        .flat_map(|(kind, workspace)| {
-            let workspaces = workspace.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-            crate::agents::find_adapter(&kind)
-                .map(|adapter| adapter.discover_local_sessions(&workspaces))
-                .unwrap_or_default()
-        })
-        .collect()
-}
-
 fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<crate::TruthNotice> {
     let since_ms = frame
         .carried_panes
@@ -680,13 +645,9 @@ fn fold_machine_config(
             read_accounts_cache(&runtime.shared_accounts_path()),
             &snapshot,
         );
-        // Fold the producer's published spending cache rather than re-walking
-        // JSONL transcript history here.
-        let spending = super::refresh::spending::consumer_spending_caches(
-            runtime,
-            &snapshot,
-            &config.headline_spec(),
-        );
+        // Consumers read producer publications only. A missing workspace
+        // sidecar stays absent until the elected producer supplies it.
+        let spending = super::refresh::spending::consumer_spending_caches(runtime, &snapshot);
         (accounts, spending)
     };
     let mut snapshot = fold_machine_config_with(

@@ -41,7 +41,11 @@ fn refresh_loop(
     let mut spending_walker = SpendingWalker::new();
     let mut meter = TickMeter::new(TickLoop::CacheRefresh, tick_for(config.tick_seconds));
     let daemon_backend = crate::mux::backend_for(config.mux);
-    let mut daemon_view_repaired_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
+    let mut daemon_tracker = crate::daemon_view::DaemonRepairTracker::new(
+        config.workspace_id.clone(),
+        config.session_name.clone(),
+    );
+    let mut daemon_checked_at = Instant::now() - DAEMON_VIEW_REPAIR_TTL;
     loop {
         std::thread::sleep(tick_for(config.tick_seconds));
         if election.elder_instance().is_some() {
@@ -75,13 +79,9 @@ fn refresh_loop(
         }
         let now = jiff::Timestamp::now().to_zoned(config.timezone.clone());
         fire_elder_timers(&runtime, &now);
-        if daemon_view_repaired_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
-            daemon_view_repaired_at = Instant::now();
-            crate::daemon_view::ensure_daemon_view(
-                daemon_backend.as_ref(),
-                &config.workspace_id,
-                &config.session_name,
-            );
+        if daemon_checked_at.elapsed() >= DAEMON_VIEW_REPAIR_TTL {
+            daemon_checked_at = Instant::now();
+            daemon_tracker.maintain(daemon_backend.as_ref(), &runtime);
         }
     }
 }

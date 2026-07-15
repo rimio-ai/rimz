@@ -493,6 +493,7 @@ fn workspace_cache_derives_from_shared_entries_while_global_lock_is_held() {
     assert!(runtime.workspace_spending_path(stale_hash).exists());
 
     let workspace = workspace_cache_from_shared_entries(
+        &mut SpendingWalker::new(),
         &runtime,
         &provider,
         &scope,
@@ -581,6 +582,7 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
         ..ProviderSpendingCache::default()
     };
     let workspace = workspace_cache_from_shared_entries(
+        &mut SpendingWalker::new(),
         &runtime,
         &provider,
         &scope,
@@ -599,7 +601,7 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
 }
 
 #[test]
-fn derive_workspace_spending_publishes_walked_baselines() {
+fn producer_missing_scope_publishes_walked_baselines() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("repo");
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
@@ -608,13 +610,20 @@ fn derive_workspace_spending_publishes_walked_baselines() {
     let scope = SpendScope::from_roots(Some(&project), &[]);
     let scope_hash = scope.hash();
     let transcript = dir.path().join("claude.jsonl");
+    std::fs::write(&transcript, b"").expect("transcript");
     let now_secs = unix_secs_now();
     let mut raw = read_spending_cache(&runtime.shared_spending_cursor_path());
     raw.files.insert(
         transcript.to_string_lossy().into_owned(),
         FileCacheEntry {
-            mtime_secs: 1,
-            len: 1,
+            mtime_secs: std::fs::metadata(&transcript)
+                .unwrap()
+                .modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            len: 0,
             cursor: SpendCursor::default(),
             origin_path: Some(project),
             entries: vec![CachedEntry {
@@ -646,18 +655,46 @@ fn derive_workspace_spending_publishes_walked_baselines() {
         timezone: Some("UTC".to_owned()),
     };
 
-    let included = super::derive_workspace_spending(
+    let provider = ProviderSpendingCache {
+        version: PROVIDER_SPENDING_VERSION,
+        refreshed_at_ms: 1_000,
+        ..Default::default()
+    };
+    let mut walker = SpendingWalker::new();
+    let included = workspace_cache_from_shared_entries(
+        &mut walker,
         &runtime,
+        &provider,
         &scope,
-        scope_hash.clone(),
-        1_000,
+        Some(&scope_hash),
         &files,
         &spec,
-    );
+    )
+    .expect("producer derives the missing scope");
 
     assert!((included.tally.headline.usd - 1.25).abs() < 1e-9);
     assert_eq!(included.live_baselines.len(), 1);
     assert_eq!(included.live_baselines.values().copied().sum::<f64>(), 1.25);
+
+    let prices = crate::agents::pricing::PriceBook::default();
+    let origin_overrides = std::collections::HashMap::new();
+    let user_inputs = Vec::new();
+    let request = crate::agents::spending::WalkRequest {
+        files: &files,
+        prices: &prices,
+        now_secs: now_secs + 1,
+        origin_overrides: &origin_overrides,
+        user_inputs: &user_inputs,
+        scope: Some(&scope),
+        spec: &spec,
+    };
+    let warm = walker.walk_local(
+        &runtime.shared_spending_cursor_path(),
+        &request,
+        &mut crate::agents::spending::SilentWalk,
+    );
+    assert!(!warm.stats.cache_parsed);
+    assert_eq!(warm.stats.dedup_passes, 0);
 }
 
 #[test]
@@ -720,6 +757,7 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
     write_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash), &prev);
 
     let served = workspace_cache_from_shared_entries(
+        &mut SpendingWalker::new(),
         &runtime,
         &provider,
         &scope,
@@ -739,6 +777,7 @@ fn workspace_cache_from_shared_entries_serves_young_previous_regression() {
     };
     write_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash), &old);
     let reset = workspace_cache_from_shared_entries(
+        &mut SpendingWalker::new(),
         &runtime,
         &provider,
         &scope,
