@@ -36,11 +36,10 @@ pub(super) fn launch_layout(
             max_turns: args.max_turns,
         },
     )
-    .map_err(|err| {
+    .inspect_err(|err| {
         for warning in err.warnings() {
             let _ = writeln!(std::io::stderr(), "{warning}");
         }
-        err
     })?;
     for warning in &prepared.warnings {
         writeln!(std::io::stderr(), "{warning}")?;

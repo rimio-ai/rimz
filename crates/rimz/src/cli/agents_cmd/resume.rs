@@ -5,7 +5,7 @@
 //! their user-facing result.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
