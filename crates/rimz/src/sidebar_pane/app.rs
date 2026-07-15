@@ -67,11 +67,13 @@ mod width_control;
 use self::loop_state::handle_wakeup;
 use self::loop_state::{LoopFlow, LoopState, MaintenanceContext};
 use self::{notify::*, socket::*, timing::*};
-use fetch::{FetchDispatcher, FetchOutcome, FetchRequest, spawn_fetch_worker};
+use fetch::{FetchDispatcher, FetchRequest, FetchUpdate, spawn_fetch_worker};
 use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 use lifecycle::{PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
-use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane};
+use selection::{
+    InputEffect, InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane,
+};
 use state::placeholder_snapshot;
 
 pub use demo::{serve_fixture, serve_gallery};
@@ -205,18 +207,17 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // dispatcher coalesces requests so a store-delta storm or a slow produce
     // can never queue more than one extra run.
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
-    let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
+    let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchUpdate>();
     // `JoinHandle` drops without blocking: the thread runs to completion on its
     // own when `request_tx` is dropped at function exit.
     let _fetch_handle = spawn_fetch_worker(
         config.clone(),
         runtime.clone(),
-        socket_path.clone(),
         config.notification_prefs.clone(),
         diag.clone(),
         election.clone(),
         request_rx,
-        result_tx,
+        (result_tx, socket_path.clone()),
     );
     let _cache_refresh_handle = cache_refresh::spawn(
         config.clone(),

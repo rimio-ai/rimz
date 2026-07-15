@@ -5,13 +5,13 @@ use crate::diag::record::GateRule;
 use crate::ids::PaneId;
 use crate::sidebar_pane::pets::PetView;
 use crate::sidebar_pane::pixel::meter::MeterPixels;
+use crate::sidebar_pane::view::BodyFilter;
 use jiff::Timestamp;
 use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
 
-use super::sections::{MakeUpHit, ProviderTabHit};
 use super::theme::Theme;
-use super::{CostRolls, ScrollbarFade, TallyAnim};
+use super::{CostRolls, FrameInteractions, ScrollbarFade, TallyAnim};
 
 pub(crate) use crate::sidebar::focus_anchor::{FrozenOrder, FrozenRow};
 
@@ -40,12 +40,8 @@ pub struct UiState {
     /// card at `animation_phase`; ORed into the serve loop's animation gate
     /// beside the tally. Crate-internal, like `tally`.
     pub(crate) cost_rolls: CostRolls,
-    /// Hit-test map of the most recently drawn frame: one entry per inner-area
-    /// content line, `Some(row)` for a jump-target row line (in
-    /// `app::visible_rows()` order) and `None` for chrome. The renderer writes
-    /// it as a byproduct of every draw; the mouse hit-test reads it. Empty
-    /// before the first draw.
-    pub line_map: Vec<Option<usize>>,
+    /// Typed hit geometry from the most recently painted frame.
+    pub(crate) interactions: FrameInteractions,
     /// The pane the highlight is pinned to — selection keyed by identity, not
     /// position. Re-derived each fold by `app::reconcile_selection` from the
     /// derived `baseline_pane` and any live `browse`. Keying on the pane means
@@ -77,7 +73,7 @@ pub struct UiState {
     /// First scroll-zone content line visible in the agent-cards viewport.
     /// Resolved by every draw — clamped to the zone, then auto-scrolled so the
     /// selected card stays in view unless a [`ManualScroll`] pin holds it —
-    /// and written back as a byproduct of the draw, like `line_map`.
+    /// and written back as a byproduct of the draw, like frame interactions.
     pub(crate) scroll_offset: usize,
     /// Stamp of the last jump scroll anchor this renderer applied, so a given
     /// anchor seeds the viewport at most once. `0` before any jump handoff.
@@ -132,40 +128,20 @@ pub struct UiState {
     /// Pane-local context-meter interning state, persisted across frames so a
     /// quantized raster keeps its image id while ratatui diffs placeholders.
     pub(crate) meter_pixels: Option<MeterPixels>,
-    /// Hit-test map of the dashboard tab rail in the most recently drawn
-    /// frame: the absolute screen line and column range of each tab's
-    /// cap-to-cap footprint, written as a byproduct of every draw like
-    /// `line_map`. Empty when no rail is on screen.
-    pub(crate) tab_hits: Vec<ProviderTabHit>,
     /// The cockpit filter target the user picked to filter the agent-card
     /// body, or `None` for the resting show-all view.
     /// Renderer-local display state — the producer, the store, and the
     /// cockpit counts (always the full fleet) are untouched; only the body
-    /// iteration narrows, through the one shared `group_visible_rows` walk. A
+    /// iteration narrows, through one shared `VisibleRoster` projection. A
     /// pure toggle: a click on the active target clears it, and
     /// it auto-clears when its count drops to zero — the make-up
     /// twin of a dashboard tab pick ending when its panel leaves.
     pub(crate) make_up_filter: Option<BodyFilter>,
-    /// Hit-test map of the cockpit filter targets in the most recently drawn
-    /// frame: the absolute screen line and column range of each non-zero
-    /// make-up bucket and the unread count's footprint, written as a
-    /// byproduct of every draw like `line_map` and `tab_hits`.
-    pub(crate) make_up_hits: Vec<MakeUpHit>,
     /// Worktree groups expanded through the renderer-local `+K more` affordance.
     /// Expansion is presentation state only: the snapshot carries the full
     /// roster, and a group drops from this set once it no longer has a capped
     /// tail to reveal.
     pub(crate) expanded_groups: BTreeSet<String>,
-    /// Hit-test map of the `+K more` / `− less` toggle lines in the most
-    /// recently drawn frame: the absolute screen line and group key, written as
-    /// a byproduct of every draw like `line_map`, `tab_hits`, and
-    /// `make_up_hits`.
-    pub(crate) more_hits: Vec<MoreHit>,
-    /// Screen row of the `↑ N need you` jump banner in the most recently drawn
-    /// frame, or `None` when the lead-unread card is in view and the banner is
-    /// hidden. The mouse hit-test reads it to scroll the cards to the top;
-    /// written as a draw byproduct like `line_map`.
-    pub(crate) banner_line: Option<usize>,
     /// Renderer-local status for a successful fetch that the regression gate is
     /// holding behind the last good frame. It is display-only evidence for the
     /// bottom chrome; the durable record is `gate_hold`/`gate_release`.
@@ -313,16 +289,4 @@ impl Alert {
     pub fn is_active(&self) -> bool {
         self.recovered_at.is_none()
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BodyFilter {
-    Status(AgentStatus),
-    Unread,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MoreHit {
-    pub(crate) line: usize,
-    pub(crate) group_key: String,
 }

@@ -115,12 +115,15 @@ fn fold_snapshot(
 ) {
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     result_tx
-        .send(FetchOutcome {
-            snapshot: Ok(snapshot),
-            final_for_request: true,
-            fresh_pane_frame,
-            unchanged: false,
-            producer: true,
+        .send(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            role: FetchRole::Producer,
+            phase: FetchPhase::Final,
+            pane_frame: if fresh_pane_frame {
+                PaneFrame::Fresh
+            } else {
+                PaneFrame::Held
+            },
         })
         .expect("send fetch outcome");
     state
@@ -282,12 +285,11 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
     let (mut fetch, _request_rx) = fetch_dispatcher();
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     result_tx
-        .send(FetchOutcome {
-            snapshot: Ok(agent_snapshot(&ws)),
-            final_for_request: true,
-            fresh_pane_frame: false,
-            unchanged: false,
-            producer: true,
+        .send(FetchUpdate::Snapshot {
+            snapshot: Box::new(agent_snapshot(&ws)),
+            role: FetchRole::Producer,
+            phase: FetchPhase::Final,
+            pane_frame: PaneFrame::Held,
         })
         .expect("send fetch outcome");
 
@@ -323,12 +325,8 @@ fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
     assert!(request_rx.try_recv().is_ok());
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     result_tx
-        .send(FetchOutcome {
-            snapshot: Err("unchanged".to_owned()),
-            final_for_request: true,
-            fresh_pane_frame: false,
-            unchanged: true,
-            producer: true,
+        .send(FetchUpdate::Unchanged {
+            role: FetchRole::Producer,
         })
         .expect("send unchanged outcome");
 
@@ -362,12 +360,8 @@ fn unchanged_fetch_outcome_dispatches_queued_refetch() {
     fetch.request(FetchRequest::producer_fresh_panes(), true);
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     result_tx
-        .send(FetchOutcome {
-            snapshot: Err("unchanged".to_owned()),
-            final_for_request: true,
-            fresh_pane_frame: false,
-            unchanged: true,
-            producer: true,
+        .send(FetchUpdate::Unchanged {
+            role: FetchRole::Producer,
         })
         .expect("send unchanged outcome");
 

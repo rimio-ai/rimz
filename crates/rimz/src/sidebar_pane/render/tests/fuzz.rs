@@ -42,7 +42,7 @@ proptest! {
 
         let theme = Theme::for_sidebar(&snapshot.theme);
         let composed = compose_lines(&snapshot, None, &ui, &theme, width, height);
-        prop_assert_eq!(composed.line_map.len(), composed.lines.len());
+        prop_assert_eq!(composed.interactions.line_count(), composed.lines.len());
 
         if width > 0 && height > 0 {
             let mut out = Vec::new();

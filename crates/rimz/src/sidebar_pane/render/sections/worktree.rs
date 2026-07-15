@@ -16,7 +16,8 @@ use crate::sidebar_pane::render::labels::{
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
-use crate::sidebar_pane::render::{MoreHit, group_visible_rows};
+use crate::sidebar_pane::render::{HitRegion, HitTarget};
+use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
 use super::agent_card::row_lines;
 use super::{Gutter, RowCtx, content_width, with_gutter};
@@ -27,28 +28,27 @@ use super::{Gutter, RowCtx, content_width, with_gutter};
 /// exactly as long as `lines`, so the hit-test can look a screen line up to a
 /// row with no separate geometry. The row index captured for a row's lines is
 /// the value *before* `row_index` advances, matching `app::visible_rows()`:
-/// both walk [`group_visible_rows`], so the ordinals stay 1:1 under capping,
+/// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
 /// expansion, and make-up filters. The caller skips a group the filter empties;
 /// the more/less line is filter-suppressed because a narrowed body is already
 /// uncapped.
-#[allow(clippy::too_many_arguments)]
-pub(in crate::sidebar_pane::render) fn worktree_group_lines(
+pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     ctx: &RowCtx<'_>,
-    group: &SidebarWorktreeGroup,
-    expanded: bool,
-    row_index: &mut usize,
+    roster: &VisibleRoster<'_>,
+    visible_group: &VisibleGroup<'_>,
     mut meter_pixels: Option<&mut MeterPixels>,
     lines: &mut Vec<Line<'static>>,
     map: &mut Vec<Option<usize>>,
-    more_hits: &mut Vec<MoreHit>,
+    more_hits: &mut Vec<HitRegion>,
 ) {
+    let group = visible_group.source();
     // Does the selection live in this worktree? If so the whole group reads as
     // one bracketed lane: the resting `▎` spine on the header and every row,
     // with the selected card itself lit bold `▌`. The `external` catch-all is
     // never a lane.
-    let first_row = *row_index;
-    let visible = group_visible_rows(group, ctx.filter, expanded, ctx.held);
-    let passing = visible.len();
+    let range = visible_group.range();
+    let first_row = range.start;
+    let passing = range.len();
     let group_selected = group.kind != SidebarWorktreeKind::External
         && (first_row..first_row + passing).contains(&ctx.selected_index);
     let lane = if group_selected {
@@ -68,38 +68,22 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     // straight into it. The `external` divider is not a worktree name, so it
     // stays inert chrome.
     let header_target =
-        (group.kind != SidebarWorktreeKind::External && passing > 0).then_some(*row_index);
+        (group.kind != SidebarWorktreeKind::External && passing > 0).then_some(first_row);
     map.push(header_target);
-    for row in visible {
-        let selected = *row_index == ctx.selected_index;
-        let this_row = *row_index;
-        *row_index += 1;
+    for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
+        let selected = this_row == ctx.selected_index;
         let gutter = if selected { Gutter::Selected } else { lane };
         let row_lines = row_lines(ctx, row, selected, gutter, meter_pixels.as_deref_mut());
         map.extend(std::iter::repeat_n(Some(this_row), row_lines.len()));
         lines.extend(row_lines);
     }
-    let natural_hidden = if ctx.filter.is_none() {
-        group
-            .rows
-            .len()
-            .saturating_sub(group_visible_rows(group, None, false, None).len())
-    } else {
-        0
-    };
-    let hidden = if ctx.filter.is_none() {
-        group
-            .rows
-            .len()
-            .saturating_sub(group_visible_rows(group, None, false, ctx.held).len())
-    } else {
-        0
-    };
-    if ctx.filter.is_none() && hidden > 0 && !expanded {
-        more_hits.push(MoreHit {
-            line: lines.len(),
-            group_key: group.key.clone(),
-        });
+    let natural_hidden = visible_group.natural_hidden_count();
+    let hidden = visible_group.hidden_count();
+    if hidden > 0 && !visible_group.expanded() {
+        more_hits.push(HitRegion::whole_line(
+            lines.len(),
+            HitTarget::ToggleGroup(group.key.clone()),
+        ));
         lines.push(with_gutter(
             ctx.theme,
             Line::styled(
@@ -114,11 +98,11 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
             ctx.width,
         ));
         map.push(None);
-    } else if ctx.filter.is_none() && natural_hidden > 0 && expanded {
-        more_hits.push(MoreHit {
-            line: lines.len(),
-            group_key: group.key.clone(),
-        });
+    } else if natural_hidden > 0 && visible_group.expanded() {
+        more_hits.push(HitRegion::whole_line(
+            lines.len(),
+            HitTarget::ToggleGroup(group.key.clone()),
+        ));
         lines.push(with_gutter(
             ctx.theme,
             Line::styled("  − less", ctx.theme.muted()),
@@ -128,6 +112,38 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
         ));
         map.push(None);
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sidebar_pane::render) fn worktree_group_lines(
+    ctx: &RowCtx<'_>,
+    group: &SidebarWorktreeGroup,
+    expanded: bool,
+    row_index: &mut usize,
+    meter_pixels: Option<&mut MeterPixels>,
+    lines: &mut Vec<Line<'static>>,
+    map: &mut Vec<Option<usize>>,
+    more_hits: &mut Vec<HitRegion>,
+) {
+    let roster = VisibleRoster::single(group, None, expanded, None);
+    let base = *row_index;
+    let map_start = map.len();
+    worktree_group_lines_projected(
+        ctx,
+        &roster,
+        &roster.groups()[0],
+        meter_pixels,
+        lines,
+        map,
+        more_hits,
+    );
+    if base > 0 {
+        for ordinal in map[map_start..].iter_mut().flatten() {
+            *ordinal += base;
+        }
+    }
+    *row_index += roster.len();
 }
 
 fn group_header(

@@ -12,24 +12,9 @@ use crate::sidebar_pane::render::labels::{
     attention_cell_style, status_chip_color, status_glyph, status_rest_style, unread_anim,
 };
 use crate::sidebar_pane::render::theme::Theme;
+use crate::sidebar_pane::render::{HitRegion, HitTarget};
 
 use super::{pin_right, trim_spans_to_width};
-
-/// One clickable filter bucket in the cockpit make-up line: the line index
-/// within [`fleet_header_lines`]'s returned lines (always 0 — the make-up is
-/// one row), the half-open column range the bucket's footprint occupies
-/// relative to the unpadded content, and the filter it applies to the body.
-/// `compose_lines` translates the position to absolute screen coordinates
-/// (the cockpit base and the one-cell chrome gutter) before storing it on
-/// `UiState::make_up_hits` for the mouse hit-test. A zero-count bucket emits
-/// no hit — inert, as if not a tab.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct MakeUpHit {
-    pub(crate) line: usize,
-    pub(crate) col_start: u16,
-    pub(crate) col_end: u16,
-    pub(crate) filter: BodyFilter,
-}
 
 /// The fixed fleet header — the cockpit's make-up line, below the repo
 /// dashboard's identity and `¤`/`◎`/spend lines. One line when the room has
@@ -56,8 +41,8 @@ pub(crate) struct MakeUpHit {
 /// today-accumulated breakdown carries the fleet's resource read.
 ///
 /// Every non-zero bucket is also a click-to-filter target, so the line returns
-/// its [`MakeUpHit`]s alongside — emitted in lockstep with the spans, columns
-/// relative to the unpadded content. The `filter` is the active pick: that
+/// its typed [`HitRegion`]s alongside — emitted in lockstep with the spans,
+/// columns relative to the unpadded content. The `filter` is the active pick: that
 /// bucket paints the same `glyph count` cells as rest (ink on a colored fill
 /// where the status has one, plus the bucket's current weight), so moving the
 /// pick changes style without moving text. Under `NO_COLOR`, or for the soft
@@ -70,7 +55,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     animation_phase: u64,
     width: usize,
     lead_unread_status: Option<AgentStatus>,
-) -> (Vec<Line<'static>>, Vec<MakeUpHit>) {
+) -> (Vec<Line<'static>>, Vec<HitRegion>) {
     let status_filter = match filter {
         Some(BodyFilter::Status(status)) => Some(status),
         Some(BodyFilter::Unread) | None => None,
@@ -147,31 +132,30 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     };
     // A bucket the width clipped keeps no hit — drop it whole rather than leave
     // a target pointing past the visible edge, the rail's drop-whole-tab rule.
-    hits.retain(|hit| usize::from(hit.col_end) <= width);
+    hits.retain(|hit| usize::from(hit.columns.end) <= width);
 
     (vec![buckets], hits)
 }
 
 /// Append a right-cluster hit run onto the absolute hit list, shifted by the
 /// column where the layout landed the cluster.
-fn offset_hits(hits: &mut Vec<MakeUpHit>, cluster: Vec<MakeUpHit>, offset: usize) {
-    hits.extend(cluster.into_iter().map(|hit| MakeUpHit {
-        col_start: hit.col_start + offset as u16,
-        col_end: hit.col_end + offset as u16,
+fn offset_hits(hits: &mut Vec<HitRegion>, cluster: Vec<HitRegion>, offset: usize) {
+    hits.extend(cluster.into_iter().map(|hit| HitRegion {
+        columns: hit.columns.start + offset as u16..hit.columns.end + offset as u16,
         ..hit
     }));
 }
 
 /// One make-up cluster under construction: the spans, the running column the
 /// hit geometry is read from (`col` doubles as the cluster's width — every
-/// make-up glyph is single-cell), and one [`MakeUpHit`] per non-zero bucket,
+/// make-up glyph is single-cell), and one [`HitRegion`] per non-zero bucket,
 /// emitted in lockstep with the spans so the click targets can never drift
 /// from the paint.
 struct Cluster<'a> {
     theme: &'a Theme,
     filter: Option<AgentStatus>,
     spans: Vec<Span<'static>>,
-    hits: Vec<MakeUpHit>,
+    hits: Vec<HitRegion>,
     col: usize,
 }
 
@@ -242,12 +226,11 @@ impl<'a> Cluster<'a> {
         } else {
             self.push_span(Span::styled(format!("{glyph} {count}"), style));
         }
-        self.hits.push(MakeUpHit {
-            line: 0,
-            col_start: start as u16,
-            col_end: self.col as u16,
-            filter: BodyFilter::Status(status),
-        });
+        self.hits.push(HitRegion::line(
+            0,
+            start as u16..self.col as u16,
+            HitTarget::BodyFilter(BodyFilter::Status(status)),
+        ));
     }
 
     fn push_span(&mut self, span: Span<'static>) {

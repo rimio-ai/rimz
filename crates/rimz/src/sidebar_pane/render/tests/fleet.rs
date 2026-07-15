@@ -1,5 +1,12 @@
 use super::*;
 
+fn body_filter_hit(hit: &HitRegion) -> Option<BodyFilter> {
+    match &hit.target {
+        HitTarget::BodyFilter(filter) => Some(*filter),
+        _ => None,
+    }
+}
+
 /// The cockpit summary leads with today's sessions (`◎ N`, under the name)
 /// over the live-agent count (`¤ N`); the cockpit below it splits the
 /// make-up at a fixed height — the left cluster (`? ! ⏸ ✓`, each glyph
@@ -308,9 +315,9 @@ fn make_up_filter_keeps_every_glyph_still_across_picks() {
         let text = make_up_text(lines);
         let hit = hits
             .iter()
-            .find(|hit| hit.filter == BodyFilter::Status(status))
+            .find(|hit| body_filter_hit(hit) == Some(BodyFilter::Status(status)))
             .expect("active bucket keeps its hit");
-        let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
+        let footprint = text_cell_range(&text, hit.columns.start, hit.columns.end);
         assert_eq!(footprint, expected, "hit covers the fixed bucket");
     }
 }
@@ -351,9 +358,9 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
     );
     let hit = hits
         .iter()
-        .find(|hit| hit.filter == BodyFilter::Status(AgentStatus::Failed))
+        .find(|hit| body_filter_hit(hit) == Some(BodyFilter::Status(AgentStatus::Failed)))
         .expect("the picked bucket keeps its hit");
-    let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
+    let footprint = text_cell_range(&text, hit.columns.start, hit.columns.end);
     assert_eq!(footprint, "! 1", "the hit covers the fixed bucket");
     let active = lines[0]
         .spans
@@ -419,7 +426,7 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
     );
     let text = make_up_text(&lines);
     assert_eq!(
-        hits.iter().map(|hit| hit.filter).collect::<Vec<_>>(),
+        hits.iter().filter_map(body_filter_hit).collect::<Vec<_>>(),
         vec![
             BodyFilter::Status(AgentStatus::Failed),
             BodyFilter::Status(AgentStatus::Running),
@@ -427,8 +434,8 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
         "only the non-zero buckets are tabs"
     );
     for hit in &hits {
-        let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
-        let BodyFilter::Status(status) = hit.filter else {
+        let footprint = text_cell_range(&text, hit.columns.start, hit.columns.end);
+        let Some(BodyFilter::Status(status)) = body_filter_hit(hit) else {
             panic!("fleet line emits only status buckets");
         };
         assert_eq!(
@@ -456,11 +463,11 @@ fn make_up_clipped_bucket_drops_its_hit() {
         None,
     );
     assert!(
-        hits.iter().all(|hit| usize::from(hit.col_end) <= 18),
+        hits.iter().all(|hit| usize::from(hit.columns.end) <= 18),
         "no hit points past the visible edge: {hits:?}"
     );
     assert_eq!(
-        hits.iter().map(|hit| hit.filter).collect::<Vec<_>>(),
+        hits.iter().filter_map(body_filter_hit).collect::<Vec<_>>(),
         vec![BodyFilter::Status(AgentStatus::Failed)],
         "the clipped working bucket keeps no hit"
     );

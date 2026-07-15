@@ -1,19 +1,19 @@
 //! The selection model: an identity-keyed highlight over a derived baseline,
 //! the transient arrow-key browse layer above it, the key/mouse handlers that
-//! act on it, and the hit-test reader over the render-built line map.
+//! act on it, and the typed effects they return to the serve loop.
 
 use crate::ids::PaneId;
 use crate::mux::WidthAdjust;
 use crate::{SidebarSnapshot, lead_unread_row, triage_key};
 
+use crate::sidebar_pane::render::HitTarget;
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, ManualScroll, UiState, active_dashboard_tab,
-    dashboard_tabbed, dashboard_tabs, group_visible_rows, selected_agent_kind, status_total,
-    unread_total,
+    dashboard_tabbed, dashboard_tabs, selected_agent_kind, status_total, unread_total,
 };
+use crate::sidebar_pane::view::VisibleRoster;
 
 use super::input::{FilterAction, KeyAction};
-use std::collections::{BTreeSet, HashSet};
 
 /// Content lines a wheel tick moves the viewport — about one card line-group
 /// per notch, so a flick traverses cards rather than crawling line by line.
@@ -22,22 +22,21 @@ const SCROLL_STEP: usize = 3;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct InputOutcome {
     pub(super) redraw: bool,
-    /// One resize step to dispatch after input handling. Resize wakeups own the
-    /// repaint and settled-width persistence.
-    pub(super) width: Option<WidthAdjust>,
-    /// The pane to fire the one-way focus command at — `Some` only on a jump
-    /// action. The handler resolves the target and returns it without moving
-    /// the highlight: selection stays derived state, so there is nothing to
-    /// repaint until the baseline catches up.
-    pub(super) focus: Option<PaneId>,
-    pub(super) dismiss: bool,
-    /// The row id to mark read / unread without jumping — `Some` only on the
-    /// selected-row toggle path. The durable receipt write, instant local clear,
-    /// and re-derive live in the loop (`on_input`), which owns the read-mark
-    /// store and the runtime paths; the handler only names the target row.
-    pub(super) mark_read: Option<String>,
-    pub(super) mark_unread: Option<String>,
-    pub(super) mark_all_read: bool,
+    pub(super) effect: Option<InputEffect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum InputEffect {
+    /// Fire the one-way focus command without moving the highlight. Selection
+    /// remains derived state until the baseline catches up.
+    Focus(PaneId),
+    /// Dispatch one resize step. Resize wakeups own repaint and persistence.
+    Width(WidthAdjust),
+    DismissAlert,
+    /// Write the durable receipt in the loop, which owns runtime paths.
+    MarkRead(String),
+    MarkUnread(String),
+    MarkAllRead,
 }
 
 impl InputOutcome {
@@ -50,14 +49,14 @@ impl InputOutcome {
 
     pub(super) fn focus(pane: PaneId) -> Self {
         Self {
-            focus: Some(pane),
+            effect: Some(InputEffect::Focus(pane)),
             ..Self::default()
         }
     }
 
     fn width(width: WidthAdjust) -> Self {
         Self {
-            width: Some(width),
+            effect: Some(InputEffect::Width(width)),
             ..Self::default()
         }
     }
@@ -65,8 +64,7 @@ impl InputOutcome {
     pub(super) fn dismiss() -> Self {
         Self {
             redraw: true,
-            dismiss: true,
-            ..Self::default()
+            effect: Some(InputEffect::DismissAlert),
         }
     }
 
@@ -75,21 +73,21 @@ impl InputOutcome {
     /// flashes the pre-clear state first.
     fn mark_read(row_id: String) -> Self {
         Self {
-            mark_read: Some(row_id),
+            effect: Some(InputEffect::MarkRead(row_id)),
             ..Self::default()
         }
     }
 
     fn mark_unread(row_id: String) -> Self {
         Self {
-            mark_unread: Some(row_id),
+            effect: Some(InputEffect::MarkUnread(row_id)),
             ..Self::default()
         }
     }
 
     fn mark_all_read() -> Self {
         Self {
-            mark_all_read: true,
+            effect: Some(InputEffect::MarkAllRead),
             ..Self::default()
         }
     }
@@ -112,20 +110,10 @@ fn jump_to(ui: &mut UiState, snapshot: &SidebarSnapshot, pane: PaneId) -> InputO
 /// through the rows that need you, oldest episode first. A walk with nothing to
 /// triage does nothing.
 fn inbox_jump(ui: &mut UiState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
-    if let Some(index) = step_attention_index_with_held(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-        ui.selected_index,
-        forward,
-    ) && let Some(pane) = pane_at_row(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-        index,
-    ) {
+    let roster = active_roster(snapshot, ui);
+    if let Some(index) = step_attention_in(&roster, ui.selected_index, forward)
+        && let Some(pane) = roster.pane_at_ordinal(index)
+    {
         return jump_to(ui, snapshot, pane);
     }
     InputOutcome::default()
@@ -141,12 +129,8 @@ enum End {
 /// jump. Selection only, no focus, over the same filtered row universe ordinary
 /// selection walks. A no-op when already there or the body is empty.
 fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
-    let len = visible_row_count_with_held(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    );
+    let roster = active_roster(snapshot, ui);
+    let len = roster.len();
     if len == 0 {
         return InputOutcome::default();
     }
@@ -154,16 +138,16 @@ fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> Inp
         End::Top => 0,
         End::Bottom => len - 1,
     };
-    select_to_index(ui, snapshot, target)
+    select_to_index_in(ui, &roster, target)
 }
 
 fn select_to_index(ui: &mut UiState, snapshot: &SidebarSnapshot, target: usize) -> InputOutcome {
-    let len = visible_row_count_with_held(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    );
+    let roster = active_roster(snapshot, ui);
+    select_to_index_in(ui, &roster, target)
+}
+
+fn select_to_index_in(ui: &mut UiState, roster: &VisibleRoster<'_>, target: usize) -> InputOutcome {
+    let len = roster.len();
     if len == 0 {
         return InputOutcome::default();
     }
@@ -171,16 +155,13 @@ fn select_to_index(ui: &mut UiState, snapshot: &SidebarSnapshot, target: usize) 
     if ui.selected_index == target {
         return InputOutcome::default();
     }
-    select_row(ui, snapshot, target);
+    select_row_in(ui, roster, target);
     begin_or_continue_browse(ui);
     InputOutcome::redraw()
 }
 
 fn visible_row_span(ui: &UiState) -> Option<(usize, usize)> {
-    let mut rows = ui.line_map.iter().flatten().copied();
-    let first = rows.next()?;
-    let last = rows.fold(first, |_, row| row);
-    Some((first, last))
+    ui.interactions.visible_row_span()
 }
 
 fn select_screen_edge(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
@@ -224,21 +205,18 @@ pub(super) fn handle_key(
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
         KeyAction::Up => {
             if ui.selected_index > 0 {
-                select_row(ui, snapshot, ui.selected_index - 1);
+                let roster = active_roster(snapshot, ui);
+                select_row_in(ui, &roster, ui.selected_index - 1);
                 begin_or_continue_browse(ui);
                 return InputOutcome::redraw();
             }
             InputOutcome::default()
         }
         KeyAction::Down => {
-            let len = visible_row_count_with_held(
-                snapshot,
-                ui.make_up_filter,
-                &ui.expanded_groups,
-                ui.held_visible(),
-            );
+            let roster = active_roster(snapshot, ui);
+            let len = roster.len();
             if ui.selected_index + 1 < len {
-                select_row(ui, snapshot, ui.selected_index + 1);
+                select_row_in(ui, &roster, ui.selected_index + 1);
                 begin_or_continue_browse(ui);
                 return InputOutcome::redraw();
             }
@@ -277,13 +255,7 @@ pub(super) fn handle_key(
         KeyAction::Dismiss => InputOutcome::dismiss(),
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
-            if let Some(pane) = pane_at_row(
-                snapshot,
-                ui.make_up_filter,
-                &ui.expanded_groups,
-                ui.held_visible(),
-                index,
-            ) {
+            if let Some(pane) = active_roster(snapshot, ui).pane_at_ordinal(index) {
                 return jump_to(ui, snapshot, pane);
             }
             InputOutcome::default()
@@ -338,46 +310,32 @@ pub(super) fn handle_mouse_click(
     // A click is engagement: dismiss the unread snap (the jump banner click below
     // is itself a click, so it lands on the lead before the snap would re-arm).
     ui.unread_focus = None;
-    // The dashboard's tabs are the bottom block's only hit targets — a
-    // click on one picks that tab in place, never a jump.
-    if let Some(tab) = tab_kind_at(ui, column, row) {
-        pick_dashboard_tab(ui, snapshot, tab);
-        return InputOutcome::redraw();
-    }
-    // The cockpit's make-up buckets and unread count are the top block's hit
-    // targets — a click toggles that body filter in place, never a jump.
-    if let Some(filter) = make_up_filter_at(ui, column, row) {
-        return if toggle_make_up_filter(ui, snapshot, filter) {
+    match ui.interactions.target_at(column, row) {
+        Some(HitTarget::ProviderTab(kind)) => {
+            pick_dashboard_tab(ui, snapshot, kind);
             InputOutcome::redraw()
-        } else {
-            InputOutcome::default()
-        };
+        }
+        Some(HitTarget::BodyFilter(filter)) => {
+            if toggle_make_up_filter(ui, snapshot, filter) {
+                InputOutcome::redraw()
+            } else {
+                InputOutcome::default()
+            }
+        }
+        Some(HitTarget::UnreadBanner) => {
+            pin_manual_scroll(ui);
+            ui.scroll_offset = 0;
+            InputOutcome::redraw()
+        }
+        Some(HitTarget::ToggleGroup(group_key)) => {
+            toggle_group_expanded(ui, snapshot, group_key);
+            InputOutcome::redraw()
+        }
+        Some(HitTarget::Row(index)) => active_roster(snapshot, ui)
+            .pane_at_ordinal(index)
+            .map_or_else(InputOutcome::default, |pane| jump_to(ui, snapshot, pane)),
+        None => InputOutcome::default(),
     }
-    // The unread jump banner owns its whole line: a click scrolls the cards back
-    // to the top, where the lead ranks, and pins the view there against
-    // auto-follow. No focus: the inbox key owns the jump. `unread_focus` is
-    // already cleared above.
-    if ui.banner_line == Some(usize::from(row)) {
-        pin_manual_scroll(ui);
-        ui.scroll_offset = 0;
-        return InputOutcome::redraw();
-    }
-    if let Some(group_key) = more_group_at(ui, row) {
-        toggle_group_expanded(ui, snapshot, group_key);
-        return InputOutcome::redraw();
-    }
-    if let Some(index) = row_index_at_screen_position(ui, row)
-        && let Some(pane) = pane_at_row(
-            snapshot,
-            ui.make_up_filter,
-            &ui.expanded_groups,
-            ui.held_visible(),
-            index,
-        )
-    {
-        return jump_to(ui, snapshot, pane);
-    }
-    InputOutcome::default()
 }
 
 /// A wheel tick: move the viewport, never the selection. The first tick pins a
@@ -406,34 +364,6 @@ fn pin_manual_scroll(ui: &mut UiState) {
             selection_at_start: ui.selected_pane.clone(),
         });
     }
-}
-
-/// The provider kind whose tab sits under a click, from the tab hit map
-/// the renderer emitted in lockstep with the frame (`UiState::tab_hits`, the
-/// tab rail's twin of `line_map`).
-fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<String> {
-    ui.tab_hits
-        .iter()
-        .find(|hit| hit.line == usize::from(row) && column >= hit.col_start && column < hit.col_end)
-        .map(|hit| hit.kind.clone())
-}
-
-/// The filter target that sits under a click, from the make-up hit
-/// map the renderer emitted in lockstep with the frame (`UiState::make_up_hits`,
-/// the cockpit's twin of `tab_hits`). A zero bucket emitted no hit, so it can
-/// never match — inert, as if not a tab.
-fn make_up_filter_at(ui: &UiState, column: u16, row: u16) -> Option<BodyFilter> {
-    ui.make_up_hits
-        .iter()
-        .find(|hit| hit.line == usize::from(row) && column >= hit.col_start && column < hit.col_end)
-        .map(|hit| hit.filter)
-}
-
-fn more_group_at(ui: &UiState, row: u16) -> Option<String> {
-    ui.more_hits
-        .iter()
-        .find(|hit| hit.line == usize::from(row))
-        .map(|hit| hit.group_key.clone())
 }
 
 fn toggle_group_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, group_key: String) {
@@ -504,100 +434,25 @@ fn select_adjacent_worktree(
     snapshot: &SidebarSnapshot,
     step: isize,
 ) -> InputOutcome {
-    let ranges = visible_group_ranges(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    );
-    if ranges.len() < 2 {
-        return InputOutcome::default();
-    }
-    let Some(row_count) = ranges.last().map(|range| range.end()) else {
+    let roster = active_roster(snapshot, ui);
+    let selected = ui.selected_index.min(roster.len().saturating_sub(1));
+    let Some(target) = roster.neighboring_group_head(selected, step) else {
         return InputOutcome::default();
     };
-    let selected = ui.selected_index.min(row_count.saturating_sub(1));
-    let Some(current) = ranges.iter().position(|range| range.contains(selected)) else {
-        return InputOutcome::default();
-    };
-    let target = if step < 0 {
-        current.checked_sub(1)
-    } else {
-        (current + 1 < ranges.len()).then_some(current + 1)
-    };
-    let Some(target) = target else {
-        return InputOutcome::default();
-    };
-    select_row(ui, snapshot, ranges[target].start);
+    select_row_in(ui, &roster, target);
     begin_or_continue_browse(ui);
     InputOutcome::redraw()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct VisibleGroupRange {
-    start: usize,
-    len: usize,
-}
-
-impl VisibleGroupRange {
-    fn end(&self) -> usize {
-        self.start + self.len
-    }
-
-    fn contains(&self, index: usize) -> bool {
-        (self.start..self.end()).contains(&index)
-    }
-}
-
-fn visible_group_ranges(
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-    expanded_groups: &BTreeSet<String>,
-    held: Option<&HashSet<String>>,
-) -> Vec<VisibleGroupRange> {
-    let mut start = 0;
-    let mut ranges = Vec::new();
-    for group in &snapshot.worktree_groups {
-        let len =
-            group_visible_rows(group, filter, expanded_groups.contains(&group.key), held).len();
-        if len > 0 {
-            ranges.push(VisibleGroupRange { start, len });
-            start += len;
-        }
-    }
-    ranges
 }
 
 /// Point the highlight at a visible row by index — the identity-keyed selection
 /// (`selected_pane`) plus its derived render index. A pure positioner for the
 /// arrow-key browse; the jump actions resolve their target through
-/// [`pane_at_row`] instead and never move the highlight. An explicit pick ends
+/// the active roster instead and never move the highlight. An explicit pick ends
 /// any wheel pin, so the viewport snaps back to following the selection.
-fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
+fn select_row_in(ui: &mut UiState, roster: &VisibleRoster<'_>, index: usize) {
     ui.selected_index = index;
-    ui.selected_pane = pane_at_row(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-        index,
-    );
+    ui.selected_pane = roster.pane_at_ordinal(index);
     ui.manual_scroll = None;
-}
-
-/// The pane backing visible row `index`, or `None` for a pane-less row or an
-/// out-of-range index.
-fn pane_at_row(
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-    expanded_groups: &BTreeSet<String>,
-    held: Option<&HashSet<String>>,
-    index: usize,
-) -> Option<PaneId> {
-    visible_rows(snapshot, filter, expanded_groups, held)
-        .nth(index)
-        .and_then(|row| row.pane.as_ref())
-        .map(|pane| pane.pane_id.clone())
 }
 
 /// The id and unread bit of the visible agent row at `index` — the read/unread
@@ -615,18 +470,13 @@ fn agent_row_mark_target_at(
     ui: &UiState,
     index: usize,
 ) -> Option<RowMarkTarget> {
-    visible_rows(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    )
-    .nth(index)
-    .filter(|row| row.status().is_some())
-    .map(|row| RowMarkTarget {
-        row_id: row.id.clone(),
-        unread: row.unread,
-    })
+    active_roster(snapshot, ui)
+        .row(index)
+        .filter(|row| row.status().is_some())
+        .map(|row| RowMarkTarget {
+            row_id: row.id.clone(),
+            unread: row.unread,
+        })
 }
 
 /// Pin the just-selected pane as the arrow-browse pick. The first arrow of a
@@ -647,13 +497,8 @@ fn begin_or_continue_browse(ui: &mut UiState) {
     }
 }
 
-fn clamp_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
-    let len = visible_row_count_with_held(
-        snapshot,
-        ui.make_up_filter,
-        &ui.expanded_groups,
-        ui.held_visible(),
-    );
+fn clamp_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
+    let len = roster.len();
     if len == 0 {
         ui.selected_index = 0;
     } else if ui.selected_index >= len {
@@ -697,78 +542,62 @@ pub(super) fn reconcile_selection(
     snapshot: &SidebarSnapshot,
     derived: Option<PaneId>,
 ) {
-    // 0. The make-up filter ends when its bucket empties. The check reads the
-    //    full-fleet `status_counts` sum — exactly the figure the make-up line
-    //    displays — so the filter clears in the same fold its bucket reads 0,
-    //    and a click-then-fold race self-heals here.
+    reconcile_filter_and_baseline(ui, snapshot, derived);
+    reconcile_browse_and_selection(ui, snapshot);
+    reconcile_dashboard(ui, snapshot);
+    reconcile_unread_focus(ui, snapshot);
+}
+
+fn reconcile_filter_and_baseline(
+    ui: &mut UiState,
+    snapshot: &SidebarSnapshot,
+    derived: Option<PaneId>,
+) {
     if let Some(filter) = ui.make_up_filter
         && filter_total(snapshot, filter) == 0
     {
         ui.make_up_filter = None;
     }
-
-    // 1. Hold-last baseline: a Some derivation advances it, a None holds it.
     if let Some(pane) = derived {
         ui.baseline_pane = Some(pane);
     }
+}
 
-    // 2. Browse: hold the roamed pick while the baseline hasn't genuinely
-    //    moved; on a baseline change the take stands — the browse ends and the
-    //    highlight follows the new baseline.
-    let mut pinned = false;
+fn reconcile_browse_and_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+    let mut browse_pinned = false;
     if let Some(browse) = ui.browse.take()
         && ui.baseline_pane == browse.baseline_at_start
     {
         ui.selected_pane = Some(browse.pane.clone());
         ui.browse = Some(browse);
-        pinned = true;
+        browse_pinned = true;
     }
-
-    // 3. Steady state: the highlight is the derived baseline.
-    if !pinned && let Some(pane) = ui.baseline_pane.clone() {
+    if !browse_pinned && let Some(pane) = ui.baseline_pane.clone() {
         ui.selected_pane = Some(pane);
     }
 
-    // 4. Drop state whose pane left the room — so a pick whose pane closed
-    //    stops shadowing the baseline — then re-anchor by identity. The
-    //    baseline check is deliberately unfiltered: the session focus pane is
-    //    real regardless of the cosmetic make-up filter, so a hidden baseline
-    //    holds and re-seats the highlight the moment the filter clears. The
-    //    browse pick *is* filtered — it roams the visible rows, so a pick the
-    //    filter hides has nothing to render and drops.
+    let baseline = VisibleRoster::baseline(snapshot);
     if let Some(pane) = ui.baseline_pane.clone()
-        && row_index_of_pane(snapshot, None, &pane).is_none()
+        && baseline.ordinal_of_pane(&pane).is_none()
     {
         ui.baseline_pane = None;
     }
+    let roster = active_roster(snapshot, ui);
     if let Some(browse) = &ui.browse
-        && row_index_of_pane_expanded(
-            snapshot,
-            ui.make_up_filter,
-            &ui.expanded_groups,
-            ui.held_visible(),
-            &browse.pane,
-        )
-        .is_none()
+        && roster.ordinal_of_pane(&browse.pane).is_none()
     {
         ui.browse = None;
     }
-    anchor_selection(ui, snapshot);
+    anchor_selection_in(ui, &roster);
 
-    // 5. A wheel pin holds the viewport only while the selection it began over
-    //    stands; a genuine selection change — a jump landing, an external focus
-    //    move — ends the peek and the viewport snaps back to the selected card.
     if let Some(manual) = &ui.manual_scroll
         && ui.selected_pane != manual.selection_at_start
     {
         ui.manual_scroll = None;
     }
+}
 
-    // 6. Dashboard hold-last: a selection-derived provider kind with a
-    //    dashboard panel advances the remembered default. A process row
-    //    derives no kind and holds it, so the dashboard keeps the last agent's
-    //    block when focus lands on a shell. active_dashboard_tab re-guards it
-    //    against the panel leaving.
+fn reconcile_dashboard(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     let derived_kind = selected_agent_kind(snapshot, ui);
     let tabs = dashboard_tabs(snapshot);
     if let Some(kind) = &derived_kind
@@ -776,13 +605,6 @@ pub(super) fn reconcile_selection(
     {
         ui.last_agent_kind = Some(kind.clone());
     }
-
-    // 7. The manual dashboard-tab pick ends like a browse: a selection-derived
-    //    provider kind that *genuinely* changed from the value captured at pick
-    //    time hands the tab back to the derived default. A `None` derivation —
-    //    a process row, an empty room — holds the pick, so jumping through a
-    //    shell pane never loses it; a pick whose panel left the dashboard is
-    //    dropped too.
     if let Some(tab) = &ui.dashboard_tab {
         let derived_moved = derived_kind.is_some() && derived_kind != tab.derived_at_start;
         let tab_gone = !tabs.iter().any(|kind| kind == &tab.kind);
@@ -790,14 +612,9 @@ pub(super) fn reconcile_selection(
             ui.dashboard_tab = None;
         }
     }
+}
 
-    // 8. Unread focus: a freshly-arrived actionable unread snaps the viewport to
-    //    it with priority over following the selection, holding there until the
-    //    user engages (any input clears it) or it stops being the lead. A manual
-    //    scroll pin is respected — a new unread arriving mid-browse never yanks
-    //    the view; the jump banner keeps it reachable. The edge fires once per
-    //    fresh lead, so a lead the user dismissed is not re-snapped while it
-    //    lingers.
+fn reconcile_unread_focus(ui: &mut UiState, snapshot: &SidebarSnapshot) {
     let lead = lead_unread_row(&snapshot.worktree_groups).map(|row| row.id.clone());
     if lead != ui.last_lead_unread {
         if lead.is_some() && ui.manual_scroll.is_none() {
@@ -805,8 +622,6 @@ pub(super) fn reconcile_selection(
         }
         ui.last_lead_unread = lead.clone();
     }
-    // End the snap once its row is no longer the actionable lead — answered, read,
-    // or displaced by an older unread (the edge above arms the displacer instead).
     if ui.unread_focus.is_some() && ui.unread_focus != lead {
         ui.unread_focus = None;
     }
@@ -817,20 +632,19 @@ pub(super) fn reconcile_selection(
 /// the dangling identity and clamp the index; the held baseline or the next
 /// pick re-seats it.
 pub(super) fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
+    let roster = active_roster(snapshot, ui);
+    anchor_selection_in(ui, &roster);
+}
+
+fn anchor_selection_in(ui: &mut UiState, roster: &VisibleRoster<'_>) {
     if let Some(pane) = ui.selected_pane.clone() {
-        if let Some(index) = row_index_of_pane_expanded(
-            snapshot,
-            ui.make_up_filter,
-            &ui.expanded_groups,
-            ui.held_visible(),
-            &pane,
-        ) {
+        if let Some(index) = roster.ordinal_of_pane(&pane) {
             ui.selected_index = index;
             return;
         }
         ui.selected_pane = None;
     }
-    clamp_selection(ui, snapshot);
+    clamp_selection_in(ui, roster);
 }
 
 /// The visible-row index backing `pane_id`, in `visible_rows` order under
@@ -842,65 +656,7 @@ pub(super) fn row_index_of_pane(
     filter: Option<BodyFilter>,
     pane_id: &PaneId,
 ) -> Option<usize> {
-    row_index_of_pane_expanded(snapshot, filter, &BTreeSet::new(), None, pane_id)
-}
-
-fn row_index_of_pane_expanded(
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-    expanded_groups: &BTreeSet<String>,
-    held: Option<&HashSet<String>>,
-    pane_id: &PaneId,
-) -> Option<usize> {
-    visible_rows(snapshot, filter, expanded_groups, held).position(|row| {
-        row.pane
-            .as_ref()
-            .is_some_and(|pane| pane.pane_id == *pane_id)
-    })
-}
-
-/// The hit-test reader, and deliberately nothing more: `UiState::line_map` —
-/// built in lockstep with the body by `render::compose_lines` — is the **only**
-/// row-geometry source. Never re-derive a row's screen position here (counting
-/// header/gap lines, card heights, or clip offsets); any parallel math would
-/// drift from the renderer the first time a section changes shape.
-fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
-    // Borderless: the body fills the frame from row 0 (no border to skip) and a
-    // row's lane spine occupies column 0, so a click anywhere on a line — spine
-    // included — maps straight onto the hit-test entry built alongside it.
-    ui.line_map.get(usize::from(row)).copied().flatten()
-}
-
-#[cfg(test)]
-fn visible_row_count(
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-    expanded_groups: &BTreeSet<String>,
-) -> usize {
-    visible_row_count_with_held(snapshot, filter, expanded_groups, None)
-}
-
-fn visible_row_count_with_held(
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-    expanded_groups: &BTreeSet<String>,
-    held: Option<&HashSet<String>>,
-) -> usize {
-    visible_rows(snapshot, filter, expanded_groups, held).count()
-}
-
-/// Every rendered row in body order — the snapshot's groups flattened through
-/// the same capping, expansion, and filter walk as the body, so these ordinals
-/// are exactly the `line_map` ordinals the renderer builds.
-fn visible_rows<'a>(
-    snapshot: &'a SidebarSnapshot,
-    filter: Option<BodyFilter>,
-    expanded_groups: &'a BTreeSet<String>,
-    held: Option<&'a HashSet<String>>,
-) -> impl Iterator<Item = &'a crate::SidebarRow> {
-    snapshot.worktree_groups.iter().flat_map(move |group| {
-        group_visible_rows(group, filter, expanded_groups.contains(&group.key), held)
-    })
+    VisibleRoster::new(snapshot, filter, &Default::default(), None).ordinal_of_pane(pane_id)
 }
 
 /// The inbox triage list, stepped one row `forward` or backward from
@@ -908,26 +664,11 @@ fn visible_rows<'a>(
 /// read actionable rows (oldest first); `forward` wraps to the next, backward to
 /// the previous, and a selection outside the list enters at the first row
 /// forward or the last row backward.
-#[cfg(test)]
-fn step_attention_index(
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-    expanded_groups: &BTreeSet<String>,
-    selected: usize,
-    forward: bool,
-) -> Option<usize> {
-    step_attention_index_with_held(snapshot, filter, expanded_groups, None, selected, forward)
-}
-
-fn step_attention_index_with_held(
-    snapshot: &SidebarSnapshot,
-    filter: Option<BodyFilter>,
-    expanded_groups: &BTreeSet<String>,
-    held: Option<&HashSet<String>>,
-    selected: usize,
-    forward: bool,
-) -> Option<usize> {
-    let mut candidates = visible_rows(snapshot, filter, expanded_groups, held)
+fn step_attention_in(roster: &VisibleRoster<'_>, selected: usize, forward: bool) -> Option<usize> {
+    let mut candidates = roster
+        .rows()
+        .iter()
+        .copied()
         .enumerate()
         .filter_map(|(index, row)| triage_key(row).map(|key| (index, key)))
         .collect::<Vec<_>>();
@@ -958,6 +699,33 @@ fn step_attention_index_with_held(
                 candidates.last().copied()
             }
         })
+}
+
+#[cfg(test)]
+fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
+    let roster = active_roster(snapshot, ui);
+    select_row_in(ui, &roster, index);
+}
+
+#[cfg(test)]
+fn step_attention_index(
+    snapshot: &SidebarSnapshot,
+    filter: Option<BodyFilter>,
+    expanded_groups: &std::collections::BTreeSet<String>,
+    selected: usize,
+    forward: bool,
+) -> Option<usize> {
+    let roster = VisibleRoster::new(snapshot, filter, expanded_groups, None);
+    step_attention_in(&roster, selected, forward)
+}
+
+fn active_roster<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> VisibleRoster<'a> {
+    VisibleRoster::new(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    )
 }
 
 fn filter_total(snapshot: &SidebarSnapshot, filter: BodyFilter) -> usize {

@@ -28,27 +28,28 @@ fn make_up_click_picks_switches_and_clears_the_filter() {
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
     let mut ui = UiState {
-        make_up_hits: vec![
-            render::MakeUpHit {
-                line: 5,
-                col_start: 5,
-                col_end: 8,
-                filter: BodyFilter::Status(AgentStatus::Failed),
-            },
-            render::MakeUpHit {
-                line: 5,
-                col_start: 28,
-                col_end: 31,
-                filter: BodyFilter::Status(AgentStatus::Running),
-            },
-        ],
+        interactions: render::FrameInteractions::from_parts(
+            vec![None; 6],
+            vec![
+                render::HitRegion::line(
+                    5,
+                    5..8,
+                    HitTarget::BodyFilter(BodyFilter::Status(AgentStatus::Failed)),
+                ),
+                render::HitRegion::line(
+                    5,
+                    28..31,
+                    HitTarget::BodyFilter(BodyFilter::Status(AgentStatus::Running)),
+                ),
+            ],
+        ),
         ..Default::default()
     };
 
     // A bucket click filters in place — a repaint, never a jump.
     let outcome = handle_mouse_click(6, 5, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert!(outcome.focus.is_none());
+    assert_eq!(outcome.effect, None);
     assert_eq!(
         ui.make_up_filter,
         Some(BodyFilter::Status(AgentStatus::Failed))
@@ -84,7 +85,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         &snapshot,
     );
     assert_eq!(outcome, InputOutcome::redraw());
-    assert!(outcome.focus.is_none());
+    assert_eq!(outcome.effect, None);
     assert_eq!(
         ui.make_up_filter,
         Some(BodyFilter::Status(AgentStatus::Failed))
@@ -151,11 +152,15 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
         })
         .collect();
     let footprints: Vec<(BodyFilter, String)> = composed
-        .make_up_hits
+        .interactions
+        .regions()
         .iter()
-        .map(|hit| {
-            let text = text_cell_range(&texts[hit.line], hit.col_start, hit.col_end);
-            (hit.filter, text)
+        .filter_map(|hit| {
+            let HitTarget::BodyFilter(filter) = &hit.target else {
+                return None;
+            };
+            let text = text_cell_range(&texts[hit.rows.start], hit.columns.start, hit.columns.end);
+            Some((*filter, text))
         })
         .collect();
     assert_eq!(
@@ -169,9 +174,13 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
 
     // The same composed hits drive the click path — the draw's write-back,
     // then a click inside the failed bucket's footprint picks it.
-    ui.make_up_hits = composed.make_up_hits;
-    let (column, row) = (ui.make_up_hits[0].col_start, ui.make_up_hits[0].line);
-    handle_mouse_click(column, u16::try_from(row).unwrap(), &mut ui, &snapshot);
+    ui.interactions = composed.interactions;
+    let target = HitTarget::BodyFilter(BodyFilter::Status(AgentStatus::Failed));
+    let (column, row) = ui
+        .interactions
+        .line_for_target(&target)
+        .expect("failed hit");
+    handle_mouse_click(column, row, &mut ui, &snapshot);
     assert_eq!(
         ui.make_up_filter,
         Some(BodyFilter::Status(AgentStatus::Failed))
@@ -198,26 +207,27 @@ fn unread_count_click_toggles_the_unread_lens() {
         })
         .collect();
     let unread_hit = composed
-        .make_up_hits
+        .interactions
+        .regions()
         .iter()
-        .find(|hit| hit.filter == BodyFilter::Unread)
+        .find(|hit| hit.target == HitTarget::BodyFilter(BodyFilter::Unread))
         .expect("unread count emits a hit when unread rows exist");
     assert_eq!(
         text_cell_range(
-            &texts[unread_hit.line],
-            unread_hit.col_start,
-            unread_hit.col_end
+            &texts[unread_hit.rows.start],
+            unread_hit.columns.start,
+            unread_hit.columns.end
         ),
         "(2)",
         "unread hit covers only the count, not its leading space"
     );
-    let unread_column = unread_hit.col_start;
-    let unread_row = u16::try_from(unread_hit.line).unwrap();
+    let unread_column = unread_hit.columns.start;
+    let unread_row = u16::try_from(unread_hit.rows.start).unwrap();
 
-    ui.make_up_hits = composed.make_up_hits;
+    ui.interactions = composed.interactions;
     let outcome = handle_mouse_click(unread_column, unread_row, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
-    assert!(outcome.focus.is_none());
+    assert_eq!(outcome.effect, None);
     assert_eq!(ui.make_up_filter, Some(BodyFilter::Unread));
     let theme = ui.theme(&snapshot.theme);
     let picked = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
@@ -258,9 +268,10 @@ fn unread_count_click_toggles_the_unread_lens() {
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
     assert!(
         composed
-            .make_up_hits
+            .interactions
+            .regions()
             .iter()
-            .all(|hit| hit.filter != BodyFilter::Unread),
+            .all(|hit| hit.target != HitTarget::BodyFilter(BodyFilter::Unread)),
         "zero unread rows leave the cockpit count inert"
     );
 }
@@ -307,7 +318,7 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
     );
 }
 #[test]
-fn make_up_filter_narrows_ordinals_in_lockstep_with_the_line_map() {
+fn make_up_filter_narrows_ordinals_in_lockstep_with_frame_targets() {
     use crate::agents::AgentStatus;
     let ws = workspace();
     let snapshot = filterable_snapshot(&ws);
@@ -316,8 +327,8 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_the_line_map() {
     // The selection walk and the rendered line map share one predicate, so
     // their ordinals can never drift: the filtered universe is exactly the
     // contiguous 0..count the body's hit-test entries carry.
-    assert_eq!(visible_row_count(&snapshot, None, &Default::default()), 3);
-    assert_eq!(visible_row_count(&snapshot, filter, &Default::default()), 1);
+    assert_eq!(roster_len(&snapshot, None, &Default::default()), 3);
+    assert_eq!(roster_len(&snapshot, filter, &Default::default()), 1);
     let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
     let running = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     assert_eq!(row_index_of_pane(&snapshot, filter, &failed), Some(0));
@@ -329,12 +340,15 @@ fn make_up_filter_narrows_ordinals_in_lockstep_with_the_line_map() {
         ..Default::default()
     };
     let theme = ui.theme(&snapshot.theme);
-    let map = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).line_map;
-    let mut ordinals: Vec<usize> = map.iter().flatten().copied().collect();
+    let interactions =
+        render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64).interactions;
+    let mut ordinals = (0..interactions.line_count())
+        .filter_map(|line| interactions.row_at_line(line))
+        .collect::<Vec<_>>();
     ordinals.dedup();
     assert_eq!(
         ordinals,
-        (0..visible_row_count(&snapshot, filter, &Default::default())).collect::<Vec<_>>(),
+        (0..roster_len(&snapshot, filter, &Default::default())).collect::<Vec<_>>(),
         "the line map carries exactly the filtered walk's ordinals"
     );
 }
@@ -366,8 +380,8 @@ fn unread_filter_narrows_to_unread_rows() {
     snapshot.worktree_groups[1].rows[0].unread = true;
     let filter = Some(BodyFilter::Unread);
 
-    assert_eq!(visible_row_count(&snapshot, None, &Default::default()), 3);
-    assert_eq!(visible_row_count(&snapshot, filter, &Default::default()), 2);
+    assert_eq!(roster_len(&snapshot, None, &Default::default()), 3);
+    assert_eq!(roster_len(&snapshot, filter, &Default::default()), 2);
 
     let mut ui = UiState::default();
     let outcome = handle_key(KeyAction::Filter(FilterAction::Unread), &mut ui, &snapshot);
@@ -569,7 +583,7 @@ fn jumping_to_a_card_ends_the_make_up_filter() {
         ..Default::default()
     };
     let outcome = handle_key(KeyAction::Digit(1), &mut ui, &snapshot);
-    assert_eq!(outcome.focus, Some(failed.clone()));
+    assert_eq!(outcome.effect, Some(InputEffect::Focus(failed.clone())));
     assert!(outcome.redraw, "clearing the filter reshapes the body");
     assert_eq!(ui.make_up_filter, None);
 
@@ -581,7 +595,7 @@ fn jumping_to_a_card_ends_the_make_up_filter() {
         ..Default::default()
     };
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
-    assert_eq!(outcome.focus, Some(failed.clone()));
+    assert_eq!(outcome.effect, Some(InputEffect::Focus(failed.clone())));
     assert_eq!(ui.make_up_filter, None);
     assert_eq!(
         ui.selected_index, 2,

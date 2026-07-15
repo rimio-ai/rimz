@@ -2,6 +2,8 @@
 //!
 //! Renderers that are not the elected producer stay in this lane: no mux call,
 //! no git call, no provider probe, and no durable store writes.
+//! Long-lived consumers use [`PublishedSnapshotReader`]; producer and test code
+//! may use the low-level cursor-taking functions directly.
 
 use crate::ids::PaneId;
 use crate::store::parse_cache::StampedPath;
@@ -16,6 +18,49 @@ mod tests;
 /// Re-exported for long-lived consumers (the sidebar fetch worker), which sit
 /// behind this module's read-only boundary and never import `crate::store`.
 pub use crate::store::snapshot::RollupCursor;
+
+/// Long-lived consumer context and incremental store-rollup state.
+pub struct PublishedSnapshotReader {
+    runtime: RuntimePaths,
+    session: String,
+    exclude: Option<PaneId>,
+    cursor: RollupCursor,
+}
+
+impl PublishedSnapshotReader {
+    pub fn new(runtime: RuntimePaths, session: impl Into<String>, exclude: Option<PaneId>) -> Self {
+        Self {
+            runtime,
+            session: session.into(),
+            exclude,
+            cursor: RollupCursor::new(),
+        }
+    }
+
+    pub fn read(&mut self, state: &StatePaths) -> crate::store::snapshot::Result<SidebarSnapshot> {
+        read_published_snapshot(
+            &mut self.cursor,
+            state,
+            &self.runtime,
+            &self.session,
+            self.exclude.as_ref(),
+        )
+    }
+
+    pub fn inputs_stamp(&self, state: &StatePaths) -> ConsumerFoldInputsStamp {
+        consumer_fold_inputs_stamp(state, &self.runtime)
+    }
+
+    /// Producer lane escape hatch for sharing the warm rollup with pane production.
+    pub(crate) fn cursor_mut(&mut self) -> &mut RollupCursor {
+        &mut self.cursor
+    }
+
+    /// Discard possibly-partial incremental state after a caught producer unwind.
+    pub(crate) fn reset_after_unwind(&mut self) {
+        self.cursor = RollupCursor::new();
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsumerFoldInputsStamp {

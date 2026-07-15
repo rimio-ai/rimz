@@ -86,17 +86,15 @@ fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
     let mut lines = Vec::new();
     let mut map = Vec::new();
     let mut more_hits = Vec::new();
-    let mut row_index = 0;
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
-    let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
-    ctx.held = Some(&held);
-    worktree_group_lines(
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let roster = crate::sidebar_pane::view::VisibleRoster::single(&group, None, false, Some(&held));
+    worktree_group_lines_projected(
         &ctx,
-        &group,
-        false,
-        &mut row_index,
+        &roster,
+        &roster.groups()[0],
         None,
         &mut lines,
         &mut map,
@@ -129,17 +127,15 @@ fn expanded_group_keeps_less_control_when_hold_makes_all_rows_visible() {
     let mut lines = Vec::new();
     let mut map = Vec::new();
     let mut more_hits = Vec::new();
-    let mut row_index = 0;
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
-    let mut ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
-    ctx.held = Some(&held);
-    worktree_group_lines(
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let roster = crate::sidebar_pane::view::VisibleRoster::single(&group, None, true, Some(&held));
+    worktree_group_lines_projected(
         &ctx,
-        &group,
-        true,
-        &mut row_index,
+        &roster,
+        &roster.groups()[0],
         None,
         &mut lines,
         &mut map,
@@ -273,8 +269,10 @@ fn visible_ids_with_held<'a>(
     expanded: bool,
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a str> {
-    group_visible_rows(group, filter, expanded, held)
-        .into_iter()
+    crate::sidebar_pane::view::VisibleRoster::single(group, filter, expanded, held)
+        .rows()
+        .iter()
+        .copied()
         .map(|row| row.id.as_str())
         .collect()
 }

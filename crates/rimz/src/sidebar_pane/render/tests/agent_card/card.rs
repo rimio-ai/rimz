@@ -613,7 +613,6 @@ fn render_enriched_selected_agent_card() {
             selected_index: 0,
             help_visible: false,
             animation_phase: 0,
-            line_map: Vec::new(),
             ..Default::default()
         },
         54,

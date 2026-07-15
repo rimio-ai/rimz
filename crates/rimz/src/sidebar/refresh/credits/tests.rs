@@ -29,6 +29,81 @@ fn nonce(value: u128) -> Uuid {
     Uuid::from_u128(value)
 }
 
+fn claimed_entry(nonce: Uuid, scope: ProviderAccountScope) -> ProviderCreditsEntry {
+    ProviderCreditsEntry {
+        scope: scope.clone(),
+        observed_at_ms: 10,
+        oauth_read_at_ms: 1,
+        credentials_stamp: Some(7),
+        account_key: Some("owner".to_owned()),
+        plan: Some("pro".to_owned()),
+        ok: true,
+        extra_credits: Some(ExtraCredits::known(None, Some(12.0), None)),
+        reset_credits: Some(ResetCredits {
+            count: 3,
+            soonest_expiry: None,
+        }),
+        direct_query_claim: Some(DirectQueryClaim {
+            nonce,
+            claimed_at_ms: 100,
+            requested_scope: scope,
+            credentials_stamp: Some(7),
+            preflight_account_key: Some("owner".to_owned()),
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn no_credentials_completion_preserves_same_account_display_and_settles_auth() {
+    let claim_nonce = nonce(41);
+    let scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let prior = claimed_entry(claim_nonce, scope.clone());
+    let (next, completion) = prior
+        .clone()
+        .complete_account_usage(
+            claim_nonce,
+            AccountUsageProbe::NoCredentials(identity(Some(7), Some("owner"), scope)),
+            500,
+        )
+        .expect("matching claim completes");
+
+    assert_eq!(next.direct_query_claim, None);
+    assert_eq!(next.oauth_read_at_ms, 500);
+    assert!(next.auth_settled);
+    assert_eq!(next.observed_at_ms, prior.observed_at_ms);
+    assert_eq!(next.ok, prior.ok);
+    assert_eq!(next.plan, prior.plan);
+    assert_eq!(next.extra_credits, prior.extra_credits);
+    assert_eq!(next.reset_credits, prior.reset_credits);
+    assert_eq!(completion.snapshot, None);
+    assert!(!completion.account_changed);
+}
+
+#[test]
+fn unsupported_completion_uses_claim_identity_and_preserves_same_account_display() {
+    let claim_nonce = nonce(42);
+    let scope = ProviderAccountScope::sub_provider("openai", "oauth");
+    let prior = claimed_entry(claim_nonce, scope.clone());
+    let (next, completion) = prior
+        .clone()
+        .complete_account_usage(claim_nonce, AccountUsageProbe::Unsupported, 600)
+        .expect("matching claim completes");
+
+    assert_eq!(next.direct_query_claim, None);
+    assert_eq!(next.oauth_read_at_ms, 600);
+    assert!(!next.auth_settled);
+    assert_eq!(next.observed_at_ms, prior.observed_at_ms);
+    assert_eq!(next.plan, prior.plan);
+    assert_eq!(next.extra_credits, prior.extra_credits);
+    assert_eq!(next.reset_credits, prior.reset_credits);
+    assert_eq!(completion.identity.scope, scope);
+    assert_eq!(completion.identity.account_key.as_deref(), Some("owner"));
+    assert_eq!(completion.identity.credentials_stamp, Some(7));
+    assert_eq!(completion.snapshot, None);
+    assert!(!completion.account_changed);
+}
+
 fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
     SidebarProviderPanel {
         kind: kind.to_owned(),

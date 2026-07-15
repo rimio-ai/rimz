@@ -2134,9 +2134,9 @@ fn with_overflow(
     hidden: usize,
     now: jiff::Timestamp,
 ) -> Vec<rimz::SidebarRow> {
-    let visible = rimz::sidebar_pane::render::capped_visible_rows(&rows, None).len();
+    let visible = rimz::sidebar_pane::view::capped_visible_rows(&rows, None).len();
     let base_hidden = rows.len().saturating_sub(visible);
-    let fillers_kept = rimz::sidebar_pane::render::WORKTREE_ROW_CAP.saturating_sub(visible);
+    let fillers_kept = rimz::sidebar_pane::view::WORKTREE_ROW_CAP.saturating_sub(visible);
     let filler_count = hidden.saturating_sub(base_hidden) + fillers_kept;
     let path = rows
         .first()

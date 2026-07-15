@@ -627,7 +627,7 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         "bottom row is pet breathing room:\n{rendered}"
     );
     assert_eq!(
-        hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
+        hits.iter().map(provider_tab_kind).collect::<Vec<_>>(),
         vec!["claude", "codex"]
     );
     assert!(
@@ -893,10 +893,16 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
         !lines[rail - 2].trim().is_empty(),
         "the separator is not body padding; cards reach it while overflowing:\n{rendered}"
     );
+    let provider_hits = frame
+        .interactions
+        .regions()
+        .iter()
+        .filter(|hit| matches!(hit.target, HitTarget::ProviderTab(_)))
+        .collect::<Vec<_>>();
     assert!(
-        !frame.tab_hits.is_empty() && frame.tab_hits.iter().all(|hit| hit.line == rail),
+        !provider_hits.is_empty() && provider_hits.iter().all(|hit| hit.rows.start == rail),
         "dashboard tab hits stay on the rail row after the separator ({} hits):\n{rendered}",
-        frame.tab_hits.len()
+        provider_hits.len()
     );
 }
 /// In `auto` mode, two providers stay stacked: both account blocks paint at

@@ -31,7 +31,7 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
         .collect();
     assert_eq!(tab_line, "─── Claude ──── Codex ──────");
     assert_eq!(
-        hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
+        hits.iter().map(provider_tab_kind).collect::<Vec<_>>(),
         vec!["claude", "codex"],
         "the dropped tab carries no hit"
     );
@@ -61,7 +61,7 @@ fn tab_rail_reserves_the_active_tab_before_fitting_the_ranked_rest() {
     assert_eq!(tab_line, "─── Claude ──── Pi ─");
     assert_eq!(
         hits.iter()
-            .map(|hit| (hit.kind.as_str(), hit.col_start, hit.col_end))
+            .map(|hit| { (provider_tab_kind(hit), hit.columns.start, hit.columns.end,) })
             .collect::<Vec<_>>(),
         vec![("claude", 2, 12), ("pi", 14, 20)]
     );
@@ -155,7 +155,7 @@ fn pets_enabled_keeps_rail_to_provider_tabs_only() {
         "provider tabs still render across the rail:\n{rail}"
     );
     assert_eq!(
-        hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
+        hits.iter().map(provider_tab_kind).collect::<Vec<_>>(),
         vec!["claude", "codex"]
     );
 }

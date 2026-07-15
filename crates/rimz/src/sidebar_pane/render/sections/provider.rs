@@ -18,6 +18,7 @@ use crate::sidebar_pane::render::labels::{
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
+use crate::sidebar_pane::render::{HitRegion, HitTarget};
 
 use super::{pin_right, trim_spans_to_width};
 
@@ -406,21 +407,6 @@ fn spend_token_spans(
     spans
 }
 
-/// One clickable tab in the dashboard's tab rail: the rail line's position,
-/// the half-open column range the tab occupies, and the provider kind it
-/// activates. [`provider_panel_lines`] emits positions relative to its returned
-/// lines and columns relative to the unpadded content; `compose_lines`
-/// translates both into absolute screen coordinates (the bottom-block base and
-/// the one-cell chrome gutter) before storing them on `UiState::tab_hits` for
-/// the mouse hit-test.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ProviderTabHit {
-    pub(crate) line: usize,
-    pub(crate) col_start: u16,
-    pub(crate) col_end: u16,
-    pub(crate) kind: String,
-}
-
 /// The pinned per-provider dashboard. In stacked mode every account paints its
 /// own block — the dashboard's top hairline, then each provider header and
 /// brand/budget/spend body separated from the next by a blank row. In
@@ -446,7 +432,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
     width: usize,
     zones: &BudgetBarConfig,
     now: Timestamp,
-) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
+) -> (Vec<Line<'static>>, Vec<HitRegion>) {
     let mut lines = Vec::new();
     let first = providers.first();
     if first.is_none() && !pets_enabled {
@@ -709,7 +695,7 @@ fn zip_provider_pet_lines(
 /// its footprint first so the selected block always has a visible chip. The
 /// hit map stays in lockstep with the frame however many kinds register or
 /// however narrow the pane.
-/// Returns the line plus one [`ProviderTabHit`] per rendered tab (line index
+/// Returns the line plus one typed [`HitRegion`] per rendered tab (line index
 /// 0, columns over the full edge-to-edge footprint, so the click target holds
 /// still too) for the mouse hit-test.
 fn provider_tab_rail(
@@ -717,7 +703,7 @@ fn provider_tab_rail(
     providers: &[SidebarProviderPanel],
     active_kind: &str,
     width: usize,
-) -> (Line<'static>, Vec<ProviderTabHit>) {
+) -> (Line<'static>, Vec<HitRegion>) {
     let rail = theme.body();
     let hairline = theme.glyph(GlyphRole::ChromeHairline).to_owned();
     let fill = |cells: usize| Span::styled(hairline.repeat(cells), rail);
@@ -796,12 +782,11 @@ fn provider_tab_rail(
             ));
             spans.push(fill(1));
         }
-        hits.push(ProviderTabHit {
-            line: 0,
-            col_start: col as u16,
-            col_end: (col + cells).min(width) as u16,
-            kind: panel.kind.clone(),
-        });
+        hits.push(HitRegion::line(
+            0,
+            col as u16..(col + cells).min(width) as u16,
+            HitTarget::ProviderTab(panel.kind.clone()),
+        ));
         col += cells;
         rendered += 1;
     }

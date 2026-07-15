@@ -168,7 +168,7 @@ fn help_popup_dismisses_and_consumes_any_user_input() {
             help_visible: true,
             selected_index: 0,
             scroll_offset: 4,
-            line_map: vec![Some(1)],
+            interactions: render::FrameInteractions::from_parts(vec![Some(1)], Vec::new()),
             ..Default::default()
         };
 

@@ -7,12 +7,12 @@ fn width_keys_dispatch_without_redrawing() {
     let mut ui = UiState::default();
 
     assert_eq!(
-        handle_key(KeyAction::WidthNarrower, &mut ui, &snapshot).width,
-        Some(WidthAdjust::Narrower),
+        handle_key(KeyAction::WidthNarrower, &mut ui, &snapshot).effect,
+        Some(InputEffect::Width(WidthAdjust::Narrower)),
     );
     assert_eq!(
-        handle_key(KeyAction::WidthWider, &mut ui, &snapshot).width,
-        Some(WidthAdjust::Wider),
+        handle_key(KeyAction::WidthWider, &mut ui, &snapshot).effect,
+        Some(InputEffect::Width(WidthAdjust::Wider)),
     );
 }
 
@@ -25,33 +25,41 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
     let ws = workspace();
     let snapshot = clickable_block_snapshot(&ws);
     // Select the agent so its deeper stats lines appear too.
-    let map = line_map_for(&snapshot, 0);
+    let interactions = interactions_for(&snapshot, 0);
 
     // Index 0 is the agent (a multi-line card) plus the worktree header that
     // jumps into it; index 1 is the process row.
-    let agent_lines = map.iter().filter(|m| **m == Some(0)).count();
+    let agent_lines = (0..interactions.line_count())
+        .filter(|line| interactions.row_at_line(*line) == Some(0))
+        .count();
     assert!(
         agent_lines >= 4,
         "the worktree header plus the selected agent card (identity + \
              description + gauge + stats) route to row 0, not {agent_lines} lines",
     );
-    let process_lines = map.iter().filter(|m| **m == Some(1)).count();
+    let process_lines = (0..interactions.line_count())
+        .filter(|line| interactions.row_at_line(*line) == Some(1))
+        .count();
     assert_eq!(process_lines, 1, "a process row is a single line");
 
     // No content line of the agent block is missed: every map slot routes
     // through the hit-test to exactly the row it was tagged with.
     let ui = UiState {
-        line_map: map.clone(),
+        interactions: interactions.clone(),
         ..UiState::default()
     };
-    for (i, entry) in map.iter().enumerate() {
+    for i in 0..interactions.line_count() {
         let got = row_index_at_screen_position(&ui, screen_row_for(i));
-        assert_eq!(got, *entry, "screen row {i} mismatched its map slot");
+        assert_eq!(
+            got,
+            interactions.row_at_line(i),
+            "screen row {i} mismatched its typed target"
+        );
     }
 
     // The cockpit header, gaps, and the `+K more` hidden-count line are inert.
     assert!(
-        map.contains(&None),
+        (0..interactions.line_count()).any(|line| interactions.row_at_line(line).is_none()),
         "cockpit header / gaps / +K more stay inert"
     );
 
@@ -60,9 +68,9 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
     // row 0 is not clickable, the worktree header routes to its first row,
     // the process row beneath it follows, and the section gap just above the
     // header is inert.
-    let header = ui.line_map.iter().position(|m| *m == Some(0)).unwrap();
+    let header = ui.interactions.line_for_row(0).unwrap();
     let row_below_header = header + 1;
-    let process_row = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
+    let process_row = ui.interactions.line_for_row(1).unwrap();
     assert_eq!(
         row_index_at_screen_position(&ui, 0),
         None,
@@ -100,40 +108,41 @@ fn more_line_click_toggles_group_expansion_and_ordinals_stay_in_lockstep() {
     let mut ui = UiState::default();
     let theme = ui.theme(&snapshot.theme);
     let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
-    ui.line_map = composed.line_map;
-    ui.more_hits = composed.more_hits;
+    ui.interactions = composed.interactions;
     assert_eq!(
-        visible_row_count(&snapshot, None, &ui.expanded_groups),
+        roster_len(&snapshot, None, &ui.expanded_groups),
         6,
         "collapsed body exposes the capped row ordinals"
     );
-    let more_line = ui.more_hits.first().expect("more hit").line;
+    let (_, more_line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
+        .expect("more hit");
 
-    let outcome = handle_mouse_click(0, screen_row_for(more_line), &mut ui, &snapshot);
+    let outcome = handle_mouse_click(0, more_line, &mut ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(ui.expanded_groups.contains(&group_key));
     assert_eq!(
-        visible_row_count(&snapshot, None, &ui.expanded_groups),
+        roster_len(&snapshot, None, &ui.expanded_groups),
         9,
         "expanded body exposes every row ordinal"
     );
 
     let theme = ui.theme(&snapshot.theme);
     let expanded = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
-    let mut ordinals = expanded
-        .line_map
-        .iter()
-        .flatten()
-        .copied()
+    let mut ordinals = (0..expanded.interactions.line_count())
+        .filter_map(|line| expanded.interactions.row_at_line(line))
         .collect::<Vec<_>>();
     ordinals.dedup();
     assert_eq!(ordinals, (0..9).collect::<Vec<_>>());
 
-    ui.line_map = expanded.line_map;
-    ui.more_hits = expanded.more_hits;
-    let less_line = ui.more_hits.first().expect("less hit").line;
-    let outcome = handle_mouse_click(0, screen_row_for(less_line), &mut ui, &snapshot);
+    ui.interactions = expanded.interactions;
+    let (_, less_line) = ui
+        .interactions
+        .line_for_target(&HitTarget::ToggleGroup(group_key.clone()))
+        .expect("less hit");
+    let outcome = handle_mouse_click(0, less_line, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(!ui.expanded_groups.contains(&group_key));
 }
@@ -157,10 +166,10 @@ fn focus_keys_fire_without_mutating_selection() {
         selected_index: 0,
         help_visible: false,
         animation_phase: 0,
-        line_map: line_map_for(&snapshot, 0),
+        interactions: interactions_for(&snapshot, 0),
         ..Default::default()
     };
-    let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
+    let row1 = ui.interactions.line_for_row(1).unwrap();
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert!(!outcome.redraw, "a jump changes nothing to repaint");
@@ -185,7 +194,6 @@ fn focus_keys_fire_without_mutating_selection() {
         selected_pane: Some(target.clone()),
         help_visible: false,
         animation_phase: 0,
-        line_map: Vec::new(),
         ..Default::default()
     };
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
@@ -249,7 +257,6 @@ fn arrow_key_reports_immediate_ui_change() {
         selected_index: 0,
         help_visible: false,
         animation_phase: 0,
-        line_map: Vec::new(),
         ..Default::default()
     };
 
@@ -297,7 +304,7 @@ fn dismiss_key_requests_alert_dismissal() {
     let outcome = handle_key(KeyAction::Dismiss, &mut ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::dismiss());
-    assert!(outcome.dismiss);
+    assert_eq!(outcome.effect, Some(InputEffect::DismissAlert));
     assert!(outcome.redraw);
     // Dismiss never moves the selection.
     assert_eq!(ui.selected_index, 0);
@@ -337,7 +344,10 @@ fn banner_click_scrolls_to_top_and_pins_without_focusing() {
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = UiState {
         scroll_offset: 42,
-        banner_line: Some(2),
+        interactions: render::FrameInteractions::from_parts(
+            vec![None; 3],
+            vec![render::HitRegion::whole_line(2, HitTarget::UnreadBanner)],
+        ),
         selected_pane: Some(target),
         ..Default::default()
     };
@@ -350,7 +360,7 @@ fn banner_click_scrolls_to_top_and_pins_without_focusing() {
         ui.manual_scroll.is_some(),
         "banner click pins the scroll-to-top position"
     );
-    assert_eq!(outcome.focus, None);
+    assert_eq!(outcome.effect, None);
 }
 #[test]
 fn selection_change_snaps_a_wheel_pin_back() {
@@ -460,7 +470,7 @@ fn top_and_bottom_keys_browse_to_the_ends() {
     let outcome = handle_key(KeyAction::Bottom, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.selected_index, 2);
-    assert_eq!(outcome.focus, None, "the end jump never focuses");
+    assert_eq!(outcome.effect, None, "the end jump never focuses");
     assert!(ui.browse.is_some(), "G begins a browse pick");
 
     // G again at the bottom is a no-op.
@@ -488,7 +498,10 @@ fn screen_edge_keys_browse_to_the_painted_window_edges() {
     );
     let mut ui = UiState {
         selected_index: 2,
-        line_map: vec![None, Some(1), Some(1), Some(2), Some(3), None],
+        interactions: render::FrameInteractions::from_parts(
+            vec![None, Some(1), Some(1), Some(2), Some(3), None],
+            Vec::new(),
+        ),
         ..Default::default()
     };
 
@@ -526,7 +539,10 @@ fn page_keys_step_by_visible_row_count_and_clamp() {
     );
     let mut ui = UiState {
         selected_index: 1,
-        line_map: vec![None, Some(1), Some(2), Some(3), None],
+        interactions: render::FrameInteractions::from_parts(
+            vec![None, Some(1), Some(2), Some(3), None],
+            Vec::new(),
+        ),
         ..Default::default()
     };
 
@@ -571,7 +587,6 @@ fn page_and_screen_edge_keys_noop_before_first_paint() {
     ] {
         let mut ui = UiState {
             selected_index: 0,
-            line_map: Vec::new(),
             ..Default::default()
         };
         let outcome = handle_key(action, &mut ui, &snapshot);
@@ -596,21 +611,21 @@ fn mark_keys_name_the_selected_agent_row_without_focus() {
     let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
 
     let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
-    assert_eq!(outcome.mark_unread, Some(row_id.clone()));
-    assert_eq!(outcome.focus, None);
+    assert_eq!(
+        outcome.effect,
+        Some(InputEffect::MarkUnread(row_id.clone()))
+    );
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
     assert_eq!(ui.selected_index, 0, "marking unread moves no selection");
 
     snapshot.worktree_groups[0].rows[0].unread = true;
     let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
-    assert_eq!(outcome.mark_read, Some(row_id.clone()));
-    assert_eq!(outcome.focus, None);
+    assert_eq!(outcome.effect, Some(InputEffect::MarkRead(row_id.clone())));
     assert!(!outcome.redraw, "the loop owns the repaint after the write");
     assert_eq!(ui.selected_index, 0, "marking read moves no selection");
 
     let outcome = handle_key(KeyAction::MarkAllRead, &mut ui, &snapshot);
-    assert!(outcome.mark_all_read);
-    assert_eq!(outcome.focus, None);
+    assert_eq!(outcome.effect, Some(InputEffect::MarkAllRead));
 }
 
 #[test]
@@ -632,8 +647,6 @@ fn mark_keys_ignore_process_rows() {
     };
 
     let outcome = handle_key(KeyAction::MarkToggle, &mut ui, &snapshot);
-    assert_eq!(outcome.mark_read, None, "no read mark on a process row");
-    assert_eq!(outcome.mark_unread, None, "no unread mark on a process row");
     assert_eq!(outcome, InputOutcome::default());
 }
 #[test]

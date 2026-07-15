@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use jiff::Timestamp;
 
+use super::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame};
 use super::gate::apply_gate;
 use super::health::degraded_too_long;
 use super::lifecycle::self_close_decision;
@@ -29,7 +30,7 @@ pub(super) struct MaintenanceContext<'a> {
     pub(super) config: &'a ServeConfig,
     pub(super) runtime: &'a RuntimePaths,
     pub(super) socket_path: &'a Path,
-    pub(super) result_rx: &'a Receiver<FetchOutcome>,
+    pub(super) result_rx: &'a Receiver<FetchUpdate>,
     pub(super) anim_start: Instant,
     pub(super) diag: &'a crate::diag::DiagSink,
     pub(super) tick: Duration,
@@ -55,6 +56,12 @@ struct BackgroundRowKey {
     unread: bool,
     inactive: bool,
     status: BackgroundRowStatusKey,
+}
+
+struct FetchApplication {
+    snapshot: std::result::Result<SidebarSnapshot, String>,
+    role: FetchRole,
+    phase: FetchPhase,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -407,21 +414,21 @@ impl LoopState {
         &mut self,
         config: &ServeConfig,
         fetch: &mut FetchDispatcher,
-        result_rx: &Receiver<FetchOutcome>,
+        result_rx: &Receiver<FetchUpdate>,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<()> {
         let mut latest = None;
         let mut saw_final = false;
-        while let Ok(outcome) = result_rx.try_recv() {
-            saw_final |= outcome.final_for_request;
-            latest = Some(outcome);
+        while let Ok(update) = result_rx.try_recv() {
+            saw_final |= update.is_final();
+            latest = Some(update);
         }
         if saw_final {
             fetch.mark_request_complete();
         }
         let rejected = match latest {
-            Some(outcome) => self.apply_latest_snapshot(config, outcome, anim_start, diag)?,
+            Some(update) => self.apply_latest_snapshot(config, update, anim_start, diag)?,
             None => false,
         };
         self.finish_snapshot_requests(fetch, saw_final, rejected);
@@ -436,7 +443,7 @@ impl LoopState {
         runtime: &RuntimePaths,
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-        result_rx: &Receiver<FetchOutcome>,
+        result_rx: &Receiver<FetchUpdate>,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
         wakeup: Wakeup,
@@ -485,25 +492,39 @@ impl LoopState {
     fn apply_latest_snapshot(
         &mut self,
         config: &ServeConfig,
-        mut outcome: FetchOutcome,
+        update: FetchUpdate,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<bool> {
-        self.last_known_elder = outcome.producer;
-        if outcome.unchanged {
+        self.last_known_elder = update.role().is_producer();
+        if matches!(update, FetchUpdate::Unchanged { .. }) {
             self.fetched_at = Instant::now();
             return Ok(false);
         }
-        let snapshot_ok = outcome.snapshot.is_ok();
-        let fresh_pane_frame = outcome.fresh_pane_frame;
-        if let Ok(pulled) = outcome.snapshot {
-            self.last_pulled = pulled;
-            let now_ms = crate::sidebar::timing::unix_now_ms();
-            self.event_store.prune(now_ms);
-            outcome.snapshot = Ok(self.fused_snapshot(now_ms));
-        }
+        let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
+        let fresh_pane_frame = update.pane_frame() == PaneFrame::Fresh;
+        let update = match update {
+            FetchUpdate::Snapshot {
+                snapshot,
+                role,
+                phase,
+                pane_frame,
+            } => {
+                self.last_pulled = *snapshot;
+                let now_ms = crate::sidebar::timing::unix_now_ms();
+                self.event_store.prune(now_ms);
+                FetchUpdate::Snapshot {
+                    snapshot: Box::new(self.fused_snapshot(now_ms)),
+                    role,
+                    phase,
+                    pane_frame,
+                }
+            }
+            failed @ FetchUpdate::Failed { .. } => failed,
+            FetchUpdate::Unchanged { .. } => unreachable!("handled above"),
+        };
         self.fetched_at = Instant::now();
-        let rejected = self.fold_outcome(config, outcome, anim_start, diag)?;
+        let rejected = self.fold_outcome(config, update, anim_start, diag)?;
         if snapshot_ok {
             self.last_self_close_check = Instant::now();
         }
@@ -571,12 +592,15 @@ impl LoopState {
         let fused = self.fused_snapshot(crate::sidebar::timing::unix_now_ms());
         self.fold_outcome(
             config,
-            FetchOutcome {
-                snapshot: Ok(fused),
-                final_for_request: false,
-                fresh_pane_frame: false,
-                unchanged: false,
-                producer: self.last_known_elder,
+            FetchUpdate::Snapshot {
+                snapshot: Box::new(fused),
+                phase: FetchPhase::Interim,
+                pane_frame: PaneFrame::Held,
+                role: if self.last_known_elder {
+                    FetchRole::Producer
+                } else {
+                    FetchRole::Consumer
+                },
             },
             anim_start,
             diag,
@@ -890,40 +914,32 @@ impl LoopState {
             // paint settles any frame the loop owed.
             self.dirty = false;
         }
-        let interacted = applied.redraw
-            || applied.focus.is_some()
-            || applied.width.is_some()
-            || applied.mark_read.is_some()
-            || applied.mark_unread.is_some()
-            || applied.mark_all_read;
+        let interacted = applied.redraw || applied.effect.is_some();
         if interacted {
             order_hold::arm_order_hold(&mut self.ui, jiff::Timestamp::now().as_millisecond());
         }
-        if let Some(pane) = applied.focus {
-            // A jump records and broadcasts the focus intent so peer tabs
-            // adopt the anchor offset and repaint while still hidden. The mux
-            // focus switch fires last, so the destination tab is already at
-            // the synced offset when it becomes visible. The producer pull
-            // verifies the optimistic focus on the next wakeup.
-            self.record_focus_intent(config, pane.clone(), anim_start, diag)?;
-            spawn_pane_focus(pane, &config.session_name);
-        }
-        if let (Some(dir), Some(pane)) = (applied.width, config.own_pane.clone()) {
-            let current_width = terminal.size().map(|size| size.width).ok();
-            if width_adjust_allowed(dir, current_width) {
-                self.width_adjust_pending = Some(Instant::now());
-                self.width_control.set_suspended(true);
-                spawn_width_adjust(pane, &config.session_name, dir);
+        match applied.effect {
+            Some(InputEffect::Focus(pane)) => {
+                // A jump records and broadcasts the focus intent so peer tabs
+                // adopt the anchor offset and repaint while still hidden. The
+                // mux focus switch fires last, so the destination tab is ready.
+                self.record_focus_intent(config, pane.clone(), anim_start, diag)?;
+                spawn_pane_focus(pane, &config.session_name);
             }
-        }
-        if let Some(row_id) = applied.mark_read {
-            self.mark_row_read(fetch, &row_id, diag);
-        }
-        if let Some(row_id) = applied.mark_unread {
-            self.mark_row_unread(fetch, &row_id, diag);
-        }
-        if applied.mark_all_read {
-            self.mark_all_read(fetch, diag);
+            Some(InputEffect::Width(dir)) => {
+                if let Some(pane) = config.own_pane.clone() {
+                    let current_width = terminal.size().map(|size| size.width).ok();
+                    if width_adjust_allowed(dir, current_width) {
+                        self.width_adjust_pending = Some(Instant::now());
+                        self.width_control.set_suspended(true);
+                        spawn_width_adjust(pane, &config.session_name, dir);
+                    }
+                }
+            }
+            Some(InputEffect::MarkRead(row_id)) => self.mark_row_read(fetch, &row_id, diag),
+            Some(InputEffect::MarkUnread(row_id)) => self.mark_row_unread(fetch, &row_id, diag),
+            Some(InputEffect::MarkAllRead) => self.mark_all_read(fetch, diag),
+            Some(InputEffect::DismissAlert) | None => {}
         }
         Ok(())
     }
@@ -942,7 +958,7 @@ impl LoopState {
         anim_start: Instant,
     ) -> Result<InputOutcome> {
         let outcome = handle_wakeup(wakeup, &mut self.ui, &self.current);
-        if outcome.dismiss {
+        if matches!(outcome.effect, Some(InputEffect::DismissAlert)) {
             self.health.alert = None;
         }
         if outcome.redraw {
@@ -1283,11 +1299,35 @@ impl LoopState {
     pub(super) fn apply_fetch_outcome(
         &mut self,
         config: &ServeConfig,
-        outcome: FetchOutcome,
+        update: FetchUpdate,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<ApplyOutcome> {
-        let (prev_good, rejected, now) = self.commit_fetch(config, outcome, diag);
+        let application = match update {
+            FetchUpdate::Snapshot {
+                snapshot,
+                role,
+                phase,
+                ..
+            } => FetchApplication {
+                snapshot: Ok(*snapshot),
+                role,
+                phase,
+            },
+            FetchUpdate::Failed { error, role, .. } => FetchApplication {
+                snapshot: Err(error),
+                role,
+                phase: FetchPhase::Final,
+            },
+            FetchUpdate::Unchanged { .. } => {
+                return Ok(ApplyOutcome {
+                    should_exit: false,
+                    tab_emptied: false,
+                    rejected: false,
+                });
+            }
+        };
+        let (prev_good, rejected, now) = self.commit_fetch(config, application, diag);
         let prev_selected = self.ui.selected_pane.clone();
         let (focused_pane, cleared) = self.sweep_read_receipts(now, diag);
         self.reconcile_selection_and_order(
@@ -1353,22 +1393,22 @@ impl LoopState {
     fn commit_fetch(
         &mut self,
         config: &ServeConfig,
-        outcome: FetchOutcome,
+        application: FetchApplication,
         diag: &crate::diag::DiagSink,
     ) -> (SidebarSnapshot, bool, Timestamp) {
-        let is_elder = outcome.producer;
+        let is_elder = application.role.is_producer();
         // The gate compares the incoming snapshot against the last frame we actually
         // committed; `current` still holds it until we overwrite it below.
-        let fetch_was_ok = outcome.snapshot.is_ok();
-        let fetch_failure = outcome.snapshot.as_ref().err().cloned();
-        let final_for_request = outcome.final_for_request;
+        let fetch_was_ok = application.snapshot.is_ok();
+        let fetch_failure = application.snapshot.as_ref().err().cloned();
+        let final_for_request = application.phase == FetchPhase::Final;
         let prev_good = self.current.clone();
         let prev_health = self.health.clone();
         let prev_gate = self.gate.clone();
         let mut computed = compute_next_state(
             &config.workspace_id,
             None,
-            outcome.snapshot,
+            application.snapshot,
             self.last_snapshot.take(),
             &self.health,
         );
@@ -1570,11 +1610,11 @@ impl LoopState {
     fn fold_outcome(
         &mut self,
         config: &ServeConfig,
-        outcome: FetchOutcome,
+        update: FetchUpdate,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
     ) -> Result<bool> {
-        let applied = self.apply_fetch_outcome(config, outcome, anim_start, diag)?;
+        let applied = self.apply_fetch_outcome(config, update, anim_start, diag)?;
         self.should_exit = applied.should_exit;
         if applied.should_exit {
             self.exit_cause = Some(if applied.tab_emptied {

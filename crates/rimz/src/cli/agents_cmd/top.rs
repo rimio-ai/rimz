@@ -47,11 +47,16 @@ pub(super) fn run_top(args: TopArgs, globals: &GlobalFlags) -> Result<()> {
         .context("preparing runtime paths")?;
     let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
+    let mut reader = rimz::sidebar::consumer::PublishedSnapshotReader::new(
+        runtime.clone(),
+        workspace.session_name.clone(),
+        None,
+    );
     let interval = args.interval.unwrap_or(DEFAULT_INTERVAL);
     let filter = channel_filter(args.all, args.worktree.as_deref(), &workspace);
-    let first = sample(&state, &runtime, &workspace, filter.as_deref())?;
+    let first = sample(&state, &mut reader, filter.as_deref())?;
     std::thread::sleep(FIRST_SAMPLE_DELAY);
-    let mut current = sample(&state, &runtime, &workspace, filter.as_deref())?;
+    let mut current = sample(&state, &mut reader, filter.as_deref())?;
     if args.once {
         let rows = top_rows(&first, &current, FIRST_SAMPLE_DELAY);
         let mut out = render::out();
@@ -68,25 +73,17 @@ pub(super) fn run_top(args: TopArgs, globals: &GlobalFlags) -> Result<()> {
             return Ok(());
         }
         previous = current;
-        current = sample(&state, &runtime, &workspace, filter.as_deref())?;
+        current = sample(&state, &mut reader, filter.as_deref())?;
         elapsed_hint = interval;
     }
 }
 
 fn sample(
     state: &rimz::StatePaths,
-    runtime: &rimz::RuntimePaths,
-    workspace: &rimz::ResolvedWorkspace,
+    reader: &mut rimz::sidebar::consumer::PublishedSnapshotReader,
     channel: Option<&str>,
 ) -> Result<TopSample> {
-    let snapshot = rimz::sidebar::consumer::read_published_snapshot(
-        &mut rimz::sidebar::consumer::RollupCursor::new(),
-        state,
-        runtime,
-        &workspace.session_name,
-        None,
-    )
-    .context("reading the room snapshot")?;
+    let snapshot = reader.read(state).context("reading the room snapshot")?;
     let in_room: HashMap<AgentSessionId, Option<u32>> = snapshot
         .agent_panes
         .iter()

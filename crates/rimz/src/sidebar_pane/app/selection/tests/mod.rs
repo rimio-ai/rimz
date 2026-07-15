@@ -28,6 +28,14 @@ fn next_attention_index(
     step_attention_index(snapshot, filter, &Default::default(), selected, true)
 }
 
+fn roster_len(
+    snapshot: &SidebarSnapshot,
+    filter: Option<BodyFilter>,
+    expanded_groups: &std::collections::BTreeSet<String>,
+) -> usize {
+    VisibleRoster::new(snapshot, filter, expanded_groups, None).len()
+}
+
 /// A group whose first row is a multi-line agent card (model, effort, and
 /// context% set so it carries identity + description + gauge, and selecting
 /// it reveals its deeper budget-bar and stats lines), followed by a
@@ -98,25 +106,30 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
 }
 
 /// Lay out `snapshot` at a generous size through the real render path,
-/// returning the freshly-composed hit-test map — the same map the live draw
-/// stores on `UiState`. Width/height are wide and tall enough that nothing
-/// the tests probe is clipped.
-fn line_map_for(snapshot: &SidebarSnapshot, selected: usize) -> Vec<Option<usize>> {
+/// returning the freshly-composed typed interactions — the same projection
+/// the live draw stores on `UiState`.
+fn interactions_for(snapshot: &SidebarSnapshot, selected: usize) -> render::FrameInteractions {
     let mut ui = UiState {
         selected_index: selected,
         help_visible: false,
         animation_phase: 0,
-        line_map: Vec::new(),
         ..Default::default()
     };
     let theme = ui.theme(&snapshot.theme);
-    render::compose_lines(snapshot, None, &ui, theme.as_ref(), 54, 64).line_map
+    render::compose_lines(snapshot, None, &ui, theme.as_ref(), 54, 64).interactions
 }
 
 /// The screen row a content-line index maps to: borderless, the body fills
 /// the frame from row 0, so map index `i` is screen row `i`.
 fn screen_row_for(map_index: usize) -> u16 {
     u16::try_from(map_index).unwrap()
+}
+
+fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
+    match ui.interactions.target_at(0, row) {
+        Some(HitTarget::Row(ordinal)) => Some(ordinal),
+        _ => None,
+    }
 }
 
 // ── The dashboard tab model ──────────────────────────────────────────────────

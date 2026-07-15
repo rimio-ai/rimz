@@ -13,8 +13,6 @@
 //! This file owns only the shared section primitives — the width tiers and the
 //! gutter every section composes with.
 
-use std::collections::HashSet;
-
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
@@ -22,9 +20,9 @@ use ratatui::text::{Line, Span};
 use crate::SidebarProviderPanel;
 use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 
+use super::CostRolls;
 pub(super) use super::layout::{pin_right, spans_width, trim_spans_to_width};
 use super::theme::{Component, Theme};
-use super::{BodyFilter, CostRolls};
 
 mod agent_card;
 mod cockpit;
@@ -36,16 +34,17 @@ mod worktree;
 
 pub(in crate::sidebar_pane::render) use agent_card::awaiting_first_prompt_affordance;
 pub(super) use cockpit::{cockpit_spend_line, cockpit_summary_line};
-pub(crate) use fleet::{MakeUpHit, status_total, unread_total};
 pub(super) use fleet::{fleet_header_lines, fleet_size};
+pub(crate) use fleet::{status_total, unread_total};
 #[cfg(test)]
 pub(super) use process::proc_stats_spans;
-pub(crate) use provider::ProviderTabHit;
 pub(super) use provider::dashboard_panel_lines_with_footer;
 #[cfg(test)]
 pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
 pub(super) use provider::{fleet_store_lines, fleet_total_lines};
+#[cfg(test)]
 pub(super) use worktree::worktree_group_lines;
+pub(super) use worktree::worktree_group_lines_projected;
 
 pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,
@@ -55,8 +54,6 @@ pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) tier: Tier,
     pub(in crate::sidebar_pane::render) bands: &'a ContextMeterConfig,
     pub(in crate::sidebar_pane::render) card_density: CardDensityMode,
-    pub(in crate::sidebar_pane::render) filter: Option<BodyFilter>,
-    pub(in crate::sidebar_pane::render) held: Option<&'a HashSet<String>>,
     pub(in crate::sidebar_pane::render) selected_index: usize,
     pub(in crate::sidebar_pane::render) animation_phase: u64,
     pub(in crate::sidebar_pane::render) cost_rolls: &'a CostRolls,

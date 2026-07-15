@@ -1,15 +1,43 @@
 use super::*;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::sidebar::notify::{
-    LinkAlert, LinkNotificationState, Notification, NotificationAgent, NotificationKind,
-};
+use crate::sidebar::notify::{LinkAlert, Notification, NotificationAgent, NotificationKind};
 use crate::sidebar_pane::app::fixtures::{pane, workspace};
 use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 
+fn guarded_reader() -> (tempfile::TempDir, PublishedSnapshotReader) {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = RuntimePaths::under(workspace(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    (
+        dir,
+        PublishedSnapshotReader::new(runtime, "rimz-test", None),
+    )
+}
+
+fn run_cycle(
+    worker: &mut FetchWorker,
+    state: &StatePaths,
+    request: FetchRequest,
+) -> Vec<FetchUpdate> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut sink = ResultSink::new(tx, PathBuf::from("/nonexistent/rimz-test.sock"), None);
+    worker.run_cycle(state, request, &mut sink);
+    drop(sink);
+    rx.try_iter().collect()
+}
+
+fn snapshot(update: &FetchUpdate) -> &SidebarSnapshot {
+    match update {
+        FetchUpdate::Snapshot { snapshot, .. } => snapshot,
+        FetchUpdate::Unchanged { .. } => panic!("expected snapshot, got unchanged"),
+        FetchUpdate::Failed { error, .. } => panic!("expected snapshot, got: {error}"),
+    }
+}
+
 #[test]
 fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
-    let mut cursor = RollupCursor::new();
-    let result = run_produce_guarded(&mut cursor, |_| {
+    let (_dir, mut reader) = guarded_reader();
+    let result = run_produce_guarded(&mut reader, |_| {
         Err(crate::sidebar::produce::ProduceErr::Fixture {
             path: PathBuf::from("/nonexistent/panes.json"),
             reason: "injected failure".to_owned(),
@@ -30,7 +58,7 @@ fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
         );
     }));
 
-    let result = run_produce_guarded(&mut cursor, |_| panic!("boom"));
+    let result = run_produce_guarded(&mut reader, |_| panic!("boom"));
     std::panic::set_hook(previous_hook);
 
     assert_eq!(result.unwrap_err(), "sidebar produce panicked: boom");
@@ -207,31 +235,14 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         published_frame_hint: false,
         force_fold: false,
     };
-    let mut cursor = RollupCursor::new();
-    let mut consumer_memo = ConsumerFoldMemo::default();
-    let mut producer_cadence = ProducerCadence::default();
-    let mut notifications = NotificationState::default();
-    let mut link_notifications = LinkNotificationState::default();
-    let mut outcomes = Vec::new();
-    let mut last_election = None;
-    run_fetch_cycle(
-        FetchCycle {
-            config: &config,
-            runtime: &runtime,
-            state: &state,
-            notification_prefs: &NotificationsPrefs::default(),
-            notifications: &mut notifications,
-            link_notifications: &mut link_notifications,
-            diag: &crate::diag::DiagSink::disabled(),
-            election: &election,
-            last_election: &mut last_election,
-        },
-        request,
-        &mut cursor,
-        &mut consumer_memo,
-        &mut producer_cadence,
-        &mut |o| outcomes.push(o),
+    let mut worker = FetchWorker::new(
+        config,
+        runtime,
+        NotificationsPrefs::default(),
+        crate::diag::DiagSink::disabled(),
+        election,
     );
+    let outcomes = run_cycle(&mut worker, &state, request);
 
     assert_eq!(
         outcomes.len(),
@@ -240,20 +251,17 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     );
     let fast = &outcomes[0];
     assert!(
-        !fast.final_for_request,
+        !fast.is_final(),
         "the fast post leaves the cycle open for the produce"
     );
-    let fast_snapshot = fast.snapshot.as_ref().expect("fast lane folds in process");
+    let fast_snapshot = snapshot(fast);
     assert!(
         !fast_snapshot.worktree_groups.is_empty(),
         "the fast fold renders the published pane"
     );
     let produced = &outcomes[1];
-    assert!(produced.final_for_request, "the produce closes the cycle");
-    let produced_snapshot = produced
-        .snapshot
-        .as_ref()
-        .expect("the in-process produce succeeds on the published frame");
+    assert!(produced.is_final(), "the produce closes the cycle");
+    let produced_snapshot = snapshot(produced);
     assert!(
         !produced_snapshot.worktree_groups.is_empty(),
         "the produce folds the same pane frame"
@@ -492,44 +500,24 @@ impl ConsumerFixture {
         }
     }
 
-    fn run(&self, request: FetchRequest) -> Vec<FetchOutcome> {
-        let mut cursor = RollupCursor::new();
-        let mut consumer_memo = ConsumerFoldMemo::default();
-        self.run_with(request, &mut cursor, &mut consumer_memo)
-    }
-
-    fn run_with(
-        &self,
-        request: FetchRequest,
-        cursor: &mut RollupCursor,
-        consumer_memo: &mut ConsumerFoldMemo,
-    ) -> Vec<FetchOutcome> {
+    fn worker(&self) -> FetchWorker {
         let config = test_config(self.workspace_id.clone(), self.younger.clone());
         let election = ProducerElectionTracker::new(self.runtime.clone(), self.younger.clone());
-        let mut notifications = NotificationState::default();
-        let mut link_notifications = LinkNotificationState::default();
-        let mut outcomes = Vec::new();
-        let mut last_election = None;
-        let mut producer_cadence = ProducerCadence::default();
-        run_fetch_cycle(
-            FetchCycle {
-                config: &config,
-                runtime: &self.runtime,
-                state: &self.state,
-                notification_prefs: &NotificationsPrefs::default(),
-                notifications: &mut notifications,
-                link_notifications: &mut link_notifications,
-                diag: &crate::diag::DiagSink::disabled(),
-                election: &election,
-                last_election: &mut last_election,
-            },
-            request,
-            cursor,
-            consumer_memo,
-            &mut producer_cadence,
-            &mut |outcome| outcomes.push(outcome),
-        );
-        outcomes
+        FetchWorker::new(
+            config,
+            self.runtime.clone(),
+            NotificationsPrefs::default(),
+            crate::diag::DiagSink::disabled(),
+            election,
+        )
+    }
+
+    fn run(&self, request: FetchRequest) -> Vec<FetchUpdate> {
+        self.run_with(request, &mut self.worker())
+    }
+
+    fn run_with(&self, request: FetchRequest, worker: &mut FetchWorker) -> Vec<FetchUpdate> {
+        run_cycle(worker, &self.state, request)
     }
 
     fn write_pane_frame(&self) {
@@ -565,17 +553,15 @@ fn unchanged_consumer_inputs_skip_the_second_fold() {
     )
     .unwrap();
 
-    let mut cursor = RollupCursor::new();
-    let mut consumer_memo = ConsumerFoldMemo::default();
-    let first = fixture.run_with(FetchRequest::default(), &mut cursor, &mut consumer_memo);
+    let mut worker = fixture.worker();
+    let first = fixture.run_with(FetchRequest::default(), &mut worker);
     assert_eq!(first.len(), 1);
-    assert!(!first[0].unchanged);
-    assert!(first[0].snapshot.is_ok());
+    assert!(matches!(first[0], FetchUpdate::Snapshot { .. }));
 
-    let second = fixture.run_with(FetchRequest::default(), &mut cursor, &mut consumer_memo);
+    let second = fixture.run_with(FetchRequest::default(), &mut worker);
     assert_eq!(second.len(), 1);
-    assert!(second[0].unchanged);
-    assert!(second[0].final_for_request);
+    assert!(matches!(second[0], FetchUpdate::Unchanged { .. }));
+    assert!(second[0].is_final());
 }
 
 #[test]
@@ -619,15 +605,17 @@ fn consumer_stamp_pane_publication_seeds_next_ordinary_skip() {
         serde_json::to_vec(&rollup).unwrap(),
     )
     .unwrap();
-    let mut cursor = RollupCursor::new();
-    let mut memo = ConsumerFoldMemo::default();
+    let mut worker = fixture.worker();
 
+    assert!(matches!(
+        fixture.run_with(FetchRequest::pane_frame_published(), &mut worker)[0],
+        FetchUpdate::Snapshot { .. }
+    ),);
     assert!(
-        !fixture.run_with(FetchRequest::pane_frame_published(), &mut cursor, &mut memo,)[0]
-            .unchanged,
-    );
-    assert!(
-        fixture.run_with(FetchRequest::default(), &mut cursor, &mut memo)[0].unchanged,
+        matches!(
+            fixture.run_with(FetchRequest::default(), &mut worker)[0],
+            FetchUpdate::Unchanged { .. }
+        ),
         "the publication fold seeds the ordinary-request memo",
     );
 }
@@ -660,17 +648,28 @@ fn consumer_stamp_other_mandatory_folds_clear_before_ordinary_reseed() {
             serde_json::to_vec(&rollup).unwrap(),
         )
         .unwrap();
-        let mut cursor = RollupCursor::new();
-        let mut memo = ConsumerFoldMemo::default();
+        let mut worker = fixture.worker();
 
-        assert!(!fixture.run_with(FetchRequest::default(), &mut cursor, &mut memo)[0].unchanged);
-        assert!(!fixture.run_with(mandatory, &mut cursor, &mut memo)[0].unchanged);
+        assert!(matches!(
+            fixture.run_with(FetchRequest::default(), &mut worker)[0],
+            FetchUpdate::Snapshot { .. }
+        ));
+        assert!(matches!(
+            fixture.run_with(mandatory, &mut worker)[0],
+            FetchUpdate::Snapshot { .. }
+        ));
         assert!(
-            !fixture.run_with(FetchRequest::default(), &mut cursor, &mut memo)[0].unchanged,
+            matches!(
+                fixture.run_with(FetchRequest::default(), &mut worker)[0],
+                FetchUpdate::Snapshot { .. }
+            ),
             "the first ordinary request reseeds the cleared memo",
         );
         assert!(
-            fixture.run_with(FetchRequest::default(), &mut cursor, &mut memo)[0].unchanged,
+            matches!(
+                fixture.run_with(FetchRequest::default(), &mut worker)[0],
+                FetchUpdate::Unchanged { .. }
+            ),
             "the next unchanged request skips",
         );
     }
@@ -694,18 +693,17 @@ fn force_fold_bypasses_consumer_unchanged_skip_without_fresh_pane_claim() {
         serde_json::to_vec(&rollup).unwrap(),
     )
     .unwrap();
-    let mut cursor = RollupCursor::new();
-    let mut consumer_memo = ConsumerFoldMemo::default();
-    assert!(
-        !fixture.run_with(FetchRequest::default(), &mut cursor, &mut consumer_memo)[0].unchanged
-    );
+    let mut worker = fixture.worker();
+    assert!(matches!(
+        fixture.run_with(FetchRequest::default(), &mut worker)[0],
+        FetchUpdate::Snapshot { .. }
+    ));
 
-    let forced = fixture.run_with(FetchRequest::force_fold(), &mut cursor, &mut consumer_memo);
+    let forced = fixture.run_with(FetchRequest::force_fold(), &mut worker);
 
     assert_eq!(forced.len(), 1);
-    assert!(!forced[0].unchanged);
-    assert!(!forced[0].fresh_pane_frame);
-    assert!(forced[0].snapshot.is_ok());
+    assert!(matches!(forced[0], FetchUpdate::Snapshot { .. }));
+    assert_eq!(forced[0].pane_frame(), PaneFrame::Held);
 }
 
 #[test]
@@ -731,15 +729,13 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
 
     assert_eq!(outcomes.len(), 1);
     let outcome = outcomes.pop().unwrap();
-    assert!(outcome.final_for_request);
-    assert!(!outcome.fresh_pane_frame);
-    let snapshot = outcome
-        .snapshot
-        .expect("waiting for the first pane frame is not a failed fetch");
-    assert_eq!(snapshot.display_name, "cold-room");
-    assert_eq!(snapshot.panes_produced_at_ms, None);
+    assert!(outcome.is_final());
+    assert_eq!(outcome.pane_frame(), PaneFrame::Held);
+    let folded = snapshot(&outcome);
+    assert_eq!(folded.display_name, "cold-room");
+    assert_eq!(folded.panes_produced_at_ms, None);
     assert!(
-        snapshot.worktree_groups.is_empty(),
+        folded.worktree_groups.is_empty(),
         "frameless folds carry rollup metadata but admit no pane cards"
     );
 }
@@ -752,11 +748,12 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
 
     assert_eq!(outcomes.len(), 1);
     let outcome = outcomes.pop().unwrap();
-    assert!(outcome.final_for_request);
-    assert!(!outcome.fresh_pane_frame);
-    let reason = outcome
-        .snapshot
-        .expect_err("an unreadable store rollup is the one failed consumer read");
+    assert!(outcome.is_final());
+    assert_eq!(outcome.pane_frame(), PaneFrame::Held);
+    let reason = match &outcome {
+        FetchUpdate::Failed { error, .. } => error,
+        _ => panic!("expected failed consumer read"),
+    };
     assert!(
         reason.contains(&fixture.state.events_log.display().to_string()),
         "the outcome names the unreadable path, got: {reason}"
@@ -821,9 +818,9 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
 
     assert_eq!(outcomes.len(), 1, "consumer folds once from cache");
     let outcome = outcomes.pop().unwrap();
-    assert!(outcome.final_for_request);
-    assert!(outcome.fresh_pane_frame);
-    let snapshot = outcome.snapshot.expect("consumer fold succeeds");
+    assert!(outcome.is_final());
+    assert_eq!(outcome.pane_frame(), PaneFrame::Fresh);
+    let snapshot = snapshot(&outcome);
     assert!(
         !snapshot.worktree_groups.is_empty(),
         "published panes are folded into the consumer snapshot"

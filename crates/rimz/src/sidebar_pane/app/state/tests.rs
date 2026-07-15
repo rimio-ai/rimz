@@ -3,7 +3,7 @@ use crate::agents::AgentStatus;
 use crate::diag::record::{DiagEvent, GateRule};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar_pane::app::ServeConfig;
-use crate::sidebar_pane::app::fetch::FetchOutcome;
+use crate::sidebar_pane::app::fetch::{FetchPhase, FetchRole, FetchUpdate, PaneFrame};
 use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::app::loop_state::LoopState;
@@ -313,16 +313,15 @@ impl ApplyHarness {
     }
 
     fn apply(&mut self, snapshot: SidebarSnapshot) -> ApplyOutcome {
-        self.apply_outcome(FetchOutcome {
-            snapshot: Ok(snapshot),
-            final_for_request: true,
-            fresh_pane_frame: true,
-            unchanged: false,
-            producer: true,
+        self.apply_outcome(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            role: FetchRole::Producer,
+            phase: FetchPhase::Final,
+            pane_frame: PaneFrame::Fresh,
         })
     }
 
-    fn apply_outcome(&mut self, outcome: FetchOutcome) -> ApplyOutcome {
+    fn apply_outcome(&mut self, outcome: FetchUpdate) -> ApplyOutcome {
         self.state
             .apply_fetch_outcome(
                 &self.config,
@@ -914,12 +913,11 @@ fn frameless_fold_does_not_blip_switch_in() {
 
     let mut frameless = a.current.clone();
     frameless.own_view = None;
-    a.apply_outcome(FetchOutcome {
-        snapshot: Ok(frameless),
-        final_for_request: false,
-        fresh_pane_frame: false,
-        unchanged: false,
-        producer: true,
+    a.apply_outcome(FetchUpdate::Snapshot {
+        snapshot: Box::new(frameless),
+        role: FetchRole::Producer,
+        phase: FetchPhase::Interim,
+        pane_frame: PaneFrame::Held,
     });
     assert_eq!(a.ui.viewing_own_tab, Some(true));
 
@@ -984,12 +982,11 @@ fn non_final_fast_success_keeps_refresh_alert_active() {
     h.last_snapshot = Some(snapshot(&ws));
     h.health = degraded_health("snapshot failed: produce");
 
-    let applied = h.apply_outcome(FetchOutcome {
-        snapshot: Ok(snapshot(&ws)),
-        final_for_request: false,
-        fresh_pane_frame: false,
-        unchanged: false,
-        producer: true,
+    let applied = h.apply_outcome(FetchUpdate::Snapshot {
+        snapshot: Box::new(snapshot(&ws)),
+        role: FetchRole::Producer,
+        phase: FetchPhase::Interim,
+        pane_frame: PaneFrame::Held,
     });
 
     assert!(!applied.should_exit);

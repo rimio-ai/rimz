@@ -15,13 +15,12 @@ pub(super) fn list_agents(
         .context("preparing runtime paths")?;
     let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing state paths")?;
-    let snapshot = rimz::sidebar::consumer::read_published_snapshot(
-        &mut rimz::sidebar::consumer::RollupCursor::new(),
-        &state,
-        &runtime,
-        &workspace.session_name,
+    let snapshot = rimz::sidebar::consumer::PublishedSnapshotReader::new(
+        runtime,
+        workspace.session_name.clone(),
         None,
     )
+    .read(&state)
     .context("reading the room snapshot")?;
 
     let channel = list_channel_filter(all, scope.as_deref(), &workspace);

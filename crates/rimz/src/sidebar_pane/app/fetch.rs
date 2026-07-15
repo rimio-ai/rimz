@@ -1,8 +1,10 @@
 //! The off-thread fetch machinery: the two-speed fetch cycle (the in-process
 //! consumer fast lane plus the elder's in-process produce, sharing one warm
-//! [`RollupCursor`]), and its single-flight request coalescing. Everything
-//! here runs on a worker thread so the render/input loop never blocks on pane
-//! production; heavy git/spend/account refreshes run on the cache refresher.
+//! [`PublishedSnapshotReader`]), and its single-flight request coalescing.
+//! `FetchWorker` owns cadence, election, memoization, notification state, and
+//! typed result publication. Everything here runs on a worker thread so the
+//! render/input loop never blocks on pane production; heavy git/spend/account
+//! refreshes run on the cache refresher.
 
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
@@ -13,7 +15,7 @@ use crate::config::NotificationsPrefs;
 use crate::diag::record::TickLoop;
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::sidebar::ProducerElectionTracker;
-use crate::sidebar::consumer::{ConsumerFoldInputsStamp, RollupCursor};
+use crate::sidebar::consumer::{ConsumerFoldInputsStamp, PublishedSnapshotReader, RollupCursor};
 use crate::sidebar::events::SidebarEvent;
 use crate::sidebar::meter::TickMeter;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
@@ -38,17 +40,19 @@ use super::{ServeConfig, tick_for};
 /// rather than trusting a torn base. Everything else the closure captures is
 /// read-only paths and options.
 fn run_produce_guarded(
-    cursor: &mut RollupCursor,
+    reader: &mut PublishedSnapshotReader,
     produce: impl FnOnce(&mut RollupCursor) -> crate::sidebar::produce::Result<SidebarSnapshot>,
 ) -> std::result::Result<SidebarSnapshot, String> {
     let result = super::with_produce_panic_diagnostic_suppressed(|| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| produce(cursor)))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            produce(reader.cursor_mut())
+        }))
     });
     match result {
         Ok(Ok(snapshot)) => Ok(snapshot),
         Ok(Err(err)) => Err(err.to_string()),
         Err(payload) => {
-            *cursor = RollupCursor::new();
+            reader.reset_after_unwind();
             Err(format!(
                 "sidebar produce panicked: {}",
                 super::panic_payload_message(payload.as_ref(), "unknown panic payload")
@@ -57,19 +61,98 @@ fn run_produce_guarded(
     }
 }
 
-/// One refresh cycle's result: the snapshot fetch outcome. A cycle can post
-/// two — the in-process fast frame, then the produce that reconciles it.
-/// `final_for_request` marks the cycle's last outcome: the loop completes the
-/// dispatcher's in-flight request (and releases any deferred refetch) only on
-/// it, so the single-flight discipline still counts whole cycles, not posts.
-pub(super) struct FetchOutcome {
-    pub(super) snapshot: std::result::Result<SidebarSnapshot, String>,
-    pub(super) final_for_request: bool,
-    pub(super) fresh_pane_frame: bool,
-    pub(super) unchanged: bool,
-    pub(super) producer: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FetchRole {
+    Producer,
+    Consumer,
 }
 
+impl FetchRole {
+    pub(super) fn is_producer(self) -> bool {
+        self == Self::Producer
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FetchPhase {
+    Interim,
+    Final,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PaneFrame {
+    Held,
+    Fresh,
+}
+
+/// Typed publication from one fetch cycle. Variant shape rules out an
+/// unchanged error, an interim failure, or conflicting protocol flags.
+pub(super) enum FetchUpdate {
+    Unchanged {
+        role: FetchRole,
+    },
+    Snapshot {
+        snapshot: Box<SidebarSnapshot>,
+        role: FetchRole,
+        phase: FetchPhase,
+        pane_frame: PaneFrame,
+    },
+    Failed {
+        error: String,
+        role: FetchRole,
+        pane_frame: PaneFrame,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SnapshotSource {
+    Published,
+    Produced,
+}
+
+struct SnapshotPublication {
+    snapshot: SidebarSnapshot,
+    role: FetchRole,
+    phase: FetchPhase,
+    pane_frame: PaneFrame,
+    source: SnapshotSource,
+}
+
+impl FetchUpdate {
+    pub(super) fn is_final(&self) -> bool {
+        !matches!(
+            self,
+            Self::Snapshot {
+                phase: FetchPhase::Interim,
+                ..
+            }
+        )
+    }
+
+    pub(super) fn role(&self) -> FetchRole {
+        match self {
+            Self::Unchanged { role } | Self::Snapshot { role, .. } | Self::Failed { role, .. } => {
+                *role
+            }
+        }
+    }
+
+    pub(super) fn pane_frame(&self) -> PaneFrame {
+        match self {
+            Self::Snapshot { pane_frame, .. } | Self::Failed { pane_frame, .. } => *pane_frame,
+            Self::Unchanged { .. } => PaneFrame::Held,
+        }
+    }
+
+    fn snapshot_mut(&mut self) -> Option<&mut SidebarSnapshot> {
+        match self {
+            Self::Snapshot { snapshot, .. } => Some(snapshot),
+            Self::Unchanged { .. } | Self::Failed { .. } => None,
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut SidebarSnapshot) {
     if let Some(refresh_ms) = config.refresh_ms_override {
         snapshot.theme.display.refresh_ms = refresh_ms;
@@ -112,18 +195,6 @@ pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut Sideba
 /// single-flight loser wait was shorter than a `list-panes`, so every loser
 /// timed out into its own uncached produce). A lone renderer is its own
 /// next-eldest, so it still self-heals through the producer branch.
-struct FetchCycle<'a> {
-    config: &'a ServeConfig,
-    runtime: &'a RuntimePaths,
-    state: &'a StatePaths,
-    notification_prefs: &'a NotificationsPrefs,
-    notifications: &'a mut NotificationState,
-    link_notifications: &'a mut LinkNotificationState,
-    diag: &'a crate::diag::DiagSink,
-    election: &'a ProducerElectionTracker,
-    last_election: &'a mut Option<ProducerElection>,
-}
-
 const CONSUMER_UNCHANGED_BACKSTOP_MS: u64 = 30_000;
 
 #[derive(Default)]
@@ -204,185 +275,277 @@ impl ProducerElection {
     }
 }
 
-fn run_fetch_cycle(
-    ctx: FetchCycle<'_>,
-    request: FetchRequest,
-    cursor: &mut RollupCursor,
-    consumer_memo: &mut ConsumerFoldMemo,
-    producer_cadence: &mut ProducerCadence,
-    post: &mut dyn FnMut(FetchOutcome),
-) {
-    let FetchCycle {
-        config,
-        runtime,
-        state,
-        notification_prefs,
-        notifications,
-        link_notifications,
-        diag,
-        election,
-        last_election,
-    } = ctx;
-    let election = ProducerElection {
-        elder: election.elder_instance(),
-    };
-    let is_producer = election.is_producer();
-    emit_producer_transition(diag, last_election, election);
-    let exclude = config.own_pane.clone();
-    let now_ms = crate::sidebar::timing::unix_now_ms();
-    let published_frame_stamps =
-        crate::sidebar::cache::published_frame_stamps(runtime, &config.session_name);
-    let may_skip_consumer_fold = consumer_stamp_skippable(request, is_producer);
-    let fold_stamp = consumer_stamp_recordable(request, is_producer)
-        .then(|| crate::sidebar::consumer::consumer_fold_inputs_stamp(state, runtime));
-    if may_skip_consumer_fold
-        && fold_stamp
-            .as_ref()
-            .is_some_and(|stamp| consumer_memo.should_skip(stamp, now_ms))
-    {
-        post(FetchOutcome {
-            snapshot: Err("unchanged".to_owned()),
-            final_for_request: true,
-            fresh_pane_frame: false,
-            unchanged: true,
-            producer: is_producer,
-        });
-        return;
-    }
-    let fast = crate::sidebar::consumer::read_published_snapshot(
-        cursor,
-        state,
-        runtime,
-        &config.session_name,
-        exclude.as_ref(),
-    );
-    // The published frame's age decides whether the producer pays the produce
-    // this cycle: a frame younger than one data tick still carries the truth
-    // the produce would re-derive (pane TTL, git TTL, spend caches all outlive
-    // it). Read from the published pane-frame stamp, and only when the fast
-    // lane actually folded that frame — an unreadable store must produce,
-    // never coast on a young stamp it could not use.
-    let frame_age_ms = fast
-        .as_ref()
-        .ok()
-        .and(published_frame_stamps.map(|(produced_at_ms, _)| produced_at_ms))
-        .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms));
-    let tick = tick_for(config.tick_seconds);
-    let produce = producer_cadence.start_attempt_if_due(
-        is_producer,
-        request.mode,
-        frame_age_ms,
-        tick,
-        Instant::now(),
-    );
-    let fast_has_request_fresh_frame = fast.as_ref().is_ok_and(|snapshot| {
-        snapshot.panes_produced_at_ms.is_some()
-            && (request.published_frame_hint
-                || request.min_pane_cache_ms.is_some_and(|min| {
-                    published_frame_stamps.is_some_and(|(_, observed_at_ms)| observed_at_ms >= min)
-                }))
-    });
-    let mut folded_consumer_ok = false;
-    match fast {
-        Ok(mut snapshot) => {
-            let deliveries = if is_producer && !produce {
-                evaluate_notifications(
-                    runtime,
-                    notification_prefs,
-                    notifications,
-                    link_notifications,
-                    diag,
-                    &mut snapshot,
-                )
-            } else {
-                Vec::new()
-            };
-            post(FetchOutcome {
-                snapshot: Ok(snapshot),
-                final_for_request: !produce,
-                fresh_pane_frame: fast_has_request_fresh_frame,
-                unchanged: false,
-                producer: is_producer,
-            });
-            deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
-            if let Some(fold_stamp) = fold_stamp {
-                consumer_memo.record(fold_stamp, now_ms);
-                folded_consumer_ok = true;
-            }
+/// Owns all state that persists between fetch requests.
+struct FetchWorker {
+    config: ServeConfig,
+    runtime: RuntimePaths,
+    notification_prefs: NotificationsPrefs,
+    diag: crate::diag::DiagSink,
+    election: ProducerElectionTracker,
+    reader: PublishedSnapshotReader,
+    consumer_memo: ConsumerFoldMemo,
+    producer_cadence: ProducerCadence,
+    notifications: NotificationState,
+    link_notifications: LinkNotificationState,
+    last_election: Option<ProducerElection>,
+    meter: TickMeter,
+}
+
+struct FastFold {
+    result: crate::store::snapshot::Result<SidebarSnapshot>,
+    role: FetchRole,
+    produce: bool,
+    pane_frame: PaneFrame,
+    stamp: Option<ConsumerFoldInputsStamp>,
+    now_ms: u64,
+}
+
+impl FetchWorker {
+    fn new(
+        config: ServeConfig,
+        runtime: RuntimePaths,
+        notification_prefs: NotificationsPrefs,
+        diag: crate::diag::DiagSink,
+        election: ProducerElectionTracker,
+    ) -> Self {
+        let reader = PublishedSnapshotReader::new(
+            runtime.clone(),
+            config.session_name.clone(),
+            config.own_pane.clone(),
+        );
+        let meter = TickMeter::new(TickLoop::Fetch, tick_for(config.tick_seconds));
+        Self {
+            config,
+            runtime,
+            notification_prefs,
+            diag,
+            election,
+            reader,
+            consumer_memo: ConsumerFoldMemo::default(),
+            producer_cadence: ProducerCadence::default(),
+            notifications: NotificationState::default(),
+            link_notifications: LinkNotificationState::default(),
+            last_election: None,
+            meter,
         }
-        // The consumer lane only misses when the store rollup itself could
-        // not be read — a missing pane frame is a successful frameless fold.
-        // With no produce to deliver the cycle's verdict, the miss is final
-        // and carries the rollup error so the health line names the cause.
-        Err(err) if !produce => post(FetchOutcome {
-            snapshot: Err(err.to_string()),
-            final_for_request: true,
-            fresh_pane_frame: false,
-            unchanged: false,
-            producer: is_producer,
-        }),
-        // An unreadable rollup on a producing cycle defers to the produce
-        // below, which folds the same store and reports its own error.
-        Err(_) => {}
     }
-    if produce {
-        let opts = crate::sidebar::produce::ProduceOptions {
-            mux: config.mux,
-            session_name: config.session_name.clone(),
-            exclude,
-            min_pane_cache_ms: request.min_pane_cache_ms,
-            diag: (*diag).clone(),
+
+    fn run_cycle(&mut self, state: &StatePaths, request: FetchRequest, sink: &mut ResultSink) {
+        let role = self.observe_role();
+        let now_ms = crate::sidebar::timing::unix_now_ms();
+        let frame_stamps =
+            crate::sidebar::cache::published_frame_stamps(&self.runtime, &self.config.session_name);
+        let mut fold_stamp = consumer_stamp_recordable(request, role.is_producer())
+            .then(|| self.reader.inputs_stamp(state));
+        if self.consumer_fold_unchanged(request, role, fold_stamp.as_ref(), now_ms) {
+            sink.publish(FetchUpdate::Unchanged { role });
+            return;
+        }
+
+        let fast = self.reader.read(state);
+        let produce = self.start_produce_if_due(request, role, frame_stamps, &fast, now_ms);
+        let pane_frame = fast_pane_frame(request, frame_stamps, &fast);
+        let folded_consumer_ok = self.publish_fast_fold(
+            state,
+            FastFold {
+                result: fast,
+                role,
+                produce,
+                pane_frame,
+                stamp: fold_stamp.take(),
+                now_ms,
+            },
+            sink,
+        );
+        if produce {
+            self.publish_produced_fold(state, request, role, sink);
+        }
+        if !folded_consumer_ok {
+            self.consumer_memo.clear();
+        }
+    }
+
+    fn observe_role(&mut self) -> FetchRole {
+        let election = ProducerElection {
+            elder: self.election.elder_instance(),
         };
-        let produced = run_produce_guarded(cursor, |cursor| {
-            crate::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)
-        });
-        match produced {
-            Ok(mut snapshot) => {
-                if is_producer {
-                    let roster = crate::sidebar::produce::live_roster_from_snapshot(&snapshot);
-                    if let Err(err) = crate::store::live_roster::publish(&state.live_roster, roster)
-                    {
-                        tracing::debug!(
-                            path = %state.live_roster.display(),
-                            error = %err,
-                            "live roster publish failed",
-                        );
-                    }
-                }
-                let deliveries = if is_producer {
-                    evaluate_notifications(
-                        runtime,
-                        notification_prefs,
-                        notifications,
-                        link_notifications,
-                        diag,
-                        &mut snapshot,
-                    )
+        let role = if election.is_producer() {
+            FetchRole::Producer
+        } else {
+            FetchRole::Consumer
+        };
+        emit_producer_transition(&self.diag, &mut self.last_election, election);
+        role
+    }
+
+    fn consumer_fold_unchanged(
+        &self,
+        request: FetchRequest,
+        role: FetchRole,
+        stamp: Option<&ConsumerFoldInputsStamp>,
+        now_ms: u64,
+    ) -> bool {
+        consumer_stamp_skippable(request, role.is_producer())
+            && stamp.is_some_and(|stamp| self.consumer_memo.should_skip(stamp, now_ms))
+    }
+
+    fn start_produce_if_due(
+        &mut self,
+        request: FetchRequest,
+        role: FetchRole,
+        frame_stamps: Option<(u64, u64)>,
+        fast: &crate::store::snapshot::Result<SidebarSnapshot>,
+        now_ms: u64,
+    ) -> bool {
+        // Pane-frame age gates only the producer reconciliation. An unreadable
+        // store cannot coast on an otherwise-young frame.
+        let frame_age_ms = fast
+            .as_ref()
+            .ok()
+            .and(frame_stamps.map(|(produced_at_ms, _)| produced_at_ms))
+            .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms));
+        self.producer_cadence.start_attempt_if_due(
+            role.is_producer(),
+            request.mode,
+            frame_age_ms,
+            tick_for(self.config.tick_seconds),
+            Instant::now(),
+        )
+    }
+
+    fn publish_fast_fold(
+        &mut self,
+        state: &StatePaths,
+        fold: FastFold,
+        sink: &mut ResultSink,
+    ) -> bool {
+        match fold.result {
+            Ok(snapshot) => {
+                let phase = if fold.produce {
+                    FetchPhase::Interim
                 } else {
-                    Vec::new()
+                    FetchPhase::Final
                 };
-                post(FetchOutcome {
-                    snapshot: Ok(snapshot),
-                    final_for_request: true,
-                    fresh_pane_frame: request.mode.produces_fresh_panes(),
-                    unchanged: false,
-                    producer: is_producer,
-                });
-                deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
+                self.publish_snapshot(
+                    state,
+                    SnapshotPublication {
+                        snapshot,
+                        role: fold.role,
+                        phase,
+                        pane_frame: fold.pane_frame,
+                        source: SnapshotSource::Published,
+                    },
+                    sink,
+                );
+                if let Some(stamp) = fold.stamp {
+                    self.consumer_memo.record(stamp, fold.now_ms);
+                    return true;
+                }
+                false
             }
-            Err(err) => {
-                post(FetchOutcome {
-                    snapshot: Err(err),
-                    final_for_request: true,
-                    fresh_pane_frame: request.mode.produces_fresh_panes(),
-                    unchanged: false,
-                    producer: is_producer,
+            Err(err) if !fold.produce => {
+                sink.publish(FetchUpdate::Failed {
+                    error: err.to_string(),
+                    role: fold.role,
+                    pane_frame: PaneFrame::Held,
                 });
+                false
             }
+            // Producing cycle reports the produce fold's own error.
+            Err(_) => false,
         }
     }
-    if !folded_consumer_ok {
-        consumer_memo.clear();
+
+    fn publish_produced_fold(
+        &mut self,
+        state: &StatePaths,
+        request: FetchRequest,
+        role: FetchRole,
+        sink: &mut ResultSink,
+    ) {
+        let pane_frame = if request.mode.produces_fresh_panes() {
+            PaneFrame::Fresh
+        } else {
+            PaneFrame::Held
+        };
+        let opts = crate::sidebar::produce::ProduceOptions {
+            mux: self.config.mux,
+            session_name: self.config.session_name.clone(),
+            exclude: self.config.own_pane.clone(),
+            min_pane_cache_ms: request.min_pane_cache_ms,
+            diag: self.diag.clone(),
+        };
+        match run_produce_guarded(&mut self.reader, |cursor| {
+            crate::sidebar::produce::produce_snapshot(cursor, state, &self.runtime, &opts)
+        }) {
+            Ok(snapshot) => self.publish_snapshot(
+                state,
+                SnapshotPublication {
+                    snapshot,
+                    role,
+                    phase: FetchPhase::Final,
+                    pane_frame,
+                    source: SnapshotSource::Produced,
+                },
+                sink,
+            ),
+            Err(error) => sink.publish(FetchUpdate::Failed {
+                error,
+                role,
+                pane_frame,
+            }),
+        }
+    }
+
+    fn publish_snapshot(
+        &mut self,
+        state: &StatePaths,
+        publication: SnapshotPublication,
+        sink: &mut ResultSink,
+    ) {
+        let SnapshotPublication {
+            mut snapshot,
+            role,
+            phase,
+            pane_frame,
+            source,
+        } = publication;
+        let final_producer = role.is_producer() && phase == FetchPhase::Final;
+        if final_producer && source == SnapshotSource::Produced {
+            let roster = crate::sidebar::produce::live_roster_from_snapshot(&snapshot);
+            if let Err(err) = crate::store::live_roster::publish(&state.live_roster, roster) {
+                tracing::debug!(
+                    path = %state.live_roster.display(),
+                    error = %err,
+                    "live roster publish failed",
+                );
+            }
+        }
+        let deliveries = if final_producer {
+            evaluate_notifications(
+                &self.runtime,
+                &self.notification_prefs,
+                &mut self.notifications,
+                &mut self.link_notifications,
+                &self.diag,
+                &mut snapshot,
+            )
+        } else {
+            Vec::new()
+        };
+        sink.publish(FetchUpdate::Snapshot {
+            snapshot: Box::new(snapshot),
+            role,
+            phase,
+            pane_frame,
+        });
+        deliver_notifications(
+            &self.config,
+            &self.runtime,
+            &self.notification_prefs,
+            &self.diag,
+            deliveries,
+        );
     }
 }
 
@@ -395,6 +558,24 @@ fn consumer_stamp_recordable(request: FetchRequest, is_producer: bool) -> bool {
         && request.mode == FetchMode::Normal
         && request.min_pane_cache_ms.is_none()
         && !request.force_fold
+}
+
+fn fast_pane_frame(
+    request: FetchRequest,
+    frame_stamps: Option<(u64, u64)>,
+    fast: &crate::store::snapshot::Result<SidebarSnapshot>,
+) -> PaneFrame {
+    if fast.as_ref().is_ok_and(|snapshot| {
+        snapshot.panes_produced_at_ms.is_some()
+            && (request.published_frame_hint
+                || request
+                    .min_pane_cache_ms
+                    .is_some_and(|min| frame_stamps.is_some_and(|(_, observed)| observed >= min)))
+    }) {
+        PaneFrame::Fresh
+    } else {
+        PaneFrame::Held
+    }
 }
 
 fn emit_producer_transition(
@@ -656,98 +837,94 @@ impl FetchRequest {
     }
 }
 
-/// Spawn the background fetch worker. It blocks for a request, coalesces any
-/// that piled up (a store-delta storm collapses to one fetch), runs one
-/// [`run_fetch_cycle`], hands the result back over `result_tx`, and pokes the
-/// loop's wakeup socket so it folds the result without polling. The thread ends
-/// when the loop drops `request_tx`.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn spawn_fetch_worker(
-    config: ServeConfig,
-    runtime: RuntimePaths,
+struct ResultSink {
+    tx: Sender<FetchUpdate>,
+    waker: Option<UnixDatagram>,
     socket_path: PathBuf,
-    notification_prefs: NotificationsPrefs,
-    diag: crate::diag::DiagSink,
-    election: ProducerElectionTracker,
-    request_rx: std::sync::mpsc::Receiver<FetchRequest>,
-    result_tx: std::sync::mpsc::Sender<FetchOutcome>,
-) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        crate::lane::set(crate::lane::WorkLane::Fetch);
-        let waker = UnixDatagram::unbound().ok();
-        // The worker's in-memory fold base, shared by the fast lane and the
-        // produce: each cycle's rollup read folds only the log bytes appended
-        // since the last one, instead of re-parsing the persisted base per
-        // delta — and promotion to producer inherits the warm base.
-        let mut cursor = RollupCursor::new();
-        let mut consumer_memo = ConsumerFoldMemo::default();
-        let mut producer_cadence = ProducerCadence::default();
-        let mut notifications = NotificationState::default();
-        let mut link_notifications = LinkNotificationState::default();
-        let mut last_election = None;
-        let mut meter = TickMeter::new(TickLoop::Fetch, tick_for(config.tick_seconds));
+    refresh_override: Option<u16>,
+    disconnected: bool,
+}
+
+impl ResultSink {
+    fn new(tx: Sender<FetchUpdate>, socket_path: PathBuf, refresh_override: Option<u16>) -> Self {
+        Self {
+            tx,
+            waker: UnixDatagram::unbound().ok(),
+            socket_path,
+            refresh_override,
+            disconnected: false,
+        }
+    }
+
+    fn publish(&mut self, mut update: FetchUpdate) {
+        if let (Some(refresh_ms), Some(snapshot)) = (self.refresh_override, update.snapshot_mut()) {
+            snapshot.theme.display.refresh_ms = refresh_ms;
+        }
+        if self.tx.send(update).is_err() {
+            self.disconnected = true;
+            return;
+        }
+        if let Some(waker) = &self.waker {
+            let _ = waker.send_to(SNAPSHOT_WAKEUP, &self.socket_path);
+        }
+    }
+}
+
+impl FetchWorker {
+    fn run(mut self, request_rx: std::sync::mpsc::Receiver<FetchRequest>, mut sink: ResultSink) {
         while let Ok(first) = request_rx.recv() {
-            // Coalesce any requests that piled up into one run, keeping the
-            // strongest intent and the newest pane-freshness floor.
             let mut request = first;
             while let Ok(extra) = request_rx.try_recv() {
                 request.merge(extra);
             }
-            // Post each outcome as it lands and poke the loop per post, so the
-            // fast in-process frame paints while the produce (if any) still
-            // runs.
-            let mut disconnected = false;
-            let mut post = |mut outcome: FetchOutcome| {
-                if let Ok(snapshot) = &mut outcome.snapshot {
-                    apply_refresh_override(&config, snapshot);
-                }
-                if result_tx.send(outcome).is_err() {
-                    disconnected = true;
-                    return;
-                }
-                if let Some(waker) = &waker {
-                    let _ = waker.send_to(SNAPSHOT_WAKEUP, &socket_path);
-                }
-            };
-            // Re-resolved every cycle (not cached at spawn), so a
-            // `workspace migrate` repoints the store without a restart.
-            match StatePaths::for_workspace(config.workspace_id.clone()) {
+            // Re-resolved every cycle so `workspace migrate` repoints reads
+            // without restarting the renderer.
+            match StatePaths::for_workspace(self.config.workspace_id.clone()) {
                 Ok(state) => {
-                    let tick = meter.begin();
-                    run_fetch_cycle(
-                        FetchCycle {
-                            config: &config,
-                            runtime: &runtime,
-                            state: &state,
-                            notification_prefs: &notification_prefs,
-                            notifications: &mut notifications,
-                            link_notifications: &mut link_notifications,
-                            diag: &diag,
-                            election: &election,
-                            last_election: &mut last_election,
-                        },
-                        request,
-                        &mut cursor,
-                        &mut consumer_memo,
-                        &mut producer_cadence,
-                        &mut post,
-                    );
-                    if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {
-                        crate::sidebar::meter::report(&diag, event);
+                    let tick = self.meter.begin();
+                    self.run_cycle(&state, request, &mut sink);
+                    if let Some(event) = self
+                        .meter
+                        .finish(tick, crate::sidebar::timing::unix_now_ms())
+                    {
+                        crate::sidebar::meter::report(&self.diag, event);
                     }
                 }
-                Err(err) => post(FetchOutcome {
-                    snapshot: Err(format!("resolving workspace state paths: {err}")),
-                    final_for_request: true,
-                    fresh_pane_frame: false,
-                    unchanged: false,
-                    producer: false,
+                Err(err) => sink.publish(FetchUpdate::Failed {
+                    error: format!("resolving workspace state paths: {err}"),
+                    role: FetchRole::Consumer,
+                    pane_frame: PaneFrame::Held,
                 }),
             }
-            if disconnected {
+            // A closed loop still gets all current-cycle durable and external
+            // side effects before the worker exits.
+            if sink.disconnected {
                 return;
             }
         }
+    }
+}
+
+/// Spawn background fetch owner. Result sender and socket path travel together
+/// because every successful send wakes that socket.
+pub(super) fn spawn_fetch_worker(
+    config: ServeConfig,
+    runtime: RuntimePaths,
+    notification_prefs: NotificationsPrefs,
+    diag: crate::diag::DiagSink,
+    election: ProducerElectionTracker,
+    request_rx: std::sync::mpsc::Receiver<FetchRequest>,
+    result: (std::sync::mpsc::Sender<FetchUpdate>, PathBuf),
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        crate::lane::set(crate::lane::WorkLane::Fetch);
+        let refresh_override = config.refresh_ms_override;
+        let worker = FetchWorker::new(config, runtime, notification_prefs, diag, election);
+        let (result_tx, socket_path) = result;
+        worker.run(
+            request_rx,
+            ResultSink::new(result_tx, socket_path, refresh_override),
+        );
     })
 }
 

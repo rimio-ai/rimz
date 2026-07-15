@@ -18,6 +18,7 @@ use super::chrome::abbreviate_under;
 use super::sections::{
     RowCtx, Tier, content_width, dashboard_panel_lines_with_footer, fleet_header_lines,
     fleet_store_lines, reset_expiry_heat_amount, worktree_group_lines,
+    worktree_group_lines_projected,
 };
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 
@@ -57,7 +58,7 @@ fn provider_panel_lines(
     width: usize,
     zones: &crate::config::BudgetBarConfig,
     now: Timestamp,
-) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
+) -> (Vec<Line<'static>>, Vec<HitRegion>) {
     let active_tab = active_kind.map(str::to_owned);
     let (lines, hits) = dashboard_panel_lines_with_footer(
         theme,
@@ -73,6 +74,13 @@ fn provider_panel_lines(
         now,
     );
     (lines, hits)
+}
+
+fn provider_tab_kind(hit: &HitRegion) -> &str {
+    match &hit.target {
+        HitTarget::ProviderTab(kind) => kind,
+        target => panic!("expected provider-tab hit, got {target:?}"),
+    }
 }
 
 fn snapshot_to_screen(snapshot: &SidebarSnapshot, width: u16, height: u16) -> String {
@@ -341,7 +349,6 @@ fn ui_at_phase(phase: u64) -> UiState {
         selected_index: 0,
         help_visible: false,
         animation_phase: phase,
-        line_map: Vec::new(),
         ..Default::default()
     }
 }
@@ -362,8 +369,6 @@ fn test_row_ctx<'a>(
         tier: Tier::for_width(content_width(width)),
         bands: &snapshot.theme.display.context_meter,
         card_density: snapshot.theme.display.card_density,
-        filter: None,
-        held: None,
         selected_index,
         animation_phase,
         cost_rolls,
@@ -417,7 +422,7 @@ fn line_texts(lines: &[Line<'static>]) -> Vec<String> {
 fn bottom_chrome_texts(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
-) -> (Vec<String>, Vec<ProviderTabHit>) {
+) -> (Vec<String>, Vec<HitRegion>) {
     bottom_chrome_texts_with_ui(snapshot, alert, &UiState::default())
 }
 
@@ -425,10 +430,13 @@ fn bottom_chrome_texts_with_ui(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
     ui: &UiState,
-) -> (Vec<String>, Vec<ProviderTabHit>) {
+) -> (Vec<String>, Vec<HitRegion>) {
     let theme = Theme::fixed(true);
-    let (lines, hits) = build_bottom_chrome(snapshot, alert, &theme, 40, ui);
-    (line_texts(&lines), hits)
+    let block = build_bottom_chrome(snapshot, alert, &theme, 40, ui);
+    (
+        line_texts(&block.lines),
+        block.interactions.regions().to_vec(),
+    )
 }
 
 fn bottom_tally() -> crate::SpendTally {
@@ -851,22 +859,28 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     };
     let theme = Theme::for_sidebar(&snapshot.theme);
     let composed = compose_lines(&snapshot, None, &ui, &theme, 54, 20);
-    let banner = composed
-        .banner_line
+    let (_, banner_row) = composed
+        .interactions
+        .line_for_target(&HitTarget::UnreadBanner)
         .expect("the unread banner renders once the lead scrolls out of view");
+    let banner = usize::from(banner_row);
     assert!(
         line_texts(std::slice::from_ref(&composed.lines[banner]))[0].contains("need you"),
         "banner line carries the unread jump text",
     );
     assert_eq!(
-        composed.line_map[banner], None,
-        "banner is structural; its click is handled through banner_line",
+        composed.interactions.target_at(0, banner_row),
+        Some(HitTarget::UnreadBanner),
+        "banner is structural and carries a typed click target",
     );
 
     let default_ui = UiState::default();
     let composed = compose_lines(&snapshot, None, &default_ui, &theme, 54, 20);
-    assert_eq!(
-        composed.banner_line, None,
+    assert!(
+        composed
+            .interactions
+            .line_for_target(&HitTarget::UnreadBanner)
+            .is_none(),
         "lead visible at the top makes the banner redundant",
     );
     assert!(
@@ -881,8 +895,11 @@ fn unread_jump_banner_tracks_lead_visibility_and_maps_inert() {
     let overflow_theme = Theme::for_sidebar(&overflow.theme);
     let default_ui = UiState::default();
     let composed = compose_lines(&overflow, None, &default_ui, &overflow_theme, 54, 20);
-    assert_eq!(
-        composed.banner_line, None,
+    assert!(
+        composed
+            .interactions
+            .line_for_target(&HitTarget::UnreadBanner)
+            .is_none(),
         "no banner without an actionable unread",
     );
 }

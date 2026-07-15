@@ -224,20 +224,13 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
     // `─ Claude ─` chip footprint edge to edge, then the inactive
     // `─ Codex ─` footprint past the 2-cell `──` gap.
     let mut ui = UiState {
-        tab_hits: vec![
-            crate::sidebar_pane::render::ProviderTabHit {
-                line: 30,
-                col_start: 3,
-                col_end: 13,
-                kind: "claude".to_owned(),
-            },
-            crate::sidebar_pane::render::ProviderTabHit {
-                line: 30,
-                col_start: 15,
-                col_end: 24,
-                kind: "codex".to_owned(),
-            },
-        ],
+        interactions: render::FrameInteractions::from_parts(
+            vec![None; 31],
+            vec![
+                render::HitRegion::line(30, 3..13, HitTarget::ProviderTab("claude".to_owned())),
+                render::HitRegion::line(30, 15..24, HitTarget::ProviderTab("codex".to_owned())),
+            ],
+        ),
         ..Default::default()
     };
 
@@ -245,7 +238,7 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
 
     // A tab click repaints in place — never a jump.
     assert_eq!(outcome, InputOutcome::redraw());
-    assert!(outcome.focus.is_none());
+    assert_eq!(outcome.effect, None);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui).as_deref(),
         Some("codex")

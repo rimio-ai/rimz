@@ -1,8 +1,7 @@
-//! Workspace-scoped advisory lock.
+//! Path-scoped workspace state/cache advisory lock.
 //!
 //! Resolutions and pushes take this lock briefly so that snapshot rebuilds
-//! and per-file CAS sequences can't interleave. The lock guards the *store*
-//! directory, not the runtime directory.
+//! and per-file state or cache RMW sequences cannot interleave.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -48,23 +47,24 @@ impl WorkspaceLock {
         Self::acquire_with_deadline(path, LOCK_TIMEOUT)
     }
 
-    fn acquire_with_deadline(path: &Path, timeout: Duration) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| LockErr::Open {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(path)
-            .map_err(|e| LockErr::Open {
+    /// Attempt one immediate acquisition without sleeping or retrying.
+    pub fn try_acquire(path: &Path) -> Result<Option<Self>> {
+        let file = open_lock_file(path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self {
+                file,
                 path: path.to_path_buf(),
-                source: e,
-            })?;
+            })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(source)) => Err(LockErr::Acquire {
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
+    }
+
+    fn acquire_with_deadline(path: &Path, timeout: Duration) -> Result<Self> {
+        let file = open_lock_file(path)?;
 
         let started = Instant::now();
         let mut backoff = Duration::from_millis(1);
@@ -97,6 +97,25 @@ impl WorkspaceLock {
     }
 }
 
+fn open_lock_file(path: &Path) -> Result<File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| LockErr::Open {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|source| LockErr::Open {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
 impl Drop for WorkspaceLock {
     fn drop(&mut self) {
         // Best-effort unlock; failure here is unrecoverable and would only
@@ -124,6 +143,17 @@ mod tests {
 
         drop(WorkspaceLock::acquire(&path).unwrap());
         WorkspaceLock::acquire(&path).unwrap();
+    }
+
+    #[test]
+    fn try_acquire_reports_contention_and_reacquires_after_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.lock");
+        let held = WorkspaceLock::acquire(&path).unwrap();
+
+        assert!(WorkspaceLock::try_acquire(&path).unwrap().is_none());
+        drop(held);
+        assert!(WorkspaceLock::try_acquire(&path).unwrap().is_some());
     }
 
     #[test]

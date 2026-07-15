@@ -16,8 +16,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use super::{GlobalFlags, current_channel, open_store};
 use crate::cli::render;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
-use rimz::sidebar::consumer::RollupCursor;
-use rimz::sidebar::consumer::read_published_snapshot;
+use rimz::sidebar::consumer::{PublishedSnapshotReader, RollupCursor};
 use rimz::sidebar::events::SidebarEvent;
 use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use rimz::sidebar::presence::{
@@ -458,14 +457,10 @@ fn try_emit_consumer_snapshot(
     let Some(session) = context.session_name.as_deref() else {
         return Ok(false);
     };
-    let snapshot = read_published_snapshot(
-        &mut RollupCursor::new(),
-        &context.state,
-        &context.runtime,
-        session,
-        context.exclude.as_ref(),
-    )
-    .context("reading the consumer snapshot")?;
+    let snapshot =
+        PublishedSnapshotReader::new(context.runtime.clone(), session, context.exclude.clone())
+            .read(&context.state)
+            .context("reading the consumer snapshot")?;
     emit_snapshot(&snapshot, json)?;
     Ok(true)
 }
@@ -1047,13 +1042,10 @@ fn resolve_sidebar_targets(
         .context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime paths")?;
     let channel = current_channel(&workspace);
-    if let Ok(snapshot) = read_published_snapshot(
-        &mut RollupCursor::new(),
-        &state,
-        &runtime,
-        &workspace.session_name,
-        None,
-    ) && let Ok(rows) = resolve_rows(&snapshot, target, worktree, channel.as_deref())
+    if let Ok(snapshot) =
+        PublishedSnapshotReader::new(runtime.clone(), workspace.session_name.clone(), None)
+            .read(&state)
+        && let Ok(rows) = resolve_rows(&snapshot, target, worktree, channel.as_deref())
         && !rows.is_empty()
     {
         return Ok(ResolvedSidebarTargets {

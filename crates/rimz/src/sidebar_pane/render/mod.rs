@@ -17,6 +17,7 @@ mod ansi;
 mod chrome;
 mod compose;
 mod fmt;
+mod interaction;
 mod labels;
 mod layout;
 mod odometer;
@@ -39,23 +40,25 @@ use self::compose::lead_unread;
 use self::compose::{
     auto_scroll_reveal_group, auto_scroll_to_selection, build_bottom_chrome, scroll_thumb,
 };
-pub(crate) use self::ui_state::MoreHit;
+pub(crate) use self::interaction::{FrameInteractions, HitRegion, HitTarget, RenderedBlock};
 pub use self::ui_state::{Alert, UiState};
 pub(crate) use self::ui_state::{
-    BodyFilter, Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
+    Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
     cockpit_spend_target,
 };
+pub(crate) use crate::sidebar_pane::view::BodyFilter;
+pub use crate::sidebar_pane::view::{WORKTREE_ROW_CAP, capped_visible_rows};
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub use oklab::blend;
 pub(crate) use scrollbar::ScrollbarFade;
 
-use std::collections::HashSet;
 use std::io::{self, Write};
 
 use crate::agents::AgentStatus;
 use crate::agents::TurnPhase;
 use crate::config::{AnimationRole, GlyphRole};
 use crate::sidebar_pane::pets::PetAction;
+use crate::sidebar_pane::view::VisibleRoster;
 use crate::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend};
 use ratatui::layout::Rect;
@@ -64,8 +67,6 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
 use self::animation::ResolvedAnimations;
-#[cfg(test)]
-pub(crate) use self::sections::{MakeUpHit, ProviderTabHit};
 pub(crate) use self::sections::{status_total, unread_total};
 use self::theme::Theme;
 
@@ -137,11 +138,7 @@ fn draw_into(
     ui.meter_pixels = meter_pixels;
     let top_height = composed.top_height;
     let bottom_height = composed.bottom_height;
-    ui.line_map = composed.line_map;
-    ui.tab_hits = composed.tab_hits;
-    ui.make_up_hits = composed.make_up_hits;
-    ui.more_hits = composed.more_hits;
-    ui.banner_line = composed.banner_line;
+    ui.interactions = composed.interactions;
     ui.scrollbar
         .observe(composed.scroll_offset, ui.animation_phase);
     ui.scroll_offset = composed.scroll_offset;
@@ -283,144 +280,24 @@ fn gallery_layout(area: Rect, column_count: usize) -> (Vec<Rect>, Vec<u16>) {
     (columns, delimiters)
 }
 
-/// The one row-visibility predicate the make-up filter narrows the body by —
-/// the single authority the body composer ([`worktree_group_lines`]) and the
-/// selection model (`app::visible_rows` and friends) share, so the row
-/// ordinals in `line_map` can never drift from the indices selection counts.
-/// With no filter every row passes; with a bucket active only agent rows of
-/// that status pass, so process rows (status `None`) drop out entirely.
-pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<BodyFilter>) -> bool {
-    match filter {
-        None => true,
-        Some(BodyFilter::Status(status)) => row.status() == Some(status),
-        Some(BodyFilter::Unread) => row.unread,
-    }
-}
-
-/// Maximum calm rows painted before overflow moves behind `+K more`.
-pub const WORKTREE_ROW_CAP: usize = 6;
-
-/// The rows a worktree group paints and the selection model can browse.
-///
-/// With a make-up filter active, every matching row passes: the cockpit bucket
-/// count and the narrowed body stay exact, ignoring any held visibility set.
-/// With an expanded group, the full roster passes. A finished group otherwise
-/// collapses every row except the focused pane and rows held from the previous
-/// order. For active groups the calm idle/process tail trims to
-/// [`WORKTREE_ROW_CAP`], always keeping unread rows, non-idle agent rows, and
-/// the focused pane. Inactive success rows still stay visible so a renderer
-/// never drops an unread stamp before receipts converge; sticky unread idle
-/// rows stay visible until the human reads them, and the first live process row
-/// stays visible when it is the group's only live member, so capping never
-/// turns a live shell's group into an inactive one. An active order hold unions
-/// in rows painted in the frozen frame, so cap exemptions settle together with
-/// the held order. Ordinary inactive idle rows are the first calm rows hidden
-/// behind `+K more`.
-pub(crate) fn group_visible_rows<'a>(
-    group: &'a crate::SidebarWorktreeGroup,
-    filter: Option<BodyFilter>,
-    expanded: bool,
-    held: Option<&HashSet<String>>,
-) -> Vec<&'a SidebarRow> {
-    if filter.is_some() {
-        return group
-            .rows
-            .iter()
-            .filter(|row| row_passes_filter(row, filter))
-            .collect();
-    }
-    if expanded {
-        return group.rows.iter().collect();
-    }
-    if group.finished {
-        return group
-            .rows
-            .iter()
-            .filter(|row| {
-                row.pane.as_ref().is_some_and(|pane| pane.is_focused)
-                    || held.is_some_and(|ids| ids.contains(&row.id))
-            })
-            .collect();
-    }
-
-    capped_visible_rows(&group.rows, held)
-}
-
-/// The rows that survive the calm-tail cap for one worktree group's roster.
-///
-/// See [`group_visible_rows`] for the full selection model; this is the
-/// no-filter, no-expand branch, shared with the sidebar fixture so the
-/// visibility rule has one home.
-pub fn capped_visible_rows<'a>(
-    rows: &'a [SidebarRow],
-    held: Option<&HashSet<String>>,
-) -> Vec<&'a SidebarRow> {
-    let process_is_only_live_member = rows.iter().map(row_band).min() == Some(0)
-        && rows
-            .iter()
-            .filter(|row| row_band(row) == 0)
-            .all(SidebarRow::is_process);
-    let liveness_process_id = if process_is_only_live_member {
-        rows.iter()
-            .find(|row| row.is_process() && row_band(row) == 0)
-            .map(|row| row.id.as_str())
-    } else {
-        None
-    };
-
-    let mut visible = Vec::new();
-    for row in rows {
-        if row.unread
-            || row
-                .status()
-                .is_some_and(|status| status != AgentStatus::Idle)
-            || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
-            || liveness_process_id == Some(row.id.as_str())
-            || held.is_some_and(|ids| ids.contains(&row.id))
-            || visible.len() < WORKTREE_ROW_CAP
-        {
-            visible.push(row);
-        }
-    }
-    visible
-}
-
-fn row_band(row: &SidebarRow) -> u8 {
-    if row.archived {
-        2
-    } else if row.inactive {
-        1
-    } else {
-        0
-    }
-}
-
-fn group_has_hidden_tail(group: &crate::SidebarWorktreeGroup) -> bool {
-    group_visible_rows(group, None, false, None).len() < group.rows.len()
-}
-
 fn prune_expanded_groups(snapshot: &SidebarSnapshot, ui: &mut UiState) {
+    let roster = VisibleRoster::baseline(snapshot);
     ui.expanded_groups.retain(|key| {
-        snapshot
-            .worktree_groups
+        roster
+            .groups()
             .iter()
-            .any(|group| group.key == *key && group_has_hidden_tail(group))
+            .any(|group| group.source().key == *key && group.natural_hidden_count() > 0)
     });
 }
 
 fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a SidebarRow> {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| {
-            group_visible_rows(
-                group,
-                ui.make_up_filter,
-                ui.expanded_groups.contains(&group.key),
-                ui.held_visible(),
-            )
-        })
-        .nth(ui.selected_index)
+    VisibleRoster::new(
+        snapshot,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    )
+    .row(ui.selected_index)
 }
 
 /// The selected row is a bare, not-yet-prompted idle card whose selected form

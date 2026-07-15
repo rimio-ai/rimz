@@ -201,7 +201,10 @@ pub(crate) fn apply_rate_limit_cache(
     let path = runtime.shared_rate_limits_path();
     if persist {
         let reset_kinds = {
-            let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock())
+            let Some(_guard) =
+                crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
+                    .ok()
+                    .flatten()
             else {
                 let cached = read_rate_limits_cache(&path);
                 let _ = apply_rate_limit_cache_with(snapshot, &cached, false, None);
@@ -217,7 +220,7 @@ pub(crate) fn apply_rate_limit_cache(
             reset_kinds
         };
         for kind in reset_kinds {
-            crate::sidebar::refresh::usage::invalidate_oauth_usage_throttle(runtime, &kind);
+            super::credits::invalidate_oauth_read(runtime, &kind);
         }
         return;
     }
@@ -232,7 +235,11 @@ pub(crate) fn apply_rate_limit_cache(
 /// frame reaps it instead. Producer-only.
 fn reset_logged_out_rate_limits_cache(runtime: &RuntimePaths) {
     let path = runtime.shared_rate_limits_path();
-    let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {
+    let Some(_guard) =
+        crate::store::lock::WorkspaceLock::try_acquire(&runtime.shared_rate_limits_lock())
+            .ok()
+            .flatten()
+    else {
         return;
     };
     let cached = read_rate_limits_cache(&path);
@@ -246,21 +253,6 @@ fn reset_logged_out_rate_limits_cache(runtime: &RuntimePaths) {
             ..Default::default()
         },
     );
-}
-
-fn try_rate_limits_cache_lock(path: &Path) -> Option<std::fs::File> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok()?;
-    }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
-        .ok()?;
-    file.try_lock().ok()?;
-    Some(file)
 }
 
 fn acquire_rate_limits_cache_lock(

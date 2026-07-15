@@ -11,7 +11,8 @@ use crate::SidebarSnapshot;
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
 use crate::sidebar::timing::REORDER_HOLD;
-use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, OrderHold, UiState, group_visible_rows};
+use crate::sidebar_pane::render::{FrozenOrder, FrozenRow, OrderHold, UiState};
+use crate::sidebar_pane::view::VisibleRoster;
 
 /// The focused row leaving the attention class or entering `Running` is the
 /// user acting on that agent in its own pane -- answering its ask or submitting
@@ -66,18 +67,16 @@ pub(super) fn apply_order_hold(
 }
 
 pub(super) fn capture_order(current: &SidebarSnapshot, ui: &UiState) -> FrozenOrder {
-    let held = ui.held_visible();
-    let visible: HashSet<String> = current
-        .worktree_groups
+    let roster = VisibleRoster::new(
+        current,
+        ui.make_up_filter,
+        &ui.expanded_groups,
+        ui.held_visible(),
+    );
+    let visible: HashSet<String> = roster
+        .rows()
         .iter()
-        .flat_map(|group| {
-            group_visible_rows(
-                group,
-                ui.make_up_filter,
-                ui.expanded_groups.contains(&group.key),
-                held,
-            )
-        })
+        .copied()
         .map(|row| row.id.clone())
         .collect();
     FrozenOrder {

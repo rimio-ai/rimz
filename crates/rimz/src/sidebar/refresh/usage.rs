@@ -350,10 +350,6 @@ fn has_fresh_realtime_windows(snapshot: &SidebarSnapshot, kind: &str) -> bool {
     })
 }
 
-pub(crate) fn invalidate_oauth_usage_throttle(runtime: &RuntimePaths, kind: &str) {
-    super::credits::invalidate_oauth_read(runtime, kind);
-}
-
 fn spawn_usage_refresh(
     runtime: &RuntimePaths,
     kind: &str,
