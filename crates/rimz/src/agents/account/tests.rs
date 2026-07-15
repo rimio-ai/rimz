@@ -62,9 +62,30 @@ fn sub_provider_windows_are_display_only_for_capacity_policy() {
 #[test]
 fn capacity_selects_temporal_windows_and_measures_surplus() {
     let now = Timestamp::from_second(1_000_000).unwrap();
+    let five_hours = 5 * 60;
     let duration_mins = 7 * 24 * 60;
+    let full_five_hours = i64::from(five_hours) * 60;
+    let selected = ProviderCapacity::from_windows(vec![
+        window(now, Some(1), full_five_hours, Some(five_hours)),
+        window(now, Some(40), 3_600, Some(duration_mins)),
+    ]);
+    assert_eq!(selected.shortest_window_running(now), Some(false));
+    assert_eq!(selected.longest_window_running(now), Some(true));
+
+    let longest_not_started = ProviderCapacity::from_windows(vec![
+        window(now, Some(40), 3_600, Some(five_hours)),
+        window(
+            now,
+            Some(1),
+            i64::from(duration_mins) * 60,
+            Some(duration_mins),
+        ),
+    ]);
+    assert_eq!(longest_not_started.shortest_window_running(now), Some(true));
+    assert_eq!(longest_not_started.longest_window_running(now), Some(false));
+
     let capacity = ProviderCapacity::from_windows(vec![
-        window(now, Some(10), 2 * 3_600, Some(5 * 60)),
+        window(now, Some(10), 2 * 3_600, Some(five_hours)),
         window(now, Some(50), 2 * 86_400, Some(duration_mins)),
     ]);
     assert_eq!(capacity.shortest_window_running(now), Some(true));
@@ -78,6 +99,7 @@ fn capacity_selects_temporal_windows_and_measures_surplus() {
 #[test]
 fn temporal_policy_fails_closed_for_incomplete_or_durationless_readings() {
     let now = Timestamp::from_second(1_000_000).unwrap();
+    let five_hours = 5 * 60;
     let duration_mins = 7 * 24 * 60;
     let readings = [
         window(
@@ -98,6 +120,29 @@ fn temporal_policy_fails_closed_for_incomplete_or_durationless_readings() {
         let capacity = ProviderCapacity::from_windows(vec![reading]);
         assert_eq!(capacity.longest_window_surplus(now), None);
     }
+
+    let past = now - SignedDuration::from_secs(60);
+    let projected = ProviderCapacity::from_windows(vec![
+        window(now, Some(40), 3_600, Some(five_hours)),
+        window(now, Some(90), -60, Some(duration_mins)),
+    ]);
+    assert_eq!(projected.longest_window_running(now), Some(false));
+    assert_eq!(projected.longest_window_reset_at(), Some(past));
+
+    let unknown =
+        ProviderCapacity::from_windows(vec![window(now, None, 3_600, Some(duration_mins))]);
+    assert_eq!(unknown.shortest_window_running(now), None);
+    assert_eq!(unknown.longest_window_running(now), None);
+
+    let undated = ProviderCapacity::from_windows(vec![
+        window(now, Some(40), 3_600, Some(five_hours)),
+        RateLimitWindow {
+            resets_at: None,
+            ..window(now, Some(80), 3_600, Some(duration_mins))
+        },
+    ]);
+    assert_eq!(undated.longest_window_reset_at(), None);
+    assert_eq!(projected.shortest_window_running(now), Some(true));
 
     let mut named = window(now, Some(100), 86_400, Some(60));
     named.scope = Some(crate::agents::RateLimitWindowScope {
