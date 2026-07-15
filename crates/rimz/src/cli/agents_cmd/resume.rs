@@ -126,13 +126,7 @@ pub(super) fn resume_lane(
     let liveness = split_lane_liveness(&lane_agents, rimz::store::runtime::agent_liveness);
     let machine_config = crate::cli::machine_config();
     if should_discover_lane_sessions(&lane_agents, &liveness) {
-        return resume_discovered_lane(
-            &workspace,
-            backend.as_ref(),
-            &lane,
-            machine_config.as_ref(),
-            bg,
-        );
+        return resume_discovered_lane(&workspace, &room, &lane, machine_config.as_ref(), bg);
     }
     if liveness.closed.is_empty() {
         let agent = liveness
@@ -200,7 +194,7 @@ fn discover_lane_sessions(path: &Path) -> Vec<LocalSessionObservation> {
 
 fn resume_discovered_lane(
     workspace: &rimz::ResolvedWorkspace,
-    backend: &dyn rimz::mux::MuxBackend,
+    room: &RoomContext,
     lane: &ResolvedLane,
     machine_config: &rimz::config::MachineConfig,
     bg: bool,
@@ -235,7 +229,7 @@ fn resume_discovered_lane(
     }
     let count = plan.tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
     for tab in plan.tabs {
-        open_resume_tab(workspace, backend, machine_config, tab, bg)?;
+        open_resume_tab(workspace, room, tab, bg)?;
     }
     writeln!(
         std::io::stdout().lock(),

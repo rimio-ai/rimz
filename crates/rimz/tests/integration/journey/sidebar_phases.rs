@@ -12,20 +12,20 @@ use super::{
 };
 use crate::common::Env;
 
-/// Phase 0 → 1 onboarding. Running an agent before wiring its hooks is not
-/// invisible: the pane is live, so it shows as a dim `○ codex` process row (the
-/// same hollow idle glyph an agent shows, set apart by the dim process tone). But
-/// the row carries no agent enrichment — without an installed hook nothing reaches
-/// the store, so no model, status, or task folds in. Only after `rimz hooks
-/// install` does a fresh `SessionStart` light up the agent row with its model. The
-/// room is deliberately correct to require `rimz hooks install` (Rimz never
+/// Phase 0 → 1 onboarding. Running a provider-store-discoverable agent before
+/// wiring its hooks is not invisible: the pane is live, so local discovery
+/// synthesizes an identity-less `○ codex` agent row with the default model. The
+/// provider store supplies session existence, while the missing hook means no
+/// durable role or lifecycle reaches the store. After `rimz hooks install`, a
+/// fresh `SessionStart` stamps the row with its configured role. The room is
+/// deliberately correct to require explicit hook installation (Rimz never
 /// silently rewrites the user's agent config).
 ///
 /// The harness fires agents through their *installed* hook, so an un-onboarded
 /// `agent_hook` reaches the store as a no-op — exactly what a real agent does
 /// with no Rimz hook configured — while the pane it runs in stays live.
 #[test]
-fn phase0_onboarding_hint_then_wire_then_agent_appears() {
+fn phase0_provider_discovery_then_hook_wires_role() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
@@ -36,20 +36,23 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
     let _screen = room.wait_for(|s| s.contains("◎ 0"), SETTLE);
 
     // The user runs codex before wiring it. The pane is live, so it shows as a
-    // process row and the first-run hint steps aside — but with no installed hook
-    // nothing reaches the store, so the row carries no agent enrichment. The
-    // idle process row and an idle agent row share the hollow `○`, so the model
-    // (`GPT 5.5`), which only an enriched agent row shows, is what tells them
-    // apart here.
+    // synthesized idle agent row and the first-run hint steps aside. Local
+    // discovery makes the adapter's default model visible, but without an
+    // installed hook no durable identity reaches the store, so the row keeps
+    // the provider-kind label instead of the configured `coder` role.
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("○ codex") && s.contains("GPT 5.5"), SETTLE);
     assert!(
         screen.contains("○ codex"),
-        "an un-onboarded codex is still a live pane, so it shows as a process row:\n{screen}"
+        "provider discovery synthesizes an identity-less agent row before hooks are wired:\n{screen}"
     );
     assert!(
-        !screen.contains("GPT 5.5"),
-        "with no installed hook nothing reaches the store, so the process row carries no agent model:\n{screen}"
+        screen.contains("GPT 5.5"),
+        "the synthesized row carries the adapter's default model:\n{screen}"
+    );
+    assert!(
+        !screen.contains("○ coder"),
+        "without a hook event the provider session has no durable configured role:\n{screen}"
     );
 
     // The user follows the hint, installs hooks, and runs codex again. Now the
