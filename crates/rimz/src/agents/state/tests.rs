@@ -72,6 +72,17 @@ fn activity_description_rejects_blank_and_control_text() {
     );
 }
 
+#[test]
+fn activity_line_collapses_description_whitespace() {
+    let mut agent = test_agent(AgentStatus::Running, 1_000);
+    agent.description = Some("ship\nwide\tlabel\rnow".to_owned());
+
+    assert_eq!(
+        agent.activity_line().as_deref(),
+        Some("ship wide label now")
+    );
+}
+
 /// The context tier climbs calm → yellow → amber → red, taking the worse
 /// of two axes — fill percentage and absolute tokens. Defaults: the Yellow
 /// tier starts warming at 50% / 128k, amber starts at 80% / 256k, and red

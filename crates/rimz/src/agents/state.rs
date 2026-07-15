@@ -794,6 +794,13 @@ impl AgentState {
             })
     }
 
+    /// [`Self::activity_description`] collapsed to a single presentable line —
+    /// the form every row-oriented surface (CLI tables, key/value reports) renders.
+    pub fn activity_line(&self) -> Option<String> {
+        self.activity_description()
+            .and_then(single_line_description)
+    }
+
     /// The lifecycle-machine view of this rollup entry — exactly the `prev` the
     /// reducer (and the ingestion anomaly log) folds the next signal onto.
     /// Lossless: `status` and `phase` are stored verbatim from the machine's
