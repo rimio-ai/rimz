@@ -33,7 +33,7 @@ const SETTLE_POLL: Duration = Duration::from_millis(100);
 
 /// Inputs that determine the managed panes in one workspace's daemon view.
 pub struct DaemonViewSpecParams<'a> {
-    pub remote_control: &'a crate::remote_control::ReadinessSnapshot,
+    pub claude_host_argv: Option<&'a [String]>,
     pub daemon: &'a DaemonConfig,
     pub rimz_bin: &'a Path,
     pub workspace_id: &'a WorkspaceId,
@@ -70,7 +70,7 @@ fn daemon_hosts(params: &DaemonViewSpecParams<'_>) -> Vec<HostPane> {
             cwd: params.worktree_root.to_path_buf(),
         });
     }
-    if let Some(argv) = params.remote_control.claude_host_argv() {
+    if let Some(argv) = params.claude_host_argv {
         hosts.push(HostPane {
             argv: argv.to_vec(),
             cwd: params.project_root.to_path_buf(),
@@ -669,7 +669,7 @@ pub(crate) fn ensure_daemon_view_with_readiness(
         .as_deref()
         .unwrap_or(&record.project_root);
     let view = daemon_view_spec(DaemonViewSpecParams {
-        remote_control: readiness,
+        claude_host_argv: readiness.claude_host_argv(),
         daemon: &machine.daemon,
         rimz_bin: &rimz_bin,
         workspace_id,

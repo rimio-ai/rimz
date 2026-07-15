@@ -73,7 +73,7 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
             crate::remote_control::HostState::Disabled,
         );
         daemon_view_spec(DaemonViewSpecParams {
-            remote_control: &remote_control,
+            claude_host_argv: remote_control.claude_host_argv(),
             daemon: &DaemonConfig::default(),
             rimz_bin,
             workspace_id: &workspace_id,
@@ -124,12 +124,8 @@ fn daemon_view_spec_orders_the_ungated_broker_then_claude() {
 #[test]
 fn daemon_view_spec_keeps_content_and_loop_panel_without_hosts() {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("valid id");
-    let remote_control = crate::remote_control::ReadinessSnapshot::from_states(
-        crate::remote_control::HostState::Disabled,
-        crate::remote_control::HostState::Disabled,
-    );
     let view = daemon_view_spec(DaemonViewSpecParams {
-        remote_control: &remote_control,
+        claude_host_argv: None,
         daemon: &DaemonConfig::default(),
         rimz_bin: Path::new("/usr/bin/rimz"),
         workspace_id: &workspace_id,

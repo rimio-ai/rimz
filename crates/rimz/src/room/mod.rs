@@ -416,7 +416,7 @@ impl RoomContext {
         });
         BackgroundViewOptions {
             view: crate::daemon_view::daemon_view_spec(crate::daemon_view::DaemonViewSpecParams {
-                remote_control: &remote_control,
+                claude_host_argv: remote_control.claude_host_argv(),
                 daemon: &self.machine_config.daemon,
                 rimz_bin: &rimz_bin,
                 workspace_id: &self.workspace.workspace_id,

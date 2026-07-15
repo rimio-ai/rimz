@@ -324,7 +324,8 @@ pub fn readiness(enabled: bool) -> Readiness {
     }
 }
 
-pub(crate) fn host_argv() -> Vec<String> {
+/// Build the exact workspace-scoped foreground host command.
+pub fn host_argv() -> Vec<String> {
     vec![
         "claude".to_owned(),
         "remote-control".to_owned(),
