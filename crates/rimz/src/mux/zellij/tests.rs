@@ -1199,7 +1199,7 @@ esac
         .with_presence_plugin_for_test(&shim);
     assert_eq!(
         backend
-            .new_sidebar_pane(&opts, 7)
+            .new_sidebar_pane(&opts, 1)
             .expect("spawn sidebar")
             .as_deref(),
         Some("terminal_7"),
@@ -1210,18 +1210,18 @@ esac
         "stdout-only hint for a pre-existing work pane must not be closed:\n{log}",
     );
     assert!(
-        log.contains("pane=7 args=--session rimz-test action new-pane --near-current-pane --direction right --name rimz-sidebar --borderless true"),
-        "repair-created sidebar panes must be borderless and targeted beside the pane anchor:\n{log}",
+        log.contains("action new-pane --direction right --name rimz-sidebar --borderless true"),
+        "repair-created sidebar panes must use an ordinary borderless right split:\n{log}",
     );
     assert!(
-        !log.contains("go-to-tab") && !log.contains("focus-pane-id"),
-        "the pane anchor must replace ambient tab/focus choreography:\n{log}"
+        log.contains("action go-to-tab 2") && !log.contains("--near-current-pane"),
+        "reinjection targets the tab with focus choreography, not the unsafe near-current route:\n{log}"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn new_sidebar_pane_uses_sidebar_anchor_without_focus_choreography() {
+fn new_sidebar_pane_targets_tab_with_ordinary_right_split() {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
@@ -1332,8 +1332,8 @@ exit 0
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
         .with_presence_plugin_for_test(&shim);
     backend
-        .new_sidebar_pane(&opts, 7)
-        .expect("spawn sidebar beside selected work pane");
+        .new_sidebar_pane(&opts, 1)
+        .expect("spawn sidebar in positioned tab");
 
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
     let new_panes: Vec<&str> = log
@@ -1342,13 +1342,14 @@ exit 0
         .collect();
     assert_eq!(new_panes.len(), 1, "one add issued:\n{log}");
     assert!(
-        new_panes[0].starts_with("pane=7 ")
-            && new_panes[0].contains("new-pane --near-current-pane --direction right"),
-        "add targets the exact raw work pane and requests a nearby split:\n{log}",
+        new_panes[0].contains("new-pane --direction right")
+            && !new_panes[0].contains("--near-current-pane")
+            && !new_panes[0].contains("--tab-id"),
+        "add uses the supported ordinary right split after selecting the tab:\n{log}",
     );
     assert!(
-        !log.contains("go-to-tab") && !log.contains("focus-pane-id"),
-        "add must not mutate tab or pane focus to route the split:\n{log}"
+        log.contains("action go-to-tab 2"),
+        "tab position 1 targets CLI tab 2:\n{log}"
     );
 }
 

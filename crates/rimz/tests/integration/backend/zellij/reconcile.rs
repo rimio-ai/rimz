@@ -423,11 +423,11 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
     );
     assert_sidebar_identity(&xdg, &name, sidebar_id, "the renderer pane is not rebuilt");
 }
-/// A missing sidebar is split beside the leftmost work pane by raw pane id,
-/// independent of the attached client's focus. Reconcile keeps every wide-tab
-/// work pane alive and restores the user's original focus after docking.
+/// A missing sidebar in a wide tab is docked after best-effort focus placement,
+/// independent of where the attached client began. Reconcile keeps every work
+/// pane alive and restores the user's original focus after docking.
 #[test]
-fn reconcile_add_targets_leftmost_work_pane_in_wide_tab() {
+fn reconcile_add_docks_sidebar_in_wide_tab() {
     require_zellij!();
 
     let xdg_dir = scoped_runtime_dir();
@@ -513,7 +513,10 @@ fn reconcile_add_targets_leftmost_work_pane_in_wide_tab() {
     let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &SidebarLiveness::default());
 
-    assert_eq!(report.recovered, 1, "the missing sidebar is added once");
+    assert_eq!(
+        report.recovered, 1,
+        "the missing sidebar is added once: {report:?}",
+    );
     assert_eq!(report.closed, 0);
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
@@ -576,8 +579,12 @@ fn reconcile_add_ends_docked_in_a_row_stacked_tab() {
     write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
     let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
     let report = reconcile_until_converged(&xdg, &opts, &rimz::mux::SidebarLiveness::default());
+    let after = expect_list_panes(&xdg, &name);
 
-    assert_eq!(report.recovered, 1, "the missing sidebar is added");
+    assert_eq!(
+        report.recovered, 1,
+        "the missing sidebar is added: report={report:?}, panes={after:?}",
+    );
     assert_eq!(report.failed, 0);
     assert_eq!(report.misdocked, 0);
     assert_sidebar_is_left_docked(&xdg, &name);

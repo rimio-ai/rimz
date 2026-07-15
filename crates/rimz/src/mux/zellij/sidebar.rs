@@ -238,31 +238,26 @@ impl ZellijBackend {
         let mut last_error = None;
         let mut fallback_misdocked: Option<u64> = None;
         for attempt in 0..ADD_DOCK_ATTEMPTS {
-            let before_panes = self.topology_panes_for_workspace(
-                &opts.session_name,
-                &opts.workspace_id,
-                None,
-                RECONCILE_LIST_TIMEOUT,
-            )?;
-            let before: HashSet<u64> = before_panes
+            let before: HashSet<u64> = self
+                .topology_panes_for_workspace(
+                    &opts.session_name,
+                    &opts.workspace_id,
+                    None,
+                    RECONCILE_LIST_TIMEOUT,
+                )?
                 .iter()
                 .filter(|pane| pane.is_terminal() && pane.tab_position == tab_position)
                 .map(|pane| pane.id)
                 .collect();
-            let anchor = leftmost_live_work_pane(&before_panes, tab_position).ok_or_else(|| {
-                MuxErr::Output {
-                    program: "zellij".to_owned(),
-                    reason: format!(
-                        "cannot add a sidebar to tab {tab_position}: no live work pane is available to anchor the split"
-                    ),
-                }
-            })?;
+            // Focus is only a placement hint for ordinary `new-pane`; mounted
+            // geometry and the bounded redock below own correctness.
+            self.focus_leftmost_work_pane(&opts.session_name, &opts.workspace_id, tab_position);
             // A `new-pane` failure is remembered, not fatal yet: concurrent
             // action clients can cross-talk responses, so the command can
             // misreport while the pane is still created — discovery gets its
             // window either way.
             let floor_ms = unix_now_ms();
-            let (hint, spawn_err) = match self.new_sidebar_pane(opts, anchor) {
+            let (hint, spawn_err) = match self.new_sidebar_pane(opts, tab_position) {
                 Ok(hint) => (hint, None),
                 Err(err) => (None, Some(err)),
             };
@@ -362,6 +357,24 @@ impl ZellijBackend {
             ])
             .run()
             .map(|_| ())
+    }
+
+    fn focus_leftmost_work_pane(
+        &self,
+        session: &str,
+        workspace_id: &WorkspaceId,
+        tab_position: u64,
+    ) {
+        let _ = self.go_to_tab_position(session, tab_position);
+        let Ok(panes) =
+            self.topology_panes_for_workspace(session, workspace_id, None, RECONCILE_LIST_TIMEOUT)
+        else {
+            return;
+        };
+        let Some(raw_id) = leftmost_live_work_pane(&panes, tab_position) else {
+            return;
+        };
+        let _ = self.focus_terminal(session, raw_id);
     }
 
     /// Read completed structural geometry directly from Zellij, using a fresh
@@ -718,19 +731,18 @@ impl ZellijBackend {
             .unwrap_or_default()
     }
 
-    /// `new-pane` beside an exact work-pane anchor, titled and `close_on_exit`
-    /// to match the layout, running the same `rimz sidebar serve` command. The
-    /// command-local pane id selects both the tab and split node without focus
-    /// choreography. Returns the created pane id Zellij prints (for example,
+    /// `new-pane` to the right of the tab's placement-hint focus, titled and
+    /// `close_on_exit` to match the layout, running the same `rimz sidebar
+    /// serve` command. Returns the created pane id Zellij prints (for example,
     /// `terminal_58`) as a hint only: concurrent action clients can cross-talk.
     pub(super) fn new_sidebar_pane(
         &self,
         opts: &SidebarPaneOptions,
-        anchor_raw_id: u64,
+        tab_position: u64,
     ) -> Result<Option<String>> {
+        self.go_to_tab_position(&opts.session_name, tab_position)?;
         let mut args = vec![
             "new-pane".to_owned(),
-            "--near-current-pane".to_owned(),
             "--direction".to_owned(),
             "right".to_owned(),
             "--name".to_owned(),
@@ -745,11 +757,7 @@ impl ZellijBackend {
         let mut command = vec![opts.rimz_bin.to_string_lossy().into_owned()];
         command.extend(sidebar_serve_args(MuxName::Zellij, opts));
         args.extend(command);
-        let output = self
-            .zellij_action(&opts.session_name)
-            .args(args)
-            .env("ZELLIJ_PANE_ID", anchor_raw_id.to_string())
-            .run()?;
+        let output = self.zellij_action(&opts.session_name).args(args).run()?;
         Ok(parse_new_pane_id(&String::from_utf8_lossy(&output.stdout)))
     }
 
