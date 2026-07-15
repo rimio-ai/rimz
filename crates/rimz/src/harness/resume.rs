@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 
 use crate::Store;
-use crate::agents::AgentState;
 use crate::agents::find_adapter;
+use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
     LayoutPaneParams, cohort_cells, fresh_resume_launch_requests, layout_panes_with_names,
@@ -138,11 +138,127 @@ struct PlannedResumeTab {
     tab: ResumeTab,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ResumeCandidateKey {
+    Pane(PaneId),
+    Session(AgentKind, AgentSessionId),
+}
+
 impl ResumePlan {
     /// Whether there is nothing to seed — the birth is exactly the bare working
     /// room.
     pub fn is_empty(&self) -> bool {
         self.tabs.is_empty()
+    }
+}
+
+/// Select the transitive overlap cluster containing the newest native session.
+///
+/// Provider sessions are intervals from creation through last activity. The
+/// newest merged cluster is the last concurrent working set; older disjoint
+/// clusters are returned separately so callers can report what stayed closed.
+pub fn concurrent_session_set(
+    mut observations: Vec<LocalSessionObservation>,
+) -> (Vec<LocalSessionObservation>, Vec<LocalSessionObservation>) {
+    observations.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    let mut clusters: Vec<(Timestamp, Vec<LocalSessionObservation>)> = Vec::new();
+    for observation in observations {
+        let end = observation.last_activity.max(observation.created_at);
+        if let Some((cluster_end, members)) = clusters.last_mut()
+            && observation.created_at <= *cluster_end
+        {
+            *cluster_end = (*cluster_end).max(end);
+            members.push(observation);
+        } else {
+            clusters.push((end, vec![observation]));
+        }
+    }
+    let Some(selected) = clusters
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, (end, _))| *end)
+        .map(|(index, _)| index)
+    else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut resume = clusters.remove(selected).1;
+    let mut skipped = clusters
+        .into_iter()
+        .flat_map(|(_, members)| members)
+        .collect::<Vec<_>>();
+    let newest_first = |left: &LocalSessionObservation, right: &LocalSessionObservation| {
+        right
+            .last_activity
+            .cmp(&left.last_activity)
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    };
+    resume.sort_by(newest_first);
+    skipped.sort_by(newest_first);
+    (resume, skipped)
+}
+
+/// Synthesize the minimal durable shape the existing flat resume planner reads.
+pub fn discovered_agent_state(
+    observation: &LocalSessionObservation,
+    channel: Option<&str>,
+) -> AgentState {
+    AgentState {
+        agent_id: observation.session_id.clone(),
+        kind: observation.kind.clone(),
+        name: None,
+        name_explicit: false,
+        kind_ordinal: None,
+        profile: None,
+        mode: None,
+        role: None,
+        team: None,
+        launch_group: None,
+        launch_ordinal: None,
+        channel: channel
+            .filter(|channel| !channel.is_empty())
+            .map(ToOwned::to_owned),
+        status: observation.status,
+        phase: observation.phase,
+        pane: None,
+        runtime_owner: None,
+        parent_agent_id: None,
+        worktree_path: Some(observation.workspace.to_string_lossy().into_owned()),
+        worktree_branch: None,
+        task: None,
+        prompt: None,
+        description: None,
+        transcript_path: Some(observation.transcript_path.to_string_lossy().into_owned()),
+        origin: None,
+        recent_prompts: Vec::new(),
+        model: None,
+        effort: None,
+        budget: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        context: None,
+        budget_park: None,
+        subagent_description: None,
+        subagent_started_at: None,
+        turn_started_at: None,
+        waiting_since: None,
+        open_ask: None,
+        compacting_since: None,
+        compaction_count: 0,
+        last_compact_command_tokens: None,
+        last_seen: observation.last_activity,
+        last_activity: observation.last_activity,
+        registered_at: Some(observation.created_at),
     }
 }
 
@@ -353,17 +469,15 @@ fn newest_cmp(
 /// `rimz` executable each pane's wrapper argv names (production passes
 /// `std::env::current_exe()`).
 ///
-/// A candidate qualifies when it is in the caller-supplied live-roster scope, is
-/// a root agent (subagents ride their parent), was bound to a pane in the
-/// incarnation that died, still carries a session id and a worktree, and was not
-/// cleanly ended. A `session.rebirth` boundary clears every pane stamp recorded
-/// before it, so a surviving (non-`None`) pane stamp identifies the incarnation
-/// being replaced, while the live roster identifies which stamped agents were
-/// alive when that incarnation died. One pane hosts one agent: a relaunch that
-/// re-used a pane id collapses to its newest stamp —
-/// the same rule the live sidebar binds by (`stamped_agent_for_pane`, in
-/// `store::snapshot::panes`) — so resume never doubles a pane, while two
-/// concurrent agents in one worktree (distinct panes) share one `#channel` tab.
+/// A candidate qualifies when it is in the caller-supplied roster scope, is a
+/// root agent (subagents ride their parent), still carries a session id and a
+/// worktree, and was not cleanly ended. A pane stamp identifies the incarnation
+/// being replaced when present; a `session.rebirth` boundary retires old stamps,
+/// so an unstamped durable candidate remains resumable and dedupes by provider
+/// session identity. One pane hosts one agent: a relaunch that re-used a pane id
+/// collapses to its newest stamp — the same rule the live sidebar binds by
+/// (`stamped_agent_for_pane`, in `store::snapshot::panes`) — while distinct
+/// sessions without stamps each remain candidates.
 pub fn plan_resume(
     agents: &[AgentState],
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
@@ -373,9 +487,9 @@ pub fn plan_resume(
     session_backed: impl Fn(&AgentState) -> bool,
     rimz_bin: &Path,
 ) -> ResumePlan {
-    // Root agents that were bound to a pane in the dead incarnation, still
-    // identified, and not cleanly ended. A subagent is paneless and rides its
-    // parent, so it is filtered out here and never resumed standalone.
+    // Root agents that are still identified and not cleanly ended. Subagents
+    // ride their parent, so their lack of a pane never makes them standalone
+    // resume candidates.
     let mut candidates: Vec<&AgentState> = agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
@@ -386,7 +500,6 @@ pub fn plan_resume(
                 .as_deref()
                 .is_some_and(|path| !path.is_empty())
         })
-        .filter(|agent| agent.pane.is_some())
         .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .collect();
 
@@ -399,23 +512,17 @@ pub fn plan_resume(
             .then_with(|| a.agent_id.cmp(&b.agent_id))
     });
 
-    let mut seen: HashSet<PaneId> = HashSet::new();
+    let mut seen: HashSet<ResumeCandidateKey> = HashSet::new();
     let mut plan = ResumePlan::default();
     let mut tabs: Vec<PlannedResumeTab> = Vec::new();
     for agent in candidates {
-        // `pane` is `Some` and `worktree_path` is `Some(non-empty)` by the
-        // filters above. The pane is the unit of identity: an older relaunch
-        // that re-used this pane id is superseded by the newest stamp (the
-        // candidates are newest-first, so the first one seen for a pane wins),
-        // mirroring the live binding's `stamped_agent_for_pane`. Distinct panes
-        // — including two same-kind agents in one worktree — each get a seed.
-        let pane_id = agent
-            .pane
-            .as_ref()
-            .expect("candidates are filtered to a stamped pane")
-            .pane_id
-            .clone();
-        if !seen.insert(pane_id) {
+        // An older relaunch that re-used a pane is superseded by the newest
+        // stamp. Rebirth-retired stamps fall back to provider session identity.
+        let key = agent.pane.as_ref().map_or_else(
+            || ResumeCandidateKey::Session(agent.kind.clone(), agent.agent_id.clone()),
+            |pane| ResumeCandidateKey::Pane(pane.pane_id.clone()),
+        );
+        if !seen.insert(key) {
             continue;
         }
         let worktree = agent.worktree_path.clone().unwrap_or_default();

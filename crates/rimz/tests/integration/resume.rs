@@ -236,10 +236,10 @@ fn a_relaunch_reusing_one_pane_resumes_only_the_newest() {
 }
 
 #[test]
-fn a_rebirth_boundary_clears_a_prior_stamp_so_it_is_not_resumed() {
-    // The pane stamp recorded before the boundary names a dead pane; the fold
-    // clears it, so `plan_resume` (which runs before the next boundary) sees no
-    // surviving pane and leaves the agent out.
+fn a_rebirth_boundary_clears_a_prior_stamp_but_keeps_the_session_resumable() {
+    // The pane stamp recorded before the boundary names a dead pane, so the
+    // fold clears it. Durable provider identity still seeds explicit lane
+    // resume after the pane numbering has been retired.
     let h = Harness::new();
     let obs = registered("sess-old", "old-ember", "terminal_3", "/repo/old", "old");
     h.store
@@ -253,9 +253,75 @@ fn a_rebirth_boundary_clears_a_prior_stamp_so_it_is_not_resumed() {
         .expect("append rebirth");
 
     let plan = plan_from_rollup(&h);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![resume_argv("claude", "sess-old", "old-ember")]
+    );
+}
+
+#[test]
+fn soft_reset_preserves_dead_paneless_resume_identity() {
+    let h = Harness::new();
+    std::fs::write(h.store.paths().locks_dir.join("dead-reap.stamp"), b"")
+        .expect("defer dead-owner reap");
+    let mut planner = registered(
+        "sess-planner",
+        "warm-drift",
+        "terminal_3",
+        "/repo/feature",
+        "feature",
+    );
+    planner.agent_pid = Some(u32::MAX);
+    planner.launch.role = Some("planner".to_owned());
+    planner.launch.team = Some("forge".to_owned());
+    h.store
+        .append_event(&lifecycle(&h, "claude", "SessionStart", &planner))
+        .expect("append dead-owner agent");
+    h.store
+        .append_event(&EventEnvelope::session_rebirth(
+            h.workspace_id.clone(),
+            "rimz-test",
+        ))
+        .expect("retire pane stamps");
+
+    h.store
+        .reset_records("rimz-test", false)
+        .expect("soft reset");
+    let projection = h
+        .store
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection");
+    let preserved = projection
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == "sess-planner")
+        .expect("soft reset kept durable identity");
+    assert!(preserved.pane.is_none());
+    assert_eq!(preserved.role.as_deref(), Some("planner"));
+    assert_eq!(preserved.team.as_deref(), Some("forge"));
+
+    let plan = rimz::harness::resume::plan_resume(
+        &projection.agents,
+        &projection.ended,
+        rimz::harness::resume::DEFAULT_RESUME_MAX,
+        None,
+        |_| true,
+        |_| true,
+        Path::new("/bin/rimz"),
+    );
+    assert_eq!(plan.tabs.len(), 1);
+    let commands = single_column(&plan.tabs[0]);
+    let command = &commands[0];
+    assert_eq!(command[5], "sess-planner");
     assert!(
-        plan.is_empty(),
-        "an agent whose only stamp predates the rebirth boundary is not resumed"
+        command
+            .windows(2)
+            .any(|pair| pair[0] == "--agent-role" && pair[1] == "planner")
+    );
+    assert!(
+        command
+            .windows(2)
+            .any(|pair| pair[0] == "--agent-team" && pair[1] == "forge")
     );
 }
 

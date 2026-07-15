@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
-use rimz::agents::AgentState;
+use rimz::agents::{AgentState, LocalSessionObservation};
 use rimz::harness::resume::{
+    concurrent_session_set, discovered_agent_state,
     materialize_team_restore_tab as build_team_restore_tab, resume_session_present,
     split_team_and_flat,
 };
@@ -61,10 +62,17 @@ struct LaneLiveness {
 
 #[derive(Debug)]
 struct LaneSummary {
+    path: PathBuf,
     label: String,
     members: usize,
     live: usize,
     freshest: Timestamp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum LaneCandidateKey {
+    Pane(PaneId),
+    Session(AgentKind, AgentSessionId),
 }
 
 pub(super) fn resume_lane(
@@ -97,10 +105,10 @@ pub(super) fn resume_lane(
         .runtime_projection(rimz::RuntimeScope::Audit)
         .context("reading audit agent rollup")?;
 
-    if scope.is_none() && from_pr.is_none() && workspace.worktree_root == workspace.project_root {
-        return list_resumable_lanes(&projection.agents, &workspace.project_root);
-    }
     let worktrees = local_worktrees(&workspace)?;
+    if scope.is_none() && from_pr.is_none() && workspace.worktree_root == workspace.project_root {
+        return list_resumable_lanes(&projection.agents, &workspace.project_root, &worktrees);
+    }
 
     let lane = match (scope.as_deref(), from_pr) {
         (_, Some(pr)) => resolve_pr_lane(pr.number, &worktrees)?,
@@ -115,14 +123,17 @@ pub(super) fn resume_lane(
     ensure_lane_exists(&lane, Path::is_dir)?;
 
     let lane_agents = current_lane_candidates(&projection.agents, &lane);
-    if lane_agents.is_empty() {
-        return Err(ResumeLaneErr::Nothing {
-            scope: lane.display,
-        }
-        .into());
-    }
-
     let liveness = split_lane_liveness(&lane_agents, rimz::store::runtime::agent_liveness);
+    let machine_config = crate::cli::machine_config();
+    if should_discover_lane_sessions(&lane_agents, &liveness) {
+        return resume_discovered_lane(
+            &workspace,
+            backend.as_ref(),
+            &lane,
+            machine_config.as_ref(),
+            bg,
+        );
+    }
     if liveness.closed.is_empty() {
         let agent = liveness
             .live
@@ -167,6 +178,72 @@ pub(super) fn resume_lane(
         machine_config.as_ref(),
         bg,
     )
+}
+
+fn should_discover_lane_sessions(lane_agents: &[AgentState], liveness: &LaneLiveness) -> bool {
+    lane_agents.is_empty()
+        || (liveness.live.is_empty() && !liveness.closed.iter().any(resume_session_present))
+}
+
+fn discover_lane_sessions(path: &Path) -> Vec<LocalSessionObservation> {
+    rimz::agents::ADAPTERS
+        .iter()
+        .copied()
+        .filter(|adapter| adapter.descriptor().capabilities.local_session_discovery)
+        .flat_map(|adapter| adapter.discover_local_sessions(path))
+        .filter(|observation| {
+            std::fs::metadata(&observation.transcript_path)
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+        })
+        .collect()
+}
+
+fn resume_discovered_lane(
+    workspace: &rimz::ResolvedWorkspace,
+    backend: &dyn rimz::mux::MuxBackend,
+    lane: &ResolvedLane,
+    machine_config: &rimz::config::MachineConfig,
+    bg: bool,
+) -> Result<()> {
+    let observations = discover_lane_sessions(&lane.path);
+    if observations.is_empty() {
+        return Err(ResumeLaneErr::Nothing {
+            scope: lane.display.clone(),
+        }
+        .into());
+    }
+    let (resume, skipped) = concurrent_session_set(observations);
+    let states = resume
+        .iter()
+        .map(|observation| discovered_agent_state(observation, lane.channel.as_deref()))
+        .collect::<Vec<_>>();
+    for kind in states.iter().map(|agent| agent.kind.as_str()) {
+        super::launch::agent_launch_env(&workspace.project_root, kind)?;
+    }
+    let plan = flat_resume_plan(
+        &states,
+        machine_config.resume.max,
+        Some(&workspace.project_root),
+    );
+    report_discovery_skips(&skipped)?;
+    report_resume_skips(&plan.skipped)?;
+    if plan.tabs.is_empty() {
+        return Err(ResumeLaneErr::Nothing {
+            scope: lane.display.clone(),
+        }
+        .into());
+    }
+    let count = plan.tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
+    for tab in plan.tabs {
+        open_resume_tab(workspace, backend, machine_config, tab, bg)?;
+    }
+    writeln!(
+        std::io::stdout().lock(),
+        "resumed {count} agent{} in '{}'",
+        if count == 1 { "" } else { "s" },
+        lane.display
+    )?;
+    Ok(())
 }
 
 fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LocalWorktree>> {
@@ -322,7 +399,6 @@ fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<Ag
     let candidates = agents
         .iter()
         .filter(|agent| root_session(agent))
-        .filter(|agent| agent.pane.is_some())
         .filter(|agent| normalized_agent_path(agent).as_deref() == Some(lane.path.as_path()))
         .filter(|agent| {
             lane.channel.as_deref().is_none_or(|channel| {
@@ -341,12 +417,13 @@ fn dedupe_current_candidates(mut candidates: Vec<AgentState>) -> Vec<AgentState>
             .cmp(&left.last_activity)
             .then_with(|| left.agent_id.cmp(&right.agent_id))
     });
-    let mut panes = HashSet::<PaneId>::new();
+    let mut seen = HashSet::<LaneCandidateKey>::new();
     candidates.retain(|agent| {
-        agent
-            .pane
-            .as_ref()
-            .is_some_and(|pane| panes.insert(pane.pane_id.clone()))
+        let key = agent.pane.as_ref().map_or_else(
+            || LaneCandidateKey::Session(agent.kind.clone(), agent.agent_id.clone()),
+            |pane| LaneCandidateKey::Pane(pane.pane_id.clone()),
+        );
+        seen.insert(key)
     });
     candidates
 }
@@ -597,6 +674,18 @@ fn report_resume_skips(skips: &[rimz::harness::resume::ResumeSkip]) -> Result<()
     Ok(())
 }
 
+fn report_discovery_skips(skips: &[LocalSessionObservation]) -> Result<()> {
+    let mut out = std::io::stderr().lock();
+    for observation in skips {
+        writeln!(
+            out,
+            "rimz: not resumed: {} {} (older run)",
+            observation.kind, observation.session_id
+        )?;
+    }
+    Ok(())
+}
+
 fn resume_skip_reason(reason: rimz::harness::resume::ResumeSkipReason) -> &'static str {
     match reason {
         rimz::harness::resume::ResumeSkipReason::NoResumeSupport => "no resume CLI",
@@ -605,8 +694,22 @@ fn resume_skip_reason(reason: rimz::harness::resume::ResumeSkipReason) -> &'stat
     }
 }
 
-fn list_resumable_lanes(agents: &[AgentState], project_root: &Path) -> Result<()> {
-    let summaries = lane_summaries(agents, project_root, rimz::store::runtime::agent_liveness);
+fn list_resumable_lanes(
+    agents: &[AgentState],
+    project_root: &Path,
+    worktrees: &[LocalWorktree],
+) -> Result<()> {
+    let summaries = merge_native_lane_summaries(
+        lane_summaries(agents, project_root, rimz::store::runtime::agent_liveness),
+        worktrees
+            .iter()
+            .cloned()
+            .map(|worktree| {
+                let observations = discover_lane_sessions(&worktree.path);
+                (worktree, observations)
+            })
+            .collect(),
+    );
     let mut table = crate::cli::render::Table::new(["LANE", "MEMBERS", "LIVE", "CLOSED", "AGE"])
         .right(&[1, 2, 3, 4]);
     let now = Timestamp::now();
@@ -662,6 +765,7 @@ fn lane_summaries(
                 .filter(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }))
                 .count();
             Some(LaneSummary {
+                path: lane.path.clone(),
                 label: lane_channel(&lane, &candidates).map_or_else(
                     || format!("#{}", path_label(&lane.path)),
                     |value| format!("#{value}"),
@@ -672,6 +776,42 @@ fn lane_summaries(
             })
         })
         .collect::<Vec<_>>();
+    summaries.sort_by(|left, right| {
+        right
+            .freshest
+            .cmp(&left.freshest)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    summaries
+}
+
+fn merge_native_lane_summaries(
+    mut summaries: Vec<LaneSummary>,
+    discovered: Vec<(LocalWorktree, Vec<LocalSessionObservation>)>,
+) -> Vec<LaneSummary> {
+    for (worktree, observations) in discovered {
+        if summaries
+            .iter()
+            .any(|summary| summary.path == worktree.path)
+        {
+            continue;
+        }
+        let (resume, _) = concurrent_session_set(observations);
+        let Some(freshest) = resume
+            .iter()
+            .map(|observation| observation.last_activity)
+            .max()
+        else {
+            continue;
+        };
+        summaries.push(LaneSummary {
+            path: worktree.path,
+            label: format!("#{}", worktree.name),
+            members: resume.len(),
+            live: 0,
+            freshest,
+        });
+    }
     summaries.sort_by(|left, right| {
         right
             .freshest
@@ -728,6 +868,31 @@ mod tests {
             path: PathBuf::from(format!("/repo-worktrees/{name}")),
             branch: Some(branch.to_owned()),
             from_pr,
+        }
+    }
+
+    fn local_observation(
+        kind: &str,
+        id: &str,
+        path: &str,
+        created: &str,
+        last: &str,
+    ) -> LocalSessionObservation {
+        LocalSessionObservation {
+            kind: AgentKind::new_unchecked(kind),
+            session_id: AgentSessionId::from(id),
+            workspace: PathBuf::from(path),
+            transcript_path: PathBuf::from(format!("/provider/{id}.jsonl")),
+            created_at: created.parse().unwrap(),
+            fresh_binding_at: None,
+            first_event_at: None,
+            last_activity: last.parse().unwrap(),
+            status: rimz::agents::AgentStatus::Idle,
+            phase: rimz::agents::TurnPhase::Idle,
+            latest_prompt: None,
+            native_prompt_detail: None,
+            waiting_since: None,
+            context_pct: None,
         }
     }
 
@@ -841,6 +1006,59 @@ mod tests {
     }
 
     #[test]
+    fn paneless_closed_agent_is_a_lane_candidate() {
+        let mut closed = agent("claude", "closed", "/repo-worktrees/docs", Some("docs"));
+        closed.pane = None;
+        let lane = ResolvedLane {
+            display: "#docs".to_owned(),
+            path: PathBuf::from("/repo-worktrees/docs"),
+            channel: Some("docs".to_owned()),
+            worktree_name: "docs".to_owned(),
+        };
+
+        let candidates = current_lane_candidates(&[closed], &lane);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].agent_id.as_str(), "closed");
+    }
+
+    #[test]
+    fn native_discovery_fallback_requires_missing_durable_conversations() {
+        let empty = LaneLiveness {
+            live: Vec::new(),
+            closed: Vec::new(),
+        };
+        assert!(should_discover_lane_sessions(&[], &empty));
+
+        let mut missing = agent("claude", "missing", "/repo-worktrees/docs", Some("docs"));
+        missing.transcript_path = Some("/missing/transcript.jsonl".to_owned());
+        let closed_missing = LaneLiveness {
+            live: Vec::new(),
+            closed: vec![missing.clone()],
+        };
+        assert!(should_discover_lane_sessions(
+            std::slice::from_ref(&missing),
+            &closed_missing
+        ));
+
+        let present = agent("claude", "present", "/repo-worktrees/docs", Some("docs"));
+        let closed_present = LaneLiveness {
+            live: Vec::new(),
+            closed: vec![present.clone()],
+        };
+        assert!(!should_discover_lane_sessions(
+            std::slice::from_ref(&present),
+            &closed_present
+        ));
+
+        let with_live = LaneLiveness {
+            live: vec![present],
+            closed: vec![missing.clone()],
+        };
+        assert!(!should_discover_lane_sessions(&[missing], &with_live));
+    }
+
+    #[test]
     fn all_closed_team_and_stray_plan_as_team_tab_plus_flat_pane() {
         let mut planner = agent("claude", "planner", "/repo-worktrees/docs", Some("docs"));
         planner.team = Some("forge".to_owned());
@@ -951,5 +1169,66 @@ mod tests {
         assert_eq!(summaries[0].label, "#docs");
         assert_eq!(summaries[0].members, 2);
         assert_eq!(summaries[0].live, 1);
+    }
+
+    #[test]
+    fn native_discovery_adds_only_storeless_worktree_lanes() {
+        let store_summary = LaneSummary {
+            path: PathBuf::from("/repo-worktrees/docs"),
+            label: "#docs".to_owned(),
+            members: 1,
+            live: 0,
+            freshest: "2025-01-03T00:00:00Z".parse().unwrap(),
+        };
+        let docs = worktree("docs", "feat/docs", None);
+        let native = worktree("native", "feat/native", None);
+        let discovered = vec![
+            (
+                docs,
+                vec![local_observation(
+                    "claude",
+                    "ignored",
+                    "/repo-worktrees/docs",
+                    "2025-01-04T09:00:00Z",
+                    "2025-01-04T10:00:00Z",
+                )],
+            ),
+            (
+                native,
+                vec![
+                    local_observation(
+                        "claude",
+                        "older-run",
+                        "/repo-worktrees/native",
+                        "2025-01-01T09:00:00Z",
+                        "2025-01-01T10:00:00Z",
+                    ),
+                    local_observation(
+                        "claude",
+                        "planner",
+                        "/repo-worktrees/native",
+                        "2025-01-04T09:00:00Z",
+                        "2025-01-04T11:00:00Z",
+                    ),
+                    local_observation(
+                        "codex",
+                        "coder",
+                        "/repo-worktrees/native",
+                        "2025-01-04T10:00:00Z",
+                        "2025-01-04T12:00:00Z",
+                    ),
+                ],
+            ),
+        ];
+
+        let summaries = merge_native_lane_summaries(vec![store_summary], discovered);
+
+        assert_eq!(summaries.len(), 2);
+        let native = summaries
+            .iter()
+            .find(|summary| summary.label == "#native")
+            .unwrap();
+        assert_eq!(native.members, 2);
+        assert_eq!(native.live, 0);
     }
 }

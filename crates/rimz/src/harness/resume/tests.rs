@@ -111,6 +111,118 @@ fn resume_id(seed: &CohortSeed) -> Option<&str> {
     }
 }
 
+fn local_session(kind: &str, id: &str, created: &str, last: &str) -> LocalSessionObservation {
+    LocalSessionObservation {
+        kind: AgentKind::new_unchecked(kind),
+        session_id: AgentSessionId::from(id),
+        workspace: PathBuf::from("/code/query-engine"),
+        transcript_path: PathBuf::from(format!("/provider/{id}.jsonl")),
+        created_at: created.parse().unwrap(),
+        fresh_binding_at: None,
+        first_event_at: None,
+        last_activity: last.parse().unwrap(),
+        status: AgentStatus::Idle,
+        phase: crate::agents::TurnPhase::Idle,
+        latest_prompt: None,
+        native_prompt_detail: None,
+        waiting_since: None,
+        context_pct: None,
+    }
+}
+
+#[test]
+fn concurrent_session_set_merges_transitive_overlap() {
+    let observations = vec![
+        local_session(
+            "claude",
+            "first",
+            "2025-01-01T09:00:00Z",
+            "2025-01-01T17:00:00Z",
+        ),
+        local_session(
+            "codex",
+            "second",
+            "2025-01-01T13:00:00Z",
+            "2025-01-01T16:00:00Z",
+        ),
+        local_session(
+            "claude",
+            "third",
+            "2025-01-01T10:00:00Z",
+            "2025-01-01T18:00:00Z",
+        ),
+    ];
+
+    let (resume, skipped) = concurrent_session_set(observations);
+
+    assert_eq!(resume.len(), 3);
+    assert_eq!(resume[0].session_id.as_str(), "third");
+    assert!(skipped.is_empty());
+}
+
+#[test]
+fn concurrent_session_set_keeps_only_the_newest_disjoint_run() {
+    let observations = vec![
+        local_session(
+            "claude",
+            "yesterday",
+            "2025-01-01T09:00:00Z",
+            "2025-01-01T10:00:00Z",
+        ),
+        local_session(
+            "codex",
+            "today",
+            "2025-01-02T09:00:00Z",
+            "2025-01-02T10:00:00Z",
+        ),
+    ];
+
+    let (resume, skipped) = concurrent_session_set(observations);
+
+    assert_eq!(resume[0].session_id.as_str(), "today");
+    assert_eq!(skipped[0].session_id.as_str(), "yesterday");
+}
+
+#[test]
+fn concurrent_session_set_handles_single_and_empty_inputs() {
+    let single = local_session(
+        "claude",
+        "only",
+        "2025-01-01T09:00:00Z",
+        "2025-01-01T10:00:00Z",
+    );
+    assert_eq!(
+        concurrent_session_set(vec![single]).0[0]
+            .session_id
+            .as_str(),
+        "only"
+    );
+    assert_eq!(concurrent_session_set(Vec::new()), (Vec::new(), Vec::new()));
+}
+
+#[test]
+fn discovered_state_is_paneless_and_keeps_resume_identity() {
+    let observation = local_session(
+        "claude",
+        "only",
+        "2025-01-01T09:00:00Z",
+        "2025-01-01T10:00:00Z",
+    );
+
+    let state = discovered_agent_state(&observation, Some("query-engine"));
+
+    assert_eq!(state.agent_id.as_str(), "only");
+    assert_eq!(state.channel.as_deref(), Some("query-engine"));
+    assert_eq!(state.worktree_path.as_deref(), Some("/code/query-engine"));
+    assert_eq!(
+        state.transcript_path.as_deref(),
+        Some("/provider/only.jsonl")
+    );
+    assert!(state.pane.is_none());
+    assert!(state.team.is_none());
+    assert!(state.role.is_none());
+}
+
 #[test]
 fn cohort_resume_selects_newest_team_member_per_role() {
     let mut old_planner = agent("claude", "old-planner", "/code/forge", Some("forge"), 30);
@@ -609,12 +721,11 @@ fn resume_command_replays_launch_identity() {
 }
 
 #[test]
-fn filters_subagents_paneless_and_ended_candidates() {
+fn filters_subagents_and_ended_candidates_but_resumes_paneless_roots() {
     let mut child = agent("claude", "kid", "/code/query-engine", Some("main"), 1);
     child.parent_agent_id = Some("parent".into());
-    // A `None` pane is both a subagent/ghost with no presence and the shape
-    // a rebirth boundary leaves behind for an agent that was not live in the
-    // dying incarnation — neither is resumed.
+    // A rebirth boundary retires the pane stamp, but durable provider identity
+    // keeps the root session resumable.
     let mut paneless = agent("claude", "paneless", "/code/query-engine", Some("main"), 1);
     paneless.pane = None;
     let ended: BTreeSet<(AgentKind, AgentSessionId)> =
@@ -634,8 +745,36 @@ fn filters_subagents_paneless_and_ended_candidates() {
         |_| true,
         Path::new("/bin/rimz"),
     );
-    assert!(plan.is_empty());
+    assert_eq!(plan.tabs.len(), 1);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![exec_resume("claude", "paneless")]
+    );
     assert!(plan.skipped.is_empty());
+}
+
+#[test]
+fn dedups_paneless_records_by_provider_session_identity() {
+    let mut older = agent("claude", "same", "/code/query-engine", Some("main"), 60);
+    older.pane = None;
+    let mut newer = agent("claude", "same", "/code/query-engine", Some("main"), 2);
+    newer.pane = None;
+
+    let plan = plan_resume(
+        &[older, newer],
+        &no_ended(),
+        DEFAULT_RESUME_MAX,
+        None,
+        |_| true,
+        |_| true,
+        Path::new("/bin/rimz"),
+    );
+
+    assert_eq!(plan.tabs.len(), 1);
+    assert_eq!(
+        single_column(&plan.tabs[0]),
+        vec![exec_resume("claude", "same")]
+    );
 }
 
 #[test]

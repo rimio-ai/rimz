@@ -121,9 +121,13 @@ rimz agents resume                # inside a worktree: that lane; at project roo
 | some members live | splits only the closed members back into the live tab and reports each skipped live handle |
 | every member closed | rebuilds team layouts in declared order and restores stray agents as flat panes |
 
+Soft reset preserves the lane's durable session identity, including exact provider ids, roles, teams, and placement, so a reset resumes with the same handles. When those RimZ records are genuinely gone, Claude and Codex fall back to their provider-owned local session stores and restore the newest concurrent working set with exact session ids. Provider-only recovery is flat because role and team identity exists only in RimZ; the resumed hooks record the recovered session again on first activity. Older disjoint runs stay closed and are reported by kind and session id.
+
+At the project root, the bare listing includes worktree lanes found only in the Claude or Codex session store as closed lanes. Each provider store is scanned once per local worktree.
+
 `--bg` leaves focus where it is when panes or tabs open. Profiles and team layouts render from the current `agents.toml`, while session identity, role, team, channel, and working directory come from the durable records. This is place-first recovery; [spec-first `--resume`](#resume-a-cohort) remains the form for choosing a prior cohort by team or layout.
 
-Failures name the fix: an unknown scope reports `no lane '#docs' in this workspace`; a removed checkout reports `worktree for '#docs' was removed; recreate it with rimz agents <spec> -w docs`; a PR with no local worktree reports `PR 69 has no local worktree; start one with rimz agents <spec> --from-pr 69`; and a known lane without a saved resumable session reports `nothing to resume in '#docs'`.
+Failures name the fix: an unknown scope reports `no lane '#docs' in this workspace`; a removed checkout reports `worktree for '#docs' was removed; recreate it with rimz agents <spec> -w docs`; a PR with no local worktree reports `PR 69 has no local worktree; start one with rimz agents <spec> --from-pr 69`; and `nothing to resume in '#docs'` means neither the RimZ store nor the supported provider stores contain a resumable session for that lane.
 
 ### Shared launch params
 
