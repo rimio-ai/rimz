@@ -584,9 +584,7 @@ impl ZellijBackend {
             return DockOutcome::Docked;
         };
         let panes = listing.panes;
-        let Some(pane) = panes.iter().find(|pane| {
-            pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id
-        }) else {
+        let Some(pane) = sidebar_pane(&panes, tab_position, raw_id) else {
             return DockOutcome::Misdocked;
         };
         let excluded = HashSet::new();
@@ -611,9 +609,7 @@ impl ZellijBackend {
             return false;
         };
         let panes = listing.panes;
-        let Some(sidebar) = panes.iter().find(|pane| {
-            pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id
-        }) else {
+        let Some(sidebar) = sidebar_pane(&panes, tab_position, raw_id) else {
             return false;
         };
         let excluded = HashSet::new();
@@ -647,9 +643,7 @@ impl ZellijBackend {
                 return None;
             };
             let panes = listing.panes;
-            let sidebar = panes.iter().find(|pane| {
-                pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id
-            })?;
+            let sidebar = sidebar_pane(&panes, tab_position, raw_id)?;
             let excluded = HashSet::new();
             if let Some(work) = repairable_nested_work_pane_ids(sidebar, &panes, &excluded) {
                 break work;
