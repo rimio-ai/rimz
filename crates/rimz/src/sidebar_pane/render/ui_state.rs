@@ -1,5 +1,4 @@
 use crate::SidebarSnapshot;
-use crate::agents::AgentStatus;
 use crate::config::ThemeConfig;
 use crate::diag::record::GateRule;
 use crate::ids::PaneId;
