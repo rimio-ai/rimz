@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::Path;
 
 use crate::agent_activity::AgentActivity;
 use crate::agents::state::append_recent_prompt;
@@ -349,8 +350,9 @@ impl SidebarSnapshot {
 
 fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> bool {
     crate::store::snapshot::process::pane_agent_kind(pane) == Some(observation.kind.as_str())
-        && crate::store::snapshot::process::pane_worktree_path(pane)
-            == observation.workspace.to_str()
+        && crate::store::snapshot::process::pane_worktree_path(pane).is_some_and(|workspace| {
+            crate::worktree::normalize_path_lexical(Path::new(workspace)) == observation.workspace
+        })
 }
 
 fn local_observation_is_current(agent: &AgentState, observation: &LocalSessionObservation) -> bool {

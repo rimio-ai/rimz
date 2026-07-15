@@ -89,6 +89,18 @@ fn stock_kiro_session_bootstraps_only_when_a_live_pane_binds() {
 }
 
 #[test]
+fn local_session_binding_normalizes_the_pane_workspace() {
+    let pane = pane("%1", "kiro-cli chat --v3", "/repo/tmp/../main");
+    let snapshot = room(Vec::new()).with_local_sessions(
+        std::slice::from_ref(&pane),
+        vec![event_observation("sess-live", 20, 10)],
+    );
+
+    assert_eq!(snapshot.agents.len(), 1);
+    assert_eq!(snapshot.agents[0].agent_id.as_str(), "sess-live");
+}
+
+#[test]
 fn exact_resume_wins_before_fresh_one_to_one_pairing() {
     let mut resumed = pane("%1", "kiro-cli chat --v3", "/repo/main");
     resumed.resumed_session_id = Some(AgentSessionId::from("sess-b"));
