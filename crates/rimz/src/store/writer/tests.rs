@@ -235,6 +235,60 @@ fn launch_batch_keeps_request_and_follow_up_order() {
 }
 
 #[test]
+fn launch_batch_failure_keeps_earlier_identity_committed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_id = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+    let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
+    let store = Store::open(paths, runtime).expect("open store");
+    let requests = ["first", "second"].map(|name| AgentLaunchRequest {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: AgentSessionId::from(format!("launch-{name}")),
+        name: AgentLaunchName::Explicit(name.to_owned()),
+        launch: LaunchParams::default(),
+        run_id: None,
+        prompt: None,
+    });
+    let batch = store
+        .begin_agent_launch_batch(
+            &requests,
+            AgentLaunchScope {
+                session_name: "rimz-test".to_owned(),
+                cwd: dir.path().to_path_buf(),
+                worktree_name: None,
+                channel: None,
+                description: None,
+            },
+        )
+        .expect("begin launch batch");
+    let mut attempted = 0;
+
+    let result = store.fail_agent_launch_batch_with(&batch, |store, identity, scope| {
+        attempted += 1;
+        if attempted == 2 {
+            return Err(StoreErr::AgentLaunchIdentity(
+                "injected second append failure".to_owned(),
+            ));
+        }
+        store.fail_agent_launch_in_scope(identity, scope)
+    });
+
+    assert!(result.is_err());
+    let failures = store
+        .read_events()
+        .expect("read launch events")
+        .into_iter()
+        .filter_map(|event| {
+            let crate::store::event::EventKind::AgentLaunch(payload) = event.kind() else {
+                return None;
+            };
+            (payload.state == AgentLaunchState::Failed).then_some(payload.agent_name)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failures, ["first"]);
+}
+
+#[test]
 fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());

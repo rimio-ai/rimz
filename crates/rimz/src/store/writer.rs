@@ -293,21 +293,37 @@ impl Store {
     /// original launch transitions.
     #[must_use = "durability barrier; check the result"]
     pub fn fail_agent_launch_batch(&self, batch: &AgentLaunchBatch) -> Result<()> {
+        self.fail_agent_launch_batch_with(batch, Store::fail_agent_launch_in_scope)
+    }
+
+    fn fail_agent_launch_batch_with(
+        &self,
+        batch: &AgentLaunchBatch,
+        mut fail: impl FnMut(&Store, &AgentLaunchIdentity, &AgentLaunchScope) -> Result<()>,
+    ) -> Result<()> {
         for identity in &batch.identities {
-            self.commit(PublishPolicy::Skip, |txn| {
-                txn.append(&self.agent_launch_event(
-                    identity,
-                    AgentLaunchState::Failed,
-                    &batch.scope.session_name,
-                    &batch.scope.cwd,
-                    batch.scope.worktree_name.as_deref(),
-                    batch.scope.channel.as_deref(),
-                    None,
-                    None,
-                ))
-            })?;
+            fail(self, identity, &batch.scope)?;
         }
         Ok(())
+    }
+
+    fn fail_agent_launch_in_scope(
+        &self,
+        identity: &AgentLaunchIdentity,
+        scope: &AgentLaunchScope,
+    ) -> Result<()> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            txn.append(&self.agent_launch_event(
+                identity,
+                AgentLaunchState::Failed,
+                &scope.session_name,
+                &scope.cwd,
+                scope.worktree_name.as_deref(),
+                scope.channel.as_deref(),
+                None,
+                None,
+            ))
+        })
     }
 
     /// Bind one provisional launch to the pane observed by its wrapper.
