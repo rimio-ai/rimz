@@ -16,19 +16,20 @@ pub(super) fn launch_layout(
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
-    reject_prompt_that_looks_like_spec(
-        args.spec.as_deref(),
-        args.prompt.as_deref(),
-        &effective.profiles,
-        &machine_config.agents.commands,
-        &effective.teams,
-    )?;
-    let preset = launch_override_preset(&args)?;
-    let prepared = rimz::harness::plan::prepare_launch(
+    let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         &machine_config.agents.commands,
         args.spec.as_deref(),
-        PrepareLaunchOptions {
+    )?;
+    let preset = validate_resolved_launch_inputs(
+        &args,
+        &effective,
+        &machine_config.agents.commands,
+        &resolved.layout,
+    )?;
+    let warnings = rimz::harness::plan::finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
             permission_mode: interactive_permission_mode_from_flags(args.ask, args.yolo)?,
             preset: &preset,
             passthrough: &args.passthrough,
@@ -41,18 +42,14 @@ pub(super) fn launch_layout(
             let _ = writeln!(std::io::stderr(), "{warning}");
         }
     })?;
-    for warning in &prepared.warnings {
+    for warning in &warnings {
         writeln!(std::io::stderr(), "{warning}")?;
     }
-    if args.name.is_some() && prepared.layout.agent_kinds().count() != 1 {
-        bail!("--name requires a layout with exactly one agent cell");
-    }
-    let PreparedLaunch {
+    let ResolvedLaunch {
         teams,
         layout,
         team_name,
-        warnings: _,
-    } = prepared;
+    } = resolved;
     let prompt = args
         .prompt
         .as_deref()
@@ -730,6 +727,27 @@ pub(super) fn reject_prompt_that_looks_like_spec(
         );
     }
     Ok(())
+}
+
+/// Apply CLI-owned launch validation in its user-visible precedence order.
+pub(super) fn validate_resolved_launch_inputs(
+    args: &AgentsArgs,
+    effective: &rimz::config::effective::LaunchAgents,
+    commands: &rimz::config::CommandsConfig,
+    layout: &LayoutSpec,
+) -> Result<rimz::agents::LaunchPreset> {
+    reject_prompt_that_looks_like_spec(
+        args.spec.as_deref(),
+        args.prompt.as_deref(),
+        &effective.profiles,
+        commands,
+        &effective.teams,
+    )?;
+    rimz::harness::plan::validate_profile_prompt_files(layout)?;
+    if args.name.is_some() && layout.agent_kinds().count() != 1 {
+        bail!("--name requires a layout with exactly one agent cell");
+    }
+    launch_override_preset(args)
 }
 
 #[cfg(test)]

@@ -104,7 +104,6 @@ impl RunWaiter {
         prepared: &PreparedRun,
         room: &rimz::room::RoomContext,
         args: &AgentsArgs,
-        _run_id: &rimz::RunId,
     ) -> Result<RunRecord> {
         let record = if prepared.output_format == OutputFormat::StreamJson {
             let mut stdout = std::io::stdout().lock();
@@ -272,19 +271,20 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
         &workspace.project_root,
         &rimz::store::paths::config_home(),
     )?;
-    reject_prompt_that_looks_like_spec(
-        args.spec.as_deref(),
-        args.prompt.as_deref(),
-        &effective.profiles,
-        &machine_config.agents.commands,
-        &effective.teams,
-    )?;
-    let preset = launch_override_preset(args)?;
-    let prepared = rimz::harness::plan::prepare_launch(
+    let mut resolved = rimz::harness::plan::resolve_launch(
         &effective,
         &machine_config.agents.commands,
         args.spec.as_deref(),
-        PrepareLaunchOptions {
+    )?;
+    let preset = validate_resolved_launch_inputs(
+        args,
+        &effective,
+        &machine_config.agents.commands,
+        &resolved.layout,
+    )?;
+    let warnings = rimz::harness::plan::finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
             permission_mode: Some(mode),
             preset: &preset,
             passthrough: &args.passthrough,
@@ -297,10 +297,10 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
             let _ = writeln!(std::io::stderr(), "{warning}");
         }
     })?;
-    for warning in &prepared.warnings {
+    for warning in &warnings {
         writeln!(std::io::stderr(), "{warning}")?;
     }
-    let layout = prepared.layout;
+    let layout = resolved.layout;
     let agent_cells = agent_cells(&layout);
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");
@@ -488,7 +488,7 @@ fn execute_attempt(
         stream_cursor: (prepared.output_format == OutputFormat::StreamJson || args.stream_text)
             .then(|| TranscriptCursor::new(true)),
     };
-    let record = waiter.await_terminal(prepared, room, args, &run_id)?;
+    let record = waiter.await_terminal(prepared, room, args)?;
     Ok(Some(BlockingAttempt { record, waiter }))
 }
 
@@ -586,7 +586,7 @@ fn verify_phase(
             verify_error = Some(err);
             break;
         }
-        record = waiter.await_terminal(prepared, room, args, &record.run_id)?;
+        record = waiter.await_terminal(prepared, room, args)?;
         verify_attempt += 1;
     }
     Ok((record, verify_error, waiter))

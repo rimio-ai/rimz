@@ -113,7 +113,7 @@ fn effective_launch(
 }
 
 #[test]
-fn prepare_launch_requires_profile_prompt_files() {
+fn profile_prompt_validation_requires_declared_files() {
     let dir = tempfile::tempdir().expect("temp dir");
     let present = dir.path().join("planner.md");
     std::fs::write(&present, "be terse").expect("write prompt");
@@ -133,20 +133,9 @@ fn prepare_launch_requires_profile_prompt_files() {
         ),
     );
     let launch = effective_launch(&machine, dir.path());
-    let preset = crate::agents::LaunchPreset::default();
-    prepare_launch(
-        &launch,
-        &machine.agents.commands,
-        Some("planner"),
-        PrepareLaunchOptions {
-            permission_mode: None,
-            preset: &preset,
-            passthrough: &[],
-            budget: None,
-            max_turns: None,
-        },
-    )
-    .expect("present prompt files pass");
+    let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"))
+        .expect("resolve profile");
+    validate_profile_prompt_files(&resolved.layout).expect("present prompt files pass");
 
     for (system, append, fragment) in [
         (
@@ -165,25 +154,16 @@ fn prepare_launch_requires_profile_prompt_files() {
             configured_profile("claude", None, None, None, system, append, None),
         );
         let launch = effective_launch(&machine, dir.path());
-        let err = prepare_launch(
-            &launch,
-            &machine.agents.commands,
-            Some("planner"),
-            PrepareLaunchOptions {
-                permission_mode: None,
-                preset: &preset,
-                passthrough: &[],
-                budget: None,
-                max_turns: None,
-            },
-        )
-        .expect_err("missing prompt fails");
+        let resolved = resolve_launch(&launch, &machine.agents.commands, Some("planner"))
+            .expect("resolve missing prompt profile");
+        let err =
+            validate_profile_prompt_files(&resolved.layout).expect_err("missing prompt fails");
         assert!(err.to_string().contains(fragment), "{err}");
     }
 }
 
 #[test]
-fn prepare_launch_finalizes_profile_cli_and_passthrough_precedence() {
+fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
@@ -211,11 +191,11 @@ fn prepare_launch_finalizes_profile_cli_and_passthrough_precedence() {
         "model_reasoning_effort=medium".to_owned(),
     ];
 
-    let prepared = prepare_launch(
-        &launch,
-        &machine.agents.commands,
-        Some("planner"),
-        PrepareLaunchOptions {
+    let mut resolved =
+        resolve_launch(&launch, &machine.agents.commands, Some("planner")).expect("resolve launch");
+    finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Yolo),
             preset: &preset,
             passthrough: &passthrough,
@@ -223,7 +203,7 @@ fn prepare_launch_finalizes_profile_cli_and_passthrough_precedence() {
             max_turns: None,
         },
     )
-    .expect("prepare launch");
+    .expect("finalize launch");
     let [
         Cell::Agent {
             args,
@@ -233,7 +213,7 @@ fn prepare_launch_finalizes_profile_cli_and_passthrough_precedence() {
             budget,
             ..
         },
-    ] = prepared.layout.columns[0].rows.as_slice()
+    ] = resolved.layout.columns[0].rows.as_slice()
     else {
         panic!("one agent")
     };
@@ -254,7 +234,7 @@ fn prepare_launch_finalizes_profile_cli_and_passthrough_precedence() {
 }
 
 #[test]
-fn prepare_launch_retains_profile_mode_and_wires_turn_limits() {
+fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     let dir = tempfile::tempdir().expect("temp dir");
     let mut machine = MachineConfig::default();
     machine.agents.profiles.0.insert(
@@ -271,11 +251,11 @@ fn prepare_launch_retains_profile_mode_and_wires_turn_limits() {
     );
     let launch = effective_launch(&machine, dir.path());
     let preset = crate::agents::LaunchPreset::default();
-    let prepared = prepare_launch(
-        &launch,
-        &machine.agents.commands,
-        Some("asked,codex"),
-        PrepareLaunchOptions {
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("asked,codex"))
+        .expect("resolve launch");
+    finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Yolo),
             preset: &preset,
             passthrough: &[],
@@ -283,8 +263,8 @@ fn prepare_launch_retains_profile_mode_and_wires_turn_limits() {
             max_turns: None,
         },
     )
-    .expect("prepare launch");
-    let modes = prepared
+    .expect("finalize launch");
+    let modes = resolved
         .layout
         .agent_cells()
         .map(|cell| match cell {
@@ -297,11 +277,11 @@ fn prepare_launch_retains_profile_mode_and_wires_turn_limits() {
         [Some(PermissionMode::Ask), Some(PermissionMode::Yolo)]
     );
 
-    let prepared = prepare_launch(
-        &launch,
-        &machine.agents.commands,
-        Some("claude"),
-        PrepareLaunchOptions {
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("claude"))
+        .expect("resolve supervised launch");
+    finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Auto),
             preset: &preset,
             passthrough: &[],
@@ -309,18 +289,18 @@ fn prepare_launch_retains_profile_mode_and_wires_turn_limits() {
             max_turns: Some(3),
         },
     )
-    .expect("prepare supervised launch");
-    let [Cell::Agent { args, model, .. }] = prepared.layout.columns[0].rows.as_slice() else {
+    .expect("finalize supervised launch");
+    let [Cell::Agent { args, model, .. }] = resolved.layout.columns[0].rows.as_slice() else {
         panic!("one agent")
     };
     assert_eq!(args, &["--permission-mode", "auto", "--max-turns", "3"]);
     assert_eq!(model, &None);
 
-    let err = prepare_launch(
-        &launch,
-        &machine.agents.commands,
-        Some("codex"),
-        PrepareLaunchOptions {
+    let mut resolved = resolve_launch(&launch, &machine.agents.commands, Some("codex"))
+        .expect("resolve codex launch");
+    let err = finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
             permission_mode: Some(PermissionMode::Auto),
             preset: &preset,
             passthrough: &[],

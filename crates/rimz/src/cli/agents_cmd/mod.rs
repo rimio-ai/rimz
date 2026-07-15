@@ -38,7 +38,7 @@ use super::GlobalFlags;
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
-    LayoutPaneParams, Placement, PrepareLaunchOptions, PreparedLaunch, apply_in_place_downgrade,
+    LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, apply_in_place_downgrade,
     cohort_cells, fresh_resume_launch_requests, launch_identity_requests, layout_panes_with_names,
     mint_launch_id, resolve_placement, validate_agent_name,
 };

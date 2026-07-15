@@ -1,4 +1,4 @@
-//! Prepare launch layouts from effective config, then compile them into launch
+//! Resolve launch layouts from effective config, then compile them into launch
 //! identities and backend-neutral pane commands.
 
 use std::fmt;
@@ -24,59 +24,39 @@ pub struct LaunchFinalizeOptions<'a> {
     pub max_turns: Option<u32>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct PrepareLaunchOptions<'a> {
-    pub permission_mode: Option<PermissionMode>,
-    pub preset: &'a crate::agents::LaunchPreset,
-    pub passthrough: &'a [String],
-    pub budget: Option<BudgetSpec>,
-    pub max_turns: Option<u32>,
-}
-
 #[derive(Clone, Debug)]
-pub struct PreparedLaunch {
+pub struct ResolvedLaunch {
     pub teams: crate::config::TeamsConfig,
     pub layout: LayoutSpec,
     pub team_name: Option<String>,
-    pub warnings: Vec<LaunchFinalizeWarning>,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum PrepareLaunchError {
+pub enum ResolveLaunchError {
     #[error(transparent)]
     Layout(#[from] crate::harness::spec::LayoutErr),
     #[error(transparent)]
     Effective(#[from] crate::config::effective::EffectiveConfigErr),
-    #[error(
-        "{origin} {field} `{}` not found; create it or fix the launch config",
-        path.display()
-    )]
-    ProfilePromptFile {
-        origin: String,
-        field: &'static str,
-        path: PathBuf,
-    },
-    #[error(transparent)]
-    Finalize(#[from] LaunchFinalizeError),
 }
 
-impl PrepareLaunchError {
-    pub fn warnings(&self) -> &[LaunchFinalizeWarning] {
-        match self {
-            Self::Finalize(err) => err.warnings(),
-            Self::Layout(_) | Self::Effective(_) | Self::ProfilePromptFile { .. } => &[],
-        }
-    }
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "{origin} {field} `{}` not found; create it or fix the launch config",
+    path.display()
+)]
+pub struct ProfilePromptFileError {
+    pub origin: String,
+    pub field: &'static str,
+    pub path: PathBuf,
 }
 
-/// Resolve effective profiles/teams and finalize one launch layout.
-pub fn prepare_launch(
+/// Resolve effective profiles/teams without applying runtime launch options.
+pub fn resolve_launch(
     launch: &crate::config::effective::LaunchAgents,
     commands: &crate::config::CommandsConfig,
     spec: Option<&str>,
-    options: PrepareLaunchOptions<'_>,
-) -> std::result::Result<PreparedLaunch, PrepareLaunchError> {
-    let mut layout =
+) -> std::result::Result<ResolvedLaunch, ResolveLaunchError> {
+    let layout =
         match crate::harness::spec::resolve_spec(spec, &launch.profiles, commands, &launch.teams) {
             Ok(layout) => layout,
             Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
@@ -89,26 +69,17 @@ pub fn prepare_launch(
     let team_name = spec
         .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
         .map(str::to_owned);
-    ensure_profile_prompt_files(&layout)?;
-    let warnings = finalize_launch_layout(
-        &mut layout,
-        LaunchFinalizeOptions {
-            permission_mode: options.permission_mode,
-            preset: options.preset,
-            passthrough: options.passthrough,
-            budget: options.budget,
-            max_turns: options.max_turns,
-        },
-    )?;
-    Ok(PreparedLaunch {
+    Ok(ResolvedLaunch {
         teams: launch.teams.clone(),
         layout,
         team_name,
-        warnings,
     })
 }
 
-fn ensure_profile_prompt_files(layout: &LayoutSpec) -> std::result::Result<(), PrepareLaunchError> {
+/// Require prompt files declared by resolved profiles before launch finalize.
+pub fn validate_profile_prompt_files(
+    layout: &LayoutSpec,
+) -> std::result::Result<(), ProfilePromptFileError> {
     for cell in layout.columns.iter().flat_map(|column| &column.rows) {
         let Cell::Agent {
             profile,
@@ -127,16 +98,19 @@ fn ensure_profile_prompt_files(layout: &LayoutSpec) -> std::result::Result<(), P
                 append_system_prompt_file.as_ref(),
             ),
         ] {
-            let Some(path) = path.filter(|path| !path.is_file()) else {
+            let Some(path) = path else {
                 continue;
             };
+            if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+                continue;
+            }
             let origin = match (role.as_deref(), profile.as_deref()) {
                 (Some(role), Some(profile)) => format!("role `{role}` profile `{profile}`"),
                 (Some(role), None) => format!("role `{role}`"),
                 (None, Some(profile)) => format!("profile `{profile}`"),
                 (None, None) => "agent cell".to_owned(),
             };
-            return Err(PrepareLaunchError::ProfilePromptFile {
+            return Err(ProfilePromptFileError {
                 origin,
                 field,
                 path: path.clone(),

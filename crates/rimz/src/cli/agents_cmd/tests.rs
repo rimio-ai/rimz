@@ -583,6 +583,27 @@ mod placement {
 mod launch_options {
     use super::*;
 
+    fn resolve_and_validate(
+        args: &AgentsArgs,
+        machine: &rimz::config::MachineConfig,
+        root: &Path,
+    ) -> Result<(ResolvedLaunch, rimz::agents::LaunchPreset)> {
+        let effective =
+            rimz::config::effective::load(&machine.agents, root, &root.join("config-home"))?;
+        let resolved = rimz::harness::plan::resolve_launch(
+            &effective,
+            &machine.agents.commands,
+            args.spec.as_deref(),
+        )?;
+        let preset = validate_resolved_launch_inputs(
+            args,
+            &effective,
+            &machine.agents.commands,
+            &resolved.layout,
+        )?;
+        Ok((resolved, preset))
+    }
+
     #[test]
     fn prompt_file_flags_resolve_and_reject_bad_paths() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -637,6 +658,108 @@ mod launch_options {
                 .contains("reading --append-system-prompt-file"),
             "{err:#}"
         );
+    }
+
+    #[test]
+    fn unknown_spec_wins_over_prompt_ambiguity() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let parsed = AgentsHarness::try_parse_from(["rimz", "missing-agent", "claude"])
+            .expect("parse malformed launch");
+
+        let err = resolve_and_validate(
+            &parsed.args,
+            &rimz::config::MachineConfig::default(),
+            dir.path(),
+        )
+        .expect_err("unknown spec wins");
+
+        assert!(err.to_string().contains("missing-agent"), "{err:#}");
+        assert!(
+            !err.to_string().contains("looks like another spec"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn unknown_spec_wins_over_missing_cli_prompt_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing = dir.path().join("missing.md");
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz",
+            "missing-agent",
+            "--system-prompt-file",
+            missing.to_str().expect("utf8 path"),
+        ])
+        .expect("parse malformed launch");
+
+        let err = resolve_and_validate(
+            &parsed.args,
+            &rimz::config::MachineConfig::default(),
+            dir.path(),
+        )
+        .expect_err("unknown spec wins");
+
+        assert!(err.to_string().contains("missing-agent"), "{err:#}");
+        assert!(!err.to_string().contains("system-prompt-file"), "{err:#}");
+    }
+
+    #[test]
+    fn multi_cell_name_fails_before_finalize_warnings() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.agents.profiles.0.insert(
+            "warn".to_owned(),
+            rimz::config::Profile {
+                agent: "codex".to_owned(),
+                mode: None,
+                model: Some("declared".to_owned()),
+                effort: None,
+                budget: None,
+                system_prompt_file: None,
+                append_system_prompt_file: None,
+                args: Some("--model raw".to_owned()),
+            },
+        );
+        let parsed = AgentsHarness::try_parse_from(["rimz", "warn,codex", "--name", "one"])
+            .expect("parse named multi-cell launch");
+        let effective = rimz::config::effective::load(
+            &machine.agents,
+            dir.path(),
+            &dir.path().join("config-home"),
+        )
+        .expect("effective config");
+        let resolved = rimz::harness::plan::resolve_launch(
+            &effective,
+            &machine.agents.commands,
+            parsed.args.spec.as_deref(),
+        )
+        .expect("resolve warning-capable layout");
+
+        let err = validate_resolved_launch_inputs(
+            &parsed.args,
+            &effective,
+            &machine.agents.commands,
+            &resolved.layout,
+        )
+        .expect_err("name cardinality wins");
+        assert_eq!(
+            err.to_string(),
+            "--name requires a layout with exactly one agent cell"
+        );
+
+        let mut warning_layout = resolved.layout;
+        let warnings = rimz::harness::plan::finalize_launch_layout(
+            &mut warning_layout,
+            LaunchFinalizeOptions {
+                permission_mode: None,
+                preset: &rimz::agents::LaunchPreset::default(),
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+        )
+        .expect("layout can finalize");
+        assert!(!warnings.is_empty(), "fixture must be warning-capable");
     }
 }
 

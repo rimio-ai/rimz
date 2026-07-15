@@ -208,28 +208,7 @@ fn restart_cell(
         .filter(|profile| launch.profiles.0.contains_key(*profile));
     let mut cell = match configured_profile {
         Some(profile) => {
-            let preset = rimz::agents::LaunchPreset::default();
-            let prepared = rimz::harness::plan::prepare_launch(
-                &launch,
-                &machine_config.agents.commands,
-                Some(profile),
-                PrepareLaunchOptions {
-                    permission_mode: None,
-                    preset: &preset,
-                    passthrough: &[],
-                    budget: None,
-                    max_turns: None,
-                },
-            )?;
-            let mut cells = prepared.layout.agent_cells();
-            let cell = cells
-                .next()
-                .cloned()
-                .context("restart profile produced no agent cell")?;
-            if cells.next().is_some() {
-                bail!("restart profile `{profile}` produced more than one agent cell");
-            }
-            cell
+            resolve_restart_profile_cell(profile, &launch, &machine_config.agents.commands)?
         }
         None => {
             if let Some(profile) = agent.profile.as_deref() {
@@ -273,6 +252,23 @@ fn restart_cell(
     *profile = agent.profile.clone();
     *role = agent.role.clone();
     *budget = agent.budget.clone();
+    Ok(cell)
+}
+
+fn resolve_restart_profile_cell(
+    profile: &str,
+    launch: &rimz::config::effective::LaunchAgents,
+    commands: &rimz::config::CommandsConfig,
+) -> Result<Cell> {
+    let resolved = rimz::harness::plan::resolve_launch(launch, commands, Some(profile))?;
+    let mut cells = resolved.layout.agent_cells();
+    let cell = cells
+        .next()
+        .cloned()
+        .context("restart profile produced no agent cell")?;
+    if cells.next().is_some() {
+        bail!("restart profile `{profile}` produced more than one agent cell");
+    }
     Ok(cell)
 }
 
@@ -403,5 +399,44 @@ mod tests {
             Some(FreshReason::NoRecordedConversation)
         );
         assert_eq!(fresh_reason(true, true), None);
+    }
+
+    #[test]
+    fn restart_profile_without_model_stays_unfinalized() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut machine = rimz::config::MachineConfig::default();
+        machine.agents.profiles.0.insert(
+            "codex-plain".to_owned(),
+            rimz::config::Profile {
+                agent: "codex".to_owned(),
+                mode: None,
+                model: None,
+                effort: None,
+                budget: None,
+                system_prompt_file: Some(dir.path().join("missing.md")),
+                append_system_prompt_file: None,
+                args: Some("--search".to_owned()),
+            },
+        );
+        let launch = rimz::config::effective::load(
+            &machine.agents,
+            dir.path(),
+            &dir.path().join("config-home"),
+        )
+        .expect("effective launch");
+
+        let cell = resolve_restart_profile_cell("codex-plain", &launch, &machine.agents.commands)
+            .expect("restart profile cell");
+        let Cell::Agent { args, model, .. } = cell else {
+            panic!("agent cell");
+        };
+
+        assert_eq!(model, None);
+        assert!(args.iter().any(|arg| arg == "--search"));
+        assert!(
+            args.iter()
+                .any(|arg| arg.contains("model_instructions_file=") && arg.ends_with("missing.md"))
+        );
+        assert!(!args.iter().any(|arg| arg == "-m" || arg == "--model"));
     }
 }
