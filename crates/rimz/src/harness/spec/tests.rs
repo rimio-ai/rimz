@@ -571,6 +571,15 @@ fn config_names_reject_grammar_clashes() {
             Err(LayoutErr::ProfileShadowsAddress { name: actual, .. }) if actual == name
         ));
     }
+    assert!(matches!(
+        parse_layout_spec(
+            "bad-command",
+            &no_profiles(),
+            &commands([("bad-command", "nvim 'unterminated")])
+        ),
+        Err(LayoutErr::InvalidCommand { command, reason })
+            if command == "bad-command" && reason.contains("shell quoting")
+    ));
 }
 
 #[test]
