@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::{RoleBinding, Team};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn profile(agent: &str) -> Profile {
     Profile {
@@ -72,436 +72,187 @@ fn no_commands() -> CommandsConfig {
     CommandsConfig::default()
 }
 
-fn agent_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> Cell {
-    let cell = parse_layout_spec(raw, profiles, commands)
-        .expect("parse agent")
-        .columns[0]
-        .rows[0]
-        .clone();
-    match cell {
-        Cell::Agent(_) => cell,
-        _ => panic!("agent cell"),
+fn agent_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> AgentCell {
+    let spec = parse_layout_spec(raw, profiles, commands).expect("parse agent");
+    agent_at(&spec, 0, 0).clone()
+}
+
+fn agent_at(spec: &LayoutSpec, column: usize, row: usize) -> &AgentCell {
+    match &spec.columns[column].rows[row] {
+        Cell::Agent(agent) => agent,
+        Cell::Command { .. } => panic!("agent cell"),
     }
 }
 
 #[test]
-fn parses_columns_and_tiled_rows() {
-    let spec =
-        parse_layout_spec("claude,codex+term", &no_profiles(), &no_commands()).expect("parse");
+fn parses_layout_shape_and_command_precedence() {
+    let commands = commands([
+        ("vim", "nvim -p"),
+        ("htop", "htop"),
+        ("claude", "nvim"),
+        ("logs:tail", "tail -f rimz.log"),
+    ]);
+
+    let spec = parse_layout_spec("term,vim+htop,claude/logs:tail", &no_profiles(), &commands)
+        .expect("layout");
     assert_eq!(
-        spec,
-        LayoutSpec {
-            columns: vec![
-                Column {
-                    rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))],
-                    stacked: false,
-                },
-                Column {
-                    rows: vec![
-                        Cell::agent(AgentKind::new_unchecked("codex")),
-                        Cell::shell()
-                    ],
-                    stacked: false,
-                }
-            ]
-        }
+        spec.columns
+            .iter()
+            .map(|column| (column.rows.len(), column.stacked))
+            .collect::<Vec<_>>(),
+        vec![(1, false), (2, false), (2, true)]
+    );
+    assert_eq!(spec.columns[0].rows[0], Cell::shell());
+    for (column, row, expected) in [
+        (1, 0, vec!["nvim", "-p"]),
+        (1, 1, vec!["htop"]),
+        (2, 0, vec!["nvim"]),
+        (2, 1, vec!["tail", "-f", "rimz.log"]),
+    ] {
+        assert!(matches!(
+            &spec.columns[column].rows[row],
+            Cell::Command { argv }
+                if argv.iter().map(String::as_str).eq(expected)
+        ));
+    }
+    assert_eq!(
+        parse_layout_spec("claude+codex/term", &no_profiles(), &no_commands()),
+        Err(LayoutErr::MixedRowOperators {
+            column: "claude+codex/term".to_owned(),
+        })
     );
 }
 
 #[test]
-fn parses_inline_roles_on_agent_cells() {
-    let spec = parse_layout_spec("claude:planner,codex:coder", &no_profiles(), &no_commands())
-        .expect("parse inline roles");
+fn inline_roles_compose_and_validate() {
+    let profiles = profiles([("planner", profile("claude"))]);
+    let commands = commands([("logs", "tail -f rimz.log")]);
+    let spec = parse_layout_spec(
+        "claude:planner,planner:lead,claude-auto:coder",
+        &profiles,
+        &commands,
+    )
+    .expect("inline roles");
 
     assert!(matches!(
-        &spec.columns[0].rows[0],
-        Cell::Agent(AgentCell { kind, role, profile, .. })
+        agent_at(&spec, 0, 0),
+        AgentCell { kind, role, profile, .. }
             if kind.as_str() == "claude"
                 && role.as_deref() == Some("planner")
                 && profile.is_none()
     ));
     assert!(matches!(
-        &spec.columns[1].rows[0],
-        Cell::Agent(AgentCell { kind, role, profile, .. })
-            if kind.as_str() == "codex"
-                && role.as_deref() == Some("coder")
-                && profile.is_none()
-    ));
-}
-
-#[test]
-fn inline_roles_compose_with_resolution_profiles_and_modes() {
-    let profiles = profiles([("planner", profile("claude"))]);
-    let teams = TeamsConfig::default();
-
-    let single = resolve_spec(Some("claude:planner"), &profiles, &no_commands(), &teams)
-        .expect("resolve single inline role");
-    assert!(matches!(
-        &single.columns[0].rows[0],
-        Cell::Agent(AgentCell { role, profile, .. })
-            if role.as_deref() == Some("planner") && profile.is_none()
-    ));
-
-    let profile_role = parse_layout_spec("planner:lead", &profiles, &no_commands())
-        .expect("parse profiled inline role");
-    assert!(matches!(
-        &profile_role.columns[0].rows[0],
-        Cell::Agent(AgentCell { role, profile, .. })
+        agent_at(&spec, 1, 0),
+        AgentCell { role, profile, .. }
             if role.as_deref() == Some("lead") && profile.as_deref() == Some("planner")
     ));
-
-    let mode_role = parse_layout_spec("claude-auto:coder", &profiles, &no_commands())
-        .expect("parse mode inline role");
     assert!(matches!(
-        &mode_role.columns[0].rows[0],
-        Cell::Agent(AgentCell { mode, role, .. })
+        agent_at(&spec, 2, 0),
+        AgentCell { mode, role, .. }
             if *mode == Some(PermissionMode::Auto) && role.as_deref() == Some("coder")
     ));
 
-    let role_named_like_profile = parse_layout_spec("codex:planner", &profiles, &no_commands())
-        .expect("inline role is a pure label");
-    assert!(matches!(
-        &role_named_like_profile.columns[0].rows[0],
-        Cell::Agent(AgentCell { kind, role, profile, .. })
-            if kind.as_str() == "codex"
-                && role.as_deref() == Some("planner")
-                && profile.is_none()
-    ));
-}
-
-#[test]
-fn inline_roles_reject_invalid_ambiguous_duplicate_and_command_labels() {
-    let commands = commands([("logs", "tail -f rimz.log")]);
-
-    assert_eq!(
-        parse_layout_spec("term:x", &no_profiles(), &commands),
-        Err(LayoutErr::RoleOnCommandCell {
-            cell: "term".to_owned(),
-            role: "x".to_owned(),
-        })
-    );
-    assert_eq!(
-        parse_layout_spec("logs:x", &no_profiles(), &commands),
-        Err(LayoutErr::RoleOnCommandCell {
-            cell: "logs".to_owned(),
-            role: "x".to_owned(),
-        })
-    );
-    assert!(matches!(
-        parse_layout_spec("claude:codex", &no_profiles(), &commands),
-        Err(LayoutErr::InlineRoleShadowsAddress { name, .. }) if name == "codex"
-    ));
-    for role in ["all", "claude-2"] {
+    for (raw, cell) in [("term:x", "term"), ("logs:x", "logs")] {
+        assert_eq!(
+            parse_layout_spec(raw, &profiles, &commands),
+            Err(LayoutErr::RoleOnCommandCell {
+                cell: cell.to_owned(),
+                role: "x".to_owned(),
+            })
+        );
+    }
+    for role in ["codex", "all", "claude-2"] {
         assert!(matches!(
-            parse_layout_spec(&format!("claude:{role}"), &no_profiles(), &commands),
+            parse_layout_spec(&format!("claude:{role}"), &profiles, &commands),
             Err(LayoutErr::InlineRoleShadowsAddress { name, .. }) if name == role
         ));
     }
-    assert_eq!(
-        parse_layout_spec("claude:x,codex:x", &no_profiles(), &commands),
-        Err(LayoutErr::DuplicateInlineRole {
-            role: "x".to_owned(),
-        })
-    );
     for role in ["", "bad role"] {
         assert_eq!(
-            parse_layout_spec(&format!("claude:{role}"), &no_profiles(), &commands),
+            parse_layout_spec(&format!("claude:{role}"), &profiles, &commands),
             Err(LayoutErr::InvalidInlineRole {
                 name: role.to_owned(),
             })
         );
     }
-}
-
-#[test]
-fn exact_command_name_with_colon_wins_over_inline_role_syntax() {
-    let commands = commands([("logs:tail", "tail -f rimz.log")]);
-
     assert_eq!(
-        parse_layout_spec("logs:tail", &no_profiles(), &commands),
-        Ok(LayoutSpec::single(Cell::Command {
-            argv: vec!["tail".to_owned(), "-f".to_owned(), "rimz.log".to_owned()],
-        }))
-    );
-}
-
-#[test]
-fn parses_stacked_columns_and_rejects_mixed_row_operators() {
-    let spec = parse_layout_spec("claude/codex", &no_profiles(), &no_commands()).expect("parse");
-    assert_eq!(spec.columns.len(), 1);
-    assert!(spec.columns[0].stacked);
-    assert_eq!(spec.columns[0].rows.len(), 2);
-
-    let spec =
-        parse_layout_spec("term,claude/codex", &no_profiles(), &no_commands()).expect("parse");
-    assert_eq!(spec.columns.len(), 2);
-    assert!(!spec.columns[0].stacked);
-    assert!(spec.columns[1].stacked);
-    assert_eq!(spec.columns[1].rows.len(), 2);
-
-    assert_eq!(
-        parse_layout_spec("claude+codex/term", &no_profiles(), &no_commands()),
-        Err(LayoutErr::MixedRowOperators {
-            column: "claude+codex/term".to_owned()
+        parse_layout_spec("claude:x,codex:x", &profiles, &commands),
+        Err(LayoutErr::DuplicateInlineRole {
+            role: "x".to_owned(),
         })
     );
 }
 
 #[test]
-fn known_spec_token_recognizes_valid_slash_layouts_only() {
+fn known_spec_tokens_require_parseable_layouts() {
     let profiles = no_profiles();
     let commands = no_commands();
     let teams = TeamsConfig::default();
 
-    assert!(is_known_spec_token(
-        "claude/codex",
-        &profiles,
-        &commands,
-        &teams
-    ));
-    assert!(!is_known_spec_token(
-        "https://example.invalid",
-        &profiles,
-        &commands,
-        &teams
-    ));
-    assert!(is_known_spec_token(
-        "claude:planner",
-        &profiles,
-        &commands,
-        &teams
-    ));
-    assert!(!is_known_spec_token(
-        "claude: fix the bug",
-        &profiles,
-        &commands,
-        &teams
-    ));
+    for raw in ["claude/codex", "claude:planner"] {
+        assert!(is_known_spec_token(raw, &profiles, &commands, &teams));
+    }
+    for raw in ["https://example.invalid", "claude: fix the bug"] {
+        assert!(!is_known_spec_token(raw, &profiles, &commands, &teams));
+    }
 }
 
 #[test]
-fn resolves_default_inline_builtin_and_named_teams() {
+fn resolve_spec_dispatches_default_inline_peer_and_team() {
     let profiles = profiles([
         ("planner", profile("claude")),
         ("reviewer", profile("codex")),
     ]);
-    let commands = no_commands();
-    let mut teams = TeamsConfig::default();
-    teams.0.insert(
+    let mut teams = TeamsConfig(BTreeMap::from([(
         "stacked".to_owned(),
         team(vec![
             role("planner", "planner"),
             role("reviewer", "reviewer"),
         ]),
+    )]));
+
+    for arg in [None, Some("  ")] {
+        assert_eq!(
+            resolve_spec(arg, &profiles, &no_commands(), &teams),
+            Ok(LayoutSpec::single(Cell::shell()))
+        );
+    }
+    assert_eq!(
+        resolve_spec(Some("claude"), &profiles, &no_commands(), &teams),
+        Ok(LayoutSpec::single(Cell::agent(AgentKind::new_unchecked(
+            "claude"
+        ))))
+    );
+    assert_eq!(
+        resolve_spec(Some("peer"), &profiles, &no_commands(), &teams)
+            .expect("peer")
+            .agent_kinds()
+            .collect::<Vec<_>>(),
+        vec!["claude", "codex"]
+    );
+    assert_eq!(
+        resolve_spec(Some("stacked"), &profiles, &no_commands(), &teams)
+            .expect("team")
+            .columns
+            .len(),
+        2
     );
 
-    assert_eq!(
-        resolve_spec(None, &profiles, &commands, &teams).expect("default"),
-        LayoutSpec::single(Cell::shell())
-    );
-    assert_eq!(
-        resolve_spec(Some("claude"), &profiles, &commands, &teams).expect("inline"),
-        LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")))
-    );
     teams
         .0
         .insert("claude".to_owned(), team(vec![role("lead", "planner")]));
     assert_eq!(
-        resolve_spec(Some("claude"), &profiles, &commands, &teams),
+        resolve_spec(Some("claude"), &profiles, &no_commands(), &teams),
         Err(LayoutErr::ReservedTeamName("claude".to_owned()))
     );
-    assert_eq!(
-        resolve_spec(Some("peer"), &profiles, &commands, &teams)
-            .expect("builtin")
-            .columns
-            .len(),
-        2
-    );
-    assert_eq!(
-        resolve_spec(Some("stacked"), &profiles, &commands, &teams)
-            .expect("named")
-            .columns
-            .len(),
-        2
-    );
     assert!(matches!(
-        resolve_spec(Some("missing"), &profiles, &commands, &teams),
+        resolve_spec(Some("missing"), &profiles, &no_commands(), &teams),
         Err(LayoutErr::UnknownTeam { team, .. }) if team == "missing"
     ));
 }
 
 #[test]
-fn commands_parse_as_raw_argv_cells_and_shadow_agent_words() {
-    let commands = commands([("vim", "nvim -p"), ("htop", "htop"), ("claude", "nvim")]);
-
-    let spec =
-        parse_layout_spec("vim,htop+claude", &no_profiles(), &commands).expect("parse commands");
-
-    assert_eq!(
-        spec.columns[0].rows[0],
-        Cell::Command {
-            argv: vec!["nvim".to_owned(), "-p".to_owned()]
-        }
-    );
-    assert_eq!(
-        spec.columns[1].rows,
-        vec![
-            Cell::Command {
-                argv: vec!["htop".to_owned()]
-            },
-            Cell::Command {
-                argv: vec!["nvim".to_owned()]
-            }
-        ]
-    );
-}
-
-#[test]
-fn profile_mode_preset_and_extra_args_render_in_order_and_stamp_profile() {
-    let profiles = profiles([(
-        "codex-deep",
-        Profile {
-            agent: "codex".to_owned(),
-            mode: Some(PermissionMode::Auto),
-            model: Some("gpt-5-codex".to_owned()),
-            effort: Some("high".to_owned()),
-            budget: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            args: Some("--profile reviewer".to_owned()),
-        },
-    )]);
-
-    let Cell::Agent(AgentCell {
-        args,
-        mode,
-        profile,
-        model,
-        effort,
-        ..
-    }) = parse_layout_spec("codex-deep", &profiles, &no_commands())
-        .expect("parse profile")
-        .columns[0]
-        .rows[0]
-        .clone()
-    else {
-        panic!("agent cell");
-    };
-
-    let mut expected = vec![
-        "--model".to_owned(),
-        "gpt-5-codex".to_owned(),
-        "-c".to_owned(),
-        "model_reasoning_effort=high".to_owned(),
-    ];
-    expected.extend(
-        crate::agents::find_adapter("codex")
-            .expect("codex")
-            .permission_args(PermissionMode::Auto),
-    );
-    expected.extend(["--profile".to_owned(), "reviewer".to_owned()]);
-    assert_eq!(args, expected);
-    assert_eq!(mode, Some(PermissionMode::Auto));
-    assert_eq!(profile.as_deref(), Some("codex-deep"));
-    assert_eq!(model.as_deref(), Some("gpt-5-codex"));
-    assert_eq!(effort.as_deref(), Some("high"));
-}
-
-#[test]
-fn profile_prompt_files_render_and_inherit() {
-    let profiles = profiles([
-        (
-            "planner",
-            Profile {
-                agent: "claude".to_owned(),
-                system_prompt_file: Some("/prompts/planner.md".into()),
-                ..profile("claude")
-            },
-        ),
-        (
-            "append",
-            Profile {
-                agent: "claude".to_owned(),
-                append_system_prompt_file: Some("/prompts/planner-extra.md".into()),
-                ..profile("claude")
-            },
-        ),
-        (
-            "base",
-            Profile {
-                agent: "claude".to_owned(),
-                append_system_prompt_file: Some("/prompts/base-extra.md".into()),
-                ..profile("claude")
-            },
-        ),
-        (
-            "child",
-            Profile {
-                agent: "base".to_owned(),
-                ..profile("base")
-            },
-        ),
-    ]);
-
-    let Cell::Agent(AgentCell { args, profile, .. }) =
-        agent_cell("planner", &profiles, &no_commands())
-    else {
-        unreachable!();
-    };
-    assert_eq!(profile.as_deref(), Some("planner"));
-    assert_eq!(
-        args,
-        vec![
-            "--system-prompt-file".to_owned(),
-            "/prompts/planner.md".to_owned(),
-        ]
-    );
-
-    let Cell::Agent(AgentCell {
-        args,
-        append_system_prompt_file,
-        profile,
-        ..
-    }) = agent_cell("append", &profiles, &no_commands())
-    else {
-        unreachable!();
-    };
-    assert_eq!(profile.as_deref(), Some("append"));
-    assert_eq!(
-        append_system_prompt_file.as_deref(),
-        Some(Path::new("/prompts/planner-extra.md"))
-    );
-    assert_eq!(
-        args,
-        vec![
-            "--append-system-prompt-file".to_owned(),
-            "/prompts/planner-extra.md".to_owned(),
-        ]
-    );
-
-    let Cell::Agent(AgentCell {
-        args,
-        append_system_prompt_file,
-        ..
-    }) = agent_cell("child", &profiles, &no_commands())
-    else {
-        unreachable!();
-    };
-    assert_eq!(
-        append_system_prompt_file.as_deref(),
-        Some(Path::new("/prompts/base-extra.md"))
-    );
-    assert_eq!(
-        args,
-        vec![
-            "--append-system-prompt-file".to_owned(),
-            "/prompts/base-extra.md".to_owned(),
-        ]
-    );
-}
-
-#[test]
-fn profile_inheritance_folds_child_wins_and_args_replace() {
+fn profile_inheritance_and_builtin_overrides_resolve() {
     let profiles = profiles([
         (
             "base",
@@ -530,49 +281,122 @@ fn profile_inheritance_folds_child_wins_and_args_replace() {
                 ..profile("base")
             },
         ),
+        (
+            "claude",
+            Profile {
+                agent: "claude".to_owned(),
+                effort: Some("high".to_owned()),
+                ..profile("claude")
+            },
+        ),
+        ("claude-child", profile("claude")),
     ]);
 
-    let child = resolve_profile("child", &profiles).expect("child resolves");
+    assert_eq!(
+        resolve_profile("claude", &no_profiles()),
+        Ok(ResolvedProfile::bare("claude"))
+    );
+    let child = resolve_profile("child", &profiles).expect("child");
     assert_eq!(child.kind.as_str(), "codex");
     assert_eq!(child.model.as_deref(), Some("base-model"));
     assert_eq!(child.effort.as_deref(), Some("high"));
     assert_eq!(child.args.as_deref(), Some("--child"));
 
-    let inherits_args = resolve_profile("inherits-args", &profiles).expect("child resolves");
-    assert_eq!(inherits_args.model.as_deref(), Some("child-model"));
-    assert_eq!(inherits_args.effort.as_deref(), Some("medium"));
-    assert_eq!(inherits_args.args.as_deref(), Some("--base"));
+    let inherited = resolve_profile("inherits-args", &profiles).expect("inherited");
+    assert_eq!(inherited.model.as_deref(), Some("child-model"));
+    assert_eq!(inherited.effort.as_deref(), Some("medium"));
+    assert_eq!(inherited.args.as_deref(), Some("--base"));
+
+    for name in ["claude", "claude-child"] {
+        let resolved = resolve_profile(name, &profiles).expect("override");
+        assert_eq!(resolved.kind.as_str(), "claude");
+        assert_eq!(resolved.effort.as_deref(), Some("high"));
+    }
 }
 
 #[test]
-fn builtin_kinds_are_implicit_profiles_and_explicit_overrides_win() {
-    let implicit = resolve_profile("claude", &no_profiles()).expect("built-in profile resolves");
-    assert_eq!(implicit, ResolvedProfile::bare("claude"));
+fn profile_cells_render_fields_in_contract_order() {
+    let profiles = profiles([
+        (
+            "codex-deep",
+            Profile {
+                agent: "codex".to_owned(),
+                mode: Some(PermissionMode::Auto),
+                model: Some("gpt-5-codex".to_owned()),
+                effort: Some("high".to_owned()),
+                args: Some("--profile reviewer".to_owned()),
+                ..profile("codex")
+            },
+        ),
+        (
+            "prompt-base",
+            Profile {
+                agent: "claude".to_owned(),
+                append_system_prompt_file: Some("/prompts/base-extra.md".into()),
+                ..profile("claude")
+            },
+        ),
+        (
+            "prompt-child",
+            Profile {
+                agent: "prompt-base".to_owned(),
+                system_prompt_file: Some("/prompts/planner.md".into()),
+                ..profile("prompt-base")
+            },
+        ),
+    ]);
+    let spec =
+        parse_layout_spec("codex-deep,prompt-child", &profiles, &no_commands()).expect("profiles");
 
-    let profiles = profiles([(
-        "claude",
-        Profile {
-            agent: "claude".to_owned(),
-            effort: Some("high".to_owned()),
-            ..profile("claude")
-        },
-    )]);
-    let explicit = resolve_profile("claude", &profiles).expect("explicit override resolves");
-    assert_eq!(explicit.kind.as_str(), "claude");
-    assert_eq!(explicit.effort.as_deref(), Some("high"));
-}
+    let codex = agent_at(&spec, 0, 0);
+    let mut expected = vec![
+        "--model".to_owned(),
+        "gpt-5-codex".to_owned(),
+        "-c".to_owned(),
+        "model_reasoning_effort=high".to_owned(),
+    ];
+    expected.extend(
+        crate::agents::find_adapter("codex")
+            .expect("codex")
+            .permission_args(PermissionMode::Auto),
+    );
+    expected.extend(["--profile".to_owned(), "reviewer".to_owned()]);
+    assert_eq!(codex.args, expected);
+    assert_eq!(codex.mode, Some(PermissionMode::Auto));
+    assert_eq!(codex.profile.as_deref(), Some("codex-deep"));
+    assert_eq!(codex.model.as_deref(), Some("gpt-5-codex"));
+    assert_eq!(codex.effort.as_deref(), Some("high"));
 
-#[test]
-fn profile_resolution_reports_unknown_base_cycles_depth_and_unsupported_fields() {
-    let unknown = profiles([("planner", profile("ghost"))]);
+    let prompt = agent_at(&spec, 1, 0);
+    assert_eq!(prompt.profile.as_deref(), Some("prompt-child"));
     assert_eq!(
-        resolve_profile("planner", &unknown),
+        prompt.system_prompt_file.as_deref(),
+        Some(Path::new("/prompts/planner.md"))
+    );
+    assert_eq!(
+        prompt.append_system_prompt_file.as_deref(),
+        Some(Path::new("/prompts/base-extra.md"))
+    );
+    assert_eq!(
+        prompt.args,
+        vec![
+            "--system-prompt-file".to_owned(),
+            "/prompts/planner.md".to_owned(),
+            "--append-system-prompt-file".to_owned(),
+            "/prompts/base-extra.md".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn profile_resolution_rejects_invalid_chains_and_fields() {
+    assert_eq!(
+        resolve_profile("planner", &profiles([("planner", profile("ghost"))])),
         Err(LayoutErr::UnknownProfileBase {
             profile: "planner".to_owned(),
-            base: "ghost".to_owned()
+            base: "ghost".to_owned(),
         })
     );
-
     let cycle = profiles([
         ("a", profile("b")),
         ("b", profile("c")),
@@ -587,13 +411,26 @@ fn profile_resolution_reports_unknown_base_cycles_depth_and_unsupported_fields()
     for i in 0..=MAX_PROFILE_DEPTH {
         chain.insert(format!("p{i}"), profile(&format!("p{}", i + 1)));
     }
-    let too_deep = ProfilesConfig(chain);
     assert_eq!(
-        resolve_profile("p0", &too_deep),
+        resolve_profile("p0", &ProfilesConfig(chain)),
         Err(LayoutErr::ProfileChainTooDeep {
-            profile: "p0".to_owned()
+            profile: "p0".to_owned(),
         })
     );
+
+    let bad_args = profiles([(
+        "bad-args",
+        Profile {
+            agent: "claude".to_owned(),
+            args: Some("'unterminated".to_owned()),
+            ..profile("claude")
+        },
+    )]);
+    assert!(matches!(
+        parse_layout_spec("bad-args", &bad_args, &no_commands()),
+        Err(LayoutErr::InvalidProfile { profile, reason })
+            if profile == "bad-args" && reason.contains("shell quoting")
+    ));
 
     let unsupported = profiles([(
         "pi-deep",
@@ -606,26 +443,22 @@ fn profile_resolution_reports_unknown_base_cycles_depth_and_unsupported_fields()
     assert!(matches!(
         parse_layout_spec("pi-deep", &unsupported, &no_commands()),
         Err(LayoutErr::InvalidProfile { profile, reason })
-            if profile == "pi-deep" && reason.contains("does not support profile field `system-prompt-file`")
-    ));
-
-    let unsupported_append = profiles([(
-        "codex-append",
-        Profile {
-            agent: "codex".to_owned(),
-            append_system_prompt_file: Some(PathBuf::from("/abs/append.md")),
-            ..profile("codex")
-        },
-    )]);
-    assert!(matches!(
-        parse_layout_spec("codex-append", &unsupported_append, &no_commands()),
-        Err(LayoutErr::InvalidProfile { profile, reason })
-            if profile == "codex-append" && reason.contains("does not support profile field `append-system-prompt-file`")
+            if profile == "pi-deep" && reason.contains("system-prompt-file")
     ));
 }
 
 #[test]
-fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
+fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
+    for (raw, mode) in [
+        ("pi-ask", PermissionMode::Ask),
+        ("pi-plan", PermissionMode::Plan),
+    ] {
+        let cell = agent_cell(raw, &no_profiles(), &no_commands());
+        assert_eq!(cell.kind.as_str(), "pi");
+        assert_eq!(cell.mode, Some(mode));
+        assert!(cell.args.is_empty());
+    }
+
     let profiles = profiles([
         (
             "claude",
@@ -636,261 +469,56 @@ fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
                 ..profile("claude")
             },
         ),
-        ("planner", profile("claude")),
+        (
+            "pi",
+            Profile {
+                agent: "pi".to_owned(),
+                mode: Some(PermissionMode::Auto),
+                args: Some("--profile-arg".to_owned()),
+                ..profile("pi")
+            },
+        ),
     ]);
 
-    let mut expected_plan = crate::agents::find_adapter("claude")
-        .expect("claude")
-        .permission_args(PermissionMode::Plan);
-    expected_plan.push("--append".to_owned());
-    for (raw, expected_profile) in [("claude", "claude"), ("planner", "planner")] {
-        let Cell::Agent(AgentCell {
-            args,
-            mode,
-            profile,
-            ..
-        }) = agent_cell(raw, &profiles, &no_commands())
-        else {
-            unreachable!();
-        };
-        assert_eq!(profile.as_deref(), Some(expected_profile), "{raw}");
-        assert_eq!(mode, Some(PermissionMode::Plan), "{raw}");
-        assert_eq!(args, expected_plan.clone(), "{raw}");
-    }
-
-    let Cell::Agent(AgentCell {
-        args,
-        mode,
-        profile,
-        ..
-    }) = agent_cell("claude-auto", &profiles, &no_commands())
-    else {
-        unreachable!();
-    };
+    let auto = agent_cell("claude-auto", &profiles, &no_commands());
     let mut expected_auto = vec!["--append".to_owned()];
     expected_auto.extend(
         crate::agents::find_adapter("claude")
             .expect("claude")
             .permission_args(PermissionMode::Auto),
     );
-    assert_eq!(profile.as_deref(), Some("claude"));
-    assert_eq!(mode, Some(PermissionMode::Auto));
-    assert_eq!(args, expected_auto);
+    assert_eq!(auto.kind.as_str(), "claude");
+    assert_eq!(auto.profile.as_deref(), Some("claude"));
+    assert_eq!(auto.mode, Some(PermissionMode::Auto));
+    assert_eq!(auto.args, expected_auto);
 
-    let Cell::Agent(AgentCell {
-        args,
-        mode,
-        profile,
-        ..
-    }) = agent_cell("claude-ping", &profiles, &no_commands())
-    else {
-        unreachable!();
-    };
-    assert_eq!(profile.as_deref(), Some("claude"));
-    assert_eq!(mode, None);
-    assert_eq!(
-        args,
-        vec![
-            "--append".to_owned(),
-            "--model".to_owned(),
-            "sonnet".to_owned(),
-            "--effort".to_owned(),
-            "low".to_owned()
-        ]
-    );
-    assert!(
-        !args.iter().any(|arg| arg == "ping"),
-        "ping prompt stays out of cell args"
-    );
-}
+    let ask = agent_cell("pi-ask", &profiles, &no_commands());
+    assert_eq!(ask.profile.as_deref(), Some("pi"));
+    assert_eq!(ask.mode, Some(PermissionMode::Ask));
+    assert_eq!(ask.args, vec!["--profile-arg".to_owned()]);
 
-#[test]
-fn virtual_agent_modes_and_ping_work_without_config() {
-    let spec = parse_layout_spec(
-        "claude-auto,codex-yolo+pi-ask",
-        &no_profiles(),
-        &no_commands(),
-    )
-    .expect("virtual modes");
+    let ping = agent_cell("claude-ping", &profiles, &no_commands());
+    let mut expected_ping = vec!["--append".to_owned()];
+    expected_ping.extend(
+        crate::agents::find_adapter("claude")
+            .expect("claude")
+            .ping_args()
+            .expect("claude ping"),
+    );
+    assert_eq!(ping.profile.as_deref(), Some("claude"));
+    assert_eq!(ping.mode, None);
+    assert_eq!(ping.args, expected_ping);
+    assert!(!ping.args.iter().any(|arg| arg == "ping"));
 
-    assert_eq!(
-        spec.columns[0].rows[0],
-        Cell::Agent(AgentCell {
-            kind: AgentKind::new_unchecked("claude"),
-            args: crate::agents::find_adapter("claude")
-                .expect("claude")
-                .permission_args(PermissionMode::Auto),
-            mode: Some(PermissionMode::Auto),
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            budget: None,
-        })
-    );
-    assert_eq!(
-        spec.columns[1].rows[0],
-        Cell::Agent(AgentCell {
-            kind: AgentKind::new_unchecked("codex"),
-            args: crate::agents::find_adapter("codex")
-                .expect("codex")
-                .permission_args(PermissionMode::Yolo),
-            mode: Some(PermissionMode::Yolo),
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            budget: None,
-        })
-    );
-    assert_eq!(
-        spec.columns[1].rows[1],
-        Cell::Agent(AgentCell {
-            kind: AgentKind::new_unchecked("pi"),
-            args: Vec::new(),
-            mode: Some(PermissionMode::Ask),
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            budget: None,
-        })
-    );
-
-    assert_eq!(
-        parse_layout_spec("claude-ping", &no_profiles(), &no_commands())
-            .expect("claude-ping")
-            .columns[0]
-            .rows[0],
-        Cell::Agent(AgentCell {
-            kind: AgentKind::new_unchecked("claude"),
-            args: vec![
-                "--model".to_owned(),
-                "sonnet".to_owned(),
-                "--effort".to_owned(),
-                "low".to_owned()
-            ],
-            mode: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            budget: None,
-        })
-    );
-    let Cell::Agent(AgentCell { args, .. }) =
-        parse_layout_spec("codex-ping", &no_profiles(), &no_commands())
-            .expect("codex-ping")
-            .columns[0]
-            .rows[0]
-            .clone()
-    else {
-        unreachable!();
-    };
-    assert_eq!(
-        args,
-        vec!["-c".to_owned(), "model_reasoning_effort=low".to_owned()]
-    );
-    assert!(
-        !args.iter().any(|arg| arg == "ping"),
-        "codex ping prompt stays out of cell args"
-    );
     assert!(matches!(
-        parse_layout_spec("pi-yolo", &no_profiles(), &no_commands()),
-        Err(LayoutErr::UnknownCell { cell, .. }) if cell == "pi-yolo"
-    ));
-    assert!(matches!(
-        parse_layout_spec("droid-yolo", &no_profiles(), &no_commands()),
-        Err(LayoutErr::UnknownCell { cell, .. }) if cell == "droid-yolo"
-    ));
-    for supported in ["droid-auto", "droid-ask", "droid-plan"] {
-        assert!(parse_layout_spec(supported, &no_profiles(), &no_commands()).is_ok());
-    }
-}
-
-#[test]
-fn opencode_virtual_modes_render_provider_flags() {
-    for (raw, mode, expected) in [
-        (
-            "opencode-plan",
-            PermissionMode::Plan,
-            vec!["--agent".to_owned(), "plan".to_owned()],
-        ),
-        (
-            "opencode-yolo",
-            PermissionMode::Yolo,
-            vec!["--auto".to_owned()],
-        ),
-    ] {
-        let Cell::Agent(AgentCell {
-            args,
-            mode: actual_mode,
-            ..
-        }) = agent_cell(raw, &no_profiles(), &no_commands())
-        else {
-            unreachable!();
-        };
-        assert_eq!(actual_mode, Some(mode), "{raw}");
-        assert_eq!(args, expected, "{raw}");
-    }
-}
-
-#[test]
-fn kind_override_does_not_make_unsupported_virtual_cells_valid() {
-    let profiles = profiles([(
-        "pi",
-        Profile {
-            agent: "pi".to_owned(),
-            args: Some("--profile-arg".to_owned()),
-            ..profile("pi")
-        },
-    )]);
-
-    let Cell::Agent(AgentCell {
-        args,
-        mode,
-        profile,
-        ..
-    }) = parse_layout_spec("pi-ask", &profiles, &no_commands())
-        .expect("ask remains valid")
-        .columns[0]
-        .rows[0]
-        .clone()
-    else {
-        panic!("agent cell");
-    };
-    assert_eq!(args, vec!["--profile-arg".to_owned()]);
-    assert_eq!(mode, Some(PermissionMode::Ask));
-    assert_eq!(profile.as_deref(), Some("pi"));
-
-    let err =
-        parse_layout_spec("pi-yolo", &profiles, &no_commands()).expect_err("yolo unsupported");
-    assert!(matches!(
-        err,
-        LayoutErr::UnknownCell { ref cell, ref valid }
-            if cell == "pi-yolo" && !valid.contains("pi-yolo") && !valid.contains("pi-ping")
-    ));
-
-    let layouts = TeamsConfig(BTreeMap::from([(
-        "bad".to_owned(),
-        team(vec![role("bad", "missing")]),
-    )]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &layouts),
-        Err(LayoutErr::UnknownRoleProfile { profile, .. }) if profile == "missing"
+        parse_layout_spec("pi-yolo", &profiles, &no_commands()),
+        Err(LayoutErr::UnknownCell { cell, valid })
+            if cell == "pi-yolo" && !valid.contains("pi-yolo")
     ));
 }
 
 #[test]
-fn profile_names_allow_kind_override_but_reject_address_grammar_clashes() {
+fn config_names_reject_grammar_clashes() {
     assert!(
         parse_layout_spec(
             "claude",
@@ -900,120 +528,53 @@ fn profile_names_allow_kind_override_but_reject_address_grammar_clashes() {
         .is_ok()
     );
 
+    assert_eq!(
+        parse_layout_spec(
+            "term",
+            &profiles([("bad/name", profile("claude"))]),
+            &no_commands()
+        ),
+        Err(LayoutErr::InvalidProfileName {
+            name: "bad/name".to_owned(),
+        })
+    );
+    assert_eq!(
+        parse_layout_spec("term", &no_profiles(), &commands([("bad name", "nvim")])),
+        Err(LayoutErr::InvalidCommandName {
+            name: "bad name".to_owned(),
+        })
+    );
+    assert_eq!(
+        parse_layout_spec(
+            "claude",
+            &profiles([("term", profile("claude"))]),
+            &no_commands()
+        ),
+        Err(LayoutErr::ReservedProfileName {
+            name: "term".to_owned(),
+        })
+    );
+    assert_eq!(
+        parse_layout_spec("claude", &no_profiles(), &commands([("term", "nvim")])),
+        Err(LayoutErr::ReservedCommandName {
+            name: "term".to_owned(),
+        })
+    );
+
     for name in ["all", "claude-2", "a:b", "a#b"] {
-        let profiles = profiles([(name, profile("claude"))]);
         assert!(matches!(
-            parse_layout_spec("term", &profiles, &no_commands()),
-            Err(LayoutErr::ProfileShadowsAddress { .. })
+            parse_layout_spec(
+                "term",
+                &profiles([(name, profile("claude"))]),
+                &no_commands()
+            ),
+            Err(LayoutErr::ProfileShadowsAddress { name: actual, .. }) if actual == name
         ));
     }
 }
 
 #[test]
-fn invalid_names_and_keyword_errors_are_specific() {
-    let bad_profile = profiles([("bad,name", profile("claude"))]);
-    assert_eq!(
-        parse_layout_spec("term", &bad_profile, &no_commands()),
-        Err(LayoutErr::InvalidProfileName {
-            name: "bad,name".to_owned()
-        })
-    );
-    let bad_command = commands([("bad name", "nvim")]);
-    assert_eq!(
-        parse_layout_spec("term", &no_profiles(), &bad_command),
-        Err(LayoutErr::InvalidCommandName {
-            name: "bad name".to_owned()
-        })
-    );
-    let bad_profile = profiles([("bad/name", profile("claude"))]);
-    assert_eq!(
-        parse_layout_spec("term", &bad_profile, &no_commands()),
-        Err(LayoutErr::InvalidProfileName {
-            name: "bad/name".to_owned()
-        })
-    );
-    let bad_command = commands([("bad/name", "nvim")]);
-    assert_eq!(
-        parse_layout_spec("term", &no_profiles(), &bad_command),
-        Err(LayoutErr::InvalidCommandName {
-            name: "bad/name".to_owned()
-        })
-    );
-    let bad_quote = commands([("bad-command", "nvim 'unterminated")]);
-    assert_eq!(
-        parse_layout_spec("bad-command", &no_profiles(), &bad_quote),
-        Err(LayoutErr::InvalidCommand {
-            command: "bad-command".to_owned(),
-            reason: "check shell quoting in command".to_owned()
-        })
-    );
-    let reserved = profiles([("term", profile("claude"))]);
-    assert_eq!(
-        parse_layout_spec("claude", &reserved, &no_commands()),
-        Err(LayoutErr::ReservedProfileName {
-            name: "term".to_owned()
-        })
-    );
-}
-
-#[test]
-fn named_teams_resolve_roles_to_one_column_each() {
-    let profiles = profiles([
-        (
-            "claude-plan",
-            Profile {
-                agent: "claude".to_owned(),
-                args: Some("--permission-mode plan".to_owned()),
-                ..profile("claude")
-            },
-        ),
-        ("reviewer", profile("codex")),
-    ]);
-    let commands = commands([("vim", "nvim")]);
-    let teams = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team(vec![
-            role("planner", "claude-plan"),
-            role("reviewer", "reviewer"),
-        ]),
-    )]));
-
-    let spec = resolve_spec(Some("review"), &profiles, &commands, &teams).expect("team");
-
-    assert_eq!(
-        spec.columns[0].rows[0],
-        Cell::Agent(AgentCell {
-            kind: AgentKind::new_unchecked("claude"),
-            args: vec!["--permission-mode".to_owned(), "plan".to_owned()],
-            mode: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: Some("claude-plan".to_owned()),
-            role: Some("planner".to_owned()),
-            model: None,
-            effort: None,
-            budget: None,
-        })
-    );
-    assert_eq!(
-        spec.columns[1].rows[0],
-        Cell::Agent(AgentCell {
-            kind: AgentKind::new_unchecked("codex"),
-            args: Vec::new(),
-            mode: None,
-            system_prompt_file: None,
-            append_system_prompt_file: None,
-            profile: Some("reviewer".to_owned()),
-            role: Some("reviewer".to_owned()),
-            model: None,
-            effort: None,
-            budget: None,
-        })
-    );
-}
-
-#[test]
-fn team_role_overrides_profile_fields_and_args_replace() {
+fn named_teams_compile_roles_and_apply_overrides() {
     let profiles = profiles([
         (
             "coder-base",
@@ -1064,52 +625,33 @@ fn team_role_overrides_profile_fields_and_args_replace() {
     )]));
 
     let spec = resolve_spec(Some("review"), &profiles, &no_commands(), &teams).expect("team");
-    let Cell::Agent(AgentCell {
-        args,
-        mode,
-        system_prompt_file,
-        profile,
-        role,
-        model,
-        effort,
-        ..
-    }) = spec.columns[0].rows[0].clone()
-    else {
-        panic!("agent cell");
-    };
+    assert_eq!(spec.columns.len(), 2);
+    assert!(spec.columns.iter().all(|column| !column.stacked));
 
-    assert_eq!(mode, Some(PermissionMode::Ask));
+    let coder = agent_at(&spec, 0, 0);
+    assert_eq!(coder.kind.as_str(), "codex");
+    assert_eq!(coder.profile.as_deref(), Some("coder-base"));
+    assert_eq!(coder.role.as_deref(), Some("coder"));
+    assert_eq!(coder.mode, Some(PermissionMode::Ask));
+    assert_eq!(coder.model.as_deref(), Some("role-model"));
+    assert_eq!(coder.effort.as_deref(), Some("high"));
     assert_eq!(
-        system_prompt_file.as_deref(),
+        coder.system_prompt_file.as_deref(),
         Some(Path::new("/prompts/coder.md"))
     );
-    assert_eq!(profile.as_deref(), Some("coder-base"));
-    assert_eq!(role.as_deref(), Some("coder"));
-    assert_eq!(model.as_deref(), Some("role-model"));
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert!(args.contains(&"role-model".to_owned()), "{args:?}");
-    assert!(
-        args.contains(&"model_reasoning_effort=high".to_owned()),
-        "{args:?}"
-    );
-    assert!(args.contains(&"--role".to_owned()), "{args:?}");
-    assert!(!args.contains(&"--base".to_owned()), "{args:?}");
+    assert!(coder.args.contains(&"--role".to_owned()));
+    assert!(!coder.args.contains(&"--base".to_owned()));
 
-    let Cell::Agent(AgentCell {
-        args,
-        append_system_prompt_file,
-        ..
-    }) = spec.columns[1].rows[0].clone()
-    else {
-        panic!("agent cell");
-    };
-
+    let planner = agent_at(&spec, 1, 0);
+    assert_eq!(planner.kind.as_str(), "claude");
+    assert_eq!(planner.profile.as_deref(), Some("planner-base"));
+    assert_eq!(planner.role.as_deref(), Some("planner"));
     assert_eq!(
-        append_system_prompt_file.as_deref(),
+        planner.append_system_prompt_file.as_deref(),
         Some(Path::new("/prompts/role-extra.md"))
     );
     assert_eq!(
-        args,
+        planner.args,
         vec![
             "--append-system-prompt-file".to_owned(),
             "/prompts/role-extra.md".to_owned(),
@@ -1118,114 +660,46 @@ fn team_role_overrides_profile_fields_and_args_replace() {
 }
 
 #[test]
-fn team_role_spec_resolves_one_role_with_team_identity() {
-    let profiles = profiles([(
-        "planner-profile",
-        Profile {
-            agent: "codex".to_owned(),
-            model: Some("profile-model".to_owned()),
-            effort: Some("medium".to_owned()),
-            ..profile("codex")
-        },
-    )]);
-    let teams = TeamsConfig(BTreeMap::from([(
-        "forge".to_owned(),
-        team(vec![
-            RoleBinding {
-                role: "planner".to_owned(),
-                profile: "planner-profile".to_owned(),
-                mode: Some(PermissionMode::Ask),
-                model: Some("role-model".to_owned()),
-                effort: Some("high".to_owned()),
-                budget: None,
-                system_prompt_file: None,
-                append_system_prompt_file: None,
-                args: None,
-            },
-            role("sub.planner", "planner-profile"),
-        ]),
-    )]));
-
-    let spec =
-        resolve_spec(Some("forge.planner"), &profiles, &no_commands(), &teams).expect("team role");
-
-    assert_eq!(spec.columns.len(), 1);
-    let [
-        Cell::Agent(AgentCell {
-            kind,
-            mode,
-            profile,
-            role,
-            model,
-            effort,
-            ..
-        }),
-    ] = spec.columns[0].rows.as_slice()
-    else {
-        panic!("single agent role cell");
-    };
-    assert_eq!(kind.as_str(), "codex");
-    assert_eq!(*mode, Some(PermissionMode::Ask));
-    assert_eq!(profile.as_deref(), Some("planner-profile"));
-    assert_eq!(role.as_deref(), Some("planner"));
-    assert_eq!(model.as_deref(), Some("role-model"));
-    assert_eq!(effort.as_deref(), Some("high"));
-
-    let dotted_role = resolve_spec(Some("forge.sub.planner"), &profiles, &no_commands(), &teams)
-        .expect("dotted role");
-    assert!(matches!(
-        &dotted_role.columns[0].rows[0],
-        Cell::Agent(AgentCell { role, .. }) if role.as_deref() == Some("sub.planner")
-    ));
-}
-
-#[test]
-fn team_role_spec_reports_unknown_role_and_preserves_non_team_dot_specs() {
-    let team_profiles = profiles([("planner-profile", profile("claude"))]);
+fn team_role_specs_preserve_identity_and_disambiguate_dots() {
+    let profiles = profiles([
+        ("planner-profile", profile("codex")),
+        ("notateam.planner", profile("claude")),
+    ]);
     let teams = TeamsConfig(BTreeMap::from([(
         "forge".to_owned(),
         team(vec![
             role("planner", "planner-profile"),
-            role("coder", "planner-profile"),
+            role("sub.planner", "planner-profile"),
         ]),
     )]));
 
+    let planner =
+        resolve_spec(Some("forge.planner"), &profiles, &no_commands(), &teams).expect("role");
+    assert_eq!(planner.columns.len(), 1);
     assert!(matches!(
-        resolve_spec(Some("forge.bogus"), &team_profiles, &no_commands(), &teams),
-        Err(LayoutErr::UnknownRoleInTeam {
-            team,
-            role,
-            valid_roles
-        }) if team == "forge" && role == "bogus" && valid_roles == "planner, coder"
+        agent_at(&planner, 0, 0),
+        AgentCell { kind, profile, role, .. }
+            if kind.as_str() == "codex"
+                && profile.as_deref() == Some("planner-profile")
+                && role.as_deref() == Some("planner")
     ));
+    let dotted = resolve_spec(Some("forge.sub.planner"), &profiles, &no_commands(), &teams)
+        .expect("dotted role");
+    assert_eq!(agent_at(&dotted, 0, 0).role.as_deref(), Some("sub.planner"));
     assert!(matches!(
-        resolve_spec(
-            Some("notateam.planner"),
-            &team_profiles,
-            &no_commands(),
-            &teams
-        ),
-        Err(LayoutErr::UnknownTeam { team, .. }) if team == "notateam.planner"
+        resolve_spec(Some("forge.bogus"), &profiles, &no_commands(), &teams),
+        Err(LayoutErr::UnknownRoleInTeam { team, role, valid_roles })
+            if team == "forge"
+                && role == "bogus"
+                && valid_roles == "planner, sub.planner"
     ));
 
-    let profile_spec = profiles([("notateam.planner", profile("claude"))]);
-    assert!(matches!(
-        resolve_spec(Some("notateam.planner"), &profile_spec, &no_commands(), &teams),
-        Ok(LayoutSpec { columns }) if matches!(
-            &columns[0].rows[0],
-            Cell::Agent(AgentCell { profile, .. }) if profile.as_deref() == Some("notateam.planner")
-        )
-    ));
-}
-
-#[test]
-fn team_names_reject_dots_and_spec_team_handles_team_role_specs() {
-    let profiles = profiles([("planner-profile", profile("claude"))]);
-    let teams = TeamsConfig(BTreeMap::from([(
-        "forge".to_owned(),
-        team(vec![role("planner", "planner-profile")]),
-    )]));
-
+    let profile_spec = resolve_spec(Some("notateam.planner"), &profiles, &no_commands(), &teams)
+        .expect("dotted profile");
+    assert_eq!(
+        agent_at(&profile_spec, 0, 0).profile.as_deref(),
+        Some("notateam.planner")
+    );
     assert_eq!(spec_team("forge", &teams), Some("forge"));
     assert_eq!(spec_team("forge.planner", &teams), Some("forge"));
     assert_eq!(spec_team("notateam.planner", &teams), None);
@@ -1237,195 +711,117 @@ fn team_names_reject_dots_and_spec_team_handles_team_role_specs() {
     assert_eq!(
         validate_config(&profiles, &no_commands(), &bad_teams),
         Err(LayoutErr::InvalidTeamName {
-            name: "pc.r".to_owned()
-        })
-    );
-    let bad_teams = TeamsConfig(BTreeMap::from([(
-        "pc/r".to_owned(),
-        team(vec![role("planner", "planner-profile")]),
-    )]));
-    assert_eq!(
-        validate_config(&profiles, &no_commands(), &bad_teams),
-        Err(LayoutErr::InvalidTeamName {
-            name: "pc/r".to_owned()
+            name: "pc.r".to_owned(),
         })
     );
 }
 
 #[test]
-fn team_layout_places_roles_first_and_allows_roleless_extras() {
+fn explicit_team_layouts_place_roles_and_roleless_cells() {
     let profiles = profiles([
         ("planner-profile", profile("claude")),
         ("coder-profile", profile("codex")),
         ("reviewer-profile", profile("claude")),
     ]);
     let commands = commands([("logs", "tail -f rimz.log")]);
-    let teams = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team_with_layout(
-            vec![
-                role("planner", "planner-profile"),
-                role("coder", "coder-profile"),
-                role("reviewer", "reviewer-profile"),
-            ],
-            "planner+reviewer,coder+term+logs",
+    let teams = TeamsConfig(BTreeMap::from([
+        (
+            "review".to_owned(),
+            team_with_layout(
+                vec![
+                    role("planner", "planner-profile"),
+                    role("coder", "coder-profile"),
+                    role("reviewer", "reviewer-profile"),
+                ],
+                "reviewer/planner,coder+term+logs",
+            ),
         ),
-    )]));
+        (
+            "pair".to_owned(),
+            team_with_layout(Vec::new(), "claude,codex"),
+        ),
+    ]));
 
     let spec = resolve_spec(Some("review"), &profiles, &commands, &teams).expect("team");
-
     assert_eq!(spec.columns.len(), 2);
-    assert!(matches!(
-        &spec.columns[0].rows[0],
-        Cell::Agent(AgentCell { role, profile, .. })
-            if role.as_deref() == Some("planner") && profile.as_deref() == Some("planner-profile")
-    ));
-    assert!(matches!(
-        &spec.columns[0].rows[1],
-        Cell::Agent(AgentCell { role, profile, .. })
-            if role.as_deref() == Some("reviewer") && profile.as_deref() == Some("reviewer-profile")
-    ));
-    assert!(matches!(
-        &spec.columns[1].rows[0],
-        Cell::Agent(AgentCell { role, profile, .. })
-            if role.as_deref() == Some("coder") && profile.as_deref() == Some("coder-profile")
-    ));
+    assert!(spec.columns[0].stacked);
+    assert_eq!(agent_at(&spec, 0, 0).role.as_deref(), Some("reviewer"));
+    assert_eq!(agent_at(&spec, 0, 1).role.as_deref(), Some("planner"));
+    assert_eq!(agent_at(&spec, 1, 0).role.as_deref(), Some("coder"));
     assert_eq!(spec.columns[1].rows[1], Cell::shell());
     assert_eq!(
         spec.columns[1].rows[2],
         Cell::Command {
-            argv: vec!["tail".to_owned(), "-f".to_owned(), "rimz.log".to_owned()]
+            argv: vec!["tail".to_owned(), "-f".to_owned(), "rimz.log".to_owned()],
         }
     );
-}
 
-#[test]
-fn roleless_team_layout_resolves_builtin_cells() {
-    let teams = TeamsConfig(BTreeMap::from([(
-        "peer".to_owned(),
-        team_with_layout(Vec::new(), "claude,codex"),
-    )]));
-
-    let spec = resolve_spec(Some("peer"), &no_profiles(), &no_commands(), &teams).expect("peer");
-
+    let pair = resolve_spec(Some("pair"), &profiles, &commands, &teams).expect("roleless team");
     assert_eq!(
-        spec,
-        LayoutSpec {
-            columns: vec![
-                Column {
-                    rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))],
-                    stacked: false,
-                },
-                Column {
-                    rows: vec![Cell::agent(AgentKind::new_unchecked("codex"))],
-                    stacked: false,
-                },
-            ],
-        }
+        pair.agent_kinds().collect::<Vec<_>>(),
+        vec!["claude", "codex"]
     );
+    assert!(pair.columns.iter().all(|column| !column.stacked));
 }
 
 #[test]
-fn team_layout_can_stack_roles() {
-    let profiles = profiles([
-        ("planner-profile", profile("claude")),
-        ("coder-profile", profile("codex")),
-    ]);
-    let teams = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team_with_layout(
-            vec![
-                role("planner", "planner-profile"),
-                role("coder", "coder-profile"),
-            ],
-            "planner/coder",
-        ),
-    )]));
+fn team_validation_rejects_invalid_roles_and_layouts() {
+    let profiles = profiles([("planner", profile("claude")), ("coder", profile("codex"))]);
+    let config = |team| TeamsConfig(BTreeMap::from([("review".to_owned(), team)]));
+    let error = |candidate| {
+        validate_config(&profiles, &no_commands(), &config(candidate)).expect_err("invalid team")
+    };
 
-    let spec = resolve_spec(Some("review"), &profiles, &no_commands(), &teams).expect("team");
-
-    assert_eq!(spec.columns.len(), 1);
-    assert!(spec.columns[0].stacked);
-    assert_eq!(spec.columns[0].rows.len(), 2);
+    assert!(matches!(
+        error(team(Vec::new())),
+        LayoutErr::EmptyTeam { .. }
+    ));
+    assert!(matches!(
+        error(team(vec![role("bad role", "planner")])),
+        LayoutErr::InvalidRoleName { name, .. } if name == "bad role"
+    ));
+    assert!(matches!(
+        error(team(vec![role("planner", "planner"), role("planner", "planner")])),
+        LayoutErr::DuplicateRole { role, .. } if role == "planner"
+    ));
+    assert!(matches!(
+        error(team(vec![role("reviewer", "missing")])),
+        LayoutErr::UnknownRoleProfile { profile, .. } if profile == "missing"
+    ));
+    assert!(matches!(
+        error(team_with_layout(
+            vec![role("planner", "planner")],
+            "planner,claude:helper"
+        )),
+        LayoutErr::UnknownRoleInLayout { role, .. } if role == "claude:helper"
+    ));
+    let roles = || vec![role("planner", "planner"), role("coder", "coder")];
+    assert!(matches!(
+        error(team_with_layout(roles(), "planner+term")),
+        LayoutErr::RoleNotPlaced { role, .. } if role == "coder"
+    ));
+    assert!(matches!(
+        error(team_with_layout(roles(), "planner+planner,coder")),
+        LayoutErr::DuplicateRoleInLayout { role, .. } if role == "planner"
+    ));
+    assert!(matches!(
+        error(team_with_layout(roles(), "planner,coder+ghost")),
+        LayoutErr::UnknownRoleInLayout { role, .. } if role == "ghost"
+    ));
+    for name in ["all", "claude"] {
+        assert!(matches!(
+            validate_config(
+                &profiles,
+                &no_commands(),
+                &config(team(vec![role(name, "planner")]))
+            ),
+            Err(LayoutErr::RoleShadowsAddress { name: actual, .. }) if actual == name
+        ));
+    }
 }
 
 #[test]
-fn team_layout_does_not_accept_inline_role_suffixes() {
-    let profiles = profiles([("planner-profile", profile("claude"))]);
-    let teams = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team_with_layout(
-            vec![role("planner", "planner-profile")],
-            "planner,claude:helper",
-        ),
-    )]));
-
-    assert_eq!(
-        resolve_spec(Some("review"), &profiles, &no_commands(), &teams),
-        Err(LayoutErr::UnknownRoleInLayout {
-            team: "review".to_owned(),
-            role: "claude:helper".to_owned(),
-        })
-    );
-}
-
-#[test]
-fn team_validation_rejects_bad_role_names_duplicates_and_unknown_profiles() {
-    let profiles = profiles([("planner", profile("claude"))]);
-    let empty = TeamsConfig(BTreeMap::from([("review".to_owned(), team(Vec::new()))]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &empty),
-        Err(LayoutErr::EmptyTeam { team }) if team == "review"
-    ));
-
-    let duplicate = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team(vec![role("planner", "planner"), role("planner", "planner")]),
-    )]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &duplicate),
-        Err(LayoutErr::DuplicateRole { role, .. }) if role == "planner"
-    ));
-
-    let bad_name = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team(vec![role("bad role", "planner")]),
-    )]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &bad_name),
-        Err(LayoutErr::InvalidRoleName { name, .. }) if name == "bad role"
-    ));
-
-    let bad_name = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team(vec![role("bad/role", "planner")]),
-    )]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &bad_name),
-        Err(LayoutErr::InvalidRoleName { name, .. }) if name == "bad/role"
-    ));
-
-    let kind_name = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team(vec![role("claude", "planner")]),
-    )]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &kind_name),
-        Err(LayoutErr::RoleShadowsAddress { name, .. }) if name == "claude"
-    ));
-
-    let missing_profile = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team(vec![role("coder", "missing")]),
-    )]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &missing_profile),
-        Err(LayoutErr::UnknownRoleProfile { profile, .. }) if profile == "missing"
-    ));
-}
-
-#[test]
-fn default_team_reports_structure_before_deferred_role_budget() {
+fn default_team_defers_role_budget_validation() {
     let profiles = profiles([("planner", profile("claude"))]);
     let mut budget_role = role("planner", "planner");
     budget_role.budget = Some("not-a-budget".to_owned());
@@ -1439,9 +835,9 @@ fn default_team_reports_structure_before_deferred_role_budget() {
         Err(LayoutErr::InvalidRoleName { name, .. }) if name == "bad role"
     ));
 
-    teams.0.get_mut("review").unwrap().roles[1].role = "coder".to_owned();
+    teams.0.get_mut("review").expect("team").roles[1].role = "coder".to_owned();
     validate_config(&profiles, &no_commands(), &teams)
-        .expect("default-team config defers role budget normalization");
+        .expect("default team defers budget normalization");
     assert!(matches!(
         resolve_spec(Some("review"), &profiles, &no_commands(), &teams),
         Err(LayoutErr::InvalidProfile { profile, .. }) if profile == "planner"
@@ -1459,15 +855,15 @@ fn team_roles_accept_implicit_builtin_profiles() {
     let spec = resolve_spec(Some("forge"), &no_profiles(), &no_commands(), &teams)
         .expect("built-in profiles resolve");
     assert!(matches!(
-        &spec.columns[0].rows[0],
-        Cell::Agent(AgentCell { kind, profile, role, .. })
+        agent_at(&spec, 0, 0),
+        AgentCell { kind, profile, role, .. }
             if kind.as_str() == "claude"
                 && profile.as_deref() == Some("claude")
                 && role.as_deref() == Some("planner")
     ));
     assert!(matches!(
-        &spec.columns[1].rows[0],
-        Cell::Agent(AgentCell { kind, profile, role, .. })
+        agent_at(&spec, 1, 0),
+        AgentCell { kind, profile, role, .. }
             if kind.as_str() == "codex"
                 && profile.as_deref() == Some("codex")
                 && role.as_deref() == Some("coder")
@@ -1475,87 +871,38 @@ fn team_roles_accept_implicit_builtin_profiles() {
 }
 
 #[test]
-fn team_layout_validation_requires_each_role_exactly_once() {
+fn team_leader_validation_accepts_one_target() {
     let profiles = profiles([("planner", profile("claude")), ("coder", profile("codex"))]);
+    let validate = |team| {
+        validate_config(
+            &profiles,
+            &no_commands(),
+            &TeamsConfig(BTreeMap::from([("forge".to_owned(), team)])),
+        )
+    };
+    let mut declared = team(vec![role("planner", "planner"), role("coder", "coder")]);
+    declared.leader = Some("coder".to_owned());
+    validate(declared.clone()).expect("declared leader");
 
-    let missing = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team_with_layout(
-            vec![role("planner", "planner"), role("coder", "coder")],
-            "planner+term",
-        ),
-    )]));
+    declared.leader = Some("reviewer".to_owned());
     assert!(matches!(
-        validate_config(&profiles, &no_commands(), &missing),
-        Err(LayoutErr::RoleNotPlaced { role, .. }) if role == "coder"
+        validate(declared),
+        Err(LayoutErr::UnknownLeaderRole { leader, valid_roles, .. })
+            if leader == "reviewer" && valid_roles == "planner, coder"
     ));
-
-    let duplicate = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team_with_layout(
-            vec![role("planner", "planner"), role("coder", "coder")],
-            "planner+planner,coder",
-        ),
-    )]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &duplicate),
-        Err(LayoutErr::DuplicateRoleInLayout { role, .. }) if role == "planner"
-    ));
-
-    let unknown = TeamsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        team_with_layout(
-            vec![role("planner", "planner"), role("coder", "coder")],
-            "planner,coder+ghost",
-        ),
-    )]));
-    assert!(matches!(
-        validate_config(&profiles, &no_commands(), &unknown),
-        Err(LayoutErr::UnknownRoleInLayout { role, .. }) if role == "ghost"
-    ));
-}
-
-#[test]
-fn team_leader_validation_accepts_one_target_and_rejects_missing_or_ambiguous_targets() {
-    let profiles = profiles([("planner", profile("claude")), ("coder", profile("codex"))]);
-    let mut unknown_role = team(vec![role("planner", "planner"), role("coder", "coder")]);
-    unknown_role.leader = Some("reviewer".to_owned());
-    let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), unknown_role)]));
-    assert_eq!(
-        validate_config(&profiles, &no_commands(), &teams),
-        Err(LayoutErr::UnknownLeaderRole {
-            team: "forge".to_owned(),
-            leader: "reviewer".to_owned(),
-            valid_roles: "planner, coder".to_owned(),
-        })
-    );
 
     let layout_only = |leader: &str, layout: &str| Team {
         roles: Vec::new(),
         leader: Some(leader.to_owned()),
         layout: Some(layout.to_owned()),
     };
-    let unique = TeamsConfig(BTreeMap::from([(
-        "pair".to_owned(),
-        layout_only("claude", "claude,codex"),
-    )]));
-    validate_config(&no_profiles(), &no_commands(), &unique).expect("unique layout leader");
-
-    let missing = TeamsConfig(BTreeMap::from([(
-        "pair".to_owned(),
-        layout_only("pi", "claude,codex"),
-    )]));
+    validate(layout_only("claude", "claude,codex")).expect("unique layout leader");
     assert!(matches!(
-        validate_config(&no_profiles(), &no_commands(), &missing),
+        validate(layout_only("pi", "claude,codex")),
         Err(LayoutErr::UnknownLeaderRole { leader, .. }) if leader == "pi"
     ));
-
-    let ambiguous = TeamsConfig(BTreeMap::from([(
-        "pair".to_owned(),
-        layout_only("claude", "claude,claude"),
-    )]));
     assert_eq!(
-        validate_config(&no_profiles(), &no_commands(), &ambiguous),
+        validate(layout_only("claude", "claude,claude")),
         Err(LayoutErr::AmbiguousPromptLeader {
             token: "claude".to_owned(),
         })
@@ -1563,86 +910,76 @@ fn team_leader_validation_accepts_one_target_and_rejects_missing_or_ambiguous_ta
 }
 
 #[test]
-fn prompt_leader_resolves_team_roles_and_safe_first_cells() {
+fn prompt_leader_selects_or_rejects_targets() {
     let profiles = profiles([("planner", profile("claude")), ("coder", profile("codex"))]);
-    let no_commands_config = no_commands();
+    let commands = commands([("vim", "vim")]);
     let mut configured = team_with_layout(
         vec![role("planner", "planner"), role("coder", "coder")],
         "coder,planner",
     );
     let teams = TeamsConfig(BTreeMap::from([("forge".to_owned(), configured.clone())]));
-    let layout =
-        resolve_spec(Some("forge"), &profiles, &no_commands_config, &teams).expect("team layout");
+    let layout = resolve_spec(Some("forge"), &profiles, &commands, &teams).expect("reordered team");
     assert_eq!(prompt_leader(&layout, Some(&configured)), Ok(1));
 
     configured.leader = Some("coder".to_owned());
     assert_eq!(prompt_leader(&layout, Some(&configured)), Ok(0));
 
-    let launch_commands = commands([("vim", "vim")]);
-    let single = parse_layout_spec("vim,codex+term", &profiles, &launch_commands)
-        .expect("one agent among command cells");
-    assert_eq!(prompt_leader(&single, None), Ok(0));
+    let command_first =
+        parse_layout_spec("vim,codex+term", &profiles, &commands).expect("one agent");
+    assert_eq!(prompt_leader(&command_first, None), Ok(0));
+    let unique =
+        parse_layout_spec("claude,codex", &no_profiles(), &no_commands()).expect("unique first");
+    assert_eq!(prompt_leader(&unique, None), Ok(0));
+    let inline = parse_layout_spec("claude:lead,claude", &no_profiles(), &no_commands())
+        .expect("inline leader");
+    assert_eq!(prompt_leader(&inline, None), Ok(0));
 
-    let roleless = Team {
-        roles: Vec::new(),
-        leader: None,
-        layout: Some("claude,codex".to_owned()),
-    };
-    let pair =
-        parse_layout_spec("claude,codex", &no_profiles(), &no_commands_config).expect("pair");
-    assert_eq!(prompt_leader(&pair, Some(&roleless)), Ok(0));
-    assert_eq!(prompt_leader(&pair, None), Ok(0));
-}
-
-#[test]
-fn prompt_leader_refuses_ambiguous_or_missing_first_targets() {
-    let profiles = no_profiles();
-    let commands = no_commands();
-    let ambiguous = parse_layout_spec("claude,claude", &profiles, &commands).expect("ambiguous");
+    let ambiguous =
+        parse_layout_spec("claude,claude", &no_profiles(), &no_commands()).expect("duplicate");
     assert_eq!(
         prompt_leader(&ambiguous, None),
         Err(LayoutErr::AmbiguousPromptLeader {
             token: "claude".to_owned(),
         })
     );
-
-    let role = parse_layout_spec("claude:lead,claude", &profiles, &commands).expect("role leader");
-    assert_eq!(prompt_leader(&role, None), Ok(0));
-
-    let command_only = parse_layout_spec("term", &profiles, &commands).expect("command only");
     assert_eq!(
-        prompt_leader(&command_only, None),
+        prompt_leader(
+            &parse_layout_spec("term", &no_profiles(), &no_commands()).expect("terminal"),
+            None
+        ),
         Err(LayoutErr::NoPromptTarget)
     );
 }
 
 #[test]
-fn title_uses_first_agent_or_terminal_and_worktree_name() {
-    let agent = parse_layout_spec("term,codex", &no_profiles(), &no_commands()).expect("parse");
-    assert_eq!(
-        default_tab_title(&agent, Path::new("/code/query-engine"), None, None),
-        "codex:query-engine"
-    );
-    assert_eq!(
-        default_tab_title(
-            &LayoutSpec::single(Cell::shell()),
-            Path::new("/code/main"),
-            None,
-            None
-        ),
-        "term:main"
-    );
-    assert_eq!(
-        default_tab_title(
+fn default_tab_title_uses_launch_identity_precedence() {
+    let agent = parse_layout_spec("term,codex", &no_profiles(), &no_commands()).expect("agent");
+    let terminal = LayoutSpec::single(Cell::shell());
+
+    for (spec, cwd, worktree, team, expected) in [
+        (
             &agent,
             Path::new("/code/wt/tab-name"),
             Some("tab-name"),
-            Some("forge")
+            Some("forge"),
+            "#tab-name",
         ),
-        "#tab-name"
-    );
-    assert_eq!(
-        default_tab_title(&agent, Path::new("/code/query-engine"), None, Some("forge")),
-        "team:forge"
-    );
+        (
+            &agent,
+            Path::new("/code/query-engine"),
+            None,
+            Some("forge"),
+            "team:forge",
+        ),
+        (
+            &agent,
+            Path::new("/code/query-engine"),
+            None,
+            None,
+            "codex:query-engine",
+        ),
+        (&terminal, Path::new("/code/main"), None, None, "term:main"),
+    ] {
+        assert_eq!(default_tab_title(spec, cwd, worktree, team), expected);
+    }
 }
