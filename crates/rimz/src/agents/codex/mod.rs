@@ -464,8 +464,8 @@ impl AgentAdapter for CodexAdapter {
         Some(local_sessions::fixture_observation())
     }
 
-    fn discover_local_sessions(&self, workspace: &Path) -> Vec<super::LocalSessionObservation> {
-        local_sessions::discover(workspace)
+    fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<super::LocalSessionObservation> {
+        local_sessions::discover(workspaces)
     }
 
     fn default_launch_model(&self) -> Option<String> {

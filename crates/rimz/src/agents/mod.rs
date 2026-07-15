@@ -1043,11 +1043,12 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// Discover validated sessions for one absolute workspace from the
-    /// provider's machine-local store. The result is pulled display truth;
-    /// callers bind it only to currently live panes and never append it to the
-    /// Rimz event log.
-    fn discover_local_sessions(&self, _workspace: &Path) -> Vec<LocalSessionObservation> {
+    /// Discover validated sessions for absolute workspaces from the provider's
+    /// machine-local store. The result is pulled display truth; callers bind it
+    /// only to currently live panes and never append it to the Rimz event log.
+    /// Adapters whose store is shared across workspaces enumerate it once for
+    /// the whole batch.
+    fn discover_local_sessions(&self, _workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
         Vec::new()
     }
 

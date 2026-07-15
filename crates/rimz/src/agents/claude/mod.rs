@@ -458,8 +458,11 @@ impl AgentAdapter for ClaudeAdapter {
         Some(local_sessions::fixture_observation())
     }
 
-    fn discover_local_sessions(&self, workspace: &Path) -> Vec<super::LocalSessionObservation> {
-        local_sessions::discover(workspace)
+    fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<super::LocalSessionObservation> {
+        workspaces
+            .iter()
+            .flat_map(|workspace| local_sessions::discover(workspace))
+            .collect()
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {

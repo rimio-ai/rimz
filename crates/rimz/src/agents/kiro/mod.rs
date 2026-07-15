@@ -224,8 +224,11 @@ impl AgentAdapter for KiroAdapter {
         session::resumed_session_id(cmdline)
     }
 
-    fn discover_local_sessions(&self, workspace: &Path) -> Vec<LocalSessionObservation> {
-        session::discover(workspace)
+    fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
+        workspaces
+            .iter()
+            .flat_map(|workspace| session::discover(workspace))
+            .collect()
     }
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {

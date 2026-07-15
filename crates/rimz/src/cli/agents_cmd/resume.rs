@@ -184,7 +184,7 @@ fn discover_lane_sessions(path: &Path) -> Vec<LocalSessionObservation> {
         .iter()
         .copied()
         .filter(|adapter| adapter.descriptor().capabilities.local_session_discovery)
-        .flat_map(|adapter| adapter.discover_local_sessions(path))
+        .flat_map(|adapter| adapter.discover_local_sessions(&[path]))
         .filter(|observation| {
             std::fs::metadata(&observation.transcript_path)
                 .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)

@@ -4,7 +4,7 @@
 //! caches and sidecars; it forks no subprocess and writes no cache files.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -523,7 +523,7 @@ pub fn enrich(
 pub fn discover_local_sessions_for_panes(
     panes: &[crate::pane::PaneRef],
 ) -> Vec<crate::agents::LocalSessionObservation> {
-    let mut candidates = HashSet::new();
+    let mut candidates = BTreeMap::<String, BTreeSet<PathBuf>>::new();
     for pane in panes {
         let Some(kind) = crate::store::snapshot::pane_agent_kind(pane) else {
             continue;
@@ -537,14 +537,18 @@ pub fn discover_local_sessions_for_panes(
         let Some(workspace) = crate::store::snapshot::pane_worktree_path(pane) else {
             continue;
         };
-        candidates.insert((kind, PathBuf::from(workspace)));
+        candidates
+            .entry(kind.to_owned())
+            .or_default()
+            .insert(PathBuf::from(workspace));
     }
     candidates
         .into_iter()
         .flat_map(|(kind, workspace)| {
-            crate::agents::find_adapter(kind)
-                .into_iter()
-                .flat_map(move |adapter| adapter.discover_local_sessions(&workspace))
+            let workspaces = workspace.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+            crate::agents::find_adapter(&kind)
+                .map(|adapter| adapter.discover_local_sessions(&workspaces))
+                .unwrap_or_default()
         })
         .collect()
 }

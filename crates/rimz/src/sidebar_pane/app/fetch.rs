@@ -147,6 +147,18 @@ impl ConsumerFoldMemo {
     }
 }
 
+/// Decides whether a cycle pays the produce from cheap pre-reads. The producer
+/// runs on a hard refresh, on a producer-only topology refresh, or when the
+/// published frame outlived one data tick (`None` age = no usable frame — cold
+/// start) and its process-local attempt cadence is due. A consumer produces
+/// only for a hard refresh; it never produces for topology freshness or a stale
+/// frame. Staleness recovery is delegated to the election: once the dead
+/// elder's heartbeat ages out (≤ one TTL) the next-eldest renderer *is* the
+/// producer and recovers through the branch above, while everyone else keeps
+/// folding the held panes with the event-fresh rollup. Exactly one producer at
+/// any moment, never a per-consumer produce storm; the lone renderer is its own
+/// next-eldest. This state records every attempt before the produce path, so
+/// errors and forced refreshes cannot start an ordinary storm.
 #[derive(Default)]
 struct ProducerCadence {
     last_attempt: Option<Instant>,
@@ -531,19 +543,6 @@ fn notification_panes(notification: &Notification) -> Vec<PaneId> {
         .filter_map(|agent| agent.pane_id.clone())
         .collect()
 }
-
-/// Whether this cycle pays the produce is decided from cheap pre-reads. The
-/// producer runs on a hard refresh, on a producer-only topology refresh, or
-/// when the published frame outlived one data tick (`None` age = no usable
-/// frame — cold start) and its process-local attempt cadence is due. A
-/// consumer produces only for a hard refresh; it never produces for topology
-/// freshness or a stale frame. Staleness recovery is delegated to the election:
-/// once the dead elder's heartbeat ages out (≤ one TTL) the next-eldest renderer
-/// *is* the producer and recovers through the branch above, while everyone else
-/// keeps folding the held panes with the event-fresh rollup. Exactly one
-/// producer at any moment, never a per-consumer produce storm; the lone renderer
-/// is its own next-eldest. [`ProducerCadence`] records every attempt before the
-/// produce path, so errors and forced refreshes cannot start an ordinary storm.
 
 /// One request to the fetch worker. The mode keeps topology signals producer-
 /// only, while a hard refresh remains available for manual recovery. When a

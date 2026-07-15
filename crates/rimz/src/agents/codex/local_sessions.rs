@@ -20,15 +20,20 @@ struct RolloutCandidate {
     active: bool,
 }
 
-pub(super) fn discover(workspace: &Path) -> Vec<LocalSessionObservation> {
+pub(super) fn discover(workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
     let Some(home) = super::app_server::codex_home() else {
         return Vec::new();
     };
-    discover_under(&home, workspace)
+    discover_under(&home, workspaces)
 }
 
-pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
-    if !workspace.is_absolute() {
+pub(super) fn discover_under(home: &Path, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
+    let workspaces = workspaces
+        .iter()
+        .copied()
+        .filter(|workspace| workspace.is_absolute())
+        .collect::<HashSet<_>>();
+    if workspaces.is_empty() {
         return Vec::new();
     }
     let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
@@ -82,7 +87,7 @@ pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionO
         {
             continue;
         }
-        if let Some(observation) = observation(path, workspace) {
+        if let Some(observation) = observation(path, &workspaces) {
             if let Some(session_id) = filename_session {
                 session_ids_seen.insert(session_id);
             }
@@ -196,7 +201,7 @@ fn relative_date(relative: &Path) -> Option<Date> {
     format!("{year}-{month}-{day}").parse().ok()
 }
 
-fn observation(path: PathBuf, workspace: &Path) -> Option<LocalSessionObservation> {
+fn observation(path: PathBuf, workspaces: &HashSet<&Path>) -> Option<LocalSessionObservation> {
     let file = fs::File::open(&path).ok()?;
     let mut first_line = String::new();
     std::io::BufReader::new(file)
@@ -207,9 +212,8 @@ fn observation(path: PathBuf, workspace: &Path) -> Option<LocalSessionObservatio
         return None;
     }
     let payload = meta.payload?;
-    if payload.cwd.as_deref().map(Path::new) != Some(workspace) {
-        return None;
-    }
+    let workspace = Path::new(payload.cwd.as_deref()?);
+    workspaces.contains(workspace).then_some(())?;
     let session_id = payload
         .id
         .as_deref()
@@ -399,7 +403,7 @@ mod tests {
             1_736_200_000,
         );
 
-        let observations = discover_under(temp.path(), workspace);
+        let observations = discover_under(temp.path(), &[workspace]);
 
         assert_eq!(
             observations
@@ -409,6 +413,57 @@ mod tests {
             [first, second, archived]
         );
         assert_eq!(observations[0].transcript_path, active_first);
+    }
+
+    #[test]
+    fn discovers_requested_workspaces_in_one_rollout_batch() {
+        let temp = tempfile::tempdir().unwrap();
+        let active = date_path(temp.path(), false, 0);
+        let first = "11111111-1111-4111-8111-111111111111";
+        let second = "22222222-2222-4222-8222-222222222222";
+        write_rollout(
+            &active,
+            first,
+            "/workspace/first",
+            "2025-01-01T00:00:00Z",
+            1_735_689_600,
+        );
+        write_rollout(
+            &active,
+            second,
+            "/workspace/second",
+            "2025-01-02T00:00:00Z",
+            1_735_776_000,
+        );
+        write_rollout(
+            &active,
+            "33333333-3333-4333-8333-333333333333",
+            "/workspace/unrequested",
+            "2025-01-03T00:00:00Z",
+            1_735_862_400,
+        );
+
+        let observations = discover_under(
+            temp.path(),
+            &[
+                Path::new("/workspace/first"),
+                Path::new("/workspace/second"),
+            ],
+        );
+
+        assert_eq!(
+            observations
+                .iter()
+                .map(|observation| (
+                    observation.session_id.as_str(),
+                    observation.workspace.as_path()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (second, Path::new("/workspace/second")),
+                (first, Path::new("/workspace/first")),
+            ]
+        );
     }
 
     #[test]
@@ -428,7 +483,7 @@ mod tests {
         }
 
         assert_eq!(
-            discover_under(temp.path(), workspace).len(),
+            discover_under(temp.path(), &[workspace]).len(),
             MAX_EXAMINED_FILES
         );
     }
