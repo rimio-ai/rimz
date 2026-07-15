@@ -419,14 +419,14 @@ fn merge_bound_local_session(
                 state.waiting_since = None;
                 state.open_ask = None;
                 state.compacting_since = None;
+                state.last_seen = observation.last_activity;
+                state.last_activity = observation.last_activity;
             }
             LocalSessionProjection::Lifecycle(projection) => {
                 state.turn_started_at = observation.first_event_at;
                 apply_local_lifecycle(&mut state, observation, projection);
             }
         }
-        state.last_seen = observation.last_activity;
-        state.last_activity = observation.last_activity;
         state.registered_at = Some(observation.created_at);
     }
     agents.push(state);
