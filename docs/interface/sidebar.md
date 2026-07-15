@@ -173,7 +173,7 @@ While a [make-up bucket](#zone-1--the-cockpit) or the unread lens is picked, the
 
 ### The card
 
-An agent is a small stacked card. The standard resting card is four lines. An idle agent with no prompt or session history is identity-only; selecting that fresh card opens the compose affordance and an empty meter. Submitting any prompt engages the card for good: it holds identity, description, meter, and stats lines while data fills in place, using `▢ 0%` and `▤ 0` before the first measurement. Selecting an engaged card appends any subagents and lights the spine, so its standard lines never reflow.
+An agent is a small stacked card. The standard resting card is four lines. An idle agent with no prompt or session history stays fresh: it is identity-only without a descriptor and identity + description when launched with one. Selecting a descriptor-free fresh card opens the compose affordance and an empty meter; a described fresh card stays two lines. Submitting any prompt engages the card for good: it holds identity, description, meter, and stats lines while data fills in place, using `▢ 0%` and `▤ 0` before the first measurement. Selecting an engaged card appends any subagents and lights the spine, so its standard lines never reflow.
 
 `[theme.display] card_density` tunes that body without changing routing: `auto` uses the standard card, `expanded` shows subagents on every parent card, and `compact` trims resting cards by status while the selected card opens to its lifecycle stage's full shape. Compact resting cards read idle as identity only, running/waiting as identity + description + meter (including the `▢ 0%` placeholder), and paused/done/failed as identity + description.
 

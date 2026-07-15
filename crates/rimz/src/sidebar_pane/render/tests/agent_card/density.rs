@@ -63,7 +63,7 @@ fn compact_density_trims_resting_cards_by_status() {
             ..Default::default()
         },
         54,
-        33,
+        31,
     );
 
     assert!(
@@ -84,10 +84,9 @@ fn compact_density_trims_resting_cards_by_status() {
         2,
         "only running and waiting resting cards keep the context bar:\n{rendered}"
     );
-    assert_eq!(
-        rendered.matches('▤').count(),
-        1,
-        "compact resting cards drop token-stat rows while the selected card opens fully:\n{rendered}"
+    assert!(
+        !rendered.contains('▤'),
+        "compact resting cards drop token-stat rows:\n{rendered}"
     );
     assert_snapshot("card_density_compact_resting_statuses", rendered);
 }
@@ -212,13 +211,14 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         Some("needs review"),
         30,
     );
-    let parent = density_agent(
+    let mut parent = density_agent(
         "claude-1",
         "claude",
         AgentStatus::Idle,
         Some("delegated sweep"),
         0,
     );
+    parent.prompt = Some("delegated sweep".to_owned());
     let mut child = density_agent(
         "child-1",
         "claude",

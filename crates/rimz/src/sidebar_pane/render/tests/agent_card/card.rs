@@ -362,6 +362,37 @@ fn unselected_blank_idle_agent_stays_single_line() {
 }
 
 #[test]
+fn described_unprompted_idle_agent_stays_fresh_and_two_lines() {
+    let mut idle = agent(
+        "idle-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    idle.description = Some("review the API".to_owned());
+    let snapshot = snapshot_with(vec![idle]);
+    let theme = Theme::fixed(true);
+
+    for selected_index in [0, usize::MAX] {
+        let card_lines = line_texts(&group_lines(&snapshot, &theme, selected_index))
+            .into_iter()
+            .skip(1)
+            .collect::<Vec<_>>();
+
+        assert_eq!(card_lines.len(), 2, "{}", card_lines.join("\n"));
+        assert!(card_lines[1].contains("review the API"), "{card_lines:?}");
+        assert!(
+            card_lines
+                .iter()
+                .all(|line| !line.contains('▢') && !line.contains('▤') && !line.contains(".  ")),
+            "{card_lines:?}"
+        );
+    }
+}
+
+#[test]
 fn running_agent_without_enrichment_keeps_full_placeholder_shape() {
     let running = agent(
         "running-1",

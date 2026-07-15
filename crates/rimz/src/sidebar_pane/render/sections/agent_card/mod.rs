@@ -50,8 +50,12 @@ enum CardStage {
 
 impl CardStage {
     fn of(row: &SidebarRow) -> Self {
-        if awaiting_first_prompt(row)
-            && !row.as_agent().is_some_and(AgentCard::has_session_history)
+        let Some(agent) = row.as_agent() else {
+            return Self::Engaged;
+        };
+        if matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
+            && agent.prompt.is_none()
+            && !agent.has_session_history()
             && gauge_percent(row).unwrap_or(0) == 0
         {
             Self::Fresh
@@ -66,7 +70,7 @@ fn agent(row: &SidebarRow) -> Option<&AgentCard> {
 }
 
 pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
-    CardStage::of(row) == CardStage::Fresh
+    CardStage::of(row) == CardStage::Fresh && awaiting_first_prompt(row)
 }
 
 pub(super) fn row_lines(
@@ -126,9 +130,13 @@ pub(super) fn row_lines(
                 inner.push(description_line(ctx, row, attention));
             }
             (CardStage::Fresh, false, _) => {
-                if selected {
-                    inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
-                    inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
+                if awaiting_first_prompt(row) {
+                    if selected {
+                        inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
+                        inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
+                    }
+                } else if descriptor(row).is_some() {
+                    inner.push(description_line(ctx, row, attention));
                 }
             }
             (CardStage::Engaged, false, _) => {
