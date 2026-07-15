@@ -61,6 +61,10 @@ pub struct SidebarProviderPanel {
     /// Visibility and managed-server health for the `⇅ rc` flag.
     #[serde(default)]
     pub remote_control: RemoteControlBadge,
+    /// Currently bound, identity-bearing root panes for this provider. This is
+    /// live room state and remains separate from historical transcript spend.
+    #[serde(default)]
+    pub active_sessions: u32,
     /// JSONL-computed headline / week / month / trailing-year spend and tokens
     /// for this provider, summed across all of its sessions' transcript history.
     #[serde(default, skip_serializing_if = "Option::is_none")]

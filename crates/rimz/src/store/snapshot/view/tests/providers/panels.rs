@@ -358,6 +358,70 @@ fn antigravity_account_stays_metered_before_and_after_quota_arrives() {
     );
 }
 
+#[test]
+fn provider_active_sessions_count_bound_identity_panes_not_durable_rows() {
+    let live = pane("%1", "agy", "/repo/main");
+    let mut older = agent("antigravity", "conversation-old", AgentStatus::Success, 10)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    older.registered_at = Some(ago(120));
+    let mut newer = agent("antigravity", "conversation-new", AgentStatus::Running, 20)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    newer.registered_at = Some(ago(60));
+    let snapshot = room(vec![older, newer])
+        .with_live_panes(vec![live], None)
+        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+    let panel = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.kind == "antigravity")
+        .unwrap();
+    assert_eq!(panel.active_sessions, 1);
+    assert!(panel.spending.is_none());
+
+    let accounts = BTreeMap::from([(
+        "antigravity".to_owned(),
+        AgentAccount {
+            metered: Some(true),
+            ..Default::default()
+        },
+    )]);
+    let mut identityless = room(Vec::new());
+    identityless.wired_kinds = vec!["antigravity".to_owned()];
+    let identityless = identityless
+        .with_live_panes(vec![pane("%2", "agy", "/repo/main")], None)
+        .with_provider_aggregates(&accounts, &BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(identityless.providers[0].active_sessions, 0);
+}
+
+#[test]
+fn active_session_count_does_not_replace_real_provider_history() {
+    let session = agent("claude", "c1", AgentStatus::Running, 10)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let spending = BTreeMap::from([(
+        "claude".to_owned(),
+        SpendTally {
+            headline: SpendWindow {
+                sessions: 12,
+                tokens: 42_000,
+                usd: 3.5,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )]);
+    let snapshot = room(vec![session])
+        .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None)
+        .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &spending);
+    let panel = &snapshot.providers[0];
+    assert_eq!(panel.active_sessions, 1);
+    assert_eq!(panel.spending.as_ref().unwrap().headline.sessions, 12);
+    assert_eq!(panel.spending.as_ref().unwrap().headline.tokens, 42_000);
+    assert_eq!(panel.spending.as_ref().unwrap().headline.usd, 3.5);
+}
+
 fn provider_sessions(
     entries: impl IntoIterator<Item = (&'static str, u32, u32, u32)>,
 ) -> BTreeMap<String, SpendTally> {

@@ -45,6 +45,15 @@ impl SidebarSnapshot {
         let kinds = provider_kinds(&self.agents, probed_accounts, provider_spending);
         let mut panels = Vec::new();
         for kind in kinds {
+            let active_sessions = u32::try_from(
+                self.agent_panes
+                    .iter()
+                    .filter(|pane| pane.kind.as_str() == kind && pane.agent_id.is_some())
+                    .map(|pane| pane.pane_id.raw())
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+            )
+            .unwrap_or(u32::MAX);
             let sessions: Vec<&AgentState> = self
                 .agents
                 .iter()
@@ -167,6 +176,7 @@ impl SidebarSnapshot {
                     plan,
                     metered,
                     remote_control,
+                    active_sessions,
                     spending,
                     day_budget: None,
                     extra_credits: None,

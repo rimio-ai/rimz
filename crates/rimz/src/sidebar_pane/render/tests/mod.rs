@@ -497,6 +497,7 @@ fn provider_panel(
         } else {
             crate::RemoteControlBadge::Hidden
         },
+        active_sessions: 12,
         spending: Some(crate::SpendTally {
             headline: crate::SpendWindow {
                 usd: 3.5,

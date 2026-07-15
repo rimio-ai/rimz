@@ -135,6 +135,7 @@ fn provider(kind: &str) -> crate::SidebarProviderPanel {
         plan: None,
         metered: false,
         remote_control: Default::default(),
+        active_sessions: 0,
         spending: None,
         day_budget: None,
         extra_credits: None,

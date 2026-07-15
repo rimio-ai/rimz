@@ -51,6 +51,7 @@ fn provider(
         plan: None,
         metered: true,
         remote_control: Default::default(),
+        active_sessions: 0,
         spending,
         day_budget: None,
         extra_credits: None,

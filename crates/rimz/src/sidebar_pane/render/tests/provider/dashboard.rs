@@ -129,6 +129,43 @@ fn provider_tripped_daily_cap_renders_against_account_day_spend() {
     let rendered = line_texts(&lines).join("\n");
     assert!(rendered.contains("$10.25 of $10/day"), "{rendered}");
 }
+
+#[test]
+fn ledgerless_provider_renders_only_its_live_session_count() {
+    let theme = Theme::default();
+    let mut antigravity = provider_panel("antigravity", "Antigravity", 33, true, false, None);
+    antigravity.active_sessions = 1;
+    antigravity.spending = None;
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[antigravity],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+    assert!(rendered.contains("◎ 1"), "{rendered}");
+    for unavailable in ["◇", "↘", "↗", "◌", "$0.00"] {
+        assert!(!rendered.contains(unavailable), "{unavailable}: {rendered}");
+    }
+
+    let accounted = provider_panel("claude", "Claude", 173, true, false, None);
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[accounted],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+    assert!(rendered.contains("◎ 12"), "{rendered}");
+    assert!(rendered.contains("◇ 498k"), "{rendered}");
+    assert!(rendered.contains("$3.50"), "{rendered}");
+}
 /// The dashboard paints the Codex block whichever way the active tab is
 /// derived: a manual pick (`←`/`→` or a click on the label) swaps the chip onto
 /// `Codex` — fill alone, no glyph moves in the rail — and with no manual pick

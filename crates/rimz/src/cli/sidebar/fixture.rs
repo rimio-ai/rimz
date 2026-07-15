@@ -2302,6 +2302,7 @@ fn provider_panel(
         } else {
             rimz::RemoteControlBadge::Hidden
         },
+        active_sessions: spending.headline.sessions,
         spending: Some(spending),
         day_budget: None,
         extra_credits: matches!(kind, "pi" | "opencode").then_some(rimz::ExtraCredits::Disabled),

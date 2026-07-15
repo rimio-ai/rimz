@@ -1021,11 +1021,15 @@ fn provider_stats_rows(
     region: usize,
     layout: ProviderLayout,
 ) -> Vec<Vec<Span<'static>>> {
-    let headline = panel
-        .spending
-        .as_ref()
-        .map(|spending| spending.headline)
-        .unwrap_or_default();
+    let Some(headline) = panel.spending.as_ref().map(|spending| spending.headline) else {
+        return vec![vec![
+            Span::styled(
+                theme.glyph(GlyphRole::CockpitSessions).to_owned(),
+                theme.styled(Component::Sessions, Modifier::empty()),
+            ),
+            Span::styled(format!(" {}", panel.active_sessions), theme.body()),
+        ]];
+    };
     let detail = provider_token_detail(theme, &headline, layout, region);
     vec![provider_stats_row(theme, panel, &headline, detail, region).spans]
 }

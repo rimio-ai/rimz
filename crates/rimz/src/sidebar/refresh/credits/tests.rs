@@ -42,6 +42,7 @@ fn panel(kind: &str, metered: bool) -> SidebarProviderPanel {
         plan: None,
         metered,
         remote_control: Default::default(),
+        active_sessions: 0,
         spending: Some(SpendTally {
             month: SpendWindow {
                 usd: 12.5,

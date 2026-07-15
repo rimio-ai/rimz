@@ -310,6 +310,7 @@ fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
         plan: None,
         metered: false,
         remote_control: Default::default(),
+        active_sessions: 0,
         spending: None,
         day_budget: None,
         extra_credits: None,
