@@ -699,17 +699,21 @@ fn list_resumable_lanes(
     project_root: &Path,
     worktrees: &[LocalWorktree],
 ) -> Result<()> {
-    let summaries = merge_native_lane_summaries(
-        lane_summaries(agents, project_root, rimz::store::runtime::agent_liveness),
-        worktrees
-            .iter()
-            .cloned()
-            .map(|worktree| {
-                let observations = discover_lane_sessions(&worktree.path);
-                (worktree, observations)
-            })
-            .collect(),
-    );
+    let summaries = lane_summaries(agents, project_root, rimz::store::runtime::agent_liveness);
+    let store_paths = summaries
+        .iter()
+        .map(|summary| summary.path.as_path())
+        .collect::<HashSet<_>>();
+    let discovered = worktrees
+        .iter()
+        .filter(|worktree| !store_paths.contains(worktree.path.as_path()))
+        .cloned()
+        .map(|worktree| {
+            let observations = discover_lane_sessions(&worktree.path);
+            (worktree, observations)
+        })
+        .collect();
+    let summaries = merge_native_lane_summaries(summaries, discovered);
     let mut table = crate::cli::render::Table::new(["LANE", "MEMBERS", "LIVE", "CLOSED", "AGE"])
         .right(&[1, 2, 3, 4]);
     let now = Timestamp::now();
