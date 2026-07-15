@@ -153,6 +153,43 @@ pub struct AgentContext {
     pub observed_at: Timestamp,
 }
 
+impl AgentContext {
+    pub fn new(source: &str, observed_at: Timestamp) -> Self {
+        Self {
+            source: source.to_owned(),
+            session_name: None,
+            session_preview: None,
+            model_id: None,
+            model_display_name: None,
+            effort: None,
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: None,
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: None,
+            pr: None,
+            account: None,
+            turn_opened_by: Vec::new(),
+            turn_error: None,
+            turn_complete: None,
+            plan_proposed: None,
+            native_permission_wait: None,
+            turn_interrupted: None,
+            observed_at,
+        }
+    }
+}
+
+/// Round and clamp a reported percentage to the `0..=100` gauge range.
+pub(crate) fn clamp_pct(value: Option<f64>) -> Option<u8> {
+    value
+        .filter(|value| value.is_finite())
+        .map(|value| value.round().clamp(0.0, 100.0) as u8)
+}
+
 /// Per-subagent enrichment a paneless child cannot publish for itself. Claude's
 /// `subagentStatusLine` is `exec`d to render the agent panel's child rows and is
 /// handed each task's `type`, `description`, `tokenCount`, and `startTime`; Rimz
@@ -719,6 +756,14 @@ pub struct AgentPullRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percentage_clamp_rejects_non_finite_values_and_bounds_finite_values() {
+        assert_eq!(clamp_pct(Some(f64::NAN)), None);
+        assert_eq!(clamp_pct(Some(-1.0)), Some(0));
+        assert_eq!(clamp_pct(Some(99.5)), Some(100));
+        assert_eq!(clamp_pct(Some(101.0)), Some(100));
+    }
 
     #[test]
     fn cost_coverage_controls_additive_spend_and_wire_shape() {

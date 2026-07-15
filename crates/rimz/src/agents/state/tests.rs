@@ -43,29 +43,9 @@ fn activity_description_prefers_rich_context_then_fallbacks() {
     agent.task = Some("live task".to_owned());
     agent.description = Some("launch label".to_owned());
     agent.context = Some(AgentContext {
-        source: "codex".to_owned(),
         session_name: Some("thread name".to_owned()),
         session_preview: Some("thread preview".to_owned()),
-        model_id: None,
-        model_display_name: None,
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
-        agent_version: None,
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: None,
-        pr: None,
-        account: None,
-        turn_opened_by: Vec::new(),
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
-        observed_at: Timestamp::from_second(1_000).unwrap(),
+        ..AgentContext::new("codex", Timestamp::from_second(1_000).unwrap())
     });
 
     assert_eq!(agent.activity_description(), Some("thread preview"));
@@ -157,61 +137,20 @@ fn test_agent(status: AgentStatus, activity: i64) -> AgentState {
 
 fn context_error(class: TurnErrorClass, at: i64) -> AgentContext {
     AgentContext {
-        source: "claude".to_owned(),
-        session_name: None,
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
-        agent_version: None,
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: None,
-        pr: None,
-        account: None,
-        turn_opened_by: Vec::new(),
         turn_error: Some(AgentTurnError {
             class,
             at: Timestamp::from_second(at).unwrap(),
             label: Some("provider parked".to_owned()),
         }),
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
-        observed_at: Timestamp::from_second(at).unwrap(),
+        ..AgentContext::new("claude", Timestamp::from_second(at).unwrap())
     }
 }
 
 fn context_settle(complete: Option<i64>, interrupted: Option<i64>) -> AgentContext {
     AgentContext {
-        source: "codex".to_owned(),
-        session_name: None,
-        session_preview: None,
-        model_id: None,
-        model_display_name: None,
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
-        agent_version: None,
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: None,
-        pr: None,
-        account: None,
-        turn_opened_by: Vec::new(),
-        turn_error: None,
         turn_complete: complete.map(|at| Timestamp::from_second(at).unwrap()),
-        plan_proposed: None,
-        native_permission_wait: None,
         turn_interrupted: interrupted.map(|at| Timestamp::from_second(at).unwrap()),
-        observed_at: Timestamp::from_second(1_000).unwrap(),
+        ..AgentContext::new("codex", Timestamp::from_second(1_000).unwrap())
     }
 }
 

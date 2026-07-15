@@ -239,31 +239,14 @@ pub(super) fn into_context(
     observed_at: Timestamp,
 ) -> AgentContext {
     AgentContext {
-        source: source.to_owned(),
         session_name: thread.as_ref().and_then(|thread| thread.name.clone()),
         session_preview: thread.as_ref().and_then(|thread| thread.preview.clone()),
         model_id: model.as_ref().map(|model| model.id.clone()),
         model_display_name: model.as_ref().map(|model| model.display_name.clone()),
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
         agent_version,
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
         rate_limits: rate_limits.map(|limits| limits.stamped_at(observed_at)),
-        pr: None,
         account,
-        turn_opened_by: Vec::new(),
-        turn_error: None,
-        // App-server enrichment carries no turn boundary; the rollout-tail
-        // refresh path stamps `turn_complete`, never this fold.
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
-        observed_at,
+        ..AgentContext::new(source, observed_at)
     }
 }
 

@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
-    AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource,
+    AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource, clamp_pct,
 };
 use crate::agents::{
     sanitize_user_prompt,
@@ -126,11 +126,6 @@ struct PrField {
     number: Option<u64>,
     url: Option<String>,
     review_state: Option<String>,
-}
-
-/// Round and clamp a reported percentage to the `0..=100` gauge range.
-fn clamp_pct(value: Option<f64>) -> Option<u8> {
-    value.map(|v| v.round().clamp(0.0, 100.0) as u8)
 }
 
 fn non_empty<T: Default + PartialEq>(value: T) -> Option<T> {
@@ -435,9 +430,7 @@ impl StatuslinePayload {
             review_state: self.pr.review_state,
         });
         AgentContext {
-            source: source.to_owned(),
             session_name: self.session_name,
-            session_preview: None,
             model_id: self.model.id,
             model_display_name: self.model.display_name,
             effort: self.effort.level,
@@ -450,21 +443,7 @@ impl StatuslinePayload {
             tokens,
             rate_limits,
             pr,
-            // The statusline carries no subscription/plan; Claude's account is
-            // probed separately (`claude auth status`) and folded at the
-            // provider panel, never here.
-            account: None,
-            turn_opened_by: Vec::new(),
-            // The payload carries no turn error either; the handler folds the
-            // transcript-tail detection in post-hoc (`observe_turn_error`).
-            turn_error: None,
-            // Claude's turns end on a reliable `Stop` hook, so the success
-            // marker stays a Codex-only concern (review mode fires no `Stop`).
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
-            observed_at,
+            ..AgentContext::new(source, observed_at)
         }
     }
 }

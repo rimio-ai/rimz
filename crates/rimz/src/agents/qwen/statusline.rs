@@ -3,7 +3,7 @@
 use jiff::Timestamp;
 use serde::Deserialize;
 
-use crate::agents::context::{AgentContext, AgentCost, AgentTokenUsage};
+use crate::agents::context::{AgentContext, AgentCost, AgentTokenUsage, clamp_pct};
 use crate::agents::model_display::display_model;
 
 #[derive(Debug, Default, Deserialize)]
@@ -49,10 +49,6 @@ struct Vim {
     mode: Option<String>,
 }
 
-fn clamp_pct(value: Option<f64>) -> Option<u8> {
-    value.map(|value| value.round().clamp(0.0, 100.0) as u8)
-}
-
 fn model_display_name(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
         let original = value.trim();
@@ -88,29 +84,12 @@ impl StatuslinePayload {
             ..AgentCost::default()
         });
         AgentContext {
-            source: source.to_owned(),
-            session_name: None,
-            session_preview: None,
-            model_id: None,
             model_display_name: model_display_name(self.model.display_name),
-            effort: None,
-            thinking_enabled: None,
-            output_style: None,
             vim_mode: self.vim.mode,
             agent_version: self.version,
-            exceeds_200k_tokens: None,
             cost,
             tokens,
-            rate_limits: None,
-            pr: None,
-            account: None,
-            turn_opened_by: Vec::new(),
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
-            observed_at,
+            ..AgentContext::new(source, observed_at)
         }
     }
 }

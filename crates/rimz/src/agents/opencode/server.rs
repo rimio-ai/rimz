@@ -151,29 +151,10 @@ fn into_context(
     observed_at: Timestamp,
 ) -> AgentContext {
     AgentContext {
-        source: "opencode".to_owned(),
         session_name: session.and_then(session_name),
-        session_preview: None,
-        model_id: None,
         model_display_name: providers.and_then(|body| model_display_name(body, model_hint)),
-        effort: None,
-        thinking_enabled: None,
-        output_style: None,
-        vim_mode: None,
         agent_version: health.and_then(agent_version),
-        exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: None,
-        pr: None,
-        account: None,
-        turn_opened_by: Vec::new(),
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
-        observed_at,
+        ..AgentContext::new("opencode", observed_at)
     }
 }
 

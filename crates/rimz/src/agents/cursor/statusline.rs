@@ -4,7 +4,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-use crate::agents::context::{AgentContext, AgentCurrentUsage, AgentTokenUsage};
+use crate::agents::context::{AgentContext, AgentCurrentUsage, AgentTokenUsage, clamp_pct};
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_string_lossy,
     deserialize_optional_u64_lossy,
@@ -87,29 +87,15 @@ impl StatuslinePayload {
         );
         let tokens = self.context_window.and_then(ContextWindow::into_usage);
         AgentContext {
-            source: source.to_owned(),
             session_name: self.session_name,
-            session_preview: None,
             model_id,
             model_display_name,
             effort,
-            thinking_enabled: None,
             output_style: self.output_style,
             vim_mode: self.vim,
             agent_version: self.version,
-            exceeds_200k_tokens: None,
-            cost: None,
             tokens,
-            rate_limits: None,
-            pr: None,
-            account: None,
-            native_permission_wait: None,
-            turn_opened_by: Vec::new(),
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
-            turn_interrupted: None,
-            observed_at,
+            ..AgentContext::new(source, observed_at)
         }
     }
 }
@@ -227,12 +213,6 @@ pub(super) fn normalize_model(model: String) -> String {
     } else {
         model
     }
-}
-
-fn clamp_pct(value: Option<f64>) -> Option<u8> {
-    value
-        .filter(|value| value.is_finite())
-        .map(|value| value.round().clamp(0.0, 100.0) as u8)
 }
 
 fn deserialize_optional_model_lossy<'de, D>(deserializer: D) -> Result<Option<Model>, D::Error>

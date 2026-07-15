@@ -5,7 +5,9 @@ use serde::Deserialize;
 
 use crate::agents::context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage, CostCoverage,
+    clamp_pct,
 };
+use crate::agents::payload::non_empty_trimmed;
 use crate::agents::pricing::PriceBook;
 
 #[derive(Debug, Default, Deserialize)]
@@ -77,23 +79,10 @@ impl ReasoningQualifier {
     }
 }
 
-fn non_empty(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_owned())
-    })
-}
-
-fn clamp_pct(value: Option<f64>) -> Option<u8> {
-    value
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value.round().clamp(0.0, 100.0) as u8)
-}
-
 fn normalize_model_display(
     display_name: Option<String>,
 ) -> (Option<String>, Option<String>, Option<bool>) {
-    let Some(display_name) = non_empty(display_name) else {
+    let Some(display_name) = display_name.as_deref().and_then(non_empty_trimmed) else {
         return (None, None, None);
     };
     let Some(without_close) = display_name.strip_suffix(')') else {
@@ -185,8 +174,8 @@ impl StatuslinePayload {
             current_usage,
             session_usage: None,
         });
-        let plan = non_empty(self.plan_tier);
-        let account_id = non_empty(self.email);
+        let plan = self.plan_tier.as_deref().and_then(non_empty_trimmed);
+        let account_id = self.email.as_deref().and_then(non_empty_trimmed);
         let account = (plan.is_some() || account_id.is_some()).then(|| AgentAccount {
             plan,
             account_id,
@@ -194,29 +183,15 @@ impl StatuslinePayload {
             ..AgentAccount::default()
         });
         AgentContext {
-            source: source.to_owned(),
-            session_name: None,
-            session_preview: None,
             model_id: self.model.id.filter(|id| !id.trim().is_empty()),
             model_display_name,
             effort,
             thinking_enabled,
-            output_style: None,
-            vim_mode: None,
-            agent_version: non_empty(self.version),
-            exceeds_200k_tokens: None,
-            cost: None,
+            agent_version: self.version.as_deref().and_then(non_empty_trimmed),
             tokens,
-            rate_limits: None,
-            pr: None,
             account,
-            turn_opened_by: Vec::new(),
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
             native_permission_wait,
-            turn_interrupted: None,
-            observed_at,
+            ..AgentContext::new(source, observed_at)
         }
     }
 }
