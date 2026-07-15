@@ -49,36 +49,12 @@ pub struct PruneOutcome {
 /// encoding; JSON callers prefer [`write_temp_then_rename`].
 #[must_use = "durability barrier; check the result"]
 pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AtomicErr::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-    let tmp = temp_sibling(path);
-    let mut temp_guard = TempFileGuard::new(tmp.clone());
-    {
-        let mut file = File::create(&tmp).map_err(|e| AtomicErr::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-        file.write_all(bytes).map_err(|e| AtomicErr::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-        testkit::count_fsync();
-        file.sync_all().map_err(|e| AtomicErr::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
-    }
-    std::fs::rename(&tmp, path).map_err(|e| AtomicErr::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    temp_guard.disarm();
-    sync_parent_dir(path)?;
-    Ok(())
+    replace_whole_file(path, Fsync::Durable, false, |writer, tmp| {
+        writer.write_all(bytes).map_err(|source| AtomicErr::Io {
+            path: tmp.to_path_buf(),
+            source,
+        })
+    })
 }
 
 /// Whether a temp+rename write fsyncs before it becomes observable.
@@ -164,6 +140,24 @@ fn write_temp_then_rename_with<T: Serialize>(
     style: JsonStyle,
     private: bool,
 ) -> Result<()> {
+    replace_whole_file(path, fsync, private, |writer, tmp| {
+        match style {
+            JsonStyle::Pretty => serde_json::to_writer_pretty(&mut *writer, value)?,
+            JsonStyle::Compact => serde_json::to_writer(&mut *writer, value)?,
+        }
+        writer.write_all(b"\n").map_err(|source| AtomicErr::Io {
+            path: tmp.to_path_buf(),
+            source,
+        })
+    })
+}
+
+fn replace_whole_file(
+    path: &Path,
+    fsync: Fsync,
+    private: bool,
+    encode: impl FnOnce(&mut BufWriter<File>, &Path) -> Result<()>,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| AtomicErr::Io {
             path: parent.to_path_buf(),
@@ -178,14 +172,7 @@ fn write_temp_then_rename_with<T: Serialize>(
             source: e,
         })?;
         let mut writer = BufWriter::new(file);
-        match style {
-            JsonStyle::Pretty => serde_json::to_writer_pretty(&mut writer, value)?,
-            JsonStyle::Compact => serde_json::to_writer(&mut writer, value)?,
-        }
-        writer.write_all(b"\n").map_err(|e| AtomicErr::Io {
-            path: tmp.clone(),
-            source: e,
-        })?;
+        encode(&mut writer, &tmp)?;
         let file = writer.into_inner().map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
             source: e.into_error(),
@@ -557,6 +544,46 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             r#"{"a":1,"b":"two"}"#.to_owned() + "\n"
+        );
+    }
+
+    #[test]
+    fn raw_atomic_write_preserves_bytes_without_newline() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("raw.bin");
+
+        write_bytes_atomically(&path, b"raw bytes").unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), b"raw bytes");
+    }
+
+    #[test]
+    fn durable_and_cache_replacements_keep_fsync_classes() {
+        let dir = tempdir().unwrap();
+        let before = testkit::fsync_count();
+        write_temp_then_rename(&dir.path().join("durable.json"), &json!({ "a": 1 })).unwrap();
+        let durable = testkit::fsync_count();
+        write_temp_then_rename_cache(&dir.path().join("cache.json"), &json!({ "a": 1 })).unwrap();
+
+        assert_eq!(durable - before, 2, "temp file and parent dir sync");
+        assert_eq!(
+            testkit::fsync_count(),
+            durable,
+            "cache replacement skips sync"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_replacement_enforces_owner_only_mode() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("private.json");
+
+        write_private_temp_then_rename(&path, &json!({ "private": true })).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
         );
     }
 
