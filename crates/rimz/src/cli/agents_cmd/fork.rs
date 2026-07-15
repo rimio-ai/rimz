@@ -58,19 +58,26 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     if let Some(name) = args.name.as_deref() {
         validate_agent_name(name)?;
     }
+    let config = machine_config();
     let adapter = rimz::agents::find_adapter(seed.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", seed.kind))?;
-    if adapter
-        .fork_command(seed.source_session_id.as_str(), &seed.cwd)
-        .is_none()
-    {
-        bail!("agent `{}` has no fork command", seed.kind);
-    }
-    // Match normal interactive launches: trust-gated project env is a launch
-    // precondition even though the hidden wrapper applies the values later.
-    agent_launch_env(&workspace.project_root, seed.kind.as_str())?;
-
-    let config = machine_config();
+    rimz::harness::launch::preflight_agent_process(
+        &workspace.project_root,
+        config.harness.rtk,
+        &rimz::harness::launch::ExecInvocation {
+            kind: seed.kind.as_str(),
+            action: rimz::harness::launch::ExecAction::Fork {
+                session_id: seed.source_session_id.as_str(),
+                extra_args: &[],
+            },
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: false,
+            exit_on_run_completion: false,
+            identity: rimz::harness::launch::ExecIdentity::default(),
+        },
+        &seed.cwd,
+    )?;
     let scoped = channel.is_some()
         || (seed.cwd != workspace.project_root && seed.cwd != workspace.worktree_root);
     let placement = apply_in_place_downgrade(

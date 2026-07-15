@@ -1,4 +1,3 @@
-use super::launch::*;
 use super::*;
 use crate::cli::{open_store, worktree};
 use std::sync::mpsc;
@@ -20,25 +19,37 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         },
         None => None,
     };
+    let machine_config = crate::cli::machine_config();
+    let provider_cwd = match action {
+        rimz::harness::launch::ExecAction::Fork { .. } => {
+            std::env::current_dir().context("reading the fork pane cwd")?
+        }
+        rimz::harness::launch::ExecAction::Resume { .. } => {
+            std::env::current_dir().context("reading the resume pane cwd")?
+        }
+        rimz::harness::launch::ExecAction::Launch { .. } => entered_worktree
+            .clone()
+            .unwrap_or_else(|| workspace.worktree_root.clone()),
+    };
+    let exec_invocation = exec_invocation(&args, action);
+    let process = rimz::harness::launch::compile_agent_process(
+        &workspace.project_root,
+        machine_config.harness.rtk,
+        &exec_invocation,
+        &provider_cwd,
+    )?;
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
     }
     if let Some(identity) = launch_identity.as_ref() {
         record_own_launch_pane(&workspace, identity);
     }
-    let adapter = rimz::agents::find_adapter(&args.kind)
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
-    let machine_config = crate::cli::machine_config();
-    let rtk = machine_config.harness.rtk;
-    let argv = agent_argv(adapter, &args.kind, &action)?;
-    let exec_invocation = exec_invocation(&args, action);
-    let rimz_env = full_agent_launch_env(&workspace.project_root, adapter, rtk, &exec_invocation)?;
-    let argv = rimz::harness::launch::login_shell_argv(&rimz_env, &argv);
-    let (program, rest) = argv
+    let (program, rest) = process
+        .argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
     if should_exec_agent_directly(&args) {
-        match exec_agent_command(program, rest, &rimz_env) {
+        match exec_agent_command(program, rest, &process.env) {
             Ok(()) => return Ok(()),
             Err(err) => {
                 mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
@@ -51,7 +62,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     install_interrupt_signal_handler().context("installing interrupt signal handler")?;
     let mut command = Command::new(program);
     command.args(rest);
-    command.envs(&rimz_env);
+    command.envs(&process.env);
     if let Some(path) = entered_worktree.as_deref() {
         command.current_dir(path);
     }
@@ -89,40 +100,6 @@ pub(super) fn exec_action(args: &ExecArgs) -> rimz::harness::launch::ExecAction<
             prompt: args.prompt.as_deref(),
             extra_args: &args.extra_args,
         },
-    }
-}
-
-pub(super) fn agent_argv(
-    adapter: &dyn AgentAdapter,
-    kind: &str,
-    action: &rimz::harness::launch::ExecAction<'_>,
-) -> Result<Vec<String>> {
-    match *action {
-        rimz::harness::launch::ExecAction::Fork {
-            session_id,
-            extra_args,
-        } => {
-            let cwd = std::env::current_dir().context("reading the fork pane cwd")?;
-            let mut argv = adapter
-                .fork_command(session_id, &cwd)
-                .ok_or_else(|| anyhow::anyhow!("agent `{kind}` has no fork command"))?;
-            argv.extend(extra_args.iter().cloned());
-            Ok(argv)
-        }
-        rimz::harness::launch::ExecAction::Resume {
-            session_id,
-            extra_args,
-        } => {
-            let cwd = std::env::current_dir().context("reading the resume pane cwd")?;
-            let mut argv = adapter
-                .resume_command(session_id, &cwd)
-                .ok_or_else(|| anyhow::anyhow!("agent `{kind}` has no resume command"))?;
-            argv.extend(extra_args.iter().cloned());
-            Ok(argv)
-        }
-        rimz::harness::launch::ExecAction::Launch { prompt, extra_args } => adapter
-            .launch_command(extra_args, prompt)
-            .ok_or_else(|| anyhow::anyhow!("agent `{kind}` has no launch command")),
     }
 }
 

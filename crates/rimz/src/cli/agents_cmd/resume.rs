@@ -153,6 +153,7 @@ pub(super) fn resume_lane(
             backend,
             &lane,
             &liveness,
+            machine_config.as_ref(),
             machine_config.resume.max,
             bg,
         );
@@ -207,7 +208,12 @@ fn resume_discovered_lane(
         .map(|observation| discovered_agent_state(observation, lane.channel.as_deref()))
         .collect::<Vec<_>>();
     for kind in states.iter().map(|agent| agent.kind.as_str()) {
-        super::launch::agent_launch_env(&workspace.project_root, kind)?;
+        rimz::harness::launch::preflight_agent_kind(
+            &workspace.project_root,
+            machine_config.harness.rtk,
+            kind,
+            &lane.path,
+        )?;
     }
     let plan = flat_resume_plan(
         &states,
@@ -451,17 +457,13 @@ fn resume_closed_into_live_lane(
     backend: &dyn rimz::mux::MuxBackend,
     lane: &ResolvedLane,
     liveness: &LaneLiveness,
+    machine_config: &rimz::config::MachineConfig,
     max: usize,
     bg: bool,
 ) -> Result<()> {
     for agent in &liveness.closed {
-        if rimz::agents::find_adapter(agent.kind.as_str()).is_some_and(|adapter| {
-            adapter
-                .resume_command(agent.agent_id.as_str(), &lane.path)
-                .is_some()
-        }) && resume_session_present(agent)
-        {
-            super::launch::agent_launch_env(&workspace.project_root, agent.kind.as_str())?;
+        if provider_can_resume(agent, &lane.path) && resume_session_present(agent) {
+            preflight_resume_agent(workspace, machine_config, agent, &lane.path)?;
         }
     }
     let plan = flat_resume_plan(&liveness.closed, max, Some(&workspace.project_root));
@@ -525,7 +527,11 @@ fn resume_closed_lane(
     machine_config: &rimz::config::MachineConfig,
     bg: bool,
 ) -> Result<()> {
-    let launch = super::launch::effective_launch_agents(machine_config, workspace)?;
+    let launch = rimz::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
     let (team, flat_agents) = split_team_and_flat(
         agents,
         &launch.teams,
@@ -536,7 +542,12 @@ fn resume_closed_lane(
         resume_session_present,
     );
     for kind in team.iter().flat_map(|planned| planned.layout.agent_kinds()) {
-        super::launch::agent_launch_env(&workspace.project_root, kind)?;
+        rimz::harness::launch::preflight_agent_kind(
+            &workspace.project_root,
+            machine_config.harness.rtk,
+            kind,
+            &lane.path,
+        )?;
     }
     let team_panes = team
         .iter()
@@ -548,13 +559,8 @@ fn resume_closed_lane(
         Some(&workspace.project_root),
     );
     for agent in &flat_agents {
-        if rimz::agents::find_adapter(agent.kind.as_str()).is_some_and(|adapter| {
-            adapter
-                .resume_command(agent.agent_id.as_str(), &lane.path)
-                .is_some()
-        }) && resume_session_present(agent)
-        {
-            super::launch::agent_launch_env(&workspace.project_root, agent.kind.as_str())?;
+        if provider_can_resume(agent, &lane.path) && resume_session_present(agent) {
+            preflight_resume_agent(workspace, machine_config, agent, &lane.path)?;
         }
     }
     report_resume_skips(&flat.skipped)?;
@@ -814,6 +820,47 @@ fn path_label(path: &Path) -> String {
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+fn provider_can_resume(agent: &AgentState, cwd: &Path) -> bool {
+    rimz::agents::find_adapter(agent.kind.as_str()).is_some_and(|adapter| {
+        rimz::harness::launch::compile_provider_argv(
+            adapter,
+            agent.kind.as_str(),
+            &rimz::harness::launch::ExecAction::Resume {
+                session_id: agent.agent_id.as_str(),
+                extra_args: &[],
+            },
+            cwd,
+        )
+        .is_ok()
+    })
+}
+
+fn preflight_resume_agent(
+    workspace: &rimz::ResolvedWorkspace,
+    machine_config: &rimz::config::MachineConfig,
+    agent: &AgentState,
+    cwd: &Path,
+) -> Result<()> {
+    rimz::harness::launch::preflight_agent_process(
+        &workspace.project_root,
+        machine_config.harness.rtk,
+        &rimz::harness::launch::ExecInvocation {
+            kind: agent.kind.as_str(),
+            action: rimz::harness::launch::ExecAction::Resume {
+                session_id: agent.agent_id.as_str(),
+                extra_args: &[],
+            },
+            run_id: None,
+            worktree_path: None,
+            close_pane_on_exit: false,
+            exit_on_run_completion: false,
+            identity: rimz::harness::launch::ExecIdentity::default(),
+        },
+        cwd,
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

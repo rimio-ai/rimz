@@ -1,8 +1,8 @@
-//! Finalize resolved launch layouts, then compile them into launch identities and
-//! backend-neutral pane commands.
+//! Prepare launch layouts from effective config, then compile them into launch
+//! identities and backend-neutral pane commands.
 
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -22,6 +22,128 @@ pub struct LaunchFinalizeOptions<'a> {
     pub passthrough: &'a [String],
     pub budget: Option<BudgetSpec>,
     pub max_turns: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PrepareLaunchOptions<'a> {
+    pub permission_mode: Option<PermissionMode>,
+    pub preset: &'a crate::agents::LaunchPreset,
+    pub passthrough: &'a [String],
+    pub budget: Option<BudgetSpec>,
+    pub max_turns: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedLaunch {
+    pub teams: crate::config::TeamsConfig,
+    pub layout: LayoutSpec,
+    pub team_name: Option<String>,
+    pub warnings: Vec<LaunchFinalizeWarning>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PrepareLaunchError {
+    #[error(transparent)]
+    Layout(#[from] crate::harness::spec::LayoutErr),
+    #[error(transparent)]
+    Effective(#[from] crate::config::effective::EffectiveConfigErr),
+    #[error(
+        "{origin} {field} `{}` not found; create it or fix the launch config",
+        path.display()
+    )]
+    ProfilePromptFile {
+        origin: String,
+        field: &'static str,
+        path: PathBuf,
+    },
+    #[error(transparent)]
+    Finalize(#[from] LaunchFinalizeError),
+}
+
+impl PrepareLaunchError {
+    pub fn warnings(&self) -> &[LaunchFinalizeWarning] {
+        match self {
+            Self::Finalize(err) => err.warnings(),
+            Self::Layout(_) | Self::Effective(_) | Self::ProfilePromptFile { .. } => &[],
+        }
+    }
+}
+
+/// Resolve effective profiles/teams and finalize one launch layout.
+pub fn prepare_launch(
+    launch: &crate::config::effective::LaunchAgents,
+    commands: &crate::config::CommandsConfig,
+    spec: Option<&str>,
+    options: PrepareLaunchOptions<'_>,
+) -> std::result::Result<PreparedLaunch, PrepareLaunchError> {
+    let mut layout =
+        match crate::harness::spec::resolve_spec(spec, &launch.profiles, commands, &launch.teams) {
+            Ok(layout) => layout,
+            Err(err @ crate::harness::spec::LayoutErr::UnknownTeam { .. })
+            | Err(err @ crate::harness::spec::LayoutErr::UnknownCell { .. }) => {
+                launch.block_untrusted_reference(spec, commands)?;
+                return Err(err.into());
+            }
+            Err(err) => return Err(err.into()),
+        };
+    let team_name = spec
+        .and_then(|spec| crate::harness::spec::spec_team(spec, &launch.teams))
+        .map(str::to_owned);
+    ensure_profile_prompt_files(&layout)?;
+    let warnings = finalize_launch_layout(
+        &mut layout,
+        LaunchFinalizeOptions {
+            permission_mode: options.permission_mode,
+            preset: options.preset,
+            passthrough: options.passthrough,
+            budget: options.budget,
+            max_turns: options.max_turns,
+        },
+    )?;
+    Ok(PreparedLaunch {
+        teams: launch.teams.clone(),
+        layout,
+        team_name,
+        warnings,
+    })
+}
+
+fn ensure_profile_prompt_files(layout: &LayoutSpec) -> std::result::Result<(), PrepareLaunchError> {
+    for cell in layout.columns.iter().flat_map(|column| &column.rows) {
+        let Cell::Agent {
+            profile,
+            role,
+            system_prompt_file,
+            append_system_prompt_file,
+            ..
+        } = cell
+        else {
+            continue;
+        };
+        for (field, path) in [
+            ("system-prompt-file", system_prompt_file.as_ref()),
+            (
+                "append-system-prompt-file",
+                append_system_prompt_file.as_ref(),
+            ),
+        ] {
+            let Some(path) = path.filter(|path| !path.is_file()) else {
+                continue;
+            };
+            let origin = match (role.as_deref(), profile.as_deref()) {
+                (Some(role), Some(profile)) => format!("role `{role}` profile `{profile}`"),
+                (Some(role), None) => format!("role `{role}`"),
+                (None, Some(profile)) => format!("profile `{profile}`"),
+                (None, None) => "agent cell".to_owned(),
+            };
+            return Err(PrepareLaunchError::ProfilePromptFile {
+                origin,
+                field,
+                path: path.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

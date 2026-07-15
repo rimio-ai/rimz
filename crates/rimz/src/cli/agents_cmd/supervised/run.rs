@@ -267,12 +267,41 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
     let mode = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
-    let PreparedLaunch {
-        profiles: _profiles,
-        teams: _teams,
-        layout,
-        team_name: _team_name,
-    } = prepare_launch_layout(args, &workspace, &machine_config, Some(mode), None)?;
+    let effective = rimz::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
+    reject_prompt_that_looks_like_spec(
+        args.spec.as_deref(),
+        args.prompt.as_deref(),
+        &effective.profiles,
+        &machine_config.agents.commands,
+        &effective.teams,
+    )?;
+    let preset = launch_override_preset(args)?;
+    let prepared = rimz::harness::plan::prepare_launch(
+        &effective,
+        &machine_config.agents.commands,
+        args.spec.as_deref(),
+        PrepareLaunchOptions {
+            permission_mode: Some(mode),
+            preset: &preset,
+            passthrough: &args.passthrough,
+            budget: args.budget,
+            max_turns: args.max_turns,
+        },
+    )
+    .map_err(|err| {
+        for warning in err.warnings() {
+            let _ = writeln!(std::io::stderr(), "{warning}");
+        }
+        err
+    })?;
+    for warning in &prepared.warnings {
+        writeln!(std::io::stderr(), "{warning}")?;
+    }
+    let layout = prepared.layout;
     let agent_cells = agent_cells(&layout);
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");
@@ -304,14 +333,14 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
             ..rimz::harness::launch::ExecIdentity::default()
         },
     };
-    let launch_env = full_agent_launch_env(
+    let process = rimz::harness::launch::compile_agent_process(
         &workspace.project_root,
-        adapter,
         machine_config.harness.rtk,
         &launch_invocation,
+        &workspace.worktree_root,
     )?;
     supervised::preflight_agent(adapter)?;
-    supervised::preflight_program(adapter, agent_cell.args, &prompt, &launch_env)?;
+    supervised::preflight_program(&process)?;
     let launch = rimz::worktree::resolve_launch_checkout(
         &workspace,
         &machine_config.agents.worktree,

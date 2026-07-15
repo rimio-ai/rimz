@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
 use super::*;
 use crate::agents::AgentStatus;
-use crate::config::{Profile, Team, TeamsConfig};
+use crate::config::{MachineConfig, Profile, Team, TeamsConfig};
 use crate::harness::run::PermissionMode;
 use crate::harness::spec::Column;
 use crate::ids::AgentKind;
@@ -77,6 +77,259 @@ fn finalize<'a>(
             max_turns: None,
         },
     )
+}
+
+fn configured_profile(
+    agent: &str,
+    mode: Option<PermissionMode>,
+    model: Option<&str>,
+    effort: Option<&str>,
+    system_prompt_file: Option<PathBuf>,
+    append_system_prompt_file: Option<PathBuf>,
+    args: Option<&str>,
+) -> Profile {
+    Profile {
+        agent: agent.to_owned(),
+        mode,
+        model: model.map(str::to_owned),
+        effort: effort.map(str::to_owned),
+        budget: None,
+        system_prompt_file,
+        append_system_prompt_file,
+        args: args.map(str::to_owned),
+    }
+}
+
+fn effective_launch(
+    machine: &MachineConfig,
+    project_root: &Path,
+) -> crate::config::effective::LaunchAgents {
+    crate::config::effective::load(
+        &machine.agents,
+        project_root,
+        &project_root.join("config-home"),
+    )
+    .expect("effective launch config")
+}
+
+#[test]
+fn prepare_launch_requires_profile_prompt_files() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let present = dir.path().join("planner.md");
+    std::fs::write(&present, "be terse").expect("write prompt");
+    let present_append = dir.path().join("append.md");
+    std::fs::write(&present_append, "follow house style").expect("write append prompt");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "planner".to_owned(),
+        configured_profile(
+            "claude",
+            None,
+            None,
+            None,
+            Some(present),
+            Some(present_append),
+            None,
+        ),
+    );
+    let launch = effective_launch(&machine, dir.path());
+    let preset = crate::agents::LaunchPreset::default();
+    prepare_launch(
+        &launch,
+        &machine.agents.commands,
+        Some("planner"),
+        PrepareLaunchOptions {
+            permission_mode: None,
+            preset: &preset,
+            passthrough: &[],
+            budget: None,
+            max_turns: None,
+        },
+    )
+    .expect("present prompt files pass");
+
+    for (system, append, fragment) in [
+        (
+            Some(dir.path().join("absent.md")),
+            None,
+            "system-prompt-file",
+        ),
+        (
+            None,
+            Some(dir.path().join("absent-append.md")),
+            "append-system-prompt-file",
+        ),
+    ] {
+        machine.agents.profiles.0.insert(
+            "planner".to_owned(),
+            configured_profile("claude", None, None, None, system, append, None),
+        );
+        let launch = effective_launch(&machine, dir.path());
+        let err = prepare_launch(
+            &launch,
+            &machine.agents.commands,
+            Some("planner"),
+            PrepareLaunchOptions {
+                permission_mode: None,
+                preset: &preset,
+                passthrough: &[],
+                budget: None,
+                max_turns: None,
+            },
+        )
+        .expect_err("missing prompt fails");
+        assert!(err.to_string().contains(fragment), "{err}");
+    }
+}
+
+#[test]
+fn prepare_launch_finalizes_profile_cli_and_passthrough_precedence() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "planner".to_owned(),
+        configured_profile(
+            "codex",
+            None,
+            Some("profile"),
+            Some("high"),
+            None,
+            None,
+            Some("--model raw-profile --config=model_reasoning_effort=low"),
+        ),
+    );
+    let launch = effective_launch(&machine, dir.path());
+    let preset = crate::agents::LaunchPreset {
+        model: Some("override".to_owned()),
+        effort: Some("xhigh".to_owned()),
+        ..Default::default()
+    };
+    let passthrough = vec![
+        "--model".to_owned(),
+        "raw-cli".to_owned(),
+        "-c".to_owned(),
+        "model_reasoning_effort=medium".to_owned(),
+    ];
+
+    let prepared = prepare_launch(
+        &launch,
+        &machine.agents.commands,
+        Some("planner"),
+        PrepareLaunchOptions {
+            permission_mode: Some(PermissionMode::Yolo),
+            preset: &preset,
+            passthrough: &passthrough,
+            budget: Some("2/day".parse().expect("budget")),
+            max_turns: None,
+        },
+    )
+    .expect("prepare launch");
+    let [
+        Cell::Agent {
+            args,
+            mode,
+            model,
+            effort,
+            budget,
+            ..
+        },
+    ] = prepared.layout.columns[0].rows.as_slice()
+    else {
+        panic!("one agent")
+    };
+    assert_eq!(*mode, Some(PermissionMode::Yolo));
+    assert_eq!(model.as_deref(), Some("override"));
+    assert_eq!(effort.as_deref(), Some("xhigh"));
+    assert_eq!(budget.as_deref(), Some("$2.00/day"));
+    assert_eq!(
+        args,
+        &[
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--model",
+            "override",
+            "-c",
+            "model_reasoning_effort=xhigh",
+        ]
+    );
+}
+
+#[test]
+fn prepare_launch_retains_profile_mode_and_wires_turn_limits() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut machine = MachineConfig::default();
+    machine.agents.profiles.0.insert(
+        "asked".to_owned(),
+        configured_profile(
+            "codex",
+            Some(PermissionMode::Ask),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+    );
+    let launch = effective_launch(&machine, dir.path());
+    let preset = crate::agents::LaunchPreset::default();
+    let prepared = prepare_launch(
+        &launch,
+        &machine.agents.commands,
+        Some("asked,codex"),
+        PrepareLaunchOptions {
+            permission_mode: Some(PermissionMode::Yolo),
+            preset: &preset,
+            passthrough: &[],
+            budget: None,
+            max_turns: None,
+        },
+    )
+    .expect("prepare launch");
+    let modes = prepared
+        .layout
+        .agent_cells()
+        .map(|cell| match cell {
+            Cell::Agent { mode, .. } => *mode,
+            Cell::Command { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        modes,
+        [Some(PermissionMode::Ask), Some(PermissionMode::Yolo)]
+    );
+
+    let prepared = prepare_launch(
+        &launch,
+        &machine.agents.commands,
+        Some("claude"),
+        PrepareLaunchOptions {
+            permission_mode: Some(PermissionMode::Auto),
+            preset: &preset,
+            passthrough: &[],
+            budget: None,
+            max_turns: Some(3),
+        },
+    )
+    .expect("prepare supervised launch");
+    let [Cell::Agent { args, model, .. }] = prepared.layout.columns[0].rows.as_slice() else {
+        panic!("one agent")
+    };
+    assert_eq!(args, &["--permission-mode", "auto", "--max-turns", "3"]);
+    assert_eq!(model, &None);
+
+    let err = prepare_launch(
+        &launch,
+        &machine.agents.commands,
+        Some("codex"),
+        PrepareLaunchOptions {
+            permission_mode: Some(PermissionMode::Auto),
+            preset: &preset,
+            passthrough: &[],
+            budget: None,
+            max_turns: Some(3),
+        },
+    )
+    .expect_err("codex should reject max turns");
+    assert_eq!(err.to_string(), "codex does not support --max-turns");
 }
 
 #[test]

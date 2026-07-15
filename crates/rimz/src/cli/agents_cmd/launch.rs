@@ -11,18 +11,49 @@ pub(super) fn launch_layout(
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let machine_config = machine_config();
+    let effective = rimz::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
+    reject_prompt_that_looks_like_spec(
+        args.spec.as_deref(),
+        args.prompt.as_deref(),
+        &effective.profiles,
+        &machine_config.agents.commands,
+        &effective.teams,
+    )?;
+    let preset = launch_override_preset(&args)?;
+    let prepared = rimz::harness::plan::prepare_launch(
+        &effective,
+        &machine_config.agents.commands,
+        args.spec.as_deref(),
+        PrepareLaunchOptions {
+            permission_mode: interactive_permission_mode_from_flags(args.ask, args.yolo)?,
+            preset: &preset,
+            passthrough: &args.passthrough,
+            budget: args.budget,
+            max_turns: args.max_turns,
+        },
+    )
+    .map_err(|err| {
+        for warning in err.warnings() {
+            let _ = writeln!(std::io::stderr(), "{warning}");
+        }
+        err
+    })?;
+    for warning in &prepared.warnings {
+        writeln!(std::io::stderr(), "{warning}")?;
+    }
+    if args.name.is_some() && prepared.layout.agent_kinds().count() != 1 {
+        bail!("--name requires a layout with exactly one agent cell");
+    }
     let PreparedLaunch {
-        profiles: _profiles,
         teams,
         layout,
         team_name,
-    } = prepare_launch_layout(
-        &args,
-        &workspace,
-        &machine_config,
-        interactive_permission_mode_from_flags(args.ask, args.yolo)?,
-        args.name.as_deref(),
-    )?;
+        warnings: _,
+    } = prepared;
     let prompt = args
         .prompt
         .as_deref()
@@ -36,7 +67,12 @@ pub(super) fn launch_layout(
         })
         .transpose()?;
     for kind in layout.agent_kinds() {
-        agent_launch_env(&workspace.project_root, kind)?;
+        rimz::harness::launch::preflight_agent_kind(
+            &workspace.project_root,
+            machine_config.harness.rtk,
+            kind,
+            &workspace.worktree_root,
+        )?;
     }
     // Resolve where the launch lands before any side effect — the live-session
     // probe, worktree creation, the store append, the sidebar build — so an
@@ -530,67 +566,6 @@ fn report_cohort_resume(plan: &rimz::harness::resume::CohortResumePlan) {
     }
 }
 
-pub(super) struct PreparedLaunch {
-    pub(super) profiles: rimz::config::ProfilesConfig,
-    pub(super) teams: rimz::config::TeamsConfig,
-    pub(super) layout: LayoutSpec,
-    pub(super) team_name: Option<String>,
-}
-
-pub(super) fn prepare_launch_layout(
-    args: &AgentsArgs,
-    workspace: &rimz::ResolvedWorkspace,
-    machine_config: &rimz::config::MachineConfig,
-    mode: Option<PermissionMode>,
-    named_single_cell: Option<&str>,
-) -> Result<PreparedLaunch> {
-    let spec = args.spec.as_deref();
-    let launch = effective_launch_agents(machine_config, workspace)?;
-    let mut layout = resolve_launch_layout(spec, &launch, machine_config)?;
-    let team_name = spec
-        .and_then(|spec| rimz::harness::spec::spec_team(spec, &launch.teams))
-        .map(str::to_owned);
-    reject_prompt_that_looks_like_spec(
-        args.spec.as_deref(),
-        args.prompt.as_deref(),
-        &launch.profiles,
-        &machine_config.agents.commands,
-        &launch.teams,
-    )?;
-    ensure_profile_prompt_files(&layout)?;
-    if named_single_cell.is_some() && layout.agent_kinds().count() != 1 {
-        bail!("--name requires a layout with exactly one agent cell");
-    }
-    let preset = launch_override_preset(args)?;
-    let warnings = match finalize_launch_layout(
-        &mut layout,
-        LaunchFinalizeOptions {
-            permission_mode: mode,
-            preset: &preset,
-            passthrough: &args.passthrough,
-            budget: args.budget,
-            max_turns: args.max_turns,
-        },
-    ) {
-        Ok(warnings) => warnings,
-        Err(err) => {
-            for warning in err.warnings() {
-                let _ = writeln!(std::io::stderr(), "{warning}");
-            }
-            return Err(err.into());
-        }
-    };
-    for warning in warnings {
-        let _ = writeln!(std::io::stderr(), "{warning}");
-    }
-    Ok(PreparedLaunch {
-        profiles: launch.profiles,
-        teams: launch.teams,
-        layout,
-        team_name,
-    })
-}
-
 /// The one pane command of an in-pane launch (the resolver guarantees a single
 /// cell before this is reached).
 fn single_pane_argv(panes: &LayoutPanes) -> Result<Vec<String>> {
@@ -625,60 +600,6 @@ pub(super) fn exec_wrapper_in_place(
     _cwd: &Path,
 ) -> anyhow::Error {
     anyhow::anyhow!("in-place launch is only supported on Unix")
-}
-
-/// Trust-gated `[[agents]]` env for an agent launch, ready to inject into the
-/// agent process. A closed trust gate fails here — at the entry point — with
-/// the fix, so an agent never launches without the env the project declares.
-pub(super) fn agent_launch_env(
-    project_root: &Path,
-    kind: &str,
-) -> Result<BTreeMap<String, String>> {
-    use rimz::trust::AgentEnv;
-    match rimz::trust::agent_env(project_root, kind)? {
-        AgentEnv::Apply(env) => {
-            validate_agent_launch_env(kind, &env)?;
-            Ok(env)
-        }
-        AgentEnv::Unconfigured => Ok(BTreeMap::new()),
-        AgentEnv::Blocked(state) => {
-            bail!(
-                "agent `{kind}` env is configured in {root}/.rimz/config.toml but the project is {state}; {fix}",
-                root = project_root.display(),
-                state = state.as_str(),
-                fix = rimz::trust::blocked_fix(state),
-            )
-        }
-    }
-}
-
-pub(super) fn full_agent_launch_env(
-    project_root: &Path,
-    adapter: &dyn AgentAdapter,
-    rtk: rimz::config::RtkMode,
-    inv: &rimz::harness::launch::ExecInvocation<'_>,
-) -> Result<BTreeMap<String, String>> {
-    let kind = adapter.descriptor().kind;
-    let mut env = agent_launch_env(project_root, kind)?;
-    for (key, value) in adapter.launch_env() {
-        env.insert(key.to_owned(), value.to_owned());
-    }
-    env.extend(rimz::harness::launch::exec_identity_env(inv));
-    env.insert(
-        rimz::harness::run::ENV_RTK.to_owned(),
-        rtk.as_str().to_owned(),
-    );
-    validate_agent_launch_env(kind, &env)?;
-    Ok(env)
-}
-
-pub(super) fn validate_agent_launch_env(kind: &str, env: &BTreeMap<String, String>) -> Result<()> {
-    if let Some(key) = rimz::harness::launch::invalid_env_key(env) {
-        bail!(
-            "agent `{kind}` launch env key `{key}` is invalid; environment variable names must be non-empty, cannot contain `=`, and cannot start with `-`",
-        );
-    }
-    Ok(())
 }
 
 pub(super) fn interactive_permission_mode_from_flags(
@@ -746,86 +667,6 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.retries.is_some()
     {
         bail!("agent launch options require an agent spec");
-    }
-    Ok(())
-}
-
-pub(super) fn effective_launch_agents(
-    machine_config: &rimz::config::MachineConfig,
-    workspace: &rimz::ResolvedWorkspace,
-) -> Result<rimz::config::effective::LaunchAgents> {
-    rimz::config::effective::load(
-        &machine_config.agents,
-        &workspace.project_root,
-        &rimz::store::paths::config_home(),
-    )
-    .map_err(Into::into)
-}
-
-pub(super) fn resolve_launch_layout(
-    spec: Option<&str>,
-    launch: &rimz::config::effective::LaunchAgents,
-    machine_config: &rimz::config::MachineConfig,
-) -> Result<LayoutSpec> {
-    match rimz::harness::spec::resolve_spec(
-        spec,
-        &launch.profiles,
-        &machine_config.agents.commands,
-        &launch.teams,
-    ) {
-        Ok(layout) => Ok(layout),
-        Err(err @ rimz::harness::spec::LayoutErr::UnknownTeam { .. })
-        | Err(err @ rimz::harness::spec::LayoutErr::UnknownCell { .. }) => {
-            launch.block_untrusted_reference(spec, &machine_config.agents.commands)?;
-            Err(err.into())
-        }
-        Err(err) => Err(err.into()),
-    }
-}
-
-/// Confirm every profile the resolved layout launches has its prompt files
-/// present, so a missing prompt fails here — at the launch entry point, with
-/// the absolute path to fix — rather than reaching the agent. This mirrors the
-/// explicit prompt-file checks; the profile paths are already resolved against
-/// the config file at load, so unrelated config reads stay IO-free.
-pub(super) fn ensure_profile_prompt_files(layout: &LayoutSpec) -> Result<()> {
-    for cell in layout.columns.iter().flat_map(|column| &column.rows) {
-        let Cell::Agent {
-            profile,
-            role,
-            system_prompt_file,
-            append_system_prompt_file,
-            ..
-        } = cell
-        else {
-            continue;
-        };
-        for (field, path) in [
-            ("system-prompt-file", system_prompt_file.as_ref()),
-            (
-                "append-system-prompt-file",
-                append_system_prompt_file.as_ref(),
-            ),
-        ] {
-            let Some(path) = path else {
-                continue;
-            };
-            if path.is_file() {
-                continue;
-            }
-            let source = match (role.as_deref(), profile.as_deref()) {
-                (Some(role), Some(profile)) => {
-                    format!("role `{role}` profile `{profile}`")
-                }
-                (Some(role), None) => format!("role `{role}`"),
-                (None, Some(profile)) => format!("profile `{profile}`"),
-                (None, None) => "agent cell".to_owned(),
-            };
-            bail!(
-                "{source} {field} `{}` not found; create it or fix the launch config",
-                path.display()
-            );
-        }
     }
     Ok(())
 }

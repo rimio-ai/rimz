@@ -55,26 +55,10 @@ pub(super) fn preflight_agent(adapter: &dyn AgentAdapter) -> Result<()> {
 }
 
 pub(super) fn preflight_program(
-    adapter: &dyn AgentAdapter,
-    permission_args: &[String],
-    prompt: &str,
-    launch_env: &std::collections::BTreeMap<String, String>,
+    process: &rimz::harness::launch::CompiledAgentProcess,
 ) -> Result<()> {
-    let argv = adapter
-        .launch_command(permission_args, Some(prompt))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "agent `{}` has no launch command",
-                adapter.descriptor().kind
-            )
-        })?;
-    let Some(program) = argv.first() else {
-        bail!(
-            "agent `{}` produced an empty launch command",
-            adapter.descriptor().kind
-        );
-    };
-    let resolves = rimz::harness::launch::program_resolves_after_shell_rc(launch_env, program)
+    let program = &process.provider_program;
+    let resolves = rimz::harness::launch::program_resolves_after_shell_rc(&process.env, program)
         .with_context(|| format!("checking `{program}` after shell startup"))?;
     if !resolves {
         bail!("finding `{program}` on PATH after shell startup");

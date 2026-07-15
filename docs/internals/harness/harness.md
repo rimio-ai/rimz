@@ -50,7 +50,7 @@ Stacks are presentation only: Zellij renders a native stack with one expanded pa
 
 The compile target is the seam the whole harness hangs off. Each cell becomes a `LayoutPanes` entry: an agent cell compiles to the exec-wrapper argv (below), a command cell to its raw argv, and an empty argv reserves the pane for the user's shell. A trailing launch prompt is attached to one agent identity and wrapper argv: a named team's configured `leader` role, its first declared role by default, or otherwise the first unambiguous agent cell. Team and multi-cell launches stamp each member's cohort and order (`launch_group`/`launch_ordinal`, exported as `RIMZ_LAUNCH_GROUP`/`RIMZ_LAUNCH_ORDINAL`) so the sidebar keeps the cards in definition order.
 
-`harness::plan::finalize_launch_layout` is the launch-finalization seam: it applies permission posture, CLI presets and passthrough argv, budget, adapter-declared preset reconciliation and defaults, and supervised turn limits to the resolved `LayoutSpec` before pane compilation.
+`harness::plan::prepare_launch` is the effective-config seam: it resolves profiles and teams, validates their prompt files, applies permission posture, CLI presets and passthrough argv, budget, adapter-declared preset reconciliation and defaults, and supervised turn limits before pane compilation. `harness::launch::compile_agent_process` is the provider-process seam: it selects launch/resume/fork argv, composes trusted project, adapter, Rimz identity, and RTK environment in that order, then applies the login-shell wrapper while retaining raw provider argv for PATH preflight.
 
 ### The exec wrapper
 

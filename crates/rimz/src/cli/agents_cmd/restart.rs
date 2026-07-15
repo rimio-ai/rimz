@@ -58,13 +58,25 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
 
     // Fail at the entry point if this project's configured launch environment
     // is not trusted, before the old pane is touched.
-    super::launch::agent_launch_env(&workspace.project_root, agent.kind.as_str())?;
+    rimz::harness::launch::preflight_agent_kind(
+        &workspace.project_root,
+        machine_config.harness.rtk,
+        agent.kind.as_str(),
+        &cwd,
+    )?;
 
     let resume_support = !agent.agent_id.is_provisional()
         && agent.worktree_path.is_some()
-        && adapter
-            .resume_command(agent.agent_id.as_str(), &cwd)
-            .is_some();
+        && rimz::harness::launch::compile_provider_argv(
+            adapter,
+            agent.kind.as_str(),
+            &rimz::harness::launch::ExecAction::Resume {
+                session_id: agent.agent_id.as_str(),
+                extra_args: &[],
+            },
+            &cwd,
+        )
+        .is_ok();
     let session_present = rimz::harness::resume::resume_session_present(&agent);
     let fresh_reason = fresh_reason(resume_support, session_present);
     let fresh_batch = if fresh_reason.is_some() {
@@ -185,17 +197,31 @@ fn restart_cell(
     machine_config: &rimz::config::MachineConfig,
     adapter: &dyn AgentAdapter,
 ) -> Result<Cell> {
-    let launch = super::launch::effective_launch_agents(machine_config, workspace)?;
+    let launch = rimz::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
     let configured_profile = agent
         .profile
         .as_deref()
         .filter(|profile| launch.profiles.0.contains_key(*profile));
     let mut cell = match configured_profile {
         Some(profile) => {
-            let layout =
-                super::launch::resolve_launch_layout(Some(profile), &launch, machine_config)?;
-            super::launch::ensure_profile_prompt_files(&layout)?;
-            let mut cells = layout.agent_cells();
+            let preset = rimz::agents::LaunchPreset::default();
+            let prepared = rimz::harness::plan::prepare_launch(
+                &launch,
+                &machine_config.agents.commands,
+                Some(profile),
+                PrepareLaunchOptions {
+                    permission_mode: None,
+                    preset: &preset,
+                    passthrough: &[],
+                    budget: None,
+                    max_turns: None,
+                },
+            )?;
+            let mut cells = prepared.layout.agent_cells();
             let cell = cells
                 .next()
                 .cloned()

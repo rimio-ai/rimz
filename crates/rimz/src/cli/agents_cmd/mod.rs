@@ -38,9 +38,9 @@ use super::GlobalFlags;
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
-    LaunchFinalizeOptions, LayoutPaneParams, Placement, apply_in_place_downgrade, cohort_cells,
-    finalize_launch_layout, fresh_resume_launch_requests, launch_identity_requests,
-    layout_panes_with_names, mint_launch_id, resolve_placement, validate_agent_name,
+    LayoutPaneParams, Placement, PrepareLaunchOptions, PreparedLaunch, apply_in_place_downgrade,
+    cohort_cells, fresh_resume_launch_requests, launch_identity_requests, layout_panes_with_names,
+    mint_launch_id, resolve_placement, validate_agent_name,
 };
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::{Cell, LayoutSpec};
@@ -751,7 +751,11 @@ pub(crate) fn create_on_miss(
     let machine_config = crate::cli::machine_config();
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let launch = effective_launch_agents(&machine_config, &workspace)?;
+    let launch = rimz::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
     if !is_launchable_type(&create.selector, &launch.profiles) {
         launch
             .block_untrusted_reference(Some(&create.selector), &machine_config.agents.commands)?;
