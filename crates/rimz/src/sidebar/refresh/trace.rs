@@ -2,12 +2,17 @@
 
 use std::ffi::OsStr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::Serialize;
 
 use crate::RuntimePaths;
 
 const TRACE_MAX_BYTES: u64 = 1_048_576;
+
+pub(super) fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
 
 #[derive(Serialize)]
 struct TraceRecord<'a> {

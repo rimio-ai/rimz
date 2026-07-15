@@ -12,7 +12,7 @@ use crate::agents::AgentAccount;
 use crate::agents::account::AccountProbe;
 use crate::sidebar::timing::{ACCOUNTS_RETRY_TTL, ACCOUNTS_TTL, unix_now_ms};
 
-use super::trace::TraceEvent;
+use super::trace::{TraceEvent, duration_ms};
 use super::{SidebarSnapshot, trace};
 
 /// Poll cadence and budget for the accounts single-flight: a loser waits up to
@@ -399,10 +399,6 @@ fn merge_probe_results(
         );
     }
     AccountsCache { providers }
-}
-
-fn duration_ms(duration: Duration) -> u64 {
-    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

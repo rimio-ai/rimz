@@ -19,7 +19,7 @@ use super::credits::{
     renew_provider_account_usage_claim,
 };
 use super::trace;
-use super::trace::TraceEvent;
+use super::trace::{TraceEvent, duration_ms};
 use super::{drop_kind_rate_limits, merge_account_rate_limits};
 
 /// Claim and spawn each metered provider's direct account-usage refresh.
@@ -224,10 +224,6 @@ fn trace_usage_helper(
         cache_publication_ms,
         total_ms,
     });
-}
-
-fn duration_ms(duration: Duration) -> u64 {
-    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 fn direct_windows_should_publish(

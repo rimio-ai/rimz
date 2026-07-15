@@ -85,15 +85,15 @@ pub fn refresh_heavy_lanes(
         base,
         &config.headline_spec(),
     );
-    // Rate-limit persistence is rebuilt from resolved provider panels, not the
-    // bare rollup. Build that scoped panel view once, write the cache, and drop
-    // it; final folds merge the just-written cache read-only.
+    // Rate-limit persistence and same-pass usage scheduling use resolved
+    // provider panels, not the bare rollup. Final folds merge the just-written
+    // cache read-only.
     let mut panels = fold_machine_config_with(
         base.clone(),
         config,
         accounts.clone(),
         &spending.provider.spending.by_provider,
-        // This throwaway fold only rebuilds rate-limit persistence.
+        // This scoped fold is not returned as the final snapshot.
         RemoteControlServerHealth::default(),
     );
     apply_rate_limit_cache(&mut panels, runtime, true);
