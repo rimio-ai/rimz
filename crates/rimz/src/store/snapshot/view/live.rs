@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::agent_activity::AgentActivity;
-use crate::agents::{AgentState, LocalSessionObservation, ProviderCapacity};
+use crate::agents::{
+    AgentState, AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
+    ProviderCapacity, TurnPhase,
+};
 use crate::diag::record::DiagEvent;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
@@ -44,24 +47,21 @@ impl SidebarSnapshot {
             // exact live pane with the same `(kind, session id)`. Use that
             // authority before command-line resume discovery, then leave the
             // fresh-cache path below for sessions that registered no hook.
-            let stamped = panes.iter().find_map(|pane| {
-                let agent = stamped_agent_for_pane(pane, &self.agents)?;
-                (agent.kind == observation.kind
-                    && agent.agent_id == observation.session_id
-                    && local_pane_matches(pane, observation)
-                    && !used_panes.contains(&pane.pane_id))
-                .then_some((pane, agent))
+            let stamped = panes.iter().find(|pane| {
+                stamped_agent_for_pane(pane, &self.agents).is_some_and(|agent| {
+                    agent.kind == observation.kind
+                        && agent.agent_id == observation.session_id
+                        && local_pane_matches(pane, observation)
+                        && !used_panes.contains(&pane.pane_id)
+                })
             });
-            if let Some((pane, agent)) = stamped {
-                // A same-session transcript can briefly trail a new hook turn.
-                // Consume that observation without letting the fresh-cache pass
-                // regress the durable row to the prior turn; second precision
-                // admits providers whose transcript timestamps omit fractions.
+            if let Some(pane) = stamped {
+                // Exact durable identity consumes both sides before lifecycle
+                // freshness is considered, so a stale provider fold cannot
+                // later bind this pane to another same-cwd session.
                 used_sessions.insert(observation_index);
-                if local_observation_is_current(agent, observation) {
-                    used_panes.insert(pane.pane_id.clone());
-                    bindings.push((observation_index, pane.clone()));
-                }
+                used_panes.insert(pane.pane_id.clone());
+                bindings.push((observation_index, pane.clone()));
                 continue;
             }
             let Some(pane) = panes.iter().find(|pane| {
@@ -350,9 +350,8 @@ fn local_pane_matches(pane: &PaneRef, observation: &LocalSessionObservation) -> 
 }
 
 fn local_observation_is_current(agent: &AgentState, observation: &LocalSessionObservation) -> bool {
-    agent
-        .turn_started_at
-        .is_none_or(|started| observation.last_activity.as_second() >= started.as_second())
+    matches!(observation.projection, LocalSessionProjection::Lifecycle(_))
+        && observation.last_activity.as_second() >= agent.last_activity.as_second()
 }
 
 fn unique_closest_pane<'a>(viable: &[&'a PaneRef]) -> Option<&'a PaneRef> {
@@ -376,21 +375,19 @@ fn merge_bound_local_session(
     observation: &LocalSessionObservation,
     pane: &PaneRef,
 ) {
-    let prior_index = agents
-        .iter()
-        .position(|agent| {
-            agent.kind == observation.kind && agent.agent_id == observation.session_id
+    let exact_index = agents.iter().position(|agent| {
+        agent.kind == observation.kind && agent.agent_id == observation.session_id
+    });
+    let prior_index = exact_index.or_else(|| {
+        agents.iter().position(|agent| {
+            agent.kind == observation.kind
+                && agent.agent_id.is_provisional()
+                && agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|stamped| stamped.pane_id == pane.pane_id)
         })
-        .or_else(|| {
-            agents.iter().position(|agent| {
-                agent.kind == observation.kind
-                    && agent.agent_id.is_provisional()
-                    && agent
-                        .pane
-                        .as_ref()
-                        .is_some_and(|stamped| stamped.pane_id == pane.pane_id)
-            })
-        });
+    });
     let prior = prior_index.map(|index| agents.remove(index));
     agents.retain(|agent| {
         !(agent.kind == observation.kind && agent.agent_id == observation.session_id)
@@ -398,24 +395,59 @@ fn merge_bound_local_session(
     let mut state = prior.unwrap_or_else(|| empty_local_agent(observation));
     state.agent_id = observation.session_id.clone();
     state.kind = observation.kind.clone();
-    state.status = observation.status;
-    state.phase = observation.phase;
     state.pane = Some(pane.clone());
-    state.parent_agent_id = None;
     state.worktree_path = Some(observation.workspace.to_string_lossy().into_owned());
-    state.task = observation.native_prompt_detail.clone();
-    state.prompt = observation.latest_prompt.clone();
-    state.recent_prompts = observation.latest_prompt.clone().into_iter().collect();
     state.transcript_path = Some(observation.transcript_path.to_string_lossy().into_owned());
-    state.context_pct = observation.context_pct;
-    state.turn_started_at = observation.first_event_at;
-    state.waiting_since = observation.waiting_since;
-    // Native Kiro approvals are observable but not routable through `rimz asks`.
+
+    if exact_index.is_some() {
+        if local_observation_is_current(&state, observation)
+            && let LocalSessionProjection::Lifecycle(projection) = &observation.projection
+        {
+            apply_local_lifecycle(&mut state, observation, projection);
+        }
+    } else {
+        state.parent_agent_id = None;
+        match &observation.projection {
+            LocalSessionProjection::IdentityOnly => {
+                state.status = AgentStatus::Idle;
+                state.phase = TurnPhase::Idle;
+                state.task = None;
+                state.prompt = None;
+                state.recent_prompts.clear();
+                state.context_pct = None;
+                state.turn_started_at = None;
+                state.waiting_since = None;
+                state.open_ask = None;
+                state.compacting_since = None;
+            }
+            LocalSessionProjection::Lifecycle(projection) => {
+                state.turn_started_at = observation.first_event_at;
+                apply_local_lifecycle(&mut state, observation, projection);
+            }
+        }
+        state.last_seen = observation.last_activity;
+        state.last_activity = observation.last_activity;
+        state.registered_at = Some(observation.created_at);
+    }
+    agents.push(state);
+}
+
+fn apply_local_lifecycle(
+    state: &mut AgentState,
+    observation: &LocalSessionObservation,
+    projection: &LocalSessionState,
+) {
+    state.status = projection.status;
+    state.phase = projection.phase;
+    state.task = projection.native_prompt_detail.clone();
+    state.prompt = projection.latest_prompt.clone();
+    state.recent_prompts = projection.latest_prompt.clone().into_iter().collect();
+    state.context_pct = projection.context_pct;
+    state.waiting_since = projection.waiting_since;
+    // Provider-native approvals are observable but remain pane-only.
     state.open_ask = None;
     state.last_seen = observation.last_activity;
     state.last_activity = observation.last_activity;
-    state.registered_at = Some(observation.created_at);
-    agents.push(state);
 }
 
 fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
@@ -432,8 +464,8 @@ fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
         launch_group: None,
         launch_ordinal: None,
         channel: None,
-        status: observation.status,
-        phase: observation.phase,
+        status: AgentStatus::Idle,
+        phase: TurnPhase::Idle,
         pane: None,
         runtime_owner: None,
         parent_agent_id: None,

@@ -9,7 +9,7 @@ use jiff::{Timestamp, civil::Date};
 use uuid::Uuid;
 
 use super::spend::wire::{CodexSessionMeta, CodexTimestamp};
-use crate::agents::{AgentStatus, LocalSessionObservation, TurnPhase};
+use crate::agents::{LocalSessionObservation, LocalSessionProjection};
 use crate::ids::{AgentKind, AgentSessionId};
 
 const MAX_EXAMINED_FILES: usize = 512;
@@ -231,12 +231,7 @@ fn observation(path: PathBuf, workspaces: &HashSet<&Path>) -> Option<LocalSessio
         fresh_binding_at: Some(created_at),
         first_event_at: Some(created_at),
         last_activity,
-        status: AgentStatus::Idle,
-        phase: TurnPhase::Idle,
-        latest_prompt: None,
-        native_prompt_detail: None,
-        waiting_since: None,
-        context_pct: None,
+        projection: LocalSessionProjection::IdentityOnly,
     })
 }
 
@@ -288,12 +283,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         fresh_binding_at: Some(created_at),
         first_event_at: Some(created_at),
         last_activity: created_at,
-        status: AgentStatus::Idle,
-        phase: TurnPhase::Idle,
-        latest_prompt: None,
-        native_prompt_detail: None,
-        waiting_since: None,
-        context_pct: None,
+        projection: LocalSessionProjection::IdentityOnly,
     }
 }
 
@@ -412,6 +402,11 @@ mod tests {
             [first, second, archived]
         );
         assert_eq!(observations[0].transcript_path, active_first);
+        assert!(
+            observations
+                .iter()
+                .all(|observation| observation.projection == LocalSessionProjection::IdentityOnly)
+        );
     }
 
     #[test]

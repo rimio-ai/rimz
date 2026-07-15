@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
-    AgentStatus, LocalSessionObservation, TranscriptMessage, TranscriptRole, read_transcript_tail,
-    sanitize_user_prompt,
+    AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
+    TranscriptMessage, TranscriptRole, read_transcript_tail, sanitize_user_prompt,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -187,12 +187,14 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         fresh_binding_at: Some(created_at),
         first_event_at: Some(created_at),
         last_activity: folded.last_activity.unwrap(),
-        status: folded.status,
-        phase: folded.phase,
-        latest_prompt: folded.latest_prompt,
-        native_prompt_detail: folded.native_prompt_detail,
-        waiting_since: folded.waiting_since,
-        context_pct: None,
+        projection: LocalSessionProjection::Lifecycle(LocalSessionState {
+            status: folded.status,
+            phase: folded.phase,
+            latest_prompt: folded.latest_prompt,
+            native_prompt_detail: folded.native_prompt_detail,
+            waiting_since: folded.waiting_since,
+            context_pct: None,
+        }),
     }
 }
 
@@ -315,12 +317,14 @@ fn observation(
         fresh_binding_at: (current_session_id == Some(session_id.as_str())).then_some(created_at),
         first_event_at: Some(created_at),
         last_activity,
-        status: folded.status,
-        phase: folded.phase,
-        latest_prompt: folded.latest_prompt,
-        native_prompt_detail: folded.native_prompt_detail,
-        waiting_since: folded.waiting_since,
-        context_pct: None,
+        projection: LocalSessionProjection::Lifecycle(LocalSessionState {
+            status: folded.status,
+            phase: folded.phase,
+            latest_prompt: folded.latest_prompt,
+            native_prompt_detail: folded.native_prompt_detail,
+            waiting_since: folded.waiting_since,
+            context_pct: None,
+        }),
     })
 }
 

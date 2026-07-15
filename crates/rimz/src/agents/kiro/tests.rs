@@ -5,8 +5,18 @@ use std::io::Write as _;
 
 use crate::agents::descriptor::{ConcernCoverage, IntegrationConcern};
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::agents::{AgentErr, LaunchPreset, TranscriptPosition, TranscriptRole};
+use crate::agents::{
+    AgentErr, LaunchPreset, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
+    TranscriptPosition, TranscriptRole,
+};
 use serde_json::json;
+
+fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
+    let LocalSessionProjection::Lifecycle(state) = &observation.projection else {
+        panic!("Kiro discovery must project lifecycle")
+    };
+    state
+}
 
 #[test]
 fn native_hooks_are_explicitly_unsupported() {
@@ -90,13 +100,19 @@ fn discovery_validates_layout_and_folds_ordered_records() {
     assert_eq!(observations.len(), 1);
     let observation = &observations[0];
     assert_eq!(observation.session_id.as_str(), session_id);
-    assert_eq!(observation.status, crate::agents::AgentStatus::Idle);
-    assert_eq!(observation.phase, crate::agents::TurnPhase::Idle);
+    assert_eq!(
+        local_state(observation).status,
+        crate::agents::AgentStatus::Idle
+    );
+    assert_eq!(
+        local_state(observation).phase,
+        crate::agents::TurnPhase::Idle
+    );
     assert_eq!(observation.fresh_binding_at, Some(observation.created_at));
     assert!(observation.first_event_at.is_none());
     assert_eq!(observation.last_activity, observation.created_at);
-    assert!(observation.latest_prompt.is_none());
-    assert!(observation.context_pct.is_none());
+    assert!(local_state(observation).latest_prompt.is_none());
+    assert!(local_state(observation).context_pct.is_none());
 
     std::fs::write(
         session_dir.join("messages.jsonl"),
@@ -105,10 +121,19 @@ fn discovery_validates_layout_and_folds_ordered_records() {
     .unwrap();
     let observations = session::discover_under(dir.path(), &workspace);
     let observation = &observations[0];
-    assert_eq!(observation.status, crate::agents::AgentStatus::Success);
-    assert_eq!(observation.phase, crate::agents::TurnPhase::Idle);
-    assert_eq!(observation.latest_prompt.as_deref(), Some("ping"));
-    assert_eq!(observation.context_pct, Some(13));
+    assert_eq!(
+        local_state(observation).status,
+        crate::agents::AgentStatus::Success
+    );
+    assert_eq!(
+        local_state(observation).phase,
+        crate::agents::TurnPhase::Idle
+    );
+    assert_eq!(
+        local_state(observation).latest_prompt.as_deref(),
+        Some("ping")
+    );
+    assert_eq!(local_state(observation).context_pct, Some(13));
     assert_eq!(
         observation.first_event_at,
         Some("2025-01-01T00:00:01Z".parse().unwrap())
@@ -146,14 +171,26 @@ fn discovery_validates_layout_and_folds_ordered_records() {
     std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
     std::fs::write(session_dir.join("messages.jsonl"), b"").unwrap();
     let observation = &session::discover_under(dir.path(), &workspace)[0];
-    assert_eq!(observation.status, crate::agents::AgentStatus::Running);
-    assert_eq!(observation.phase, crate::agents::TurnPhase::Reasoning);
+    assert_eq!(
+        local_state(observation).status,
+        crate::agents::AgentStatus::Running
+    );
+    assert_eq!(
+        local_state(observation).phase,
+        crate::agents::TurnPhase::Reasoning
+    );
 
     metadata["status"] = serde_json::Value::Null;
     std::fs::write(session_dir.join("session.json"), metadata.to_string()).unwrap();
     let observation = &session::discover_under(dir.path(), &workspace)[0];
-    assert_eq!(observation.status, crate::agents::AgentStatus::Idle);
-    assert_eq!(observation.phase, crate::agents::TurnPhase::Idle);
+    assert_eq!(
+        local_state(observation).status,
+        crate::agents::AgentStatus::Idle
+    );
+    assert_eq!(
+        local_state(observation).phase,
+        crate::agents::TurnPhase::Idle
+    );
 }
 
 #[cfg(unix)]

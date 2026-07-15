@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
-    AgentStatus, LocalSessionObservation, TranscriptMessage, TranscriptRole, read_transcript_tail,
+    AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
+    TranscriptMessage, TranscriptRole, read_transcript_tail,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -515,12 +516,14 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         fresh_binding_at: Some(created_at),
         first_event_at: folded.first_event_at,
         last_activity: folded.last_activity,
-        status,
-        phase,
-        latest_prompt: folded.latest_prompt,
-        native_prompt_detail,
-        waiting_since,
-        context_pct: folded.context_pct,
+        projection: LocalSessionProjection::Lifecycle(LocalSessionState {
+            status,
+            phase,
+            latest_prompt: folded.latest_prompt,
+            native_prompt_detail,
+            waiting_since,
+            context_pct: folded.context_pct,
+        }),
     }
 }
 
@@ -541,12 +544,14 @@ fn observation(session: ValidatedSession, workspace: &Path) -> Option<LocalSessi
         fresh_binding_at: Some(created_at),
         first_event_at: folded.first_event_at,
         last_activity: folded.last_activity,
-        status,
-        phase,
-        latest_prompt: folded.latest_prompt,
-        native_prompt_detail,
-        waiting_since,
-        context_pct: folded.context_pct,
+        projection: LocalSessionProjection::Lifecycle(LocalSessionState {
+            status,
+            phase,
+            latest_prompt: folded.latest_prompt,
+            native_prompt_detail,
+            waiting_since,
+            context_pct: folded.context_pct,
+        }),
     })
 }
 

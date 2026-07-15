@@ -19,7 +19,9 @@ use jiff::Timestamp;
 
 use crate::Store;
 use crate::agents::find_adapter;
-use crate::agents::{AgentState, LocalSessionObservation};
+use crate::agents::{
+    AgentState, AgentStatus, LocalSessionObservation, LocalSessionProjection, TurnPhase,
+};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
     LayoutPaneParams, cohort_cells, fresh_resume_launch_requests, layout_panes_with_names,
@@ -352,6 +354,10 @@ pub fn discovered_agent_state(
     observation: &LocalSessionObservation,
     channel: Option<&str>,
 ) -> AgentState {
+    let (status, phase) = match &observation.projection {
+        LocalSessionProjection::IdentityOnly => (AgentStatus::Idle, TurnPhase::Idle),
+        LocalSessionProjection::Lifecycle(state) => (state.status, state.phase),
+    };
     AgentState {
         agent_id: observation.session_id.clone(),
         kind: observation.kind.clone(),
@@ -367,8 +373,8 @@ pub fn discovered_agent_state(
         channel: channel
             .filter(|channel| !channel.is_empty())
             .map(ToOwned::to_owned),
-        status: observation.status,
-        phase: observation.phase,
+        status,
+        phase,
         pane: None,
         runtime_owner: None,
         parent_agent_id: None,

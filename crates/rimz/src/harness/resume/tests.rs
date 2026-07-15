@@ -121,12 +121,7 @@ fn local_session(kind: &str, id: &str, created: &str, last: &str) -> LocalSessio
         fresh_binding_at: None,
         first_event_at: None,
         last_activity: last.parse().unwrap(),
-        status: AgentStatus::Idle,
-        phase: crate::agents::TurnPhase::Idle,
-        latest_prompt: None,
-        native_prompt_detail: None,
-        waiting_since: None,
-        context_pct: None,
+        projection: crate::agents::LocalSessionProjection::IdentityOnly,
     }
 }
 
@@ -221,6 +216,32 @@ fn discovered_state_is_paneless_and_keeps_resume_identity() {
     assert!(state.pane.is_none());
     assert!(state.team.is_none());
     assert!(state.role.is_none());
+    assert_eq!(state.status, AgentStatus::Idle);
+    assert_eq!(state.phase, crate::agents::TurnPhase::Idle);
+}
+
+#[test]
+fn discovered_state_uses_provider_lifecycle_when_available() {
+    let mut observation = local_session(
+        "kiro",
+        "only",
+        "2025-01-01T09:00:00Z",
+        "2025-01-01T10:00:00Z",
+    );
+    observation.projection =
+        crate::agents::LocalSessionProjection::Lifecycle(crate::agents::LocalSessionState {
+            status: AgentStatus::Waiting,
+            phase: crate::agents::TurnPhase::Idle,
+            latest_prompt: Some("pick one".to_owned()),
+            native_prompt_detail: None,
+            waiting_since: Some("2025-01-01T10:00:00Z".parse().unwrap()),
+            context_pct: Some(25),
+        });
+
+    let state = discovered_agent_state(&observation, None);
+
+    assert_eq!(state.status, AgentStatus::Waiting);
+    assert_eq!(state.phase, crate::agents::TurnPhase::Idle);
 }
 
 #[test]

@@ -181,6 +181,87 @@ fn sidebar_suppresses_claude_rc_badge_when_auth_blocks_remote_control() {
 }
 
 #[test]
+fn codex_identity_enrichment_preserves_hook_owned_question() {
+    let env = Env::new();
+    let session_id = "11111111-1111-4111-8111-111111111111";
+    let now = jiff::Timestamp::now();
+    let date = now.to_zoned(jiff::tz::TimeZone::UTC).date();
+    let sessions = env.home_root.join(format!(
+        ".codex/sessions/{:04}/{:02}/{:02}",
+        date.year(),
+        date.month(),
+        date.day()
+    ));
+    std::fs::create_dir_all(&sessions).expect("create Codex sessions dir");
+    let rollout = sessions.join(format!(
+        "rollout-{:04}-{:02}-{:02}T00-00-00-{session_id}.jsonl",
+        date.year(),
+        date.month(),
+        date.day()
+    ));
+    std::fs::write(
+        &rollout,
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "timestamp": now.to_string(),
+                "type": "session_meta",
+                "payload": {
+                    "id": session_id,
+                    "cwd": env.project_root,
+                }
+            })
+        ),
+    )
+    .expect("write Codex rollout");
+
+    let hook = env.run_installed_hook_in_pane(
+        "codex",
+        &serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": session_id,
+            "tool_name": "request_user_input",
+            "tool_input": {
+                "questions": [{
+                    "id": "shape",
+                    "question": "Which fix shape?",
+                    "options": [{ "label": "minimal" }, { "label": "broad" }]
+                }]
+            }
+        })
+        .to_string(),
+        &[("TMUX_PANE", "%7")],
+    );
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+
+    let mut pane = crate::common::tmux_pane("%7", "codex", &env.project_root);
+    pane.resumed_session_id = Some(rimz::ids::AgentSessionId::from(session_id));
+    let snapshot = env.snapshot_json_with_panes(&[pane]);
+    let agent = snapshot["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .find(|agent| agent["agent_id"] == session_id)
+        .expect("Codex agent");
+    assert_eq!(agent["status"], "waiting");
+    assert!(agent["waiting_since"].is_string());
+    assert!(agent["open_ask"]["id"].as_str().is_some());
+
+    let row = snapshot["worktree_groups"]
+        .as_array()
+        .expect("worktree groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .find(|row| row["id"] == session_id)
+        .expect("Codex worktree row");
+    assert_eq!(row["status"], "waiting");
+}
+
+#[test]
 fn kiro_local_store_bootstraps_live_state_and_history_without_events() {
     let env = Env::new();
     let session_id = "sess_11111111-1111-4111-8111-111111111111";

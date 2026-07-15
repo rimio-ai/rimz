@@ -11,7 +11,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::spend::claude_config_dirs;
-use crate::agents::{AgentStatus, LocalSessionObservation, TurnPhase, read_transcript_tail};
+use crate::agents::{LocalSessionObservation, LocalSessionProjection, read_transcript_tail};
 use crate::ids::{AgentKind, AgentSessionId};
 
 const MAX_DISCOVERED_SESSIONS: usize = 512;
@@ -97,12 +97,7 @@ fn observation(path: PathBuf, workspace: &Path) -> Option<LocalSessionObservatio
         fresh_binding_at: Some(created_at),
         first_event_at: Some(created_at),
         last_activity,
-        status: AgentStatus::Idle,
-        phase: TurnPhase::Idle,
-        latest_prompt: None,
-        native_prompt_detail: None,
-        waiting_since: None,
-        context_pct: None,
+        projection: LocalSessionProjection::IdentityOnly,
     })
 }
 
@@ -176,12 +171,7 @@ pub(super) fn fixture_observation() -> LocalSessionObservation {
         fresh_binding_at: Some(created_at),
         first_event_at: Some(created_at),
         last_activity: created_at,
-        status: AgentStatus::Idle,
-        phase: TurnPhase::Idle,
-        latest_prompt: None,
-        native_prompt_detail: None,
-        waiting_since: None,
-        context_pct: None,
+        projection: LocalSessionProjection::IdentityOnly,
     }
 }
 
@@ -254,6 +244,11 @@ mod tests {
         assert_eq!(
             observations[1].created_at,
             "2025-01-01T00:00:00Z".parse::<Timestamp>().unwrap()
+        );
+        assert!(
+            observations
+                .iter()
+                .all(|observation| observation.projection == LocalSessionProjection::IdentityOnly)
         );
     }
 }

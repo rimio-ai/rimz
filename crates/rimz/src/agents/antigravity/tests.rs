@@ -6,11 +6,18 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::agents::{
-    AgentStatus, LaunchPreset, PriceBook, StatusLineChange, TranscriptPosition, TranscriptRole,
-    TurnPhase,
+    AgentStatus, LaunchPreset, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
+    PriceBook, StatusLineChange, TranscriptPosition, TranscriptRole, TurnPhase,
 };
 
 const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+fn local_state(observation: &LocalSessionObservation) -> &LocalSessionState {
+    let LocalSessionProjection::Lifecycle(state) = &observation.projection else {
+        panic!("Antigravity discovery must project lifecycle")
+    };
+    state
+}
 
 #[test]
 fn safe_native_hooks_map_lifecycle_and_keep_pre_tool_policy_untouched() {
@@ -677,14 +684,14 @@ fn transcript_questions_project_native_waits_and_clear_on_progress() {
         .join("\n"),
     );
     let observation = &session::discover_under(dir.path(), workspace)[0];
-    assert_eq!(observation.status, AgentStatus::Waiting);
-    assert_eq!(observation.phase, TurnPhase::Idle);
+    assert_eq!(local_state(observation).status, AgentStatus::Waiting);
+    assert_eq!(local_state(observation).phase, TurnPhase::Idle);
     assert_eq!(
-        observation.native_prompt_detail.as_deref(),
+        local_state(observation).native_prompt_detail.as_deref(),
         Some("First choice?")
     );
     assert_eq!(
-        observation.waiting_since,
+        local_state(observation).waiting_since,
         Some("2026-07-13T23:23:10Z".parse().unwrap())
     );
 
@@ -706,11 +713,11 @@ fn transcript_questions_project_native_waits_and_clear_on_progress() {
     std::fs::write(&path, &lines).unwrap();
     let observation = &session::discover_under(dir.path(), workspace)[0];
     assert_eq!(
-        observation.native_prompt_detail.as_deref(),
+        local_state(observation).native_prompt_detail.as_deref(),
         Some("Replacement?")
     );
     assert_eq!(
-        observation.waiting_since,
+        local_state(observation).waiting_since,
         Some("2026-07-13T23:23:11Z".parse().unwrap())
     );
 
@@ -718,9 +725,9 @@ fn transcript_questions_project_native_waits_and_clear_on_progress() {
     lines.push_str(&planner_record(3, "2026-07-13T23:23:12Z", None));
     std::fs::write(&path, &lines).unwrap();
     let observation = &session::discover_under(dir.path(), workspace)[0];
-    assert_eq!(observation.status, AgentStatus::Success);
-    assert!(observation.native_prompt_detail.is_none());
-    assert!(observation.waiting_since.is_none());
+    assert_eq!(local_state(observation).status, AgentStatus::Success);
+    assert!(local_state(observation).native_prompt_detail.is_none());
+    assert!(local_state(observation).waiting_since.is_none());
 
     lines.push('\n');
     lines.push_str(&planner_record(
@@ -735,10 +742,10 @@ fn transcript_questions_project_native_waits_and_clear_on_progress() {
     lines.push_str(&user_record(5, "2026-07-13T23:23:14Z", "continue"));
     std::fs::write(&path, &lines).unwrap();
     let observation = &session::discover_under(dir.path(), workspace)[0];
-    assert_eq!(observation.status, AgentStatus::Running);
-    assert_eq!(observation.phase, TurnPhase::Reasoning);
-    assert!(observation.native_prompt_detail.is_none());
-    assert!(observation.waiting_since.is_none());
+    assert_eq!(local_state(observation).status, AgentStatus::Running);
+    assert_eq!(local_state(observation).phase, TurnPhase::Reasoning);
+    assert!(local_state(observation).native_prompt_detail.is_none());
+    assert!(local_state(observation).waiting_since.is_none());
 }
 
 #[test]
@@ -763,9 +770,9 @@ fn malformed_or_empty_question_calls_settle_as_ordinary_responses() {
             .join("\n"),
         );
         let observation = &session::discover_under(dir.path(), workspace)[0];
-        assert_eq!(observation.status, AgentStatus::Success);
-        assert!(observation.native_prompt_detail.is_none());
-        assert!(observation.waiting_since.is_none());
+        assert_eq!(local_state(observation).status, AgentStatus::Success);
+        assert!(local_state(observation).native_prompt_detail.is_none());
+        assert!(local_state(observation).waiting_since.is_none());
     }
 }
 
@@ -815,9 +822,12 @@ fn discovery_uses_cache_only_for_fresh_pairing_and_keeps_exact_resume_available(
     let observation = &observations[0];
     assert_eq!(observation.session_id.as_str(), SESSION_ID);
     assert_eq!(observation.transcript_path, transcript);
-    assert_eq!(observation.status, AgentStatus::Success);
-    assert_eq!(observation.phase, TurnPhase::Idle);
-    assert_eq!(observation.latest_prompt.as_deref(), Some("ping"));
+    assert_eq!(local_state(observation).status, AgentStatus::Success);
+    assert_eq!(local_state(observation).phase, TurnPhase::Idle);
+    assert_eq!(
+        local_state(observation).latest_prompt.as_deref(),
+        Some("ping")
+    );
     assert!(observation.first_event_at.is_some());
     assert_eq!(observation.fresh_binding_at, observation.first_event_at);
 
@@ -856,7 +866,10 @@ fn transcript_selection_accepts_both_names_and_prefers_full_without_duplicates()
     let observations = session::discover_under(dir.path(), &workspace);
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].transcript_path, full);
-    assert_eq!(observations[0].latest_prompt.as_deref(), Some("ping"));
+    assert_eq!(
+        local_state(&observations[0]).latest_prompt.as_deref(),
+        Some("ping")
+    );
 
     let unknown = write_transcript_named(
         dir.path(),

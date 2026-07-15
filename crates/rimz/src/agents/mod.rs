@@ -585,9 +585,31 @@ pub struct LocalContextRefresh {
     pub transcript_stat: Option<TranscriptStat>,
 }
 
-/// Provider-owned local session truth normalized for transient sidebar
-/// projection. Adapters validate native paths and payloads before constructing
-/// this shape; snapshot code never sees provider wire records.
+/// Lifecycle fields projected by a provider-owned local session store.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalSessionState {
+    pub status: AgentStatus,
+    pub phase: TurnPhase,
+    pub latest_prompt: Option<String>,
+    pub native_prompt_detail: Option<String>,
+    pub waiting_since: Option<Timestamp>,
+    pub context_pct: Option<u8>,
+}
+
+/// The lifecycle authority carried by a local session observation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalSessionProjection {
+    /// The provider store proves identity and activity bounds only. Snapshot
+    /// merge preserves exact durable lifecycle truth and synthesizes idle only
+    /// when no durable session state exists.
+    IdentityOnly,
+    /// The provider store validates and folds lifecycle truth itself.
+    Lifecycle(LocalSessionState),
+}
+
+/// Provider-owned local session binding evidence normalized for transient
+/// sidebar projection. Adapters validate native paths and payloads before
+/// constructing this shape; snapshot code never sees provider wire records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalSessionObservation {
     pub kind: crate::ids::AgentKind,
@@ -602,12 +624,7 @@ pub struct LocalSessionObservation {
     /// Timestamp of the first real transcript or lifecycle record.
     pub first_event_at: Option<Timestamp>,
     pub last_activity: Timestamp,
-    pub status: AgentStatus,
-    pub phase: TurnPhase,
-    pub latest_prompt: Option<String>,
-    pub native_prompt_detail: Option<String>,
-    pub waiting_since: Option<Timestamp>,
-    pub context_pct: Option<u8>,
+    pub projection: LocalSessionProjection,
 }
 
 /// A detached `rimz` helper an adapter requests after a lifecycle event lands

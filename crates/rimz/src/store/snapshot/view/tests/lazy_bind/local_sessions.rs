@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::agents::LocalSessionObservation;
+use crate::agents::{LocalSessionObservation, LocalSessionProjection, LocalSessionState};
 use crate::ids::{AgentKind, AgentSessionId};
 
 fn observation(
@@ -19,21 +19,30 @@ fn observation(
         fresh_binding_at: fresh_binding_secs_ago.map(ago),
         first_event_at: event_at,
         last_activity: event_at.unwrap_or_else(|| ago(created_secs_ago)),
-        status: if event_at.is_some() {
-            AgentStatus::Running
-        } else {
-            AgentStatus::Idle
-        },
-        phase: if event_at.is_some() {
-            TurnPhase::Reasoning
-        } else {
-            TurnPhase::Idle
-        },
-        latest_prompt: event_at.map(|_| "ping".to_owned()),
-        native_prompt_detail: None,
-        waiting_since: None,
-        context_pct: event_at.map(|_| 12),
+        projection: LocalSessionProjection::Lifecycle(LocalSessionState {
+            status: if event_at.is_some() {
+                AgentStatus::Running
+            } else {
+                AgentStatus::Idle
+            },
+            phase: if event_at.is_some() {
+                TurnPhase::Reasoning
+            } else {
+                TurnPhase::Idle
+            },
+            latest_prompt: event_at.map(|_| "ping".to_owned()),
+            native_prompt_detail: None,
+            waiting_since: None,
+            context_pct: event_at.map(|_| 12),
+        }),
     }
+}
+
+fn lifecycle_state(observation: &mut LocalSessionObservation) -> &mut LocalSessionState {
+    let LocalSessionProjection::Lifecycle(state) = &mut observation.projection else {
+        panic!("lifecycle projection")
+    };
+    state
 }
 
 fn event_observation(
@@ -51,6 +60,14 @@ fn event_observation(
 
 fn newborn_observation(id: &str, created_secs_ago: i64) -> LocalSessionObservation {
     observation(id, created_secs_ago, None, Some(created_secs_ago))
+}
+
+fn identity_observation(kind: &str, id: &str, last_secs_ago: i64) -> LocalSessionObservation {
+    let mut observation = observation(id, 20, Some(last_secs_ago), Some(20));
+    observation.kind = AgentKind::new_unchecked(kind);
+    observation.transcript_path = PathBuf::from(format!("/{kind}/{id}.jsonl"));
+    observation.projection = LocalSessionProjection::IdentityOnly;
+    observation
 }
 
 #[test]
@@ -257,10 +274,11 @@ fn antigravity_transcript_question_projects_a_pane_only_wait() {
     observation.kind = AgentKind::new_unchecked("antigravity");
     observation.transcript_path =
         PathBuf::from("/antigravity/conversation-a/transcript_full.jsonl");
-    observation.status = AgentStatus::Waiting;
-    observation.phase = TurnPhase::Idle;
-    observation.native_prompt_detail = Some("Which option?".to_owned());
-    observation.waiting_since = Some(waiting_since);
+    let projected = lifecycle_state(&mut observation);
+    projected.status = AgentStatus::Waiting;
+    projected.phase = TurnPhase::Idle;
+    projected.native_prompt_detail = Some("Which option?".to_owned());
+    projected.waiting_since = Some(waiting_since);
 
     let snapshot = room(Vec::new())
         .with_local_sessions(std::slice::from_ref(&pane), vec![observation])
@@ -288,10 +306,11 @@ fn hook_bound_antigravity_question_does_not_need_workspace_latest_authorization(
     observation.kind = AgentKind::new_unchecked("antigravity");
     observation.transcript_path =
         PathBuf::from("/antigravity/conversation-a/transcript_full.jsonl");
-    observation.status = AgentStatus::Waiting;
-    observation.phase = TurnPhase::Idle;
-    observation.native_prompt_detail = Some("Which language?".to_owned());
-    observation.waiting_since = Some(waiting_since);
+    let projected = lifecycle_state(&mut observation);
+    projected.status = AgentStatus::Waiting;
+    projected.phase = TurnPhase::Idle;
+    projected.native_prompt_detail = Some("Which language?".to_owned());
+    projected.waiting_since = Some(waiting_since);
 
     let snapshot = room(vec![durable])
         .with_local_sessions(std::slice::from_ref(&pane), vec![observation])
@@ -309,18 +328,20 @@ fn hook_bound_antigravity_question_does_not_need_workspace_latest_authorization(
 }
 
 #[test]
-fn stale_hook_bound_transcript_does_not_regress_a_newer_turn() {
+fn lifecycle_state_newer_than_turn_start_but_older_than_activity_is_rejected() {
     let pane = pane("%1", "agy", "/repo/main");
     let mut durable = agent("antigravity", "conversation-a", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .in_pane("%1")
-        .turn_started_ago(5);
+        .active_ago(5)
+        .turn_started_ago(15);
     durable.prompt = Some("current turn".to_owned());
     let mut stale = observation("conversation-a", 20, Some(10), Some(20));
     stale.kind = AgentKind::new_unchecked("antigravity");
-    stale.status = AgentStatus::Success;
-    stale.phase = TurnPhase::Idle;
-    stale.latest_prompt = Some("prior turn".to_owned());
+    let projected = lifecycle_state(&mut stale);
+    projected.status = AgentStatus::Success;
+    projected.phase = TurnPhase::Idle;
+    projected.latest_prompt = Some("prior turn".to_owned());
 
     let snapshot = room(vec![durable])
         .with_local_sessions(std::slice::from_ref(&pane), vec![stale])
@@ -328,6 +349,141 @@ fn stale_hook_bound_transcript_does_not_regress_a_newer_turn() {
     let agent = rollup_agent(&snapshot, "conversation-a");
     assert_eq!(agent.status, AgentStatus::Running);
     assert_eq!(agent.prompt.as_deref(), Some("current turn"));
+}
+
+#[test]
+fn same_second_lifecycle_state_is_accepted_without_replacing_turn_start() {
+    let pane = pane("%1", "agy", "/repo/main");
+    let turn_started_at = ago(20);
+    let mut durable = agent("antigravity", "conversation-a", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(10);
+    durable.turn_started_at = Some(turn_started_at);
+    durable.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: crate::agents::AskKind::Question,
+        detail: Some("durable question".to_owned()),
+        since: ago(12),
+    });
+    let mut current = observation("conversation-a", 30, Some(10), Some(30));
+    current.kind = AgentKind::new_unchecked("antigravity");
+    let projected = lifecycle_state(&mut current);
+    projected.status = AgentStatus::Success;
+    projected.phase = TurnPhase::Idle;
+    projected.latest_prompt = Some("provider prompt".to_owned());
+
+    let snapshot = room(vec![durable])
+        .with_local_sessions(std::slice::from_ref(&pane), vec![current])
+        .with_live_panes(vec![pane], None);
+    let agent = rollup_agent(&snapshot, "conversation-a");
+    assert_eq!(agent.status, AgentStatus::Success);
+    assert_eq!(agent.prompt.as_deref(), Some("provider prompt"));
+    assert_eq!(agent.turn_started_at, Some(turn_started_at));
+    assert!(agent.open_ask.is_none());
+}
+
+#[test]
+fn exact_identity_only_codex_observation_preserves_hook_owned_wait() {
+    let pane = pane("%1", "codex", "/repo/main");
+    let waiting_since = ago(8);
+    let turn_started_at = ago(20);
+    let mut durable = agent("codex", "session-a", AgentStatus::Waiting, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    durable.phase = TurnPhase::Idle;
+    durable.prompt = Some("choose a database".to_owned());
+    durable.turn_started_at = Some(turn_started_at);
+    durable.waiting_since = Some(waiting_since);
+    durable.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: crate::agents::AskKind::Question,
+        detail: Some("Which database?".to_owned()),
+        since: waiting_since,
+    });
+    let open_ask = durable.open_ask.clone();
+
+    let snapshot = room(vec![durable])
+        .with_local_sessions(
+            std::slice::from_ref(&pane),
+            vec![identity_observation("codex", "session-a", 1)],
+        )
+        .with_live_panes(vec![pane], None);
+    let agent = rollup_agent(&snapshot, "session-a");
+    assert_eq!(agent.status, AgentStatus::Waiting);
+    assert_eq!(agent.prompt.as_deref(), Some("choose a database"));
+    assert_eq!(agent.turn_started_at, Some(turn_started_at));
+    assert_eq!(agent.waiting_since, Some(waiting_since));
+    assert_eq!(agent.open_ask, open_ask);
+}
+
+#[test]
+fn newer_identity_only_observation_preserves_running_lifecycle_and_clocks() {
+    let pane = pane("%1", "codex", "/repo/main");
+    let turn_started_at = ago(20);
+    let last_activity = ago(5);
+    let mut durable = agent("codex", "session-a", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    durable.phase = TurnPhase::Acting;
+    durable.prompt = Some("current prompt".to_owned());
+    durable.recent_prompts = vec!["older prompt".to_owned(), "current prompt".to_owned()];
+    durable.turn_started_at = Some(turn_started_at);
+    durable.last_seen = last_activity;
+    durable.last_activity = last_activity;
+    durable.context_pct = Some(42);
+
+    let snapshot = room(vec![durable])
+        .with_local_sessions(
+            std::slice::from_ref(&pane),
+            vec![identity_observation("codex", "session-a", 1)],
+        )
+        .with_live_panes(vec![pane], None);
+    let agent = rollup_agent(&snapshot, "session-a");
+    assert_eq!(agent.status, AgentStatus::Running);
+    assert_eq!(agent.phase, TurnPhase::Acting);
+    assert_eq!(agent.prompt.as_deref(), Some("current prompt"));
+    assert_eq!(
+        agent.recent_prompts,
+        ["older prompt".to_owned(), "current prompt".to_owned()]
+    );
+    assert_eq!(agent.turn_started_at, Some(turn_started_at));
+    assert_eq!(agent.last_activity, last_activity);
+    assert_eq!(agent.context_pct, Some(42));
+}
+
+#[test]
+fn identity_only_session_adopts_launch_identity_as_idle() {
+    let mut provisional = agent("codex", "launch_abc", AgentStatus::Running, 1).in_pane("%1");
+    provisional.name = Some("writer".to_owned());
+    provisional.name_explicit = true;
+    provisional.profile = Some("codex-yolo".to_owned());
+    provisional.role = Some("coder".to_owned());
+    provisional.channel = Some("auth".to_owned());
+    provisional.prompt = Some("launch placeholder".to_owned());
+    provisional.open_ask = Some(crate::agents::OpenAsk {
+        id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: crate::agents::AskKind::Question,
+        detail: None,
+        since: ago(5),
+    });
+    let pane = pane("%1", "codex", "/repo/main");
+    let snapshot = room(vec![provisional]).with_local_sessions(
+        std::slice::from_ref(&pane),
+        vec![identity_observation("codex", "session-real", 1)],
+    );
+
+    let adopted = rollup_agent(&snapshot, "session-real");
+    assert_eq!(adopted.name.as_deref(), Some("writer"));
+    assert_eq!(adopted.profile.as_deref(), Some("codex-yolo"));
+    assert_eq!(adopted.role.as_deref(), Some("coder"));
+    assert_eq!(adopted.channel.as_deref(), Some("auth"));
+    assert_eq!(adopted.status, AgentStatus::Idle);
+    assert_eq!(adopted.phase, TurnPhase::Idle);
+    assert!(adopted.prompt.is_none());
+    assert!(adopted.turn_started_at.is_none());
+    assert!(adopted.open_ask.is_none());
 }
 
 #[test]

@@ -53,7 +53,7 @@ Codex hooks are **daemon-routed** (since 0.137 for a plain TUI launch, not just 
 
 Codex local-session discovery reads the first `session_meta` line from recent rollout files under `CODEX_HOME` or `~/.codex`. One discovery call enumerates the shared active and archived rollout trees once for every requested absolute workspace, then admits a parsed session only when its payload `cwd` exactly matches that workspace set. Active rollouts come from `sessions/YYYY/MM/DD/` newest date first; archived rollouts are flat files under `archived_sessions/` ordered by the timestamp in `rollout-<timestamp>-<uuid>.jsonl`. The payload `id` supplies session identity with the filename UUID as fallback, the header timestamp supplies creation time, and file mtime supplies last activity.
 
-One scan examines at most 512 rollout files and stops before active date directories or archived filename dates older than 14 days. Active storage wins when the same session also has an archived twin. These bounds keep provider fallback and lazy pane binding independent of a user's full Codex history.
+One scan examines at most 512 rollout files and stops before active date directories or archived filename dates older than 14 days. Active storage wins when the same session also has an archived twin. These bounds keep provider fallback and lazy pane binding independent of a user's full Codex history. Discovery observations are identity-only: rollout creation and mtime bound resume clustering and safe pane binding, while hooks remain authoritative for lifecycle state, prompts, waits, routable asks, compaction, context, and clocks on an exact durable session.
 
 ## Context and transcript
 

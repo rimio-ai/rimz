@@ -26,11 +26,11 @@ The 1.1.2 fixtures verify JSONL records with `step_index`, `source`, `type`, `st
 - `MODEL` / `PLANNER_RESPONSE` becomes assistant text; `status: DONE` settles success unless a typed `ask_question` tool call carries a nonblank question.
 - `SYSTEM` conversation-history/checkpoint records, malformed lines, unknown sources, and unknown types stay out of visible history.
 
-Reads preserve physical order, tolerate unknown complete records, and retain a torn final JSONL record until it becomes complete. `transcript_full.jsonl` carries `ask_question.args.questions` as an array; legacy `transcript.jsonl` may JSON-encode that array as a string. A valid question projects waiting/idle with its first nonblank question and record timestamp; a newer question replaces it, and later visible user input or an ordinary completed planner response clears it. This native wait creates no durable RimZ ask, and the Antigravity pane remains the answer surface.
+Reads preserve physical order, tolerate unknown complete records, and retain a torn final JSONL record until it becomes complete. The validated transcript fold is lifecycle-authoritative when its last activity is at least as current as the exact durable row. `transcript_full.jsonl` carries `ask_question.args.questions` as an array; legacy `transcript.jsonl` may JSON-encode that array as a string. A valid question projects waiting/idle with its first nonblank question and record timestamp; a newer question replaces it, and later visible user input or an ordinary completed planner response clears it. This native wait creates no durable RimZ ask, clears any older routable ask only when the fold is accepted, and keeps the Antigravity pane as the answer surface.
 
 Discovery folds a bounded tail; the first `PreInvocation` reads the same bounded tail to carry the latest completed, visible, sanitized user prompt into the turn, while later lifecycle hooks stay free of transcript reads. Full history and incremental assistant output use the adapter-normalized transcript path.
 
-The pulled records remain a cold-start and history fallback. Installed hooks own live turn state; the statusline owns live model, account, and context usage, while the local service supplies separately cached display account facts and identity-bearing quota between turns.
+The pulled records remain cold-start, history, and current provider-lifecycle truth. A newer durable hook row wins over a stale transcript fold; an equally current or newer validated fold supplies live status, phase, prompt, native wait, and clocks. The statusline owns live model, account, and context usage, while the local service supplies separately cached display account facts and identity-bearing quota between turns.
 
 ## Hooks and rich state
 
