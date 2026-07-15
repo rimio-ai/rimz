@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::BufRead as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -14,6 +15,8 @@ use crate::agents::{AgentStatus, LocalSessionObservation, TurnPhase, read_transc
 use crate::ids::{AgentKind, AgentSessionId};
 
 const MAX_DISCOVERED_SESSIONS: usize = 512;
+const MAX_SESSION_HEAD_LINES: usize = 32;
+const MAX_SESSION_HEAD_BYTES: u64 = 64 * 1024;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,7 +79,7 @@ fn observation_cmp(
 fn observation(path: PathBuf, workspace: &Path) -> Option<LocalSessionObservation> {
     let session_id = path.file_stem()?.to_str()?;
     Uuid::parse_str(session_id).ok()?;
-    let first = first_record(&path)?;
+    let first = first_session_record(&path)?;
     if first.is_sidechain || first.cwd.as_deref() != Some(workspace) {
         return None;
     }
@@ -103,13 +106,23 @@ fn observation(path: PathBuf, workspace: &Path) -> Option<LocalSessionObservatio
     })
 }
 
-fn first_record(path: &Path) -> Option<ClaudeSessionRecord> {
+fn first_session_record(path: &Path) -> Option<ClaudeSessionRecord> {
     let file = fs::File::open(path).ok()?;
-    let mut lines = std::io::BufReader::new(file).lines();
-    let line = lines.next()?.ok()?;
-    (!line.trim().is_empty())
-        .then(|| serde_json::from_str(&line).ok())
-        .flatten()
+    let reader = std::io::BufReader::new(file);
+    for line in reader
+        .take(MAX_SESSION_HEAD_BYTES)
+        .lines()
+        .take(MAX_SESSION_HEAD_LINES)
+    {
+        let Ok(line) = line else { break };
+        let Ok(record) = serde_json::from_str::<ClaudeSessionRecord>(&line) else {
+            continue;
+        };
+        if record.cwd.is_some() && record.timestamp.is_some() {
+            return Some(record);
+        }
+    }
+    None
 }
 
 fn tail_timestamp(path: &Path) -> Option<Timestamp> {
@@ -190,6 +203,10 @@ mod tests {
             &project,
             "11111111-1111-4111-8111-111111111111",
             &[
+                r#"{"type":"mode","mode":"default"}"#,
+                r#"{"type":"permission-mode","mode":"default"}"#,
+                r#"{"type":"bridge-session","sessionId":"11111111-1111-4111-8111-111111111111"}"#,
+                r#"{"type":"file-history-snapshot","snapshot":{}}"#,
                 r#"{"timestamp":"2025-01-01T00:00:00Z","cwd":"/home/marvin/.agents"}"#,
                 r#"{"timestamp":"2025-01-01T00:05:00Z","cwd":"/home/marvin/.agents"}"#,
             ],
@@ -233,6 +250,10 @@ mod tests {
         assert_eq!(
             observations[1].last_activity,
             "2025-01-01T00:05:00Z".parse::<Timestamp>().unwrap()
+        );
+        assert_eq!(
+            observations[1].created_at,
+            "2025-01-01T00:00:00Z".parse::<Timestamp>().unwrap()
         );
     }
 }
