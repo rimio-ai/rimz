@@ -119,7 +119,7 @@ fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
 
     let guarded = h
         .store
-        .runtime_projection(RuntimeScope::Runtime)
+        .runtime_projection(RuntimeScope::Audit)
         .expect("audit projection");
     assert!(
         guarded.agents.iter().any(|agent| agent.agent_id == key.1),
