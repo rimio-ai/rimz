@@ -271,32 +271,34 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 
 ## Agent compatibility matrix
 
-Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and give the best experience today. Every other agent is **experimental**: wired and tested against its documented surface, but not yet dogfooded enough by the author, so expect the occasional bug and please [report what you hit](https://github.com/rimio-ai/rimz/issues). Any of them still mostly just works: the CLI runs stock in your terminal and the official apps stay untouched.
+Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and give the best experience today. **Pi and OpenCode are in alpha** — wired end to end and close behind. Every other agent is **experimental**: wired and tested against its documented surface, but not yet dogfooded enough by the author, so expect the occasional bug and please [report what you hit](https://github.com/rimio-ai/rimz/issues). Any of them still mostly just works: the CLI runs stock in your terminal and the official apps stay untouched.
 
-| Agent       | Status          | State | Live | History | Ask | Subagents | Account |
-|-------------|-----------------|:-----:|:----:|:-------:|:---:|:---------:|:-------:|
-| Claude Code | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |     ●     |    ●    |
-| Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |     ●     |    ●    |
-| Pi          | 🧪 Experimental |   ●   |  ●   |    ●    |  ✗  |     ✗     |    ●    |
-| OpenCode    | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |     ●     |    ●    |
-| Antigravity | 🧪 Experimental |   ◐   |  ◐   |    ◐    |  ◐  |     ✗     |    ●    |
-| Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |     ✗     |    ◐    |
-| Droid       | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ◐  |     ✗     |    ✗    |
-| Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ✗  |     ✗     |    ◐    |
-| Amp         | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |     ✗     |    ◐    |
-| Kiro CLI    | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ◐  |     ✗     |    ✗    |
-| Qwen Code   | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |     ●     |    ◐    |
-| Kimi        | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |     ◐     |    ●    |
+| Agent       | Status          | State | Live | History | Account | Ask | Subagents |
+|-------------|-----------------|:-----:|:----:|:-------:|:-------:|:---:|:---------:|
+| Claude Code | ✅ Supported     |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
+| Codex       | ✅ Supported     |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
+| Pi          | 🔬 Alpha         |   ●   |  ●   |    ●    |    ●    |  ✗  |     ✗     |
+| OpenCode    | 🔬 Alpha         |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
+| Antigravity | 🧪 Experimental  |   ◐   |  ◐   |    ◐    |    ●    |  ◐  |     ✗     |
+| Copilot     | 🧪 Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ✗     |
+| Droid       | 🧪 Experimental  |   ●   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
+| Cursor      | 🧪 Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ✗  |     ✗     |
+| Amp         | 🧪 Experimental  |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ✗     |
+| Kiro        | 🧪 Experimental  |   ●   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
+| Qwen        | 🧪 Experimental  |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ●     |
+| Kimi        | 🧪 Experimental  |   ●   |  ●   |    ●    |    ●    |  ●  |     ◐     |
 
 <sub>● full · ◐ partial · ✗ the native CLI lacks a verified signal sufficient for this capability; an agent-side extension or validated upstream wire can add it.</sub>
 
 *See it* — **State** live working/idle/waiting, **Live** realtime context health and cost on the card, **History** full session read (transcript, per-turn tokens, spend), **Account** login, plan, and provider-exposed rate-limit or balance/budget facts. *Do it* — **Ask** blocking prompts routed to your keyboard, **Subagents** the child-agent tree. The full per-mechanism detail, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md), and `rimz coverage` prints the live grid on your own machine with a reason on every cell.
 
+<sub><b>Latest version only.</b> RimZ tracks each agent's most recent release; older CLI versions are not supported.</sub>
+
 ## Contributing
 
 Start with [AGENTS.md](./AGENTS.md), the working contract for humans and coding agents alike; the code shape and quality gates are in [rust-conventions.md](./docs/contributing/rust-conventions.md).
 
-The experimental agents above are where help lands fastest: bug reports and adapter fixes are exactly how an agent graduates to Supported, and both are genuinely welcome. The adapter playbook is [agent-adapters.md](./docs/contributing/agent-adapters.md).
+The alpha and experimental agents above are where help lands fastest: bug reports and adapter fixes are exactly how an agent graduates to Supported, and both are genuinely welcome. The adapter playbook is [agent-adapters.md](./docs/contributing/agent-adapters.md).
 
 ## License
 
