@@ -192,6 +192,89 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
             expected: vec!["fork", "newer"],
         },
         Case {
+            label: "antigravity same-process conversation switch drops the prior session",
+            agents: {
+                let mut older = agent("antigravity", "older", AgentStatus::Success, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(120);
+                older.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "older",
+                    9_999,
+                    Some("process-a".to_owned()),
+                ));
+                let mut newer = agent("antigravity", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(60);
+                newer.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "newer",
+                    9_999,
+                    Some("process-a".to_owned()),
+                ));
+                vec![older, newer]
+            },
+            expected: vec!["newer"],
+        },
+        Case {
+            label: "antigravity process identity mismatch keeps both conversations",
+            agents: {
+                let mut older = agent("antigravity", "older", AgentStatus::Success, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(120);
+                older.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "older",
+                    9_999,
+                    Some("process-a".to_owned()),
+                ));
+                let mut newer = agent("antigravity", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(60);
+                newer.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "newer",
+                    9_999,
+                    Some("process-b".to_owned()),
+                ));
+                vec![older, newer]
+            },
+            expected: vec!["newer", "older"],
+        },
+        Case {
+            label: "antigravity pane incarnation mismatch keeps both conversations",
+            agents: {
+                let mut older = agent("antigravity", "older", AgentStatus::Success, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(120);
+                older.pane.as_mut().unwrap().pane_process_start = Some(ago(600));
+                older.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "older",
+                    9_999,
+                    Some("process-a".to_owned()),
+                ));
+                let mut newer = agent("antigravity", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .in_pane("%1")
+                    .active_ago(60);
+                newer.pane.as_mut().unwrap().pane_process_start = Some(ago(300));
+                newer.runtime_owner = Some(RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    "newer",
+                    9_999,
+                    Some("process-a".to_owned()),
+                ));
+                vec![older, newer]
+            },
+            expected: vec!["newer", "older"],
+        },
+        Case {
             label: "unknown older lineage keeps both same-pane sessions",
             agents: {
                 let older = agent("codex", "older", AgentStatus::Running, 0)

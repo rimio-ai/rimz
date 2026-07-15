@@ -80,8 +80,8 @@ pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCr
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
     LaunchPermissionArgs, LaunchSpec, PlanLabel, PresetMatchers, PromptStyle, RealtimeUsageChannel,
-    RemoteControlCapability, SessionCommand, StaticPresetMatcher, ThreadKey, ToolClassification,
-    program_names_kind,
+    RemoteControlCapability, SamePaneSessionPolicy, SessionCommand, StaticPresetMatcher, ThreadKey,
+    ToolClassification, program_names_kind,
 };
 pub use emblems::{emblem_lines, fallback_emblem};
 pub(crate) use identity::{

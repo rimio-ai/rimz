@@ -328,6 +328,103 @@ fn hook_bound_antigravity_question_does_not_need_workspace_latest_authorization(
 }
 
 #[test]
+fn hook_bound_prompt_survives_bounded_local_observations_without_prompt_evidence() {
+    for status in [AgentStatus::Running, AgentStatus::Success] {
+        let pane = pane("%1", "agy", "/repo/main");
+        let mut durable = agent("antigravity", "conversation-a", status, 0)
+            .worktree("/repo/main")
+            .in_pane("%1");
+        durable.prompt = Some("sticky hook prompt".to_owned());
+        durable.recent_prompts = vec!["sticky hook prompt".to_owned()];
+        let mut local = observation("conversation-a", 20, Some(10), None);
+        local.kind = AgentKind::new_unchecked("antigravity");
+        let projected = lifecycle_state(&mut local);
+        projected.status = status;
+        projected.phase = if status == AgentStatus::Running {
+            TurnPhase::Reasoning
+        } else {
+            TurnPhase::Idle
+        };
+        projected.latest_prompt = None;
+
+        let snapshot = room(vec![durable])
+            .with_local_sessions(std::slice::from_ref(&pane), vec![local])
+            .with_live_panes(vec![pane], None);
+        let merged = rollup_agent(&snapshot, "conversation-a");
+        assert_eq!(merged.prompt.as_deref(), Some("sticky hook prompt"));
+        assert_eq!(merged.recent_prompts, ["sticky hook prompt"]);
+    }
+}
+
+#[test]
+fn concrete_local_prompt_replaces_once_while_new_session_stays_blank() {
+    let shared_pane = pane("%1", "agy", "/repo/main");
+    let mut durable = agent("antigravity", "conversation-a", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    durable.prompt = Some("older prompt".to_owned());
+    durable.recent_prompts = vec!["older prompt".to_owned()];
+    let mut local = observation("conversation-a", 20, Some(10), None);
+    local.kind = AgentKind::new_unchecked("antigravity");
+    lifecycle_state(&mut local).latest_prompt = Some("newer prompt".to_owned());
+
+    let snapshot = room(vec![durable])
+        .with_local_sessions(std::slice::from_ref(&shared_pane), vec![local.clone()]);
+    let snapshot = snapshot
+        .with_local_sessions(std::slice::from_ref(&shared_pane), vec![local])
+        .with_live_panes(vec![shared_pane], None);
+    let merged = rollup_agent(&snapshot, "conversation-a");
+    assert_eq!(merged.prompt.as_deref(), Some("newer prompt"));
+    assert_eq!(merged.recent_prompts, ["older prompt", "newer prompt"]);
+
+    let mut blank_pane = pane("%2", "agy", "/repo/main");
+    blank_pane.resumed_session_id = Some(AgentSessionId::from("conversation-blank"));
+    let mut blank = observation("conversation-blank", 20, Some(10), None);
+    blank.kind = AgentKind::new_unchecked("antigravity");
+    lifecycle_state(&mut blank).latest_prompt = None;
+    let blank_snapshot = room(vec![merged.clone()])
+        .with_local_sessions(std::slice::from_ref(&blank_pane), vec![blank]);
+    let blank = rollup_agent(&blank_snapshot, "conversation-blank");
+    assert!(blank.prompt.is_none());
+    assert!(blank.recent_prompts.is_empty());
+}
+
+#[test]
+fn latest_hook_bound_antigravity_conversation_consumes_the_shared_pane() {
+    let pane = pane("%1", "agy", "/repo/main");
+    let mut older = agent("antigravity", "conversation-old", AgentStatus::Success, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120);
+    older.registered_at = Some(ago(600));
+    let mut newer = agent("antigravity", "conversation-new", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    newer.registered_at = Some(ago(60));
+
+    let mut stale_cache = observation("conversation-old", 600, Some(120), Some(5));
+    stale_cache.kind = AgentKind::new_unchecked("antigravity");
+    lifecycle_state(&mut stale_cache).latest_prompt = Some("old cached prompt".to_owned());
+    let mut current = observation("conversation-new", 60, Some(5), None);
+    current.kind = AgentKind::new_unchecked("antigravity");
+    lifecycle_state(&mut current).latest_prompt = Some("new prompt".to_owned());
+
+    let snapshot = room(vec![older, newer])
+        .with_local_sessions(std::slice::from_ref(&pane), vec![stale_cache, current])
+        .with_live_panes(vec![pane], None);
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "conversation-new");
+    assert_eq!(
+        rollup_agent(&snapshot, "conversation-new")
+            .prompt
+            .as_deref(),
+        Some("new prompt")
+    );
+}
+
+#[test]
 fn lifecycle_state_newer_than_turn_start_but_older_than_activity_is_rejected() {
     let pane = pane("%1", "agy", "/repo/main");
     let mut durable = agent("antigravity", "conversation-a", AgentStatus::Running, 0)

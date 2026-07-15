@@ -843,6 +843,38 @@ fn discovery_uses_cache_only_for_fresh_pairing_and_keeps_exact_resume_available(
 }
 
 #[test]
+fn bounded_discovery_can_lose_an_older_prompt_from_a_long_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let mut records = vec![user_record(0, "2026-07-13T23:00:00Z", "sticky label")];
+    for step in 1..=900 {
+        records.push(planner_record(
+            step,
+            "2026-07-13T23:23:10Z",
+            Some(json!([])),
+        ));
+    }
+    let transcript = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_full.jsonl",
+        &records.join("\n"),
+    );
+    assert!(std::fs::metadata(&transcript).unwrap().len() > 64 * 1024);
+
+    let observation = session::discover_under(dir.path(), &workspace)
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(observation.status, AgentStatus::Success);
+    assert!(
+        observation.latest_prompt.is_none(),
+        "the bounded tail is valid weaker evidence; snapshot merge preserves the hook prompt"
+    );
+}
+
+#[test]
 fn transcript_selection_accepts_both_names_and_prefers_full_without_duplicates() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = dir.path().join("workspace");

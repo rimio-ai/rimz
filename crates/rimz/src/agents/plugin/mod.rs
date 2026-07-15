@@ -479,6 +479,7 @@ fn build_descriptor(
             registers_lazily: manifest.capabilities.registers_lazily,
             local_session_discovery: false,
             daemon_hooked_sessions: false,
+            same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
             realtime_usage: RealtimeUsageChannel {
                 windows_defer_to_fresh_realtime: false,
             },

@@ -94,6 +94,7 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: false,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
+        same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
         },

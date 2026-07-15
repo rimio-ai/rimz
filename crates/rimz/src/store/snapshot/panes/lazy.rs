@@ -10,7 +10,7 @@ use super::{
 };
 use crate::agents::AgentDescriptor;
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentState, AgentStatus, SessionOrigin};
+use crate::agents::{AgentState, AgentStatus, SamePaneSessionPolicy, SessionOrigin};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
 use crate::store::snapshot::process::{pane_command_is_known, row_from_process};
@@ -186,9 +186,16 @@ impl<'a> HookPaneRecoveryContext<'a> {
         {
             candidates =
                 selectable_focused_occupied_candidates(&evidence, &candidate_records, client_focus);
-            if candidates.is_empty() && self.origin == Some(SessionOrigin::Fresh) {
-                candidates = self
-                    .selectable_resting_fresh_occupied_candidates(&evidence, &candidate_records);
+            if self.follows_latest() {
+                candidates.retain(|candidate| {
+                    self.occupied_owner_is_resting(&candidate.pane.pane_id, &candidate_records)
+                });
+            }
+            if candidates.is_empty()
+                && (self.origin == Some(SessionOrigin::Fresh) || self.follows_latest())
+            {
+                candidates =
+                    self.selectable_resting_occupied_candidates(&evidence, &candidate_records);
                 occupied_sole_candidate = candidates.len() == 1;
                 if !occupied_sole_candidate {
                     occupied_candidate_count = Some(candidates.len());
@@ -323,15 +330,41 @@ impl<'a> HookPaneRecoveryContext<'a> {
     }
 
     fn can_share_occupied_pane(&self) -> bool {
-        crate::agents::descriptor_by_kind(self.kind.as_str())
-            .is_some_and(|descriptor| descriptor.capabilities.daemon_hooked_sessions)
-            && !self
-                .prior_agents
-                .iter()
-                .any(|agent| agent.kind == *self.kind && agent.agent_id == *self.agent_id)
+        crate::agents::descriptor_by_kind(self.kind.as_str()).is_some_and(|descriptor| {
+            descriptor.capabilities.daemon_hooked_sessions
+                || descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
+        }) && !self
+            .prior_agents
+            .iter()
+            .any(|agent| agent.kind == *self.kind && agent.agent_id == *self.agent_id)
     }
 
-    fn selectable_resting_fresh_occupied_candidates<'b>(
+    fn follows_latest(&self) -> bool {
+        crate::agents::descriptor_by_kind(self.kind.as_str()).is_some_and(|descriptor| {
+            descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
+        })
+    }
+
+    fn occupied_owner_is_resting(
+        &self,
+        pane_id: &PaneId,
+        records: &[HookPaneRecoveryCandidate],
+    ) -> bool {
+        let Some(owner_id) = records
+            .iter()
+            .find(|record| &record.pane_id == pane_id)
+            .and_then(|record| record.occupied_by_agent_id.as_deref())
+        else {
+            return false;
+        };
+        self.prior_agents.iter().any(|owner| {
+            owner.kind == *self.kind
+                && owner.agent_id.as_str() == owner_id
+                && !matches!(owner.status, AgentStatus::Running | AgentStatus::Waiting)
+        })
+    }
+
+    fn selectable_resting_occupied_candidates<'b>(
         &self,
         evidence: &'b [PaneBindingEvidence<'b>],
         records: &[HookPaneRecoveryCandidate],
@@ -347,7 +380,7 @@ impl<'a> HookPaneRecoveryContext<'a> {
                 })?;
                 (hook_candidate_selectable(record, true)
                     && !matches!(owner.status, AgentStatus::Running | AgentStatus::Waiting)
-                    && owner.origin == Some(SessionOrigin::Fresh))
+                    && (self.follows_latest() || owner.origin == Some(SessionOrigin::Fresh)))
                 .then_some(evidence)
             })
             .collect()

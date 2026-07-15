@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
+use crate::agents::state::append_recent_prompt;
 use crate::agents::{AgentLifecycleObservation, LaunchParams};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
@@ -25,12 +26,6 @@ mod identity;
 pub(crate) use identity::AgentIdentityState;
 pub(super) use identity::backfill_agent_identities;
 use identity::{CardIdentity, CardIdentityAllocator, usable_name};
-
-/// How many user prompts a session's rollup keeps (`AgentState::recent_prompts`,
-/// newest last). The events are durable, so the cap bounds only the projected
-/// history, not the record; 16 covers a long working session without growing
-/// the rollup cache unbounded.
-const RECENT_PROMPTS_LIMIT: usize = 16;
 
 /// Strip a trailing capability tag (`claude-opus-4-8[1m]` → `claude-opus-4-8`)
 /// so the sidebar shows one stable model id per agent. The tag rides only on a
@@ -909,14 +904,6 @@ fn prompt_projection(
         task,
         prompt: event_prompt.or_else(|| prior.and_then(|p| p.prompt.clone())),
         recent_prompts,
-    }
-}
-
-fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
-    recent_prompts.push(prompt.to_owned());
-    let excess = recent_prompts.len().saturating_sub(RECENT_PROMPTS_LIMIT);
-    if excess > 0 {
-        recent_prompts.drain(0..excess);
     }
 }
 

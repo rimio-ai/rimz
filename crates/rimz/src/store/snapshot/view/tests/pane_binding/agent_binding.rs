@@ -90,6 +90,37 @@ fn forked_side_session_does_not_repaint_primary_card() {
 }
 
 #[test]
+fn antigravity_shared_pane_follows_latest_conversation() {
+    let mut older = agent(
+        "antigravity",
+        "conversation-old",
+        AgentStatus::Success,
+        1_000,
+    )
+    .worktree("/repo/main")
+    .in_pane("%1")
+    .active_ago(120);
+    older.registered_at = Some(ago(600));
+
+    let mut newer = agent(
+        "antigravity",
+        "conversation-new",
+        AgentStatus::Running,
+        2_000,
+    )
+    .worktree("/repo/main")
+    .in_pane("%1")
+    .active_ago(5);
+    newer.registered_at = Some(ago(60));
+
+    let snapshot =
+        room(vec![older, newer]).with_live_panes(vec![pane("%1", "agy", "/repo/main")], None);
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "conversation-new");
+}
+
+#[test]
 fn shared_pane_primary_is_stable_when_registration_ties() {
     for (label, a_active_ago, b_active_ago) in [
         ("agent-b is fresher", 120, 5),

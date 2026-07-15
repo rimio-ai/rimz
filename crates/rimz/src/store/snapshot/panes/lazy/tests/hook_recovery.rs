@@ -87,7 +87,18 @@ fn select(
     origin: Option<SessionOrigin>,
     phase: HookPaneRecoveryPhase,
 ) -> HookPaneRecoverySelection {
-    let kind = AgentKind::new_unchecked("codex");
+    select_kind("codex", prior_agents, panes, client_focus, origin, phase)
+}
+
+fn select_kind(
+    kind: &str,
+    prior_agents: &[AgentState],
+    panes: &[PaneRef],
+    client_focus: Option<&[PaneId]>,
+    origin: Option<SessionOrigin>,
+    phase: HookPaneRecoveryPhase,
+) -> HookPaneRecoverySelection {
+    let kind = AgentKind::new_unchecked(kind);
     let agent_id = AgentSessionId::from("new");
     HookPaneRecoveryContext::new(&kind, &agent_id, origin, phase, prior_agents).select(
         "/repo/main",
@@ -432,6 +443,55 @@ fn sole_resting_fresh_occupied_pane_binds_without_focus() {
     assert_eq!(selected.method, OccupiedSoleCandidate);
     assert_eq!(selected.candidate_count, 1);
     assert!(selected.candidates[0].reject_reasons.is_empty());
+}
+
+#[test]
+fn antigravity_turn_start_follows_the_sole_resting_conversation_without_lineage() {
+    let pane_id = id("terminal_30");
+    let owner = prior(
+        "antigravity",
+        "old",
+        Some(pane_id.clone()),
+        AgentStatus::Success,
+        None,
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let occupied = pane("terminal_30", "agy", "/repo/main", false);
+    let selected = select_kind(
+        "antigravity",
+        &[owner],
+        &[occupied],
+        Some(&[]),
+        None,
+        HookPaneRecoveryPhase::TurnStarted,
+    );
+
+    assert_eq!(selected.pane_id.as_ref(), Some(&pane_id));
+    assert_eq!(selected.method, OccupiedSoleCandidate);
+
+    for status in [AgentStatus::Running, AgentStatus::Waiting] {
+        let owner = prior(
+            "antigravity",
+            "old",
+            Some(pane_id.clone()),
+            status,
+            None,
+            jiff::Timestamp::UNIX_EPOCH,
+        );
+        let occupied = pane("terminal_30", "agy", "/repo/main", true);
+        let selected = select_kind(
+            "antigravity",
+            &[owner],
+            &[occupied],
+            Some(std::slice::from_ref(&pane_id)),
+            None,
+            HookPaneRecoveryPhase::TurnStarted,
+        );
+        assert_eq!(
+            selected.pane_id, None,
+            "{status:?} owner stays authoritative"
+        );
+    }
 }
 
 #[test]

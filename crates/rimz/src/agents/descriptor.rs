@@ -495,11 +495,23 @@ pub struct Capabilities {
     /// conversation, so a new session may succeed another in the same pane
     /// before the reaper clears the stamp.
     pub daemon_hooked_sessions: bool,
+    /// Which co-resident root session owns a live pane when one agent process
+    /// carries more than one session id.
+    pub same_pane_session: SamePaneSessionPolicy,
     /// How this provider's realtime usage channel interacts with the uniform
     /// account-usage driver.
     pub realtime_usage: RealtimeUsageChannel,
     /// Remote-control surfaces the provider can host.
     pub remote_control: RemoteControlCapability,
+}
+
+/// Pane ownership for multiple root sessions hosted by one live agent process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SamePaneSessionPolicy {
+    /// Keep the earliest registered session as the pane's primary owner.
+    KeepPrimary,
+    /// Hand the pane to the most recently registered active conversation.
+    FollowLatest,
 }
 
 /// How a provider's realtime usage channel interacts with the uniform direct

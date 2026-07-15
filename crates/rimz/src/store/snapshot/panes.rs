@@ -1,13 +1,14 @@
 //! Pane binding: which store agent owns which live pane, the own-view
 //! projection, and the daemon-view predicates.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::process::{pane_agent_kind, pane_worktree_path};
-use crate::agents::AgentState;
+use crate::agents::{AgentState, SamePaneSessionPolicy};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwnerKind};
 use crate::store::session_death::agent_owner_pid;
@@ -183,23 +184,37 @@ pub fn stamped_agent_for_pane<'a>(
         // pane id; it nests under the parent via `attach_sub_agents` and must
         // never win the pane as a top-level row. Panes bind root agents only.
         .filter(|agent| agent.parent_agent_id.is_none())
-        // The card follows the pane's *primary* — the session that owned it
-        // first (earliest `registered_at`). When registration order ties or is
-        // unknown, the lowest session id wins so the pane stays pinned to one
-        // primary instead of following whichever co-resident session posted
-        // activity last. A later in-process thread fork (Codex `/side` / `/btw`
-        // registers a fresh session id in the same pane and process) posts
-        // newer activity but a later registration, so it can never repaint the
-        // card. Safe because the process-start guard in
+        // The descriptor decides whether the card stays on the pane's first
+        // session or follows the latest co-resident conversation. Safe because
+        // the process-start guard in
         // `stamped_agent_matches_live_pane` has already evicted any
         // older-instance residue: this only arbitrates between sessions
-        // genuinely sharing one live process, and a real relaunch (new process)
-        // still takes over because the dead predecessor is gone before this runs.
-        .min_by(|a, b| {
-            registered_rank(a)
-                .cmp(&registered_rank(b))
-                .then_with(|| a.agent_id.cmp(&b.agent_id))
-        })
+        // genuinely sharing one live process.
+        .min_by(|left, right| compare_same_pane_owners(left, right))
+}
+
+fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {
+    let follows_latest = left.kind == right.kind
+        && crate::agents::descriptor_by_kind(left.kind.as_str()).is_some_and(|descriptor| {
+            descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
+        });
+    if !follows_latest {
+        return registered_rank(left)
+            .cmp(&registered_rank(right))
+            .then_with(|| left.agent_id.cmp(&right.agent_id));
+    }
+    compare_latest_registration(left, right)
+        .then_with(|| right.last_activity.cmp(&left.last_activity))
+        .then_with(|| right.agent_id.cmp(&left.agent_id))
+}
+
+fn compare_latest_registration(left: &AgentState, right: &AgentState) -> Ordering {
+    match (left.registered_at, right.registered_at) {
+        (Some(left), Some(right)) => right.cmp(&left),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
 }
 
 /// Registration sort key: an earlier `registered_at` ranks first (the pane's

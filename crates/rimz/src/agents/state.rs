@@ -361,6 +361,21 @@ pub fn is_turn_interrupted(
 /// to condense.
 pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
+/// How many user prompts a session rollup retains, newest last.
+const RECENT_PROMPTS_LIMIT: usize = 16;
+
+/// Append one concrete prompt without duplicating a repeated observation.
+pub(crate) fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
+    if prompt.is_empty() || recent_prompts.last().is_some_and(|prior| prior == prompt) {
+        return;
+    }
+    recent_prompts.push(prompt.to_owned());
+    let excess = recent_prompts.len().saturating_sub(RECENT_PROMPTS_LIMIT);
+    if excess > 0 {
+        recent_prompts.drain(0..excess);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(from = "AgentStateWire")]
 pub struct AgentState {

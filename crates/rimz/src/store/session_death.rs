@@ -2,7 +2,7 @@
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentState, SessionOrigin};
+use crate::agents::{AgentState, SamePaneSessionPolicy, SessionOrigin};
 use crate::pane::RuntimeOwnerKind;
 
 /// Age in seconds after which a pidless agent session is reaped as a ghost.
@@ -36,7 +36,50 @@ pub(crate) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
     newer.kind == older.kind
         && newer.agent_id != older.agent_id
         && newer.last_activity > older.last_activity
-        && (older_yields_pane(older, newer) || cleared_conversation_supersedes(older, newer))
+        && (older_yields_pane(older, newer)
+            || cleared_conversation_supersedes(older, newer)
+            || same_process_conversation_supersedes(older, newer))
+}
+
+/// A provider that follows its latest conversation can prove an in-place
+/// session switch when both records name the same pane incarnation and agent
+/// process. The outer activity guard establishes which record is newer.
+pub(crate) fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+    if crate::agents::descriptor_by_kind(older.kind.as_str()).is_none_or(|descriptor| {
+        descriptor.capabilities.same_pane_session != SamePaneSessionPolicy::FollowLatest
+    }) {
+        return false;
+    }
+    let same_pane = matches!(
+        (older.pane.as_ref(), newer.pane.as_ref()),
+        (Some(older_pane), Some(newer_pane))
+            if older_pane.pane_id == newer_pane.pane_id
+                && compatible_tokens(
+                    older_pane.pane_process_start.as_ref(),
+                    newer_pane.pane_process_start.as_ref(),
+                )
+    );
+    if !same_pane {
+        return false;
+    }
+    matches!(
+        (older.runtime_owner.as_ref(), newer.runtime_owner.as_ref()),
+        (Some(older_owner), Some(newer_owner))
+            if older_owner.kind == RuntimeOwnerKind::Agent
+                && newer_owner.kind == RuntimeOwnerKind::Agent
+                && older_owner.pid == newer_owner.pid
+                && compatible_tokens(
+                    older_owner.process_start.as_ref(),
+                    newer_owner.process_start.as_ref(),
+                )
+    )
+}
+
+fn compatible_tokens<T: PartialEq>(older: Option<&T>, newer: Option<&T>) -> bool {
+    match (older, newer) {
+        (Some(older), Some(newer)) => older == newer,
+        _ => true,
+    }
 }
 
 /// True when reaping `older` cannot drop a concurrently-live agent. The pane is

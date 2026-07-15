@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::agent_activity::AgentActivity;
+use crate::agents::state::append_recent_prompt;
 use crate::agents::{
     AgentState, AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     ProviderCapacity, TurnPhase,
@@ -440,8 +441,10 @@ fn apply_local_lifecycle(
     state.status = projection.status;
     state.phase = projection.phase;
     state.task = projection.native_prompt_detail.clone();
-    state.prompt = projection.latest_prompt.clone();
-    state.recent_prompts = projection.latest_prompt.clone().into_iter().collect();
+    if let Some(prompt) = projection.latest_prompt.as_deref() {
+        state.prompt = Some(prompt.to_owned());
+        append_recent_prompt(&mut state.recent_prompts, prompt);
+    }
     state.context_pct = projection.context_pct;
     state.waiting_since = projection.waiting_since;
     // Provider-native approvals are observable but remain pane-only.

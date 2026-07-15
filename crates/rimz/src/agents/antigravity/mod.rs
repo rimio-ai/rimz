@@ -19,8 +19,8 @@ use serde_json::Value;
 
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
-    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
+    SamePaneSessionPolicy, ThreadKey, ToolClassification,
 };
 use super::lifecycle::LifecycleSignal;
 use super::{
@@ -93,6 +93,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: true,
         daemon_hooked_sessions: false,
+        same_pane_session: SamePaneSessionPolicy::FollowLatest,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
         },
