@@ -71,25 +71,20 @@ fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
 #[test]
 fn refresh_override_stamps_folded_snapshot() {
     let workspace_id = workspace();
-    let mut snapshot = super::super::state::placeholder_snapshot(workspace_id.clone());
-    snapshot.theme.display.refresh_ms = 250;
-    let config = ServeConfig {
-        workspace_id,
-        mux: MuxName::Zellij,
-        session_name: "rimz-test".to_owned(),
-        instance_id: SidebarInstanceId::new(),
-        tick_seconds: 2,
-        refresh_ms_override: Some(50),
-        timezone: jiff::tz::TimeZone::UTC,
-        notification_prefs: NotificationsPrefs::default(),
-        nav_keys: crate::sidebar_pane::app::NavKeymap::from_config(
-            &crate::config::SidebarKeys::default(),
-        ),
-        own_pane: None,
-    };
+    let mut folded = super::super::state::placeholder_snapshot(workspace_id.clone());
+    folded.theme.display.refresh_ms = 250;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), Some(50));
 
-    apply_refresh_override(&config, &mut snapshot);
+    sink.publish(FetchUpdate::Snapshot {
+        snapshot: Box::new(folded),
+        role: FetchRole::Consumer,
+        phase: FetchPhase::Final,
+        pane_frame: PaneFrame::Held,
+    });
 
+    let update = rx.recv().expect("published snapshot");
+    let snapshot = snapshot(&update);
     assert_eq!(snapshot.theme.display.refresh_ms, 50);
     assert_eq!(snapshot.theme.display.resolved_refresh_ms(), 50);
 }

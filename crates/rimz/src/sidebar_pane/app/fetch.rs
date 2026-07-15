@@ -152,13 +152,6 @@ impl FetchUpdate {
     }
 }
 
-#[cfg(test)]
-pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut SidebarSnapshot) {
-    if let Some(refresh_ms) = config.refresh_ms_override {
-        snapshot.theme.display.refresh_ms = refresh_ms;
-    }
-}
-
 /// One fetch cycle, posting one or two outcomes. Runs on the fetch worker
 /// thread, keeping the produce's `list-panes` + git round-trips off the
 /// render/input loop so animation never stalls on it. `state` is resolved per
