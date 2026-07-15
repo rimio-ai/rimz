@@ -86,6 +86,11 @@ fn invalidate_snapshot_caches(paths: &StatePaths, rollup: RollupInvalidation) ->
     Ok(())
 }
 
+/// Preserve every non-tombstoned agent within retention across log rotation.
+///
+/// Rotation and soft reset are storage boundaries, so they keep the audit
+/// rollup's resumable identity even when an agent's runtime owner has exited.
+/// A hard reset remains the explicit forget boundary.
 fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Result<usize> {
     let current_bytes = match std::fs::metadata(&paths.events_log) {
         Ok(meta) => meta.len(),
@@ -104,18 +109,12 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
     }
 
     let (cache, merged_agents, resume_outcomes) = snapshot::catch_up_rollup(paths)?;
-    let live_agents = runtime::RuntimeProjection::from_parts(
-        cache.tombstones.iter().cloned().collect(),
-        merged_agents,
-        runtime::RuntimeScope::Runtime,
-    )
-    .agents;
-    let live_agents = prune_old_dead_agents(live_agents, event_log::DEFAULT_RETENTION);
-    let carryover_agents = live_agents.len();
+    let retained_agents = prune_old_dead_agents(merged_agents, event_log::DEFAULT_RETENTION);
+    let carryover_agents = retained_agents.len();
     snapshot::write_carryover(
         &paths.agents_carryover,
         &snapshot::EventCarryover {
-            agents: live_agents,
+            agents: retained_agents,
             agent_identity: cache.agent_identity.without_consumed_launches(),
             resume_outcomes,
         },
@@ -786,7 +785,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn rotation_carryover_prunes_dead_runtime_owner_agents() {
+    fn rotation_carryover_keeps_recent_dead_runtime_owner_agents() {
         let dir = tempfile::tempdir().expect("tempdir");
         let workspace_id = WorkspaceId::from_project_root(dir.path());
         let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
@@ -843,8 +842,8 @@ mod tests {
             "live-owner agent must survive rotation carryover: {ids:?}"
         );
         assert!(
-            !ids.contains(&"sess-dead"),
-            "dead-owner agent must be pruned from rotation carryover: {ids:?}"
+            ids.contains(&"sess-dead"),
+            "recent dead-owner identity must survive rotation carryover: {ids:?}"
         );
     }
 

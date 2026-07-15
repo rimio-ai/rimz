@@ -119,7 +119,7 @@ fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
 
     let guarded = h
         .store
-        .runtime_projection(RuntimeScope::Audit)
+        .runtime_projection(RuntimeScope::Runtime)
         .expect("audit projection");
     assert!(
         guarded.agents.iter().any(|agent| agent.agent_id == key.1),
@@ -325,15 +325,24 @@ fn a_reader_recovers_a_commit_that_never_published() {
 #[test]
 fn rotation_bumps_the_generation_and_reseeds_the_fold() {
     let h = crate::common::Harness::new();
+    std::fs::write(h.store.paths().locks_dir.join("dead-reap.stamp"), b"")
+        .expect("defer dead-owner reap");
     h.store
         .append_event(&lifecycle(&h, "SessionStart", "before-rotation"))
         .expect("append");
+    h.store
+        .append_event(&dead_owner_lifecycle(
+            &h,
+            "SessionStart",
+            "closed-before-rotation",
+        ))
+        .expect("append dead-owner lifecycle");
 
     let outcome = h.store.rotate_event_log(1, None).expect("rotate");
     assert!(outcome.rotation.is_rotated());
     assert_eq!(
-        outcome.carryover_agents, 1,
-        "the rotating log's rollup moved into the carryover"
+        outcome.carryover_agents, 2,
+        "the rotating log's audit rollup moved into the carryover"
     );
 
     h.store
@@ -347,7 +356,7 @@ fn rotation_bumps_the_generation_and_reseeds_the_fold() {
 
     let projection = h
         .store
-        .runtime_projection(RuntimeScope::Runtime)
+        .runtime_projection(RuntimeScope::Audit)
         .expect("projection");
     let mut ids: Vec<&str> = projection
         .agents
@@ -357,8 +366,53 @@ fn rotation_bumps_the_generation_and_reseeds_the_fold() {
     ids.sort_unstable();
     assert_eq!(
         ids,
-        ["after-rotation", "before-rotation"],
-        "carryover and fresh-generation agents both project"
+        [
+            "after-rotation",
+            "before-rotation",
+            "closed-before-rotation"
+        ],
+        "carryover keeps closed identity beside fresh-generation agents"
+    );
+}
+
+#[test]
+fn soft_reset_keeps_closed_identity_and_hard_reset_forgets_it() {
+    let h = crate::common::Harness::new();
+    std::fs::write(h.store.paths().locks_dir.join("dead-reap.stamp"), b"")
+        .expect("defer dead-owner reap");
+    h.store
+        .append_event(&dead_owner_lifecycle(
+            &h,
+            "SessionStart",
+            "closed-before-reset",
+        ))
+        .expect("append dead-owner lifecycle");
+
+    h.store
+        .reset_records("rimz-test", false)
+        .expect("soft reset");
+    let after_soft = h
+        .store
+        .runtime_projection(RuntimeScope::Audit)
+        .expect("audit after soft reset");
+    assert!(
+        after_soft
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == "closed-before-reset"),
+        "soft reset preserves resumable identity"
+    );
+
+    h.store
+        .reset_records("rimz-test", true)
+        .expect("hard reset");
+    let after_hard = h
+        .store
+        .runtime_projection(RuntimeScope::Audit)
+        .expect("audit after hard reset");
+    assert!(
+        after_hard.agents.is_empty(),
+        "hard reset is the explicit forget boundary"
     );
 }
 
