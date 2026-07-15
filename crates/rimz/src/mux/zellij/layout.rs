@@ -111,10 +111,9 @@ pub(super) fn render_session_layout(
     resume: &[ResumeTab],
 ) -> Result<String> {
     // The explicit tabs instantiate on the detached background session at
-    // birth; only the `new_tab_template` waits for an attached client.
+    // birth; only the `new_tab_template` waits for an attached client. Both
+    // carry the same seed derived from the launch probe.
     let sidebar = sidebar_pane_kdl(opts, None, opts.birth_size.percent)?;
-    // Auto spells its wide fallback here; convergence owns the per-view width.
-    let new_tab_sidebar = sidebar_pane_kdl(opts, None, opts.width.percent.resolve(None))?;
 
     // The daemon tab leads, when present.
     let daemon_tab = match daemon {
@@ -186,7 +185,7 @@ pub(super) fn render_session_layout(
     let work_pane = render_plain_terminal_pane(16);
     let work_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
     let new_tab_pane = render_plain_terminal_pane(16);
-    let new_tab_body = render_sidebar_work_area(&new_tab_sidebar, &new_tab_pane, 8);
+    let new_tab_body = render_sidebar_work_area(&sidebar, &new_tab_pane, 8);
     Ok(format!(
         r#"layout {{
     new_tab_template {{

@@ -194,27 +194,31 @@ fn session_layout_uses_configured_birth_fixed_options() {
 }
 
 #[test]
-fn session_layout_uses_policy_percent_for_template_and_seed_for_birth() {
+fn session_layout_seeds_template_and_birth_from_probed_width() {
     let opts = sidebar_opts("rimz-width", None, Some(120));
     let layout = render_session_layout(&opts, None, &[]).expect("render layout");
-    assert!(
-        layout.contains(r#"pane size="25%" name="rimz-sidebar" borderless=true"#),
-        "the explicit birth tab instantiates detached, so the verdict is \
-             its percentage share:\n{layout}",
+    assert_eq!(
+        layout
+            .matches(r#"pane size="25%" name="rimz-sidebar" borderless=true"#)
+            .count(),
+        2,
+        "the template and explicit birth tab share the probed seed:\n{layout}",
     );
     assert_eq!(
         layout
             .matches(r#"pane size="30%" name="rimz-sidebar" borderless=true"#)
             .count(),
-        1,
-        "the template uses the wide fallback while the birth uses the probed width:\n{layout}",
+        0,
+        "a probed narrow launch does not use the wide fallback:\n{layout}",
     );
     let capped = sidebar_opts("rimz-width", None, Some(340));
     let layout = render_session_layout(&capped, None, &[]).expect("render layout");
-    assert!(
-        layout.contains(r#"pane size="21%" name="rimz-sidebar" borderless=true"#),
-        "the explicit birth tab instantiates detached, so a capped width \
-             is its derived percentage:\n{layout}",
+    assert_eq!(
+        layout
+            .matches(r#"pane size="21%" name="rimz-sidebar" borderless=true"#)
+            .count(),
+        2,
+        "the template and explicit birth tab share the cap-aware seed:\n{layout}",
     );
     let new_tab_template = layout
         .split("new_tab_template")
@@ -222,8 +226,8 @@ fn session_layout_uses_policy_percent_for_template_and_seed_for_birth() {
         .and_then(|section| section.split("\n    tab").next())
         .expect("layout carries a new_tab_template");
     assert!(
-        new_tab_template.contains(r#"size="30%""#),
-        "the new_tab_template carries the policy percentage:\n{layout}",
+        new_tab_template.contains(r#"size="21%""#),
+        "the new_tab_template carries the cap-aware launch seed:\n{layout}",
     );
     let birth_tab = layout
         .split("    tab focus=true")
@@ -234,6 +238,18 @@ fn session_layout_uses_policy_percent_for_template_and_seed_for_birth() {
         "the explicit birth tab carries no fixed sidebar size:\n{layout}",
     );
     assert_sidebar_sizes_are_percent(&layout);
+
+    let unprobed = sidebar_opts("rimz-width", None, None);
+    let layout = render_session_layout(&unprobed, None, &[]).expect("render layout");
+    let new_tab_template = layout
+        .split("new_tab_template")
+        .nth(1)
+        .and_then(|section| section.split("\n    tab").next())
+        .expect("layout carries a new_tab_template");
+    assert!(
+        new_tab_template.contains(r#"size="30%""#),
+        "an unprobed launch keeps the unknown-geometry wide fallback:\n{layout}",
+    );
 }
 
 #[test]

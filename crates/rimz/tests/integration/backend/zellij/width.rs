@@ -137,13 +137,13 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 
-    // A native tab starts from the unknown-geometry wide fallback, then live
-    // convergence applies the narrow-view policy.
+    // A native tab inherits the 340-column launch probe's cap-aware 21% seed,
+    // then live convergence applies the narrow-view policy.
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 2);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[53..=65, 60..=65]),
-        "the native template births the new tab near the 30% fallback, got {:?}",
+        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57, 42..=46]),
+        "the native template births the new tab from the cap-aware launch seed, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
     assert_eq!(
@@ -156,12 +156,13 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 
-    // Keep one tab active while three existing tabs need the room override.
+    // Keep one tab active while the two converged tabs need the room override;
+    // the launch-seeded tab is already within its tolerance.
     open_new_tab(xdg.path(), &name);
     wait_for_tab_count(xdg.path(), &name, 3);
     assert!(
-        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57, 47..=57, 60..=65]),
-        "the new tab starts at the fallback while converged tabs stay narrow, got {:?}",
+        wait_for_sidebar_columns(xdg.path(), &name, &[47..=57, 47..=57, 42..=46]),
+        "the new tab starts at the launch seed while converged tabs stay narrow, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
     );
 
@@ -169,7 +170,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     // the two background tabs, and every future tab.
     assert_eq!(
         converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 40, 5),
-        3,
+        2,
     );
     assert!(wait_for_sidebar_columns(
         xdg.path(),
@@ -180,7 +181,7 @@ fn sidebar_widths_converge_after_resize_new_tab_and_override() {
     wait_for_tab_count(xdg.path(), &name, 4);
     assert_eq!(
         converge_each_sidebar_with_nudges(&backend, xdg.path(), &name, 40, 5),
-        1,
+        0,
     );
     assert!(
         wait_for_sidebar_columns(xdg.path(), &name, &[35..=45, 35..=45, 35..=45, 35..=45]),
