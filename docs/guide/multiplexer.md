@@ -22,16 +22,6 @@ One thing more happens on Zellij: RimZ seeds a permission grant for the presence
 
 `rimz config init --print` lists every room option RimZ applies, with its default. Nothing outside the room changes, so undoing RimZ is closing the room.
 
-You need none of the configuration on this page: a freshly installed multiplexer works because the room sets its own options. The baselines are for your comfort and for the sessions you run outside RimZ. The fastest good config is the one RimZ ships under [examples/](../../examples/README.md), Zellij as a complete starting file and tmux as sourceable modules:
-
-```sh
-# From the rimz checkout
-cp examples/zellij/config.kdl ~/.config/zellij/config.kdl        # Zellij: the whole baseline, one file
-printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-keys,theme-tokyonight}.conf >> ~/.tmux.conf
-```
-
-Copy the whole thing if you are starting fresh; lift the blocks you want if you already have a config. The rest of this page walks through what each block does and why.
-
 ### Room overrides in RimZ config
 
 The `[zellij]` and `[tmux]` tables in `~/.config/rimz/config.toml` tune the room-scoped settings, and `[mux] default` picks the backend when both are installed:
@@ -48,7 +38,19 @@ pane_frames = true              # optional override; unset, your config.kdl wins
 # pane_border_lines = "heavy"
 ```
 
-An optional key left unset falls through to your own Zellij or tmux config. A key you set here wins inside the room, because RimZ reasserts room options on every attach. Setting `[tmux] pane_border_status` makes RimZ own `pane-border-format` too, so it titles work panes and blanks the sidebar's border row; unset, your `~/.tmux.conf` format applies and may title the sidebar. `rimz config init --print` lists every room option with its default, and the full model is in [configuration → Multiplexer room options](./configuration.md#multiplexer-room-options).
+An optional key left unset falls through to your own Zellij or tmux config. A key you set here wins inside the room, because RimZ reasserts room options on every attach. Setting `[tmux] pane_border_status` makes RimZ own `pane-border-format` too, so it titles work panes and blanks the sidebar's border row; unset, your `~/.tmux.conf` format applies and may title the sidebar. The full model is in [configuration → Multiplexer room options](./configuration.md#multiplexer-room-options).
+
+## Adopt the baseline
+
+You need none of the configuration on this page: a freshly installed multiplexer works because the room sets its own options. The baselines are for your comfort and for the sessions you run outside RimZ. The fastest good config is the one RimZ ships under [examples/](../../examples/README.md), Zellij as a complete starting file and tmux as sourceable modules:
+
+```sh
+# From the rimz checkout
+cp examples/zellij/config.kdl ~/.config/zellij/config.kdl        # Zellij: the whole baseline, one file
+printf 'source-file %s\n' "$PWD"/examples/tmux/{agents,quality-of-life,zellij-keys,theme-tokyonight}.conf >> ~/.tmux.conf
+```
+
+Copy the whole thing if you are starting fresh; lift the blocks you want if you already have a config. The rest of this page walks through what each block does and why.
 
 ## Layouts and messages are ordinary pane operations
 
@@ -236,3 +238,11 @@ set -g window-status-separator ""
 `pane-border-status top` labels each pane's border with its index and running command, so a grid of agents stays legible at a glance. RimZ inherits this setting when its [`[tmux] pane_border_status`](./configuration.md#multiplexer-room-options) override is unset; set that override and RimZ titles work panes and blanks the sidebar's own border row. tmux does not draw a pane's outer window edge, so panes are not fully boxed like Zellij frames.
 
 Swap the hex values for your own scheme's palette; `rimz list-themes` names every scheme RimZ bundles if you want the sidebar and status bar to match.
+
+## See also
+
+- [Set up your machine → configure your multiplexer](./setup.md#configure-your-multiplexer): the short list of settings the room applies, one by one.
+- [Configuration → multiplexer room options](./configuration.md#multiplexer-room-options): every `[zellij]` and `[tmux]` key with its default.
+- [examples/](../../examples/README.md): the shipped baseline files these blocks come from.
+- [Security and trust → the Zellij presence plugin](./security.md#the-zellij-presence-plugin): the one permission grant RimZ seeds, and how to revoke it.
+- [Zellij](../externals/mux-adapter/zellij-reference.md) and [tmux](../externals/mux-adapter/tmux-reference.md) upstream references: every option catalogued at the source.
