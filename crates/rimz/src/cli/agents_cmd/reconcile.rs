@@ -64,11 +64,7 @@ pub(super) fn reconcile_cohort_launch(
     } else {
         rimz::worktree::status(&path, &marker)?
     };
-    let assessment = rimz::worktree::removal_assessment(
-        &path,
-        status,
-        &rimz::worktree::RemovalProtection::default(),
-    );
+    let assessment = rimz::worktree::ProtectionSet::default().assess(&path, status);
 
     let subject = cohort_subject(spec_display, team);
     match reconcile_action(present_members, !members.is_empty(), assessment) {
@@ -220,9 +216,8 @@ mod tests {
     #[test]
     fn reconcile_action_table() {
         let removable = rimz::worktree::RemovalAssessment::Removable;
-        let dirty = rimz::worktree::RemovalAssessment::Kept(rimz::worktree::RemovalReason::Dirty);
-        let pending =
-            rimz::worktree::RemovalAssessment::Kept(rimz::worktree::RemovalReason::NotLanded);
+        let dirty = rimz::worktree::RemovalAssessment::Dirty;
+        let pending = rimz::worktree::RemovalAssessment::NotLanded;
 
         assert_eq!(
             reconcile_action(true, false, removable),

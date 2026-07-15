@@ -79,6 +79,29 @@ fn worktree_new_list_and_remove_round_trip() {
 }
 
 #[test]
+fn worktree_remove_leaves_candidate_cwd_before_git_removal() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+
+    env.rimz()
+        .current_dir(&path)
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .success()
+        .stdout(contains("removed demo"));
+
+    assert!(!path.exists(), "worktree removed from inside its checkout");
+}
+
+#[test]
 fn worktree_new_accepts_branch_style_name_and_removes_by_raw_spelling() {
     if git_missing() {
         return;
@@ -707,10 +730,9 @@ fn worktree_new_symlinks_dirs_from_worktreelink_without_dirtying_checkout() {
         .expect("read marker")
         .expect("marker");
     assert_eq!(
-        rimz::worktree::removal_assessment(
+        rimz::worktree::ProtectionSet::default().assess(
             &path,
             rimz::worktree::status(&path, &marker).expect("status"),
-            &rimz::worktree::RemovalProtection::default(),
         ),
         rimz::worktree::RemovalAssessment::Removable,
         "the linked dir does not block cleanup"

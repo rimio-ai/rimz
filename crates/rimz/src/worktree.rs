@@ -12,11 +12,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::agents::AgentState;
 use crate::config::{WorktreeBase, WorktreeConfig};
 use crate::forge::PrTarget;
 use crate::ids::PaneId;
-use crate::pane::PaneRef;
+use crate::store::runtime::AgentLiveness;
 use crate::workspace::{ResolvedWorkspace, RootClass};
 
 mod include;
@@ -201,75 +200,96 @@ pub enum BranchDeletion {
     KeptUnmerged,
 }
 
+/// One live mux pane fact gathered before worktree removal assessment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneProtectionFact {
+    pub pane_id: PaneId,
+    pub cwd: Option<PathBuf>,
+    pub sidebar: bool,
+}
+
+/// One durable agent fact with process state already probed by CLI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentProtectionFact {
+    pub pane_id: Option<PaneId>,
+    pub liveness: AgentLiveness,
+    pub stored_path: Option<PathBuf>,
+    pub process_cwd: Option<PathBuf>,
+}
+
+/// Normalized paths whose live panes or agents prevent checkout removal.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RemovalProtection {
-    occupied_paths: HashSet<PathBuf>,
+pub struct ProtectionSet {
+    paths: Vec<PathBuf>,
 }
 
-impl RemovalProtection {
-    pub fn fold_panes<'a>(
-        &mut self,
-        panes: impl IntoIterator<Item = &'a PaneRef>,
-        own_pane: Option<&PaneId>,
-    ) {
-        for pane in panes {
-            if pane.is_rimz_sidebar() || own_pane.is_some_and(|own| &pane.pane_id == own) {
-                continue;
-            }
-            if let Some(path) = pane.cwd.as_deref() {
-                self.record(Path::new(path));
-            }
-        }
-    }
-
-    pub fn fold_agents(&mut self, agents: &[AgentState], own_pane: Option<&PaneId>) {
-        for agent in agents {
-            if matches!((agent.pane.as_ref(), own_pane), (Some(pane), Some(own)) if &pane.pane_id == own)
-            {
-                continue;
-            }
-            match crate::store::runtime::agent_liveness(agent) {
-                crate::store::runtime::AgentLiveness::Dead => {}
-                crate::store::runtime::AgentLiveness::Unknown => {
-                    if let Some(path) = agent.worktree_path.as_deref() {
-                        self.record(Path::new(path));
-                    }
-                }
-                crate::store::runtime::AgentLiveness::Live { pid } => {
-                    if let Some(path) = agent.worktree_path.as_deref() {
-                        self.record(Path::new(path));
-                    }
-                    if let Some(cwd) = crate::proc::cwd(pid) {
-                        self.record(&cwd);
-                    }
-                }
-            }
-        }
-    }
-
-    fn record(&mut self, path: &Path) {
-        self.occupied_paths.insert(normalize_path_lexical(path));
-    }
-
-    fn protects(&self, worktree: &Path) -> bool {
-        let worktree = normalize_path_lexical(worktree);
-        self.occupied_paths
-            .iter()
-            .any(|path| path_inside(path, &worktree))
-    }
-}
-
+/// Removal policy result in fixed safety-precedence order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemovalAssessment {
     Removable,
-    Kept(RemovalReason),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RemovalReason {
     InUse,
     Dirty,
     NotLanded,
+}
+
+impl ProtectionSet {
+    /// Fold already-probed pane and agent facts into one normalized set.
+    pub fn from_facts(
+        panes: &[PaneProtectionFact],
+        agents: &[AgentProtectionFact],
+        own_pane: Option<&PaneId>,
+    ) -> Self {
+        let mut protected = Self::default();
+        for pane in panes {
+            if pane.sidebar || own_pane == Some(&pane.pane_id) {
+                continue;
+            }
+            protected.insert(pane.cwd.as_deref());
+        }
+        for agent in agents {
+            if own_pane.is_some() && agent.pane_id.as_ref() == own_pane {
+                continue;
+            }
+            match agent.liveness {
+                AgentLiveness::Dead => {}
+                AgentLiveness::Unknown => protected.insert(agent.stored_path.as_deref()),
+                AgentLiveness::Live { .. } => {
+                    protected.insert(agent.stored_path.as_deref());
+                    protected.insert(agent.process_cwd.as_deref());
+                }
+            }
+        }
+        protected
+    }
+
+    /// Whether a candidate checkout contains any protected path.
+    pub fn protects(&self, candidate: &Path) -> bool {
+        let candidate = normalize_path_lexical(candidate);
+        self.paths.iter().any(|path| path_inside(path, &candidate))
+    }
+
+    /// Classify one checkout with in-use taking precedence over work state.
+    pub fn assess(&self, candidate: &Path, status: WorktreeStatus) -> RemovalAssessment {
+        if self.protects(candidate) {
+            RemovalAssessment::InUse
+        } else if status.dirty {
+            RemovalAssessment::Dirty
+        } else if !status.landed.is_landed() {
+            RemovalAssessment::NotLanded
+        } else {
+            RemovalAssessment::Removable
+        }
+    }
+
+    fn insert(&mut self, path: Option<&Path>) {
+        let Some(path) = path else {
+            return;
+        };
+        let path = normalize_path_lexical(path);
+        if !self.paths.contains(&path) {
+            self.paths.push(path);
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -300,39 +320,6 @@ impl RemovalOutcome {
 
     pub const fn branch_deletion(&self) -> BranchDeletion {
         self.branch_deletion
-    }
-}
-
-pub fn removal_assessment(
-    path: &Path,
-    status: WorktreeStatus,
-    protection: &RemovalProtection,
-) -> RemovalAssessment {
-    if protection.protects(path) {
-        RemovalAssessment::Kept(RemovalReason::InUse)
-    } else if status.dirty {
-        RemovalAssessment::Kept(RemovalReason::Dirty)
-    } else if !status.landed.is_landed() {
-        RemovalAssessment::Kept(RemovalReason::NotLanded)
-    } else {
-        RemovalAssessment::Removable
-    }
-}
-
-impl WorktreeListEntry {
-    pub fn removal_assessment(&self, protection: &RemovalProtection) -> RemovalAssessment {
-        removal_assessment(
-            &self.path,
-            WorktreeStatus {
-                dirty: self.dirty,
-                landed: match self.landed {
-                    Some(true) => LandedVerdict::Landed,
-                    Some(false) => LandedVerdict::Pending,
-                    None => LandedVerdict::Unknown,
-                },
-            },
-            protection,
-        )
     }
 }
 
@@ -443,8 +430,7 @@ pub fn remove(
     })?;
     let status = status(&path, &marker)?;
     if !force
-        && removal_assessment(&path, status, &RemovalProtection::default())
-            != RemovalAssessment::Removable
+        && ProtectionSet::default().assess(&path, status) != RemovalAssessment::Removable
     {
         return Err(WorktreeErr::Dirty {
             name: name.to_owned(),
@@ -460,6 +446,7 @@ pub fn remove_marked_worktree(
     force: bool,
 ) -> Result<RemovalOutcome> {
     ensure_repo(repo_root)?;
+    leave_worktree_before_removal(repo_root, path)?;
     let mut args = vec!["worktree", "remove"];
     if force {
         args.push("--force");
@@ -513,6 +500,14 @@ pub fn status(worktree: &Path, marker: &WorktreeMarker) -> Result<WorktreeStatus
         dirty: !porcelain.trim().is_empty(),
         landed,
     })
+}
+
+fn leave_worktree_before_removal(repo_root: &Path, path: &Path) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    if path_inside(&normalize_path_lexical(&cwd), &normalize_path_lexical(path)) {
+        std::env::set_current_dir(repo_root)?;
+    }
+    Ok(())
 }
 
 pub fn parse_worktree_list(raw: &str) -> Vec<WorktreeRow> {
@@ -1330,220 +1325,116 @@ mod tests {
     }
 
     #[test]
-    fn removal_assessment_prioritizes_occupancy_then_git_state() {
-        let clean = WorktreeStatus::default();
-        let dirty = WorktreeStatus {
-            dirty: true,
-            landed: LandedVerdict::Landed,
-        };
-        let pending = WorktreeStatus {
-            dirty: false,
-            landed: LandedVerdict::Pending,
-        };
-        let protection = RemovalProtection::default();
+    fn protection_set_normalizes_containment_and_excludes_own_and_sidebar_panes() {
+        let own = PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_own");
+        let panes = vec![
+            PaneProtectionFact {
+                pane_id: own.clone(),
+                cwd: Some(PathBuf::from("/repo-worktrees/demo")),
+                sidebar: false,
+            },
+            PaneProtectionFact {
+                pane_id: PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_sidebar"),
+                cwd: Some(PathBuf::from("/repo-worktrees/demo")),
+                sidebar: true,
+            },
+            PaneProtectionFact {
+                pane_id: PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_user"),
+                cwd: Some(PathBuf::from("/repo/../repo-worktrees/demo/src")),
+                sidebar: false,
+            },
+        ];
+        let protections = ProtectionSet::from_facts(&panes, &[], Some(&own));
 
-        assert_eq!(
-            removal_assessment(Path::new("/repo-worktrees/clean"), clean, &protection),
-            RemovalAssessment::Removable
+        assert!(protections.protects(Path::new("/repo-worktrees/demo")));
+        assert!(!protections.protects(Path::new("/repo-worktrees/other")));
+        assert!(
+            !ProtectionSet::from_facts(&panes[..2], &[], Some(&own))
+                .protects(Path::new("/repo-worktrees/demo"))
         );
-        assert_eq!(
-            removal_assessment(Path::new("/repo-worktrees/dirty"), dirty, &protection),
-            RemovalAssessment::Kept(RemovalReason::Dirty)
-        );
-        assert_eq!(
-            removal_assessment(Path::new("/repo-worktrees/pending"), pending, &protection),
-            RemovalAssessment::Kept(RemovalReason::NotLanded)
-        );
-        assert_eq!(
-            removal_assessment(
-                Path::new("/repo-worktrees/unknown"),
-                WorktreeStatus::unknown(),
-                &protection,
+    }
+
+    #[test]
+    fn protection_set_applies_agent_liveness_rules() {
+        let stored = Some(PathBuf::from("/repo-worktrees/demo"));
+        let process = Some(PathBuf::from("/repo-worktrees/demo/src"));
+        for (liveness, stored_path, process_cwd, expected) in [
+            (AgentLiveness::Dead, stored.clone(), process.clone(), false),
+            (AgentLiveness::Unknown, stored.clone(), None, true),
+            (
+                AgentLiveness::Live { pid: 7 },
+                Some(PathBuf::from("/repo-worktrees/other")),
+                process,
+                true,
             ),
-            RemovalAssessment::Kept(RemovalReason::NotLanded)
-        );
+        ] {
+            let protections = ProtectionSet::from_facts(
+                &[],
+                &[AgentProtectionFact {
+                    pane_id: None,
+                    liveness,
+                    stored_path,
+                    process_cwd,
+                }],
+                None,
+            );
+            assert_eq!(
+                protections.protects(Path::new("/repo-worktrees/demo")),
+                expected
+            );
+        }
+    }
 
-        let mut protection = RemovalProtection::default();
-        protection.fold_panes(
-            &[pane(
-                "terminal_shell",
-                Some("zsh"),
-                Some("/repo/../repo-worktrees/protected/src"),
-            )],
+    #[test]
+    fn removal_assessment_uses_in_use_dirty_landing_precedence() {
+        let protections = ProtectionSet::from_facts(
+            &[PaneProtectionFact {
+                pane_id: PaneId::from_parts(crate::ids::MuxName::Tmux, "%1"),
+                cwd: Some(PathBuf::from("/repo-worktrees/in-use/src")),
+                sidebar: false,
+            }],
+            &[],
             None,
         );
-        assert_eq!(
-            removal_assessment(
-                Path::new("/repo-worktrees/protected"),
+        let cases = [
+            (
+                "/repo-worktrees/in-use",
                 WorktreeStatus {
                     dirty: true,
                     landed: LandedVerdict::Pending,
                 },
-                &protection,
+                RemovalAssessment::InUse,
             ),
-            RemovalAssessment::Kept(RemovalReason::InUse)
-        );
-    }
-
-    #[test]
-    fn list_entries_delegate_to_removal_assessment() {
-        let protection = RemovalProtection::default();
-
-        assert_eq!(
-            worktree_entry("clean", false, Some(true)).removal_assessment(&protection),
-            RemovalAssessment::Removable
-        );
-        assert_eq!(
-            worktree_entry("dirty", true, Some(true)).removal_assessment(&protection),
-            RemovalAssessment::Kept(RemovalReason::Dirty)
-        );
-        assert_eq!(
-            worktree_entry("pending", false, Some(false)).removal_assessment(&protection),
-            RemovalAssessment::Kept(RemovalReason::NotLanded)
-        );
-        assert_eq!(
-            worktree_entry("unknown", false, None).removal_assessment(&protection),
-            RemovalAssessment::Kept(RemovalReason::NotLanded)
-        );
-    }
-
-    #[test]
-    fn pane_protection_excludes_sidebar_and_own_pane() {
-        let worktree = Path::new("/repo-worktrees/demo");
-        let own = PaneId::from_parts(crate::MuxName::Zellij, "terminal_own");
-        let mut protection = RemovalProtection::default();
-        protection.fold_panes(
-            &[
-                pane(
-                    "terminal_side",
-                    Some("rimz-sidebar"),
-                    Some("/repo-worktrees/demo"),
-                ),
-                pane(
-                    "terminal_outside",
-                    Some("zsh"),
-                    Some("/repo-worktrees/other"),
-                ),
-                pane("terminal_own", Some("codex"), Some("/repo-worktrees/demo")),
-            ],
-            Some(&own),
-        );
-        assert_eq!(
-            removal_assessment(worktree, WorktreeStatus::default(), &protection),
-            RemovalAssessment::Removable
-        );
-
-        for protected in [
-            pane(
-                "terminal_agent",
-                Some("codex"),
-                Some("/repo-worktrees/demo"),
+            (
+                "/repo-worktrees/dirty",
+                WorktreeStatus {
+                    dirty: true,
+                    landed: LandedVerdict::Pending,
+                },
+                RemovalAssessment::Dirty,
             ),
-            pane(
-                "terminal_shell",
-                Some("zsh"),
-                Some("/repo-worktrees/demo/src"),
+            (
+                "/repo-worktrees/pending",
+                WorktreeStatus {
+                    dirty: false,
+                    landed: LandedVerdict::Pending,
+                },
+                RemovalAssessment::NotLanded,
             ),
-        ] {
-            let mut protection = RemovalProtection::default();
-            protection.fold_panes(&[protected], Some(&own));
-            assert_eq!(
-                removal_assessment(worktree, WorktreeStatus::default(), &protection),
-                RemovalAssessment::Kept(RemovalReason::InUse)
-            );
+            (
+                "/repo-worktrees/unknown",
+                WorktreeStatus::unknown(),
+                RemovalAssessment::NotLanded,
+            ),
+            (
+                "/repo-worktrees/clean",
+                WorktreeStatus::default(),
+                RemovalAssessment::Removable,
+            ),
+        ];
+        for (path, status, expected) in cases {
+            assert_eq!(protections.assess(Path::new(path), status), expected);
         }
-    }
-
-    #[test]
-    fn agent_protection_keeps_unknown_and_live_launch_paths() {
-        let worktree = Path::new("/repo-worktrees/demo");
-        let own = PaneId::from_parts(crate::MuxName::Zellij, "terminal_own");
-        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-
-        for protected in [
-            agent("inflight", Some("/repo/../repo-worktrees/demo"), None, now),
-            agent(
-                "other-pane",
-                Some("/repo-worktrees/demo/src"),
-                Some("terminal_other"),
-                now,
-            ),
-            agent(
-                "idle-unknown",
-                Some("/repo-worktrees/demo"),
-                None,
-                now - std::time::Duration::from_secs(30),
-            ),
-        ] {
-            let mut protection = RemovalProtection::default();
-            protection.fold_agents(&[protected], Some(&own));
-            assert_eq!(
-                removal_assessment(worktree, WorktreeStatus::default(), &protection),
-                RemovalAssessment::Kept(RemovalReason::InUse)
-            );
-        }
-
-        let own_agent = agent(
-            "own",
-            Some("/repo-worktrees/demo"),
-            Some("terminal_own"),
-            now,
-        );
-        let other = agent("other", Some("/repo-worktrees/other"), None, now);
-        let mut protection = RemovalProtection::default();
-        protection.fold_agents(&[own_agent, other], Some(&own));
-        assert_eq!(
-            removal_assessment(worktree, WorktreeStatus::default(), &protection),
-            RemovalAssessment::Removable
-        );
-
-        #[cfg(target_os = "linux")]
-        {
-            let mut dead = agent("dead", Some("/repo-worktrees/demo"), None, now);
-            dead.runtime_owner = Some(crate::RuntimeOwner::new(
-                crate::RuntimeOwnerKind::Agent,
-                "dead",
-                u32::MAX,
-                None,
-            ));
-            let mut protection = RemovalProtection::default();
-            protection.fold_agents(&[dead], Some(&own));
-            assert_eq!(
-                removal_assessment(worktree, WorktreeStatus::default(), &protection),
-                RemovalAssessment::Removable
-            );
-        }
-
-        let mut live = agent("live", Some("/repo-worktrees/demo"), None, now);
-        live.runtime_owner = Some(crate::store::runtime::current_process_owner(
-            crate::RuntimeOwnerKind::Agent,
-            "live",
-        ));
-        let mut protection = RemovalProtection::default();
-        protection.fold_agents(&[live], Some(&own));
-        assert_eq!(
-            removal_assessment(worktree, WorktreeStatus::default(), &protection),
-            RemovalAssessment::Kept(RemovalReason::InUse)
-        );
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn live_agent_process_cwd_is_protected() {
-        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-        let mut live = agent("live", Some("/repo-worktrees/other"), None, now);
-        live.runtime_owner = Some(crate::store::runtime::current_process_owner(
-            crate::RuntimeOwnerKind::Agent,
-            "live",
-        ));
-        let current = std::env::current_dir().expect("current dir");
-        let mut protection = RemovalProtection::default();
-        protection.fold_agents(&[live], None);
-
-        assert_eq!(
-            removal_assessment(&current, WorktreeStatus::default(), &protection),
-            RemovalAssessment::Kept(RemovalReason::InUse)
-        );
     }
 
     #[test]
@@ -1609,39 +1500,6 @@ branch refs/heads/swift-otter
 
         assert_eq!(marker.version, 3);
         assert_eq!(marker.from_pr, None);
-    }
-
-    fn worktree_entry(name: &str, dirty: bool, landed: Option<bool>) -> WorktreeListEntry {
-        WorktreeListEntry {
-            name: name.to_owned(),
-            path: PathBuf::from(format!("/repo-worktrees/{name}")),
-            branch: Some(name.to_owned()),
-            base_ref: "main".to_owned(),
-            dirty,
-            landed,
-        }
-    }
-
-    fn pane(raw: &str, command: Option<&str>, cwd: Option<&str>) -> PaneRef {
-        PaneRef {
-            command: command.map(ToOwned::to_owned),
-            cwd: cwd.map(ToOwned::to_owned),
-            ..PaneRef::from_id(PaneId::from_parts(crate::MuxName::Zellij, raw))
-        }
-    }
-
-    fn agent(
-        id: &str,
-        worktree_path: Option<&str>,
-        raw_pane: Option<&str>,
-        last_seen: jiff::Timestamp,
-    ) -> AgentState {
-        AgentState {
-            name: Some(id.to_owned()),
-            pane: raw_pane.map(|raw| pane(raw, Some("codex"), None)),
-            worktree_path: worktree_path.map(ToOwned::to_owned),
-            ..crate::testkit::agent_state("codex", id, last_seen)
-        }
     }
 
     #[test]

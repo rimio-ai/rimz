@@ -1,4 +1,4 @@
-//! `rimz gc` — reclaim stale maintenance state.
+//! `rimz gc` — reclaim stale maintenance state through domain assessments.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -275,7 +275,24 @@ struct FailedWorktree {
 struct KeptWorktree {
     name: String,
     path: PathBuf,
-    reason: rimz::worktree::RemovalReason,
+    reason: KeptReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeptReason {
+    InUse,
+    Dirty,
+    NotMerged,
+}
+
+impl KeptReason {
+    fn json(self) -> &'static str {
+        match self {
+            Self::InUse => "in_use",
+            Self::Dirty => "uncommitted_changes",
+            Self::NotMerged => "not_merged",
+        }
+    }
 }
 
 fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> WorktreeSweepStatus {
@@ -310,17 +327,18 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
                 return WorktreeSweepStatus::Skipped(WorktreeSkip::RosterUnavailable);
             }
         };
-    let mut protection = rimz::worktree::RemovalProtection::default();
-    if let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux)
-        && let Ok(listing) = rimz::mux::backend_for(mux).list_panes(rimz::mux::PaneListOptions {
-            session_name: Some(workspace.session_name.clone()),
-            workspace_id: Some(workspace.workspace_id.clone()),
-            ..Default::default()
-        })
-    {
-        protection.fold_panes(&listing.panes, None);
-    }
-    protection.fold_agents(&snapshot.agents, None);
+    let panes = match rimz::mux::auto_detect_backend(globals.mux) {
+        Ok(mux) => rimz::mux::backend_for(mux)
+            .list_panes(rimz::mux::PaneListOptions {
+                session_name: Some(workspace.session_name.clone()),
+                workspace_id: Some(workspace.workspace_id.clone()),
+                ..Default::default()
+            })
+            .map(|listing| listing.panes)
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    let protections = super::worktree::protection_set_from_runtime(&panes, &snapshot.agents, None);
     spinner.set("scanning worktrees…");
     let entries = match rimz::worktree::list(&workspace.project_root) {
         Ok(entries) => entries,
@@ -329,18 +347,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             return WorktreeSweepStatus::Skipped(WorktreeSkip::ListFailed);
         }
     };
-    let mut candidates = Vec::new();
-    let mut kept = Vec::new();
-    for entry in entries {
-        match entry.removal_assessment(&protection) {
-            rimz::worktree::RemovalAssessment::Removable => candidates.push(entry),
-            rimz::worktree::RemovalAssessment::Kept(reason) => kept.push(KeptWorktree {
-                name: entry.name,
-                path: entry.path,
-                reason,
-            }),
-        }
-    }
+    let (candidates, kept) = partition_candidates(entries, &protections);
     let total = candidates.len();
     let mut sweep = WorktreeSweep {
         kept,
@@ -406,6 +413,40 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
         let _ = rimz::worktree::prune(&workspace.project_root);
     }
     WorktreeSweepStatus::Swept(sweep)
+}
+
+fn partition_candidates(
+    entries: Vec<rimz::worktree::WorktreeListEntry>,
+    protections: &rimz::worktree::ProtectionSet,
+) -> (Vec<rimz::worktree::WorktreeListEntry>, Vec<KeptWorktree>) {
+    let mut candidates = Vec::new();
+    let mut kept = Vec::new();
+    for entry in entries {
+        let status = rimz::worktree::WorktreeStatus {
+            dirty: entry.dirty,
+            landed: match entry.landed {
+                Some(true) => rimz::worktree::LandedVerdict::Landed,
+                Some(false) => rimz::worktree::LandedVerdict::Pending,
+                None => rimz::worktree::LandedVerdict::Unknown,
+            },
+        };
+        let reason = match protections.assess(&entry.path, status) {
+            rimz::worktree::RemovalAssessment::Removable => None,
+            rimz::worktree::RemovalAssessment::InUse => Some(KeptReason::InUse),
+            rimz::worktree::RemovalAssessment::Dirty => Some(KeptReason::Dirty),
+            rimz::worktree::RemovalAssessment::NotLanded => Some(KeptReason::NotMerged),
+        };
+        if let Some(reason) = reason {
+            kept.push(KeptWorktree {
+                name: entry.name,
+                path: entry.path,
+                reason,
+            });
+        } else {
+            candidates.push(entry);
+        }
+    }
+    (candidates, kept)
 }
 
 fn open_store_for_worktree_gc(
@@ -863,14 +904,14 @@ fn kept_summary(kept: &[KeptWorktree]) -> String {
     let mut parts = Vec::new();
     let in_use = kept
         .iter()
-        .filter(|worktree| worktree.reason == rimz::worktree::RemovalReason::InUse)
+        .filter(|worktree| worktree.reason == KeptReason::InUse)
         .count();
     if in_use > 0 {
         parts.push(plural(in_use, "in use", "in use"));
     }
     let dirty = kept
         .iter()
-        .filter(|worktree| worktree.reason == rimz::worktree::RemovalReason::Dirty)
+        .filter(|worktree| worktree.reason == KeptReason::Dirty)
         .count();
     if dirty > 0 {
         parts.push(plural(
@@ -881,7 +922,7 @@ fn kept_summary(kept: &[KeptWorktree]) -> String {
     }
     let not_merged = kept
         .iter()
-        .filter(|worktree| worktree.reason == rimz::worktree::RemovalReason::NotLanded)
+        .filter(|worktree| worktree.reason == KeptReason::NotMerged)
         .count();
     if not_merged > 0 {
         parts.push(plural(not_merged, "not merged yet", "not merged yet"));
@@ -1056,16 +1097,8 @@ impl From<&KeptWorktree> for JsonKeptWorktree {
         Self {
             name: worktree.name.clone(),
             path: path_string(&worktree.path),
-            reason: removal_reason_json(worktree.reason),
+            reason: worktree.reason.json(),
         }
-    }
-}
-
-fn removal_reason_json(reason: rimz::worktree::RemovalReason) -> &'static str {
-    match reason {
-        rimz::worktree::RemovalReason::InUse => "in_use",
-        rimz::worktree::RemovalReason::Dirty => "uncommitted_changes",
-        rimz::worktree::RemovalReason::NotLanded => "not_merged",
     }
 }
 
@@ -1265,6 +1298,78 @@ fn parse_duration(raw: &str) -> std::result::Result<Duration, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::{MuxName, PaneId};
+
+    #[test]
+    fn gc_protection_excludes_sidebar_chrome() {
+        let panes = vec![
+            pane(
+                "terminal_side",
+                Some("rimz-sidebar"),
+                Some("/repo-worktrees/demo"),
+            ),
+            pane(
+                "terminal_agent",
+                Some("codex"),
+                Some("/repo-worktrees/demo"),
+            ),
+            pane(
+                "terminal_shell",
+                Some("zsh"),
+                Some("/repo-worktrees/demo/src"),
+            ),
+            pane("terminal_unknown", None, Some("/repo-worktrees/demo")),
+            pane("terminal_empty", Some("zsh"), None),
+        ];
+
+        let protections = crate::cli::worktree::protection_set_from_runtime(&panes, &[], None);
+        assert!(protections.protects(std::path::Path::new("/repo-worktrees/demo")));
+        assert!(
+            !crate::cli::worktree::protection_set_from_runtime(&panes[..1], &[], None)
+                .protects(std::path::Path::new("/repo-worktrees/demo"))
+        );
+    }
+
+    #[test]
+    fn partition_candidates_keeps_protected_dirty_and_unmerged_entries() {
+        let entries = vec![
+            worktree_entry("protected", "/repo-worktrees/protected", true, Some(false)),
+            worktree_entry("dirty", "/repo-worktrees/dirty", true, Some(true)),
+            worktree_entry("unknown", "/repo-worktrees/unknown", false, None),
+            worktree_entry("pending", "/repo-worktrees/pending", false, Some(false)),
+            worktree_entry("clean", "/repo-worktrees/clean", false, Some(true)),
+        ];
+        let protected = rimz::worktree::ProtectionSet::from_facts(
+            &[rimz::worktree::PaneProtectionFact {
+                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_protected"),
+                cwd: Some(PathBuf::from("/repo-worktrees/protected/src")),
+                sidebar: false,
+            }],
+            &[],
+            None,
+        );
+
+        let (candidates, kept) = partition_candidates(entries, &protected);
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["clean"]
+        );
+        assert_eq!(
+            kept.iter()
+                .map(|worktree| (worktree.name.as_str(), worktree.reason))
+                .collect::<Vec<_>>(),
+            [
+                ("protected", KeptReason::InUse),
+                ("dirty", KeptReason::Dirty),
+                ("unknown", KeptReason::NotMerged),
+                ("pending", KeptReason::NotMerged),
+            ]
+        );
+    }
 
     #[test]
     fn render_report_names_all_clean_checks() {
@@ -1500,24 +1605,48 @@ mod tests {
             KeptWorktree {
                 name: "active".to_owned(),
                 path: PathBuf::from("/repo-worktrees/active"),
-                reason: rimz::worktree::RemovalReason::InUse,
+                reason: KeptReason::InUse,
             },
             KeptWorktree {
                 name: "shell".to_owned(),
                 path: PathBuf::from("/repo-worktrees/shell"),
-                reason: rimz::worktree::RemovalReason::InUse,
+                reason: KeptReason::InUse,
             },
             KeptWorktree {
                 name: "pending".to_owned(),
                 path: PathBuf::from("/repo-worktrees/pending"),
-                reason: rimz::worktree::RemovalReason::NotLanded,
+                reason: KeptReason::NotMerged,
             },
         ]
+    }
+
+    fn worktree_entry(
+        name: &str,
+        path: &str,
+        dirty: bool,
+        landed: Option<bool>,
+    ) -> rimz::worktree::WorktreeListEntry {
+        rimz::worktree::WorktreeListEntry {
+            name: name.to_owned(),
+            path: PathBuf::from(path),
+            branch: Some(name.to_owned()),
+            base_ref: "main".to_owned(),
+            dirty,
+            landed,
+        }
     }
 
     fn strip_report(outcome: &GcOutcome) -> String {
         let mut stream = anstream::StripStream::new(Vec::new());
         render_report(outcome, &mut stream).expect("render report");
         String::from_utf8(stream.into_inner()).expect("utf-8")
+    }
+
+    fn pane(raw: &str, command: Option<&str>, cwd: Option<&str>) -> rimz::pane::PaneRef {
+        rimz::pane::PaneRef {
+            command: command.map(ToOwned::to_owned),
+            cwd: cwd.map(ToOwned::to_owned),
+            ..rimz::pane::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
+        }
     }
 }
