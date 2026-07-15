@@ -940,6 +940,32 @@ fn stale_sent_message_times_out_at_attempt_cap() {
 }
 
 #[test]
+fn stale_sent_reconcile_preserves_cross_message_event_order() {
+    let (_dir, store, workspace_id) = store();
+    let mut timed_out =
+        message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+    timed_out.message_id = message_id(1);
+    timed_out.unconfirmed_sends = 3;
+    let mut requeued = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%2"));
+    requeued.message_id = message_id(2);
+    store.record_sent_message(&timed_out, "session").unwrap();
+    store.record_sent_message(&requeued, "session").unwrap();
+
+    store
+        .reconcile_stale_sent_messages("session", Timestamp::now(), Duration::ZERO, 3, |_| false)
+        .unwrap();
+
+    let events = event_log::read_all(&store.inner.paths.events_log).unwrap();
+    let methods = events
+        .iter()
+        .rev()
+        .take(2)
+        .map(|event| event.method.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(methods, ["message.queued", "message.timed_out"]);
+}
+
+#[test]
 fn fresh_sent_message_waits_for_reconcile_deadline() {
     let (_dir, store, workspace_id) = store();
     let message = message(&workspace_id).with_pane_id(PaneId::from_parts(MuxName::Tmux, "%1"));

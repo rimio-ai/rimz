@@ -207,31 +207,44 @@ impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
         mut update: impl FnMut(&mut MessageRecord) -> MessageUpdate,
     ) -> Vec<MessageRecord> {
         let mut updated = Vec::new();
-        let mut terminal = Vec::new();
+        let mut applied = Vec::new();
         for message in &mut self.live {
             match update(message) {
                 MessageUpdate::Keep => {}
                 MessageUpdate::SilentRewrite => {
                     self.live_changed = true;
-                    updated.push(message.clone());
+                    applied.push((message.clone(), MessageUpdate::SilentRewrite));
                 }
                 MessageUpdate::Rewrite { method, reason } => {
                     self.live_changed = true;
-                    updated.push(message.clone());
+                    applied.push((message.clone(), MessageUpdate::Rewrite { method, reason }));
+                }
+                MessageUpdate::Finalize { status, reason } => {
+                    applied.push((message.clone(), MessageUpdate::Finalize { status, reason }));
+                }
+            }
+        }
+        for (message, update) in applied {
+            match update {
+                MessageUpdate::SilentRewrite => updated.push(message),
+                MessageUpdate::Rewrite { method, reason } => {
                     self.events.push(EventEnvelope::message_event(
-                        message,
+                        &message,
                         session_name,
                         method,
                         reason.as_deref(),
                     ));
+                    updated.push(message);
                 }
-                MessageUpdate::Finalize { status, reason } => {
-                    terminal.push((message.clone(), status, reason));
-                }
+                MessageUpdate::Finalize { status, reason } => updated.push(self.terminalize(
+                    message,
+                    status,
+                    session_name,
+                    reason.as_deref(),
+                    now,
+                )),
+                MessageUpdate::Keep => {}
             }
-        }
-        for (message, status, reason) in terminal {
-            updated.push(self.terminalize(message, status, session_name, reason.as_deref(), now));
         }
         updated
     }
