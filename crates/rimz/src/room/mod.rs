@@ -2,6 +2,7 @@
 
 mod birth;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,7 +12,7 @@ use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::harness::rebirth::RebirthPlan;
 use crate::ids::{MuxName, WorkspaceId};
 use crate::mux::{
-    BackgroundViewOptions, CommandSpec, MuxBackend, PresencePluginOptions, SessionHealth,
+    BackgroundViewOptions, CommandSpec, MuxBackend, MuxErr, PresencePluginOptions, SessionHealth,
     SessionOptions, SidebarPaneOptions, SidebarWidth,
 };
 use crate::store::workspace_record;
@@ -22,6 +23,97 @@ pub use birth::{
     AttendedRecovery, BackgroundViewBirth, BirthOutcome, NormalBirth, NormalRebirth,
     ResetRecoveryError, RoomBirth, RoomResetReport, SupervisedBirth,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum LiveRoomErr {
+    #[error(
+        "no live Rimz room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
+    )]
+    Autodetect {
+        session_name: String,
+        #[source]
+        source: MuxErr,
+    },
+    #[error(
+        "no live Rimz room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
+    )]
+    Missing { session_name: String },
+    #[error(transparent)]
+    Mux(#[from] MuxErr),
+}
+
+pub type LiveRoomResult<T> = std::result::Result<T, LiveRoomErr>;
+
+/// Select the configured multiplexer and require this workspace's room to be live.
+pub fn require_live_mux(
+    explicit: Option<MuxName>,
+    workspace: &ResolvedWorkspace,
+) -> LiveRoomResult<MuxName> {
+    let mux =
+        crate::mux::auto_detect_backend(explicit).map_err(|source| LiveRoomErr::Autodetect {
+            session_name: workspace.session_name.clone(),
+            source,
+        })?;
+    let backend = crate::mux::backend_for(mux);
+    require_live_session(backend.as_ref(), &workspace.session_name)?;
+    Ok(mux)
+}
+
+/// Require one managed room session on an already-selected backend.
+pub fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> LiveRoomResult<()> {
+    let sessions = backend.list_sessions()?;
+    if sessions.iter().any(|session| session == session_name) {
+        Ok(())
+    } else {
+        Err(LiveRoomErr::Missing {
+            session_name: session_name.to_owned(),
+        })
+    }
+}
+
+/// Build the room identity pin carried by a pane opened in a managed session.
+pub fn pane_identity_env(
+    workspace: &ResolvedWorkspace,
+    channel: Option<&str>,
+    inherit_channel: bool,
+) -> BTreeMap<String, String> {
+    let ambient_channel = inherit_channel
+        .then(|| std::env::var(crate::harness::run::ENV_CHANNEL).ok())
+        .flatten();
+    pane_identity_env_with_ambient(workspace, channel, ambient_channel.as_deref())
+}
+
+fn pane_identity_env_with_ambient(
+    workspace: &ResolvedWorkspace,
+    channel: Option<&str>,
+    ambient_channel: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::from([
+        ("RIMZ".to_owned(), "1".to_owned()),
+        (
+            crate::workspace::ENV_WORKSPACE_ID.to_owned(),
+            workspace.workspace_id.to_string(),
+        ),
+        (
+            crate::workspace::ENV_PROJECT_ROOT.to_owned(),
+            workspace.project_root.display().to_string(),
+        ),
+        (
+            crate::harness::run::ENV_WORKTREE_PATH.to_owned(),
+            workspace.worktree_root.display().to_string(),
+        ),
+    ]);
+    if let Some(channel) = channel
+        .or(ambient_channel)
+        .filter(|value| !value.is_empty())
+    {
+        env.insert(
+            crate::harness::run::ENV_CHANNEL.to_owned(),
+            channel.to_owned(),
+        );
+    }
+    env
+}
 
 /// Terminal sizing policy for room operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -384,4 +476,85 @@ fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {
         .and_then(|paths| workspace_record::read(&paths.workspace_record).ok())
         .and_then(|record| record.rimz_bin);
     crate::workspace::resolve_recorded_rimz_bin(recorded.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace() -> ResolvedWorkspace {
+        let project_root = PathBuf::from("/code/rimz");
+        ResolvedWorkspace {
+            workspace_id: WorkspaceId::from_project_root(&project_root),
+            project_root: project_root.clone(),
+            root_class: RootClass::Repo,
+            worktree_root: project_root.join("../rimz-worktrees/demo"),
+            worktree_branch: Some("demo".to_owned()),
+            session_name: "rimz-rimz".to_owned(),
+            mux_hint: None,
+        }
+    }
+
+    #[test]
+    fn pane_identity_pins_workspace_and_prefers_explicit_channel() {
+        let workspace = workspace();
+
+        let env = pane_identity_env_with_ambient(&workspace, Some("explicit"), Some("ambient"));
+
+        assert_eq!(env.get("RIMZ").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.get(crate::workspace::ENV_WORKSPACE_ID)
+                .map(String::as_str),
+            Some(workspace.workspace_id.as_str())
+        );
+        assert_eq!(
+            env.get(crate::workspace::ENV_PROJECT_ROOT)
+                .map(String::as_str),
+            Some("/code/rimz")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_WORKTREE_PATH)
+                .map(String::as_str),
+            Some("/code/rimz/../rimz-worktrees/demo")
+        );
+        assert_eq!(
+            env.get(crate::harness::run::ENV_CHANNEL)
+                .map(String::as_str),
+            Some("explicit")
+        );
+    }
+
+    #[test]
+    fn pane_identity_inherits_nonempty_ambient_channel_only_when_supplied() {
+        let workspace = workspace();
+
+        let inherited = pane_identity_env_with_ambient(&workspace, None, Some("ambient"));
+        let empty = pane_identity_env_with_ambient(&workspace, None, Some(""));
+        let scoped = pane_identity_env_with_ambient(&workspace, None, None);
+
+        assert_eq!(
+            inherited
+                .get(crate::harness::run::ENV_CHANNEL)
+                .map(String::as_str),
+            Some("ambient")
+        );
+        assert!(!empty.contains_key(crate::harness::run::ENV_CHANNEL));
+        assert!(!scoped.contains_key(crate::harness::run::ENV_CHANNEL));
+    }
+
+    #[test]
+    fn live_room_errors_keep_command_guidance() {
+        let missing = LiveRoomErr::Missing {
+            session_name: "rimz-demo".to_owned(),
+        };
+        let autodetect = LiveRoomErr::Autodetect {
+            session_name: "rimz-demo".to_owned(),
+            source: MuxErr::NoMuxFound,
+        };
+        let expected =
+            "no live Rimz room `rimz-demo`; run `rimz start` first or enter one with `rimz attach`";
+
+        assert_eq!(missing.to_string(), expected);
+        assert_eq!(autodetect.to_string(), expected);
+    }
 }

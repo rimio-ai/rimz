@@ -84,11 +84,7 @@ pub(super) fn resume_lane(
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone())
             .context("resolving current workspace")?;
-    let mux = rimz::mux::auto_detect_backend(globals.mux).map_err(|_| {
-        anyhow::anyhow!(crate::cli::agents_launch::live_session_guidance(
-            &workspace.session_name
-        ))
-    })?;
+    let mux = rimz::room::require_live_mux(globals.mux, &workspace)?;
     let machine_config = crate::cli::machine_config();
     let room = RoomContext::from_resolved(
         &workspace,
@@ -97,7 +93,6 @@ pub(super) fn resume_lane(
         RoomSizing::OrdinaryTab,
     )?;
     let backend = room.backend();
-    crate::cli::agents_launch::ensure_live_session(backend, &workspace.session_name)?;
     crate::cli::record_workspace(&workspace)?;
 
     let store = crate::cli::open_store(&workspace)?;
@@ -503,11 +498,7 @@ fn resume_closed_into_live_lane(
             target_pane_id: Some(target.pane_id.clone()),
             cwd: Some(lane.path.to_string_lossy().into_owned()),
             command: Some(command),
-            env: crate::cli::agents_launch::launch_identity_env(
-                &lane_workspace,
-                channel.as_deref(),
-                false,
-            ),
+            env: rimz::room::pane_identity_env(&lane_workspace, channel.as_deref(), false),
             title: None,
             stacked: false,
             direction,

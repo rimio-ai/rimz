@@ -80,7 +80,7 @@ struct PreparedRun {
     mode: PermissionMode,
     layout: LayoutSpec,
     adapter: &'static dyn AgentAdapter,
-    launch: crate::cli::agents_launch::ResolvedCwd,
+    launch: rimz::worktree::LaunchCheckout,
     store: rimz::Store,
     kind: AgentKind,
     room_channel: Option<String>,
@@ -219,7 +219,7 @@ fn open_attempt_pane(
                 cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
                 command: Some(pane.argv.clone()),
                 title: None,
-                env: crate::cli::agents_launch::launch_identity_env(
+                env: rimz::room::pane_identity_env(
                     &prepared.workspace,
                     prepared.room_channel.as_deref(),
                     args.worktree.is_none() && args.from_pr.is_none(),
@@ -230,7 +230,7 @@ fn open_attempt_pane(
             })
             .map_err(anyhow::Error::from),
         RunPlacement::LoopZone => {
-            let env = crate::cli::agents_launch::launch_identity_env(
+            let env = rimz::room::pane_identity_env(
                 &prepared.workspace,
                 prepared.room_channel.as_deref(),
                 args.worktree.is_none() && args.from_pr.is_none(),
@@ -312,7 +312,7 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
     )?;
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(adapter, agent_cell.args, &prompt, &launch_env)?;
-    let launch = crate::cli::agents_launch::resolve_cwd(
+    let launch = rimz::worktree::resolve_launch_checkout(
         &workspace,
         &machine_config.agents.worktree,
         args.worktree.as_deref(),
@@ -370,7 +370,7 @@ fn execute_attempt(
     let mut launch_requests = launch_identity_requests(
         &prepared.layout,
         args.name.as_deref(),
-        generated_worktree_name(&prepared.launch),
+        prepared.launch.generated_name(),
         None,
         None,
         prepared.room_channel.as_deref(),

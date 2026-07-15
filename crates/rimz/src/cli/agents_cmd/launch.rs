@@ -1,7 +1,7 @@
 //! Interactive launch orchestration and presentation.
 
 use super::*;
-use crate::cli::{agents_launch, machine_config, open_store, record_workspace};
+use crate::cli::{machine_config, open_store, record_workspace};
 
 pub(super) fn launch_layout(
     args: AgentsArgs,
@@ -89,7 +89,7 @@ pub(super) fn launch_layout(
         RoomSizing::OrdinaryTab,
     )?;
     let backend = room.backend();
-    agents_launch::ensure_live_session(backend, &workspace.session_name)?;
+    rimz::room::require_live_session(backend, &workspace.session_name)?;
     let store = open_store(&workspace)?;
 
     let explicit_worktree_name = args
@@ -134,7 +134,7 @@ pub(super) fn launch_layout(
         }
     }
 
-    let launch = agents_launch::resolve_cwd(
+    let launch = rimz::worktree::resolve_launch_checkout(
         &workspace,
         &machine_config.agents.worktree,
         args.worktree.as_deref(),
@@ -153,7 +153,7 @@ pub(super) fn launch_layout(
     let launch_requests = launch_identity_requests(
         &layout,
         args.name.as_deref(),
-        generated_worktree_name(&launch),
+        launch.generated_name(),
         team_name.as_deref(),
         team_name
             .as_deref()
@@ -227,7 +227,7 @@ pub(super) fn launch_layout(
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(single_pane_argv(&panes)?),
                     title: None,
-                    env: agents_launch::launch_identity_env(
+                    env: rimz::room::pane_identity_env(
                         &workspace,
                         room_channel.as_deref(),
                         !worktree_launch,
@@ -245,7 +245,7 @@ pub(super) fn launch_layout(
             let argv = single_pane_argv(&panes)?;
             let err = exec_wrapper_in_place(
                 &argv,
-                agents_launch::launch_identity_env(
+                rimz::room::pane_identity_env(
                     &workspace,
                     room_channel.as_deref(),
                     !worktree_launch,
@@ -338,7 +338,7 @@ fn launch_resume_layout(
         RoomSizing::OrdinaryTab,
     )?;
     let backend = room.backend();
-    agents_launch::ensure_live_session(backend, &workspace.session_name)?;
+    rimz::room::require_live_session(backend, &workspace.session_name)?;
     record_workspace(workspace)?;
 
     let launch_requests = fresh_resume_launch_requests(
@@ -408,7 +408,7 @@ fn launch_resume_layout(
                     cwd: Some(cwd.to_string_lossy().into_owned()),
                     command: Some(single_pane_argv(&panes)?),
                     title: None,
-                    env: agents_launch::launch_identity_env(workspace, channel.as_deref(), false),
+                    env: rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
                     stacked: false,
                     direction,
                     focus: !args.bg,
@@ -421,7 +421,7 @@ fn launch_resume_layout(
             let argv = single_pane_argv(&panes)?;
             let err = exec_wrapper_in_place(
                 &argv,
-                agents_launch::launch_identity_env(workspace, channel.as_deref(), false),
+                rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
                 &cwd,
             );
             (Err(err), "running the agent in the current pane")
@@ -890,12 +890,6 @@ pub(super) fn reject_prompt_that_looks_like_spec(
         );
     }
     Ok(())
-}
-
-pub(super) fn generated_worktree_name(launch: &agents_launch::ResolvedCwd) -> Option<&str> {
-    launch
-        .generated_worktree
-        .then_some(launch.worktree_name.as_deref())?
 }
 
 #[cfg(test)]

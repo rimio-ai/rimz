@@ -116,8 +116,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         },
     };
     let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation);
-    let mut env =
-        crate::cli::agents_launch::launch_identity_env(&workspace, agent.channel.as_deref(), false);
+    let mut env = rimz::room::pane_identity_env(&workspace, agent.channel.as_deref(), false);
     env.insert(
         rimz::harness::run::ENV_WORKTREE_PATH.to_owned(),
         cwd.display().to_string(),

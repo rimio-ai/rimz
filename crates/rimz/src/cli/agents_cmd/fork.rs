@@ -1,7 +1,7 @@
 //! Provider-native conversation forks launched as fresh Rimz agent rows.
 
 use super::*;
-use crate::cli::{agents_launch, machine_config, open_store};
+use crate::cli::{machine_config, open_store};
 
 #[derive(Debug, Args)]
 pub(super) struct ForkArgs {
@@ -89,7 +89,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     let room =
         RoomContext::from_resolved(&workspace, config.clone(), mux, RoomSizing::OrdinaryTab)?;
     let backend = room.backend();
-    agents_launch::ensure_live_session(backend, &workspace.session_name)?;
+    rimz::room::require_live_session(backend, &workspace.session_name)?;
 
     let request = AgentLaunchRequest {
         kind: seed.kind.clone(),
@@ -178,7 +178,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                     cwd: Some(seed.cwd.to_string_lossy().into_owned()),
                     command: Some(argv.clone()),
                     title: None,
-                    env: agents_launch::launch_identity_env(&workspace, channel.as_deref(), false),
+                    env: rimz::room::pane_identity_env(&workspace, channel.as_deref(), false),
                     stacked: false,
                     direction,
                     focus: !args.bg,
@@ -190,7 +190,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             report_fork(&seed, &source_name, &launch.name);
             let err = exec_wrapper_in_place(
                 &argv,
-                agents_launch::launch_identity_env(&workspace, channel.as_deref(), false),
+                rimz::room::pane_identity_env(&workspace, channel.as_deref(), false),
                 &seed.cwd,
             );
             (Err(err), "running the agent fork in the current pane")

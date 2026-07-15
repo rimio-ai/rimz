@@ -42,13 +42,7 @@ pub(super) struct TopArgs {
 
 pub(super) fn run_top(args: TopArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let mux = rimz::mux::auto_detect_backend(globals.mux).map_err(|_| {
-        anyhow::anyhow!(crate::cli::agents_launch::live_session_guidance(
-            &workspace.session_name
-        ))
-    })?;
-    let backend = rimz::mux::backend_for(mux);
-    crate::cli::agents_launch::ensure_live_session(&*backend, &workspace.session_name)?;
+    let _mux = rimz::room::require_live_mux(globals.mux, &workspace)?;
     let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
     let state = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())

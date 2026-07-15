@@ -14,8 +14,10 @@ use uuid::Uuid;
 
 use crate::agents::AgentState;
 use crate::config::{WorktreeBase, WorktreeConfig};
+use crate::forge::PrTarget;
 use crate::ids::PaneId;
 use crate::pane::PaneRef;
+use crate::workspace::{ResolvedWorkspace, RootClass};
 
 mod include;
 mod link;
@@ -39,6 +41,10 @@ const AUTO_NOUNS: &[&str] = &[
 pub enum WorktreeErr {
     #[error("rimz worktrees require a git repository; run from a repo checkout")]
     NotRepo,
+    #[error("--worktree requires a git repository-backed room")]
+    LaunchWorktreeRequiresRepo,
+    #[error("--from-pr requires a git repository-backed room")]
+    LaunchPrRequiresRepo,
     #[error(
         "invalid worktree name `{0}`; use letters, numbers, `_`, `-`, with `/` separating branch-style segments"
     )]
@@ -112,6 +118,22 @@ pub struct CreatedWorktree {
     /// Directories symlinked into the worktree from the project's `.worktreelink`.
     /// Zero for a reused worktree, which is never re-seeded.
     pub linked: usize,
+}
+
+/// Checkout selected for an agent launch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaunchCheckout {
+    pub cwd: PathBuf,
+    pub worktree_name: Option<String>,
+    generated_name: bool,
+}
+
+impl LaunchCheckout {
+    /// Return the auto-generated name for a bare `--worktree` request.
+    pub fn generated_name(&self) -> Option<&str> {
+        self.generated_name
+            .then_some(self.worktree_name.as_deref())?
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,6 +371,62 @@ pub fn create(
         },
         Checkout::NewBranch(&checkout_base_ref),
     )
+}
+
+/// Resolve the cwd and optional Rimz-owned checkout for an agent launch.
+///
+/// Callers complete trust and provider preflight before entering this
+/// side-effecting boundary.
+pub fn resolve_launch_checkout(
+    workspace: &ResolvedWorkspace,
+    config: &WorktreeConfig,
+    worktree: Option<&str>,
+    from_pr: Option<&PrTarget>,
+) -> Result<LaunchCheckout> {
+    if let Some(pr) = from_pr {
+        if workspace.root_class != RootClass::Repo {
+            return Err(WorktreeErr::LaunchPrRequiresRepo);
+        }
+        let name = worktree.map(str::trim).filter(|name| !name.is_empty());
+        let created = create_from_pr(
+            &workspace.project_root,
+            config,
+            pr,
+            name,
+            None,
+            name.is_some(),
+        )?;
+        return Ok(LaunchCheckout {
+            cwd: created.path,
+            worktree_name: Some(created.name),
+            generated_name: false,
+        });
+    }
+
+    let Some(raw_name) = worktree else {
+        return Ok(LaunchCheckout {
+            cwd: workspace.worktree_root.clone(),
+            worktree_name: None,
+            generated_name: false,
+        });
+    };
+    if workspace.root_class != RootClass::Repo {
+        return Err(WorktreeErr::LaunchWorktreeRequiresRepo);
+    }
+    let name = raw_name.trim();
+    let created = create(
+        &workspace.project_root,
+        config,
+        (!name.is_empty()).then_some(name),
+        None,
+        None,
+        !name.is_empty(),
+    )?;
+    Ok(LaunchCheckout {
+        cwd: created.path,
+        worktree_name: Some(created.name),
+        generated_name: name.is_empty(),
+    })
 }
 
 pub fn remove(
@@ -1100,6 +1178,71 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn workspace(root_class: RootClass) -> ResolvedWorkspace {
+        let project_root = PathBuf::from("/code/query-engine");
+        ResolvedWorkspace {
+            workspace_id: crate::ids::WorkspaceId::from_project_root(&project_root),
+            project_root: project_root.clone(),
+            root_class,
+            worktree_root: project_root,
+            worktree_branch: None,
+            session_name: "rimz-query-engine".to_owned(),
+            mux_hint: None,
+        }
+    }
+
+    #[test]
+    fn launch_checkout_without_flags_keeps_current_worktree() {
+        let workspace = workspace(RootClass::Directory);
+
+        let checkout = resolve_launch_checkout(&workspace, &WorktreeConfig::default(), None, None)
+            .expect("current checkout");
+
+        assert_eq!(checkout.cwd, workspace.worktree_root);
+        assert_eq!(checkout.worktree_name, None);
+        assert_eq!(checkout.generated_name(), None);
+    }
+
+    #[test]
+    fn launch_checkout_reports_non_repository_flags_exactly() {
+        let workspace = workspace(RootClass::Directory);
+        let config = WorktreeConfig::default();
+
+        let worktree = resolve_launch_checkout(&workspace, &config, Some("demo"), None)
+            .expect_err("worktree needs repo");
+        assert_eq!(
+            worktree.to_string(),
+            "--worktree requires a git repository-backed room"
+        );
+
+        let pr = PrTarget {
+            number: 42,
+            forge: None,
+        };
+        let from_pr = resolve_launch_checkout(&workspace, &config, None, Some(&pr))
+            .expect_err("PR needs repo");
+        assert_eq!(
+            from_pr.to_string(),
+            "--from-pr requires a git repository-backed room"
+        );
+    }
+
+    #[test]
+    fn generated_launch_name_is_exposed_only_for_bare_checkout() {
+        let generated = LaunchCheckout {
+            cwd: PathBuf::from("/code/query-engine-worktrees/swift-orbit"),
+            worktree_name: Some("swift-orbit".to_owned()),
+            generated_name: true,
+        };
+        let named = LaunchCheckout {
+            generated_name: false,
+            ..generated.clone()
+        };
+
+        assert_eq!(generated.generated_name(), Some("swift-orbit"));
+        assert_eq!(named.generated_name(), None);
+    }
 
     #[test]
     fn template_expands_relative_to_repo_root() {
