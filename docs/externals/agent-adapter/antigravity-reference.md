@@ -167,7 +167,7 @@ agy --conversation=<conversation-id>
 
 `/fork` (alias `/branch`) clones conversation history up to the current turn, allocates a new conversation ID, and switches the current TUI to that clone. It does not clone the Git checkout. Because no `agy --fork <source-id>` launch surface exists, it cannot implement `rimz agents fork`, whose contract opens a provider-native copy beside an untouched source.
 
-`/rewind` (alias `/undo`) rewinds conversation history. `/clear` resets the terminal and active conversation context; the official reference does not say whether it allocates a new `conversationId`, rewrites the transcript, or changes the SQLite row. Capture all three before mapping either command to identity or compaction behavior.
+`/rewind` (alias `/undo`) rewinds conversation history. `/clear` resets the terminal and active conversation context. A sanitized live 1.1.2 capture observes the next first `PreInvocation` carrying a distinct `conversationId` while the same `agy` process remains in the same pane, so RimZ follows that newest active ID under guarded same-process pane ownership. This observation establishes an in-place active-ID switch only: the official reference does not define `/clear` versus `/fork` lineage, parentage, transcript persistence, or SQLite retention, and RimZ assigns no `Fresh` origin from it.
 
 The CLI prints an exact resume command on exit. That text is useful to humans but the hook/statusline ID remains the durable machine identity.
 
@@ -646,7 +646,7 @@ The landed adapter uses this conservative mapping:
 
 | Antigravity observation | RimZ signal/enrichment | Notes |
 | --- | --- | --- |
-| first `PreInvocation`, `invocationNum = 0` | `turn_started` | create-on-miss establishes identity and carries transcript/workspace/model enrichment plus the latest completed visible user prompt from the bounded validated transcript tail |
+| first `PreInvocation`, `invocationNum = 0` | `turn_started` | create-on-miss establishes identity, switches guarded same-pane ownership to a newly reported active conversation ID, and carries transcript/workspace/model enrichment plus the latest completed visible user prompt from the bounded validated transcript tail |
 | later `PreInvocation` | activity only | do not reopen the turn after tool use |
 | successful edit-matcher `PostToolUse` | `tool_used { mutates: true, edits: true }` | acting begins only after execution succeeds |
 | successful `run_command` matcher `PostToolUse` | `tool_used { mutates: true, edits: false }` | durable proof of generic mutation |

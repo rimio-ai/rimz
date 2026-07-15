@@ -54,7 +54,7 @@ Pinned to the bottom of the sidebar is one block per provider account, because a
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 5d22h
 ```
 
-The stats row is this provider's spend for the headline window: sessions, the token breakdown, and dollars pinned right. Two totals rows then close the dashboard, summing every provider across the trailing week and month:
+When a provider has historical usage, the stats row is its account-global spend for the headline window: sessions, the token breakdown, and dollars pinned right. A provider without a cumulative ledger shows only `◎` and the number of identity-bearing sessions active in this room; unavailable token and dollar positions stay absent. Antigravity uses this fallback because its statusline reports replace-style current usage for the card rather than additive history. Two fleet-total rows then close the dashboard, summing every supported provider across the trailing week and month and retaining their ordinary cold-cache zero state:
 
 ```
   W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88
@@ -112,7 +112,7 @@ Two scopes and a set of windows keep the surfaces honest:
 - The cockpit is scoped to the room you are in. The provider dashboard totals and everything in `rimz stats` are account-global, summed per provider account across every project on the machine.
 - The cockpit window is `session`, `24h`, or `today` (above). The dashboard's totals rows are the trailing week and month, `rimz stats` adds year and all-time, and the heatmap buckets by calendar day.
 
-None of this can fail into a wrong-looking number. Spend is enrichment, so a missing binary, a logged-out account, or an unpriced model degrades to a blank or a zero, never a bad figure dressed up as a real one. Provider totals and locally priced token counters render identically as dollars. Coverage decides addition: cumulative session values such as Cursor and Droid participate in the cockpit and live budgets, while Antigravity's replace-style current usage stays card-only; none becomes provider history, account-day spend, or `rimz stats`. For the mechanism in full, the caches, the price-table precedence, and the window fusion, see [providers internals](../internals/agents/providers.md).
+None of this can fail into a wrong-looking number. Spend is enrichment, so a missing binary, a logged-out account, or an unpriced model degrades to an explicitly absent field or a zero inside a real historical tally, never a bad figure dressed up as a real one. Provider totals and locally priced token counters render identically as dollars. Coverage decides addition: cumulative session values such as Cursor and Droid participate in the cockpit and live budgets, while Antigravity's replace-style current usage stays card-only; none becomes provider history, account-day spend, or `rimz stats`. For the mechanism in full, the caches, the price-table precedence, and the window fusion, see [providers internals](../internals/agents/providers.md).
 
 ## Configuration
 
