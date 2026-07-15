@@ -37,11 +37,15 @@ pub struct CodexTokenEvent {
 
 // ── Typed structs — session format ───────────────────────────────────────────
 
-/// Rollout `session_meta` header — the file's first line. Only its `cwd`
-/// matters to spend: it stamps each entry's durable origin so a closed Codex
-/// session still scopes to its workspace, the way Claude and Pi already do.
+/// Rollout `session_meta` header — the file's first line. Spend reads `cwd`;
+/// local-session discovery also reads the provider session id and creation
+/// timestamp without scanning the rollout body.
 #[derive(Deserialize)]
 pub(crate) struct CodexSessionMeta<'a> {
+    #[serde(rename = "type", borrow, default)]
+    pub(crate) entry_type: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) timestamp: Option<CodexTimestamp<'a>>,
     #[serde(
         borrow,
         default,
@@ -50,9 +54,11 @@ pub(crate) struct CodexSessionMeta<'a> {
     pub(crate) payload: Option<CodexSessionMetaPayload<'a>>,
 }
 
-/// The slice of the `session_meta` payload spend reads: the session's `cwd`.
+/// The slice of the `session_meta` payload Rimz reads: session identity and cwd.
 #[derive(Default, Deserialize)]
 pub(crate) struct CodexSessionMetaPayload<'a> {
+    #[serde(borrow, default)]
+    pub(crate) id: Option<Cow<'a, str>>,
     #[serde(borrow, default)]
     pub(crate) cwd: Option<Cow<'a, str>>,
 }

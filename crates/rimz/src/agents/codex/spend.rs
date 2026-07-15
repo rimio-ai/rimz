@@ -43,7 +43,7 @@ use crate::agents::transcript_fs::{collect_jsonl, home_dir};
 mod parse;
 #[cfg(test)]
 mod tests;
-mod wire;
+pub(super) mod wire;
 
 use parse::{CodexSpendState, parse_codex_session};
 #[cfg(test)]

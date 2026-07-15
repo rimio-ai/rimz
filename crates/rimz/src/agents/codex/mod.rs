@@ -29,6 +29,7 @@ pub(crate) mod app_server;
 mod ask;
 pub mod broker;
 mod install;
+mod local_sessions;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub mod process;
@@ -173,7 +174,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // its pane by cwd and renders a wired-but-unprompted `codex` pane as
         // an idle agent.
         registers_lazily: true,
-        local_session_discovery: false,
+        local_session_discovery: true,
         daemon_hooked_sessions: true,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
@@ -456,6 +457,15 @@ pub struct CodexAdapter;
 impl AgentAdapter for CodexAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &CODEX_DESCRIPTOR
+    }
+
+    #[cfg(test)]
+    fn local_session_fixture(&self) -> Option<super::LocalSessionObservation> {
+        Some(local_sessions::fixture_observation())
+    }
+
+    fn discover_local_sessions(&self, workspace: &Path) -> Vec<super::LocalSessionObservation> {
+        local_sessions::discover(workspace)
     }
 
     fn default_launch_model(&self) -> Option<String> {

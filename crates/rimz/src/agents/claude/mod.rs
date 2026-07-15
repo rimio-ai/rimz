@@ -20,6 +20,7 @@
 pub(crate) mod account;
 mod ask;
 mod install;
+mod local_sessions;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub mod remote_control;
@@ -101,7 +102,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // recovered by cwd, and a pane with no session, such as the login
         // screen before SessionStart, is idle-synthesized like any wired agent.
         registers_lazily: false,
-        local_session_discovery: false,
+        local_session_discovery: true,
         daemon_hooked_sessions: false,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: true,
@@ -450,6 +451,15 @@ impl ClaudeAdapter {
 impl AgentAdapter for ClaudeAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &CLAUDE_DESCRIPTOR
+    }
+
+    #[cfg(test)]
+    fn local_session_fixture(&self) -> Option<super::LocalSessionObservation> {
+        Some(local_sessions::fixture_observation())
+    }
+
+    fn discover_local_sessions(&self, workspace: &Path) -> Vec<super::LocalSessionObservation> {
+        local_sessions::discover(workspace)
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
