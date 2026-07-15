@@ -1352,6 +1352,7 @@ fn assert_pending_message(env: &Env, session: &str, text_fragment: &str) {
         .expect("pending messages");
     assert_eq!(messages.len(), 1, "{messages:?}");
     let message = &messages[0];
+    assert_eq!(message.kind.as_str(), "claude");
     assert_eq!(message.agent_id.as_str(), session);
     assert_eq!(message.status, MessageStatus::Queued);
     assert!(message.text.contains(text_fragment), "{}", message.text);
