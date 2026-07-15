@@ -1,378 +1,236 @@
 use super::*;
-use crate::agents::SessionOrigin;
+use crate::agents::SessionOrigin::{self, Forked, Fresh};
 
-/// Build a single-agent rollup at the epoch, run the reap, and return the
-/// surviving agent ids. Fixture timestamps are epoch offsets, so the TTL
-/// rules are exercised deterministically.
-fn reap_survivors(agents: Vec<AgentState>) -> Vec<String> {
+fn session(kind: &str, id: &str, age_secs: i64) -> AgentState {
+    agent(kind, id, AgentStatus::Running, 0)
+        .worktree(&format!("/repo/{id}"))
+        .active_ago(age_secs)
+}
+
+fn pane_session(kind: &str, id: &str, pane: &str, age_secs: i64) -> AgentState {
+    session(kind, id, age_secs).in_pane(pane)
+}
+
+fn with_owner(
+    mut agent: AgentState,
+    kind: RuntimeOwnerKind,
+    pid: u32,
+    process_start: Option<&str>,
+) -> AgentState {
+    agent.runtime_owner = Some(RuntimeOwner::new(
+        kind,
+        agent.agent_id.to_string(),
+        pid,
+        process_start.map(str::to_owned),
+    ));
+    agent
+}
+
+fn with_origin(mut agent: AgentState, origin: SessionOrigin) -> AgentState {
+    agent.origin = Some(origin);
+    agent
+}
+
+fn with_pane_start(mut agent: AgentState, age_secs: i64) -> AgentState {
+    agent
+        .pane
+        .as_mut()
+        .expect("pane session")
+        .pane_process_start = Some(ago(age_secs));
+    agent
+}
+
+fn assert_survivors(label: &str, agents: Vec<AgentState>, expected: &[&str]) {
     let mut snapshot = room(agents);
     snapshot.reap_stale_sessions();
-    let mut ids: Vec<String> = snapshot
+    let mut ids = snapshot
         .agents
         .iter()
-        .map(|a| a.agent_id.to_string())
-        .collect();
-    ids.sort();
-    ids
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    assert_eq!(ids, expected, "{label}");
 }
 
 #[test]
 fn root_session_reaper_drops_only_unprovable_ghosts() {
-    struct Case {
-        label: &'static str,
-        agents: Vec<AgentState>,
-        expected: Vec<&'static str>,
-    }
+    assert_survivors(
+        "strict ghost TTL and runtime-owner classification",
+        vec![
+            session("claude", "stale-ownerless", GHOST_SESSION_TTL_SECS + 1),
+            with_owner(
+                session("codex", "stale-daemon", GHOST_SESSION_TTL_SECS + 1),
+                RuntimeOwnerKind::Daemon,
+                77,
+                None,
+            ),
+            session("claude", "boundary", GHOST_SESSION_TTL_SECS),
+            with_owner(
+                session("codex", "agent-owned", GHOST_SESSION_TTL_SECS + 1),
+                RuntimeOwnerKind::Agent,
+                88,
+                None,
+            ),
+        ],
+        &["agent-owned", "boundary"],
+    );
 
-    for case in [
-        Case {
-            label: "ownerless stale session drops, recent and owned survive",
-            agents: {
-                let stale = agent("claude", "stale", AgentStatus::Idle, 0)
-                    .worktree("/repo/stale")
-                    .active_ago(GHOST_SESSION_TTL_SECS + 60);
-                let recent = agent("claude", "recent", AgentStatus::Idle, 0)
-                    .worktree("/repo/recent")
-                    .active_ago(60);
-                let mut pidful = agent("codex", "pidful", AgentStatus::Idle, 0)
-                    .worktree("/repo/pidful")
-                    .active_ago(GHOST_SESSION_TTL_SECS * 10);
-                pidful.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "pidful",
-                    4242,
-                    None,
-                ));
-                vec![stale, recent, pidful]
-            },
-            expected: vec!["pidful", "recent"],
-        },
-        Case {
-            label: "daemon-owned stale session is pidless but pane owner survives",
-            agents: {
-                let mut stale_daemon = agent("codex", "stale-daemon", AgentStatus::Idle, 0)
-                    .worktree("/repo/stale-daemon")
-                    .active_ago(GHOST_SESSION_TTL_SECS + 60);
-                stale_daemon.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Daemon,
-                    "stale-daemon",
-                    77,
-                    None,
-                ));
-                let mut recent_daemon = agent("codex", "recent-daemon", AgentStatus::Idle, 0)
-                    .worktree("/repo/recent-daemon")
-                    .active_ago(60);
-                recent_daemon.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Daemon,
-                    "recent-daemon",
-                    77,
-                    None,
-                ));
-                let mut pane_owner = agent("codex", "pane-owner", AgentStatus::Idle, 0)
-                    .worktree("/repo/pane-owner")
-                    .in_pane("%9")
-                    .active_ago(GHOST_SESSION_TTL_SECS * 10);
-                pane_owner.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "pane-owner",
-                    88,
-                    None,
-                ));
-                vec![stale_daemon, recent_daemon, pane_owner]
-            },
-            expected: vec!["pane-owner", "recent-daemon"],
-        },
-        Case {
-            label: "paneless same path and branch collapses to newest",
-            agents: vec![
-                agent("codex", "older", AgentStatus::Idle, 0)
+    assert_survivors(
+        "paneless roots collapse only within one worktree and branch",
+        vec![
+            session("codex", "older", 120)
+                .worktree("/repo/a")
+                .branch("main"),
+            session("codex", "newer", 60)
+                .worktree("/repo/a")
+                .branch("main"),
+        ],
+        &["newer"],
+    );
+    assert_survivors(
+        "a stamped root cannot prove a paneless root dead",
+        vec![
+            session("codex", "older", 120)
+                .worktree("/repo/a")
+                .branch("main"),
+            pane_session("codex", "newer", "%2", 60)
+                .worktree("/repo/a")
+                .branch("main"),
+        ],
+        &["newer", "older"],
+    );
+
+    assert_survivors(
+        "a different owner relaunch in one pane supersedes across checkout",
+        vec![
+            with_owner(
+                pane_session("claude", "older", "%1", 120)
                     .worktree("/repo/a")
-                    .branch("main")
-                    .active_ago(120),
-                agent("codex", "newer", AgentStatus::Idle, 0)
+                    .branch("main"),
+                RuntimeOwnerKind::Agent,
+                111,
+                None,
+            ),
+            with_owner(
+                pane_session("claude", "newer", "%1", 60)
                     .worktree("/repo/a")
-                    .branch("main")
-                    .active_ago(60),
-            ],
-            expected: vec!["newer"],
-        },
-        Case {
-            label: "newer distinct pane does not prove paneless older stale",
-            agents: vec![
-                agent("codex", "older", AgentStatus::Idle, 0)
-                    .worktree("/repo/a")
-                    .branch("main")
-                    .active_ago(120),
-                agent("codex", "newer", AgentStatus::Idle, 0)
-                    .worktree("/repo/a")
-                    .branch("main")
-                    .in_pane("%2")
-                    .active_ago(60),
-            ],
-            expected: vec!["newer", "older"],
-        },
-        Case {
-            label: "relaunch reusing a pane collapses across a branch checkout",
-            agents: {
-                let mut older = agent("claude", "older", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .branch("main")
-                    .in_pane("%1")
-                    .active_ago(120);
-                older.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "older",
-                    111,
-                    None,
-                ));
-                let mut newer = agent("claude", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .branch("feature")
-                    .in_pane("%1")
-                    .active_ago(60);
-                newer.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "newer",
-                    222,
-                    None,
-                ));
-                vec![older, newer]
-            },
-            expected: vec!["newer"],
-        },
-        Case {
-            label: "distinct stamped panes are concurrent live sessions",
-            agents: {
-                let mut older = agent("claude", "older", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .branch("main")
-                    .in_pane("%1")
-                    .active_ago(120);
-                older.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "older",
-                    111,
-                    None,
-                ));
-                let mut newer = agent("claude", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .branch("main")
-                    .in_pane("%2")
-                    .active_ago(60);
-                newer.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "newer",
-                    222,
-                    None,
-                ));
-                vec![older, newer]
-            },
-            expected: vec!["newer", "older"],
-        },
-        Case {
-            label: "fresh same-pane replacement drops the prior session but keeps forks",
-            agents: {
-                let mut older = agent("codex", "older", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(120);
-                older.origin = Some(SessionOrigin::Fresh);
-                let mut fork = agent("codex", "fork", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(90);
-                fork.origin = Some(SessionOrigin::Forked);
-                let mut newer = agent("codex", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(60);
-                newer.origin = Some(SessionOrigin::Fresh);
-                vec![older, fork, newer]
-            },
-            expected: vec!["fork", "newer"],
-        },
-        Case {
-            label: "antigravity same-process conversation switch drops the prior session",
-            agents: {
-                let mut older = agent("antigravity", "older", AgentStatus::Success, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(120);
-                older.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "older",
-                    9_999,
-                    Some("process-a".to_owned()),
-                ));
-                let mut newer = agent("antigravity", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(60);
-                newer.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "newer",
-                    9_999,
-                    Some("process-a".to_owned()),
-                ));
-                vec![older, newer]
-            },
-            expected: vec!["newer"],
-        },
-        Case {
-            label: "antigravity process identity mismatch keeps both conversations",
-            agents: {
-                let mut older = agent("antigravity", "older", AgentStatus::Success, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(120);
-                older.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "older",
-                    9_999,
-                    Some("process-a".to_owned()),
-                ));
-                let mut newer = agent("antigravity", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(60);
-                newer.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "newer",
-                    9_999,
-                    Some("process-b".to_owned()),
-                ));
-                vec![older, newer]
-            },
-            expected: vec!["newer", "older"],
-        },
-        Case {
-            label: "antigravity pane incarnation mismatch keeps both conversations",
-            agents: {
-                let mut older = agent("antigravity", "older", AgentStatus::Success, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(120);
-                older.pane.as_mut().unwrap().pane_process_start = Some(ago(600));
-                older.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "older",
-                    9_999,
-                    Some("process-a".to_owned()),
-                ));
-                let mut newer = agent("antigravity", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(60);
-                newer.pane.as_mut().unwrap().pane_process_start = Some(ago(300));
-                newer.runtime_owner = Some(RuntimeOwner::new(
-                    RuntimeOwnerKind::Agent,
-                    "newer",
-                    9_999,
-                    Some("process-a".to_owned()),
-                ));
-                vec![older, newer]
-            },
-            expected: vec!["newer", "older"],
-        },
-        Case {
-            label: "unknown older lineage keeps both same-pane sessions",
-            agents: {
-                let older = agent("codex", "older", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(120);
-                let mut newer = agent("codex", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(60);
-                newer.origin = Some(SessionOrigin::Fresh);
-                vec![older, newer]
-            },
-            expected: vec!["newer", "older"],
-        },
-        Case {
-            label: "unknown newer lineage keeps both same-pane sessions",
-            agents: {
-                let mut older = agent("codex", "older", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(120);
-                older.origin = Some(SessionOrigin::Fresh);
-                let newer = agent("codex", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(60);
-                vec![older, newer]
-            },
-            expected: vec!["newer", "older"],
-        },
-        Case {
-            label: "fresh sessions on distinct panes are concurrent",
-            agents: {
-                let mut older = agent("codex", "older", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%1")
-                    .active_ago(120);
-                older.origin = Some(SessionOrigin::Fresh);
-                let mut newer = agent("codex", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .in_pane("%2")
-                    .active_ago(60);
-                newer.origin = Some(SessionOrigin::Fresh);
-                vec![older, newer]
-            },
-            expected: vec!["newer", "older"],
-        },
-        Case {
-            label: "paneless fresh root does not yield to a stamped fresh root",
-            agents: {
-                let mut older = agent("codex", "older", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .branch("main")
-                    .active_ago(120);
-                older.origin = Some(SessionOrigin::Fresh);
-                let mut newer = agent("codex", "newer", AgentStatus::Running, 0)
-                    .worktree("/repo/a")
-                    .branch("main")
-                    .in_pane("%1")
-                    .active_ago(60);
-                newer.origin = Some(SessionOrigin::Fresh);
-                vec![older, newer]
-            },
-            expected: vec!["newer", "older"],
-        },
-    ] {
-        assert_eq!(
-            reap_survivors(case.agents),
-            case.expected
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-            "{}",
-            case.label
-        );
-    }
+                    .branch("feature"),
+                RuntimeOwnerKind::Agent,
+                222,
+                None,
+            ),
+        ],
+        &["newer"],
+    );
+    assert_survivors(
+        "distinct stamped panes remain concurrent",
+        vec![
+            with_owner(
+                pane_session("claude", "older", "%1", 120),
+                RuntimeOwnerKind::Agent,
+                111,
+                None,
+            ),
+            with_owner(
+                pane_session("claude", "newer", "%2", 60),
+                RuntimeOwnerKind::Agent,
+                222,
+                None,
+            ),
+        ],
+        &["newer", "older"],
+    );
+
+    assert_survivors(
+        "fresh same-pane roots replace older roots but preserve forks",
+        vec![
+            with_origin(pane_session("codex", "older", "%1", 120), Fresh),
+            with_origin(pane_session("codex", "fork", "%1", 90), Forked),
+            with_origin(pane_session("codex", "newer", "%1", 60), Fresh),
+        ],
+        &["fork", "newer"],
+    );
+    assert_survivors(
+        "missing older lineage fails safe",
+        vec![
+            pane_session("codex", "older", "%1", 120),
+            with_origin(pane_session("codex", "newer", "%1", 60), Fresh),
+        ],
+        &["newer", "older"],
+    );
+    assert_survivors(
+        "missing newer lineage fails safe",
+        vec![
+            with_origin(pane_session("codex", "older", "%1", 120), Fresh),
+            pane_session("codex", "newer", "%1", 60),
+        ],
+        &["newer", "older"],
+    );
+    assert_survivors(
+        "fresh roots in distinct panes remain concurrent",
+        vec![
+            with_origin(pane_session("codex", "older", "%1", 120), Fresh),
+            with_origin(pane_session("codex", "newer", "%2", 60), Fresh),
+        ],
+        &["newer", "older"],
+    );
+    assert_survivors(
+        "a paneless fresh root does not yield to a stamped fresh root",
+        vec![
+            with_origin(session("codex", "older", 120), Fresh),
+            with_origin(pane_session("codex", "newer", "%1", 60), Fresh),
+        ],
+        &["newer", "older"],
+    );
+
+    let follow_latest = |id, age, token| {
+        with_owner(
+            pane_session("antigravity", id, "%1", age),
+            RuntimeOwnerKind::Agent,
+            9_999,
+            Some(token),
+        )
+    };
+    assert_survivors(
+        "follow-latest providers replace same-process conversations",
+        vec![
+            follow_latest("older", 120, "process-a"),
+            follow_latest("newer", 60, "process-a"),
+        ],
+        &["newer"],
+    );
+    assert_survivors(
+        "follow-latest process identity mismatch fails safe",
+        vec![
+            follow_latest("older", 120, "process-a"),
+            follow_latest("newer", 60, "process-b"),
+        ],
+        &["newer", "older"],
+    );
+    assert_survivors(
+        "follow-latest pane incarnation mismatch fails safe",
+        vec![
+            with_pane_start(follow_latest("older", 120, "process-a"), 600),
+            with_pane_start(follow_latest("newer", 60, "process-a"), 300),
+        ],
+        &["newer", "older"],
+    );
 }
 
 #[test]
 fn reaper_never_drops_a_subagent() {
-    let parent = agent("claude", "sess-root", AgentStatus::Running, 0);
-    // A pidless idle child well past the ghost TTL, plus a same-type sibling
-    // that would "supersede" it under the root rule — both survive, because
-    // children are exempt and leave only when the parent does.
-    let old_child = child_state(
-        "sess-root",
-        "child-old",
-        AgentStatus::Idle,
-        GHOST_SESSION_TTL_SECS + 600,
-    );
-    let new_child = child_state("sess-root", "child-new", AgentStatus::Running, 5);
-    assert_eq!(
-        reap_survivors(vec![parent, old_child, new_child]),
+    assert_survivors(
+        "subagents survive both ghost TTL and root supersession rules",
         vec![
-            "child-new".to_owned(),
-            "child-old".to_owned(),
-            "sess-root".to_owned()
+            session("claude", "sess-root", 0),
+            child_state(
+                "sess-root",
+                "child-old",
+                AgentStatus::Idle,
+                GHOST_SESSION_TTL_SECS + 1,
+            ),
+            child_state("sess-root", "child-new", AgentStatus::Running, 5),
         ],
+        &["child-new", "child-old", "sess-root"],
     );
 }
