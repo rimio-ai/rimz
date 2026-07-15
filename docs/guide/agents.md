@@ -207,6 +207,17 @@ Two everyday tasks have their own guides, with the depth this page leaves out:
 
 The complete `rimz agents` surface, every verb and flag, is the [agent-control reference](../reference/cli/agents.md).
 
+## Answer asks from your phone
+
+An agent that stops to ask while you are away does not have to wait for your terminal. Claude Code and Codex ship **remote control**, the bridge behind their official mobile apps, and two toggles keep it up with every room:
+
+```sh
+rimz config set remote_control.claude true
+rimz config set remote_control.codex true
+```
+
+The ask reaches your phone as a push from the provider's own app, and your answer lands in the same session as if you had typed it in the pane. Both toggles are off by default; exactly what each one runs, the preconditions, and the undo are in [remote → answer asks from your phone](./remote.md#answer-asks-from-your-phone).
+
 That is the whole daily workflow. The two sections below are the detail it names — the profile fields and the permission-mode suffixes — here for when you need a specific field rather than on your way in.
 
 ## Profiles: shape an agent for one job
@@ -283,7 +294,6 @@ One more suffix sits outside permissions: `-ping` opens the agent at its lowest 
 - [Token Insight](./insight.md) — fleet-wide token and dollar insight: the cockpit, the provider dashboard, and `rimz stats`.
 - [Budgets](./budget.md) — dollar caps on an agent, a task, a room, or a provider login, and what a park means.
 - [Scripting agents](./scripting.md) — the same launcher as a supervised, exit-coded run (`-p`).
-- [Remote → answer asks from your phone](./remote.md#answer-asks-from-your-phone) — the provider mobile-app bridge, kept up with the room.
 - [Configuration → profiles and teams](./configuration.md#agent-profiles-commands-and-teams) — the `agents.toml` shape behind every profile and team.
 - [Agent-control reference](../reference/cli/agents.md) — the complete `rimz agents`, `worktree`, and `gc` surface.
 - [Agent support](../reference/agent-support.md) — which agents RimZ drives and what each integration adds.

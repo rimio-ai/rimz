@@ -300,9 +300,18 @@ Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and
 | Qwen        | ⚪ Experimental  |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ●     |
 | Kimi        | ⚪ Experimental  |   ●   |  ●   |    ●    |    ●    |  ●  |     ◐     |
 
-<sub>● full · ◐ partial · ✗ the native CLI lacks a verified signal sufficient for this capability; an agent-side extension or validated upstream wire can add it.</sub>
+<sub>● full · ◐ partial · ✗ the native CLI lacks the capability</sub>
 
-Each column is one slice of coverage: **State** (live working/idle/waiting), **Live** (realtime context health and cost on the card), **History** (full session read: transcript, per-turn tokens, spend), **Account** (login, plan, and provider-exposed rate-limit or balance facts), **Ask** (blocking prompts routed to your keyboard), **Subagents** (the child-agent tree). The per-mechanism detail and permission-mode mapping live in [agent support](./docs/reference/agent-support.md), and `rimz coverage` prints the live grid on your own machine with a reason on every cell.
+What each column covers:
+
+- **State**: live working/idle/waiting
+- **Live**: realtime context health and cost on the card
+- **History**: full session read (transcript, per-turn tokens, spend)
+- **Account**: login, plan, and rate-limit or balance windows
+- **Ask**: blocking prompts routed to your keyboard
+- **Subagents**: the child-agent tree
+
+The per-mechanism detail and permission-mode mapping live in [agent support](./docs/reference/agent-support.md), and `rimz coverage` prints the live grid on your own machine with a reason on every cell.
 
 <sub><b>Latest version only.</b> RimZ tracks each agent's most recent release; older CLI versions are not supported.</sub>
 
