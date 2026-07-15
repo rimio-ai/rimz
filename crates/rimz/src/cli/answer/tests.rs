@@ -1,21 +1,5 @@
 use super::*;
-use crate::cli::asks::AskAgentView;
 use rimz::transcript::{AskOption, AskQuestion};
-
-fn view(questions: Vec<AskQuestion>) -> OpenAskView {
-    OpenAskView {
-        ask_id: AskId::parse("ask_0123456789abcdef").unwrap(),
-        agent: AskAgentView {
-            handle: "@planner".to_owned(),
-            kind: rimz::ids::AgentKind::new_unchecked("claude"),
-            channel: None,
-        },
-        kind: AskKind::Question,
-        since: jiff::Timestamp::UNIX_EPOCH,
-        detail: None,
-        questions,
-    }
-}
 
 fn question(multi_select: bool) -> AskQuestion {
     AskQuestion {
@@ -78,13 +62,14 @@ fn selectors_accept_indices_labels_and_multiselect() {
 
 #[test]
 fn structured_answers_require_one_object_per_question() {
-    let view = view(vec![question(false), question(true)]);
+    let questions = vec![question(false), question(true)];
     let error = normalize_json_answers(
         &[JsonAnswer {
             pick: vec![JsonPick::Label("safe".to_owned())],
             text: None,
         }],
-        &view,
+        AskKind::Question,
+        &questions,
     )
     .unwrap_err();
     assert!(error.contains("expected 2 JSON answer objects"));

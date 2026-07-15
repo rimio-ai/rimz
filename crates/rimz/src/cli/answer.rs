@@ -11,11 +11,10 @@ use clap::Args;
 use serde::Deserialize;
 
 use super::{GlobalFlags, current_channel, open_store, resolution_snapshot, resolve_agent_one};
-use crate::cli::asks::{OpenAskView, view_for_agent};
 use rimz::agents::{AnswerPlanErr, AnswerStep, AskKind, AskReply};
 use rimz::ids::AskId;
 use rimz::mux::{paste_into_pane, press_pane_key, type_into_pane};
-use rimz::transcript::{AskAnswer, TranscriptEntry, TranscriptKind};
+use rimz::transcript::{AskAnswer, AskQuestion, TranscriptEntry, TranscriptKind};
 use rimz::workspace::WorkspaceResolver;
 
 const DEFAULT_ANSWER_WAIT: Duration = Duration::from_secs(30);
@@ -64,23 +63,24 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let peers = root_peers(&snapshot);
     let agent = resolve_current_agent(&snapshot, &args.target, channel.as_deref())
         .unwrap_or_else(|message| answer_exit(2, &message));
-    let open = agent.open_ask.as_ref().expect("resolved current ask");
-    let ask_id = open.id.clone();
+    let detail = rimz::agents::read_open_ask(store.paths(), agent)
+        .unwrap_or_else(|err| answer_exit(2, &err.to_string()))
+        .unwrap_or_else(|| answer_exit(2, "agent is not asking anything"));
+    let ask_id = detail.open.id.clone();
     let kind = agent.kind.clone();
     let agent_id = agent.agent_id.clone();
     let handle = rimz::harness::target::agent_handle(agent, &peers, true);
-    let view = view_for_agent(&workspace, agent, &peers)
-        .unwrap_or_else(|err| answer_exit(2, &err.to_string()));
     let adapter = rimz::agents::adapter_by_kind(kind.as_str())
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
     if let Err(AnswerPlanErr::Unsupported(kind)) =
-        adapter.answer_plan(open.kind, &view.questions, &[])
+        adapter.answer_plan(detail.open.kind, &detail.questions, &[])
     {
         answer_exit(3, &format!("{kind} does not support structured answers"));
     }
-    let replies = parse_replies(&args, &view).unwrap_or_else(|message| answer_exit(3, &message));
+    let replies = parse_replies(&args, detail.open.kind, &detail.questions)
+        .unwrap_or_else(|message| answer_exit(3, &message));
     let steps = adapter
-        .answer_plan(open.kind, &view.questions, &replies)
+        .answer_plan(detail.open.kind, &detail.questions, &replies)
         .unwrap_or_else(|err| answer_exit(3, &err.to_string()));
 
     // Re-read immediately before the first keystroke. This is the compare half
@@ -131,7 +131,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
             ),
         );
     }
-    record_answer_if_missing(&store, agent, &view, &replies)?;
+    record_answer_if_missing(&store, agent, &ask_id, &detail.questions, &replies)?;
     let mut out = super::render::out();
     writeln!(out, "answered {ask_id} for {handle}")?;
     Ok(())
@@ -160,7 +160,8 @@ fn resolve_current_agent<'a>(
 
 fn parse_replies(
     args: &AnswerArgs,
-    view: &OpenAskView,
+    kind: AskKind,
+    questions: &[AskQuestion],
 ) -> std::result::Result<Vec<AskReply>, String> {
     if let Some(file) = args.json.as_ref() {
         if !args.selectors.is_empty() || args.text.is_some() {
@@ -179,26 +180,26 @@ fn parse_replies(
         };
         let values: Vec<JsonAnswer> =
             serde_json::from_str(&raw).map_err(|err| format!("invalid answer JSON: {err}"))?;
-        return normalize_json_answers(&values, view);
+        return normalize_json_answers(&values, kind, questions);
     }
 
-    if args.text.is_some() && view.questions.len() != 1 {
+    if args.text.is_some() && questions.len() != 1 {
         return Err("--text is single-question-only; use --json for multiple questions".to_owned());
     }
     if args.text.is_some() && !args.selectors.is_empty() {
         return Err("mixing picks and text requires --json".to_owned());
     }
-    if args.selectors.len() != view.questions.len()
-        && !(view.questions.len() == 1 && args.selectors.is_empty() && args.text.is_some())
+    if args.selectors.len() != questions.len()
+        && !(questions.len() == 1 && args.selectors.is_empty() && args.text.is_some())
     {
         return Err(format!(
             "expected {} positional answer{}, got {}",
-            view.questions.len(),
-            if view.questions.len() == 1 { "" } else { "s" },
+            questions.len(),
+            if questions.len() == 1 { "" } else { "s" },
             args.selectors.len()
         ));
     }
-    view.questions
+    questions
         .iter()
         .enumerate()
         .map(|(index, question)| {
@@ -209,13 +210,13 @@ fn parse_replies(
                     raw.split(',')
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
-                        .map(|value| resolve_answer_selector(view.kind, value, question))
+                        .map(|value| resolve_answer_selector(kind, value, question))
                         .collect::<std::result::Result<Vec<_>, _>>()
                 })
                 .transpose()?
                 .unwrap_or_default();
             validate_reply(
-                view.kind,
+                kind,
                 question,
                 AskReply {
                     picks,
@@ -228,29 +229,30 @@ fn parse_replies(
 
 fn normalize_json_answers(
     values: &[JsonAnswer],
-    view: &OpenAskView,
+    kind: AskKind,
+    questions: &[AskQuestion],
 ) -> std::result::Result<Vec<AskReply>, String> {
-    if values.len() != view.questions.len() {
+    if values.len() != questions.len() {
         return Err(format!(
             "expected {} JSON answer objects, got {}",
-            view.questions.len(),
+            questions.len(),
             values.len()
         ));
     }
     values
         .iter()
-        .zip(&view.questions)
+        .zip(questions)
         .map(|(value, question)| {
             let picks = value
                 .pick
                 .iter()
                 .map(|pick| match pick {
-                    JsonPick::Index(index) => resolve_answer_index(view.kind, *index, question),
-                    JsonPick::Label(label) => resolve_answer_selector(view.kind, label, question),
+                    JsonPick::Index(index) => resolve_answer_index(kind, *index, question),
+                    JsonPick::Label(label) => resolve_answer_selector(kind, label, question),
                 })
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             validate_reply(
-                view.kind,
+                kind,
                 question,
                 AskReply {
                     picks,
@@ -410,14 +412,14 @@ fn wait_for_confirmation(
 fn record_answer_if_missing(
     store: &rimz::Store,
     agent: &rimz::agents::AgentState,
-    view: &OpenAskView,
+    ask_id: &AskId,
+    questions: &[AskQuestion],
     replies: &[AskReply],
 ) -> Result<()> {
-    if transcript_has_answer(store.paths(), &view.ask_id)? {
+    if transcript_has_answer(store.paths(), ask_id)? {
         return Ok(());
     }
-    let answers = view
-        .questions
+    let answers = questions
         .iter()
         .zip(replies)
         .map(|(question, reply)| {
@@ -444,7 +446,7 @@ fn record_answer_if_missing(
         TranscriptKind::Answer,
         rimz::transcript::answers_text(&answers),
     );
-    entry.id = Some(view.ask_id.clone());
+    entry.id = Some(ask_id.clone());
     entry.channel =
         rimz::transcript::entry_channel(agent.channel.as_deref(), agent.worktree_path.as_deref());
     entry.name = agent.name.clone();

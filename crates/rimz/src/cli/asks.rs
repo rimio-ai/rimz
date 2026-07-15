@@ -8,9 +8,8 @@ use serde::Serialize;
 
 use super::{GlobalFlags, current_channel, open_store, resolve_agent_one};
 use crate::cli::render;
-use rimz::agents::{AgentState, AskKind};
+use rimz::agents::{AgentState, AskKind, OpenAskDetail, read_open_ask};
 use rimz::ids::AskId;
-use rimz::transcript::AskQuestion;
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -46,21 +45,17 @@ enum AsksSubcmd {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct AskAgentView {
-    pub handle: String,
-    pub kind: rimz::ids::AgentKind,
+struct AskAgentView {
+    handle: String,
+    kind: rimz::ids::AgentKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel: Option<String>,
+    channel: Option<String>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct OpenAskView {
-    pub ask_id: AskId,
-    pub agent: AskAgentView,
-    pub kind: AskKind,
-    pub since: jiff::Timestamp,
-    pub detail: Option<String>,
-    pub questions: Vec<AskQuestion>,
+struct OpenAskView {
+    agent: AskAgentView,
+    detail: OpenAskDetail,
 }
 
 #[derive(Serialize)]
@@ -91,12 +86,13 @@ struct AskOptionJson<'a> {
 impl<'a> From<&'a OpenAskView> for AskJsonView<'a> {
     fn from(view: &'a OpenAskView) -> Self {
         Self {
-            ask_id: &view.ask_id,
+            ask_id: &view.detail.open.id,
             agent: &view.agent,
-            kind: view.kind,
-            since: view.since,
-            detail: view.detail.as_deref(),
+            kind: view.detail.open.kind,
+            since: view.detail.open.since,
+            detail: view.detail.open.detail.as_deref(),
             questions: view
+                .detail
                 .questions
                 .iter()
                 .map(|question| AskQuestionJson {
@@ -142,9 +138,9 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
                 rimz::harness::target::agent_channel(agent).as_deref() == Some(channel)
             })
         })
-        .map(|agent| view_for_agent(&workspace, agent, &peers))
+        .map(|agent| view_for_agent(store.paths(), agent, &peers))
         .collect::<Result<Vec<_>>>()?;
-    views.sort_by_key(|view| view.since);
+    views.sort_by_key(|view| view.detail.open.since);
 
     if json {
         return print_json(&views.iter().map(AskJsonView::from).collect::<Vec<_>>());
@@ -157,10 +153,10 @@ fn list(all: bool, json: bool, globals: &GlobalFlags) -> Result<()> {
     for view in views {
         let question = first_line(&view).to_owned();
         table.row([
-            render::cell(view.ask_id.as_str()).fg(render::palette::ACCENT),
+            render::cell(view.detail.open.id.as_str()).fg(render::palette::ACCENT),
             render::cell(view.agent.handle.as_str()),
-            render::cell(ask_kind_label(view.kind)),
-            render::cell(render::age_short(view.since, now)),
+            render::cell(view.detail.open.kind.short_label()),
+            render::cell(render::age_short(view.detail.open.since, now)),
             render::cell(question),
         ]);
     }
@@ -193,17 +189,17 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             rimz::harness::target::agent_handle(agent, &peers, true)
         );
     }
-    let view = view_for_agent(&workspace, agent, &peers)?;
+    let view = view_for_agent(store.paths(), agent, &peers)?;
     if json {
         return print_json(&AskJsonView::from(&view));
     }
     let mut out = render::out();
-    writeln!(out, "{}  {}", view.ask_id, view.agent.handle)?;
-    if let Some(detail) = view.detail.as_deref() {
+    writeln!(out, "{}  {}", view.detail.open.id, view.agent.handle)?;
+    if let Some(detail) = view.detail.open.detail.as_deref() {
         writeln!(out, "{detail}")?;
     }
-    for (question_index, question) in view.questions.iter().enumerate() {
-        if view.questions.len() > 1 {
+    for (question_index, question) in view.detail.questions.iter().enumerate() {
+        if view.detail.questions.len() > 1 {
             writeln!(out, "\n{}. {}", question_index + 1, question.question)?;
         } else {
             writeln!(out, "\n{}", question.question)?;
@@ -223,53 +219,21 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn view_for_agent(
-    workspace: &rimz::ResolvedWorkspace,
+fn view_for_agent(
+    paths: &rimz::StatePaths,
     agent: &AgentState,
     peers: &[&AgentState],
 ) -> Result<OpenAskView> {
-    let open = agent
-        .open_ask
-        .as_ref()
-        .filter(|_| agent.is_awaiting_input())
+    let detail = read_open_ask(paths, agent)?
         .ok_or_else(|| anyhow::anyhow!("agent is not asking anything"))?;
-    let adapter = rimz::agents::adapter_by_kind(agent.kind.as_str())?;
-    let paths = rimz::StatePaths::for_workspace(workspace.workspace_id.clone())
-        .context("preparing transcript paths")?;
-    let questions = match open.kind {
-        AskKind::Question | AskKind::PlanApproval => {
-            rimz::transcript::latest_open_ask(&paths, &agent.kind, &agent.agent_id)?
-                .filter(|entry| entry.id.as_ref() == Some(&open.id))
-                .map(|entry| entry.questions)
-                .unwrap_or_else(|| synthetic_questions(adapter, open.kind, open.detail.as_deref()))
-        }
-        AskKind::Permission => synthetic_questions(adapter, open.kind, open.detail.as_deref()),
-    };
     Ok(OpenAskView {
-        ask_id: open.id.clone(),
         agent: AskAgentView {
             handle: rimz::harness::target::agent_handle(agent, peers, true),
             kind: agent.kind.clone(),
             channel: rimz::harness::target::agent_channel(agent),
         },
-        kind: open.kind,
-        since: open.since,
-        detail: open.detail.clone(),
-        questions,
+        detail,
     })
-}
-
-fn synthetic_questions(
-    adapter: &dyn rimz::agents::AgentAdapter,
-    kind: AskKind,
-    detail: Option<&str>,
-) -> Vec<AskQuestion> {
-    vec![AskQuestion {
-        question: detail.unwrap_or_else(|| ask_kind_label(kind)).to_owned(),
-        options: adapter.ask_options(kind).unwrap_or_default(),
-        multi_select: false,
-        has_option_previews: false,
-    }]
 }
 
 fn root_peers(snapshot: &rimz::SidebarSnapshot) -> Vec<&AgentState> {
@@ -280,19 +244,12 @@ fn root_peers(snapshot: &rimz::SidebarSnapshot) -> Vec<&AgentState> {
         .collect()
 }
 
-fn ask_kind_label(kind: AskKind) -> &'static str {
-    match kind {
-        AskKind::Permission => "permission",
-        AskKind::PlanApproval => "plan approval",
-        AskKind::Question => "question",
-    }
-}
-
 fn first_line(view: &OpenAskView) -> &str {
-    view.questions
+    view.detail
+        .questions
         .first()
         .map(|question| question.question.lines().next().unwrap_or_default())
-        .or(view.detail.as_deref())
+        .or(view.detail.open.detail.as_deref())
         .unwrap_or("waiting for input")
 }
 

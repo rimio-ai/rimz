@@ -72,6 +72,16 @@ pub enum AskKind {
     Question,
 }
 
+impl AskKind {
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::Permission => "permission",
+            Self::PlanApproval => "plan approval",
+            Self::Question => "question",
+        }
+    }
+}
+
 /// The agent-agnostic intent each native lifecycle event carries. An adapter's
 /// `observe_lifecycle` maps a native event onto exactly one of these (plus the
 /// enrichment); it no longer decides an [`AgentStatus`].

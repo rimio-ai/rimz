@@ -3,6 +3,9 @@ use serde_json::json;
 #[cfg(unix)]
 use crate::common::path_with_front;
 use crate::common::{CommandTimeoutExt, Env, permission_payload, tmux_pane};
+use rimz::agents::{AgentState, AgentStatus, AskKind, OpenAsk};
+use rimz::ids::AskId;
+use rimz::transcript::{AskOption, AskQuestion, TranscriptEntry, TranscriptKind};
 
 fn question_payload() -> String {
     serde_json::to_string(&json!({
@@ -122,6 +125,58 @@ fn asks_lists_and_shows_structured_question_json() {
 }
 
 #[test]
+fn asks_ignores_newer_transcript_question_with_a_different_id() {
+    let env = Env::new();
+    let hook = env.run_hook("claude", &question_payload());
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    let snapshot = env.store().snapshot_cached().expect("agent snapshot");
+    let agent = &snapshot.agents[0];
+    let open = agent.open_ask.as_ref().expect("current ask");
+
+    let mut foreign = TranscriptEntry::new(
+        jiff::Timestamp::now(),
+        agent.kind.clone(),
+        agent.agent_id.clone(),
+        TranscriptKind::Ask,
+        "Foreign transcript question?".to_owned(),
+    );
+    let foreign_id = AskId::parse("ask_0123456789abcdef").expect("foreign ask id");
+    assert_ne!(foreign_id, open.id);
+    foreign.id = Some(foreign_id);
+    foreign.questions = vec![AskQuestion {
+        question: "Foreign transcript question?".to_owned(),
+        options: vec![AskOption::from("foreign-option".to_owned())],
+        multi_select: false,
+        has_option_previews: false,
+    }];
+    rimz::transcript::append(env.store().paths(), &foreign).expect("append foreign ask");
+
+    let output = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("run asks");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
+    assert_eq!(asks[0]["ask_id"], open.id.as_str());
+    assert_eq!(
+        asks[0]["questions"][0]["question"],
+        open.detail.as_deref().expect("current question detail")
+    );
+    assert_eq!(asks[0]["questions"][0]["options"], json!([]));
+    assert!(!asks.to_string().contains("Foreign transcript question?"));
+    assert!(!asks.to_string().contains("foreign-option"));
+}
+
+#[test]
 fn permission_request_does_not_replace_its_native_question_ask() {
     let env = Env::new();
     let question = env.run_hook("claude", &question_payload());
@@ -164,6 +219,26 @@ fn asks_synthesizes_safe_permission_options() {
         String::from_utf8_lossy(&hook.stderr)
     );
 
+    let snapshot = env.store().snapshot_cached().expect("agent snapshot");
+    let agent = &snapshot.agents[0];
+    let open = agent.open_ask.as_ref().expect("current permission ask");
+    let mut transcript_ask = TranscriptEntry::new(
+        jiff::Timestamp::now(),
+        agent.kind.clone(),
+        agent.agent_id.clone(),
+        TranscriptKind::Ask,
+        "Foreign permission question?".to_owned(),
+    );
+    transcript_ask.id = Some(open.id.clone());
+    transcript_ask.questions = vec![AskQuestion {
+        question: "Foreign permission question?".to_owned(),
+        options: vec![AskOption::from("foreign-option".to_owned())],
+        multi_select: false,
+        has_option_previews: false,
+    }];
+    rimz::transcript::append(env.store().paths(), &transcript_ask)
+        .expect("append permission transcript ask");
+
     let output = env
         .rimz()
         .args(["asks", "--json"])
@@ -176,11 +251,17 @@ fn asks_synthesizes_safe_permission_options() {
     );
     let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
     assert_eq!(asks[0]["kind"], "permission");
+    assert_eq!(
+        asks[0]["questions"][0]["question"],
+        open.detail.as_deref().expect("current permission detail")
+    );
     assert_eq!(asks[0]["questions"][0]["options"][0]["label"], "allow");
     assert_eq!(
         asks[0]["questions"][0]["options"].as_array().unwrap().len(),
         1
     );
+    assert!(!asks.to_string().contains("Foreign permission question?"));
+    assert!(!asks.to_string().contains("foreign-option"));
 }
 
 #[test]
@@ -222,6 +303,84 @@ fn asks_marks_plan_approval_mode_changes() {
             .is_some_and(|text| text.contains("auto-accept"))
     );
     assert_eq!(options.len(), 1);
+}
+
+#[test]
+fn asks_synthesizes_safe_plan_approval_without_transcript() {
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "sess-plan-missing-transcript",
+        "tool_name": "ExitPlanMode",
+        "tool_input": { "plan": "1. Make the change\n2. Verify it" }
+    }))
+    .expect("payload");
+    let hook = env.run_hook("claude", &payload);
+    assert!(
+        hook.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    let snapshot = env.store().snapshot_cached().expect("agent snapshot");
+    let open = snapshot.agents[0]
+        .open_ask
+        .as_ref()
+        .expect("current plan ask");
+    let transcript_dir = env.store().paths().transcript_dir.clone();
+    std::fs::remove_dir_all(transcript_dir).expect("remove transcript bucket");
+
+    let output = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("run asks");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
+    assert_eq!(
+        asks[0]["questions"][0]["question"],
+        open.detail.as_deref().expect("current plan detail")
+    );
+    let options = asks[0]["questions"][0]["options"]
+        .as_array()
+        .expect("options");
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0]["label"], "approve");
+    assert_eq!(
+        options[0]["caution"],
+        "enables auto-accept for subsequent edits"
+    );
+}
+
+#[test]
+fn read_open_ask_rejects_ineligible_state_before_external_reads() {
+    let env = Env::new();
+    let store = env.store();
+    assert!(!store.paths().transcript_dir.exists());
+
+    let mut not_waiting = AgentState::stub("unknown", "sess-not-waiting", AgentStatus::Idle);
+    not_waiting.open_ask = Some(OpenAsk {
+        id: AskId::parse("ask_0123456789abcdef").expect("ask id"),
+        kind: AskKind::Question,
+        detail: Some("Ignored question".to_owned()),
+        since: jiff::Timestamp::now(),
+    });
+    assert_eq!(
+        rimz::agents::read_open_ask(store.paths(), &not_waiting).expect("eligible read"),
+        None
+    );
+
+    let mut missing_open = AgentState::stub("unknown", "sess-no-open", AgentStatus::Waiting);
+    missing_open.waiting_since = Some(missing_open.last_activity);
+    assert!(missing_open.is_awaiting_input());
+    assert_eq!(
+        rimz::agents::read_open_ask(store.paths(), &missing_open).expect("eligible read"),
+        None
+    );
+    assert!(!store.paths().transcript_dir.exists());
 }
 
 #[test]

@@ -39,6 +39,7 @@ mod managed_source;
 pub(crate) mod managed_statusline;
 pub mod model_display;
 mod observation;
+mod open_ask;
 pub mod opencode;
 pub(crate) mod payload;
 pub mod pi;
@@ -94,6 +95,7 @@ pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use managed_source::ManagedSource;
 pub use observation::{AgentLifecycleObservation, LaunchParams, SessionOrigin};
+pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub(crate) use payload::{
     CONTROL_TAG_PREFIXES, classify_agent_hook, non_empty_trimmed, optional_payload_string,
     sanitize_user_prompt, stop_payload_errored,
