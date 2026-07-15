@@ -25,10 +25,9 @@
   <a href="#configuration">Configuration</a> ·
   <a href="#agent-compatibility-matrix">Agents</a> ·
   <a href="#documentation">Docs</a>
-  <!-- · website · Discord · llms.txt - join here when live -->
 </p>
 
-<p align="center"><sub><b>AI agents / LLMs:</b> read <a href="AGENTS.md"><code>/AGENTS.md</code></a>.<!-- llms.txt and the hosted docs index land here --></sub></p>
+<p align="center"><sub><b>AI agents / LLMs:</b> read <a href="AGENTS.md"><code>/AGENTS.md</code></a>.</sub></p>
 
 ---
 
@@ -225,7 +224,7 @@ cargo install --locked rimz
 `homebrew`:
 
 ```sh
-brew tap rimio/homebrew-rimz
+brew tap rimio-ai/homebrew-rimz
 brew install rimz
 ```
 

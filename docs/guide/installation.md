@@ -16,7 +16,7 @@ The multiplexer needs no configuration for RimZ: every room sets its own options
 ## Install with Homebrew (macOS)
 
 ```sh
-brew tap rimio/homebrew-rimz
+brew tap rimio-ai/homebrew-rimz
 brew install rimz
 ```
 
