@@ -430,7 +430,7 @@ pub(crate) struct ProviderTabHit {
 /// the header then drops the name the rail carries and sits beside the emblem's
 /// first row. A metered account drains one "mana" bar per included budget window and
 /// may swap in an `ex` paid-usage row when an included cap is spent; an
-/// unmetered API-key account shows one `api` spend row. The bars share one start
+/// unmetered API-key account shows one `api` budget row. The bars share one start
 /// and one end column across every block, so the dashboard reads as one aligned
 /// grid.
 #[allow(clippy::too_many_arguments)]
@@ -1116,7 +1116,8 @@ fn provider_token_detail(
 /// The provider's budget bars within `region`: a metered account drains one
 /// "mana" bar per reported window (`5h`, `7d`, `30d`, …, ordered short→long);
 /// a metered account whose windows have not arrived yet shows one anonymous
-/// unknown-track row; an unmetered account shows the single `api` spend row.
+/// unknown-track row; an unmetered account shows one `api` budget row, full with
+/// `∞` when uncapped.
 /// Each reset reads a two-unit countdown scaled to its magnitude. Each row
 /// aligns front and back within `region`, so they line up across providers too.
 fn provider_bar_rows(
@@ -1127,9 +1128,8 @@ fn provider_bar_rows(
     now: Timestamp,
 ) -> Vec<Vec<Span<'static>>> {
     if !panel.metered {
-        return vec![extra_credits_bar_row(
+        return vec![api_credits_bar_row(
             theme,
-            "api",
             panel.extra_credits.as_ref(),
             region,
             zones,
@@ -1408,6 +1408,47 @@ fn extra_credits_bar_row(
     bar_row(label, label_style, bar, extra_value_spans(theme, credits))
 }
 
+fn api_credits_bar_row(
+    theme: &Theme,
+    credits: Option<&ExtraCredits>,
+    region: usize,
+    zones: &BudgetBarConfig,
+) -> Vec<Span<'static>> {
+    let bar_width = provider_bar_width(region);
+    if let Some(remaining) = credits.and_then(ExtraCredits::remaining_percentage) {
+        let value = credits
+            .and_then(ExtraCredits::remaining_usd_left)
+            .map(dollars_compact)
+            .map_or_else(blank_value_spans, |value| money_value_spans(theme, &value));
+        return bar_row(
+            "api",
+            mana_style(theme, remaining, zones),
+            mana_bar_spans(theme, remaining, bar_width, zones),
+            value,
+        );
+    }
+    if credits
+        .is_some_and(|credits| credits.limit_usd().is_some() || credits.remaining_usd().is_some())
+    {
+        let value = credits
+            .and_then(ExtraCredits::remaining_usd)
+            .map(dollars_compact)
+            .map_or_else(blank_value_spans, |value| money_value_spans(theme, &value));
+        return bar_row(
+            "api",
+            theme.muted(),
+            unknown_mana_bar_spans(theme, bar_width),
+            value,
+        );
+    }
+    bar_row(
+        "api",
+        mana_style(theme, 100, zones),
+        mana_bar_spans(theme, 100, bar_width, zones),
+        unlimited_value_spans(theme),
+    )
+}
+
 fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<'static>> {
     let value = match credits {
         Some(ExtraCredits::Disabled) => "off".to_owned(),
@@ -1423,8 +1464,12 @@ fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<
             ),
         ];
     }
+    money_value_spans(theme, &value)
+}
+
+fn money_value_spans(theme: &Theme, value: &str) -> Vec<Span<'static>> {
     let value_width = PROVIDER_VALUE_WIDTH.saturating_sub(1);
-    let clipped = clip(&value, value_width);
+    let clipped = clip(value, value_width);
     let pad = value_width.saturating_sub(text_width(&clipped));
     vec![
         Span::raw(" ".repeat(pad)),

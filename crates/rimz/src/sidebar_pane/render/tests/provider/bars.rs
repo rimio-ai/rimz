@@ -495,7 +495,7 @@ fn named_quotas_remain_independent_and_bypass_temporal_substitution() {
 }
 
 #[test]
-fn api_key_provider_uses_month_spend_bar_with_optional_ceiling() {
+fn api_key_provider_shows_budget_left_or_unlimited_full_bar() {
     let theme = Theme::fixed(false);
     let mut panel = provider_panel("codex", "Codex", 33, false, false, None);
     panel.extra_credits = Some(crate::agents::ExtraCredits::known(
@@ -511,7 +511,9 @@ fn api_key_provider_uses_month_spend_bar_with_optional_ceiling() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
     assert!(text.trim_start().starts_with("api"), "{text:?}");
-    assert!(text.contains("$12/$25"), "{text:?}");
+    assert!(text.contains("$13"), "{text:?}");
+    assert!(!text.contains("$12"), "{text:?}");
+    assert!(!text.contains('/'), "{text:?}");
     assert!(
         text.contains('▰'),
         "known spend against a ceiling gets a filled remaining bar: {text:?}"
@@ -523,12 +525,11 @@ fn api_key_provider_uses_month_spend_bar_with_optional_ceiling() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(text.contains("$12"), "{text:?}");
-    assert!(!text.contains('/'), "{text:?}");
-    assert!(!text.contains('∞'), "{text:?}");
+    assert!(text.contains('∞'), "{text:?}");
+    assert!(!text.contains('$'), "{text:?}");
     assert!(
-        !text.contains('▰'),
-        "uncapped API spend shows dollars without claiming a fill: {text:?}"
+        text.contains('▰') && !text.contains('▱'),
+        "uncapped API usage paints a full unlimited bar: {text:?}"
     );
 }
 

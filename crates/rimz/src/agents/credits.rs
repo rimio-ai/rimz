@@ -336,6 +336,22 @@ impl ExtraCredits {
         }
     }
 
+    /// Remaining dollars, direct or derived from `limit - used`, when known.
+    pub fn remaining_usd_left(&self) -> Option<f64> {
+        match self {
+            Self::Disabled => Some(0.0),
+            Self::Known {
+                used_usd,
+                remaining_usd,
+                limit_usd,
+            } => remaining_usd.or_else(|| {
+                limit_usd
+                    .zip(*used_usd)
+                    .map(|(limit, used)| (limit - used).max(0.0))
+            }),
+        }
+    }
+
     pub fn used_usd(&self) -> Option<f64> {
         match self {
             Self::Known { used_usd, .. } => *used_usd,
@@ -609,5 +625,26 @@ mod tests {
             ExtraCredits::known(Some(12.0), None, None).remaining_percentage(),
             None
         );
+    }
+
+    #[test]
+    fn extra_credits_remaining_usd_left_prefers_direct_or_derives_from_limit() {
+        assert_eq!(
+            ExtraCredits::known(Some(12.0), Some(7.5), Some(50.0)).remaining_usd_left(),
+            Some(7.5)
+        );
+        assert_eq!(
+            ExtraCredits::known(Some(12.0), None, Some(50.0)).remaining_usd_left(),
+            Some(38.0)
+        );
+        assert_eq!(
+            ExtraCredits::known(Some(75.0), None, Some(50.0)).remaining_usd_left(),
+            Some(0.0)
+        );
+        assert_eq!(
+            ExtraCredits::known(None, None, None).remaining_usd_left(),
+            None
+        );
+        assert_eq!(ExtraCredits::Disabled.remaining_usd_left(), Some(0.0));
     }
 }

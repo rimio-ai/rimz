@@ -103,7 +103,7 @@ How the wash, the crest, and the lead-row motion are produced — `shimmer` vs. 
 | `✓ main`          | merged worktree — its work is landed and nothing remains to offer; remove it; a known PR verdict (`⊙`/`✕`/`✓`) overrides this local verdict |
 | `⟳ main` / `✓ main` / `✕ main` / `⊙ main` / `≡ main` / `⑂ main` | trunk marker ladder: local rebase/merge/cherry-pick in progress, then PR merged, PR closed, PR open, then local merged, pristine, or plain branch |
 | `$1.27` / `$0.42` | spend — dollar green, two decimals, identical for provider totals and locally priced counters; omitted while a session's cost rounds to zero |
-| `▰▱` / `▱▱` / `ex` / `api` | provider account bar: included-window budget (`5h`/`7d`/`30d`, or a provider- or plugin-defined label such as `bld`/`dep`, fill = left), unknown budget as a dim empty track, paid extra usage as `ex`, API-key spend as `api`; `∞` marks unknown or unreported allowance, an explicitly unlimited named quota, or a currently lifted limit |
+| `▰▱` / `▱▱` / `ex` / `api` | provider account bar: included-window budget (`5h`/`7d`/`30d`, or a provider- or plugin-defined label such as `bld`/`dep`, fill = left), unknown budget as a dim empty track, paid extra usage as `ex`, API-key budget as `api` (fill = budget left, with `$left` beside it); an unbudgeted API key is a full bar with `∞`, which also marks an explicitly unlimited named quota or a currently lifted limit |
 | `↻ 2h06m`         | when a provider budget resets; a known-duration window is soft at a sustainable burn pace, heating toward red as spend outruns the window or cooling toward green when spend runs well under it once enough of the window has elapsed; a durationless named quota keeps the reported countdown in the quiet tone because pace is unknowable — the duration form of `↻`, next to a budget bar (the count forms are compactions on a card and reset credits in the Codex header) |
 | `↻ N`             | the count form of `↻`: on a card context line, completed compactions; in the Codex provider header, available rate-limit reset credits, with the glyph colored by soonest expiry |
 
@@ -388,13 +388,13 @@ Provider blocks stacked (`theme.display.provider_tabs = "never"`). Claude and Co
 
   Pi v0.80.6 · OpenAI API
   █▜███▛█  ◎ 19  ◇  8M ↘  7M ↗ 1M ◌ 142M      $420.42
- ▝▜▛▀▀▀▜▛▘ api ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ $420.42
+ ▝▜▛▀▀▀▜▛▘ api ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ ∞
   ▝▘   ▝▘
 ```
 
-An **unmetered** account (an API key) shows an `api` bar: trailing-month transcript spend as `$used`, or `$used/$limit` when a display ceiling is configured. A wholly unknown spend reads `∞`. The dashboard isn't pinned to fixed windows — each is labeled by its reported length, and paid usage earns a separate `ex` row only when it matters to the account's usable budget.
+An **unmetered** account (an API key) shows an `api` budget bar. A configured display ceiling drains against trailing-month transcript spend and places the remaining dollars at the right; spend stays in the stats row above. With no configured budget, the bar is full and reads `∞`. The dashboard isn't pinned to fixed windows — each is labeled by its reported length, and paid usage earns a separate `ex` row only when it matters to the account's usable budget.
 
-A **Pi block** names its version and the backing account it runs on — `Pi v0.80.6 · Anthropic OAuth`. Pi keeps its budget readings under the `pi` provider: live sessions publish response-header windows, idle OAuth accounts refresh out-of-band, and an API key gets the `api` paid-usage row instead ([provider.md → Per-provider mapping](../internals/agents/providers.md#per-provider-mapping)).
+A **Pi block** names its version and the backing account it runs on — `Pi v0.80.6 · Anthropic OAuth`. Pi keeps its budget readings under the `pi` provider: live sessions publish response-header windows, idle OAuth accounts refresh out-of-band, and an API key gets the `api` budget row instead ([provider.md → Per-provider mapping](../internals/agents/providers.md#per-provider-mapping)).
 
 Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — green when its managed server is up (or pane sessions auto-enable), red when a configured server is down. The host stays infrastructure, never its own row. Codex can also pin `↻ N` in that header cluster when reset credits are available; the count stays neutral, and the glyph moves red → amber → yellow → green as the nearest credit gets farther from expiry, resting grey at a week or more. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem resolves from the embedded catalog with a shared fallback, while emblem, color, and name remain configurable through `[theme.providers.<kind>]` (see [theme.md](../guide/theme.md#provider-styling)).
 

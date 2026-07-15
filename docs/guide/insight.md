@@ -65,7 +65,7 @@ These totals are account-global, like `rimz stats`: they count every project on 
 
 #### Budget is not spend
 
-The `5h` and `7d` bars measure a different thing from the dollar figures. They are the included budget of your subscription plan, draining toward the reset printed beside them (`↻ 1h47m`), and they fill with what is left. A plan like Claude Max or ChatGPT Pro refills on its duration windows automatically, so those bars are your read on pace, not a bill. An API-key account has no such window, so its block shows a single `api` row of trailing-month spend instead.
+The `5h` and `7d` bars measure a different thing from the dollar figures. They are the included budget of your subscription plan, draining toward the reset printed beside them (`↻ 1h47m`), and they fill with what is left. A plan like Claude Max or ChatGPT Pro refills on its duration windows automatically, so those bars are your read on pace, not a bill. An API-key account has no such window, so its block shows a single `api` budget row instead; an uncapped key is a full bar with `∞`.
 
 When a window empties mid-turn the agent parks rather than fails, and with auto-continue it resumes itself the moment the window resets ([loops, built-in recovery](./loops.md#built-in-recovery)). The exact bar tones, the reset colouring, and the not-yet-started window are drawn in the [interface reference](../interface/sidebar.md#zone-3--the-provider-dashboard); where the readings come from is [providers internals](../internals/agents/providers.md).
 
@@ -115,7 +115,7 @@ A few knobs, all plain TOML ([configuration](./configuration.md)):
 
 - `[sidebar] spend_window` picks the cockpit window (`session`, `24h`, `today`), and `timezone` sets the `today` cutoff and the displayed times.
 - `[theme.display] max_provider_blocks` and `provider_list` choose how many provider blocks the dashboard shows and in what order. A token-only provider ranks by spend like any other.
-- `[accounts.usage_limit_usd]` sets a display ceiling per API-key provider, changing its `api` row from `$used` to `$used/$limit`. It tunes the bar only; the provider still enforces the real limit.
+- `[accounts.usage_limit_usd]` sets a display ceiling per API-key provider, changing its full `∞` row into a month-budget bar that drains against trailing-month spend and shows `$left`. It tunes the bar only; the provider still enforces the real limit.
 
 ## See also
 

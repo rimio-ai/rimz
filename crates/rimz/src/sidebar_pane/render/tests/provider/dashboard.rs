@@ -170,7 +170,7 @@ fn ledgerless_provider_renders_only_its_live_session_count() {
 /// derived: a manual pick (`←`/`→` or a click on the label) swaps the chip onto
 /// `Codex` — fill alone, no glyph moves in the rail — and with no manual pick
 /// the focus follows the selected pane's provider. Either way the unmetered
-/// block (the `∞` icon at the front, an empty `▱` track, no countdown) paints
+/// block (the `∞` icon at the front, a full `▰` bar, no countdown) paints
 /// where Claude's was and the Claude block stays off screen.
 #[test]
 fn render_provider_dashboard_codex_tab_paints_however_derived() {
@@ -198,7 +198,8 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
 
     assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
     assert!(rendered.contains('∞'), "infinity at the front:\n{rendered}");
-    assert!(rendered.contains('▱'), "the empty ∞ track:\n{rendered}");
+    assert!(rendered.contains('▰'), "the full ∞ bar:\n{rendered}");
+    assert!(!rendered.contains('▱'), "no empty track:\n{rendered}");
     assert!(
         !rendered.contains("Claude Max"),
         "the unpicked block stays off screen:\n{rendered}"
