@@ -58,9 +58,9 @@ fn reconcile_defers_the_add_on_a_detached_session() {
     );
 }
 /// A claimed live sidebar sitting off the layout's dock — the residue of the
-/// pre-discovery mis-mount (right side, ~50%) — is converged in place by
-/// reconcile: moved to the left column and resized toward the fixed birth width,
-/// with the renderer's pane (and so the renderer) untouched.
+/// pre-discovery mis-mount at the far right — is converged in place by
+/// reconcile across every work column and resized toward the fixed birth
+/// width, with every existing process and the renderer pane untouched.
 #[test]
 fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     require_zellij!();
@@ -73,23 +73,31 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     };
     let cwd = TempDir::new().expect("cwd tempdir");
 
-    // A background session with a deterministic right-side sidebar, matching the
-    // shape a raced live add used to leave behind.
+    // A background session with a deterministic far-right sidebar, matching
+    // the shape a raced live add used to leave behind in a wide work tab.
     let (_stub_dir, stub) = sidebar_command_stub();
     let layout = write_kdl_layout(
         cwd.path(),
         &stub,
         "right-sidebar.kdl",
         |cwd_kdl, stub_kdl| {
-            format!(
-                r#"layout {{
-    pane split_direction="vertical" {{
-        pane cwd={cwd_kdl} {{
+            let work = (1..=6)
+                .map(|index| {
+                    format!(
+                        r#"        pane name="redock-work-{index}" cwd={cwd_kdl} {{
             command "sleep"
             args "600"
             start_suspended false
             close_on_exit true
         }}
+"#,
+                    )
+                })
+                .collect::<String>();
+            format!(
+                r#"layout {{
+    pane split_direction="vertical" {{
+{work}
         pane name="rimz-sidebar" cwd={cwd_kdl} {{
             command {stub_kdl}
             start_suspended false
@@ -102,11 +110,11 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         },
     );
     birth_kdl_session(xdg_dir.path(), &name, cwd.path(), &layout, "right-sidebar");
-    let initial = wait_for_pane_count(xdg_dir.path(), &name, 2);
+    let initial = wait_for_pane_count(xdg_dir.path(), &name, 7);
     assert_eq!(
         initial.len(),
-        2,
-        "layout should birth a sidebar and one work pane: {initial:?}",
+        7,
+        "layout should birth a sidebar and six work panes: {initial:?}",
     );
 
     // A wide client: the 50% mis-mount must exceed the `max_cols` cap (72) to
@@ -116,9 +124,28 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     wait_for_attached_client(&xdg, &name);
     let before = raw_sidebar_pane(&xdg, &name);
     let sidebar_id = before.id;
+    let before_work = work_pane_geometry(&xdg, &name);
+    let before_work_ids: BTreeSet<u64> = before_work.iter().map(|pane| pane.id).collect();
+    assert_eq!(
+        before_work.len(),
+        6,
+        "wide fixture work panes: {before_work:?}"
+    );
     assert!(
         before.pane_x > 0,
         "the recreated mis-mount starts off the left column: {before:?}",
+    );
+    let focused_work_id = before_work
+        .iter()
+        .max_by_key(|pane| pane.x)
+        .map(|pane| pane.id)
+        .expect("rightmost work pane");
+    focus_nonplugin_pane_until(
+        &xdg,
+        &name,
+        before.tab_id,
+        focused_work_id,
+        "rightmost work pane before redock",
     );
 
     let project_root = std::env::temp_dir();
@@ -139,6 +166,7 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
     assert_eq!(report.closed, 0, "the renderer's pane is never closed");
     assert_eq!(report.recovered, 0, "nothing needed adding");
     assert_eq!(report.failed, 0);
+    assert_eq!(report.misdocked, 0);
     assert_sidebar_is_left_docked(&xdg, &name);
     wait_for_sidebar_width_at_most(&xdg, &name, u64::from(opts.birth_size.cols.get()));
     assert_sidebar_identity(
@@ -146,6 +174,19 @@ fn reconcile_redocks_an_off_spec_claimed_sidebar() {
         &name,
         sidebar_id,
         "the same pane survived the move — the renderer was never replaced",
+    );
+    let after_work_ids: BTreeSet<u64> = work_pane_geometry(&xdg, &name)
+        .into_iter()
+        .map(|pane| pane.id)
+        .collect();
+    assert_eq!(
+        after_work_ids, before_work_ids,
+        "redock preserves every work pane",
+    );
+    assert_eq!(
+        wait_for_focused_nonplugin_id_in_tab(&xdg, &name, before.tab_id, focused_work_id),
+        Some(focused_work_id),
+        "redock restores the original focused work pane",
     );
 }
 /// A claimed sidebar can sit at `x=0` while still not being a full-height left
@@ -381,6 +422,112 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
          sidebar={after_sidebar:?}, work={after_work:?}",
     );
     assert_sidebar_identity(&xdg, &name, sidebar_id, "the renderer pane is not rebuilt");
+}
+/// A missing sidebar is split beside the leftmost work pane by raw pane id,
+/// independent of the attached client's focus. Reconcile keeps every wide-tab
+/// work pane alive and restores the user's original focus after docking.
+#[test]
+fn reconcile_add_targets_leftmost_work_pane_in_wide_tab() {
+    require_zellij!();
+
+    let xdg_dir = scoped_runtime_dir();
+    let name = unique_session_name("wideadd");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg_dir.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let layout = write_kdl_layout(cwd.path(), &stub, "wide-add.kdl", |cwd_kdl, _| {
+        let work = (1..=6)
+            .map(|index| {
+                format!(
+                    r#"        pane name="wide-add-work-{index}" cwd={cwd_kdl} {{
+            command "sleep"
+            args "600"
+            start_suspended false
+            close_on_exit true
+        }}
+"#,
+                )
+            })
+            .collect::<String>();
+        format!(
+            r#"layout {{
+    pane split_direction="vertical" {{
+{work}
+    }}
+}}
+"#,
+        )
+    });
+    birth_kdl_session(xdg_dir.path(), &name, cwd.path(), &layout, "wide add");
+    let initial = wait_for_pane_count(xdg_dir.path(), &name, 6);
+    assert_eq!(initial.len(), 6, "fixture should birth six work panes");
+
+    let _client = AttachedClient::attach(xdg_dir.path(), &name, 360, 60);
+    let xdg = xdg_dir.path().to_path_buf();
+    wait_for_attached_client(&xdg, &name);
+    let before = work_pane_geometry(&xdg, &name);
+    let before_ids: BTreeSet<u64> = before.iter().map(|pane| pane.id).collect();
+    let leftmost_x = before
+        .iter()
+        .map(|pane| pane.x)
+        .min()
+        .expect("leftmost work pane");
+    let focused_work_id = before
+        .iter()
+        .max_by_key(|pane| pane.x)
+        .map(|pane| pane.id)
+        .expect("rightmost work pane");
+    assert!(
+        before
+            .iter()
+            .find(|pane| pane.id == focused_work_id)
+            .is_some_and(|pane| pane.x > leftmost_x),
+        "fixture focus must be away from the left edge: {before:?}",
+    );
+    let tab_id = expect_list_panes(&xdg, &name)
+        .panes
+        .iter()
+        .find(|pane| pane.id == focused_work_id)
+        .map(|pane| pane.tab_id)
+        .expect("work pane tab");
+    focus_nonplugin_pane_until(
+        &xdg,
+        &name,
+        tab_id,
+        focused_work_id,
+        "rightmost work pane before sidebar add",
+    );
+
+    let opts = reconcile_opts(
+        &name,
+        "/tmp/rimz-wideadd",
+        cwd.path(),
+        cwd.path(),
+        stub,
+        360,
+    );
+    write_topology_cache_from_list_panes(&xdg, &opts.workspace_id, &name);
+    let _mirror = topology_cache_mirror(&xdg, &opts.workspace_id, &name);
+    let report = reconcile_until_converged(&xdg, &opts, &SidebarLiveness::default());
+
+    assert_eq!(report.recovered, 1, "the missing sidebar is added once");
+    assert_eq!(report.closed, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.misdocked, 0);
+    assert_sidebar_is_left_docked(&xdg, &name);
+    let after_ids: BTreeSet<u64> = work_pane_geometry(&xdg, &name)
+        .into_iter()
+        .map(|pane| pane.id)
+        .collect();
+    assert_eq!(after_ids, before_ids, "every work pane survives the add");
+    assert_eq!(
+        wait_for_focused_nonplugin_id_in_tab(&xdg, &name, tab_id, focused_work_id),
+        Some(focused_work_id),
+        "the original focused work pane is restored",
+    );
 }
 /// Adding a sidebar to a tab whose work panes are already row-stacked used to
 /// birth the sidebar into only one row. The verified add path now repairs that

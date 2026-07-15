@@ -835,6 +835,232 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn redock_uses_authoritative_geometry_beyond_four_adjacent_swaps() {
+    use std::collections::HashSet;
+
+    use super::raw_pane::{SidebarDock, sidebar_dock_verdict};
+    use crate::config::MultiplexerConfig;
+    use crate::ids::WorkspaceId;
+    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+    use crate::mux::{SidebarPaneOptions, SidebarWidth};
+    use crate::sidebar::cache::write_pane_topology_cache;
+    use crate::store::paths::RuntimePaths;
+
+    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
+    let project_root = tempfile::TempDir::new().expect("project tempdir");
+    let workspace_id = WorkspaceId::from_project_root(project_root.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let mut stale_panes: Vec<PaneTopologyPane> = (1..=7)
+        .map(|id| PaneTopologyPane {
+            id,
+            is_plugin: false,
+            is_held: false,
+            exited: false,
+            is_suppressed: false,
+            is_floating: false,
+            is_focused: id == 1,
+            tab_position: 1,
+            tab_name: Some("work".to_owned()),
+            pane_columns: Some(140),
+            pane_x: Some((id - 1) * 140),
+            title: Some("zsh".to_owned()),
+            pane_command: Some("zsh".to_owned()),
+            pane_cwd: None,
+            terminal_command: Some("zsh".to_owned()),
+        })
+        .collect();
+    stale_panes.push(PaneTopologyPane {
+        id: 8,
+        is_plugin: false,
+        is_held: false,
+        exited: false,
+        is_suppressed: false,
+        is_floating: false,
+        is_focused: false,
+        tab_position: 1,
+        tab_name: Some("work".to_owned()),
+        pane_columns: Some(140),
+        pane_x: Some(980),
+        title: Some("rimz-sidebar".to_owned()),
+        pane_command: Some("rimz-sidebar".to_owned()),
+        pane_cwd: None,
+        terminal_command: Some("rimz".to_owned()),
+    });
+    write_pane_topology_cache(
+        &runtime,
+        &PaneTopologyCache {
+            session_name: "rimz-test".to_owned(),
+            produced_at_ms: 9_999_999_999_999,
+            writer: None,
+            focused_pane: Some(1),
+            clients: None,
+            panes: stale_panes,
+        },
+    )
+    .expect("write future-stamped stale topology");
+
+    let script = r#"#!/bin/sh
+dir=$(dirname "$0")
+log="$dir/zellij.log"
+moves="$dir/move-count"
+resized="$dir/resized"
+printf '%s\n' "$*" >> "$log"
+
+case " $* " in
+  *" action list-panes --all --json "*)
+    count=$(cat "$moves" 2>/dev/null || printf '0')
+    if [ "$count" -gt 7 ]; then count=7; fi
+    sidebar_slot=$((7 - count))
+    sidebar_x=$((sidebar_slot * 140))
+    sidebar_cols=140
+    if [ -f "$resized" ]; then sidebar_cols=72; fi
+    printf '['
+    i=0
+    while [ "$i" -lt 7 ]; do
+      if [ "$i" -ge "$sidebar_slot" ]; then slot=$((i + 1)); else slot=$i; fi
+      if [ "$i" -gt 0 ]; then printf ','; fi
+      printf '{"id":%s,"is_plugin":false,"is_focused":%s,"tab_position":1,"tab_name":"work","pane_columns":140,"pane_x":%s,"title":"zsh","terminal_command":"zsh"}' \
+        "$((i + 1))" "$(if [ "$i" -eq 0 ]; then printf true; else printf false; fi)" "$((slot * 140))"
+      i=$((i + 1))
+    done
+    printf ',{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"work","pane_columns":%s,"pane_x":%s,"title":"rimz-sidebar","terminal_command":"rimz"}]\n' "$sidebar_cols" "$sidebar_x"
+    exit 0
+    ;;
+  *" action move-pane left --pane-id terminal_8 "*)
+    count=$(cat "$moves" 2>/dev/null || printf '0')
+    printf '%s\n' "$((count + 1))" > "$moves"
+    exit 0
+    ;;
+  *" action resize decrease right --pane-id terminal_8 "*)
+    : > "$resized"
+    exit 0
+    ;;
+esac
+
+exit 1
+"#;
+    let (temp, shim) = zellij_shim(script);
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
+    let width = SidebarWidth::default();
+    let opts = SidebarPaneOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id: workspace_id.clone(),
+        project_root: project_root.path().to_path_buf(),
+        extra_env: Default::default(),
+        cwd: project_root.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(1120)),
+        width_override: None,
+        rimz_bin: std::path::PathBuf::from("rimz"),
+        replace_existing: false,
+        pristine_birth: false,
+        config: MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    backend.converge_sidebar_geometry(&opts, 1, 8);
+
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    let lines: Vec<&str> = log.lines().collect();
+    let move_positions: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| line.contains("action move-pane left").then_some(index))
+        .collect();
+    let resize_position = lines
+        .iter()
+        .position(|line| line.contains("action resize decrease right"))
+        .expect("verified dock should start width convergence");
+    assert_eq!(
+        move_positions.len(),
+        7,
+        "the pane-count budget must permit every adjacent swap:\n{log}",
+    );
+    assert!(
+        resize_position > *move_positions.last().expect("redock actions"),
+        "width convergence must follow the final structural move:\n{log}",
+    );
+    let listing = backend
+        .structural_geometry_listing("rimz-test", &workspace_id, None)
+        .expect("final authoritative geometry");
+    let sidebar = listing
+        .panes
+        .iter()
+        .find(|pane| pane.is_terminal() && pane.id == 8)
+        .expect("sidebar");
+    assert_eq!(sidebar.pane_x, Some(0));
+    assert_eq!(
+        sidebar_dock_verdict(sidebar, &listing.panes, &HashSet::new()),
+        Some(SidebarDock::Docked),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn redock_stops_after_authoritative_no_progress_without_resize() {
+    use crate::config::MultiplexerConfig;
+    use crate::ids::WorkspaceId;
+    use crate::mux::{SidebarPaneOptions, SidebarWidth};
+
+    let script = r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-panes --all --json "*)
+    printf '[{"id":1,"is_plugin":false,"is_focused":true,"tab_position":1,"pane_columns":90,"pane_x":0,"title":"zsh","terminal_command":"zsh"},{"id":2,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":90,"title":"zsh","terminal_command":"zsh"},{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":180,"title":"rimz-sidebar","terminal_command":"rimz"}]\n'
+    exit 0
+    ;;
+  *" action move-pane left --pane-id terminal_8 "*)
+    exit 0
+    ;;
+esac
+exit 1
+"#;
+    let (temp, shim) = zellij_shim(script);
+    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
+    let project_root = tempfile::TempDir::new().expect("project tempdir");
+    let workspace_id = WorkspaceId::from_project_root(project_root.path());
+    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
+        .with_presence_plugin_for_test(&shim);
+    let width = SidebarWidth::default();
+    let opts = SidebarPaneOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id,
+        project_root: project_root.path().to_path_buf(),
+        extra_env: Default::default(),
+        cwd: project_root.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(270)),
+        width_override: None,
+        rimz_bin: std::path::PathBuf::from("rimz"),
+        replace_existing: false,
+        pristine_birth: false,
+        config: MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    backend.converge_sidebar_geometry(&opts, 1, 8);
+
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.contains("action move-pane left"))
+            .count(),
+        1,
+        "unchanged authoritative x must stop the loop:\n{log}",
+    );
+    assert!(
+        !log.contains("action resize"),
+        "a displaced sidebar must not enter width convergence:\n{log}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn width_nudge_steps_only_the_named_pane_without_a_listing() {
     use crate::ids::PaneId;
     use crate::mux::MuxBackend;
@@ -911,7 +1137,7 @@ fn add_sidebar_timeout_never_closes_stdout_only_hint() {
 dir=$(dirname "$0")
 log="$dir/zellij.log"
 state="$dir/new-pane-count"
-printf '%s\n' "$*" >> "$log"
+printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$log"
 cache="{cache}"
 
 if [ "$1" = "--version" ]; then
@@ -973,7 +1199,7 @@ esac
         .with_presence_plugin_for_test(&shim);
     assert_eq!(
         backend
-            .new_sidebar_pane(&opts, 1)
+            .new_sidebar_pane(&opts, 7)
             .expect("spawn sidebar")
             .as_deref(),
         Some("terminal_7"),
@@ -984,18 +1210,18 @@ esac
         "stdout-only hint for a pre-existing work pane must not be closed:\n{log}",
     );
     assert!(
-        log.contains("action new-pane --direction right --name rimz-sidebar --borderless true"),
-        "repair-created sidebar panes must be explicitly borderless and position-targeted by focus:\n{log}",
+        log.contains("pane=7 args=--session rimz-test action new-pane --near-current-pane --direction right --name rimz-sidebar --borderless true"),
+        "repair-created sidebar panes must be borderless and targeted beside the pane anchor:\n{log}",
     );
     assert!(
-        log.contains("action go-to-tab 2"),
-        "tab position 1 targets CLI tab 2:\n{log}"
+        !log.contains("go-to-tab") && !log.contains("focus-pane-id"),
+        "the pane anchor must replace ambient tab/focus choreography:\n{log}"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn reconcile_targets_tabs_by_position_from_topology_cache() {
+fn new_sidebar_pane_uses_sidebar_anchor_without_focus_choreography() {
     use crate::config::MultiplexerConfig;
     use crate::ids::WorkspaceId;
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
@@ -1009,7 +1235,7 @@ fn reconcile_targets_tabs_by_position_from_topology_cache() {
 dir=$(dirname "$0")
 log="$dir/zellij.log"
 state="$dir/sidebar-added"
-printf '%s\n' "$*" >> "$log"
+printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$log"
 
 if [ "$1" = "--version" ]; then
   printf 'zellij 0.44.3\n'
@@ -1106,8 +1332,8 @@ exit 0
     let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
         .with_presence_plugin_for_test(&shim);
     backend
-        .new_sidebar_pane(&opts, 1)
-        .expect("spawn sidebar in positioned tab");
+        .new_sidebar_pane(&opts, 7)
+        .expect("spawn sidebar beside selected work pane");
 
     let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
     let new_panes: Vec<&str> = log
@@ -1116,12 +1342,13 @@ exit 0
         .collect();
     assert_eq!(new_panes.len(), 1, "one add issued:\n{log}");
     assert!(
-        !new_panes[0].contains("--tab-id"),
-        "add targets the tab by focusing its position, not by internal tab id:\n{log}",
+        new_panes[0].starts_with("pane=7 ")
+            && new_panes[0].contains("new-pane --near-current-pane --direction right"),
+        "add targets the exact raw work pane and requests a nearby split:\n{log}",
     );
     assert!(
-        log.contains("action go-to-tab 2"),
-        "tab position 1 targets CLI tab 2:\n{log}"
+        !log.contains("go-to-tab") && !log.contains("focus-pane-id"),
+        "add must not mutate tab or pane focus to route the split:\n{log}"
     );
 }
 

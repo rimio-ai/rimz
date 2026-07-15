@@ -1195,14 +1195,14 @@ fn repairable_nested_sidebar_remains(
     raw_id: u64,
     min_topology_produced_at_ms: Option<u64>,
 ) -> bool {
-    let Ok(panes) = backend.topology_panes_for_workspace(
+    let Ok(listing) = backend.structural_geometry_listing(
         session_name,
         workspace_id,
         min_topology_produced_at_ms,
-        crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
     ) else {
         return false;
     };
+    let panes = listing.panes;
     let Some(sidebar) = panes
         .iter()
         .find(|pane| pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id)

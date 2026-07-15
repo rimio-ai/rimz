@@ -9,9 +9,9 @@ use super::parse::{
     parse_focused_terminal_client_ids, strip_ansi,
 };
 use super::raw_pane::{
-    RawPane, SidebarDock, is_sidebar_pane, leftmost_live_work_pane, mounted_sidebar_pane,
-    parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
-    tab_view_cols,
+    RawPane, RawPaneListing, SidebarDock, is_sidebar_pane, leftmost_live_work_pane,
+    mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id, repairable_nested_work_pane_ids,
+    sidebar_dock_verdict, tab_view_cols,
 };
 use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
@@ -47,6 +47,14 @@ const STACK_REPAIR_SETTLE: Duration = Duration::from_millis(500);
 pub(super) enum DockOutcome {
     Docked,
     Misdocked,
+}
+
+fn sidebar_pane(panes: &[RawPane], tab_position: u64, raw_id: u64) -> Option<&RawPane> {
+    // Plugin panes share the integer id space (`plugin_1` beside
+    // `terminal_1`), so the terminal filter is load-bearing here.
+    panes
+        .iter()
+        .find(|pane| pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id)
 }
 
 impl ZellijBackend {
@@ -230,24 +238,31 @@ impl ZellijBackend {
         let mut last_error = None;
         let mut fallback_misdocked: Option<u64> = None;
         for attempt in 0..ADD_DOCK_ATTEMPTS {
-            let before: HashSet<u64> = self
-                .topology_panes_for_workspace(
-                    &opts.session_name,
-                    &opts.workspace_id,
-                    None,
-                    RECONCILE_LIST_TIMEOUT,
-                )?
+            let before_panes = self.topology_panes_for_workspace(
+                &opts.session_name,
+                &opts.workspace_id,
+                None,
+                RECONCILE_LIST_TIMEOUT,
+            )?;
+            let before: HashSet<u64> = before_panes
                 .iter()
                 .filter(|pane| pane.is_terminal() && pane.tab_position == tab_position)
                 .map(|pane| pane.id)
                 .collect();
-            self.focus_leftmost_work_pane(&opts.session_name, &opts.workspace_id, tab_position);
+            let anchor = leftmost_live_work_pane(&before_panes, tab_position).ok_or_else(|| {
+                MuxErr::Output {
+                    program: "zellij".to_owned(),
+                    reason: format!(
+                        "cannot add a sidebar to tab {tab_position}: no live work pane is available to anchor the split"
+                    ),
+                }
+            })?;
             // A `new-pane` failure is remembered, not fatal yet: concurrent
             // action clients can cross-talk responses, so the command can
             // misreport while the pane is still created — discovery gets its
             // window either way.
             let floor_ms = unix_now_ms();
-            let (hint, spawn_err) = match self.new_sidebar_pane(opts, tab_position) {
+            let (hint, spawn_err) = match self.new_sidebar_pane(opts, anchor) {
                 Ok(hint) => (hint, None),
                 Err(err) => (None, Some(err)),
             };
@@ -349,22 +364,24 @@ impl ZellijBackend {
             .map(|_| ())
     }
 
-    fn focus_leftmost_work_pane(
+    /// Read completed structural geometry directly from Zellij, using a fresh
+    /// presence publication only when the server listing is unavailable.
+    pub(super) fn structural_geometry_listing(
         &self,
         session: &str,
         workspace_id: &WorkspaceId,
-        tab_position: u64,
-    ) {
-        let _ = self.go_to_tab_position(session, tab_position);
-        let Ok(panes) =
-            self.topology_panes_for_workspace(session, workspace_id, None, RECONCILE_LIST_TIMEOUT)
-        else {
-            return;
-        };
-        let Some(raw_id) = leftmost_live_work_pane(&panes, tab_position) else {
-            return;
-        };
-        let _ = self.focus_terminal(session, raw_id);
+        min_topology_produced_at_ms: Option<u64>,
+    ) -> Result<RawPaneListing> {
+        self.authoritative_pane_listing(session, None, Some(workspace_id), RECONCILE_LIST_TIMEOUT)
+            .or_else(|_| {
+                self.topology_listing(
+                    Some(session),
+                    None,
+                    Some(workspace_id),
+                    min_topology_produced_at_ms,
+                    RECONCILE_LIST_TIMEOUT,
+                )
+            })
     }
 
     /// Repair birth-time stranded focus: while any tab holds focus on its
@@ -415,53 +432,81 @@ impl ZellijBackend {
     }
 
     /// Converge one kept sidebar pane onto the layout's dock, in place and
-    /// without touching its renderer: a bounded move-left loop (re-listing
-    /// between steps — `move-pane left` swaps one position per call) until the
-    /// pane reaches the left column or stops progressing, a narrow nested-row
-    /// repair that stacks work panes into the right column when the surrounding
-    /// layout is safe to rewrite, then a resize toward the tab's live width
-    /// target when it sits outside the repair band. Returns the last successful
-    /// repair action timestamp. Best-effort: geometry is cosmetic, so any
-    /// failure just leaves the pane where it is for the next pass.
+    /// without touching its renderer. Each targeted `move-pane left` crosses
+    /// one adjacent pane and must strictly reduce authoritative `pane_x`; the
+    /// tab's tiled-pane count bounds the loop. A narrow nested row can then be
+    /// stacked into the right column. Width convergence starts only after the
+    /// same current geometry proves a full-height left dock. Returns the latest
+    /// successful repair-action timestamp. Best-effort: any failure leaves the
+    /// pane for the next pass.
     pub(super) fn converge_sidebar_geometry(
         &self,
         opts: &SidebarPaneOptions,
         tab_position: u64,
         raw_id: u64,
     ) -> Option<u64> {
-        const REDOCK_MAX_STEPS: u32 = 4;
         let pane_raw = format!("terminal_{raw_id}");
         let mut floor = None;
-        let mut last_x = u64::MAX;
-        for _ in 0..REDOCK_MAX_STEPS {
-            let Ok(panes) = self.topology_panes_for_workspace(
-                &opts.session_name,
-                &opts.workspace_id,
-                floor,
-                RECONCILE_LIST_TIMEOUT,
-            ) else {
-                break;
-            };
-            // Plugin panes share the integer id space (`plugin_1` beside
-            // `terminal_1`), so the terminal filter is load-bearing here.
-            let Some(pane) = panes.iter().find(|pane| {
-                pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id
-            }) else {
-                break;
-            };
-            let Some(x) = pane.pane_x else { break };
-            if x == 0 || x >= last_x {
-                break; // docked, or no progress — stop rather than spin.
-            }
-            last_x = x;
+        let Ok(mut listing) =
+            self.structural_geometry_listing(&opts.session_name, &opts.workspace_id, floor)
+        else {
+            return floor;
+        };
+        let Some(mut x) =
+            sidebar_pane(&listing.panes, tab_position, raw_id).and_then(|pane| pane.pane_x)
+        else {
+            return floor;
+        };
+        let mut swaps_remaining = listing
+            .panes
+            .iter()
+            .filter(|pane| pane.tab_position == tab_position && pane.is_terminal())
+            .count()
+            .saturating_sub(1);
+        while x > 0 && swaps_remaining > 0 {
             let action_floor = unix_now_ms();
             if self.dock_left(&opts.session_name, &pane_raw).is_err() {
                 break;
             }
             floor = Some(action_floor);
+            swaps_remaining -= 1;
+            let Ok(next) = self.structural_geometry_listing(
+                &opts.session_name,
+                &opts.workspace_id,
+                Some(action_floor),
+            ) else {
+                break;
+            };
+            let Some(next_x) =
+                sidebar_pane(&next.panes, tab_position, raw_id).and_then(|pane| pane.pane_x)
+            else {
+                break;
+            };
+            listing = next;
+            if next_x >= x {
+                break;
+            }
+            x = next_x;
         }
-        if let Some(action_ms) = self.stack_nested_work_panes(opts, tab_position, raw_id, floor) {
+
+        let excluded = HashSet::new();
+        let verdict = sidebar_pane(&listing.panes, tab_position, raw_id)
+            .and_then(|pane| sidebar_dock_verdict(pane, &listing.panes, &excluded));
+        if verdict == Some(SidebarDock::NestedRow)
+            && let Some(action_ms) = self.stack_nested_work_panes(opts, tab_position, raw_id, floor)
+        {
             floor = Some(action_ms);
+            let Ok(next) =
+                self.structural_geometry_listing(&opts.session_name, &opts.workspace_id, floor)
+            else {
+                return floor;
+            };
+            listing = next;
+        }
+        let verdict = sidebar_pane(&listing.panes, tab_position, raw_id)
+            .and_then(|pane| sidebar_dock_verdict(pane, &listing.panes, &excluded));
+        if verdict != Some(SidebarDock::Docked) {
+            return floor;
         }
         let sync = WidthSyncOptions {
             session_name: opts.session_name.clone(),
@@ -520,14 +565,12 @@ impl ZellijBackend {
         min_topology_produced_at_ms: Option<u64>,
     ) -> DockOutcome {
         std::thread::sleep(DOCK_VERIFY_SETTLE);
-        let Ok(panes) = self.topology_panes_for_workspace(
-            session,
-            workspace_id,
-            min_topology_produced_at_ms,
-            RECONCILE_LIST_TIMEOUT,
-        ) else {
+        let Ok(listing) =
+            self.structural_geometry_listing(session, workspace_id, min_topology_produced_at_ms)
+        else {
             return DockOutcome::Docked;
         };
+        let panes = listing.panes;
         let Some(pane) = panes.iter().find(|pane| {
             pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id
         }) else {
@@ -547,14 +590,14 @@ impl ZellijBackend {
         raw_id: u64,
         min_topology_produced_at_ms: Option<u64>,
     ) -> bool {
-        let Ok(panes) = self.topology_panes_for_workspace(
+        let Ok(listing) = self.structural_geometry_listing(
             &opts.session_name,
             &opts.workspace_id,
             min_topology_produced_at_ms,
-            RECONCILE_LIST_TIMEOUT,
         ) else {
             return false;
         };
+        let panes = listing.panes;
         let Some(sidebar) = panes.iter().find(|pane| {
             pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id
         }) else {
@@ -583,14 +626,14 @@ impl ZellijBackend {
     ) -> Option<u64> {
         let deadline = Instant::now() + STACK_REPAIR_SETTLE;
         let work = loop {
-            let Ok(panes) = self.topology_panes_for_workspace(
+            let Ok(listing) = self.structural_geometry_listing(
                 &opts.session_name,
                 &opts.workspace_id,
                 min_topology_produced_at_ms,
-                RECONCILE_LIST_TIMEOUT,
             ) else {
                 return None;
             };
+            let panes = listing.panes;
             let sidebar = panes.iter().find(|pane| {
                 pane.is_terminal() && pane.tab_position == tab_position && pane.id == raw_id
             })?;
@@ -675,19 +718,19 @@ impl ZellijBackend {
             .unwrap_or_default()
     }
 
-    /// `new-pane` to the right of the tab's focus, titled and `close_on_exit` to
-    /// match the layout, running the same `rimz sidebar serve` command. Returns
-    /// the created pane id Zellij prints (e.g. `terminal_58`) — as a *hint*
-    /// only: under concurrent action clients the stdout can carry another
-    /// client's response or nothing, while the pane is still created.
+    /// `new-pane` beside an exact work-pane anchor, titled and `close_on_exit`
+    /// to match the layout, running the same `rimz sidebar serve` command. The
+    /// command-local pane id selects both the tab and split node without focus
+    /// choreography. Returns the created pane id Zellij prints (for example,
+    /// `terminal_58`) as a hint only: concurrent action clients can cross-talk.
     pub(super) fn new_sidebar_pane(
         &self,
         opts: &SidebarPaneOptions,
-        tab_position: u64,
+        anchor_raw_id: u64,
     ) -> Result<Option<String>> {
-        self.go_to_tab_position(&opts.session_name, tab_position)?;
         let mut args = vec![
             "new-pane".to_owned(),
+            "--near-current-pane".to_owned(),
             "--direction".to_owned(),
             "right".to_owned(),
             "--name".to_owned(),
@@ -702,7 +745,11 @@ impl ZellijBackend {
         let mut command = vec![opts.rimz_bin.to_string_lossy().into_owned()];
         command.extend(sidebar_serve_args(MuxName::Zellij, opts));
         args.extend(command);
-        let output = self.zellij_action(&opts.session_name).args(args).run()?;
+        let output = self
+            .zellij_action(&opts.session_name)
+            .args(args)
+            .env("ZELLIJ_PANE_ID", anchor_raw_id.to_string())
+            .run()?;
         Ok(parse_new_pane_id(&String::from_utf8_lossy(&output.stdout)))
     }
 
