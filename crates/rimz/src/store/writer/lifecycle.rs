@@ -7,7 +7,7 @@ use crate::agents::lifecycle::{LifecycleSignal, Transition, TransitionKind};
 use crate::ids::AgentKind;
 use crate::store::event::EventEnvelope;
 
-use super::{PublishPolicy, Store, debounce};
+use super::{Store, debounce};
 use crate::store::Result;
 
 const MIB: u64 = 1024 * 1024;
@@ -62,17 +62,15 @@ impl Store {
             intent.event_name,
             &observation,
         );
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             txn.append(&envelope)?;
             let Ok(metadata) = std::fs::metadata(&txn.paths.events_log) else {
                 return Ok(AgentLifecycleOutcome::Appended);
             };
             let stamp = txn.paths.locks_dir.join(AUTO_ROTATE_STAMP);
-            if !auto_rotation_due_at(
-                metadata.len(),
-                rotation_threshold,
-                debounce::stamp_age(&stamp),
-            ) {
+            if metadata.len() < rotation_threshold
+                || !debounce::stamp_due(&stamp, AUTO_ROTATE_DEBOUNCE)
+            {
                 return Ok(AgentLifecycleOutcome::Appended);
             }
             debounce::touch_stamp(&stamp);
@@ -129,6 +127,7 @@ fn auto_rotation_due(log_len: u64, stamp_age: Option<Duration>) -> bool {
     auto_rotation_due_at(log_len, DEFAULT_EVENT_LOG_ROTATE_BYTES, stamp_age)
 }
 
+#[cfg(test)]
 fn auto_rotation_due_at(log_len: u64, threshold: u64, stamp_age: Option<Duration>) -> bool {
     log_len >= threshold && stamp_age.is_none_or(|age| age >= AUTO_ROTATE_DEBOUNCE)
 }
@@ -322,7 +321,7 @@ mod tests {
     fn missing_unreadable_and_future_stamps_are_due() {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing = dir.path().join("missing.stamp");
-        assert!(debounce::stamp_age(&missing).is_none());
+        assert!(debounce::stamp_due(&missing, AUTO_ROTATE_DEBOUNCE));
         assert!(auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES, None));
 
         #[cfg(unix)]
@@ -330,7 +329,7 @@ mod tests {
             let unreadable = dir.path().join("unreadable.stamp");
             std::os::unix::fs::symlink("unreadable.stamp", &unreadable)
                 .expect("create symlink loop");
-            assert!(debounce::stamp_age(&unreadable).is_none());
+            assert!(debounce::stamp_due(&unreadable, AUTO_ROTATE_DEBOUNCE));
             assert!(auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES, None));
         }
 
@@ -343,7 +342,7 @@ mod tests {
             .expect("create future stamp");
         file.set_times(FileTimes::new().set_modified(SystemTime::now() + Duration::from_secs(60)))
             .expect("set future stamp time");
-        assert!(debounce::stamp_age(&future).is_none());
+        assert!(debounce::stamp_due(&future, AUTO_ROTATE_DEBOUNCE));
         assert!(auto_rotation_due(DEFAULT_EVENT_LOG_ROTATE_BYTES, None));
     }
 
@@ -386,7 +385,7 @@ mod tests {
             )
             .expect("age rotation stamp");
         assert!(
-            debounce::stamp_age(&stamp).is_none_or(|age| age >= AUTO_ROTATE_DEBOUNCE),
+            debounce::stamp_due(&stamp, AUTO_ROTATE_DEBOUNCE),
             "aged stamp must pass debounce"
         );
         assert_eq!(

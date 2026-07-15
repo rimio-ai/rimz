@@ -31,31 +31,21 @@ pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_L
 pub(crate) use queue::DeliverySweepUpdate;
 pub use queue::{EditOutcome, MessageEdit};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PublishPolicy {
-    Debounced,
-    Forced,
-    Skip,
-}
-
 pub(super) struct Txn<'a> {
     pub(super) paths: &'a StatePaths,
     events: Vec<EventEnvelope>,
-    publish: PublishPolicy,
+    force_publish: bool,
 }
 
 impl Txn<'_> {
     pub(super) fn append(&mut self, event: &EventEnvelope) -> Result<()> {
         event_log::append(&self.paths.events_log, event)?;
         self.events.push(event.clone());
-        if self.publish == PublishPolicy::Skip {
-            self.publish = PublishPolicy::Debounced;
-        }
         Ok(())
     }
 
-    pub(super) fn set_publish(&mut self, publish: PublishPolicy) {
-        self.publish = publish;
+    pub(super) fn force_publish(&mut self) {
+        self.force_publish = true;
     }
 }
 
@@ -143,17 +133,13 @@ fn prune_old_dead_agents(
 }
 
 impl Store {
-    fn commit<T>(
-        &self,
-        publish: PublishPolicy,
-        f: impl FnOnce(&mut Txn<'_>) -> Result<T>,
-    ) -> Result<T> {
+    fn commit<T>(&self, f: impl FnOnce(&mut Txn<'_>) -> Result<T>) -> Result<T> {
         let (out, txn) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let mut txn = Txn {
                 paths: &self.inner.paths,
                 events: Vec::new(),
-                publish,
+                force_publish: false,
             };
             let out = f(&mut txn)?;
             (out, txn)
@@ -162,15 +148,16 @@ impl Store {
         for event in &txn.events {
             self.wake_sidebars_for_event_best_effort(event);
         }
-        match txn.publish {
-            PublishPolicy::Debounced => self.publish_snapshot_best_effort(),
-            PublishPolicy::Forced => self.publish_snapshot_forced(),
-            PublishPolicy::Skip if !txn.events.is_empty() => {
-                debounce::sync_log_debounced(&self.inner.paths);
-            }
-            PublishPolicy::Skip => {}
-        }
-        if txn.publish != PublishPolicy::Skip {
+        let ran_publish_tail = if txn.force_publish {
+            self.publish_snapshot_forced();
+            true
+        } else if !txn.events.is_empty() {
+            self.publish_snapshot_best_effort();
+            true
+        } else {
+            false
+        };
+        if ran_publish_tail {
             self.reap_dead_sessions_if_due();
         }
         Ok(out)
@@ -180,7 +167,7 @@ impl Store {
     /// not change agent state and does not wake sidebars.
     #[must_use = "durability barrier; check the result"]
     pub fn record_workspace(&self, workspace: &ResolvedWorkspace) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let record = workspace_record_preserving_rimz_bin(txn.paths, workspace, None);
             workspace_record::write(txn.paths, &record)?;
             Ok(())
@@ -191,7 +178,7 @@ impl Store {
     /// re-records preserve this value; only room owner flows update it.
     #[must_use = "durability barrier; check the result"]
     pub fn record_room_bin(&self, workspace: &ResolvedWorkspace, rimz_bin: PathBuf) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let record = workspace_record_preserving_rimz_bin(txn.paths, workspace, Some(rimz_bin));
             workspace_record::write(txn.paths, &record)?;
             Ok(())
@@ -250,7 +237,7 @@ impl Store {
     /// Append a freestanding event.
     #[must_use = "durability barrier; check the result"]
     pub fn append_event(&self, event: &EventEnvelope) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             txn.append(event)?;
             Ok(())
         })
@@ -264,7 +251,7 @@ impl Store {
         requests: &[AgentLaunchRequest],
         scope: AgentLaunchScope,
     ) -> Result<AgentLaunchBatch> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
             let identities = allocate_agent_launch_identities(requests, &base_agents)?;
             let events = identities
@@ -313,7 +300,7 @@ impl Store {
         identity: &AgentLaunchIdentity,
         scope: &AgentLaunchScope,
     ) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             txn.append(&self.agent_launch_event(
                 identity,
                 AgentLaunchState::Failed,
@@ -336,7 +323,7 @@ impl Store {
         cwd: &Path,
         pane_id: &crate::ids::PaneId,
     ) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             txn.append(&self.agent_launch_event(
                 identity,
                 AgentLaunchState::Bound,
@@ -359,7 +346,7 @@ impl Store {
         session_name: &str,
         cwd: &Path,
     ) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             txn.append(&self.agent_launch_event(
                 identity,
                 AgentLaunchState::Failed,

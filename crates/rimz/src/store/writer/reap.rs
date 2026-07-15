@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use jiff::Timestamp;
 use tracing::warn;
@@ -9,7 +9,7 @@ use crate::store::runtime::{self, AgentLiveness, RuntimeScope};
 use crate::store::{live_roster, session_death};
 
 use super::super::{Result, StatePaths, Store, workspace_record};
-use super::PublishPolicy;
+use super::debounce;
 
 const REAP_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -17,19 +17,8 @@ fn dead_reap_stamp(paths: &StatePaths) -> std::path::PathBuf {
     paths.locks_dir.join("dead-reap.stamp")
 }
 
-fn write_reap_stamp(paths: &StatePaths) {
-    let _ = std::fs::write(dead_reap_stamp(paths), b"");
-}
-
 pub(super) fn reap_due(paths: &StatePaths) -> bool {
-    let Some(age) = std::fs::metadata(dead_reap_stamp(paths))
-        .and_then(|meta| meta.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-    else {
-        return true;
-    };
-    age >= REAP_INTERVAL
+    debounce::stamp_due(&dead_reap_stamp(paths), REAP_INTERVAL)
 }
 
 fn reap_session_name(paths: &StatePaths) -> String {
@@ -77,7 +66,7 @@ impl Store {
         }
 
         let session_name = reap_session_name(&self.inner.paths);
-        self.commit(PublishPolicy::Debounced, |txn| {
+        self.commit(|txn| {
             for (kind, agent_id, event_name) in &victims {
                 let observation =
                     AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Ended);
@@ -97,7 +86,7 @@ impl Store {
         if !reap_due(&self.inner.paths) {
             return;
         }
-        write_reap_stamp(&self.inner.paths);
+        debounce::touch_stamp(&dead_reap_stamp(&self.inner.paths));
         if let Err(err) = self.reap_dead_sessions() {
             warn!(error = %err, "dead session reap failed after store commit");
         }
@@ -106,6 +95,8 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use super::*;
     use crate::agents::{AgentAdapter, AmpAdapter, LaunchParams, SessionOrigin};
     use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
@@ -382,7 +373,7 @@ mod tests {
         let paths = store.paths();
 
         assert!(reap_due(paths), "missing stamp is due");
-        write_reap_stamp(paths);
+        debounce::touch_stamp(&dead_reap_stamp(paths));
         assert!(!reap_due(paths), "fresh stamp is not due");
 
         std::fs::File::options()

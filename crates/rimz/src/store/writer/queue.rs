@@ -11,7 +11,7 @@ use crate::message::{
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 
 use super::super::{Result, Store, UnresolvedMessage, message_store};
-use super::{PublishPolicy, Txn};
+use super::Txn;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
@@ -347,7 +347,7 @@ impl Store {
     pub fn queue_message(&self, message: &MessageRecord, session_name: &str) -> Result<()> {
         let event =
             EventEnvelope::message_event(message, session_name, MessageEventMethod::Queued, None);
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             message_store::write(&txn.paths.messages_dir, message)?;
             txn.append(&event)
         })
@@ -360,7 +360,7 @@ impl Store {
         now: Timestamp,
         session_name: &str,
     ) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let updates = updates
                 .iter()
                 .map(|update| (update.message_id.as_str(), update))
@@ -385,7 +385,7 @@ impl Store {
         edit: MessageEdit,
         session_name: &str,
     ) -> Result<EditOutcome> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
                 Ok(message) => message,
                 Err(message_store::MessageStoreErr::NotFound(_)) => {
@@ -424,7 +424,7 @@ impl Store {
         message: &MessageRecord,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let mut message =
                 match message_store::load(&txn.paths.messages_dir, &message.message_id) {
                     Ok(existing)
@@ -464,7 +464,7 @@ impl Store {
         message_id: &MessageId,
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let queued = message_store::list_pending(&txn.paths.messages_dir)?;
             let Some(message) = queued
                 .iter()
@@ -491,7 +491,7 @@ impl Store {
         message_id: &MessageId,
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let queued = message_store::list_pending(&txn.paths.messages_dir)?;
             let Some(message) = queued
                 .iter()
@@ -513,7 +513,7 @@ impl Store {
         note: &str,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let now = Timestamp::now();
             let updated = self.update_messages_locked(txn, session_name, now, |message| {
                 if message.message_id != *message_id
@@ -546,7 +546,7 @@ impl Store {
 
     #[must_use = "durability barrier; check the result"]
     pub fn defer_message_wake(&self, message_id: &MessageId, until: Timestamp) -> Result<()> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
                 Ok(message) if message.status == MessageStatus::Queued => message,
                 Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(()),
@@ -567,7 +567,7 @@ impl Store {
         reason: Option<&str>,
     ) -> Result<Option<MessageRecord>> {
         debug_assert!(status.is_terminal());
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let message = match message_store::load(&txn.paths.messages_dir, message_id) {
                 Ok(message)
                     if matches!(
@@ -597,7 +597,7 @@ impl Store {
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let messages = message_store::list(&txn.paths.messages_dir)?;
             let Some(oldest) = messages
                 .iter()
@@ -641,7 +641,7 @@ impl Store {
         session_name: &str,
         reason: Option<&str>,
     ) -> Result<Option<MessageRecord>> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
                 Ok(message) if message.status == MessageStatus::Sent => message,
                 Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(None),
@@ -671,7 +671,7 @@ impl Store {
         max_attempts: u32,
         defer: impl Fn(&MessageRecord) -> bool,
     ) -> Result<ReconcileReport> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let mut report = ReconcileReport::default();
             let updated = self.update_messages_locked(txn, session_name, now, |message| {
                 if message.status != MessageStatus::Sent {
@@ -711,7 +711,7 @@ impl Store {
                 }
             })?;
             if !updated.is_empty() {
-                txn.set_publish(PublishPolicy::Forced);
+                txn.force_publish();
             }
             Ok(report)
         })
@@ -736,7 +736,7 @@ impl Store {
         error: &str,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let mut message =
                 match message_store::load(&txn.paths.messages_dir, &message.message_id) {
                     Ok(existing)
@@ -774,7 +774,7 @@ impl Store {
         error: &str,
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
                 Ok(message)
                     if matches!(
@@ -824,7 +824,7 @@ impl Store {
             crate::store::event::EventKind::Message { payload, .. } => payload.message_id,
             _ => unreachable!("unresolved_message_event is a message event"),
         };
-        self.commit(PublishPolicy::Skip, |txn| txn.append(&event))?;
+        self.commit(|txn| txn.append(&event))?;
         Ok(message_id)
     }
 
@@ -854,7 +854,7 @@ impl Store {
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             self.finalize_matching_messages_locked(
                 txn,
                 MessageStatus::Removed,
@@ -872,7 +872,7 @@ impl Store {
         channel: &str,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
-        self.commit(PublishPolicy::Skip, |txn| {
+        self.commit(|txn| {
             self.finalize_matching_messages_locked(
                 txn,
                 MessageStatus::Removed,
@@ -888,7 +888,7 @@ impl Store {
     pub fn archive_orphan_messages(&self, session_name: &str) -> Result<usize> {
         let snapshot = self.snapshot()?;
         let live_agents = snapshot.agents;
-        let archived = self.commit(PublishPolicy::Skip, |txn| {
+        let archived = self.commit(|txn| {
             let archived =
                 self.update_messages_locked(txn, session_name, Timestamp::now(), |message| {
                     if !message.status.is_open() {
@@ -923,7 +923,7 @@ impl Store {
                     }
                 })?;
             if !archived.is_empty() {
-                txn.set_publish(PublishPolicy::Forced);
+                txn.force_publish();
             }
             Ok(archived)
         })?;
@@ -940,7 +940,7 @@ impl Store {
         session_name: &str,
     ) -> Result<usize> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
-        let archived = self.commit(PublishPolicy::Skip, |txn| {
+        let archived = self.commit(|txn| {
             self.finalize_matching_messages_locked(
                 txn,
                 MessageStatus::Archived,
@@ -962,7 +962,7 @@ impl Store {
         session_name: &str,
     ) -> Result<usize> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
-        let archived = self.commit(PublishPolicy::Skip, |txn| {
+        let archived = self.commit(|txn| {
             self.update_messages_locked(txn, session_name, Timestamp::now(), |message| {
                 if message.status != MessageStatus::Queued {
                     return MessageUpdate::Keep;
@@ -990,7 +990,7 @@ impl Store {
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
-        let archived = self.commit(PublishPolicy::Skip, |txn| {
+        let archived = self.commit(|txn| {
             self.finalize_matching_messages_locked(
                 txn,
                 MessageStatus::Archived,

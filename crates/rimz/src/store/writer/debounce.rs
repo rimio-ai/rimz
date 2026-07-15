@@ -5,14 +5,17 @@ use tracing::warn;
 
 use super::super::{StatePaths, atomic};
 
-/// Age of a debounce stamp's mtime. `None` when the stamp is missing or
-/// unreadable, or its mtime sits in the future (clock skew) — every gate
-/// reads `None` as due, erring toward one redundant run, never a stale skip.
-pub(super) fn stamp_age(path: &std::path::Path) -> Option<Duration> {
-    let modified = std::fs::metadata(path)
+/// Whether a debounce stamp is missing, unreadable, future-dated, or at least
+/// `interval` old. Clock and I/O uncertainty err toward one redundant run.
+pub(super) fn stamp_due(path: &std::path::Path, interval: Duration) -> bool {
+    let Some(age) = std::fs::metadata(path)
         .and_then(|meta| meta.modified())
-        .ok()?;
-    SystemTime::now().duration_since(modified).ok()
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+    else {
+        return true;
+    };
+    age >= interval
 }
 
 /// Best-effort: a failed touch only means the next write runs the gated task
@@ -32,16 +35,12 @@ fn log_sync_stamp(paths: &StatePaths) -> PathBuf {
     paths.locks_dir.join("log-sync.stamp")
 }
 
-fn log_sync_due(paths: &StatePaths) -> bool {
-    stamp_age(&log_sync_stamp(paths)).is_none_or(|age| age >= LOG_SYNC_INTERVAL)
-}
-
 /// Group-commit the relaxed event-log appends at most once per
 /// [`LOG_SYNC_INTERVAL`]. One fdatasync flushes the inode's dirty pages
 /// regardless of which process wrote them, so a single writer per interval
 /// makes the whole fleet's appends durable.
 pub(super) fn sync_log_debounced(paths: &StatePaths) {
-    if !log_sync_due(paths) {
+    if !stamp_due(&log_sync_stamp(paths), LOG_SYNC_INTERVAL) {
         return;
     }
     match atomic::sync_file_data(&paths.events_log) {
