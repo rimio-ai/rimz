@@ -50,38 +50,81 @@ fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
     );
 }
 #[test]
-#[rustfmt::skip]
 fn native_hooks_normalize_lifecycle() {
     let common = hook_payload();
     let tool = |mutates, edits| LifecycleSignal::ToolUsed { mutates, edits };
-    let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded { errored, parked_on_background };
+    let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {
+        errored,
+        parked_on_background,
+    };
     let started = AntigravityAdapter
-        .observe_lifecycle("PreInvocation", &with(&common, [("invocationNum", json!(0))]))
+        .observe_lifecycle(
+            "PreInvocation",
+            &with(&common, [("invocationNum", json!(0))]),
+        )
         .unwrap();
     assert_eq!(started.signal, LifecycleSignal::TurnStarted);
     assert_eq!(started.agent_id.as_deref(), Some(SESSION_ID));
     assert_eq!(started.worktree_path.as_deref(), Some("/workspace/project"));
-    assert_eq!(started.transcript_path.as_deref(), Some("/tmp/transcript_full.jsonl"));
+    assert_eq!(
+        started.transcript_path.as_deref(),
+        Some("/tmp/transcript_full.jsonl")
+    );
     assert_eq!(started.launch.model.as_deref(), Some(FLASH));
     for (event, payload, expected) in [
-        ("PreInvocation", with(&common, [("invocationNum", json!(1))]), None),
-        ("PostToolUse:edit", with(&common, [("error", json!(""))]), Some(tool(true, true))),
-        ("PostToolUse:mutating", with(&common, [("error", json!(null))]), Some(tool(true, false))),
-        ("PostToolUse:edit", with(&common, [("error", json!("write failed"))]), Some(tool(false, false))),
+        (
+            "PreInvocation",
+            with(&common, [("invocationNum", json!(1))]),
+            None,
+        ),
+        (
+            "PostToolUse:edit",
+            with(&common, [("error", json!(""))]),
+            Some(tool(true, true)),
+        ),
+        (
+            "PostToolUse:mutating",
+            with(&common, [("error", json!(null))]),
+            Some(tool(true, false)),
+        ),
+        (
+            "PostToolUse:edit",
+            with(&common, [("error", json!("write failed"))]),
+            Some(tool(false, false)),
+        ),
         (
             "Stop",
-            with(&common, [("terminationReason", json!("model_stop")), ("error", json!("")), ("fullyIdle", json!(false))]),
+            with(
+                &common,
+                [
+                    ("terminationReason", json!("model_stop")),
+                    ("error", json!("")),
+                    ("fullyIdle", json!(false)),
+                ],
+            ),
             Some(ended(false, true)),
         ),
         (
             "Stop",
-            with(&common, [("terminationReason", json!("max_steps_exceeded")), ("fullyIdle", json!(true))]),
+            with(
+                &common,
+                [
+                    ("terminationReason", json!("max_steps_exceeded")),
+                    ("fullyIdle", json!(true)),
+                ],
+            ),
             Some(ended(true, false)),
         ),
-        ("Stop", with(&common, [("terminationReason", json!("model_stop"))]), None),
+        (
+            "Stop",
+            with(&common, [("terminationReason", json!("model_stop"))]),
+            None,
+        ),
         ("Stop", json!({"fullyIdle": true}), None),
     ] {
-        let signal = AntigravityAdapter.observe_lifecycle(event, &payload).map(|value| value.signal);
+        let signal = AntigravityAdapter
+            .observe_lifecycle(event, &payload)
+            .map(|value| value.signal);
         assert_eq!(signal, expected);
     }
 }
@@ -550,14 +593,27 @@ fn bounded_discovery_can_lose_an_older_prompt_from_a_long_turn() {
     assert!(local_state(&observation).latest_prompt.is_none());
 }
 #[test]
-#[rustfmt::skip]
 fn first_invocation_recovers_only_the_latest_completed_visible_prompt() {
     let dir = tempfile::tempdir().unwrap();
     let torn = user_record(5, "2026-07-13T23:23:13Z", "torn");
     let mut lines = vec!["not-json".to_owned()];
     for (step, source, kind, status, at, content) in [
-        (0, "SYSTEM", "CHECKPOINT", "DONE", "2026-07-13T23:23:08Z", "internal description"),
-        (1, "USER_EXPLICIT", "USER_INPUT", "IN_PROGRESS", AT_10, "partial description"),
+        (
+            0,
+            "SYSTEM",
+            "CHECKPOINT",
+            "DONE",
+            "2026-07-13T23:23:08Z",
+            "internal description",
+        ),
+        (
+            1,
+            "USER_EXPLICIT",
+            "USER_INPUT",
+            "IN_PROGRESS",
+            AT_10,
+            "partial description",
+        ),
         (2, "MODEL", "USER_INPUT", "DONE", AT_11, "wrong source"),
     ] {
         lines.push(record(step, source, kind, status, at, content).to_string());
@@ -572,19 +628,37 @@ fn first_invocation_recovers_only_the_latest_completed_visible_prompt() {
         "transcript_full.jsonl",
         &lines.join("\n"),
     );
-    let payload = with(&hook_payload(), [("transcriptPath", json!(transcript)), ("invocationNum", json!(0))]);
+    let payload = with(
+        &hook_payload(),
+        [
+            ("transcriptPath", json!(transcript)),
+            ("invocationNum", json!(0)),
+        ],
+    );
     let started = observe_lifecycle_with_prompt_reader("PreInvocation", &payload, |path, id| {
         session::latest_prompt_under(dir.path(), path, id)
     })
     .unwrap();
     assert_eq!(started.prompt.as_deref(), Some("label this turn"));
-    let stopped = observe_lifecycle_with_prompt_reader("Stop", &with(
-        &payload,
-        [("fullyIdle", json!(true)), ("terminationReason", json!("model_stop"))],
-    ), |_, _| panic!("Stop must not read transcripts"))
+    let stopped = observe_lifecycle_with_prompt_reader(
+        "Stop",
+        &with(
+            &payload,
+            [
+                ("fullyIdle", json!(true)),
+                ("terminationReason", json!("model_stop")),
+            ],
+        ),
+        |_, _| panic!("Stop must not read transcripts"),
+    )
     .unwrap();
     assert!(stopped.prompt.is_none());
-    let unknown = write_transcript_named(dir.path(), SESSION_ID, "transcript_debug.jsonl", include_str!("tests/fixtures/transcript_full.jsonl"));
+    let unknown = write_transcript_named(
+        dir.path(),
+        SESSION_ID,
+        "transcript_debug.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
     let rejected = observe_lifecycle_with_prompt_reader(
         "PreInvocation",
         &with(&payload, [("transcriptPath", json!(unknown))]),
