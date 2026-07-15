@@ -462,6 +462,113 @@ fn env_pin_beats_the_recovered_pin() {
 }
 
 #[test]
+fn daemon_mode_sibling_pin_beats_a_valid_ambient_pin() {
+    let (dir, ambient_root, marker_dir) = pin_fixture();
+    let ambient_root = ambient_root.canonicalize().expect("canonical ambient");
+    let sibling_root = dir.path().join("sibling");
+    std::fs::create_dir_all(&sibling_root).expect("mkdir sibling");
+    let env = pin_of(
+        WorkspaceId::from_project_root(&ambient_root).to_string(),
+        ambient_root,
+    );
+    let sibling_root = sibling_root.canonicalize().expect("canonical sibling");
+    let scan = scan_of(sibling_root.clone());
+
+    let resolved = WorkspaceResolver::resolve_with(
+        ResolveMode::ParticipateDaemon,
+        &marker_dir,
+        None,
+        &env,
+        &scan,
+    )
+    .expect("resolve");
+    assert_eq!(resolved.project_root, sibling_root);
+}
+
+#[test]
+fn daemon_mode_without_sibling_ignores_the_ambient_pin() {
+    let (_dir, ambient_root, marker_dir) = pin_fixture();
+    let ambient_root = ambient_root.canonicalize().expect("canonical ambient");
+    let env = pin_of(
+        WorkspaceId::from_project_root(&ambient_root).to_string(),
+        ambient_root,
+    );
+
+    let resolved = WorkspaceResolver::resolve_with(
+        ResolveMode::ParticipateDaemon,
+        &marker_dir,
+        None,
+        &env,
+        NO_SCAN,
+    )
+    .expect("resolve");
+    assert_eq!(
+        resolved.project_root,
+        marker_dir.canonicalize().expect("canonical marker"),
+    );
+}
+
+#[test]
+fn daemon_mode_root_override_wins() {
+    let (dir, ambient_root, marker_dir) = pin_fixture();
+    let ambient_root = ambient_root.canonicalize().expect("canonical ambient");
+    let sibling_root = dir.path().join("sibling");
+    let forced_root = dir.path().join("forced");
+    std::fs::create_dir_all(&sibling_root).expect("mkdir sibling");
+    std::fs::create_dir_all(&forced_root).expect("mkdir forced");
+    let env = pin_of(
+        WorkspaceId::from_project_root(&ambient_root).to_string(),
+        ambient_root,
+    );
+    let scan = scan_of(sibling_root.canonicalize().expect("canonical sibling"));
+
+    let resolved = WorkspaceResolver::resolve_with(
+        ResolveMode::ParticipateDaemon,
+        &marker_dir,
+        Some(forced_root.clone()),
+        &env,
+        &scan,
+    )
+    .expect("resolve");
+    assert_eq!(
+        resolved.project_root,
+        forced_root.canonicalize().expect("canonical forced"),
+    );
+}
+
+#[test]
+fn daemon_mode_split_sibling_pins_fall_back_to_the_static_ladder() {
+    let (dir, ambient_root, marker_dir) = pin_fixture();
+    let ambient_root = ambient_root.canonicalize().expect("canonical ambient");
+    let sibling_root = dir.path().join("sibling");
+    let other_sibling_root = dir.path().join("other-sibling");
+    std::fs::create_dir_all(&sibling_root).expect("mkdir sibling");
+    std::fs::create_dir_all(&other_sibling_root).expect("mkdir other sibling");
+    let env = pin_of(
+        WorkspaceId::from_project_root(&ambient_root).to_string(),
+        ambient_root,
+    );
+    let sibling_root = sibling_root.canonicalize().expect("canonical sibling");
+    let other_sibling_root = other_sibling_root
+        .canonicalize()
+        .expect("canonical other sibling");
+    let scan = move |_cwd: &Path| vec![sibling_root.clone(), other_sibling_root.clone()];
+
+    let resolved = WorkspaceResolver::resolve_with(
+        ResolveMode::ParticipateDaemon,
+        &marker_dir,
+        None,
+        &env,
+        &scan,
+    )
+    .expect("resolve");
+    assert_eq!(
+        resolved.project_root,
+        marker_dir.canonicalize().expect("canonical marker"),
+    );
+}
+
+#[test]
 fn split_recovered_pins_fall_back_to_the_static_ladder() {
     let (dir, pinned_root, marker_dir) = pin_fixture();
     let other_root = dir.path().join("other");

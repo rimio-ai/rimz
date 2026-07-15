@@ -250,7 +250,7 @@ pub struct SessionOptions {
     /// its in-pane hook children — inherits the workspace it lives in. A
     /// daemon-routed hook child inherits its daemon's env instead; resolution
     /// recovers the pin from the in-pane agent process
-    /// ([`crate::workspace::WorkspaceResolver::resolve_participant_with_pin_recovery`]).
+    /// ([`crate::workspace::WorkspaceResolver::resolve_daemon_participant_with_pin_recovery`]).
     pub workspace_id: WorkspaceId,
     pub project_root: PathBuf,
     /// Adapter-owned enrichment environment carried through the room session seam.

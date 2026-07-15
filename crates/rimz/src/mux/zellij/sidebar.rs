@@ -100,7 +100,7 @@ impl ZellijBackend {
         // children inside them — inherit the room's workspace transitively.
         // A daemon-routed hook child (Codex's per-user app-server) inherits
         // the daemon's env instead and recovers the pin from the in-pane
-        // agent process (`resolve_participant_with_pin_recovery`). Zellij has
+        // agent process (`resolve_daemon_participant_with_pin_recovery`). Zellij has
         // no post-birth `set-environment`, so birth is the one stamping
         // point; a pre-pin server keeps its env and its participants fall
         // back to the static ladder.

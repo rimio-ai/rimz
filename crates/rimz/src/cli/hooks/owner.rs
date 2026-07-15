@@ -55,7 +55,7 @@ pub(super) fn attach_agent_owner(
     let Some(pid) = observation.agent_pid.or(owner_pid) else {
         return;
     };
-    let kind = if source == "codex" && rimz::agents::codex::pid_is_codex_daemon(pid) {
+    let kind = if hook_owner_is_daemon(source, pid) {
         RuntimeOwnerKind::Daemon
     } else {
         RuntimeOwnerKind::Agent
@@ -64,6 +64,10 @@ pub(super) fn attach_agent_owner(
     observation.agent_pid = Some(pid);
     observation.agent_process_start = owner.process_start.clone();
     observation.runtime_owner = Some(owner);
+}
+
+pub(super) fn hook_owner_is_daemon(source: &str, pid: u32) -> bool {
+    source == "codex" && rimz::agents::codex::pid_is_codex_daemon(pid)
 }
 
 #[cfg(test)]

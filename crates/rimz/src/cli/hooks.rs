@@ -37,7 +37,7 @@ use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
 pub(crate) use lifecycle::handle_lifecycle_hook;
-use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid};
+use owner::{attach_agent_owner, attach_agent_pane, hook_agent_pid, hook_owner_is_daemon};
 use payload_ids::{payload_agent_id, payload_context_agent_id, spawn_refresh_detached};
 use proctree::sibling_agent_pins;
 pub(super) const FOCUSED_PANE_BIND_TIMEOUT: std::time::Duration =
@@ -138,15 +138,21 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     } else {
         raw_agent_pid
     };
-    // A daemon-routed hook (Codex's app-server spawns hook children with the
-    // daemon's env, not the pane's) misses the session pin in its own
-    // environment, so resolution may recover it from the sibling agent
-    // process at this cwd.
-    let workspace = WorkspaceResolver::resolve_participant_with_pin_recovery(
-        ".",
-        globals.root.clone(),
-        &|cwd: &Path| sibling_agent_pins(&source, cwd),
-    )?;
+    let daemon_owned = normalized_owner_pid.is_some_and(|pid| hook_owner_is_daemon(&source, pid));
+    let scan = |cwd: &Path| sibling_agent_pins(&source, cwd);
+    // A daemon's environment is unattributable: it can carry a valid workspace
+    // pin for the unrelated room that launched the shared daemon. Daemon-owned
+    // hooks never consult it. Pane-owned hooks keep the env pin first and use
+    // sibling recovery when a daemon route cannot be classified.
+    let workspace = if daemon_owned {
+        WorkspaceResolver::resolve_daemon_participant_with_pin_recovery(
+            ".",
+            globals.root.clone(),
+            &scan,
+        )?
+    } else {
+        WorkspaceResolver::resolve_participant_with_pin_recovery(".", globals.root.clone(), &scan)?
+    };
     let store = open_store(&workspace)?;
     let mut buf = String::new();
     io::stdin()

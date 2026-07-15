@@ -325,7 +325,7 @@ impl Drop for SiblingAgent {
 }
 
 #[cfg(target_os = "linux")]
-fn spawn_sibling_codex(env: &Env, cwd: &std::path::Path) -> SiblingAgent {
+fn spawn_sibling_codex(env: &Env, cwd: &std::path::Path, args: &[&str]) -> SiblingAgent {
     use std::os::unix::fs::PermissionsExt;
 
     let script = env.home_root.join("codex");
@@ -334,6 +334,7 @@ fn spawn_sibling_codex(env: &Env, cwd: &std::path::Path) -> SiblingAgent {
     std::fs::write(&script, "#!/bin/sh\nsleep 30\n").expect("write sibling script");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let child = std::process::Command::new(&script)
+        .args(args)
         .current_dir(cwd)
         .env(rimz::workspace::ENV_WORKSPACE_ID, env.workspace_id.as_str())
         .env(rimz::workspace::ENV_PROJECT_ROOT, &env.project_root)
@@ -378,7 +379,7 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
         // The agent's launch dir sits outside the room root, like `$HOME`.
         let elsewhere = env.home_root.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
-        let _sibling = spawn_sibling_codex(&env, &elsewhere);
+        let _sibling = spawn_sibling_codex(&env, &elsewhere, &[]);
 
         // The harness scrubs the pin from the hook's own env (`Env::rimz`),
         // exactly like a daemon-spawned hook child.
@@ -406,6 +407,64 @@ fn codex_hook_recovers_pin_from_sibling_process_when_env_pin_absent() {
             !stray.events_log.exists(),
             "no hidden cwd-derived store appears beside the room",
         );
+    }
+}
+
+#[test]
+fn codex_daemon_hook_ignores_valid_inherited_pin_from_another_room() {
+    #[cfg(not(target_os = "linux"))]
+    {
+        tracing::warn!("skipping: /proc recovery is Linux-only");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let env = Env::new();
+        let wrong_room = env.home_root.join("wrongroom");
+        let elsewhere = env.home_root.join("elsewhere");
+        std::fs::create_dir_all(&wrong_room).expect("mkdir wrong room");
+        std::fs::create_dir_all(&elsewhere).expect("mkdir elsewhere");
+
+        let _sibling = spawn_sibling_codex(&env, &elsewhere, &[]);
+        let daemon = spawn_sibling_codex(&env, &env.home_root, &["app-server"]);
+        let wrong_room = canonical(&wrong_room);
+        let wrong_id = WorkspaceId::from_project_root(&wrong_room);
+
+        let mut cmd = env.hook_command("codex");
+        cmd.current_dir(&elsewhere)
+            .env("RIMZ_AGENT_PID", daemon.child.id().to_string())
+            .env(rimz::workspace::ENV_WORKSPACE_ID, wrong_id.as_str())
+            .env(rimz::workspace::ENV_PROJECT_ROOT, &wrong_room);
+        let output = env
+            .spawn_payload(cmd, &crate::common::codex_permission_payload())
+            .wait_with_output()
+            .expect("wait hook");
+        assert!(
+            output.status.success(),
+            "hook failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        let pinned = env.state_path_for(&env.project_root);
+        let wrong = env.state_path_for(&wrong_room);
+        let stray = env.state_path_for(&elsewhere);
+        let events = std::fs::read_to_string(&pinned.events_log)
+            .expect("the sibling pin routes the daemon hook into the room's store");
+        assert!(
+            events.contains("\"source\":\"codex\""),
+            "the room's store holds the codex hook event:\n{events}",
+        );
+        assert!(
+            !wrong.events_log.exists(),
+            "the daemon's valid inherited pin is ignored",
+        );
+        assert!(
+            !stray.events_log.exists(),
+            "no hidden cwd-derived store appears beside the room",
+        );
+
+        // If a daemon ever shares this cwd with a disagreeing pin, recovery
+        // falls through visibly to the static ladder rather than writing into
+        // another room.
     }
 }
 

@@ -9,16 +9,14 @@
 //!
 //! Identity is then *pinned per session*: session birth stamps
 //! [`ENV_WORKSPACE_ID`]/[`ENV_PROJECT_ROOT`] into the mux environment, and
-//! participating commands (hooks, statusline helpers)
-//! resolve through [`WorkspaceResolver::resolve_participant`], which honors
-//! that pin before the static ladder — so an agent in a nested repo inside a
-//! directory workspace still writes to the room it lives in. A daemon-routed
-//! hook is the one participant whose own environment misses the pin (its
-//! parent is a per-user agent daemon, not the pane), so
-//! [`WorkspaceResolver::resolve_participant_with_pin_recovery`] recovers the
-//! pin from the sibling agent process at the hook's cwd. The full order:
-//! `--root`, env pin, recovered sibling pin, static ladder. Room-choosing
-//! commands (`rimz start`/`attach`) resolve statically via
+//! participating commands (hooks, statusline helpers) resolve by ownership.
+//! Pane-owned participants use `--root`, the verified env pin, a recovered
+//! sibling pin, then the static ladder, so an agent in a nested repo inside a
+//! directory workspace still writes to the room it lives in. Daemon-owned
+//! hooks use `--root`, a recovered sibling pin, then the static ladder. Their
+//! shared daemon's environment belongs to whichever context launched it and
+//! may carry a valid pin for an unrelated room, so that ambient pin is
+//! excluded. Room-choosing commands (`rimz start`/`attach`) resolve statically via
 //! [`WorkspaceResolver::resolve`], keeping a deliberate per-repo room one
 //! `rimz start` away from inside a parent room. See `docs/internals` and
 //! `DESIGN.md` for the rules this implements.
@@ -306,6 +304,11 @@ enum ResolveMode {
     /// in the room it lives in. Never refuses — a hook on the agent's
     /// critical path degrades to the static ladder, never errors on identity.
     Participate,
+    /// Daemon-owned hook participation: the shared daemon's environment may
+    /// belong to an unrelated room, so only a recovered sibling pin precedes
+    /// the static ladder. An explicit root still wins. Never refuses, like
+    /// [`Self::Participate`].
+    ParticipateDaemon,
 }
 
 /// Process-environment lookup, injected so the pin and `$HOME` reads unit-test
@@ -353,12 +356,11 @@ impl WorkspaceResolver {
         )
     }
 
-    /// [`Self::resolve_participant`] for a hook that may be daemon-routed —
-    /// spawned by a per-user agent daemon, so its own environment misses the
-    /// session pin. The env pin still wins when present; otherwise `scan`
-    /// recovers the pin from sibling agent processes at the hook's cwd,
-    /// adopted only when every verified candidate names one root; the static
-    /// ladder remains the floor.
+    /// [`Self::resolve_participant`] with sibling-pin recovery for a pane-owned
+    /// hook. The verified env pin still wins; otherwise `scan` recovers the
+    /// pin from sibling agent processes at the hook's cwd, adopted only when
+    /// every verified candidate names one root. The static ladder remains the
+    /// floor.
     pub fn resolve_participant_with_pin_recovery(
         start: impl AsRef<Path>,
         root_override: Option<PathBuf>,
@@ -366,6 +368,24 @@ impl WorkspaceResolver {
     ) -> Result<ResolvedWorkspace> {
         Self::resolve_with(
             ResolveMode::Participate,
+            start.as_ref(),
+            root_override,
+            &|key: &str| std::env::var_os(key),
+            scan,
+        )
+    }
+
+    /// Resolve a daemon-owned hook without consulting its ambient env pin.
+    /// The shared daemon's environment belongs to its launcher and may carry
+    /// a valid pin for an unrelated room. A unanimous recovered sibling pin
+    /// wins over the static ladder; an explicit `root_override` wins over both.
+    pub fn resolve_daemon_participant_with_pin_recovery(
+        start: impl AsRef<Path>,
+        root_override: Option<PathBuf>,
+        scan: PinScan,
+    ) -> Result<ResolvedWorkspace> {
+        Self::resolve_with(
+            ResolveMode::ParticipateDaemon,
             start.as_ref(),
             root_override,
             &|key: &str| std::env::var_os(key),
@@ -388,10 +408,13 @@ impl WorkspaceResolver {
             let root = root.canonicalize().unwrap_or(root);
             let class = classify_root(&root)?;
             (root.clone(), root, class)
-        } else if let Some(pinned) = (mode == ResolveMode::Participate)
-            .then(|| read_verified_pin(env).or_else(|| recover_pinned_root(&start, scan)))
-            .flatten()
-        {
+        } else if let Some(pinned) = match mode {
+            ResolveMode::Create => None,
+            ResolveMode::Participate => {
+                read_verified_pin(env).or_else(|| recover_pinned_root(&start, scan))
+            }
+            ResolveMode::ParticipateDaemon => recover_pinned_root(&start, scan),
+        } {
             // The pane lives in a session that already chose a root; the cwd
             // still names the worktree the participant works in, for grouping.
             let worktree_root = match resolve_git(&start)? {
@@ -452,11 +475,9 @@ pub fn verify_pin(id: &str, root: &Path) -> Option<PathBuf> {
     Some(root)
 }
 
-/// Recover the pin from sibling agent processes when the participant's own
-/// environment carries none — the daemon-routed hook, whose child inherits
-/// the daemon's environment rather than the pane's. Adopts the root iff every
-/// verified candidate names the same one; an empty or split scan falls
-/// through to the static ladder.
+/// Recover the pin from sibling agent processes when the participant cannot
+/// use its own environment. Adopts the root iff every verified candidate names
+/// the same one; an empty or split scan falls through to the static ladder.
 fn recover_pinned_root(start: &Path, scan: PinScan) -> Option<PathBuf> {
     let mut roots = scan(start);
     roots.sort();
