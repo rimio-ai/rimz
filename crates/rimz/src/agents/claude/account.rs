@@ -47,16 +47,15 @@ pub(crate) fn budget_window(
 /// failure or non-zero exit is `Unavailable` (transient), not a logged-out
 /// account, so a missing-then-installed binary recovers on the short retry TTL.
 pub(crate) fn probe() -> AccountProbe {
-    let Ok(output) = Command::new("claude")
-        .args(["auth", "status"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-    else {
+    let mut command = Command::new("claude");
+    command.args(["auth", "status"]).stdin(Stdio::null());
+    let Ok(output) = crate::proc::run_bounded_output(
+        &mut command,
+        crate::agents::account::INFORMATIONAL_PROBE_TIMEOUT,
+    ) else {
         return AccountProbe::Unavailable;
     };
-    if !output.status.success() {
+    if output.timed_out || !output.status.success() {
         return AccountProbe::Unavailable;
     }
     let mut probe = parse_claude_auth(&output.stdout);

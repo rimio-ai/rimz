@@ -19,15 +19,15 @@ pub(super) fn probe(descriptor: &AgentDescriptor) -> AccountProbe {
 }
 
 fn run(binary: &Path, args: &[&str]) -> Option<ProbeOutput> {
-    let output = Command::new(binary)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .ok()?;
+    let mut command = Command::new(binary);
+    command.args(args).stdin(Stdio::null());
+    let output = crate::proc::run_bounded_output(
+        &mut command,
+        crate::agents::account::INFORMATIONAL_PROBE_TIMEOUT,
+    )
+    .ok()?;
     Some(ProbeOutput {
-        success: output.status.success(),
+        success: !output.timed_out && output.status.success(),
         stdout: output.stdout,
     })
 }

@@ -78,14 +78,14 @@ impl FromStr for CliVersion {
 /// Run `<binary> --version` with captured stdio. Any failure is an absent
 /// version, not account truth or a launch precondition on its own.
 pub(crate) fn probe_cli_version(binary: impl AsRef<OsStr>) -> Option<String> {
-    let output = Command::new(binary)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let mut command = Command::new(binary);
+    command.arg("--version").stdin(Stdio::null());
+    let output = crate::proc::run_bounded_output(
+        &mut command,
+        crate::agents::account::INFORMATIONAL_PROBE_TIMEOUT,
+    )
+    .ok()?;
+    if output.timed_out || !output.status.success() {
         return None;
     }
     cli_version_from_streams(

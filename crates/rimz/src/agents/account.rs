@@ -26,6 +26,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,11 @@ use serde::{Deserialize, Serialize};
 use super::{AgentRateLimits, ProviderAccountScope, RateLimitWindow, context::RateLimitWindowKey};
 use crate::RuntimePaths;
 use crate::ids::AgentKind;
+
+/// Informational account and CLI-version probes are best-effort enrichment.
+/// Bound every subprocess so one installed but wedged CLI cannot hold the
+/// shared account cache producer indefinitely.
+pub(crate) const INFORMATIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(test)]
 mod tests;

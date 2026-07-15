@@ -99,6 +99,7 @@ fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
 pub(crate) struct BoundedOutput {
     pub(crate) status: ExitStatus,
     pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
     pub(crate) timed_out: bool,
 }
 
@@ -121,20 +122,25 @@ pub(crate) fn run_bounded_output(
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait()? {
-            let _ = join_reader(stderr);
             return Ok(BoundedOutput {
                 status,
                 stdout: join_reader(stdout),
+                stderr: join_reader(stderr),
                 timed_out: false,
             });
         }
         if Instant::now() >= deadline {
+            tracing::debug!(
+                program = %command.get_program().to_string_lossy(),
+                timeout_ms = timeout.as_millis(),
+                "bounded subprocess timed out",
+            );
             let _ = child.kill();
             let status = child.wait()?;
-            drop(join_reader(stderr));
             return Ok(BoundedOutput {
                 status,
                 stdout: join_reader(stdout),
+                stderr: join_reader(stderr),
                 timed_out: true,
             });
         }
@@ -834,15 +840,16 @@ mod tests {
     }
 
     #[test]
-    fn bounded_output_captures_stdout() {
+    fn bounded_output_captures_both_streams() {
         let mut cmd = Command::new("sh");
-        cmd.args(["-c", "printf rimz"]);
+        cmd.args(["-c", "printf rimz; printf trace >&2"]);
 
         let output = run_bounded_output(&mut cmd, Duration::from_secs(1)).expect("bounded output");
 
         assert!(output.status.success());
         assert!(!output.timed_out);
         assert_eq!(output.stdout, b"rimz");
+        assert_eq!(output.stderr, b"trace");
     }
 
     #[test]

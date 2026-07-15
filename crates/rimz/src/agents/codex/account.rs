@@ -140,15 +140,17 @@ fn with_credentials_mtime(probe: AccountProbe, path: &std::path::Path) -> Accoun
 }
 
 fn probe_login_status() -> AccountProbe {
-    let Ok(output) = Command::new("codex")
-        .args(["login", "status"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-    else {
+    let mut command = Command::new("codex");
+    command.args(["login", "status"]).stdin(Stdio::null());
+    let Ok(output) = crate::proc::run_bounded_output(
+        &mut command,
+        crate::agents::account::INFORMATIONAL_PROBE_TIMEOUT,
+    ) else {
         return AccountProbe::Unavailable;
     };
+    if output.timed_out || !output.status.success() {
+        return AccountProbe::Unavailable;
+    }
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
     parse_login_status(&text)
