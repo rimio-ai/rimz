@@ -104,6 +104,28 @@ impl Pricing {
         }
     }
 
+    pub(crate) const fn from_base_rates(
+        input: f64,
+        output: f64,
+        cache_create: Option<f64>,
+        cache_read: Option<f64>,
+    ) -> Self {
+        Self {
+            input,
+            output,
+            cache_create: match cache_create {
+                Some(rate) => rate,
+                None => input * 1.25,
+            },
+            cache_read: match cache_read {
+                Some(rate) => rate,
+                None => input * 0.1,
+            },
+            cache_read_explicit: cache_read.is_some(),
+            ..Self::empty()
+        }
+    }
+
     pub(crate) fn cost(
         self,
         input: u64,
@@ -653,6 +675,19 @@ mod tests {
                 "claude-sonnet-4": {"input_cost_per_token": 9e-9, "output_cost_per_token": 9e-9}
             }"#,
         )
+    }
+
+    #[test]
+    fn base_rates_own_cache_defaults_and_explicitness() {
+        let defaulted = Pricing::from_base_rates(2.0, 4.0, None, None);
+        assert_eq!(defaulted.cache_create, 2.5);
+        assert_eq!(defaulted.cache_read, 0.2);
+        assert!(!defaulted.cache_read_explicit);
+
+        let explicit = Pricing::from_base_rates(2.0, 4.0, Some(3.0), Some(0.5));
+        assert_eq!(explicit.cache_create, 3.0);
+        assert_eq!(explicit.cache_read, 0.5);
+        assert!(explicit.cache_read_explicit);
     }
 
     #[test]

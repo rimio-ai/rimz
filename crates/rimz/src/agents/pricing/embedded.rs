@@ -62,11 +62,6 @@ pub(super) fn parse(json: &str) -> HashMap<String, Pricing> {
         out.insert(
             model,
             Pricing {
-                input,
-                output,
-                cache_read: cache_read.unwrap_or(input * 0.1),
-                cache_create: num("cache_creation_input_token_cost").unwrap_or(input * 1.25),
-                cache_read_explicit: cache_read.is_some(),
                 input_above_200k: num("input_cost_per_token_above_200k_tokens"),
                 output_above_200k: num("output_cost_per_token_above_200k_tokens"),
                 cache_create_above_200k: num("cache_creation_input_token_cost_above_200k_tokens"),
@@ -77,6 +72,12 @@ pub(super) fn parse(json: &str) -> HashMap<String, Pricing> {
                     .get("max_input_tokens")
                     .and_then(Value::as_u64)
                     .filter(|tokens| *tokens > 0),
+                ..Pricing::from_base_rates(
+                    input,
+                    output,
+                    num("cache_creation_input_token_cost"),
+                    cache_read,
+                )
             },
         );
     }

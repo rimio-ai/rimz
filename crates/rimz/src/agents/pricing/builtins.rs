@@ -205,14 +205,7 @@ pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
 }
 
 fn p(input: f64, output: f64, cache_create: f64, cache_read: f64) -> Pricing {
-    Pricing {
-        input,
-        output,
-        cache_create,
-        cache_read,
-        cache_read_explicit: true,
-        ..Pricing::empty()
-    }
+    Pricing::from_base_rates(input, output, Some(cache_create), Some(cache_read))
 }
 
 fn with_fast(model: &str, price: Pricing) -> Pricing {

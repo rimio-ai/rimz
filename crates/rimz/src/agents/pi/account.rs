@@ -12,7 +12,7 @@ fn config() -> Config {
     Config {
         adapter: Adapter::Pi,
         auth_path: Some(pi_config_dir().join("auth.json")),
-        used_provider: used_provider(),
+        used_provider,
         api_key_types: &["api_key"],
         account_key_domain: ACCOUNT_KEY_DOMAIN,
     }

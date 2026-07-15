@@ -6,20 +6,22 @@ use serde_json::{Map, Value};
 
 use super::{QWEN_HOOK_TIMEOUT_MS, QWEN_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, STATUS_LINE};
 use crate::agents::managed_json_hooks::{ManagedJsonHookSpec, SyncEncoding};
+use crate::agents::managed_source::ManagedSource;
 use crate::agents::managed_statusline;
-use crate::agents::{
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, agent_config_path,
-};
+use crate::agents::{Result, agent_config_path};
 
-const SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
+static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
     agent: "qwen",
     catalog: QWEN_HOOKS,
     command: RIMZ_HOOK_COMMAND,
     legacy_command_marker: RIMZ_HOOK_MARKER,
     timeout: QWEN_HOOK_TIMEOUT_MS,
     sync: SyncEncoding::HandlerAsync,
+    legacy_matcherless_blocking_events: &["PreToolUse"],
     status_lines: &[&STATUS_LINE],
 };
+
+pub(super) static MANAGED_SOURCE: ManagedSource = ManagedSource::json(&SPEC, qwen_settings_path);
 
 pub(super) fn qwen_settings_path() -> Result<PathBuf> {
     if std::env::var_os("RIMZ_QWEN_SETTINGS").is_some() {
@@ -37,26 +39,6 @@ pub(super) fn qwen_settings_path() -> Result<PathBuf> {
         "RIMZ_QWEN_SETTINGS",
         Path::new(".qwen/settings.json"),
     )
-}
-
-pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {
-    SPEC.install_into(path)
-}
-
-pub(super) fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
-    SPEC.preview_at(path)
-}
-
-pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
-    SPEC.uninstall_from(path)
-}
-
-pub(super) fn hooks_installed_at(path: &Path) -> bool {
-    SPEC.installed_at(path)
-}
-
-pub(super) fn managed_artifacts_at(path: &Path) -> bool {
-    SPEC.managed_artifacts_at(path)
 }
 
 pub(super) fn read_existing_json(path: &Path) -> Result<Map<String, Value>> {

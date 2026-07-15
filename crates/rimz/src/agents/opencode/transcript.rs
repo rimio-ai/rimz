@@ -14,14 +14,13 @@ use rusqlite::{Connection, Rows, params};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::spend::open_readonly;
+use super::database::{MessageTime, open_readonly};
 use crate::agents::sanitize_user_prompt;
 use crate::agents::transcript::{
     TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole,
 };
 use crate::agents::transcript_fs::{
     deserialize_optional_object_lossy, deserialize_optional_string_lossy,
-    deserialize_optional_u64_lossy,
 };
 use crate::ids::AgentSessionId;
 
@@ -34,12 +33,6 @@ struct MessageData {
     #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
     time: Option<MessageTime>,
     summary: Option<Value>,
-}
-
-#[derive(Deserialize)]
-struct MessageTime {
-    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
-    created: Option<u64>,
 }
 
 #[derive(Deserialize)]

@@ -12,7 +12,7 @@ fn install_wraps_and_restores_existing_subagent_status_line() {
         r#"{ "subagentStatusLine": { "type": "command", "command": "my-subagent-line" } }"#,
     )
     .unwrap();
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         parsed["subagentStatusLine"]["command"],
@@ -34,7 +34,7 @@ fn install_wraps_and_restores_existing_subagent_status_line() {
         Some("my-subagent-line")
     );
 
-    uninstall_from(&path).unwrap();
+    MANAGED_SOURCE.uninstall_from(&path).unwrap();
     let restored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         restored["subagentStatusLine"]["command"],
@@ -61,7 +61,7 @@ fn install_wraps_and_restores_user_status_line() {
             r#"{ "statusLine": { "type": "command", "command": "npx -y ccstatusline@latest", "padding": 0, "refreshInterval": 10 } }"#,
         )
         .unwrap();
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
     assert_eq!(parsed["statusLine"]["padding"], 0);
@@ -72,7 +72,7 @@ fn install_wraps_and_restores_user_status_line() {
         wrapped_status_line_command_from(&root, &STATUS_LINE).as_deref(),
         Some("npx -y ccstatusline@latest")
     );
-    uninstall_from(&path).unwrap();
+    MANAGED_SOURCE.uninstall_from(&path).unwrap();
     let restored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         restored["statusLine"]["command"],
@@ -83,7 +83,7 @@ fn install_wraps_and_restores_user_status_line() {
 
     // A bare-string statusline is captured whole the same way and restored.
     std::fs::write(&path, r#"{ "statusLine": "echo hi" }"#).unwrap();
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(parsed["statusLine"]["_rimz_wrapped"], "echo hi");
     let root = read_existing_json(&path).unwrap();
@@ -91,7 +91,7 @@ fn install_wraps_and_restores_user_status_line() {
         wrapped_status_line_command_from(&root, &STATUS_LINE).as_deref(),
         Some("echo hi")
     );
-    uninstall_from(&path).unwrap();
+    MANAGED_SOURCE.uninstall_from(&path).unwrap();
     let restored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(restored["statusLine"], "echo hi");
 }
@@ -105,9 +105,9 @@ fn reinstall_does_not_double_wrap() {
         r#"{ "statusLine": { "type": "command", "command": "user-line" } }"#,
     )
     .unwrap();
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
     let first = std::fs::read_to_string(&path).unwrap();
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
     let second = std::fs::read_to_string(&path).unwrap();
     assert_eq!(first, second, "re-install must be byte-identical");
     let parsed: Value = serde_json::from_str(&second).unwrap();
@@ -152,7 +152,7 @@ fn recursive_status_line_wrap_is_repaired_on_install_and_dropped_on_uninstall() 
         serde_json::to_string(&recursive(json!({ "padding": 0, "refreshInterval": 10 }))).unwrap(),
     )
     .unwrap();
-    install_into(&install_path).unwrap();
+    MANAGED_SOURCE.install_into(&install_path).unwrap();
     let parsed: Value = serde_json::from_slice(&std::fs::read(&install_path).unwrap()).unwrap();
     assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
     assert!(
@@ -168,7 +168,7 @@ fn recursive_status_line_wrap_is_repaired_on_install_and_dropped_on_uninstall() 
         serde_json::to_string(&recursive(json!({}))).unwrap(),
     )
     .unwrap();
-    uninstall_from(&uninstall_path).unwrap();
+    MANAGED_SOURCE.uninstall_from(&uninstall_path).unwrap();
     let parsed: Value = serde_json::from_slice(&std::fs::read(&uninstall_path).unwrap()).unwrap();
     assert!(
         parsed.get("statusLine").is_none(),
@@ -180,8 +180,8 @@ fn recursive_status_line_wrap_is_repaired_on_install_and_dropped_on_uninstall() 
 fn uninstall_removes_status_line_when_none_existed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
-    install_into(&path).unwrap();
-    uninstall_from(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
+    MANAGED_SOURCE.uninstall_from(&path).unwrap();
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert!(
         parsed.get("statusLine").is_none(),

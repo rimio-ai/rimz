@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{AgentCost, AgentCurrentUsage};
+use crate::agents::{AgentCost, AgentCurrentUsage, AgentState, single_line_description};
 
 fn row_time() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
@@ -145,6 +145,40 @@ fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
         card: RowCard::Process(ProcessCard::default()),
     };
     assert_eq!(process.display_name(), "cargo");
+}
+
+#[test]
+fn agent_card_activity_description_matches_agent_state_precedence() {
+    let context = AgentContext {
+        session_preview: Some(" \n\t".to_owned()),
+        session_name: Some("<task-notification>control</task-notification>".to_owned()),
+        ..AgentContext::new("codex", row_time())
+    };
+    let mut card = AgentCard {
+        context: Some(context.clone()),
+        description: Some("\u{0007}".to_owned()),
+        task: Some(" ship\nwide ".to_owned()),
+        prompt: Some("latest prompt".to_owned()),
+        ..AgentCard::default()
+    };
+    let mut state = AgentState::stub("codex", "sess", AgentStatus::Running);
+    state.context = Some(context);
+    state.description = card.description.clone();
+    state.task = card.task.clone();
+    state.prompt = card.prompt.clone();
+
+    assert_eq!(card.activity_description(), state.activity_description());
+    assert_eq!(
+        card.activity_description()
+            .and_then(single_line_description)
+            .as_deref(),
+        Some("ship wide")
+    );
+
+    card.task = Some("<system-reminder>control</system-reminder>".to_owned());
+    state.task = card.task.clone();
+    assert_eq!(card.activity_description(), Some("latest prompt"));
+    assert_eq!(card.activity_description(), state.activity_description());
 }
 
 #[test]

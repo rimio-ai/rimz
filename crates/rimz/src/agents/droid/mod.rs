@@ -18,10 +18,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use self::install::{
-    droid_settings_path, hooks_installed_at, install_into, managed_artifacts_at,
-    preview_install_at, uninstall_from,
-};
+use self::install::{MANAGED_SOURCE, droid_settings_path};
 use self::payloads::{parse_session_start, parse_user_prompt_submit};
 #[cfg(test)]
 use super::AgentHookClass;
@@ -33,10 +30,10 @@ use super::descriptor::{
 use super::hook_types::{HookRecord, SessionSource, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx,
-    RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
-    optional_payload_string, read_transcript_lines, sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, AgentTokenUsage, ClassifiedHook, LocalContextRefresh,
+    LocalContextRefreshCtx, ManagedSource, RefreshTrigger, Result, SessionOrigin,
+    TranscriptMessage, TranscriptPage, TranscriptPosition, optional_payload_string,
+    read_transcript_lines, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -498,24 +495,8 @@ impl AgentAdapter for DroidAdapter {
         spend::parse(path, prices)
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        install_into(&droid_settings_path()?)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        preview_install_at(&droid_settings_path()?)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        uninstall_from(&droid_settings_path()?)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        droid_settings_path().is_ok_and(|path| hooks_installed_at(&path))
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        droid_settings_path().is_ok_and(|path| managed_artifacts_at(&path))
+    fn managed_source(&self) -> Option<&'static ManagedSource> {
+        Some(&MANAGED_SOURCE)
     }
 }
 

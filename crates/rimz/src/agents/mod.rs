@@ -110,8 +110,8 @@ pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentCardRef, AgentSignal, AgentState, AgentStatus,
     COMPACTING_WINDOW_SECS, ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS,
     DEFAULT_INACTIVE_AFTER_SECS, DEFAULT_STALL_AFTER_SECS, OpenAsk, is_native_permission_wait,
-    is_stalled, is_turn_complete, is_turn_dead, is_turn_interrupted, looks_like_control_text,
-    single_line_description, usable_description,
+    is_stalled, is_turn_complete, is_turn_dead, is_turn_interrupted, single_line_description,
+    usable_description,
 };
 pub(crate) use state::{display_turn_error, effective_turn_error_class};
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
@@ -1378,7 +1378,10 @@ pub trait AgentAdapter: Send + Sync {
     /// usable by [`Self::hooks_installed`]. No-arg uninstall uses this so
     /// "ensure absent" cleans damaged configs without rewriting untouched ones.
     fn managed_hook_artifacts_present(&self) -> bool {
-        self.hooks_installed()
+        self.managed_source().map_or_else(
+            || self.hooks_installed(),
+            ManagedSource::managed_artifacts_present,
+        )
     }
 
     /// The user's original statusline command this agent currently wraps, if

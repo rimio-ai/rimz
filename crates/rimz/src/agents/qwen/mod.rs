@@ -15,8 +15,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use self::install::{
-    hooks_installed_at, install_into, managed_artifacts_at, preview_install_at, qwen_settings_path,
-    read_existing_json, uninstall_from, wrapped_status_line_command_from,
+    MANAGED_SOURCE, qwen_settings_path, read_existing_json, wrapped_status_line_command_from,
 };
 use self::payloads::{
     QwenStopError, parse_compact, parse_session_start, parse_stop, parse_stop_failure,
@@ -38,9 +37,9 @@ use super::pricing::PriceBook;
 use super::transcript::{TranscriptMessage, TranscriptRole};
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, RootIdentity,
-    SessionOrigin, SubagentIdentity, TurnErrorClass, non_empty_trimmed, optional_payload_string,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity, TurnErrorClass,
+    non_empty_trimmed, optional_payload_string, resolve_root_identity, resolve_subagent_identity,
+    sanitize_user_prompt, stop_payload_errored,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -605,20 +604,8 @@ impl AgentAdapter for QwenAdapter {
         let root = read_existing_json(&qwen_settings_path().ok()?).ok()?;
         wrapped_status_line_command_from(&root)
     }
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        install_into(&qwen_settings_path()?)
-    }
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        preview_install_at(&qwen_settings_path()?)
-    }
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        uninstall_from(&qwen_settings_path()?)
-    }
-    fn hooks_installed(&self) -> bool {
-        qwen_settings_path().is_ok_and(|path| hooks_installed_at(&path))
-    }
-    fn managed_hook_artifacts_present(&self) -> bool {
-        qwen_settings_path().is_ok_and(|path| managed_artifacts_at(&path))
+    fn managed_source(&self) -> Option<&'static ManagedSource> {
+        Some(&MANAGED_SOURCE)
     }
 
     fn probe_account(&self) -> super::account::AccountProbe {

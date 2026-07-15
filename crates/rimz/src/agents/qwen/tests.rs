@@ -74,9 +74,11 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     fs::write(&path, r#"{"ui":{"statusLine":{"type":"command","command":"myline","refreshInterval":5}},"theme":"dark"}"#).unwrap();
-    let report = install::install_into(&path).unwrap();
+    let report = install::MANAGED_SOURCE.install_into(&path).unwrap();
     assert_eq!(report.installed_events.len(), 14);
-    assert!(install::hooks_installed_at(&path));
+    assert!(install::MANAGED_SOURCE.installed_at(&path));
+    assert!(install::MANAGED_SOURCE.managed_artifacts_at(&path));
+    assert!(!install::MANAGED_SOURCE.upgrade_available_at(&path));
     let installed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         installed
@@ -102,8 +104,8 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
             .and_then(Value::as_str),
         Some(BLOCKING_TOOL_MATCHER)
     );
-    install::uninstall_from(&path).unwrap();
-    assert!(!install::hooks_installed_at(&path));
+    install::MANAGED_SOURCE.uninstall_from(&path).unwrap();
+    assert!(!install::MANAGED_SOURCE.installed_at(&path));
     let restored: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         restored
@@ -118,7 +120,7 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
         r#"{"ui":{"statusLine":{"type":"preset","name":"minimal"}}}"#,
     )
     .unwrap();
-    let preview = install::preview_install_at(&path).unwrap();
+    let preview = install::MANAGED_SOURCE.preview_at(&path).unwrap();
     assert_eq!(preview.status_line_change, None);
     let candidate: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
     assert_eq!(
@@ -133,7 +135,7 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
         json!({"ui": {"statusLine": "compact"}}),
     ] {
         fs::write(&path, serde_json::to_string(&original).unwrap()).unwrap();
-        let preview = install::preview_install_at(&path).unwrap();
+        let preview = install::MANAGED_SOURCE.preview_at(&path).unwrap();
         assert_eq!(preview.status_line_change, None);
         let candidate: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
         assert_eq!(candidate.get("ui"), original.get("ui"));
@@ -145,12 +147,23 @@ fn rejects_async_managed_blocking_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     fs::write(&path, format!(r#"{{"hooks":{{"PermissionRequest":[{{"_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}","async":true}}]}}]}}}}"#)).unwrap();
-    let error = install::install_into(&path).unwrap_err().to_string();
+    let error = install::MANAGED_SOURCE
+        .install_into(&path)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("async"));
 
     fs::write(&path, format!(r#"{{"hooks":{{"PreToolUse":[{{"_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}","async":true}}]}}]}}}}"#)).unwrap();
-    let error = install::install_into(&path).unwrap_err().to_string();
+    let error = install::MANAGED_SOURCE
+        .install_into(&path)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("PreToolUse"));
+
+    fs::write(&path, format!(r#"{{"hooks":{{"PreToolUse":[{{"matcher":"OtherTool","_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}","async":true}}]}}]}}}}"#)).unwrap();
+    install::MANAGED_SOURCE
+        .install_into(&path)
+        .expect("ordinary matcher mismatch is reclaimed, not rejected as a legacy broad hook");
 }
 
 #[test]

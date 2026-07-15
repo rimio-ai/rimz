@@ -184,6 +184,25 @@ pub(crate) struct TranscriptTail {
     pub(crate) torn_suffix: bool,
 }
 
+/// Length of the consumable JSONL prefix plus whether the unconsumed suffix
+/// contains non-whitespace bytes. Newline-terminated records are complete by
+/// the writer contract; a final record without a newline is complete only when
+/// it parses as one JSON value.
+fn complete_jsonl_prefix(bytes: &[u8]) -> (usize, bool) {
+    let complete = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |newline| newline + 1);
+    let fragment = &bytes[complete..];
+    if !fragment.is_empty() && serde_json::from_slice::<serde::de::IgnoredAny>(fragment).is_ok() {
+        return (bytes.len(), false);
+    }
+    (
+        complete,
+        fragment.iter().any(|byte| !byte.is_ascii_whitespace()),
+    )
+}
+
 /// The bounded transcript tail plus whether an incomplete final record was
 /// excluded. Cursor uses the extra bit to prove its transcript is resting at
 /// a terminal row; other adapters retain the string-only wrapper above.
@@ -194,70 +213,58 @@ pub(crate) fn read_transcript_tail_with_status(path: &Path) -> Option<Transcript
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
     let normal_start = len.saturating_sub(TAIL_BYTES);
-    let mut start = normal_start;
-    let mut expanding = false;
-    let mut buf;
-    loop {
-        let starts_at_boundary = if start == 0 {
-            true
+    file.seek(SeekFrom::Start(normal_start)).ok()?;
+    let mut buf = Vec::with_capacity(usize::try_from(len - normal_start).unwrap_or(0));
+    file.by_ref()
+        .take(len - normal_start)
+        .read_to_end(&mut buf)
+        .ok()?;
+
+    let starts_at_boundary = if normal_start == 0 {
+        true
+    } else {
+        file.seek(SeekFrom::Start(normal_start - 1)).ok()?;
+        let mut previous = [0];
+        file.read_exact(&mut previous).ok()?;
+        previous[0] == b'\n'
+    };
+    let mut completeness = None;
+    if !starts_at_boundary {
+        let discard_partial = buf
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .and_then(|newline| {
+                let remainder = &buf[newline + 1..];
+                let status = complete_jsonl_prefix(remainder);
+                (remainder.contains(&b'\n')
+                    || (!remainder.is_empty() && status.0 == remainder.len()))
+                .then_some((newline, status))
+            });
+        if let Some((newline, status)) = discard_partial {
+            buf.drain(..=newline);
+            completeness = Some(status);
         } else {
-            file.seek(SeekFrom::Start(start - 1)).ok()?;
-            let mut previous = [0];
-            file.read_exact(&mut previous).ok()?;
-            previous[0] == b'\n'
-        };
-        file.seek(SeekFrom::Start(start)).ok()?;
-        buf = Vec::new();
-        file.read_to_end(&mut buf).ok()?;
-        if starts_at_boundary {
-            if expanding {
-                let cutoff = usize::try_from(normal_start.saturating_sub(start))
-                    .unwrap_or(usize::MAX)
-                    .min(buf.len());
-                if let Some(newline) = buf[..cutoff].iter().rposition(|byte| *byte == b'\n') {
-                    buf.drain(..=newline);
+            let mut record_start = 0;
+            let mut scan_end = normal_start;
+            let mut chunk = Vec::with_capacity(TAIL_BYTES as usize);
+            while scan_end > 0 {
+                let scan_start = scan_end.saturating_sub(TAIL_BYTES);
+                chunk.resize(usize::try_from(scan_end - scan_start).ok()?, 0);
+                file.seek(SeekFrom::Start(scan_start)).ok()?;
+                file.read_exact(&mut chunk).ok()?;
+                if let Some(newline) = chunk.iter().rposition(|byte| *byte == b'\n') {
+                    record_start = scan_start + newline as u64 + 1;
+                    break;
                 }
+                scan_end = scan_start;
             }
-            break;
+            buf.clear();
+            file.seek(SeekFrom::Start(record_start)).ok()?;
+            file.take(len - record_start).read_to_end(&mut buf).ok()?;
         }
-        if expanding {
-            let cutoff = usize::try_from(normal_start.saturating_sub(start)).unwrap_or(usize::MAX);
-            if let Some(newline) = buf
-                .get(..cutoff.min(buf.len()))
-                .and_then(|prefix| prefix.iter().rposition(|byte| *byte == b'\n'))
-            {
-                buf.drain(..=newline);
-                break;
-            }
-        } else if let Some(newline) = buf.iter().position(|byte| *byte == b'\n') {
-            let remainder = &buf[newline + 1..];
-            if remainder.contains(&b'\n')
-                || serde_json::from_slice::<serde::de::IgnoredAny>(remainder).is_ok()
-            {
-                buf.drain(..=newline);
-                break;
-            }
-        }
-        expanding = true;
-        start = start.saturating_sub(TAIL_BYTES);
     }
 
-    let (complete, torn_suffix) = match buf.iter().rposition(|byte| *byte == b'\n') {
-        Some(newline) if newline + 1 < buf.len() => {
-            let fragment = &buf[newline + 1..];
-            if serde_json::from_slice::<serde::de::IgnoredAny>(fragment).is_ok() {
-                (buf.len(), false)
-            } else {
-                (
-                    newline + 1,
-                    fragment.iter().any(|byte| !byte.is_ascii_whitespace()),
-                )
-            }
-        }
-        Some(_) => (buf.len(), false),
-        None if serde_json::from_slice::<serde::de::IgnoredAny>(&buf).is_ok() => (buf.len(), false),
-        None => (0, buf.iter().any(|byte| !byte.is_ascii_whitespace())),
-    };
+    let (complete, torn_suffix) = completeness.unwrap_or_else(|| complete_jsonl_prefix(&buf));
     buf.truncate(complete);
     Some(TranscriptTail {
         text: String::from_utf8_lossy(&buf).into_owned(),
@@ -286,18 +293,7 @@ pub(crate) fn read_spend_lines(path: &Path, offset: u64) -> Option<(Vec<u8>, u64
     file.seek(SeekFrom::Start(offset)).ok()?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).ok()?;
-    let complete = match buf.iter().rposition(|&b| b == b'\n') {
-        Some(last_newline) => last_newline + 1,
-        None => 0,
-    };
-    let fragment = &buf[complete..];
-    let consumed = if !fragment.is_empty()
-        && serde_json::from_slice::<serde::de::IgnoredAny>(fragment).is_ok()
-    {
-        buf.len()
-    } else {
-        complete
-    };
+    let (consumed, _) = complete_jsonl_prefix(&buf);
     if consumed == 0 {
         return None;
     }
@@ -358,6 +354,36 @@ mod tests {
     }
 
     #[test]
+    fn transcript_tail_reads_a_three_chunk_newest_record_once_and_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        let content = "z".repeat(3 * 64 * 1024 + 17);
+        let newest = format!("{{\"content\":{content:?}}}");
+        fs::write(&path, format!("{{\"old\":true}}\n{newest}")).unwrap();
+
+        let tail = read_transcript_tail_with_status(&path).unwrap();
+        assert_eq!(tail.text, newest);
+        assert!(!tail.torn_suffix);
+    }
+
+    #[test]
+    fn transcript_tail_keeps_a_multichunk_record_before_a_torn_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        let content = "z".repeat(3 * 64 * 1024 + 17);
+        let newest_complete = format!("{{\"content\":{content:?}}}\n");
+        fs::write(
+            &path,
+            format!("{{\"old\":true}}\n{newest_complete}{{\"torn\":"),
+        )
+        .unwrap();
+
+        let tail = read_transcript_tail_with_status(&path).unwrap();
+        assert_eq!(tail.text, newest_complete);
+        assert!(tail.torn_suffix);
+    }
+
+    #[test]
     fn transcript_tail_keeps_valid_no_newline_and_drops_torn_fragment() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("log.jsonl");
@@ -383,5 +409,21 @@ mod tests {
             assert_eq!(tail.text, text, "{content:?}");
             assert_eq!(tail.torn_suffix, torn_suffix, "{content:?}");
         }
+    }
+
+    #[test]
+    fn jsonl_completeness_pins_whitespace_and_incremental_fragments() {
+        assert_eq!(complete_jsonl_prefix(b" \t "), (0, false));
+        assert_eq!(complete_jsonl_prefix(b"{\"a\":1}"), (7, false));
+        assert_eq!(complete_jsonl_prefix(b"{\"a\":"), (0, true));
+        assert_eq!(complete_jsonl_prefix(b"{\"a\":1}\n{\"b\":"), (8, true));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log.jsonl");
+        fs::write(&path, b" \t ").unwrap();
+        let tail = read_transcript_tail_with_status(&path).unwrap();
+        assert_eq!(tail.text, "");
+        assert!(!tail.torn_suffix);
+        assert!(read_spend_lines(&path, 0).is_none());
     }
 }

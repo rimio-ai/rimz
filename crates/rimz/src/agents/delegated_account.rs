@@ -32,7 +32,7 @@ impl Adapter {
 pub(crate) struct Config {
     pub(crate) adapter: Adapter,
     pub(crate) auth_path: Option<PathBuf>,
-    pub(crate) used_provider: Option<String>,
+    pub(crate) used_provider: fn() -> Option<String>,
     pub(crate) api_key_types: &'static [&'static str],
     pub(crate) account_key_domain: &'static [u8],
 }
@@ -122,8 +122,11 @@ pub(crate) fn probe_account(config: &Config) -> AccountProbe {
     let Ok(credentials) = serde_json::from_slice::<BTreeMap<String, Credential>>(&bytes) else {
         return AccountProbe::Unavailable;
     };
-    let Some((provider, credential)) =
-        select_display(&credentials, config.used_provider.as_deref())
+    if credentials.is_empty() {
+        return AccountProbe::LoggedOut;
+    }
+    let used_provider = (config.used_provider)();
+    let Some((provider, credential)) = select_display(&credentials, used_provider.as_deref())
     else {
         return AccountProbe::LoggedOut;
     };
@@ -247,8 +250,13 @@ fn select_usage(bytes: &[u8], config: &Config) -> Result<SelectedCredential, Err
             adapter: config.adapter.name(),
             source,
         })?;
-    let Some((provider, credential)) = config
-        .used_provider
+    if credentials.is_empty() {
+        return Err(Error::NoCredentials {
+            adapter: config.adapter.name(),
+        });
+    }
+    let used_provider = (config.used_provider)();
+    let Some((provider, credential)) = used_provider
         .as_deref()
         .and_then(|provider| credentials.get_key_value(provider))
         .or_else(|| {
@@ -356,12 +364,30 @@ fn unix_now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn no_used_provider() -> Option<String> {
+        None
+    }
+
+    fn openai_used_provider() -> Option<String> {
+        Some("openai".to_owned())
+    }
+
+    fn opencode_used_provider() -> Option<String> {
+        Some("opencode".to_owned())
+    }
 
     fn config(adapter: Adapter, used: Option<&str>, domain: &'static [u8]) -> Config {
         Config {
             adapter,
             auth_path: None,
-            used_provider: used.map(ToOwned::to_owned),
+            used_provider: match used {
+                Some("openai") => openai_used_provider,
+                Some("opencode") => opencode_used_provider,
+                Some(other) => panic!("missing test resolver for {other}"),
+                None => no_used_provider,
+            },
             api_key_types: match adapter {
                 Adapter::Pi => &["api_key"],
                 Adapter::OpenCode => &["api", "api_key"],
@@ -515,5 +541,41 @@ mod tests {
         };
         assert_eq!(account.plan.as_deref(), Some("OpenCode Wellknown"));
         assert_eq!(account.metered, None);
+    }
+
+    static RESOLVER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    fn counted_openai_provider() -> Option<String> {
+        RESOLVER_CALLS.fetch_add(1, Ordering::Relaxed);
+        Some("openai".to_owned())
+    }
+
+    #[test]
+    fn active_provider_resolves_only_after_valid_nonempty_auth() {
+        RESOLVER_CALLS.store(0, Ordering::Relaxed);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        let mut config = config(Adapter::OpenCode, None, b"open");
+        config.auth_path = Some(path.clone());
+        config.used_provider = counted_openai_provider;
+
+        assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
+        std::fs::write(&path, b"not json").unwrap();
+        assert!(matches!(probe_account(&config), AccountProbe::Unavailable));
+        std::fs::write(&path, b"{}").unwrap();
+        assert!(matches!(probe_account(&config), AccountProbe::LoggedOut));
+        assert_eq!(RESOLVER_CALLS.load(Ordering::Relaxed), 0);
+
+        std::fs::write(
+            &path,
+            br#"{"anthropic":{"type":"oauth"},"openai":{"type":"api_key"}}"#,
+        )
+        .unwrap();
+        let AccountProbe::Found(account) = probe_account(&config) else {
+            panic!("valid credentials should select an account")
+        };
+        assert_eq!(account.sub_provider.as_deref(), Some("openai"));
+        assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
+        assert_eq!(RESOLVER_CALLS.load(Ordering::Relaxed), 1);
     }
 }

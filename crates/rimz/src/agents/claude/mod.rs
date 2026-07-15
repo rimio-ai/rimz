@@ -35,12 +35,11 @@ use jiff::Timestamp;
 use serde_json::Map;
 use serde_json::Value;
 
+use self::install::{
+    MANAGED_SOURCE, claude_settings_path, read_existing_json, wrapped_status_line_command_from,
+};
 #[cfg(test)]
 use self::install::{classify_status_line_change, upsert_rimz_status_line};
-use self::install::{
-    claude_settings_path, hooks_installed_at, install_into, managed_artifacts_at,
-    preview_install_at, read_existing_json, uninstall_from, wrapped_status_line_command_from,
-};
 use self::payloads::{
     ClaudeCommon, ClaudePostCompact, ClaudeSessionStart, ClaudeStop, ClaudeSubagentStart,
     ClaudeSubagentStop, ClaudeUserPromptSubmit, parse_permission_request, parse_post_compact,
@@ -64,10 +63,10 @@ use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, AgentTurnError,
-    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    RootIdentity, SessionOrigin, SubagentIdentity, SubagentObservation, TranscriptMessage,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    ClassifiedHook, ManagedSource, Result, RootIdentity, SessionOrigin, SubagentIdentity,
+    SubagentObservation, TranscriptMessage, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::transcript::{AskAnswer, AskQuestion};
@@ -731,27 +730,8 @@ impl AgentAdapter for ClaudeAdapter {
         wrapped_status_line_command_from(&root, &SUBAGENT_STATUS_LINE)
     }
 
-    fn install_hooks(&self) -> Result<HookInstallReport> {
-        let path = claude_settings_path()?;
-        install_into(&path)
-    }
-
-    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
-        let path = claude_settings_path()?;
-        preview_install_at(&path)
-    }
-
-    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
-        let path = claude_settings_path()?;
-        uninstall_from(&path)
-    }
-
-    fn hooks_installed(&self) -> bool {
-        claude_settings_path().is_ok_and(|path| hooks_installed_at(&path))
-    }
-
-    fn managed_hook_artifacts_present(&self) -> bool {
-        claude_settings_path().is_ok_and(|path| managed_artifacts_at(&path))
+    fn managed_source(&self) -> Option<&'static ManagedSource> {
+        Some(&MANAGED_SOURCE)
     }
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {

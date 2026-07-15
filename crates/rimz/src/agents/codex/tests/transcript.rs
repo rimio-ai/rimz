@@ -78,6 +78,35 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
 }
 
 #[test]
+fn shared_scan_keeps_latest_usage_and_same_turn_plan_past_older_recovery() {
+    let tail = concat!(
+        r#"{"timestamp":"2026-07-13T09:00:00Z","type":"event_msg","payload":{"type":"stream_error","message":"older failure"}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T09:01:00Z","type":"event_msg","payload":{"type":"task_started"}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T10:00:00Z","type":"turn_context","payload":{"turn_id":"turn-plan","model":"gpt-5.5","effort":"high"}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":120,"cached_input_tokens":20,"output_tokens":8,"total_tokens":128},"total_token_usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":80},"model_context_window":258400}}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T10:00:02Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-plan","item":{"type":"Plan","text":"Ship shared scan"}}}"#,
+        "\n",
+        r#"{"timestamp":"2026-07-13T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-plan","last_agent_message":"Codex says:"}}"#,
+    );
+
+    let (usage, outcome) =
+        scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_parts();
+    assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(usage.effort.as_deref(), Some("high"));
+    assert_eq!(usage.last_input_tokens, Some(120));
+    assert_eq!(usage.cumulative_input_tokens, Some(1000));
+    let Some(RestingTurnOutcome::PlanProposed(plan)) = outcome else {
+        panic!("latest clean turn should rest on its plan")
+    };
+    assert_eq!(plan.text, "Ship shared scan");
+    assert_eq!(plan.at, "2026-07-13T10:00:03Z".parse().unwrap());
+}
+
+#[test]
 fn stream_assistant_messages_reads_rollout_agent_messages_only() {
     let messages =
         CodexAdapter.stream_assistant_messages(include_str!("fixtures/stream-rollout.jsonl"));

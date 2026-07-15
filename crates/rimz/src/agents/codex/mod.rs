@@ -63,9 +63,9 @@ pub use self::process::{
 };
 pub(crate) use self::transcript::infer_turn_death_from_spent_window;
 use self::transcript::{
-    CodexRolloutHeader, TranscriptUsage, configured_model, configured_reasoning_effort,
-    detect_plan_proposed, detect_turn_error, find_session_transcript, payload_reasoning_effort,
-    read_rollout_header, usage_from_transcript_tail,
+    CodexRolloutHeader, RestingTurnOutcome, TranscriptScanNeed, TranscriptUsage, configured_model,
+    configured_reasoning_effort, detect_plan_proposed, detect_turn_error, find_session_transcript,
+    payload_reasoning_effort, read_rollout_header, scan_transcript_tail,
 };
 #[cfg(test)]
 use self::transcript::{
@@ -1080,16 +1080,22 @@ fn codex_transcript_observation(
         (header.session_id.as_deref() == Some(child_id)).then_some(header)
     });
     let tail = path.as_deref().and_then(read_transcript_tail);
-    let usage = tail
+    let need = if detect_turn_death {
+        TranscriptScanNeed::UsageAndOutcome
+    } else {
+        TranscriptScanNeed::UsageOnly
+    };
+    let (usage, outcome) = tail
         .as_deref()
-        .map(usage_from_transcript_tail)
+        .map(|tail| scan_transcript_tail(tail, need).into_parts())
         .unwrap_or_default();
-    let turn_error = detect_turn_death
-        .then(|| tail.as_deref().and_then(detect_turn_error))
-        .flatten();
-    let plan_proposed = detect_turn_death
-        .then(|| tail.as_deref().and_then(detect_plan_proposed))
-        .flatten();
+    let (turn_error, plan_proposed) = match outcome {
+        Some(RestingTurnOutcome::Died(error)) => (Some(error), None),
+        Some(RestingTurnOutcome::PlanProposed(plan)) => (None, Some(plan)),
+        Some(RestingTurnOutcome::Complete(_) | RestingTurnOutcome::Interrupted(_)) | None => {
+            (None, None)
+        }
+    };
     CodexTranscriptObservation {
         path,
         header,

@@ -821,27 +821,12 @@ impl AgentState {
     /// One-line activity label for CLI and sidebar rows: rich session preview,
     /// rich session name, launch description, live task, then latest prompt.
     pub fn activity_description(&self) -> Option<&str> {
-        self.context
-            .as_ref()
-            .and_then(|context| context.session_preview.as_deref())
-            .filter(|preview| usable_description(preview))
-            .or_else(|| {
-                self.context
-                    .as_ref()
-                    .and_then(|context| context.session_name.as_deref())
-                    .filter(|name| usable_description(name))
-            })
-            .or_else(|| {
-                self.description
-                    .as_deref()
-                    .filter(|description| usable_description(description))
-            })
-            .or_else(|| self.task.as_deref().filter(|task| usable_description(task)))
-            .or_else(|| {
-                self.prompt
-                    .as_deref()
-                    .filter(|prompt| usable_description(prompt))
-            })
+        select_activity_description(
+            self.context.as_ref(),
+            self.description.as_deref(),
+            self.task.as_deref(),
+            self.prompt.as_deref(),
+        )
     }
 
     /// [`Self::activity_description`] collapsed to a single presentable line —
@@ -1062,16 +1047,38 @@ pub fn single_line_description(value: &str) -> Option<String> {
 }
 
 pub fn usable_description(value: &str) -> bool {
-    single_line_description(value).is_some() && !looks_like_control_text(value)
+    value
+        .chars()
+        .any(|ch| !ch.is_whitespace() && !ch.is_control())
+        && !looks_like_control_text(value)
 }
 
 /// Whether a description candidate is a harness-injected control turn rather
 /// than human-authored text.
-pub fn looks_like_control_text(value: &str) -> bool {
+fn looks_like_control_text(value: &str) -> bool {
     let trimmed = value.trim_start();
     crate::agents::CONTROL_TAG_PREFIXES
         .iter()
         .any(|tag| trimmed.starts_with(tag))
+}
+
+pub(crate) fn select_activity_description<'a>(
+    context: Option<&'a AgentContext>,
+    description: Option<&'a str>,
+    task: Option<&'a str>,
+    prompt: Option<&'a str>,
+) -> Option<&'a str> {
+    context
+        .and_then(|context| context.session_preview.as_deref())
+        .filter(|value| usable_description(value))
+        .or_else(|| {
+            context
+                .and_then(|context| context.session_name.as_deref())
+                .filter(|value| usable_description(value))
+        })
+        .or_else(|| description.filter(|value| usable_description(value)))
+        .or_else(|| task.filter(|value| usable_description(value)))
+        .or_else(|| prompt.filter(|value| usable_description(value)))
 }
 
 #[cfg(test)]

@@ -89,65 +89,7 @@ pub(crate) fn oauth_http_get(
     headers: &[(&str, String)],
     breadcrumb: &str,
 ) -> std::result::Result<String, (HttpErrKind, String)> {
-    tracing::info!(
-        target: crate::observability::BREADCRUMB_TARGET,
-        host = %url_host(url),
-        "{}",
-        breadcrumb,
-    );
-
-    let mut result = oauth_http_get_once(url, headers);
-    for attempt in 1..OAUTH_HTTP_ATTEMPTS {
-        match &result {
-            Err((kind, host)) if kind.is_transient() => {
-                tracing::debug!(host, attempt, %kind, "OAuth usage HTTP retry");
-                std::thread::sleep(OAUTH_HTTP_RETRY_BACKOFF * attempt);
-                result = oauth_http_get_once(url, headers);
-            }
-            _ => break,
-        }
-    }
-    result
-}
-
-fn oauth_http_get_once(
-    url: &str,
-    headers: &[(&str, String)],
-) -> std::result::Result<String, (HttpErrKind, String)> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS)))
-        .max_redirects(0)
-        .build()
-        .new_agent();
-    let mut request = agent.get(url);
-    for (name, value) in headers {
-        request = request.header(*name, value);
-    }
-    let host = || url_host(url).to_owned();
-    let mut response = request
-        .call()
-        // ureq surfaces a non-2xx response as `Error::StatusCode` (its default),
-        // so a 401/429 must be read here — the `status != 200` branch below only
-        // sees the success codes that come back `Ok`.
-        .map_err(|err| {
-            (
-                match err {
-                    ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
-                    _ => HttpErrKind::Transport,
-                },
-                host(),
-            )
-        })?;
-    let status = response.status().as_u16();
-    if status != 200 {
-        return Err((HttpErrKind::Status(status), host()));
-    }
-    response
-        .body_mut()
-        .with_config()
-        .limit(OAUTH_HTTP_MAX_BYTES)
-        .read_to_string()
-        .map_err(|_| (HttpErrKind::Body, host()))
+    oauth_http_request(url, headers, None, breadcrumb)
 }
 
 /// Bounded JSON POST for fixed provider account-usage endpoints. Secret-bearing
@@ -159,6 +101,17 @@ pub(crate) fn oauth_http_post_json<T: Serialize>(
     body: &T,
     breadcrumb: &str,
 ) -> std::result::Result<String, (HttpErrKind, String)> {
+    let host = || url_host(url).to_owned();
+    let body = serde_json::to_vec(body).map_err(|_| (HttpErrKind::Body, host()))?;
+    oauth_http_request(url, headers, Some(&body), breadcrumb)
+}
+
+fn oauth_http_request(
+    url: &str,
+    headers: &[(&str, String)],
+    body: Option<&[u8]>,
+    breadcrumb: &str,
+) -> std::result::Result<String, (HttpErrKind, String)> {
     tracing::info!(
         target: crate::observability::BREADCRUMB_TARGET,
         host = %url_host(url),
@@ -166,13 +119,13 @@ pub(crate) fn oauth_http_post_json<T: Serialize>(
         breadcrumb,
     );
 
-    let mut result = oauth_http_post_json_once(url, headers, body);
+    let mut result = oauth_http_request_once(url, headers, body);
     for attempt in 1..OAUTH_HTTP_ATTEMPTS {
         match &result {
             Err((kind, host)) if kind.is_transient() => {
                 tracing::debug!(host, attempt, %kind, "OAuth usage HTTP retry");
                 std::thread::sleep(OAUTH_HTTP_RETRY_BACKOFF * attempt);
-                result = oauth_http_post_json_once(url, headers, body);
+                result = oauth_http_request_once(url, headers, body);
             }
             _ => break,
         }
@@ -180,34 +133,45 @@ pub(crate) fn oauth_http_post_json<T: Serialize>(
     result
 }
 
-fn oauth_http_post_json_once<T: Serialize>(
+fn oauth_http_request_once(
     url: &str,
     headers: &[(&str, String)],
-    body: &T,
+    body: Option<&[u8]>,
 ) -> std::result::Result<String, (HttpErrKind, String)> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(OAUTH_HTTP_TIMEOUT_SECS)))
         .max_redirects(0)
         .build()
         .new_agent();
-    let mut request = agent.post(url);
+    let mut request = ureq::http::Request::builder()
+        .method(if body.is_some() { "POST" } else { "GET" })
+        .uri(url);
     for (name, value) in headers {
         request = request.header(*name, value);
     }
+    if body.is_some() {
+        request = request.header("Content-Type", "application/json");
+    }
     let host = || url_host(url).to_owned();
-    let body = serde_json::to_vec(body).map_err(|_| (HttpErrKind::Body, host()))?;
-    let mut response = request
-        .header("Content-Type", "application/json")
-        .send(body)
-        .map_err(|err| {
-            (
-                match err {
-                    ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
-                    _ => HttpErrKind::Transport,
-                },
-                host(),
-            )
-        })?;
+    let response = match body {
+        Some(body) => request
+            .body(body)
+            .map_err(|_| (HttpErrKind::Transport, host()))
+            .and_then(|request| {
+                agent
+                    .run(request)
+                    .map_err(|error| (error_kind(error), host()))
+            }),
+        None => request
+            .body(())
+            .map_err(|_| (HttpErrKind::Transport, host()))
+            .and_then(|request| {
+                agent
+                    .run(request)
+                    .map_err(|error| (error_kind(error), host()))
+            }),
+    };
+    let mut response = response?;
     let status = response.status().as_u16();
     if status != 200 {
         return Err((HttpErrKind::Status(status), host()));
@@ -218,6 +182,15 @@ fn oauth_http_post_json_once<T: Serialize>(
         .limit(OAUTH_HTTP_MAX_BYTES)
         .read_to_string()
         .map_err(|_| (HttpErrKind::Body, host()))
+}
+
+fn error_kind(error: ureq::Error) -> HttpErrKind {
+    match error {
+        // ureq surfaces non-2xx responses as `StatusCode`; the explicit status
+        // check above covers success-class responses other than 200.
+        ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
+        _ => HttpErrKind::Transport,
+    }
 }
 
 /// A provider account-usage reading normalized from a local out-of-band source:
@@ -504,6 +477,14 @@ mod tests {
         )
     }
 
+    fn oauth_request(post: bool, url: &str) -> std::result::Result<String, (HttpErrKind, String)> {
+        if post {
+            oauth_http_post_json(url, &[], &serde_json::json!({"request":"quota"}), "test")
+        } else {
+            oauth_http_get(url, &[], "test")
+        }
+    }
+
     #[test]
     fn http_error_transience() {
         assert!(HttpErrKind::Transport.is_transient());
@@ -599,6 +580,63 @@ mod tests {
         let error = oauth_http_get(&format!("{origin}/large"), &[], "test cap").unwrap_err();
         assert_eq!(error.0, HttpErrKind::Body);
         assert_eq!(server.join().unwrap().len(), OAUTH_HTTP_ATTEMPTS as usize);
+    }
+
+    #[test]
+    fn oauth_get_and_post_share_redirect_status_retry_and_body_limits() {
+        for post in [false, true] {
+            let (origin, server) = serve_many(vec![response(
+                "302 Found",
+                "redirect",
+                "Location: https://example.invalid/leak\r\n",
+            )]);
+            assert_eq!(
+                oauth_request(post, &format!("{origin}/redirect"))
+                    .unwrap_err()
+                    .0,
+                HttpErrKind::Status(302)
+            );
+            assert_eq!(server.join().unwrap().len(), 1);
+
+            let (origin, server) = serve_many(vec![
+                response("500 Internal Server Error", "", ""),
+                response("503 Service Unavailable", "", ""),
+                response("200 OK", "done", ""),
+            ]);
+            assert_eq!(
+                oauth_request(post, &format!("{origin}/retry")).unwrap(),
+                "done"
+            );
+            assert_eq!(server.join().unwrap().len(), 3);
+
+            for (status, code) in [
+                ("401 Unauthorized", 401),
+                ("403 Forbidden", 403),
+                ("429 Too Many Requests", 429),
+            ] {
+                let (origin, server) = serve_many(vec![response(status, "rejected", "")]);
+                assert_eq!(
+                    oauth_request(post, &format!("{origin}/status"))
+                        .unwrap_err()
+                        .0,
+                    HttpErrKind::Status(code)
+                );
+                assert_eq!(server.join().unwrap().len(), 1);
+            }
+
+            let oversized = "x".repeat(OAUTH_HTTP_MAX_BYTES as usize + 1);
+            let responses = (0..OAUTH_HTTP_ATTEMPTS)
+                .map(|_| response("200 OK", &oversized, ""))
+                .collect();
+            let (origin, server) = serve_many(responses);
+            assert_eq!(
+                oauth_request(post, &format!("{origin}/large"))
+                    .unwrap_err()
+                    .0,
+                HttpErrKind::Body
+            );
+            assert_eq!(server.join().unwrap().len(), OAUTH_HTTP_ATTEMPTS as usize);
+        }
     }
 
     #[test]

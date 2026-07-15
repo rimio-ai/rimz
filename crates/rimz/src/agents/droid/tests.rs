@@ -41,15 +41,15 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
     .unwrap();
 
     let before = std::fs::read_to_string(&path).unwrap();
-    let preview = preview_install_at(&path).unwrap();
+    let preview = MANAGED_SOURCE.preview_at(&path).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
-    let report = install_into(&path).unwrap();
+    let report = MANAGED_SOURCE.install_into(&path).unwrap();
     assert!(report.files[0].existed);
     assert_eq!(
         preview.files[0].candidate,
         std::fs::read_to_string(&path).unwrap()
     );
-    assert!(hooks_installed_at(&path));
+    assert!(MANAGED_SOURCE.installed_at(&path));
 
     let mut root: Value = serde_json::from_str(&preview.files[0].candidate).unwrap();
     let notification = root["hooks"]["Notification"].as_array().unwrap();
@@ -57,21 +57,23 @@ fn install_preview_reclaim_drift_and_uninstall_preserve_user_config() {
     assert_eq!(root["model"], "custom");
     root["hooks"].as_object_mut().unwrap().remove("Stop");
     std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
-    assert!(!hooks_installed_at(&path));
-    install_into(&path).unwrap();
-    assert!(hooks_installed_at(&path));
+    assert!(!MANAGED_SOURCE.installed_at(&path));
+    assert!(MANAGED_SOURCE.managed_artifacts_at(&path));
+    assert!(!MANAGED_SOURCE.upgrade_available_at(&path));
+    MANAGED_SOURCE.install_into(&path).unwrap();
+    assert!(MANAGED_SOURCE.installed_at(&path));
 
     let mut root: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     root["hooks"]["PostToolUse"][0]["hooks"][0]["timeout"] = json!(60);
     std::fs::write(&path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
     assert!(
-        !hooks_installed_at(&path),
+        !MANAGED_SOURCE.installed_at(&path),
         "timeout drift must re-offer the canonical hook merge"
     );
-    install_into(&path).unwrap();
-    assert!(hooks_installed_at(&path));
+    MANAGED_SOURCE.install_into(&path).unwrap();
+    assert!(MANAGED_SOURCE.installed_at(&path));
 
-    let uninstall = uninstall_from(&path).unwrap();
+    let uninstall = MANAGED_SOURCE.uninstall_from(&path).unwrap();
     assert!(uninstall.files[0].existed);
     let root: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(root["model"], "custom");

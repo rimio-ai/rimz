@@ -14,6 +14,7 @@
 //! per-session `session_ended` event, with pane liveness as the crash backstop.
 
 pub(crate) mod account;
+mod database;
 pub(crate) mod payloads;
 pub mod server;
 pub(crate) mod spend;
@@ -595,7 +596,7 @@ impl AgentAdapter for OpencodeAdapter {
             .map(Path::new)
             .filter(|path| path.is_file())
             .map(Path::to_path_buf)
-            .or_else(|| spend::opencode_db_files().into_iter().next())?;
+            .or_else(|| database::files().into_iter().next())?;
         transcript::last_assistant_message(&path, session_id)
     }
 
@@ -631,7 +632,7 @@ impl AgentAdapter for OpencodeAdapter {
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {
-        spend::opencode_db_files()
+        database::files()
     }
 
     fn session_transcript(&self, _session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {

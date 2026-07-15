@@ -15,9 +15,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags};
+#[cfg(test)]
+use rusqlite::Connection;
 use serde::Deserialize;
 
+use super::database::{MessageTime, open_readonly};
 use crate::agents::pricing::PriceBook;
 use crate::agents::spending::{
     CachedEntry, SpendCursor, SpendParse, origin_path, record_unknown_model,
@@ -26,87 +28,6 @@ use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
     deserialize_optional_string_lossy, deserialize_optional_u64_lossy,
 };
-
-// ── Discovery ────────────────────────────────────────────────────────────────
-
-pub(crate) fn opencode_db_files() -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for dir in opencode_data_dirs() {
-        if let Some(path) = db_file_in_dir(&dir) {
-            files.push(path);
-        }
-    }
-    files.sort();
-    files.dedup();
-    files
-}
-
-pub(crate) fn opencode_data_dirs() -> Vec<PathBuf> {
-    if let Ok(env_val) = std::env::var("RIMZ_OPENCODE_DATA_DIR") {
-        return env_val
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .collect();
-    }
-
-    let data_home = std::env::var_os("XDG_DATA_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-                .map(|home| home.join(".local/share"))
-        })
-        .unwrap_or_else(|| PathBuf::from("/").join(".local/share"));
-    vec![data_home.join("opencode")]
-}
-
-fn db_file_in_dir(dir: &Path) -> Option<PathBuf> {
-    let primary = dir.join("opencode.db");
-    if primary.is_file() {
-        return Some(primary);
-    }
-
-    let mut candidates = Vec::new();
-    let rd = std::fs::read_dir(dir).ok()?;
-    for entry in rd.filter_map(|entry| entry.ok()) {
-        let path = entry.path();
-        if path.is_file()
-            && path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(is_channel_db_name)
-        {
-            candidates.push(path);
-        }
-    }
-    candidates.sort();
-    candidates.into_iter().next()
-}
-
-fn is_channel_db_name(name: &str) -> bool {
-    let Some(channel) = name
-        .strip_prefix("opencode-")
-        .and_then(|rest| rest.strip_suffix(".db"))
-    else {
-        return false;
-    };
-    !channel.is_empty()
-        && channel
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-}
-
-pub(crate) fn open_readonly(path: &Path) -> Option<Connection> {
-    Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
-    .ok()
-}
 
 // ── Parser ───────────────────────────────────────────────────────────────────
 
@@ -140,12 +61,6 @@ struct MessagePath {
     cwd: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     root: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct MessageTime {
-    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
-    created: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -398,48 +313,6 @@ fn push_unique(out: &mut Vec<String>, value: String) {
     }
 }
 
-// ── Account helper ───────────────────────────────────────────────────────────
-
-pub(crate) fn latest_message_provider() -> Option<String> {
-    opencode_db_files()
-        .into_iter()
-        .filter_map(|path| latest_provider_in_db(&path))
-        .max_by(|a, b| a.0.cmp(&b.0))
-        .map(|(_, provider)| provider)
-}
-
-fn latest_provider_in_db(path: &Path) -> Option<(u64, String)> {
-    let conn = open_readonly(path)?;
-    let mut stmt = conn
-        .prepare("SELECT data FROM message ORDER BY rowid DESC LIMIT 100")
-        .ok()?;
-    let mut rows = stmt.query([]).ok()?;
-    loop {
-        let row = match rows.next() {
-            Ok(Some(row)) => row,
-            Ok(None) => break,
-            Err(_) => break,
-        };
-        let Ok(data) = row.get::<_, String>(0) else {
-            continue;
-        };
-        let Ok(message) = serde_json::from_str::<MessageData>(&data) else {
-            continue;
-        };
-        let Some(provider) = non_empty(message.provider_id.as_deref()) else {
-            continue;
-        };
-        let provider = provider.to_owned();
-        let ts = message
-            .time
-            .as_ref()
-            .and_then(|time| time.created)
-            .unwrap_or(0);
-        return Some((ts, provider));
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,24 +372,6 @@ mod tests {
                 }
             }"#,
         )
-    }
-
-    #[test]
-    fn discovery_prefers_primary_then_sorted_channel_db() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("opencode-beta.db"), "").unwrap();
-        std::fs::write(dir.path().join("opencode-alpha.db"), "").unwrap();
-        assert_eq!(
-            db_file_in_dir(dir.path()).unwrap().file_name().unwrap(),
-            "opencode-alpha.db"
-        );
-        std::fs::write(dir.path().join("opencode.db"), "").unwrap();
-        assert_eq!(
-            db_file_in_dir(dir.path()).unwrap().file_name().unwrap(),
-            "opencode.db"
-        );
-        std::fs::write(dir.path().join("opencode-bad!.db"), "").unwrap();
-        assert!(!is_channel_db_name("opencode-bad!.db"));
     }
 
     #[test]
@@ -753,23 +608,5 @@ mod tests {
         assert_eq!((entry.input, entry.output, entry.cache_read), (100, 70, 30));
         let expected = 100.0 * 0.000001 + 70.0 * 0.000002 + 30.0 * 0.0000001;
         assert!((entry.cost_usd - expected).abs() < 1e-12);
-    }
-
-    #[test]
-    fn latest_provider_reads_newest_message() {
-        let dir = TempDir::new().unwrap();
-        let path = create_db(dir.path(), "opencode.db");
-        insert_message(
-            &path,
-            r#"{"providerID":"anthropic","modelID":"claude","tokens":{"input":1},"time":{"created":1000}}"#,
-        );
-        insert_message(
-            &path,
-            r#"{"providerID":"openai","modelID":"gpt","tokens":{"input":1},"time":{"created":2000}}"#,
-        );
-        assert_eq!(
-            latest_provider_in_db(&path).map(|(_, provider)| provider),
-            Some("openai".to_owned())
-        );
     }
 }

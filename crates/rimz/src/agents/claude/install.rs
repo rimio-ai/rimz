@@ -11,20 +11,22 @@ use super::{
 #[cfg(test)]
 use crate::agents::StatusLineChange;
 use crate::agents::managed_json_hooks::{ManagedJsonHookSpec, SyncEncoding};
+use crate::agents::managed_source::ManagedSource;
 use crate::agents::managed_statusline::{self, ManagedStatusLineSpec};
-use crate::agents::{
-    HookInstallPreview, HookInstallReport, HookUninstallReport, Result, agent_config_path,
-};
+use crate::agents::{Result, agent_config_path};
 
-const SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
+static SPEC: ManagedJsonHookSpec = ManagedJsonHookSpec {
     agent: "claude",
     catalog: CLAUDE_HOOKS,
     command: RIMZ_HOOK_COMMAND,
     legacy_command_marker: RIMZ_HOOK_MARKER,
     timeout: CLAUDE_HOOK_TIMEOUT_SECS,
     sync: SyncEncoding::EntryMarker,
+    legacy_matcherless_blocking_events: &[],
     status_lines: &[&STATUS_LINE, &SUBAGENT_STATUS_LINE],
 };
+
+pub(super) static MANAGED_SOURCE: ManagedSource = ManagedSource::json(&SPEC, claude_settings_path);
 
 pub(super) fn claude_settings_path() -> Result<PathBuf> {
     agent_config_path(
@@ -32,26 +34,6 @@ pub(super) fn claude_settings_path() -> Result<PathBuf> {
         "RIMZ_CLAUDE_SETTINGS",
         Path::new(".claude/settings.json"),
     )
-}
-
-pub(super) fn install_into(path: &Path) -> Result<HookInstallReport> {
-    SPEC.install_into(path)
-}
-
-pub(super) fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
-    SPEC.preview_at(path)
-}
-
-pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
-    SPEC.uninstall_from(path)
-}
-
-pub(super) fn hooks_installed_at(path: &Path) -> bool {
-    SPEC.installed_at(path)
-}
-
-pub(super) fn managed_artifacts_at(path: &Path) -> bool {
-    SPEC.managed_artifacts_at(path)
 }
 
 pub(super) fn read_existing_json(path: &Path) -> Result<Map<String, Value>> {

@@ -153,11 +153,10 @@ pub fn refresh_transcript_context(
 
     let prices = pricing::cached_book(pricing_cache_path);
     let tail = read_transcript_tail(&path);
-    let usage = tail
+    let (usage, outcome) = tail
         .as_deref()
-        .map(usage_from_transcript_tail)
+        .map(|tail| scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_parts())
         .unwrap_or_default();
-    let outcome = tail.as_deref().and_then(detect_resting_turn_outcome);
     let (turn_complete, plan_proposed, turn_interrupted, turn_error) = match outcome {
         Some(RestingTurnOutcome::Complete(at)) => (Some(at), None, None, None),
         Some(RestingTurnOutcome::PlanProposed(plan)) => (None, Some(plan.at), None, None),
@@ -525,18 +524,14 @@ pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
     };
-    usage_from_transcript_tail(&text)
-}
-
-pub(super) fn usage_from_transcript_tail(text: &str) -> TranscriptUsage {
-    scan_transcript_tail(text).into_usage()
+    scan_transcript_tail(&text, TranscriptScanNeed::UsageOnly).into_usage()
 }
 
 /// Cap on provider error text surfaced on the agent card.
 const TURN_ERROR_LABEL_MAX: usize = 80;
 const MESSAGELESS_TASK_COMPLETE_LABEL: &str = "turn ended with no final message";
 
-enum RestingTurnOutcome {
+pub(super) enum RestingTurnOutcome {
     Complete(Timestamp),
     PlanProposed(PlanProposal),
     Interrupted(Timestamp),
@@ -561,88 +556,69 @@ pub(super) struct PlanProposal {
 /// match. Records after the completion clear the marker through the same live
 /// vocabulary as the other resting-turn detectors.
 pub(super) fn detect_plan_proposed(tail: &str) -> Option<PlanProposal> {
-    let mut completed_turn: Option<(String, Timestamp)> = None;
-    for line in tail.lines().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-
-        if completed_turn.is_none() {
-            if transcript_record_proves_recovery(&value) || turn_error_from_record(&value).is_some()
-            {
-                return None;
-            }
-            let Some(payload) = event_msg_payload(&value) else {
-                continue;
-            };
-            match payload.get("type").and_then(Value::as_str) {
-                Some("turn_aborted") => return None,
-                Some("task_complete") if payload.get("error").is_none() => {
-                    let turn_id = payload
-                        .get("turn_id")
-                        .and_then(Value::as_str)
-                        .and_then(non_empty_text)?;
-                    completed_turn = Some((turn_id, record_timestamp(&value)?));
-                }
-                Some("task_complete") => return None,
-                _ => {}
-            }
-            continue;
-        }
-
-        let Some(payload) = event_msg_payload(&value) else {
-            continue;
-        };
-        if payload.get("type").and_then(Value::as_str) == Some("task_complete") {
-            return None;
-        }
-        let Some((turn_id, at)) = completed_turn.as_ref() else {
-            continue;
-        };
-        if payload.get("type").and_then(Value::as_str) != Some("item_completed")
-            || payload.get("turn_id").and_then(Value::as_str) != Some(turn_id.as_str())
-        {
-            continue;
-        }
-        let Some(item) = payload.get("item") else {
-            continue;
-        };
-        if item.get("type").and_then(Value::as_str) != Some("Plan") {
-            continue;
-        }
-        let Some(text) = item
-            .get("text")
-            .and_then(Value::as_str)
-            .and_then(non_empty_text)
-        else {
-            continue;
-        };
-        return Some(PlanProposal { text, at: *at });
+    match scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_outcome() {
+        Some(RestingTurnOutcome::PlanProposed(plan)) => Some(plan),
+        _ => None,
     }
-    None
 }
 
 pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
-    for line in tail.lines().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if transcript_record_proves_recovery(&value) {
-            return None;
-        }
-        if let Some(error) = turn_error_from_record(&value) {
-            return Some(error);
-        }
+    match scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_outcome() {
+        Some(RestingTurnOutcome::Died(error)) => Some(error),
+        _ => None,
     }
-    None
+}
+
+#[cfg(test)]
+fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
+    scan_transcript_tail(tail, TranscriptScanNeed::UsageAndOutcome).into_outcome()
+}
+
+fn completed_turn_fallback(payload: &Value, at: Timestamp) -> RestingTurnOutcome {
+    if task_complete_has_final_message(payload) {
+        RestingTurnOutcome::Complete(at)
+    } else {
+        RestingTurnOutcome::Died(messageless_task_complete(at))
+    }
+}
+
+fn plan_proposal_from_record(
+    value: &Value,
+    completed_turn_id: &str,
+    at: Timestamp,
+) -> Option<PlanProposal> {
+    let payload = event_msg_payload(value)?;
+    if payload.get("type").and_then(Value::as_str) != Some("item_completed")
+        || payload.get("turn_id").and_then(Value::as_str) != Some(completed_turn_id)
+    {
+        return None;
+    }
+    let item = payload.get("item")?;
+    if item.get("type").and_then(Value::as_str) != Some("Plan") {
+        return None;
+    }
+    item.get("text")
+        .and_then(Value::as_str)
+        .and_then(non_empty_text)
+        .map(|text| PlanProposal { text, at })
+}
+
+fn terminal_outcome_from_record(value: &Value) -> Option<Option<RestingTurnOutcome>> {
+    if transcript_record_proves_recovery(value) {
+        return Some(None);
+    }
+    if let Some(error) = turn_error_from_record(value) {
+        return Some(Some(RestingTurnOutcome::Died(error)));
+    }
+    let payload = event_msg_payload(value)?;
+    match payload.get("type").and_then(Value::as_str) {
+        Some("turn_aborted") => Some(record_timestamp(value).map(RestingTurnOutcome::Interrupted)),
+        Some("task_complete") if payload.get("error").is_none() => {
+            Some(record_timestamp(value).map(|at| completed_turn_fallback(payload, at)))
+        }
+        Some("task_complete") => Some(None),
+        _ => None,
+    }
 }
 
 /// Detect a cleanly-completed Codex turn from the rollout tail. Codex closes a
@@ -680,45 +656,6 @@ pub(super) fn detect_turn_interrupted(tail: &str) -> Option<Timestamp> {
         | Some(RestingTurnOutcome::Died(_))
         | None => None,
     }
-}
-
-fn detect_resting_turn_outcome(tail: &str) -> Option<RestingTurnOutcome> {
-    if let Some(plan) = detect_plan_proposed(tail) {
-        return Some(RestingTurnOutcome::PlanProposed(plan));
-    }
-    for line in tail.lines().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if transcript_record_proves_recovery(&value) {
-            return None;
-        }
-        if let Some(error) = turn_error_from_record(&value) {
-            return Some(RestingTurnOutcome::Died(error));
-        }
-        let Some(payload) = event_msg_payload(&value) else {
-            continue;
-        };
-        match payload.get("type").and_then(Value::as_str) {
-            Some("turn_aborted") => {
-                return Some(RestingTurnOutcome::Interrupted(record_timestamp(&value)?));
-            }
-            Some("task_complete") if payload.get("error").is_none() => {
-                let at = record_timestamp(&value)?;
-                if task_complete_has_final_message(payload) {
-                    return Some(RestingTurnOutcome::Complete(at));
-                }
-                return Some(RestingTurnOutcome::Died(messageless_task_complete(at)));
-            }
-            Some("task_complete") => return None,
-            _ => continue,
-        }
-    }
-    None
 }
 
 pub fn turn_death_needs_pane_confirmation(error: &AgentTurnError) -> bool {
@@ -991,22 +928,47 @@ struct LastUsage {
     output: Option<u64>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum TranscriptScanNeed {
+    UsageOnly,
+    UsageAndOutcome,
+}
+
 #[derive(Default)]
-struct TranscriptScan {
+enum OutcomeScan {
+    #[default]
+    Searching,
+    SeekingPlan {
+        turn_id: String,
+        at: Timestamp,
+        fallback: Option<RestingTurnOutcome>,
+    },
+    Resolved(Option<RestingTurnOutcome>),
+}
+
+#[derive(Default)]
+pub(super) struct TranscriptScan {
     latest_model: Option<String>,
     latest_effort: Option<String>,
     latest_usage: Option<LastUsage>,
     latest_cumulative: Option<(u64, u64, u64)>,
+    outcome: OutcomeScan,
 }
 
 impl TranscriptScan {
-    fn complete(&self) -> bool {
+    fn usage_complete(&self) -> bool {
         self.latest_model.is_some()
             && self.latest_usage.is_some()
             && self.latest_cumulative.is_some()
     }
 
-    fn into_usage(self) -> TranscriptUsage {
+    fn complete(&self, need: TranscriptScanNeed) -> bool {
+        self.usage_complete()
+            && (need == TranscriptScanNeed::UsageOnly
+                || matches!(self.outcome, OutcomeScan::Resolved(_)))
+    }
+
+    pub(super) fn into_usage(self) -> TranscriptUsage {
         let (cumulative_input_tokens, cumulative_cached_tokens, cumulative_output_tokens) =
             match self.latest_cumulative {
                 Some((i, c, o)) => (Some(i), c, Some(o)),
@@ -1031,9 +993,26 @@ impl TranscriptScan {
             },
         }
     }
+
+    pub(super) fn into_outcome(self) -> Option<RestingTurnOutcome> {
+        match self.outcome {
+            OutcomeScan::Resolved(outcome) => outcome,
+            OutcomeScan::SeekingPlan { fallback, .. } => fallback,
+            OutcomeScan::Searching => None,
+        }
+    }
+
+    pub(super) fn into_parts(mut self) -> (TranscriptUsage, Option<RestingTurnOutcome>) {
+        let outcome = match std::mem::take(&mut self.outcome) {
+            OutcomeScan::Resolved(outcome) => outcome,
+            OutcomeScan::SeekingPlan { fallback, .. } => fallback,
+            OutcomeScan::Searching => None,
+        };
+        (self.into_usage(), outcome)
+    }
 }
 
-fn scan_transcript_tail(text: &str) -> TranscriptScan {
+pub(super) fn scan_transcript_tail(text: &str, need: TranscriptScanNeed) -> TranscriptScan {
     let mut scan = TranscriptScan::default();
     for line in text.lines().rev() {
         let line = line.trim();
@@ -1043,36 +1022,96 @@ fn scan_transcript_tail(text: &str) -> TranscriptScan {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        scan_transcript_record(&value, &mut scan);
-        if scan.complete() {
+        scan_transcript_record(&value, &mut scan, need);
+        if scan.complete(need) {
             break;
         }
     }
+    scan.outcome = match std::mem::take(&mut scan.outcome) {
+        OutcomeScan::SeekingPlan { fallback, .. } => OutcomeScan::Resolved(fallback),
+        OutcomeScan::Searching => OutcomeScan::Resolved(None),
+        resolved => resolved,
+    };
     scan
 }
 
-fn scan_transcript_record(value: &Value, scan: &mut TranscriptScan) {
+fn scan_transcript_record(value: &Value, scan: &mut TranscriptScan, need: TranscriptScanNeed) {
     if scan.latest_model.is_none() {
         scan.latest_model = turn_context_model(value);
     }
     if scan.latest_effort.is_none() {
         scan.latest_effort = turn_context_effort(value);
     }
-    if scan.latest_usage.is_some() && scan.latest_cumulative.is_some() {
-        return;
+    if scan.latest_usage.is_none() || scan.latest_cumulative.is_none() {
+        let info = value
+            .get("payload")
+            .filter(|payload| payload.get("type").and_then(Value::as_str) == Some("token_count"))
+            .and_then(|payload| payload.get("info"));
+        if scan.latest_usage.is_none() {
+            scan.latest_usage = last_usage_from_info(info);
+        }
+        if scan.latest_cumulative.is_none() {
+            scan.latest_cumulative = cumulative_usage_from_info(info);
+        }
     }
-    let Some(payload) = value.get("payload") else {
-        return;
-    };
-    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
-        return;
+    if need == TranscriptScanNeed::UsageAndOutcome {
+        scan_outcome_record(value, &mut scan.outcome);
     }
-    let info = payload.get("info");
-    if scan.latest_usage.is_none() {
-        scan.latest_usage = last_usage_from_info(info);
-    }
-    if scan.latest_cumulative.is_none() {
-        scan.latest_cumulative = cumulative_usage_from_info(info);
+}
+
+fn scan_outcome_record(value: &Value, state: &mut OutcomeScan) {
+    match state {
+        OutcomeScan::Resolved(_) => {}
+        OutcomeScan::Searching => {
+            let Some(outcome) = terminal_outcome_from_record(value) else {
+                return;
+            };
+            let clean_completion = event_msg_payload(value).is_some_and(|payload| {
+                payload.get("type").and_then(Value::as_str) == Some("task_complete")
+                    && payload.get("error").is_none()
+            });
+            if !clean_completion {
+                *state = OutcomeScan::Resolved(outcome);
+                return;
+            }
+            let Some(payload) = event_msg_payload(value) else {
+                *state = OutcomeScan::Resolved(outcome);
+                return;
+            };
+            let Some(turn_id) = payload
+                .get("turn_id")
+                .and_then(Value::as_str)
+                .and_then(non_empty_text)
+            else {
+                *state = OutcomeScan::Resolved(outcome);
+                return;
+            };
+            let Some(at) = record_timestamp(value) else {
+                *state = OutcomeScan::Resolved(None);
+                return;
+            };
+            *state = OutcomeScan::SeekingPlan {
+                turn_id,
+                at,
+                fallback: outcome,
+            };
+        }
+        OutcomeScan::SeekingPlan {
+            turn_id,
+            at,
+            fallback,
+        } => {
+            let Some(payload) = event_msg_payload(value) else {
+                return;
+            };
+            if payload.get("type").and_then(Value::as_str) == Some("task_complete") {
+                *state = OutcomeScan::Resolved(fallback.take());
+                return;
+            }
+            if let Some(plan) = plan_proposal_from_record(value, turn_id, *at) {
+                *state = OutcomeScan::Resolved(Some(RestingTurnOutcome::PlanProposed(plan)));
+            }
+        }
     }
 }
 

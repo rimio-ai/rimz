@@ -1,12 +1,12 @@
-//! Whole-file Rimz-managed integration sources (pi's extension, OpenCode's
-//! plugin): the ownership-marker protocol shared by every adapter whose wire
-//! Rimz authors. Install is whole-file ownership: a marked file is reclaimed
-//! byte-for-byte, an unmarked file is the user's and refuses.
+//! Managed integration seam for whole-file Rimz sources and strict JSON hook
+//! merges. Adapters declare one source; backend-specific ownership and merge
+//! policy stays behind it.
 
 use std::path::{Path, PathBuf};
 
 use crate::store::atomic;
 
+use super::managed_json_hooks::ManagedJsonHookSpec;
 use super::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
     HookUninstallReport, Result, read_optional_file,
@@ -14,17 +14,21 @@ use super::{
 
 pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
 
-/// Whole-file ownership specification for one Rimz-authored integration source.
+enum ManagedSourceBackend {
+    WholeFile {
+        source: &'static str,
+        wired_events: &'static [&'static str],
+        artifact_noun: &'static str,
+        upgradeable: bool,
+    },
+    JsonHooks(&'static ManagedJsonHookSpec),
+}
+
+/// One adapter's managed integration source.
 pub struct ManagedSource {
     agent: &'static str,
-    /// The embedded integration source; carries RIMZ_MANAGED_MARKER on line 1.
-    source: &'static str,
-    wired_events: &'static [&'static str],
-    /// The noun in the refuse-unmarked message ("extension" / "plugin"),
-    /// keeping each adapter's existing user-facing error text byte-identical.
-    artifact_noun: &'static str,
     path: fn() -> Result<PathBuf>,
-    upgradeable: bool,
+    backend: ManagedSourceBackend,
 }
 
 impl ManagedSource {
@@ -38,11 +42,24 @@ impl ManagedSource {
     ) -> Self {
         Self {
             agent,
-            source,
-            wired_events,
-            artifact_noun,
             path,
-            upgradeable,
+            backend: ManagedSourceBackend::WholeFile {
+                source,
+                wired_events,
+                artifact_noun,
+                upgradeable,
+            },
+        }
+    }
+
+    pub(crate) const fn json(
+        spec: &'static ManagedJsonHookSpec,
+        path: fn() -> Result<PathBuf>,
+    ) -> Self {
+        Self {
+            agent: spec.agent,
+            path,
+            backend: ManagedSourceBackend::JsonHooks(spec),
         }
     }
 
@@ -66,7 +83,11 @@ impl ManagedSource {
     }
 
     pub fn upgrade_available(&self) -> bool {
-        self.upgradeable && (self.path)().is_ok_and(|path| self.upgrade_available_at(&path))
+        (self.path)().is_ok_and(|path| self.upgrade_available_at(&path))
+    }
+
+    pub fn managed_artifacts_present(&self) -> bool {
+        (self.path)().is_ok_and(|path| self.managed_artifacts_at(&path))
     }
 
     /// Install is whole-file ownership: the embedded source overwrites the path
@@ -74,9 +95,13 @@ impl ManagedSource {
     /// however edited since) is reclaimed byte-for-byte; an unmarked file is
     /// the user's own source and refuses.
     pub fn install_into(&self, path: &Path) -> Result<HookInstallReport> {
+        let source = match &self.backend {
+            ManagedSourceBackend::JsonHooks(spec) => return spec.install_into(path),
+            ManagedSourceBackend::WholeFile { source, .. } => source,
+        };
         let original = read_optional_file(self.agent, path)?;
         self.refuse_unmarked(path, original.as_deref())?;
-        atomic::write_bytes_atomically(path, self.source.as_bytes())?;
+        atomic::write_bytes_atomically(path, source.as_bytes())?;
         Ok(HookInstallReport {
             agent: self.agent,
             files: vec![HookInstallFileReport {
@@ -88,6 +113,10 @@ impl ManagedSource {
     }
 
     pub fn preview_at(&self, path: &Path) -> Result<HookInstallPreview> {
+        let source = match &self.backend {
+            ManagedSourceBackend::JsonHooks(spec) => return spec.preview_at(path),
+            ManagedSourceBackend::WholeFile { source, .. } => source,
+        };
         let original = read_optional_file(self.agent, path)?;
         // Mirror install's refusal so the consent gate surfaces the conflict
         // before a doomed install, not after.
@@ -98,7 +127,7 @@ impl ManagedSource {
                 path: path.to_path_buf(),
                 existed: original.is_some(),
                 original,
-                candidate: self.source.to_owned(),
+                candidate: (*source).to_owned(),
             }],
             planned_events: self.installed_event_names(),
             status_line_change: None,
@@ -107,6 +136,9 @@ impl ManagedSource {
     }
 
     pub fn uninstall_from(&self, path: &Path) -> Result<HookUninstallReport> {
+        if let ManagedSourceBackend::JsonHooks(spec) = &self.backend {
+            return spec.uninstall_from(path);
+        }
         let original = read_optional_file(self.agent, path)?;
         let existed = original.is_some();
         let mut removed_events = Vec::new();
@@ -133,24 +165,48 @@ impl ManagedSource {
     /// as "not installed". The first-line marker distinguishes the Rimz-owned
     /// source from a user's own file at the same path.
     pub fn installed_at(&self, path: &Path) -> bool {
-        std::fs::read_to_string(path).is_ok_and(|content| file_is_rimz_managed(&content))
+        match &self.backend {
+            ManagedSourceBackend::WholeFile { .. } => {
+                std::fs::read_to_string(path).is_ok_and(|content| file_is_rimz_managed(&content))
+            }
+            ManagedSourceBackend::JsonHooks(spec) => spec.installed_at(path),
+        }
+    }
+
+    pub fn managed_artifacts_at(&self, path: &Path) -> bool {
+        match &self.backend {
+            ManagedSourceBackend::WholeFile { .. } => self.installed_at(path),
+            ManagedSourceBackend::JsonHooks(spec) => spec.managed_artifacts_at(path),
+        }
     }
 
     /// Whether a Rimz-owned source differs from the source embedded in this
     /// build. Best-effort: missing, unreadable, and user-owned files are not
     /// upgrade candidates.
     pub fn upgrade_available_at(&self, path: &Path) -> bool {
-        std::fs::read_to_string(path)
-            .is_ok_and(|content| file_is_rimz_managed(&content) && content != self.source)
+        let ManagedSourceBackend::WholeFile {
+            source,
+            upgradeable,
+            ..
+        } = &self.backend
+        else {
+            return false;
+        };
+        *upgradeable
+            && std::fs::read_to_string(path)
+                .is_ok_and(|content| file_is_rimz_managed(&content) && content != *source)
     }
 
     fn refuse_unmarked(&self, path: &Path, original: Option<&str>) -> Result<()> {
+        let ManagedSourceBackend::WholeFile { artifact_noun, .. } = &self.backend else {
+            return Ok(());
+        };
         match original {
             Some(existing) if !file_is_rimz_managed(existing) => Err(AgentErr::Install {
                 agent: self.agent,
                 reason: format!(
                     "refusing to overwrite an unmarked user {} at {}; move it aside or remove it to let Rimz manage this file",
-                    self.artifact_noun,
+                    artifact_noun,
                     path.display()
                 ),
             }),
@@ -159,7 +215,10 @@ impl ManagedSource {
     }
 
     fn installed_event_names(&self) -> Vec<String> {
-        self.wired_events
+        let ManagedSourceBackend::WholeFile { wired_events, .. } = &self.backend else {
+            return Vec::new();
+        };
+        wired_events
             .iter()
             .map(|event| (*event).to_owned())
             .collect()

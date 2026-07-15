@@ -111,14 +111,7 @@ pub(super) fn parse_models_dev(json: &str) -> BTreeMap<String, Pricing> {
             let cache_create = per_million("cache_write").map(|cost| cost / 1e6);
             out.insert(
                 model_id.clone(),
-                Pricing {
-                    input,
-                    output,
-                    cache_read: cache_read.unwrap_or(input * 0.1),
-                    cache_create: cache_create.unwrap_or(input * 1.25),
-                    cache_read_explicit: cache_read.is_some(),
-                    ..Pricing::empty()
-                },
+                Pricing::from_base_rates(input, output, cache_create, cache_read),
             );
         }
     }

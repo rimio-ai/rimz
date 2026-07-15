@@ -23,10 +23,10 @@ fn install_into_empty_dir_creates_managed_entries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     assert!(
-        !hooks_installed_at(&path),
+        !MANAGED_SOURCE.installed_at(&path),
         "a missing settings file reads as not installed"
     );
-    let report = install_into(&path).unwrap();
+    let report = MANAGED_SOURCE.install_into(&path).unwrap();
     assert!(!report.files[0].existed);
     assert_eq!(report.agent, "claude");
     assert!(report.installed_events.contains(&"SessionStart".to_owned()));
@@ -36,12 +36,12 @@ fn install_into_empty_dir_creates_managed_entries() {
             .installed_events
             .contains(&"PermissionRequest".to_owned())
     );
-    assert!(hooks_installed_at(&path));
+    assert!(MANAGED_SOURCE.installed_at(&path));
 
     assert_managed_settings_json(&path);
 
     let first = std::fs::read_to_string(&path).unwrap();
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
     let second = std::fs::read_to_string(&path).unwrap();
     assert_eq!(
         first, second,
@@ -123,7 +123,7 @@ fn install_preserves_user_hooks() {
             }"#,
     )
     .unwrap();
-    let report = install_into(&path).unwrap();
+    let report = MANAGED_SOURCE.install_into(&path).unwrap();
     assert!(report.files[0].existed);
 
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -176,7 +176,7 @@ fn install_reclaims_legacy_and_duplicate_entries() {
             }"#,
         )
         .unwrap();
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
 
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(
@@ -217,7 +217,7 @@ fn install_reclaims_legacy_and_duplicate_entries() {
 fn uninstall_removes_managed_entries_only() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing-settings.json");
-    let missing_report = uninstall_from(&missing).unwrap();
+    let missing_report = MANAGED_SOURCE.uninstall_from(&missing).unwrap();
     assert!(!missing_report.files[0].existed);
     assert!(missing_report.removed_events.is_empty());
 
@@ -234,11 +234,11 @@ fn uninstall_removes_managed_entries_only() {
             }"#,
     )
     .unwrap();
-    install_into(&path).unwrap();
-    let report = uninstall_from(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
+    let report = MANAGED_SOURCE.uninstall_from(&path).unwrap();
     assert!(report.files[0].existed);
     assert!(!report.removed_events.is_empty());
-    assert!(!hooks_installed_at(&path));
+    assert!(!MANAGED_SOURCE.installed_at(&path));
 
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(parsed["model"], "claude-opus-4-7");
@@ -254,7 +254,7 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
     let dir = tempfile::tempdir().unwrap();
 
     let path = dir.path().join("partial.json");
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
     let mut parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     parsed["hooks"]
         .as_object_mut()
@@ -263,22 +263,24 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
     std::fs::write(&path, serde_json::to_string(&parsed).unwrap()).unwrap();
 
     assert!(
-        !hooks_installed_at(&path),
+        !MANAGED_SOURCE.installed_at(&path),
         "a partial managed hook set must re-offer install"
     );
+    assert!(MANAGED_SOURCE.managed_artifacts_at(&path));
+    assert!(!MANAGED_SOURCE.upgrade_available_at(&path));
 
     let path = dir.path().join("async.json");
-    install_into(&path).unwrap();
+    MANAGED_SOURCE.install_into(&path).unwrap();
     let mut parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     parsed["hooks"]["PermissionRequest"][0]["_rimz_sync"] = Value::Bool(false);
     std::fs::write(&path, serde_json::to_string(&parsed).unwrap()).unwrap();
 
     assert!(
-        !hooks_installed_at(&path),
+        !MANAGED_SOURCE.installed_at(&path),
         "a blocking Rimz hook marked async is not a usable install"
     );
     assert!(matches!(
-        install_into(&path).unwrap_err(),
+        MANAGED_SOURCE.install_into(&path).unwrap_err(),
         AgentErr::Install {
             agent: "claude",
             ..
@@ -292,7 +294,7 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
     )
     .unwrap();
     assert!(
-        !hooks_installed_at(&path),
+        !MANAGED_SOURCE.installed_at(&path),
         "user-managed hooks with no _rimz_managed marker are not installed"
     );
 
@@ -315,7 +317,7 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
     let payload = serde_json::json!({ "hooks": hooks });
     std::fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
     assert!(
-        hooks_installed_at(&path),
+        MANAGED_SOURCE.installed_at(&path),
         "a hook entry whose command contains the rimz marker reads as installed even without _rimz_managed"
     );
 
@@ -343,7 +345,7 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
     std::fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
 
     assert!(
-        !hooks_installed_at(&path),
+        !MANAGED_SOURCE.installed_at(&path),
         "a legacy managed PreToolUse matcher must not satisfy the broad canonical hook"
     );
 }
@@ -353,7 +355,7 @@ fn install_rejects_top_level_non_object() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     std::fs::write(&path, "[]").unwrap();
-    let err = install_into(&path).unwrap_err();
+    let err = MANAGED_SOURCE.install_into(&path).unwrap_err();
     assert!(matches!(
         err,
         AgentErr::Install {
