@@ -15,7 +15,7 @@ rimz agents claude "Summarize what changed on this branch." -p    # the claude -
 rimz agents codex "Prepare the release checklist." -p             # the same grammar, any agent
 ```
 
-- **One grammar for every fully scripted adapter.** The same flags, exit codes, and output formats drive Claude, Codex, Amp, Pi, OpenCode, and Droid; swapping the model behind a pipeline is a one-word change. Kiro CLI 2.12.1 v3 exposes no verified executable turn-completion signal, so `rimz agents kiro -p` fails before it opens a pane or writes a run record.
+- **One grammar for every fully scripted adapter.** The same flags, exit codes, and output formats drive Claude, Codex, Amp, Pi, OpenCode, and Droid; swapping the model behind a pipeline is a one-word change. (Kiro's CLI exposes no verified turn-completion signal yet, so `rimz agents kiro -p` refuses before opening a pane rather than hanging.)
 - **A pane instead of a headless process.** The turn runs the stock CLI in your room with a live card in the sidebar, so a scripted run is exactly as observable — and as steerable — as one you launched by hand ([a real agent, not a background job](#a-real-agent-not-a-background-job)).
 
 ## What a run does on your machine
@@ -52,8 +52,6 @@ fi
 
 On success, stdout is the final assistant answer and nothing else, so it pipes cleanly. A failed, timed-out, or canceled run prints its status, the captured pane tail, and the transcript path on stderr, keeping stdout uncontaminated for the happy path.
 
-Long-running commands animate their current phase and elapsed time on an interactive stderr terminal. Set `RIMZ_NO_PROGRESS=1` to disable the status line everywhere; non-TTY stderr and RimZ-launched agent shells carrying `RIMZ_AGENT_KIND` disable it automatically.
-
 **Cap the wall clock.** `--timeout` bounds the run and turns a wedged turn into exit `124` your wrapper can handle.
 
 ```sh
@@ -62,19 +60,9 @@ rimz agents codex "Update dependencies and run the test suite." -p --timeout 30m
 
 **Cap the dollars.** `--budget 2` records `budget_exceeded` and exits `125`, distinct from a timeout or agent failure. The cap model behind the flag is the [budgets guide](./budget.md).
 
-**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times and appends the previous attempt's captured pane tail to the original prompt in a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code. Retries work with blocking text and JSON output and refuse `--bg` and `--output-format stream-json`.
+Two more flags, `--verify` and `--retries`, gate what counts as done and rerun what failed; they have [their own section below](#verify-and-retry).
 
-```sh
-rimz agents codex "Fix the failing checks." -p --retries 1 --timeout 30m
-```
-
-**Verify the work.** `--verify <CMD>` runs a shell command in the run's working directory after each completed agent turn. A non-zero exit, signal, or timeout re-prompts the same live session with the command, status, and output tail, then waits for that session's next turn; `--max-attempts <N>` counts total agent turns and defaults to `3`. The verify command and every re-prompted wait use `--timeout` when set; without it, the command has a five-minute cap, and a timed-out verify is red. Exhausting the attempt cap records `verify_failed` and exits `123`.
-
-```sh
-rimz agents codex "Fix the failing auth test." -p --verify "cargo xtask test auth" --max-attempts 3
-```
-
-`--verify` composes with `--retries`: verification repairs stay in the same session after a completed turn, while an agent turn that fails with exit `1` starts the existing fresh-session retry path and resets the verify attempt count. Verification requires a blocking text or JSON run and refuses `--bg` and `--output-format stream-json`.
+Long-running commands animate their current phase and elapsed time on an interactive stderr terminal. Set `RIMZ_NO_PROGRESS=1` to disable the status line everywhere; non-TTY stderr and RimZ-launched agent shells carrying `RIMZ_AGENT_KIND` disable it automatically.
 
 ## Feed the prompt in
 
@@ -103,6 +91,24 @@ rimz agents claude "Refactor the parser." -p --output-format stream-json        
 | `stream-json` | run events as newline-delimited JSON while the turn runs | a pipeline that wants progress rather than a final blob |
 
 Where the adapter exposes a native cap, `--max-turns <N>` bounds the agentic turn count (Claude today); an agent without one refuses the flag rather than running unbounded.
+
+## Verify and retry
+
+An exit code tells you the turn ended; these two flags let the run prove the work and repair itself before your script ever sees a failure.
+
+**Verify the work.** `--verify <CMD>` runs a shell command in the run's working directory after each completed agent turn. A non-zero exit, signal, or timeout re-prompts the same live session with the command, status, and output tail, then waits for that session's next turn; `--max-attempts <N>` counts total agent turns and defaults to `3`. The verify command and every re-prompted wait use `--timeout` when set; without it, the command has a five-minute cap, and a timed-out verify is red. Exhausting the attempt cap records `verify_failed` and exits `123`.
+
+```sh
+rimz agents codex "Fix the failing auth test." -p --verify "cargo xtask test auth" --max-attempts 3
+```
+
+**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times and appends the previous attempt's captured pane tail to the original prompt in a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code.
+
+```sh
+rimz agents codex "Fix the failing checks." -p --retries 1 --timeout 30m
+```
+
+The two compose: verification repairs stay in the same session after a completed turn, while an agent turn that fails with exit `1` starts a fresh-session retry and resets the verify attempt count. Both require a blocking text or JSON run and refuse `--bg` and `--output-format stream-json`.
 
 ## A real agent, not a background job
 

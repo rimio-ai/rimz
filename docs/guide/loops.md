@@ -8,11 +8,11 @@ You already run things on a clock. Cron lines and systemd timers drive your main
 
 But cron and a hand-rolled `while` loop only know one move: start a fresh process and walk away. That scheduled `claude -p` is invisible, so it hangs in silence the first time it stops for a permission prompt (the headless gap [scripting](./scripting.md#why-rimz-agents--p) opens with). It fires whether or not there is anything to do, spending a whole agent turn to re-check a world that has not changed. And it cannot hand work to an agent you already have running; every run is a brand-new process starting from an empty context.
 
-`rimz loop` is the same clock with the room behind it. A task is a name, a schedule, and one of three actions:
+`rimz loop` is the same clock with the room behind it. A task is a name, a schedule, and an action — a fresh turn or a wake — with two shell-command gates that wrap either one:
 
 - `--agent` starts a new agent for the turn: a fresh supervised pane that runs the prompt once and cleans up. Reach for it when the work should begin from a clean context each time.
 - `--wake` hands the prompt to an agent you already have running and waiting, so the work resumes in that same conversation with all of its context, rather than in a cold new process.
-- `--check` runs a shell command before any agent action and spends a turn only on its result, so a scheduled agent never starts just to find nothing to do.
+- `--check` runs a shell command before the action and spends a turn only on its result, so a scheduled agent never starts just to find nothing to do.
 - `--verify` runs a shell command after a spawned agent turn and re-prompts that same session until the task is actually done.
 
 Whichever action fires, the turn is a full room citizen: a live card in the sidebar, a permission question that routes to you instead of hanging the job, and a line in the run log that `rimz loop show` summarizes and `rimz loop logs` opens in full.
@@ -54,7 +54,7 @@ To keep the windows back-to-back all day, let the window set its own schedule:
 rimz loop add prime --agent claude-ping --prompt ping --every reset
 ```
 
-`--every reset` fires one minute after the provider's longest budget window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes. The shape requires a supported `<kind>-ping`; `--agent antigravity-ping --every reset` is rejected rather than turning an ordinary model selection into an undocumented primer.
+`--every reset` fires one minute after the provider's longest budget window resets, then reads that ping's own result to time the next fire. Each window opens the moment the last one closes. The shape requires a supported `<kind>-ping`.
 
 ## Wake a running agent
 
@@ -129,10 +129,10 @@ Two opt-in settings keep a live agent working through the interruptions that wou
 
 ```sh
 rimz config set resume.auto_continue true     # resume rate-limit and API-error parks
-rimz config set harness.smart_compact "70%"   # compact before a message once context passes 70%
+rimz config set harness.smart_compact 200k    # compact before a message once context passes 200k tokens (or "70%")
 ```
 
-**Auto-continue** picks a certified parked turn back up on its own. A provider-owned per-turn failure marker proves why the turn stopped; an authoritative account window then supplies the reset clock for a rate-limit or spend-limit park, while a certified transient overload or API error uses a lengthening backoff ramp. An exhausted window, error message, or stalled pane cannot arm recovery by itself. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. Antigravity has account-owned clocks but no certified recoverable 1.1.2 Stop class, so its error Stops remain terminal and a loop fire records the ordinary failure. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
+**Auto-continue** picks a certified parked turn back up on its own. A provider-owned per-turn failure marker proves why the turn stopped; an authoritative account window then supplies the reset clock for a rate-limit or spend-limit park, while a certified transient overload or API error uses a lengthening backoff ramp. An exhausted window, error message, or stalled pane cannot arm recovery by itself. Recovery types the nudge (`continue` by default) into the agent's live pane through the same path as a steer message, so the agent's next hook moves the row back to running. Antigravity has account-owned clocks but no failure marker certified recoverable, so its error stops remain terminal and a loop fire records the ordinary failure. The backoff and retry keys are in [configuration.md → Resume](./configuration.md#resume); the decision logic is [provider.md → Auto-continue](../internals/agents/providers.md#auto-continue).
 
 **Dollar budgets bound hands-off work.** `--budget 5` caps each fired run; `--budget-per-day 20` makes the scheduler sum that task's completed run costs in the configured local day and skip a fire that cannot fund its per-run cap, recording `budget skipped`. `rimz loop list` shows each task's spend against its daily cap. For check-gated work, `rimz loop show` separates the agent attempts from cheap check passes and totals their costs across the recorded history; other tasks retain the last-run and rolling ten-run average cost. Fresh input/output tokens stay visible per run. The room-fleet and provider-account daily caps gate the same fires before launch; the whole cap model, and why a human message can waive an interactive turn but never satisfies a loop gate, is the [budgets guide](./budget.md).
 
