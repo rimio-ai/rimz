@@ -209,6 +209,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     };
     let mut cursor = RollupCursor::new();
     let mut consumer_memo = ConsumerFoldMemo::default();
+    let mut producer_cadence = ProducerCadence::default();
     let mut notifications = NotificationState::default();
     let mut link_notifications = LinkNotificationState::default();
     let mut outcomes = Vec::new();
@@ -228,6 +229,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         request,
         &mut cursor,
         &mut consumer_memo,
+        &mut producer_cadence,
         &mut |o| outcomes.push(o),
     );
 
@@ -259,10 +261,12 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
 }
 
 #[test]
-fn produce_gate_keeps_consumers_read_only_except_hard_refresh() {
+fn produce_gate_bounds_normal_attempts_and_keeps_consumers_read_only() {
     // The two-speed/storm-removal contract: the elected producer pays topology
     // produce at most once per data tick; consumers fold held panes unless the
     // user asks for a hard recovery refresh.
+    let tick = Duration::from_secs(1);
+    let start = Instant::now();
     for (name, is_producer, mode, frame_age_ms, expected) in [
         (
             "fresh producer frame skips produce",
@@ -328,12 +332,80 @@ fn produce_gate_keeps_consumers_read_only_except_hard_refresh() {
             false,
         ),
     ] {
+        let mut cadence = ProducerCadence::default();
         assert_eq!(
-            produce_this_cycle(is_producer, mode, frame_age_ms, 1000),
+            cadence.start_attempt_if_due(is_producer, mode, frame_age_ms, tick, start),
             expected,
             "{name}"
         );
     }
+}
+
+#[test]
+fn produce_gate_throttles_cold_stale_and_failed_attempts_at_tick_boundary() {
+    let tick = Duration::from_secs(1);
+    let start = Instant::now();
+    let mut cadence = ProducerCadence::default();
+
+    assert!(cadence.start_attempt_if_due(true, FetchMode::Normal, None, tick, start));
+    assert!(
+        !cadence.start_attempt_if_due(
+            true,
+            FetchMode::Normal,
+            Some(10_000),
+            tick,
+            start + tick - Duration::from_nanos(1),
+        ),
+        "recording before the produce path throttles a failed cold attempt",
+    );
+    assert!(cadence.start_attempt_if_due(
+        true,
+        FetchMode::Normal,
+        Some(10_000),
+        tick,
+        start + tick,
+    ));
+}
+
+#[test]
+fn produce_gate_forced_attempts_bypass_and_advance_local_cadence() {
+    let tick = Duration::from_secs(1);
+    let start = Instant::now();
+    let mut cadence = ProducerCadence::default();
+
+    assert!(cadence.start_attempt_if_due(true, FetchMode::Normal, None, tick, start));
+    let forced_at = start + Duration::from_millis(10);
+    assert!(cadence.start_attempt_if_due(
+        true,
+        FetchMode::ProducerFreshPanes,
+        Some(0),
+        tick,
+        forced_at,
+    ));
+    assert!(cadence.start_attempt_if_due(
+        false,
+        FetchMode::HardRefresh,
+        Some(0),
+        tick,
+        forced_at + Duration::from_millis(10),
+    ));
+    assert!(!cadence.start_attempt_if_due(
+        true,
+        FetchMode::Normal,
+        Some(10_000),
+        tick,
+        forced_at + tick,
+    ));
+}
+
+#[test]
+fn produce_gate_newly_promoted_consumer_starts_without_cadence_debt() {
+    let tick = Duration::from_secs(1);
+    let now = Instant::now();
+    let mut cadence = ProducerCadence::default();
+
+    assert!(!cadence.start_attempt_if_due(false, FetchMode::Normal, Some(10_000), tick, now,));
+    assert!(cadence.start_attempt_if_due(true, FetchMode::Normal, Some(10_000), tick, now,));
 }
 
 fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
@@ -438,6 +510,7 @@ impl ConsumerFixture {
         let mut link_notifications = LinkNotificationState::default();
         let mut outcomes = Vec::new();
         let mut last_election = None;
+        let mut producer_cadence = ProducerCadence::default();
         run_fetch_cycle(
             FetchCycle {
                 config: &config,
@@ -453,6 +526,7 @@ impl ConsumerFixture {
             request,
             cursor,
             consumer_memo,
+            &mut producer_cadence,
             &mut |outcome| outcomes.push(outcome),
         );
         outcomes
@@ -505,12 +579,16 @@ fn unchanged_consumer_inputs_skip_the_second_fold() {
 }
 
 #[test]
-fn consumer_stamp_eligibility_excludes_every_mandatory_request() {
-    assert!(consumer_stamp_eligible(FetchRequest::default(), false));
-    assert!(!consumer_stamp_eligible(FetchRequest::default(), true));
+fn consumer_stamp_skip_and_record_eligibility_are_separate() {
+    assert!(consumer_stamp_skippable(FetchRequest::default(), false));
+    assert!(consumer_stamp_recordable(FetchRequest::default(), false));
+    assert!(!consumer_stamp_skippable(FetchRequest::default(), true));
+    assert!(!consumer_stamp_recordable(FetchRequest::default(), true));
+    let publication = FetchRequest::pane_frame_published();
+    assert!(!consumer_stamp_skippable(publication, false));
+    assert!(consumer_stamp_recordable(publication, false));
     for request in [
         FetchRequest::force_fold(),
-        FetchRequest::pane_frame_published(),
         FetchRequest::producer_fresh_panes(),
         FetchRequest::hard_refresh(),
         FetchRequest {
@@ -518,16 +596,53 @@ fn consumer_stamp_eligibility_excludes_every_mandatory_request() {
             ..FetchRequest::default()
         },
     ] {
-        assert!(!consumer_stamp_eligible(request, false));
+        assert!(!consumer_stamp_skippable(request, false));
+        assert!(!consumer_stamp_recordable(request, false));
     }
 }
 
 #[test]
-fn mandatory_consumer_fold_requires_one_ordinary_reseed_before_skip() {
+fn consumer_stamp_pane_publication_seeds_next_ordinary_skip() {
+    let fixture = ConsumerFixture::new();
+    fixture.write_pane_frame();
+    let mut rollup = SidebarSnapshot::build(
+        fixture.workspace_id.clone(),
+        Vec::new(),
+        jiff::Timestamp::now(),
+    );
+    rollup.reflects_log = Some(crate::store::event_log::LogExtent {
+        generation: 0,
+        offset: 0,
+    });
+    std::fs::write(
+        &fixture.state.latest_snapshot,
+        serde_json::to_vec(&rollup).unwrap(),
+    )
+    .unwrap();
+    let mut cursor = RollupCursor::new();
+    let mut memo = ConsumerFoldMemo::default();
+
+    assert!(
+        !fixture.run_with(FetchRequest::pane_frame_published(), &mut cursor, &mut memo,)[0]
+            .unchanged,
+    );
+    assert!(
+        fixture.run_with(FetchRequest::default(), &mut cursor, &mut memo)[0].unchanged,
+        "the publication fold seeds the ordinary-request memo",
+    );
+}
+
+#[test]
+fn consumer_stamp_other_mandatory_folds_clear_before_ordinary_reseed() {
     for mandatory in [
         FetchRequest::force_fold(),
-        FetchRequest::pane_frame_published(),
         FetchRequest::producer_fresh_panes(),
+        FetchRequest {
+            mode: FetchMode::HardRefresh,
+            min_pane_cache_ms: None,
+            published_frame_hint: false,
+            force_fold: false,
+        },
     ] {
         let fixture = ConsumerFixture::new();
         fixture.write_pane_frame();

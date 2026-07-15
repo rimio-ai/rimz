@@ -7,6 +7,7 @@
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
+use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
 use crate::diag::record::TickLoop;
@@ -146,6 +147,40 @@ impl ConsumerFoldMemo {
     }
 }
 
+#[derive(Default)]
+struct ProducerCadence {
+    last_attempt: Option<Instant>,
+}
+
+impl ProducerCadence {
+    fn start_attempt_if_due(
+        &mut self,
+        is_producer: bool,
+        mode: FetchMode,
+        frame_age_ms: Option<u64>,
+        tick: Duration,
+        now: Instant,
+    ) -> bool {
+        let normal_attempt_due = self
+            .last_attempt
+            .is_none_or(|last| now.saturating_duration_since(last) >= tick);
+        let produce = match mode {
+            FetchMode::Normal if is_producer => {
+                normal_attempt_due && frame_age_ms.is_none_or(|age| age >= tick.as_millis() as u64)
+            }
+            FetchMode::Normal => false,
+            FetchMode::ProducerFreshPanes => is_producer,
+            FetchMode::HardRefresh => true,
+        };
+        if produce {
+            // Record before the produce path so forced and failed attempts
+            // bound the next ordinary attempt too.
+            self.last_attempt = Some(now);
+        }
+        produce
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProducerElection {
     elder: Option<SidebarInstanceId>,
@@ -162,6 +197,7 @@ fn run_fetch_cycle(
     request: FetchRequest,
     cursor: &mut RollupCursor,
     consumer_memo: &mut ConsumerFoldMemo,
+    producer_cadence: &mut ProducerCadence,
     post: &mut dyn FnMut(FetchOutcome),
 ) {
     let FetchCycle {
@@ -184,11 +220,13 @@ fn run_fetch_cycle(
     let now_ms = crate::sidebar::timing::unix_now_ms();
     let published_frame_stamps =
         crate::sidebar::cache::published_frame_stamps(runtime, &config.session_name);
-    let fold_stamp = consumer_stamp_eligible(request, is_producer)
+    let may_skip_consumer_fold = consumer_stamp_skippable(request, is_producer);
+    let fold_stamp = consumer_stamp_recordable(request, is_producer)
         .then(|| crate::sidebar::consumer::consumer_fold_inputs_stamp(state, runtime));
-    if fold_stamp
-        .as_ref()
-        .is_some_and(|stamp| consumer_memo.should_skip(stamp, now_ms))
+    if may_skip_consumer_fold
+        && fold_stamp
+            .as_ref()
+            .is_some_and(|stamp| consumer_memo.should_skip(stamp, now_ms))
     {
         post(FetchOutcome {
             snapshot: Err("unchanged".to_owned()),
@@ -217,11 +255,13 @@ fn run_fetch_cycle(
         .ok()
         .and(published_frame_stamps.map(|(produced_at_ms, _)| produced_at_ms))
         .map(|produced_at_ms| now_ms.saturating_sub(produced_at_ms));
-    let produce = produce_this_cycle(
+    let tick = tick_for(config.tick_seconds);
+    let produce = producer_cadence.start_attempt_if_due(
         is_producer,
         request.mode,
         frame_age_ms,
-        tick_for(config.tick_seconds).as_millis() as u64,
+        tick,
+        Instant::now(),
     );
     let fast_has_request_fresh_frame = fast.as_ref().is_ok_and(|snapshot| {
         snapshot.panes_produced_at_ms.is_some()
@@ -334,8 +374,15 @@ fn run_fetch_cycle(
     }
 }
 
-fn consumer_stamp_eligible(request: FetchRequest, is_producer: bool) -> bool {
+fn consumer_stamp_skippable(request: FetchRequest, is_producer: bool) -> bool {
     !is_producer && request.allows_unchanged_skip()
+}
+
+fn consumer_stamp_recordable(request: FetchRequest, is_producer: bool) -> bool {
+    !is_producer
+        && request.mode == FetchMode::Normal
+        && request.min_pane_cache_ms.is_none()
+        && !request.force_fold
 }
 
 fn emit_producer_transition(
@@ -485,30 +532,18 @@ fn notification_panes(notification: &Notification) -> Vec<PaneId> {
         .collect()
 }
 
-/// Whether this cycle pays the produce, decided from cheap pre-reads. Pure, so
-/// the produce-gating contract is unit-testable: the producer runs on a hard
-/// refresh, on a producer-only topology refresh, or when the published frame
-/// outlived one data tick (`None` age = no usable frame — cold start). A
+/// Whether this cycle pays the produce is decided from cheap pre-reads. The
+/// producer runs on a hard refresh, on a producer-only topology refresh, or
+/// when the published frame outlived one data tick (`None` age = no usable
+/// frame — cold start) and its process-local attempt cadence is due. A
 /// consumer produces only for a hard refresh; it never produces for topology
 /// freshness or a stale frame. Staleness recovery is delegated to the election:
 /// once the dead elder's heartbeat ages out (≤ one TTL) the next-eldest renderer
 /// *is* the producer and recovers through the branch above, while everyone else
 /// keeps folding the held panes with the event-fresh rollup. Exactly one
 /// producer at any moment, never a per-consumer produce storm; the lone renderer
-/// is its own next-eldest.
-fn produce_this_cycle(
-    is_producer: bool,
-    mode: FetchMode,
-    frame_age_ms: Option<u64>,
-    tick_ms: u64,
-) -> bool {
-    match mode {
-        FetchMode::Normal if is_producer => frame_age_ms.is_none_or(|age| age >= tick_ms),
-        FetchMode::Normal => false,
-        FetchMode::ProducerFreshPanes => is_producer,
-        FetchMode::HardRefresh => true,
-    }
-}
+/// is its own next-eldest. [`ProducerCadence`] records every attempt before the
+/// produce path, so errors and forced refreshes cannot start an ordinary storm.
 
 /// One request to the fetch worker. The mode keeps topology signals producer-
 /// only, while a hard refresh remains available for manual recovery. When a
@@ -647,6 +682,7 @@ pub(super) fn spawn_fetch_worker(
         // delta — and promotion to producer inherits the warm base.
         let mut cursor = RollupCursor::new();
         let mut consumer_memo = ConsumerFoldMemo::default();
+        let mut producer_cadence = ProducerCadence::default();
         let mut notifications = NotificationState::default();
         let mut link_notifications = LinkNotificationState::default();
         let mut last_election = None;
@@ -694,6 +730,7 @@ pub(super) fn spawn_fetch_worker(
                         request,
                         &mut cursor,
                         &mut consumer_memo,
+                        &mut producer_cadence,
                         &mut post,
                     );
                     if let Some(event) = meter.finish(tick, crate::sidebar::timing::unix_now_ms()) {
