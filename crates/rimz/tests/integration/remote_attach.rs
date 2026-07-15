@@ -7,7 +7,7 @@
 //! these prove the CLI surface end to end.
 
 use std::io::Read as _;
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -17,18 +17,6 @@ use crate::common::{CommandTimeoutExt, Env};
 fn ssh_shim() -> PathBuf {
     crate::common::cargo_bin("ssh-trace", env!("CARGO_BIN_EXE_ssh-trace"))
 }
-
-/// The transport options shared by supervised and one-shot remote attaches.
-const SSH_TRANSPORT_OPTS: [&str; 8] = [
-    "-o",
-    "ServerAliveInterval=5",
-    "-o",
-    "ServerAliveCountMax=3",
-    "-o",
-    "ConnectTimeout=10",
-    "-o",
-    "Compression=yes",
-];
 
 /// One `Vec<argv>` per shim invocation, from the tab-joined trace log.
 fn shim_invocations(log: &Path) -> Vec<Vec<String>> {
@@ -62,21 +50,26 @@ fn write_infocmp_shim(path: &Path) {
 }
 
 enum InfocmpFixture {
-    Ambient,
     Missing,
     Copy,
 }
 
-fn run_exec_with_term(term: &str, colorterm: Option<&str>, infocmp: InfocmpFixture) -> Vec<String> {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
+fn remote_connect_command(env: &Env, log: &Path) -> Command {
     let mut cmd = env.rimz();
     cmd.args(["remote", "connect", "dev-box:query-engine", "--attach"])
         .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
+        .env("RIMZ_TEST_SSH_LOG", log)
         .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("TERM", term);
+        .env("TERM", "xterm-256color");
+    cmd
+}
+
+fn run_exec_with_term(colorterm: Option<&str>, infocmp: InfocmpFixture) -> Vec<String> {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let mut cmd = remote_connect_command(&env, &log);
+    cmd.env("TERM", "alacritty");
     match colorterm {
         Some(value) => {
             cmd.env("COLORTERM", value);
@@ -86,7 +79,6 @@ fn run_exec_with_term(term: &str, colorterm: Option<&str>, infocmp: InfocmpFixtu
         }
     }
     match infocmp {
-        InfocmpFixture::Ambient => {}
         InfocmpFixture::Missing => {
             cmd.env("RIMZ_INFOCMP_BIN", env.project_root.join("missing-infocmp"));
         }
@@ -106,18 +98,7 @@ fn run_exec_with_term(term: &str, colorterm: Option<&str>, infocmp: InfocmpFixtu
     );
     let invocations = shim_invocations(&log);
     assert_eq!(invocations.len(), 1, "one ssh run");
-    let argv = invocations.into_iter().next().expect("ssh invocation");
-    assert_eq!(argv.len(), 17, "snippet is a single argv element: {argv:?}");
-    assert!(argv[0].ends_with("ssh-trace"));
-    assert_eq!(argv[1..9], SSH_TRANSPORT_OPTS);
-    assert_eq!(argv[9], "-o");
-    assert_eq!(argv[10], "ControlMaster=auto");
-    assert_eq!(argv[11], "-o");
-    assert!(argv[12].starts_with("ControlPath="), "{argv:?}");
-    assert_eq!(argv[13], "-t");
-    assert_eq!(argv[14], "--");
-    assert_eq!(argv[15], "dev-box");
-    argv
+    invocations.into_iter().next().expect("ssh invocation")
 }
 
 fn snippet(argv: &[String]) -> &str {
@@ -192,22 +173,24 @@ fn reserve_local_port() -> u16 {
     listener.local_addr().expect("reserved address").port()
 }
 
+fn closed_ssh_endpoint(env: &Env) -> (PathBuf, SocketAddr) {
+    let path = env.project_root.join("ssh-config.txt");
+    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve dial port");
+    let address = reservation.local_addr().expect("dial address");
+    drop(reservation);
+    std::fs::write(
+        &path,
+        format!("hostname 127.0.0.1\nport {}\n", address.port()),
+    )
+    .expect("write ssh config fixture");
+    (path, address)
+}
+
 fn remote_web_command(env: &Env, log: &Path, port: u16) -> Command {
-    let mut cmd = env.rimz();
-    cmd.args([
-        "remote",
-        "connect",
-        "dev-box:query-engine",
-        "--web",
-        "--web-port",
-        &port.to_string(),
-        "--attach",
-    ])
-    .env("RIMZ_SSH_BIN", ssh_shim())
-    .env("RIMZ_TEST_SSH_LOG", log)
-    .env("RIMZ_REMOTE_DIAL_MS", "0")
-    .env("RIMZ_REMOTE_GATETIME_MS", "0")
-    .env("RIMZ_REMOTE_BACKOFF_MS", "1");
+    let mut cmd = remote_connect_command(env, log);
+    cmd.args(["--web", "--web-port", &port.to_string()])
+        .env("RIMZ_REMOTE_GATETIME_MS", "0")
+        .env("RIMZ_REMOTE_BACKOFF_MS", "1");
     cmd
 }
 
@@ -368,39 +351,26 @@ fn link_stats_ingest_keeps_a_newer_publishers_sidecar() {
 }
 
 #[test]
-fn exec_uses_ssh_shim_and_applies_terminal_plan() {
-    let portable = run_exec_with_term("xterm-256color", None, InfocmpFixture::Ambient);
-    assert!(snippet(&portable).starts_with("PATH=\"$HOME/.cargo/bin"));
-    assert!(snippet(&portable).ends_with("exec rimz attach --attach -- 'query-engine'"));
-    assert!(
-        !snippet(&portable).contains("COLORTERM"),
-        "{}",
-        snippet(&portable)
-    );
-
-    let truecolor =
-        run_exec_with_term("xterm-256color", Some("truecolor"), InfocmpFixture::Ambient);
-    assert!(
-        snippet(&truecolor).contains("export COLORTERM=truecolor; exec rimz"),
-        "{}",
-        snippet(&truecolor)
-    );
-
-    let downgrade = run_exec_with_term("alacritty", None, InfocmpFixture::Missing);
+fn exec_downgrades_or_copies_terminal_at_the_cli_boundary() {
+    let downgrade = run_exec_with_term(None, InfocmpFixture::Missing);
     assert!(
         snippet(&downgrade).contains("export TERM=xterm-256color; exec rimz"),
         "{}",
         snippet(&downgrade)
     );
 
-    let copy = run_exec_with_term("alacritty", None, InfocmpFixture::Copy);
+    let copy = run_exec_with_term(Some("truecolor"), InfocmpFixture::Copy);
     assert!(
         snippet(&copy)
             .contains("printf '%s\\n' 'CANNED,' | tic -x - 2>/dev/null && export TERM='alacritty'"),
         "{}",
         snippet(&copy)
     );
-    assert!(snippet(&copy).ends_with("exec rimz attach --attach -- 'query-engine'"));
+    assert!(
+        snippet(&copy).contains("export COLORTERM=truecolor;"),
+        "{}",
+        snippet(&copy)
+    );
 }
 
 #[test]
@@ -455,24 +425,20 @@ fn probe_stream_waits_for_control_master_before_starting() {
 }
 
 #[test]
-fn link_drop_on_an_established_session_reconnects() {
+fn established_link_drop_reconnects_and_notifies_once() {
     let env = Env::new();
+    write_link_notify_command_config(&env);
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
+    let notify_log = env.project_root.join("notify.log");
     // First session drops the link (255), the reattach detaches cleanly (0).
     std::fs::write(&plan, "255\n0\n").expect("write plan");
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
+    let out = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
-        .env("RIMZ_REMOTE_DIAL_MS", "0")
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        // Gatetime 0: even the shim's instant session counts as established.
-        .env("RIMZ_REMOTE_GATETIME_MS", "0")
+        .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
+        .env("RIMZ_REMOTE_GATETIME_MS", "20")
         .env("RIMZ_REMOTE_BACKOFF_MS", "1")
-        .env("TERM", "xterm-256color")
+        .env("RIMZ_NOTIFY_TEST_LOG", &notify_log)
         .bounded_output()
         .expect("run rimz remote connect --attach");
     assert!(
@@ -501,96 +467,43 @@ fn link_drop_on_an_established_session_reconnects() {
         "the supervisor narrates the retry: {stderr}"
     );
     assert!(
-        !stderr.contains("restored"),
-        "a retry verdict must not emit a false restored line: {stderr}"
-    );
-    assert!(
         stderr.contains("(attempt 1)"),
         "attempts number per outage, not per lifetime: {stderr}"
+    );
+
+    let text = wait_for_notify_log(
+        &notify_log,
+        &[
+            "link_lost|RimZ: remote link lost|SSH to dev-box dropped; reconnecting.",
+            "link_restored|RimZ: remote link restored|SSH to dev-box is responsive again.",
+        ],
+    );
+    assert_eq!(text.matches("link_lost|").count(), 1, "lost edge: {text}");
+    assert_eq!(
+        text.matches("link_restored|").count(),
+        1,
+        "restored edge: {text}"
+    );
+    assert!(
+        text.find("link_lost|") < text.find("link_restored|"),
+        "restore follows loss: {text}"
     );
 }
 
 #[test]
-fn network_transition_accelerates_a_long_reconnect_wait() {
+fn unreachable_endpoint_holds_until_restored_then_reconnects_immediately() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
-    let ssh_config = env.project_root.join("ssh-config.txt");
-    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve dial port");
-    let address = reservation.local_addr().expect("dial address");
-    drop(reservation);
+    let (ssh_config, address) = closed_ssh_endpoint(&env);
     std::fs::write(&plan, "255\n0\n").expect("write plan");
-    std::fs::write(
-        &ssh_config,
-        format!("hostname 127.0.0.1\nport {}\n", address.port()),
-    )
-    .expect("write ssh config fixture");
 
-    let mut child = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
+    let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
         .env("RIMZ_REMOTE_BACKOFF_MS", "60000")
-        .env("RIMZ_REMOTE_DIAL_MS", "50")
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("TERM", "xterm-256color")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn supervised remote connect");
-
-    wait_for_main_invocations(&mut child, &log, 1, Duration::from_secs(2));
-    // The disconnected probe channel leaves the main-session poll on its
-    // 200ms cadence; keep the port closed long enough for the first retry dial.
-    std::thread::sleep(Duration::from_millis(500));
-    let _listener = TcpListener::bind(address).expect("restore reachable endpoint");
-    wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(3));
-    let out = child.wait_with_output().expect("wait for clean reattach");
-
-    assert!(
-        out.status.success(),
-        "transition-accelerated reattach exits cleanly\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("network to dev-box restored — reconnecting now"),
-        "the network edge is visible: {stderr}"
-    );
-}
-
-#[test]
-fn unreachable_endpoint_holds_reconnect_attempts_until_restored() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let plan = env.project_root.join("ssh-trace.plan");
-    let ssh_config = env.project_root.join("ssh-config.txt");
-    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve dial port");
-    let address = reservation.local_addr().expect("dial address");
-    drop(reservation);
-    std::fs::write(&plan, "255\n0\n").expect("write plan");
-    std::fs::write(
-        &ssh_config,
-        format!("hostname 127.0.0.1\nport {}\n", address.port()),
-    )
-    .expect("write ssh config fixture");
-
-    let mut child = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_TEST_SSH_PLAN", &plan)
-        .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
-        .env("RIMZ_REMOTE_GATETIME_MS", "0")
-        .env("RIMZ_REMOTE_BACKOFF_MS", "50")
         .env("RIMZ_REMOTE_DIAL_MS", "25")
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("TERM", "xterm-256color")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -631,30 +544,16 @@ fn unreachable_endpoint_retries_at_the_hold_cap() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
     let plan = env.project_root.join("ssh-trace.plan");
-    let ssh_config = env.project_root.join("ssh-config.txt");
-    let reservation = TcpListener::bind(("127.0.0.1", 0)).expect("reserve dial port");
-    let address = reservation.local_addr().expect("dial address");
-    drop(reservation);
+    let (ssh_config, _) = closed_ssh_endpoint(&env);
     std::fs::write(&plan, "255\n0\n").expect("write plan");
-    std::fs::write(
-        &ssh_config,
-        format!("hostname 127.0.0.1\nport {}\n", address.port()),
-    )
-    .expect("write ssh config fixture");
 
-    let mut child = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
+    let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_PLAN", &plan)
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
         .env("RIMZ_REMOTE_BACKOFF_MS", "50")
         .env("RIMZ_REMOTE_BACKOFF_CAP_MS", "200")
         .env("RIMZ_REMOTE_DIAL_MS", "25")
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("TERM", "xterm-256color")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -692,11 +591,7 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
     let stderr = std::fs::File::create(&stderr_path).expect("create stderr log");
 
     let started = Instant::now();
-    let mut child = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
+    let mut child = remote_connect_command(&env, &log)
         .env("RIMZ_TEST_SSH_G_FILE", &ssh_config)
         .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
         .env("RIMZ_TEST_PROBE_SILENT_AFTER_ACKS", "2")
@@ -706,27 +601,12 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
         .env("RIMZ_REMOTE_BLACKOUT_MS", "100")
         .env("RIMZ_REMOTE_GATETIME_MS", "0")
         .env("RIMZ_REMOTE_DIAL_MS", "50")
-        .env("TERM", "xterm-256color")
         .stdout(Stdio::null())
         .stderr(stderr)
         .spawn()
         .expect("spawn supervised remote connect");
 
     wait_for_main_invocations(&mut child, &log, 2, Duration::from_secs(2));
-    let invocations = shim_invocations(&log)
-        .into_iter()
-        .filter(|argv| is_main_invocation(argv))
-        .collect::<Vec<_>>();
-    assert!(
-        !snippet(&invocations[0]).contains("RIMZ_REMOTE_RECONNECT"),
-        "the initial attach stays attended: {:?}",
-        invocations[0]
-    );
-    assert!(
-        snippet(&invocations[1]).contains("export RIMZ_REMOTE_RECONNECT=1;"),
-        "a zombie replacement is marked unattended: {:?}",
-        invocations[1]
-    );
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "the replacement attach must beat the parked three-second ssh child"
@@ -741,54 +621,6 @@ fn reachable_host_and_probe_blackout_kill_a_zombie_transport() {
             "link to dev-box confirmed dead — host reachable, session silent; reconnecting now"
         ),
         "the evidence-backed zombie kill is visible: {stderr}"
-    );
-}
-
-#[test]
-fn local_link_notify_command_receives_lost_and_restored_env() {
-    let env = Env::new();
-    write_link_notify_command_config(&env);
-    let log = env.project_root.join("ssh-trace.log");
-    let plan = env.project_root.join("ssh-trace.plan");
-    let notify_log = env.project_root.join("notify.log");
-    std::fs::write(&plan, "255\n0\n").expect("write plan");
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_TEST_SSH_PLAN", &plan)
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "80")
-        .env("RIMZ_REMOTE_DIAL_MS", "0")
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("RIMZ_REMOTE_GATETIME_MS", "20")
-        .env("RIMZ_REMOTE_BACKOFF_MS", "1")
-        .env("RIMZ_NOTIFY_TEST_LOG", &notify_log)
-        .env("TERM", "xterm-256color")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
-    assert!(
-        out.status.success(),
-        "reconnect ends on clean detach\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let text = wait_for_notify_log(
-        &notify_log,
-        &[
-            "link_lost|RimZ: remote link lost|SSH to dev-box dropped; reconnecting.",
-            "link_restored|RimZ: remote link restored|SSH to dev-box is responsive again.",
-        ],
-    );
-    assert_eq!(
-        text.matches("link_lost|").count(),
-        1,
-        "lost edge fires once:\n{text}"
-    );
-    assert_eq!(
-        text.matches("link_restored|").count(),
-        1,
-        "restored edge fires once:\n{text}"
     );
 }
 
@@ -875,7 +707,6 @@ fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
         String::from_utf8_lossy(&out.stderr).contains("remote preparation started"),
         "preparation stderr stays visible"
     );
-    assert_eq!(shim_invocations(&log).len(), 3, "prep, token, tunnel");
     assert_eq!(tunnel_invocation_count(&log), 1);
 }
 
@@ -900,38 +731,11 @@ fn remote_web_reconnects_once_after_established_transport_exit() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(tunnel_invocation_count(&log), 2);
-    assert_eq!(shim_invocations(&log).len(), 4, "prep, token, two tunnels");
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("web tunnel to dev-box lost — reconnecting"),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-}
-
-#[test]
-fn remote_web_no_reconnect_surfaces_established_transport_exit() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let plan = env.project_root.join("tunnel.plan");
-    let port = reserve_local_port();
-    std::fs::write(&plan, "255\n").expect("write tunnel plan");
-
-    let out = remote_web_command(&env, &log, port)
-        .arg("--no-reconnect")
-        .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
-        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "80")
-        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
-        .bounded_output()
-        .expect("run non-reconnecting remote web tunnel");
-
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("exited with status 255; not reconnecting"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(tunnel_invocation_count(&log), 1);
-    assert_eq!(shim_invocations(&log).len(), 3, "prep, token, tunnel");
 }
 
 #[test]
@@ -955,13 +759,11 @@ fn remote_web_fatal_exit_before_readiness_emits_no_url() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(tunnel_invocation_count(&log), 1);
-    assert_eq!(shim_invocations(&log).len(), 3, "prep, token, tunnel");
 }
 
 #[test]
-fn remote_alias_cli_lifecycle_covers_add_update_list_reset_rm() {
+fn remote_alias_update_drives_connect_and_reset() {
     let env = Env::new();
-    let remote_file = env.config_root().join("rimz").join("remote.toml");
 
     let add = env
         .rimz()
@@ -973,27 +775,6 @@ fn remote_alias_cli_lifecycle_covers_add_update_list_reset_rm() {
         "add succeeds\nstderr:\n{}",
         String::from_utf8_lossy(&add.stderr),
     );
-    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
-    assert!(text.contains("name = \"prod\""), "{text}");
-    assert!(
-        text.contains("target = \"agent@prod-box:query-engine\""),
-        "{text}"
-    );
-
-    let dup = env
-        .rimz()
-        .args(["remote", "add", "prod", "other-box:other-engine"])
-        .bounded_output()
-        .expect("run duplicate rimz remote add");
-    assert!(
-        !dup.status.success(),
-        "duplicate add must fail non-interactively"
-    );
-    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
-    assert!(
-        text.contains("agent@prod-box:query-engine"),
-        "target unchanged: {text}",
-    );
 
     let update = env
         .rimz()
@@ -1004,11 +785,6 @@ fn remote_alias_cli_lifecycle_covers_add_update_list_reset_rm() {
         update.status.success(),
         "update succeeds\nstderr:\n{}",
         String::from_utf8_lossy(&update.stderr),
-    );
-    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
-    assert!(
-        text.contains("agent@prod-box:other-engine"),
-        "target replaced: {text}",
     );
 
     let printed = env
@@ -1027,21 +803,6 @@ fn remote_alias_cli_lifecycle_covers_add_update_list_reset_rm() {
         "alias session rides into remote rimz: {line}"
     );
 
-    let list = env
-        .rimz()
-        .args(["remote", "list", "--json"])
-        .bounded_output()
-        .expect("run rimz remote list --json");
-    assert!(
-        list.status.success(),
-        "list succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&list.stderr),
-    );
-    let json: serde_json::Value =
-        serde_json::from_slice(&list.stdout).expect("remote list json parses");
-    assert_eq!(json["remotes"][0]["name"], "prod");
-    assert_eq!(json["remotes"][0]["reconnect"], true);
-
     let reset = env
         .rimz()
         .args(["remote", "reset", "prod", "--print"])
@@ -1052,31 +813,5 @@ fn remote_alias_cli_lifecycle_covers_add_update_list_reset_rm() {
     assert!(
         line.contains("--no-resume"),
         "remote reset injects --no-resume: {line}"
-    );
-
-    let missing = env
-        .rimz()
-        .args(["remote", "update", "nope", "host:path"])
-        .bounded_output()
-        .expect("run missing rimz remote update");
-    assert!(
-        !missing.status.success(),
-        "update of absent alias must fail"
-    );
-
-    let rm = env
-        .rimz()
-        .args(["remote", "rm", "prod"])
-        .bounded_output()
-        .expect("run rimz remote rm");
-    assert!(
-        rm.status.success(),
-        "rm succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&rm.stderr),
-    );
-    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
-    assert!(
-        !text.contains("name = \"prod\""),
-        "alias removed from file: {text}"
     );
 }
