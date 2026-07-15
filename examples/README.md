@@ -46,7 +46,7 @@ A same-named directory in `~/.agents/teams` is overwritten; remove it first if y
 
 Launch with `rimz agents forge`; the launch grammar lives in the [agents CLI reference](../docs/reference/cli/agents.md). Each role answers to `@planner`, `@coder`, or `@reviewer`.
 
-The `claude` and `codex` CLIs must be on `PATH`. The profiles in `team.toml` pin models (`fable`, `opus`) and Codex feature flags; adjust them there to taste. The coder's PR step expects a `pr` skill from the author's private skills collection and falls back to plain `gh` or `tea` without it.
+The `claude` and `codex` CLIs must be on `PATH`. The profiles in `team.toml` pin models (`fable`, `opus`) and Codex feature flags; adjust them there to taste. The coder's PR step expects a `pr` skill and falls back to plain `gh` or `tea` without it.
 
 Try the team before installing by pointing RimZ at this checkout:
 
