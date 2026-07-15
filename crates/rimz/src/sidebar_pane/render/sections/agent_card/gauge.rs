@@ -91,11 +91,12 @@ pub(super) fn bar_row(
 /// large-window working ranges stay visible; the displayed percentage remains
 /// the raw measurement. When the statusline reports the per-message token
 /// breakdown, every severity splits the fill into cache-read / cache-write /
-/// fresh-input segments; each accent starts with a gap-fronted `╺` cap so even
-/// a half-cell fragment stays visible. The `▣` glyph wears the same severity,
-/// so glyph, bar, and the `▤` line below speak one urgency. The value prefers
-/// a one-decimal precise fraction (`78.2%`) over the integer gauge. An empty
-/// (0%) window reads the hollow `▢`; any usage fills it to `▣`.
+/// fresh-input segments. Components below 0.5% of the filled window fold into
+/// the lead run; each remaining accent starts with a gap-fronted `╺` cap, and
+/// the segmented fill ends flush at a whole cell. The `▣` glyph wears the same
+/// severity, so glyph, bar, and the `▤` line below speak one urgency. The value
+/// prefers a one-decimal precise fraction (`78.2%`) over the integer gauge. An
+/// empty (0%) window reads the hollow `▢`; any usage fills it to `▣`.
 pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,

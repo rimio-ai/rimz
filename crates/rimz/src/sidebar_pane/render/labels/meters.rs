@@ -378,15 +378,18 @@ pub(in crate::sidebar_pane::render) fn window_style(theme: &Theme, window: u64) 
     theme.styled(component, Modifier::DIM)
 }
 
-/// The context meter's health bar: the first nonzero segment paints in the
+/// Keep a segment at ≥ 1/200th (0.5%) of the filled window; smaller is noise.
+const SEGMENT_VISIBILITY_FLOOR: u128 = 200;
+
+/// The context meter's health bar: the first visible segment paints in the
 /// row's current health tone (`theme.heat_tone(amount)`), while later accent
-/// segments (cache-write, fresh input) stay flat in their own tones. Each
-/// accent starts with a gap-fronted half-rule cap (`╺` by default), giving even
-/// a half-cell of ink a visible floor without moving the bar end. `fill_pct`
-/// sizes the filled run to the nearest half cell; segments too numerous
-/// for that run drop smallest-first. With no split to draw, the whole filled run
-/// is one flat health run. Under `NO_COLOR` color collapses while the leading
-/// gap in each accent cap keeps composition boundaries legible by shape.
+/// segments (cache-write, fresh input) stay flat in their own tones. Components
+/// below 0.5% of the filled window fold into the lead run; each remaining accent
+/// starts with a gap-fronted half-rule cap (`╺` by default). A segmented bar
+/// quantizes to whole cells so its last cap sits flush against the track, while
+/// a flat bar keeps nearest-half-cell resolution. Segments too numerous for the
+/// filled run drop smallest-first. Under `NO_COLOR` color collapses while the
+/// leading gap in each accent cap keeps composition boundaries legible by shape.
 pub(in crate::sidebar_pane::render) fn context_gauge_spans(
     theme: &Theme,
     amount: f32,
@@ -397,21 +400,28 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
     let width = width.max(1);
     let (filled, trailing_half) = filled_half_cells(fill_pct, width);
     let weight: u128 = segments.iter().map(|(value, _)| u128::from(*value)).sum();
+    let survivors: Vec<(usize, u64)> = segments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (value, _))| {
+            (u128::from(*value) * SEGMENT_VISIBILITY_FLOOR >= weight && *value > 0)
+                .then_some((index, *value))
+        })
+        .collect();
     let bar_track = theme.glyph(GlyphRole::MeterBarTrack).to_owned();
     let bar_cap = theme.glyph(GlyphRole::MeterBarCap).to_owned();
     let bar_half = theme.glyph(GlyphRole::MeterBarHalf).to_owned();
     let track = |drawn: usize| -> Option<Span<'static>> {
         (drawn < width).then(|| Span::styled(bar_track.repeat(width - drawn), theme.faint()))
     };
-    if filled == 0 || weight == 0 {
+    if filled == 0 || weight == 0 || survivors.len() <= 1 {
         // No split to draw: the whole filled run uses the current health tone.
         let color = if weight == 0 {
             theme.heat_tone(amount)
         } else {
-            segments
-                .iter()
-                .rev()
-                .find_map(|(value, color)| (*value > 0).then_some(*color))
+            survivors
+                .last()
+                .map(|(index, _)| segments[*index].1)
                 .unwrap_or_else(|| theme.heat_tone(amount))
         };
         let mut spans = filled_run_spans(theme, theme.heat_tone(amount), filled);
@@ -424,12 +434,9 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
         spans.extend(track(filled + usize::from(trailing_half)));
         return spans;
     }
-    let mut active: Vec<(usize, u64)> = segments
-        .iter()
-        .enumerate()
-        .filter_map(|(index, (value, _))| (*value > 0).then_some((index, *value)))
-        .collect();
-    while active.len() > filled {
+    let cells = ((fill_pct.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
+    let mut active = survivors;
+    while active.len() > cells {
         let smallest = active.iter().map(|(_, value)| *value).min().unwrap_or(0);
         let drop = active
             .iter()
@@ -438,7 +445,7 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
         active.remove(drop);
     }
 
-    let budget = filled * 2;
+    let budget = cells * 2;
     let active_weight: u128 = active.iter().map(|(_, value)| u128::from(*value)).sum();
     let mut accents: Vec<(usize, u64, usize)> = active
         .iter()
@@ -507,18 +514,7 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
         ));
         spans.extend(filled_run_spans(theme, color, (ink - 1) / 2));
     }
-    if trailing_half {
-        let color = segments
-            .iter()
-            .rev()
-            .find_map(|(value, color)| (*value > 0).then_some(*color))
-            .unwrap_or_else(|| theme.heat_tone(amount));
-        spans.push(Span::styled(
-            bar_half,
-            theme.style(color, Modifier::empty()),
-        ));
-    }
-    spans.extend(track(filled + usize::from(trailing_half)));
+    spans.extend(track(cells));
     spans
 }
 

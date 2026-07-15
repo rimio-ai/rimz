@@ -204,7 +204,7 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         (6, 10, "╸─────────", false),
         (6, 32, "━╺──────────────────────────────", true),
         (30, 10, "━━╺───────", true),
-        (30, 32, "━━━━━━━╺━╸──────────────────────", true),
+        (30, 32, "━━━━━━━━╺━──────────────────────", true),
     ];
     for (percent, width, expected, write_visible) in regression {
         let segments = [
@@ -224,14 +224,19 @@ fn gauge_bars_map_severity_and_quantize_segments() {
     }
 
     let half_tail = context_gauge_spans(&lit, 0.0, &segments, 55.0, 10);
-    let tail = half_tail
-        .iter()
-        .find(|span| span.content == "╸")
-        .expect("segmented bar has a half-cell tail");
-    assert_eq!(
-        tail.style.fg,
-        Some(lit.component(Component::Input)),
-        "the half-cell tail carries the last nonempty segment color"
+    let half_tail_text = text(&half_tail);
+    assert_eq!(half_tail_text, "━━━╺━╺────");
+    assert!(
+        !half_tail_text.contains('╸'),
+        "a segmented bar ends on a whole cell"
+    );
+    let track_start = half_tail_text.find('─').expect("segmented bar has track");
+    assert!(
+        matches!(
+            half_tail_text[..track_start].chars().next_back(),
+            Some('━' | '╺')
+        ),
+        "the last segment sits flush against the track"
     );
 
     let narrow = text(&context_gauge_spans(&plain, 0.0, &segments, 20.0, 10));
@@ -294,13 +299,10 @@ fn gauge_bars_map_severity_and_quantize_segments() {
             percent as f64,
             width,
         ));
-        let (whole, half) = filled_half_cells(percent as f64, width);
-        let filled = whole + usize::from(half);
+        let filled = ((f64::from(percent) / 100.0) * width as f64).round() as usize;
         assert_eq!(rendered.chars().count(), width);
-        assert!(matches!(
-            rendered.chars().nth(filled - 1),
-            Some('━' | '╺' | '╸')
-        ));
+        assert!(matches!(rendered.chars().nth(filled - 1), Some('━' | '╺')));
+        assert_eq!(rendered.chars().nth(filled), Some('─'));
     }
 
     // A weightless split falls back to a single flat health run.
@@ -368,6 +370,64 @@ fn gauge_bars_map_severity_and_quantize_segments() {
         indexed.component(Component::CacheWrite),
         indexed_from_truecolor(truecolor.component(Component::CacheWrite)),
         "indexed cache-write is the truecolor violet quantized to xterm"
+    );
+}
+
+#[test]
+fn context_gauge_drops_subscale_accents_and_seals_segmented_tail() {
+    let theme = Theme::fixed(false);
+    let read = theme.component(Component::CacheRead);
+    let write = theme.component(Component::CacheWrite);
+    let input = theme.component(Component::Input);
+
+    let noise = context_gauge_spans(
+        &theme,
+        0.0,
+        &[(87_000, read), (3_000, write), (2, input)],
+        45.0,
+        30,
+    );
+    let noise_text = text(&noise);
+    assert_eq!(noise_text, format!("{}╺{}", "━".repeat(13), "─".repeat(16)));
+    assert_eq!(noise_text.matches('╺').count(), 1);
+    assert!(!noise_text.contains('╸'));
+    assert!(
+        noise.iter().all(|span| span.style.fg != Some(input)),
+        "a sub-0.5% input accent folds into the lead run"
+    );
+
+    let threshold = context_gauge_spans(
+        &theme,
+        0.0,
+        &[(199, read), (0, write), (1, input)],
+        100.0,
+        10,
+    );
+    assert_eq!(text(&threshold), format!("{}╺", "━".repeat(9)));
+    assert_eq!(threshold.last().and_then(|span| span.style.fg), Some(input));
+
+    let sealed = text(&context_gauge_spans(
+        &theme,
+        0.0,
+        &[(183_000, read), (0, write), (1_000, input)],
+        92.0,
+        30,
+    ));
+    assert_eq!(sealed, format!("{}╺{}", "━".repeat(27), "─".repeat(2)));
+    assert!(!sealed.contains('╸'));
+
+    let flat = context_gauge_spans(
+        &theme,
+        0.0,
+        &[(90_000, read), (0, write), (2, input)],
+        f64::EPSILON,
+        30,
+    );
+    assert_eq!(text(&flat), format!("╸{}", "─".repeat(29)));
+    assert_eq!(flat[0].style.fg, Some(read));
+    assert!(
+        flat.iter().all(|span| span.style.fg != Some(input)),
+        "the flat tail ignores a dropped segment's color"
     );
 }
 
