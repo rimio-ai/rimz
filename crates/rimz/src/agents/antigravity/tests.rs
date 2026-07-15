@@ -867,9 +867,9 @@ fn bounded_discovery_can_lose_an_older_prompt_from_a_long_turn() {
         .into_iter()
         .next()
         .unwrap();
-    assert_eq!(observation.status, AgentStatus::Success);
+    assert_eq!(local_state(&observation).status, AgentStatus::Success);
     assert!(
-        observation.latest_prompt.is_none(),
+        local_state(&observation).latest_prompt.is_none(),
         "the bounded tail is valid weaker evidence; snapshot merge preserves the hook prompt"
     );
 }
