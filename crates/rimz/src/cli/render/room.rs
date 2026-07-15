@@ -4,6 +4,45 @@ use std::io::Write;
 
 use anyhow::Result;
 
+pub(crate) fn present_mux_pick(
+    pick: std::result::Result<rimz::room::session::MuxPick, rimz::room::session::MuxPickErr>,
+) -> Result<rimz::ids::MuxName> {
+    let (mux, notices) = match pick {
+        Ok(pick) => (Ok(pick.mux), pick.notices),
+        Err(err) => (Err(err.source), err.notices),
+    };
+    print_notices(notices)?;
+    Ok(mux?)
+}
+
+pub(crate) fn print_notices(notices: Vec<String>) -> Result<()> {
+    let mut stderr = super::err();
+    for notice in notices {
+        writeln!(stderr, "note: {notice}")?;
+    }
+    Ok(())
+}
+
+pub(crate) fn present_birth_outcome(
+    outcome: Result<rimz::room::BirthOutcome>,
+    session_name: &str,
+) -> Result<rimz::room::BirthOutcome> {
+    match outcome {
+        Ok(outcome) => {
+            if let Some(reset) = outcome.reset.as_ref() {
+                print_automatic_reset(session_name, reset)?;
+            }
+            Ok(outcome)
+        }
+        Err(err) => {
+            if let Some(reset) = err.downcast_ref::<rimz::room::ResetRecoveryError>() {
+                print_automatic_reset(session_name, &reset.report)?;
+            }
+            Err(err)
+        }
+    }
+}
+
 pub(crate) fn print_automatic_reset(
     session_name: &str,
     report: &rimz::room::RoomResetReport,

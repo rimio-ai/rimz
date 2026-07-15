@@ -17,7 +17,7 @@ use crate::mux::{
     SessionOptions, SidebarPaneOptions, SidebarWidth,
 };
 use crate::store::workspace_record;
-use crate::workspace::{ResolvedWorkspace, RootClass};
+use crate::workspace::ResolvedWorkspace;
 use crate::{RuntimePaths, StatePaths, Store, WorkspaceRecord};
 
 pub use birth::{
@@ -30,11 +30,7 @@ pub enum LiveRoomErr {
     #[error(
         "no live Rimz room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
     )]
-    Autodetect { session_name: String },
-    #[error(
-        "no live Rimz room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
-    )]
-    Missing { session_name: String },
+    Unavailable { session_name: String },
     #[error(transparent)]
     Mux(#[from] MuxErr),
 }
@@ -46,7 +42,7 @@ pub fn require_live_mux(
     explicit: Option<MuxName>,
     workspace: &ResolvedWorkspace,
 ) -> LiveRoomResult<MuxName> {
-    let mux = crate::mux::auto_detect_backend(explicit).map_err(|_| LiveRoomErr::Autodetect {
+    let mux = crate::mux::auto_detect_backend(explicit).map_err(|_| LiveRoomErr::Unavailable {
         session_name: workspace.session_name.clone(),
     })?;
     let backend = crate::mux::backend_for(mux);
@@ -60,7 +56,7 @@ pub fn require_live_session(backend: &dyn MuxBackend, session_name: &str) -> Liv
     if sessions.iter().any(|session| session == session_name) {
         Ok(())
     } else {
-        Err(LiveRoomErr::Missing {
+        Err(LiveRoomErr::Unavailable {
             session_name: session_name.to_owned(),
         })
     }
@@ -83,21 +79,12 @@ fn pane_identity_env_with_ambient(
     channel: Option<&str>,
     ambient_channel: Option<&str>,
 ) -> BTreeMap<String, String> {
-    let mut env = BTreeMap::from([
-        ("RIMZ".to_owned(), "1".to_owned()),
-        (
-            crate::workspace::ENV_WORKSPACE_ID.to_owned(),
-            workspace.workspace_id.to_string(),
-        ),
-        (
-            crate::workspace::ENV_PROJECT_ROOT.to_owned(),
-            workspace.project_root.display().to_string(),
-        ),
-        (
-            crate::harness::run::ENV_WORKTREE_PATH.to_owned(),
-            workspace.worktree_root.display().to_string(),
-        ),
-    ]);
+    let mut env = crate::workspace::pin_env(&workspace.workspace_id, &workspace.project_root);
+    env.insert("RIMZ".to_owned(), "1".to_owned());
+    env.insert(
+        crate::harness::run::ENV_WORKTREE_PATH.to_owned(),
+        workspace.worktree_root.display().to_string(),
+    );
     if let Some(channel) = channel
         .or(ambient_channel)
         .filter(|value| !value.is_empty())
@@ -121,12 +108,7 @@ pub enum RoomSizing {
 
 /// Owned managed-room identity and runtime configuration.
 pub struct RoomContext {
-    workspace_id: WorkspaceId,
-    project_root: PathBuf,
-    worktree_root: PathBuf,
-    root_class: RootClass,
-    session_name: String,
-    mux: MuxName,
+    workspace: ResolvedWorkspace,
     backend: Box<dyn MuxBackend>,
     machine_config: Arc<MachineConfig>,
     mux_config: MultiplexerConfig,
@@ -145,17 +127,10 @@ impl RoomContext {
         mux: MuxName,
         sizing: RoomSizing,
     ) -> Result<Self> {
-        Self::new(
-            workspace.workspace_id.clone(),
-            workspace.project_root.clone(),
-            workspace.worktree_root.clone(),
-            workspace.root_class,
-            workspace.session_name.clone(),
-            machine_config,
-            mux,
-            sizing,
-            recorded_room_bin(&workspace.workspace_id),
-        )
+        let mut workspace = workspace.clone();
+        workspace.mux_hint = Some(mux);
+        let rimz_bin = recorded_room_bin(&workspace.workspace_id);
+        Self::new(workspace, machine_config, mux, sizing, rimz_bin)
     }
 
     /// Build context from durable workspace identity.
@@ -165,15 +140,9 @@ impl RoomContext {
         mux: MuxName,
         sizing: RoomSizing,
     ) -> Result<Self> {
+        let workspace = Self::workspace_from_record(record, mux);
         Self::new(
-            record.workspace_id.clone(),
-            record.project_root.clone(),
-            record
-                .worktree_root
-                .clone()
-                .unwrap_or_else(|| record.project_root.clone()),
-            record.root_class,
-            record.session_name.clone(),
+            workspace,
             machine_config,
             mux,
             sizing,
@@ -181,19 +150,29 @@ impl RoomContext {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    fn workspace_from_record(record: &WorkspaceRecord, mux: MuxName) -> ResolvedWorkspace {
+        ResolvedWorkspace {
+            workspace_id: record.workspace_id.clone(),
+            project_root: record.project_root.clone(),
+            root_class: record.root_class,
+            worktree_root: record
+                .worktree_root
+                .clone()
+                .unwrap_or_else(|| record.project_root.clone()),
+            worktree_branch: None,
+            session_name: record.session_name.clone(),
+            mux_hint: Some(mux),
+        }
+    }
+
     fn new(
-        workspace_id: WorkspaceId,
-        project_root: PathBuf,
-        worktree_root: PathBuf,
-        root_class: RootClass,
-        session_name: String,
+        workspace: ResolvedWorkspace,
         machine_config: Arc<MachineConfig>,
         mux: MuxName,
         sizing: RoomSizing,
         rimz_bin: PathBuf,
     ) -> Result<Self> {
-        let runtime = RuntimePaths::for_workspace(workspace_id.clone())
+        let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
             .context("preparing adapter runtime paths")?;
         runtime
             .ensure_dirs()
@@ -206,12 +185,7 @@ impl RoomContext {
         };
         let extra_env = crate::agents::registry::room_env(&runtime);
         Ok(Self {
-            workspace_id,
-            project_root,
-            worktree_root,
-            root_class,
-            session_name,
-            mux,
+            workspace,
             backend: crate::mux::backend_for(mux),
             machine_config,
             mux_config,
@@ -226,52 +200,30 @@ impl RoomContext {
     /// Claim this room for the running RimZ binary and durably record it.
     pub fn claim_owner(&mut self) -> Result<()> {
         let rimz_bin = crate::reload::current_reexec_target().unwrap_or_else(crate::proc::rimz_exe);
-        let paths = StatePaths::for_workspace(self.workspace_id.clone())
+        let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
             .context("preparing store paths")?;
         let store = Store::open(paths, self.runtime.clone()).context("opening store")?;
-        let workspace = self.resolved_identity();
         store
-            .record_room_bin(&workspace, rimz_bin.clone())
+            .record_room_bin(&self.workspace, rimz_bin.clone())
             .context("recording room binary")?;
         self.rimz_bin = rimz_bin;
         Ok(())
     }
 
-    fn resolved_identity(&self) -> ResolvedWorkspace {
-        ResolvedWorkspace {
-            workspace_id: self.workspace_id.clone(),
-            project_root: self.project_root.clone(),
-            root_class: self.root_class,
-            worktree_root: self.worktree_root.clone(),
-            worktree_branch: None,
-            session_name: self.session_name.clone(),
-            mux_hint: Some(self.mux),
-        }
-    }
-
     pub fn workspace_id(&self) -> &WorkspaceId {
-        &self.workspace_id
-    }
-
-    pub fn project_root(&self) -> &Path {
-        &self.project_root
+        &self.workspace.workspace_id
     }
 
     pub fn session_name(&self) -> &str {
-        &self.session_name
+        &self.workspace.session_name
     }
 
     pub fn mux_name(&self) -> MuxName {
-        self.mux
+        self.backend.name()
     }
 
     pub fn backend(&self) -> &dyn MuxBackend {
         self.backend.as_ref()
-    }
-
-    /// Read-only verdict used before CLI recovery presentation.
-    pub fn is_healthy_live(&self) -> bool {
-        Self::probe_healthy_live(self.backend.as_ref(), &self.session_name)
     }
 
     /// Probe a selected backend before first-run config can construct final context.
@@ -299,9 +251,9 @@ impl RoomContext {
     ) -> std::result::Result<RebirthPlan, crate::harness::rebirth::RebirthErr> {
         RebirthPlan::inspect(
             self.backend.as_ref(),
-            &self.workspace_id,
-            &self.session_name,
-            &self.project_root,
+            &self.workspace.workspace_id,
+            &self.workspace.session_name,
+            &self.workspace.project_root,
             &self.machine_config,
             disabled,
         )
@@ -326,9 +278,9 @@ impl RoomContext {
     ) -> SidebarPaneOptions {
         let width_override = crate::sidebar::width_override::load(&self.runtime);
         SidebarPaneOptions {
-            session_name: self.session_name.clone(),
-            workspace_id: self.workspace_id.clone(),
-            project_root: self.project_root.clone(),
+            session_name: self.workspace.session_name.clone(),
+            workspace_id: self.workspace.workspace_id.clone(),
+            project_root: self.workspace.project_root.clone(),
             extra_env: self.extra_env.clone(),
             cwd: cwd.to_path_buf(),
             width: self.width,
@@ -347,9 +299,9 @@ impl RoomContext {
 
     fn session_options(&self, cwd: &Path) -> SessionOptions {
         SessionOptions {
-            session_name: self.session_name.clone(),
-            workspace_id: self.workspace_id.clone(),
-            project_root: self.project_root.clone(),
+            session_name: self.workspace.session_name.clone(),
+            workspace_id: self.workspace.workspace_id.clone(),
+            project_root: self.workspace.project_root.clone(),
             extra_env: self.extra_env.clone(),
             cwd: cwd.to_path_buf(),
             config: self.mux_config.clone(),
@@ -360,29 +312,31 @@ impl RoomContext {
 
     /// Build and return attach command after clearing stale resurrection state.
     pub fn prepare_attach(&self) -> CommandSpec {
-        let cache_removed = self.backend.purge_resurrection_cache(&self.session_name);
+        let cache_removed = self
+            .backend
+            .purge_resurrection_cache(&self.workspace.session_name);
         if !cache_removed.is_empty() {
             tracing::debug!(
-                session = %self.session_name,
+                session = %self.workspace.session_name,
                 paths = ?cache_removed,
                 "purged stale resurrection cache before attach",
             );
         }
         self.backend
-            .attach_command(&self.session_name, &self.mux_config)
+            .attach_command(&self.workspace.session_name, &self.mux_config)
     }
 
     /// Ask the backend to enable browser sharing for this room.
     pub fn share_web(&self) -> bool {
         let Some(opts) = self.presence_options(true) else {
             tracing::debug!(
-                session = %self.session_name,
+                session = %self.workspace.session_name,
                 "presence plugin unavailable; Zellij web sharing was not requested",
             );
             return false;
         };
         if let Err(err) = self.backend.share_web_session(&opts) {
-            tracing::debug!(session = %self.session_name, error = %err, "Zellij web-sharing pipe failed");
+            tracing::debug!(session = %self.workspace.session_name, error = %err, "Zellij web-sharing pipe failed");
             return false;
         }
         true
@@ -395,8 +349,8 @@ impl RoomContext {
             crate::mux::zellij::presence_plugin_path()?
         };
         Some(PresencePluginOptions {
-            session_name: self.session_name.clone(),
-            workspace_id: self.workspace_id.clone(),
+            session_name: self.workspace.session_name.clone(),
+            workspace_id: self.workspace.workspace_id.clone(),
             wasm,
             rimz_bin: self.rimz_bin.clone(),
             converge: false,
@@ -414,14 +368,14 @@ impl RoomContext {
     fn load_presence(&self) {
         let Some(opts) = self.presence_options(false) else {
             tracing::debug!(
-                session = %self.session_name,
+                session = %self.workspace.session_name,
                 "presence plugin unavailable; the producer keeps its pane poll",
             );
             return;
         };
         if let Err(err) = self.backend.ensure_presence_plugin(&opts) {
             tracing::debug!(
-                session = %self.session_name,
+                session = %self.workspace.session_name,
                 error = %err,
                 "presence plugin load failed; the producer keeps its pane poll",
             );
@@ -453,14 +407,14 @@ impl RoomContext {
                 remote_control: &self.machine_config.remote_control,
                 daemon: &self.machine_config.daemon,
                 rimz_bin: &rimz_bin,
-                workspace_id: &self.workspace_id,
-                session_name: &self.session_name,
-                project_root: &self.project_root,
-                worktree_root: &self.worktree_root,
+                workspace_id: &self.workspace.workspace_id,
+                session_name: &self.workspace.session_name,
+                project_root: &self.workspace.project_root,
+                worktree_root: &self.workspace.worktree_root,
                 claude_present: which::which("claude").is_ok(),
                 codex_present: which::which("codex").is_ok(),
             }),
-            sidebar: self.sidebar_options(&self.worktree_root, Vec::new(), refresh_ms),
+            sidebar: self.sidebar_options(&self.workspace.worktree_root, Vec::new(), refresh_ms),
         }
     }
 }
@@ -476,6 +430,7 @@ fn recorded_room_bin(workspace_id: &WorkspaceId) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::RootClass;
 
     fn workspace() -> ResolvedWorkspace {
         let project_root = PathBuf::from("/code/rimz");
@@ -538,18 +493,41 @@ mod tests {
     }
 
     #[test]
+    fn record_to_workspace_preserves_identity_and_normalizes_missing_fields() {
+        let project_root = PathBuf::from("/code/rimz");
+        let record = WorkspaceRecord {
+            workspace_id: WorkspaceId::from_project_root(&project_root),
+            project_root: project_root.clone(),
+            worktree_root: None,
+            session_name: "rimz-rimz".to_owned(),
+            root_class: RootClass::Marker,
+            rimz_bin: Some(PathBuf::from("/opt/rimz/bin/rimz")),
+            updated_at: jiff::Timestamp::now(),
+        };
+
+        let workspace = RoomContext::workspace_from_record(&record, MuxName::Tmux);
+
+        assert_eq!(workspace.workspace_id, record.workspace_id);
+        assert_eq!(workspace.project_root, project_root);
+        assert_eq!(workspace.worktree_root, project_root);
+        assert_eq!(workspace.root_class, RootClass::Marker);
+        assert_eq!(workspace.session_name, record.session_name);
+        assert_eq!(workspace.worktree_branch, None);
+        assert_eq!(workspace.mux_hint, Some(MuxName::Tmux));
+    }
+
+    #[test]
     fn live_room_errors_keep_command_guidance() {
-        let missing = LiveRoomErr::Missing {
+        let unavailable = LiveRoomErr::Unavailable {
             session_name: "rimz-demo".to_owned(),
         };
-        let autodetect = LiveRoomErr::Autodetect {
-            session_name: "rimz-demo".to_owned(),
-        };
+        let mux = LiveRoomErr::Mux(MuxErr::NoMuxFound);
         let expected =
             "no live Rimz room `rimz-demo`; run `rimz start` first or enter one with `rimz attach`";
 
-        assert_eq!(missing.to_string(), expected);
-        assert_eq!(autodetect.to_string(), expected);
-        assert!(std::error::Error::source(&autodetect).is_none());
+        assert_eq!(unavailable.to_string(), expected);
+        assert!(std::error::Error::source(&unavailable).is_none());
+        assert_eq!(mux.to_string(), MuxErr::NoMuxFound.to_string());
+        assert!(matches!(mux, LiveRoomErr::Mux(MuxErr::NoMuxFound)));
     }
 }

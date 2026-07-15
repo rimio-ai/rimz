@@ -97,17 +97,11 @@ pub fn pick_mux_for_session(
     })
 }
 
-/// Whether a rival backend already owns this path's room. Session identity is
-/// path-derived and shared across backends, so a live rival session under the
-/// derived name means a second backend would share this room's store while its
-/// panes stay unreachable. Pure over the rival's live session list.
-fn rival_backend_owns_room(session_name: &str, rival_sessions: &[String]) -> bool {
-    rival_sessions.iter().any(|name| name == session_name)
-}
-
 /// Fail-fast guard for a new-room birth: refuse when the other backend already
 /// runs this path's room. A rival that isn't installed or can't be listed never
-/// blocks — best-effort probe, hard refusal only on a positive.
+/// blocks — best-effort probe, hard refusal only on a positive. Session identity
+/// is shared across backends, so a matching rival session would share the room's
+/// store while its panes stay unreachable.
 pub fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<Vec<String>> {
     let rival = mux.other();
     let backend = crate::mux::backend_for(rival);
@@ -124,7 +118,7 @@ pub fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<Ve
             return Ok(Vec::new());
         }
     };
-    if rival_backend_owns_room(session_name, &sessions) {
+    if sessions.iter().any(|name| name == session_name) {
         bail!(
             "This project's room is already running under {rival} (session `{session_name}`).\n\
              Rimz keeps one room per project, so opening it under {mux} too would split your \

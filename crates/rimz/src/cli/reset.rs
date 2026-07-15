@@ -37,23 +37,15 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     // Reset the backend that owns the live room, so teardown and shared-store
     // reset target the same session. An explicit rival `--mux` refuses before
     // prompting or destroying anything.
-    let pick = rimz::room::session::pick_mux_for_session(
+    let mux = super::render::room::present_mux_pick(rimz::room::session::pick_mux_for_session(
         &workspace.session_name,
         globals.mux,
         MissingSessionReport::Silent,
-    );
-    let mut err = super::render::err();
-    let (mux, notices) = match pick {
-        Ok(pick) => (Ok(pick.mux), pick.notices),
-        Err(err) => (Err(err.source), err.notices),
-    };
-    for notice in notices {
-        writeln!(err, "note: {notice}")?;
-    }
-    let mux = mux?;
-    for notice in rimz::room::session::ensure_single_backend_room(mux, &workspace.session_name)? {
-        writeln!(err, "note: {notice}")?;
-    }
+    ))?;
+    super::render::room::print_notices(rimz::room::session::ensure_single_backend_room(
+        mux,
+        &workspace.session_name,
+    )?)?;
 
     if !args.yes {
         if !std::io::stdin().is_terminal() {

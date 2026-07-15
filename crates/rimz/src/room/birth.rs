@@ -92,10 +92,12 @@ impl RoomContext {
     /// Execute shared room birth ordering for a normal or supervised caller.
     pub fn birth(&mut self, birth: RoomBirth) -> Result<BirthOutcome> {
         let pre_existed = match self.backend.list_sessions() {
-            Ok(sessions) => sessions.iter().any(|name| name == &self.session_name),
+            Ok(sessions) => sessions
+                .iter()
+                .any(|name| name == &self.workspace.session_name),
             Err(err) => {
                 tracing::debug!(
-                    session = %self.session_name,
+                    session = %self.workspace.session_name,
                     error = %err,
                     "could not prove session is absent before birth; using non-destructive sidebar split",
                 );
@@ -106,7 +108,7 @@ impl RoomContext {
             crate::sidebar::purge_rebirth_heartbeats(&self.runtime);
             if let Err(err) = crate::sidebar::width_override::clear(&self.runtime) {
                 tracing::debug!(
-                    workspace = %self.workspace_id,
+                    workspace = %self.workspace.workspace_id,
                     error = %err,
                     "clearing room-runtime sidebar width override failed",
                 );
@@ -146,20 +148,22 @@ impl RoomContext {
                 NormalRebirth::Live => ResumePlan::default(),
                 NormalRebirth::Fresh => {
                     crate::harness::rebirth::record_boundary(
-                        &self.workspace_id,
-                        &self.session_name,
+                        &self.workspace.workspace_id,
+                        &self.workspace.session_name,
                     );
                     ResumePlan::default()
                 }
                 NormalRebirth::Selected { plan, choice } => {
-                    (*plan).materialize(choice, &self.session_name).resume
+                    (*plan)
+                        .materialize(choice, &self.workspace.session_name)
+                        .resume
                 }
             },
             None => {
                 if !pre_existed {
                     crate::harness::rebirth::record_boundary(
-                        &self.workspace_id,
-                        &self.session_name,
+                        &self.workspace.workspace_id,
+                        &self.workspace.session_name,
                     );
                 }
                 ResumePlan::default()
@@ -203,19 +207,19 @@ impl RoomContext {
         crate::remote_control::ensure_codex_daemon(&self.machine_config.remote_control);
         match self.backend.open_background_view(options) {
             Ok(BackgroundViewLaunch::Launched) => tracing::info!(
-                session = %self.session_name,
+                session = %self.workspace.session_name,
                 view = crate::daemon_view::VIEW_NAME,
                 "launched the daemon view",
             ),
             Ok(BackgroundViewLaunch::AlreadyRunning) => {
                 tracing::debug!(
-                    session = %self.session_name,
+                    session = %self.workspace.session_name,
                     "daemon view already present; repairing missing managed panes",
                 );
                 crate::daemon_view::repair_daemon_view(
                     self.backend.as_ref(),
-                    &self.session_name,
-                    &self.workspace_id,
+                    &self.workspace.session_name,
+                    &self.workspace.workspace_id,
                     &options.view,
                 );
             }
@@ -224,7 +228,7 @@ impl RoomContext {
                 "daemon view deferred; session not addressable yet (pre-attach gate will rebirth it)",
             ),
             Err(err) => tracing::warn!(
-                session = %self.session_name,
+                session = %self.workspace.session_name,
                 error = %err,
                 "daemon view launch failed; continuing without it",
             ),
@@ -244,7 +248,7 @@ impl RoomContext {
         }
         if recovery == AttendedRecovery::RequireExplicitReset {
             return Err(ResetRequired {
-                session: self.session_name.clone(),
+                session: self.workspace.session_name.clone(),
             }
             .into());
         }
@@ -290,18 +294,18 @@ impl RoomContext {
     pub fn reset(&self, hard: bool) -> Result<RoomResetReport> {
         let teardown = crate::mux::recovery::teardown_room(
             self.backend.as_ref(),
-            &self.workspace_id,
-            &self.session_name,
+            &self.workspace.workspace_id,
+            &self.workspace.session_name,
             &self.runtime,
         );
-        let paths = StatePaths::for_workspace(self.workspace_id.clone())
+        let paths = StatePaths::for_workspace(self.workspace.workspace_id.clone())
             .context("preparing store paths for reset")?;
         let store = Store::open(paths, self.runtime.clone()).context("opening store for reset")?;
         store
-            .record_workspace(&self.resolved_identity())
+            .record_workspace(&self.workspace)
             .context("recording workspace metadata for reset")?;
         let records = store
-            .reset_records(&self.session_name, hard)
+            .reset_records(&self.workspace.session_name, hard)
             .context("resetting workspace records")?;
         Ok(RoomResetReport { teardown, records })
     }

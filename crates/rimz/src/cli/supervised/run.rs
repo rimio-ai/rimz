@@ -606,27 +606,19 @@ pub(in crate::cli) fn run_supervised(
         mux,
         rimz::room::RoomSizing::Birth,
     )?;
-    let outcome = match room.birth(rimz::room::RoomBirth::Supervised(
-        rimz::room::SupervisedBirth {
-            cwd: prepared.launch.cwd.clone(),
-            recovery: if std::io::stdin().is_terminal() {
-                rimz::room::AttendedRecovery::Reset
-            } else {
-                rimz::room::AttendedRecovery::RequireExplicitReset
+    render::room::present_birth_outcome(
+        room.birth(rimz::room::RoomBirth::Supervised(
+            rimz::room::SupervisedBirth {
+                cwd: prepared.launch.cwd.clone(),
+                recovery: if std::io::stdin().is_terminal() {
+                    rimz::room::AttendedRecovery::Reset
+                } else {
+                    rimz::room::AttendedRecovery::RequireExplicitReset
+                },
             },
-        },
-    )) {
-        Ok(outcome) => outcome,
-        Err(err) => {
-            if let Some(reset) = err.downcast_ref::<rimz::room::ResetRecoveryError>() {
-                render::room::print_automatic_reset(room.session_name(), &reset.report)?;
-            }
-            return Err(err);
-        }
-    };
-    if let Some(reset) = outcome.reset.as_ref() {
-        render::room::print_automatic_reset(room.session_name(), reset)?;
-    }
+        )),
+        room.session_name(),
+    )?;
     let retries = request.retries;
     let owns_worktree = request.worktree.is_some() || request.from_pr.is_some();
     let base_prompt = prepared.prompt.clone();
