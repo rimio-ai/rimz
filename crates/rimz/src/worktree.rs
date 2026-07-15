@@ -429,9 +429,7 @@ pub fn remove(
         path: path.clone(),
     })?;
     let status = status(&path, &marker)?;
-    if !force
-        && ProtectionSet::default().assess(&path, status) != RemovalAssessment::Removable
-    {
+    if !force && ProtectionSet::default().assess(&path, status) != RemovalAssessment::Removable {
         return Err(WorktreeErr::Dirty {
             name: name.to_owned(),
         });

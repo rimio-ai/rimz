@@ -323,13 +323,10 @@ fn remove_for_cleanup(
     globals: &GlobalFlags,
     force: bool,
 ) -> Result<rimz::worktree::RemovalOutcome> {
-    let removed =
-        rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)?;
-    if let Err(err) = archive_removed_worktree_messages(
-        &removed,
-        globals,
-        WORKTREE_REMOVED_ARCHIVE_REASON,
-    ) {
+    let removed = rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)?;
+    if let Err(err) =
+        archive_removed_worktree_messages(&removed, globals, WORKTREE_REMOVED_ARCHIVE_REASON)
+    {
         tracing::debug!(
             branch = %marker.branch,
             error = %err,
@@ -424,11 +421,7 @@ fn archive_removed_worktree_messages(
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(removed.repo_root(), globals.root.clone())?;
     let store = open_store(&workspace)?;
-    store.archive_channel_messages(
-        removed.worktree_name(),
-        reason,
-        &workspace.session_name,
-    )?;
+    store.archive_channel_messages(removed.worktree_name(), reason, &workspace.session_name)?;
     Ok(())
 }
 
