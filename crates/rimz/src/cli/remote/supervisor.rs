@@ -18,7 +18,7 @@ use rimz::remote::reachability::{
     DIAL_TIMEOUT, DialGate, DialPlan, WaitVerdict, dial_interval_from_env, parse_dial_plan,
     ssh_config_query_spec,
 };
-use rimz::remote::{RemoteTarget, SshAttachPlan};
+use rimz::remote::{RemoteTarget, SshAttachAttempt, SshAttachPlan};
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -45,35 +45,15 @@ pub(super) fn supervise_remote(
     let mut first_attempt = true;
     report_remote_connect(host, true);
     loop {
-        let control_ready = match prepare_control_path(control_path) {
-            Ok(()) => true,
-            Err(err) => {
-                tracing::debug!(
-                    path = %control_path.display(),
-                    error = %err,
-                    "ControlMaster unavailable; continuing without link probes"
-                );
-                false
-            }
-        };
         let (events_tx, events_rx) = mpsc::channel();
-        let probe = if control_ready {
-            spawn_probe_loop(target.clone(), control_path.to_path_buf(), events_tx)
-        } else {
-            drop(events_tx);
-            ProbeHandle::disabled()
-        };
+        let probe = ProbeHandle::start(target.clone(), control_path.to_path_buf(), events_tx);
         let attempt = if first_attempt {
             plan.initial()
         } else {
             plan.retry()
         };
         first_attempt = false;
-        let spec = if control_ready {
-            attempt.control(control_path)
-        } else {
-            attempt.plain()
-        };
+        let spec = probe.attach_spec(&attempt);
         let outcome = run_ssh_session(
             &spec,
             host,
@@ -81,10 +61,7 @@ pub(super) fn supervise_remote(
             &mut session_link,
             dial_plan.as_ref(),
         )?;
-        probe.stop();
-        if control_ready {
-            remove_control_path(control_path);
-        }
+        drop(probe);
         if outcome.killed_zombie {
             let _ = writeln!(
                 std::io::stderr().lock(),
@@ -479,21 +456,51 @@ fn remove_control_path(path: &Path) {
 struct ProbeHandle {
     stop: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
+    control_path: Option<PathBuf>,
 }
 
 impl ProbeHandle {
+    fn start(target: RemoteTarget, control_path: PathBuf, events: mpsc::Sender<LinkEvent>) -> Self {
+        if let Err(err) = prepare_control_path(&control_path) {
+            tracing::debug!(
+                path = %control_path.display(),
+                error = %err,
+                "ControlMaster unavailable; continuing without link probes"
+            );
+            return Self::disabled();
+        }
+        spawn_probe_loop(target, control_path, events)
+    }
+
     fn disabled() -> Self {
         Self {
             stop: Arc::new(AtomicBool::new(true)),
             join: None,
+            control_path: None,
         }
     }
 
-    fn stop(mut self) {
+    fn attach_spec(&self, attempt: &SshAttachAttempt<'_>) -> rimz::mux::CommandSpec {
+        match &self.control_path {
+            Some(path) => attempt.control(path),
+            None => attempt.plain(),
+        }
+    }
+
+    fn finish(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
+        if let Some(path) = &self.control_path {
+            remove_control_path(path);
+        }
+    }
+}
+
+impl Drop for ProbeHandle {
+    fn drop(&mut self) {
+        self.finish();
     }
 }
 
@@ -503,16 +510,22 @@ fn spawn_probe_loop(
     events: mpsc::Sender<LinkEvent>,
 ) -> ProbeHandle {
     let Some(interval) = probe_interval_from_env() else {
-        return ProbeHandle::disabled();
+        return ProbeHandle {
+            stop: Arc::new(AtomicBool::new(true)),
+            join: None,
+            control_path: Some(control_path),
+        };
     };
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
+    let thread_path = control_path.clone();
     let join = std::thread::spawn(move || {
-        probe_loop(target, control_path, interval, events, thread_stop);
+        probe_loop(target, thread_path, interval, events, thread_stop);
     });
     ProbeHandle {
         stop,
         join: Some(join),
+        control_path: Some(control_path),
     }
 }
 
