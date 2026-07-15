@@ -9,7 +9,7 @@
 use std::io::Read as _;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::common::{CommandTimeoutExt, Env};
@@ -179,6 +179,58 @@ fn main_invocation_count(log: &Path) -> usize {
         .count()
 }
 
+fn tunnel_invocation_count(log: &Path) -> usize {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.split('\t').any(|arg| arg == "-N"))
+        .count()
+}
+
+fn reserve_local_port() -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("reserve local web port");
+    listener.local_addr().expect("reserved address").port()
+}
+
+fn remote_web_command(env: &Env, log: &Path, port: u16) -> Command {
+    let mut cmd = env.rimz();
+    cmd.args([
+        "remote",
+        "connect",
+        "dev-box:query-engine",
+        "--web",
+        "--web-port",
+        &port.to_string(),
+        "--attach",
+    ])
+    .env("RIMZ_SSH_BIN", ssh_shim())
+    .env("RIMZ_TEST_SSH_LOG", log)
+    .env("RIMZ_REMOTE_DIAL_MS", "0")
+    .env("RIMZ_REMOTE_GATETIME_MS", "0")
+    .env("RIMZ_REMOTE_BACKOFF_MS", "1");
+    cmd
+}
+
+fn write_browser_shim(env: &Env) -> (PathBuf, PathBuf) {
+    let bin = env.project_root.join("browser-bin");
+    let log = env.project_root.join("browser.log");
+    std::fs::create_dir_all(&bin).expect("create browser bin");
+    let opener = bin.join("xdg-open");
+    std::fs::write(
+        &opener,
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$RIMZ_TEST_BROWSER_LOG\"\n",
+    )
+    .expect("write browser shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        std::fs::set_permissions(&opener, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod browser shim");
+    }
+    (bin, log)
+}
+
 fn wait_for_main_invocations(
     child: &mut std::process::Child,
     log: &Path,
@@ -201,6 +253,21 @@ fn wait_for_main_invocations(
             let trace = std::fs::read_to_string(log).unwrap_or_default();
             panic!(
                 "expected {expected} main ssh invocations within {timeout:?}; saw {count}\ntrace:\n{trace}\nstderr:\n{stderr}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_tunnel_invocation(child: &mut std::process::Child, log: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while tunnel_invocation_count(log) == 0 {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "web tunnel did not start; trace={:?}",
+                shim_invocations(log)
             );
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -723,6 +790,172 @@ fn local_link_notify_command_receives_lost_and_restored_env() {
         1,
         "restored edge fires once:\n{text}"
     );
+}
+
+#[test]
+fn remote_web_missing_binary_points_at_setup_without_extra_ssh() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let port = reserve_local_port();
+    let out = remote_web_command(&env, &log, port)
+        .env("RIMZ_TEST_SSH_WEB_PREP_STATUS", "127")
+        .bounded_output()
+        .expect("run remote web prep without rimz");
+
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("rimz is not installed on dev-box"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("rimz remote setup dev-box:query-engine"),
+        "{stderr}"
+    );
+    assert_eq!(shim_invocations(&log).len(), 1, "preparation only");
+}
+
+#[test]
+fn remote_web_emits_prep_url_and_browser_only_after_tunnel_readiness() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let stdout_path = env.project_root.join("stdout.log");
+    let tunnel_plan = env.project_root.join("tunnel.plan");
+    let port = reserve_local_port();
+    let (browser_bin, browser_log) = write_browser_shim(&env);
+    let ambient_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(browser_bin.clone()).chain(std::env::split_paths(&ambient_path)),
+    )
+    .expect("browser PATH");
+    std::fs::write(&tunnel_plan, "0\n").expect("write tunnel plan");
+    let stdout = std::fs::File::create(&stdout_path).expect("create stdout log");
+
+    let mut child = remote_web_command(&env, &log, port)
+        .env(
+            "RIMZ_TEST_SSH_WEB_PREP_STDERR",
+            "remote preparation started\n",
+        )
+        .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
+        .env("RIMZ_TEST_SSH_TUNNEL_READY_MS", "300")
+        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "150")
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &tunnel_plan)
+        .env("RIMZ_TEST_BROWSER_LOG", &browser_log)
+        .env("PATH", path)
+        .stdout(stdout)
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn remote web connect");
+
+    wait_for_tunnel_invocation(&mut child, &log);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        std::fs::read_to_string(&stdout_path).unwrap_or_default(),
+        "",
+        "URL waits for local listener readiness"
+    );
+    assert!(!browser_log.exists(), "browser waits for tunnel readiness");
+
+    let out = child.wait_with_output().expect("wait remote web connect");
+    assert!(
+        out.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let url = format!("http://127.0.0.1:{port}/rimz-project-a1b2c3");
+    assert_eq!(
+        std::fs::read_to_string(&stdout_path)
+            .expect("read stdout")
+            .trim(),
+        url
+    );
+    let browser = wait_for_notify_log(&browser_log, &[&url]);
+    assert_eq!(browser.trim(), url);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("remote preparation started"),
+        "preparation stderr stays visible"
+    );
+    assert_eq!(shim_invocations(&log).len(), 3, "prep, token, tunnel");
+    assert_eq!(tunnel_invocation_count(&log), 1);
+}
+
+#[test]
+fn remote_web_reconnects_once_after_established_transport_exit() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("tunnel.plan");
+    let port = reserve_local_port();
+    std::fs::write(&plan, "255\n0\n").expect("write tunnel plan");
+
+    let out = remote_web_command(&env, &log, port)
+        .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
+        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "80")
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
+        .bounded_output()
+        .expect("run reconnecting remote web tunnel");
+
+    assert!(
+        out.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(tunnel_invocation_count(&log), 2);
+    assert_eq!(shim_invocations(&log).len(), 4, "prep, token, two tunnels");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("web tunnel to dev-box lost — reconnecting"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn remote_web_no_reconnect_surfaces_established_transport_exit() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("tunnel.plan");
+    let port = reserve_local_port();
+    std::fs::write(&plan, "255\n").expect("write tunnel plan");
+
+    let out = remote_web_command(&env, &log, port)
+        .arg("--no-reconnect")
+        .env("RIMZ_TEST_SSH_TUNNEL_LISTEN", "1")
+        .env("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS", "80")
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
+        .bounded_output()
+        .expect("run non-reconnecting remote web tunnel");
+
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("exited with status 255; not reconnecting"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(tunnel_invocation_count(&log), 1);
+    assert_eq!(shim_invocations(&log).len(), 3, "prep, token, tunnel");
+}
+
+#[test]
+fn remote_web_fatal_exit_before_readiness_emits_no_url() {
+    let env = Env::new();
+    let log = env.project_root.join("ssh-trace.log");
+    let plan = env.project_root.join("tunnel.plan");
+    let port = reserve_local_port();
+    std::fs::write(&plan, "2\n").expect("write tunnel plan");
+
+    let out = remote_web_command(&env, &log, port)
+        .env("RIMZ_TEST_SSH_TUNNEL_PLAN", &plan)
+        .bounded_output()
+        .expect("run fatal remote web tunnel");
+
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty(), "URL must not precede readiness");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("exited with status 2; not reconnecting"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(tunnel_invocation_count(&log), 1);
+    assert_eq!(shim_invocations(&log).len(), 3, "prep, token, tunnel");
 }
 
 #[test]

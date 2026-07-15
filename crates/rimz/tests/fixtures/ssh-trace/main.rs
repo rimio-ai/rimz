@@ -40,6 +40,18 @@ fn main() {
         return;
     }
 
+    if argv.iter().any(|arg| arg.contains("rimz web open")) {
+        exit_web_prep();
+    }
+
+    if argv.iter().any(|arg| arg.contains("web token ensure")) {
+        exit_web_token();
+    }
+
+    if argv.iter().any(|arg| arg == "-N") {
+        run_web_tunnel(&argv);
+    }
+
     publish_control_master_if_requested();
 
     if let Ok(ms) = env::var("RIMZ_TEST_SSH_SLEEP_MS")
@@ -48,8 +60,77 @@ fn main() {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
 
-    let Some(plan_path) = env::var_os("RIMZ_TEST_SSH_PLAN") else {
-        return;
+    exit_from_plan("RIMZ_TEST_SSH_PLAN");
+}
+
+fn exit_web_prep() -> ! {
+    if let Ok(stderr) = env::var("RIMZ_TEST_SSH_WEB_PREP_STDERR") {
+        let mut stream = std::io::stderr().lock();
+        stream
+            .write_all(stderr.as_bytes())
+            .expect("write prep stderr");
+        stream.flush().expect("flush prep stderr");
+    }
+    let output = env::var("RIMZ_TEST_SSH_WEB_PREP_OUTPUT").unwrap_or_else(|_| {
+        r#"{"version":"rimz.web.v1","engine":"zellij","url":"http://127.0.0.1:8082/rimz-project-a1b2c3","session":"rimz-project-a1b2c3","base_url":"http://127.0.0.1:8082","ip":"127.0.0.1","port":8082,"token_count":1}"#.to_owned()
+    });
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(output.as_bytes())
+        .expect("write prep stdout");
+    stdout.flush().expect("flush prep stdout");
+    let code = env::var("RIMZ_TEST_SSH_WEB_PREP_STATUS")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0);
+    std::process::exit(code);
+}
+
+fn exit_web_token() -> ! {
+    let output = env::var("RIMZ_TEST_SSH_WEB_TOKEN_OUTPUT")
+        .unwrap_or_else(|_| "test-web-token\n".to_owned());
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(output.as_bytes())
+        .expect("write token stdout");
+    stdout.flush().expect("flush token stdout");
+    let code = env::var("RIMZ_TEST_SSH_WEB_TOKEN_STATUS")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0);
+    std::process::exit(code);
+}
+
+fn run_web_tunnel(argv: &[String]) -> ! {
+    if let Ok(ms) = env::var("RIMZ_TEST_SSH_TUNNEL_READY_MS")
+        && let Ok(ms) = ms.parse::<u64>()
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+    let _listener = env::var_os("RIMZ_TEST_SSH_TUNNEL_LISTEN").map(|_| {
+        let forwarding = argv
+            .windows(2)
+            .find(|args| args[0] == "-L")
+            .map(|args| args[1].as_str())
+            .expect("tunnel invocation has -L forwarding");
+        let local_port = forwarding
+            .split(':')
+            .nth(1)
+            .and_then(|port| port.parse::<u16>().ok())
+            .expect("-L forwarding has a local port");
+        std::net::TcpListener::bind(("127.0.0.1", local_port)).expect("bind tunnel listener")
+    });
+    if let Ok(ms) = env::var("RIMZ_TEST_SSH_TUNNEL_SLEEP_MS")
+        && let Ok(ms) = ms.parse::<u64>()
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+    exit_from_plan("RIMZ_TEST_SSH_TUNNEL_PLAN");
+}
+
+fn exit_from_plan(key: &str) -> ! {
+    let Some(plan_path) = env::var_os(key) else {
+        std::process::exit(0);
     };
     let plan = std::fs::read_to_string(&plan_path).expect("read exit plan");
     let mut lines = plan.lines();

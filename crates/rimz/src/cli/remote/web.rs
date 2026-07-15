@@ -1,9 +1,8 @@
 use std::io::{IsTerminal, Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::process::Stdio;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -16,54 +15,189 @@ pub(super) struct RemoteWebOptions {
     pub(super) port: Option<u16>,
 }
 
-struct RemoteWebGuard {
+/// Foreground owner of one active SSH tunnel and its reconnect lifecycle.
+struct RemoteTunnel {
+    spec: rimz::mux::CommandSpec,
     host: String,
-    stop: Arc<AtomicBool>,
-    child: Arc<Mutex<Option<Child>>>,
-    thread: Option<JoinHandle<TunnelExit>>,
+    reconnect: bool,
+    policy: rimz::remote::ReconnectPolicy,
+    reconnect_state: rimz::remote::ReconnectState,
+    dial_plan: Option<rimz::remote::reachability::DialPlan>,
+    child: Option<rimz::child_process::SupervisedChild>,
+    started: Instant,
+    wake_tx: mpsc::Sender<()>,
+    wake_rx: mpsc::Receiver<()>,
+    stop: AtomicBool,
 }
 
-impl Drop for RemoteWebGuard {
+impl Drop for RemoteTunnel {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Ok(mut child) = self.child.lock()
-            && let Some(child) = child.as_mut()
-        {
-            let _ = child.kill();
-        }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.kill_and_reap();
     }
 }
 
-impl RemoteWebGuard {
-    fn is_finished(&self) -> bool {
-        self.thread
-            .as_ref()
-            .is_some_and(std::thread::JoinHandle::is_finished)
+impl RemoteTunnel {
+    fn start(
+        spec: rimz::mux::CommandSpec,
+        destination: String,
+        host: String,
+        reconnect: bool,
+    ) -> Result<Self> {
+        let policy = rimz::remote::ReconnectPolicy::from_env();
+        let dial_plan = super::supervisor::resolve_dial_plan(&destination);
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let mut tunnel = Self {
+            spec,
+            host,
+            reconnect,
+            policy,
+            reconnect_state: rimz::remote::ReconnectState::new(policy),
+            dial_plan,
+            child: None,
+            started: Instant::now(),
+            wake_tx,
+            wake_rx,
+            stop: AtomicBool::new(false),
+        };
+        tunnel.spawn_child()?;
+        Ok(tunnel)
     }
 
-    fn wait(mut self) -> Result<()> {
-        let exit = self
-            .thread
-            .take()
-            .context("remote web tunnel supervisor already joined")?
-            .join()
-            .map_err(|_| anyhow::anyhow!("remote web tunnel supervisor panicked"))?;
-        match exit {
-            TunnelExit::Clean => Ok(()),
-            TunnelExit::Fatal(code) => {
+    fn wait_until_ready(&mut self, port: u16) -> Result<PortWait> {
+        let addr = ("127.0.0.1", port)
+            .to_socket_addrs()?
+            .next()
+            .context("resolving local tunnel address")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
+                return Ok(PortWait::Ready);
+            }
+            if let Some(exit_code) = self.poll_exit()? {
+                match self.settle_exit(exit_code)? {
+                    TunnelFlow::Running => {}
+                    TunnelFlow::Done => return Ok(PortWait::ExitedCleanly),
+                }
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "waiting for web tunnel on http://127.0.0.1:{port}: local web tunnel port {port} did not accept connections within 5s"
+                );
+            }
+            rimz::child_process::wait_wake(
+                &self.wake_rx,
+                Some((Instant::now() + Duration::from_millis(50)).min(deadline)),
+            );
+        }
+    }
+
+    fn run(&mut self) -> Result<()> {
+        loop {
+            let exit_code = self.wait_for_exit()?;
+            match self.settle_exit(exit_code)? {
+                TunnelFlow::Running => {}
+                TunnelFlow::Done => return Ok(()),
+            }
+        }
+    }
+
+    fn spawn_child(&mut self) -> Result<()> {
+        let child = self
+            .spec
+            .to_command()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| anyhow::anyhow!("web tunnel to {} failed to start: {err}", self.host))?;
+        self.started = Instant::now();
+        self.child = Some(rimz::child_process::SupervisedChild::adopt(
+            child,
+            self.wake_tx.clone(),
+        ));
+        Ok(())
+    }
+
+    fn poll_exit(&mut self) -> Result<Option<Option<i32>>> {
+        let child = self
+            .child
+            .as_mut()
+            .context("remote web tunnel child is not running")?;
+        let Some(status) = child.try_wait().context("polling remote web tunnel")? else {
+            return Ok(None);
+        };
+        self.child = None;
+        Ok(Some(status.code()))
+    }
+
+    fn wait_for_exit(&mut self) -> Result<Option<i32>> {
+        loop {
+            if let Some(exit_code) = self.poll_exit()? {
+                return Ok(exit_code);
+            }
+            rimz::child_process::wait_wake(&self.wake_rx, None);
+        }
+    }
+
+    fn settle_exit(&mut self, exit_code: Option<i32>) -> Result<TunnelFlow> {
+        let established = self.started.elapsed() >= self.policy.gatetime;
+        match tunnel_step(
+            self.reconnect_state.settle(exit_code, established),
+            self.reconnect,
+        ) {
+            TunnelStep::Clean => Ok(TunnelFlow::Done),
+            TunnelStep::Fatal(code) => {
                 bail!(
                     "web tunnel to {} exited with status {code}; not reconnecting",
                     self.host
                 )
             }
-            TunnelExit::StartFailed(err) => {
-                bail!("web tunnel to {} failed to start: {err}", self.host)
+            TunnelStep::Retry(delay) => {
+                let consecutive_failures = self.reconnect_state.consecutive_failures();
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "rimz: web tunnel to {} lost — reconnecting in {}s (attempt {consecutive_failures})",
+                    self.host,
+                    delay.as_secs(),
+                );
+                if matches!(
+                    super::supervisor::wait_before_retry(
+                        self.dial_plan.as_ref(),
+                        delay,
+                        self.policy.backoff_cap,
+                        &self.host,
+                        &self.stop,
+                    ),
+                    rimz::remote::reachability::WaitVerdict::AttachNow {
+                        network_restored: true
+                    }
+                ) {
+                    self.reconnect_state.network_restored();
+                }
+                self.spawn_child()?;
+                Ok(TunnelFlow::Running)
             }
         }
     }
+
+    fn kill_and_reap(&mut self) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        child.signal_kill();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) => rimz::child_process::wait_wake(&self.wake_rx, None),
+            }
+        }
+        self.child = None;
+    }
+}
+
+enum TunnelFlow {
+    Running,
+    Done,
 }
 
 pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
@@ -90,19 +224,16 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     relay_web_token(remote, payload.engine);
     let local_port = rimz::web::choose_local_port(&payload.session, remote.web.port)
         .context("choosing local web tunnel port")?;
-    let tunnel_spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
-    let guard = spawn_tunnel_supervisor(
-        tunnel_spec,
+    let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
+    let mut tunnel = RemoteTunnel::start(
+        spec,
         remote.target.ssh_destination().destination.clone(),
         remote.target.host_display().to_owned(),
         remote.reconnect,
     )?;
-    match wait_for_local_port(local_port, &guard)
-        .with_context(|| format!("waiting for web tunnel on http://127.0.0.1:{local_port}"))?
-    {
+    match tunnel.wait_until_ready(local_port)? {
         PortWait::Ready => {}
-        PortWait::SupervisorExited => {
-            guard.wait()?;
+        PortWait::ExitedCleanly => {
             bail!("web tunnel exited before local port accepted connections");
         }
     }
@@ -110,7 +241,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     writeln!(std::io::stdout().lock(), "{url}")?;
     super::super::open_browser_best_effort(&url);
     report_web_tunnel_up(remote.target.host_display(), remote.reconnect);
-    guard.wait()
+    tunnel.run()
 }
 
 fn relay_web_token(remote: &RemoteConnect, engine: rimz::web::WebEngine) {
@@ -177,8 +308,11 @@ fn run_web_prep(
         })?;
     let mut stdout = Vec::new();
     if let Some(mut pipe) = child.stdout.take() {
-        pipe.read_to_end(&mut stdout)
-            .with_context(|| format!("{label}: reading remote prep stdout"))?;
+        if let Err(err) = pipe.read_to_end(&mut stdout) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(err).with_context(|| format!("{label}: reading remote prep stdout"));
+        }
     }
     let status = child
         .wait()
@@ -205,45 +339,6 @@ fn remote_output_context(label: &str, bytes: &[u8]) -> String {
     format!("{label}; stdout={:?}", stdout.trim())
 }
 
-fn spawn_tunnel_supervisor(
-    spec: rimz::mux::CommandSpec,
-    destination: String,
-    host: String,
-    reconnect: bool,
-) -> Result<RemoteWebGuard> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let child = Arc::new(Mutex::new(None));
-    let thread_stop = Arc::clone(&stop);
-    let thread_child = Arc::clone(&child);
-    let thread_host = host.clone();
-    let thread = std::thread::Builder::new()
-        .name("rimz-remote-web-tunnel".to_owned())
-        .spawn(move || {
-            supervise_tunnel(
-                spec,
-                destination,
-                thread_host,
-                reconnect,
-                thread_stop,
-                thread_child,
-            )
-        })
-        .context("spawning remote web tunnel supervisor")?;
-    Ok(RemoteWebGuard {
-        host,
-        stop,
-        child,
-        thread: Some(thread),
-    })
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum TunnelExit {
-    Clean,
-    Fatal(i32),
-    StartFailed(String),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TunnelStep {
     Clean,
@@ -262,124 +357,9 @@ fn tunnel_step(verdict: rimz::remote::Verdict, reconnect: bool) -> TunnelStep {
     }
 }
 
-fn supervise_tunnel(
-    spec: rimz::mux::CommandSpec,
-    destination: String,
-    host: String,
-    reconnect: bool,
-    stop: Arc<AtomicBool>,
-    child_slot: Arc<Mutex<Option<Child>>>,
-) -> TunnelExit {
-    use rimz::remote::{ReconnectPolicy, ReconnectState};
-
-    let policy = ReconnectPolicy::from_env();
-    let mut reconnect_state = ReconnectState::new(policy);
-    let dial_plan = super::supervisor::resolve_dial_plan(&destination);
-    while !stop.load(Ordering::SeqCst) {
-        let started = Instant::now();
-        let child = match spec
-            .to_command()
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(err) => return TunnelExit::StartFailed(err.to_string()),
-        };
-        if let Ok(mut slot) = child_slot.lock() {
-            *slot = Some(child);
-        }
-        let exit_code = wait_tunnel_child(&stop, &child_slot);
-        if stop.load(Ordering::SeqCst) {
-            return TunnelExit::Clean;
-        }
-        let ran_past_gatetime = started.elapsed() >= policy.gatetime;
-        match tunnel_step(
-            reconnect_state.settle(exit_code, ran_past_gatetime),
-            reconnect,
-        ) {
-            TunnelStep::Clean => return TunnelExit::Clean,
-            TunnelStep::Fatal(code) => return TunnelExit::Fatal(code),
-            TunnelStep::Retry(delay) => {
-                let consecutive_failures = reconnect_state.consecutive_failures();
-                let _ = writeln!(
-                    std::io::stderr().lock(),
-                    "rimz: web tunnel to {host} lost — reconnecting in {}s (attempt {consecutive_failures})",
-                    delay.as_secs(),
-                );
-                if matches!(
-                    super::supervisor::wait_before_retry(
-                        dial_plan.as_ref(),
-                        delay,
-                        policy.backoff_cap,
-                        &host,
-                        &stop,
-                    ),
-                    rimz::remote::reachability::WaitVerdict::AttachNow {
-                        network_restored: true
-                    }
-                ) {
-                    reconnect_state.network_restored();
-                }
-            }
-        }
-    }
-    TunnelExit::Clean
-}
-
-fn wait_tunnel_child(stop: &AtomicBool, child_slot: &Mutex<Option<Child>>) -> Option<i32> {
-    loop {
-        if stop.load(Ordering::SeqCst) {
-            if let Ok(mut slot) = child_slot.lock()
-                && let Some(child) = slot.as_mut()
-            {
-                let _ = child.kill();
-            }
-            return None;
-        }
-        if let Ok(mut slot) = child_slot.lock()
-            && let Some(child) = slot.as_mut()
-        {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    *slot = None;
-                    return status.code();
-                }
-                Ok(None) => {}
-                Err(_) => {
-                    *slot = None;
-                    return Some(1);
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 enum PortWait {
     Ready,
-    SupervisorExited,
-}
-
-fn wait_for_local_port(port: u16, guard: &RemoteWebGuard) -> Result<PortWait> {
-    let addr = ("127.0.0.1", port)
-        .to_socket_addrs()?
-        .next()
-        .context("resolving local tunnel address")?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
-            return Ok(PortWait::Ready);
-        }
-        if guard.is_finished() {
-            return Ok(PortWait::SupervisorExited);
-        }
-        if Instant::now() >= deadline {
-            bail!("local web tunnel port {port} did not accept connections within 5s");
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    ExitedCleanly,
 }
 
 fn report_web_tunnel_up(host: &str, reconnect: bool) {
