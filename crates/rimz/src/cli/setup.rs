@@ -222,7 +222,7 @@ fn render_merge_report(report: &MergeReport) -> Result<()> {
 fn print_report(report: &SetupReport) -> std::io::Result<()> {
     use std::io::Write;
     let mut out = render::out();
-    writeln!(out, "Rimz setup")?;
+    writeln!(out, "RimZ setup")?;
     let mut kv = render::KeyVals::new().indent(2);
     match &report.mux {
         Ok(mux) => {

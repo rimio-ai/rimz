@@ -1,14 +1,14 @@
-// Rimz Pi extension — _rimz_managed, written by `rimz hooks install pi`.
+// RimZ Pi extension — _rimz_managed, written by `rimz hooks install pi`.
 // Re-install with `rimz hooks install pi`; remove the file (or run
 // `rimz hooks uninstall pi`) to unwire. Edits are overwritten on re-install.
 //
 // Forwards pi's lifecycle events to `rimz hooks feed --source pi` as one JSON
 // payload on the child's stdin — fire-and-forget with fresh, fully-piped
-// stdio, so pi never blocks on Rimz and the child's output never reaches pi's
+// stdio, so pi never blocks on RimZ and the child's output never reaches pi's
 // UI. The one exception is `tool_call`, pi's blocking pre-tool gate: its
 // handler awaits the child and reads the decision from stdout — `{"block":
 // true, "reason": …}` blocks the tool, anything else (including an absent or
-// broken rimz) lets it run. Rimz authors this wire; the event mapping it
+// broken rimz) lets it run. RimZ authors this wire; the event mapping it
 // feeds is docs/internals/agents/pi.md and the upstream surface is
 // docs/externals/agent-adapter/pi-reference.md.
 import { spawn } from "node:child_process";

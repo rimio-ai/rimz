@@ -25,7 +25,7 @@ pub enum PathErr {
     },
     #[error(transparent)]
     SocketBudgetExceeded(#[from] crate::sock::SocketPathTooLong),
-    #[error("invalid Rimz runtime path layout under {path}")]
+    #[error("invalid RimZ runtime path layout under {path}")]
     InvalidRuntimeLayout { path: PathBuf },
     #[error("runtime path {path} is not a directory")]
     RuntimePathNotDirectory { path: PathBuf },
@@ -565,7 +565,7 @@ pub fn config_home() -> PathBuf {
     env::temp_dir().join("rimz-config")
 }
 
-/// Per-user agent library root. Rimz discovers drop-in profile and team
+/// Per-user agent library root. RimZ discovers drop-in profile and team
 /// fragments here, and `RIMZ_AGENTS_HOME` relocates it.
 pub fn agents_home() -> PathBuf {
     if let Some(value) = env_path("RIMZ_AGENTS_HOME") {
@@ -577,7 +577,7 @@ pub fn agents_home() -> PathBuf {
     env::temp_dir().join("rimz-agents")
 }
 
-/// Per-user data root. Rimz stores stable, user-level artifacts here, including
+/// Per-user data root. RimZ stores stable, user-level artifacts here, including
 /// the materialized embedded Zellij presence plugin.
 pub fn data_home() -> PathBuf {
     if let Some(value) = env_path("XDG_DATA_HOME") {

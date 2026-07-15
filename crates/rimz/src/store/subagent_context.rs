@@ -9,7 +9,7 @@
 //! log: this is display-only latency, not truth ("Durability first",
 //! `docs/internals/store.md`).
 //!
-//! Ownership: the WRITER is always a Rimz CLI producer. The
+//! Ownership: the WRITER is always a RimZ CLI producer. The
 //! sidebar renderer reads this data only through the snapshot JSON, never this
 //! module, so "sidebar is read-only on the store" holds.
 
@@ -47,7 +47,7 @@ impl sidecar::SidecarRecord for SubagentContextRecord {
     }
 }
 
-/// Persist (latest-wins) one child's context. WRITER = a Rimz CLI producer.
+/// Persist (latest-wins) one child's context. WRITER = a RimZ CLI producer.
 /// Atomic temp+rename (no fsync — disposable sidecar) via
 /// [`write_temp_then_rename_cache`].
 pub fn write(

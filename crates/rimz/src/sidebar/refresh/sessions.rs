@@ -446,7 +446,7 @@ fn spawn_session_context_refresh(
     {
         // Best-effort enrichment on a per-frame path. The CWD anchor clears the
         // gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH is an environment fact, not
-        // a Rimz fault. Keep it at debug! so it never reaches Sentry.
+        // a RimZ fault. Keep it at debug! so it never reaches Sentry.
         tracing::debug!(
             kind,
             session = %session_id,

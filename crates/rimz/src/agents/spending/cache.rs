@@ -102,7 +102,7 @@ pub struct FileCacheEntry {
     #[serde(default, rename = "c", skip_serializing_if = "is_default_cursor")]
     pub cursor: SpendCursor,
     /// Durable per-file origin learned from the parser or a trusted override.
-    /// Codex rollout paths do not encode a workspace, so Rimz can stamp the
+    /// Codex rollout paths do not encode a workspace, so RimZ can stamp the
     /// file once from live snapshot metadata and reuse that origin across cold
     /// re-parses.
     #[serde(default, rename = "p", skip_serializing_if = "Option::is_none")]

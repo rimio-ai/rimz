@@ -250,7 +250,7 @@ fn forward_to_wrapped(
     let _ = io::stderr().lock().write_all(&output.stderr);
 
     // Forward the child's exit code so a failing statusline surfaces as it would
-    // without Rimz in the middle.
+    // without RimZ in the middle.
     if let Some(code) = output.status.code()
         && code != 0
     {

@@ -101,7 +101,7 @@ pub struct DiffStatsCacheEntry {
     /// `None` means unknown or an old cache entry.
     #[serde(default)]
     pub landed: Option<bool>,
-    /// Whether the worktree carries work of its own: HEAD moved past the Rimz
+    /// Whether the worktree carries work of its own: HEAD moved past the RimZ
     /// worktree marker's `base_ref` on a lineage outside the trunk's
     /// first-parent chain. `None` means the checkout is unmarked or unreadable.
     #[serde(default)]
@@ -217,7 +217,7 @@ pub(crate) fn needed_worktree_paths(snapshot: &SidebarSnapshot) -> Vec<String> {
 }
 
 /// The checkout path a worktree-like group reads git facts from. Ordinary
-/// worktree groups trust their path; channel groups must carry the Rimz
+/// worktree groups trust their path; channel groups must carry the RimZ
 /// worktree marker whose name matches the lane label before they inherit that
 /// checkout's git story.
 pub(crate) fn git_backed_worktree_path(group: &SidebarWorktreeGroup) -> Option<String> {

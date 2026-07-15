@@ -1,4 +1,4 @@
-//! Rimz-owned disk usage measurement: symlink-safe byte walks plus the account
+//! RimZ-owned disk usage measurement: symlink-safe byte walks plus the account
 //! roots `doctor` and `gc` surface.
 
 use std::fs;

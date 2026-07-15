@@ -3,7 +3,7 @@
 //! Durable sidebar artifacts are written by whichever process holds the role
 //! at the time, and across an upgrade old and new builds overlap inside one
 //! workspace. Stamping each published pane frame and diagnostic record with
-//! the writer's build id turns that overlap into recorded evidence. Rimz uses
+//! the writer's build id turns that overlap into recorded evidence. RimZ uses
 //! the linker build identity (`.note.gnu.build-id` on ELF, `LC_UUID` on
 //! Mach-O) and falls back to hashing the image bytes when the identity is not
 //! available.
@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use sha2::{Digest, Sha256};
 
-/// Bytes of build identity Rimz stamps into runtime artifacts.
+/// Bytes of build identity RimZ stamps into runtime artifacts.
 const BUILD_ID_BYTES: usize = 6;
 /// Bytes of the image prefix scanned for the linker build id.
 const IMAGE_PREFIX_LEN: usize = 1 << 20;
@@ -47,7 +47,7 @@ fn compute() -> Option<String> {
     of_file(&running_image_path()?).ok()
 }
 
-/// Read the linker build identity at `path` into the short build id Rimz
+/// Read the linker build identity at `path` into the short build id RimZ
 /// stamps into runtime artifacts. Hash the image bytes when the identity is not
 /// available.
 pub fn of_file(path: &Path) -> io::Result<String> {

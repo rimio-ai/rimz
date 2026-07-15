@@ -19,7 +19,7 @@ use crate::store::{SidebarSnapshot, StatePaths, Store};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 /// The launched adapter kind (`claude`, `codex`, ...). Its presence marks the
-/// process as a Rimz-launched agent for peer-message attribution.
+/// process as a RimZ-launched agent for peer-message attribution.
 pub const ENV_AGENT_KIND: &str = "RIMZ_AGENT_KIND";
 pub const ENV_AGENT_NAME: &str = "RIMZ_AGENT_NAME";
 /// The `[agents.profiles]` profile name an agent launched as, so it answers to

@@ -255,7 +255,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
 /// The current channel a command runs in: an explicit named lane from
 /// `RIMZ_CHANNEL`, else the worktree directory basename when we are genuinely
 /// inside a separate worktree. A bare directory workspace (root == worktree)
-/// yields `None` for humans; Rimz-launched team members carry `RIMZ_CHANNEL`,
+/// yields `None` for humans; RimZ-launched team members carry `RIMZ_CHANNEL`,
 /// so their calls scope to the stamped team lane.
 pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
     if let Ok(channel) = std::env::var(rimz::harness::run::ENV_CHANNEL)
@@ -504,16 +504,16 @@ enum Subcmd {
     ListThemes(list_themes::ListThemesArgs),
     /// Remove stale runtime liveness hints.
     Gc(gc::GcArgs),
-    /// Remove Rimz from this machine.
+    /// Remove RimZ from this machine.
     ///
     /// Removes hooks, rooms, and runtime footprint. Use --state, --config, or
     /// --all to purge durable state and config.
     Uninstall(uninstall::UninstallArgs),
     /// Create, list, and remove named channels.
     Channel(channel::ChannelArgs),
-    /// Create, list, and remove Rimz-owned git worktrees.
+    /// Create, list, and remove RimZ-owned git worktrees.
     Worktree(worktree::WorktreeArgs),
-    /// Launch agent tabs, optionally in Rimz-owned worktrees.
+    /// Launch agent tabs, optionally in RimZ-owned worktrees.
     Agents(Box<agents_cmd::AgentsArgs>),
     /// Inspect the blocking prompts agents currently have open.
     Asks(asks::AsksArgs),

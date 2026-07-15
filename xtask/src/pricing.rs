@@ -27,7 +27,7 @@ const KEPT_FIELDS: [&str; 9] = [
 /// Regenerate the ignored pricing snapshot that `crates/rimz/build.rs` embeds
 /// as the tier-1 table when present. Fetches LiteLLM first, fills missing
 /// models from authoritative models.dev provider catalogues, compacts to the
-/// fields Rimz reads, and writes a sorted JSON document. `RIMZ_PRICING_JSON_PATH`
+/// fields RimZ reads, and writes a sorted JSON document. `RIMZ_PRICING_JSON_PATH`
 /// overrides the LiteLLM network fetch with a local raw document;
 /// `RIMZ_PRICING_MODELS_DEV_JSON_PATH` supplies a local models.dev document.
 /// Without the models.dev override, a local LiteLLM override keeps the task

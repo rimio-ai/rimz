@@ -1,4 +1,4 @@
-//! Wrap recognized cargo commands through `rtk` so Rimz-launched agents see
+//! Wrap recognized cargo commands through `rtk` so RimZ-launched agents see
 //! compressed output. Gated by `RIMZ_RTK` from `[harness] rtk`; absent means a
 //! human run and leaves cargo untouched.
 

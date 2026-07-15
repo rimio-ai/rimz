@@ -1,6 +1,6 @@
 //! Codex hook installer for `config.toml`.
 //!
-//! This module owns the non-destructive TOML merge/uninstall path, Rimz hook command detection, and Codex trust-state reporting for managed hooks.
+//! This module owns the non-destructive TOML merge/uninstall path, RimZ hook command detection, and Codex trust-state reporting for managed hooks.
 
 use std::path::{Path, PathBuf};
 
@@ -62,7 +62,7 @@ pub(super) fn preview_install_at(path: &Path) -> Result<HookInstallPreview> {
 fn install_candidate(path: &Path) -> Result<(toml::Table, Vec<String>)> {
     let mut root = read_existing_table(path)?;
 
-    // Strip any prior Rimz-managed hooks (and the legacy block) before writing
+    // Strip any prior RimZ-managed hooks (and the legacy block) before writing
     // the fresh set — installer constants are the single source of truth.
     strip_rimz_hook_commands(&mut root);
     remove_rimz_block(&mut root);
@@ -125,13 +125,13 @@ pub(super) fn managed_artifacts_at(path: &Path) -> bool {
     })
 }
 
-/// Rimz-installed hook events Codex has not yet trusted. Codex records trust
+/// RimZ-installed hook events Codex has not yet trusted. Codex records trust
 /// per hook-definition hash under `[hooks.state]`
 /// (`"<config-path>:<event_token>:<i>:<j>"` keys) and **silently skips** an
 /// untrusted hook, so an installed-but-untrusted event is a dead channel only
 /// the user can open (`/hooks` inside Codex). Presence-only by token: a hash
 /// mismatch is Codex's to re-flag, and mirroring its hash algorithm would
-/// couple Rimz to an upstream internal.
+/// couple RimZ to an upstream internal.
 pub(super) fn untrusted_hook_events_at(path: &Path) -> Vec<String> {
     let Ok(root) = read_existing_table(path) else {
         return Vec::new();
@@ -234,7 +234,7 @@ fn insert_rimz_hook_group(root: &mut toml::Table, event: &str, matcher: Option<&
     );
     handler.insert(
         "statusMessage".to_owned(),
-        toml::Value::String(format!("Routing {event} through Rimz")),
+        toml::Value::String(format!("Routing {event} through RimZ")),
     );
 
     let mut group = toml::Table::new();

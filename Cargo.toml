@@ -40,13 +40,13 @@ serde_ignored = "0.1"
 toml = "1"
 flate2 = "1"
 # OpenCode stores usage in a WAL SQLite database; the adapter opens it
-# read-only for account-spend parsing. `bundled` keeps Rimz independent of a
+# read-only for account-spend parsing. `bundled` keeps RimZ independent of a
 # system libsqlite3 at install time.
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 # Format-preserving TOML edits for `rimz config set`; keeps the generated
 # config template's comments intact while changing one key.
 toml_edit = { version = "0.25", features = ["serde"] }
-# Zellij stores plugin permission grants as KDL (`permissions.kdl`). Rimz seeds
+# Zellij stores plugin permission grants as KDL (`permissions.kdl`). RimZ seeds
 # its own presence-plugin grant by parsing and merging that shared file instead
 # of string-splicing a format Zellij itself owns.
 kdl = "4.7.1"
@@ -65,7 +65,7 @@ clap = { version = "4", features = ["derive", "env", "unstable-ext", "wrap_help"
 # clap stabilizes the environment-driven engine.
 clap_complete = { version = "=4.6.7", features = ["unstable-dynamic"] }
 # Layout launch flags are authored as shell-like strings in TOML but launched as
-# direct argv, so Rimz needs quote removal without invoking a shell. `shlex` is a
+# direct argv, so RimZ needs quote removal without invoking a shell. `shlex` is a
 # tiny POSIX-compatible splitter already present through the build graph and
 # vetted for deploy; making it direct avoids a bespoke parser on a launch path.
 shlex = "2"
@@ -108,16 +108,16 @@ url = "2"
 # Codex app-server daemon control sockets speak RFC6455 WebSocket over a Unix
 # stream. `tungstenite` supplies the handshake, framing, ping/pong, close, and
 # fragmentation state machine over any `Read + Write`; hand-rolling that would
-# put protocol correctness on Rimz for a transport that must fail safe. Default
+# put protocol correctness on RimZ for a transport that must fail safe. Default
 # features are enough here; TLS stays out because the stream is UDS-local.
 tungstenite = "0.29"
 
-# Off-box error/event reporting. Rimz `warn!`/`error!` and observed agent
+# Off-box error/event reporting. RimZ `warn!`/`error!` and observed agent
 # rate-limit/overload conditions surface in a Sentry project an operator can
 # watch. The rimz crate marks these deps optional behind its non-default
 # `sentry` feature, so shipped binaries exclude the reporting code and this
 # transitive tree entirely. `sentry` rides its `ureq` transport so it reuses the
-# same small, synchronous, rustls-backed HTTP client Rimz already pins — no
+# same small, synchronous, rustls-backed HTTP client RimZ already pins — no
 # second TLS stack, no async-runtime drag — and the init guard flushes on drop,
 # which fits the short-lived hook subprocesses. `panic` and `backtrace` capture
 # process panics with stacks; `contexts` is deliberately omitted so the Apple
@@ -161,7 +161,7 @@ hex = "0.4"
 # Rust, and avoids libwebp C bindings for the built-in Codex CDN asset cache.
 image-webp = "0.2"
 # Petdex pets may ship PNG sheets (for example `goose-default`). `png` is
-# pure Rust and keeps Rimz off the full `image` crate tree.
+# pure Rust and keeps RimZ off the full `image` crate tree.
 png = "0.18"
 # Event-log frame checksum: hardware CRC32 for the per-frame validate and the
 # repair scan. Already in the tree through flate2 and already carries a

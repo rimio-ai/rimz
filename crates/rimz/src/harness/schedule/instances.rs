@@ -1,4 +1,4 @@
-//! Rimz-owned loop task instances and merged loop task reads.
+//! RimZ-owned loop task instances and merged loop task reads.
 //!
 //! Durable recurring definitions live in `loop.toml`. Machine-generated
 //! one-shots, self-wakes, and poll-until instances live here as state, using

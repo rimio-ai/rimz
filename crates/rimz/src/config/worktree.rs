@@ -6,7 +6,7 @@ use std::str::FromStr;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct WorktreeConfig {
-    /// Directory template for Rimz-owned worktrees. Relative paths resolve from
+    /// Directory template for RimZ-owned worktrees. Relative paths resolve from
     /// the repository root; `{repo}` expands to the root directory basename.
     pub dir: String,
     /// Base ref for new worktrees: local `HEAD`, remote `origin/HEAD`, or an

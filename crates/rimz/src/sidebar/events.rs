@@ -329,7 +329,7 @@ mod tests {
             SidebarEvent::WidthTargetChanged,
             SidebarEvent::PaneFramePublished,
             SidebarEvent::Notify {
-                title: "Rimz: claude needs you".to_owned(),
+                title: "RimZ: claude needs you".to_owned(),
                 body: "claude sess-1 is waiting for input".to_owned(),
                 panes: vec![pane("terminal_4")],
                 recheck_unread: true,
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn notify_omits_empty_panes_and_defaults_old_events() {
         let expected = envelope(SidebarEvent::Notify {
-            title: "Rimz: claude needs you".to_owned(),
+            title: "RimZ: claude needs you".to_owned(),
             body: "claude sess-1 is waiting for input".to_owned(),
             panes: Vec::new(),
             recheck_unread: true,

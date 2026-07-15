@@ -12,7 +12,7 @@ pub const BRACKET_PASTE_OPEN: &str = "\u{1b}[200~";
 /// Bracketed-paste close marker (`ESC[201~`).
 pub const BRACKET_PASTE_CLOSE: &str = "\u{1b}[201~";
 
-/// Small named-key vocabulary Rimz exposes for pane automation.
+/// Small named-key vocabulary RimZ exposes for pane automation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NamedKey {
     Enter,

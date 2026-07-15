@@ -419,7 +419,7 @@ fn init_test_repo(parent: &Path) -> PathBuf {
     std::fs::create_dir_all(&repo).expect("repo dir");
     git_run(&repo, ["init", "-b", "main"]).expect("git init");
     git_run(&repo, ["config", "user.email", "rimz@example.test"]).expect("git email");
-    git_run(&repo, ["config", "user.name", "Rimz Test"]).expect("git name");
+    git_run(&repo, ["config", "user.name", "RimZ Test"]).expect("git name");
     std::fs::write(repo.join("README.md"), "base\n").expect("base file");
     git_run(&repo, ["add", "README.md"]).expect("git add");
     git_run(&repo, ["commit", "-m", "base"]).expect("base commit");

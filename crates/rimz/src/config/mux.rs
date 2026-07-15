@@ -31,7 +31,7 @@ impl From<&MachineConfig> for MultiplexerConfig {
     }
 }
 
-/// Zellij room options. Critical Rimz invariants are passed on every birth and
+/// Zellij room options. Critical RimZ invariants are passed on every birth and
 /// attach; optional fields are passed only when the user sets them here, so the
 /// user's `~/.config/zellij/config.kdl` remains authoritative otherwise.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -63,16 +63,16 @@ pub struct ZellijConfig {
     pub support_kitty_keyboard_protocol: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub osc8_hyperlinks: Option<bool>,
-    /// Whether Zellij serializes this room to disk for later resurrection. Rimz
+    /// Whether Zellij serializes this room to disk for later resurrection. RimZ
     /// keeps it off: a resurrected room comes back with every command pane
-    /// `start_suspended` ("Waiting to run") and a dead mouse. Rimz owns rebirth,
+    /// `start_suspended` ("Waiting to run") and a dead mouse. RimZ owns rebirth,
     /// so a dead server leaves nothing to resurrect and the next start comes up
     /// clean and running. Embedded in the birth layout because Zellij drops
     /// detached-birth CLI options, and still passed as an option flag on birth
     /// and attach.
     pub session_serialization: bool,
     /// Whether Zellij skips the per-second session metadata writer and command
-    /// discovery loop. Rimz keeps it on because the loop rewrites
+    /// discovery loop. RimZ keeps it on because the loop rewrites
     /// `session-metadata.kdl` and forks `ps` even when session serialization is
     /// disabled. Embedded in the birth layout because Zellij drops
     /// detached-birth CLI options, and still passed as an option flag on birth
@@ -137,10 +137,10 @@ impl ZellijClipboard {
     }
 }
 
-/// Rimz-owned tmux room defaults. Session/window options stay scoped to the
-/// Rimz session. Optional pane-border fields are passed only when the user sets
+/// RimZ-owned tmux room defaults. Session/window options stay scoped to the
+/// RimZ session. Optional pane-border fields are passed only when the user sets
 /// them here, so the user's `~/.tmux.conf` remains authoritative otherwise.
-/// tmux server options are runtime-global inside the tmux server; Rimz sets
+/// tmux server options are runtime-global inside the tmux server; RimZ sets
 /// them because clipboard and rich-key support are server-scoped.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]

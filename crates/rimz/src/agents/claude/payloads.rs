@@ -1,6 +1,6 @@
 //! Typed input structs for the Claude Code hook protocol.
 //!
-//! Structs contain only fields Rimz consumes. All use `#[serde(default)]` so
+//! Structs contain only fields RimZ consumes. All use `#[serde(default)]` so
 //! sparse or out-of-spec payloads deserialize cleanly; `parse_*` functions are
 //! the adapter entry points.
 

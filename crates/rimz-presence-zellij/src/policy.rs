@@ -33,7 +33,7 @@ pub const FOCUS_SETTLE_MS: u64 = 250;
 /// `PRESENCE_STAMP_FRESH` (150s) allows two missed keepalives of slack.
 pub const KEEPALIVE_MS: u64 = 60_000;
 
-/// Pane title the Zellij layouts assign to Rimz's native sidebar.
+/// Pane title the Zellij layouts assign to RimZ's native sidebar.
 pub const SIDEBAR_PANE_TITLE: &str = "rimz-sidebar";
 
 /// The pane fields the plugin projects. The manifest hash folds only the stable

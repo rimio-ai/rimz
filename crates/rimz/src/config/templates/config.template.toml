@@ -1,8 +1,8 @@
-# Rimz per-machine configuration.
+# RimZ per-machine configuration.
 #
 # Save as ~/.config/rimz/config.toml, or run `rimz config init`.
 # Every key below is optional. Defaults stay commented so an untouched file
-# keeps following defaults shipped by future Rimz versions; uncomment a line
+# keeps following defaults shipped by future RimZ versions; uncomment a line
 # only when this machine needs an override.
 
 ## timezone = "America/New_York" # IANA zone for displayed times and scheduling; default = system local
@@ -46,7 +46,7 @@
 # debounce_ms = 5000
 # coalesce_ms = 1000
 # remind_secs = 60                   # seconds between local unread reminders; 0 disables reminders
-## title = "Rimz: {{agent}} {{kind}}"  # optional banner title for agent/coalesced notifications
+## title = "RimZ: {{agent}} {{kind}}"  # optional banner title for agent/coalesced notifications
 ## body = "{{task}}"                   # optional banner body; vars: kind, agent, handle, status, worktree, task, count, unread
 ## command = "ntfy publish rimz"       # shorthand for one unconditional handler; receives RIMZ_NOTIFY_* environment variables
 ## [[notifications.handler]]
@@ -76,7 +76,7 @@
 # screen_bottom = "L"
 
 [web]
-# enabled = true                     # allow rimz web / remote --web to enable Zellij browser sharing (auto-grants the Rimz presence plugin)
+# enabled = true                     # allow rimz web / remote --web to enable Zellij browser sharing (auto-grants the RimZ presence plugin)
 
 [web.zellij]
 # Zellij browser access. base_url is the URL users open; set it when a reverse
@@ -96,14 +96,14 @@
 ## default = "tmux"                   # preferred backend when both zellij and tmux are installed; unset resolves to tmux
 
 [zellij]
-# Critical room invariants Rimz always applies:
+# Critical room invariants RimZ always applies:
 mouse_click_through = true            # single click on a card jumps to the agent (Zellij >= 0.44.0)
 focus_follows_mouse = false           # off so a single click passes through to the renderer
-session_serialization = false         # Rimz owns rebirth instead of Zellij resurrection
+session_serialization = false         # RimZ owns rebirth instead of Zellij resurrection
 disable_session_metadata = true       # stop Zellij's per-second metadata/ps loop
 
 # Optional: uncomment to override your ~/.config/zellij/config.kdl. Left unset,
-# Rimz leaves these to your Zellij config or Zellij's defaults.
+# RimZ leaves these to your Zellij config or Zellij's defaults.
 ## pane_frames = true
 ## mouse_mode = true
 ## advanced_mouse_actions = true
@@ -118,7 +118,7 @@ disable_session_metadata = true       # stop Zellij's per-second metadata/ps loo
 ## osc8_hyperlinks = true
 
 [tmux]
-# Rimz applies these to its tmux session on every birth.
+# RimZ applies these to its tmux session on every birth.
 mouse = true
 focus_events = true
 history_limit = 100000
@@ -130,7 +130,7 @@ escape_time_ms = 0
 renumber_windows = true
 aggressive_resize = true
 
-# Optional: uncomment to override your ~/.tmux.conf. Left unset, Rimz leaves
+# Optional: uncomment to override your ~/.tmux.conf. Left unset, RimZ leaves
 # pane borders to your tmux config or tmux's defaults.
 ## pane_border_status = "top"          # "off", "top", or "bottom"
 ## pane_border_lines = "heavy"         # "simple", "single", "double", or "heavy"

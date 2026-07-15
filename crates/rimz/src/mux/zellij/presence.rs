@@ -432,7 +432,7 @@ fn read_presence_permissions_document(path: &Path) -> Option<KdlDocument> {
                 tracing::debug!(
                     path = %path.display(),
                     error = %err,
-                    "parsing Zellij permission cache failed; rebuilding Rimz presence grant only",
+                    "parsing Zellij permission cache failed; rebuilding RimZ presence grant only",
                 );
                 Some(KdlDocument::new())
             }

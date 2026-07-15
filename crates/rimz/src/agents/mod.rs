@@ -443,12 +443,12 @@ pub struct HookInstallFilePreview {
 /// in the consent gate alongside the hook diff.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StatusLineChange {
-    /// No prior statusline; install adds Rimz's reader.
+    /// No prior statusline; install adds RimZ's reader.
     Added,
     /// Wraps the user's existing statusline command, restored on uninstall.
     /// `original` is the user's command, shown verbatim in the summary.
     Wrapping { original: String },
-    /// Re-install over an identical Rimz wrap — no change.
+    /// Re-install over an identical RimZ wrap — no change.
     Unchanged,
 }
 
@@ -1062,7 +1062,7 @@ pub trait AgentAdapter: Send + Sync {
 
     /// Discover validated sessions for absolute workspaces from the provider's
     /// machine-local store. The result is pulled display truth; callers bind it
-    /// only to currently live panes and never append it to the Rimz event log.
+    /// only to currently live panes and never append it to the RimZ event log.
     /// Adapters whose store is shared across workspaces enumerate it once for
     /// the whole batch.
     fn discover_local_sessions(&self, _workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
@@ -1373,7 +1373,7 @@ pub trait AgentAdapter: Send + Sync {
         })
     }
 
-    /// Whether the user's config carries any Rimz-managed hook artifact, including
+    /// Whether the user's config carries any RimZ-managed hook artifact, including
     /// partial or legacy installs that are not complete enough to be considered
     /// usable by [`Self::hooks_installed`]. No-arg uninstall uses this so
     /// "ensure absent" cleans damaged configs without rewriting untouched ones.
@@ -1409,7 +1409,7 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// Whether this agent's per-user config currently carries Rimz-managed
+    /// Whether this agent's per-user config currently carries RimZ-managed
     /// hooks — i.e. the user ran `rimz hooks install`. Best-effort: a missing
     /// file or any read/parse failure reads as "not installed". An agent only
     /// ever fires `rimz hooks feed` when this holds, so `rimz doctor` surfaces
@@ -1427,10 +1427,10 @@ pub trait AgentAdapter: Send + Sync {
             .is_some_and(ManagedSource::upgrade_available)
     }
 
-    /// Rimz-installed hook events this agent will silently skip until the
+    /// RimZ-installed hook events this agent will silently skip until the
     /// user trusts them in the agent's own UI. Empty for agents without a
     /// trust gate; Codex overrides it from `[hooks.state]` in its config.
-    /// Rimz cannot trust on the user's behalf, so `rimz start` and
+    /// RimZ cannot trust on the user's behalf, so `rimz start` and
     /// `rimz doctor` surface the fix ([`hook_trust_fix`]) instead.
     fn untrusted_installed_hooks(&self) -> Vec<String> {
         Vec::new()
@@ -1495,7 +1495,7 @@ fn turn_lifecycle_gap(coverage: ConcernCoverage, need: TurnLifecycleNeed) -> Opt
 /// One-line fix for an installed-but-untrusted hook set, shared by hook
 /// preflights, the `rimz start` notice, and `rimz doctor`.
 pub fn hook_trust_fix(kind: &str) -> String {
-    format!("run /hooks inside {kind} and trust the Rimz hooks")
+    format!("run /hooks inside {kind} and trust the RimZ hooks")
 }
 
 #[cfg(test)]

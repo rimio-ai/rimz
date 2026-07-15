@@ -158,7 +158,7 @@ pub fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<Ve
     if sessions.iter().any(|name| name == session_name) {
         bail!(
             "This project's room is already running under {rival} (session `{session_name}`).\n\
-             Rimz keeps one room per project, so opening it under {mux} too would split your \
+             RimZ keeps one room per project, so opening it under {mux} too would split your \
              fleet across two multiplexers that can't reach each other's panes.\n\n\
              Attach to the running room:\n    rimz attach {session_name}\n\n\
              Or close it, then start under {mux}:\n    rimz --mux {rival} reset --no-start"

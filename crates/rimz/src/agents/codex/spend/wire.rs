@@ -54,7 +54,7 @@ pub(crate) struct CodexSessionMeta<'a> {
     pub(crate) payload: Option<CodexSessionMetaPayload<'a>>,
 }
 
-/// The slice of the `session_meta` payload Rimz reads: session identity and cwd.
+/// The slice of the `session_meta` payload RimZ reads: session identity and cwd.
 #[derive(Default, Deserialize)]
 pub(crate) struct CodexSessionMetaPayload<'a> {
     #[serde(borrow, default)]

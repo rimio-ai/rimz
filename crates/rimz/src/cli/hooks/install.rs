@@ -45,7 +45,7 @@ pub(super) fn run_uninstall(agent: Option<String>) -> Result<()> {
     if reports.is_empty() {
         return crate::cli::render::finish(writeln!(
             out,
-            "No Rimz-managed hooks are installed; nothing to uninstall."
+            "No RimZ-managed hooks are installed; nothing to uninstall."
         ));
     }
     for report in &reports {

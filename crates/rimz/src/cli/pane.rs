@@ -206,7 +206,7 @@ fn agent_name(agent: &AgentState) -> &str {
 
 /// List the room as panes: every pane grouped by its native tab, each labelled
 /// with the agent-colleague that lives in it (`@kind#worktree`) or `process` for
-/// a plain pane, alongside its status and working directory. Rimz's own sidebar
+/// a plain pane, alongside its status and working directory. RimZ's own sidebar
 /// chrome is dropped — it is never a routing target.
 ///
 /// The pane enumeration is the spine and always works. The agent annotations are
@@ -228,7 +228,7 @@ fn list(
             .map(|workspace| workspace.session_name.clone())
             .context("resolving the cwd's workspace session; pass --session-name")?,
     };
-    // Drop Rimz's own sidebar chrome: it is never a routing target, so it has no
+    // Drop RimZ's own sidebar chrome: it is never a routing target, so it has no
     // place in either the table or the `--json` tree.
     let panes: Vec<PaneRef> = backend
         .list_panes(PaneListOptions {

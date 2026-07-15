@@ -1,4 +1,4 @@
-//! Tier 2: hardcoded fallback prices for models Rimz must price offline.
+//! Tier 2: hardcoded fallback prices for models RimZ must price offline.
 //!
 //! Builtins overwrite the embedded snapshot, then the live LiteLLM cache may
 //! overwrite them. That matches ccusage precedence: local fallbacks cover stale

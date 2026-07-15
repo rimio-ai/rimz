@@ -112,7 +112,7 @@ impl ThemeConfig {
 }
 
 /// Root `[colors]` in theme.toml. The shape follows Alacritty's palette tables
-/// so a theme can be pasted directly into Rimz; missing or extra Alacritty keys
+/// so a theme can be pasted directly into RimZ; missing or extra Alacritty keys
 /// are tolerated at load, and the renderer validates the keys it needs when it
 /// derives tones.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

@@ -3,7 +3,7 @@ name: Docs site dispatch
 on:
   push:
     branches: [main]
-    paths: ["docs/**"]
+    paths: ["README.md", "docs/**"]
 
 permissions: {}
 

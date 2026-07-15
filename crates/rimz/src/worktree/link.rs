@@ -1,7 +1,7 @@
 //! Symlink directories from the project checkout into a freshly created worktree.
 //!
 //! `.worktreelink` is the sharing twin of `.worktreeinclude`: one relative
-//! directory path per line, with blank lines and `#` comments ignored. Rimz
+//! directory path per line, with blank lines and `#` comments ignored. RimZ
 //! links those directories from the main checkout into each new worktree, then
 //! registers an anchored exclude pattern in the worktree's effective
 //! `info/exclude` so the machine-local link never dirties the checkout.

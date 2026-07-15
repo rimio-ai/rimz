@@ -1,4 +1,4 @@
-//! AF_UNIX socket path budgeting shared by every Rimz socket surface.
+//! AF_UNIX socket path budgeting shared by every RimZ socket surface.
 //!
 //! The OS limit includes the trailing NUL byte. Public headroom values in this
 //! module therefore report bytes-used including that terminator, while
@@ -48,7 +48,7 @@ impl SockBudget {
 
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "socket path {path} needs {used} bytes; AF_UNIX allows {limit} including the terminator.\nPoint Rimz at a shorter runtime directory and re-run rimz:\n\n    {remedy}\n\nAdd the export to your shell profile to make it permanent. `rimz doctor` reports the socket headroom.",
+    "socket path {path} needs {used} bytes; AF_UNIX allows {limit} including the terminator.\nPoint RimZ at a shorter runtime directory and re-run rimz:\n\n    {remedy}\n\nAdd the export to your shell profile to make it permanent. `rimz doctor` reports the socket headroom.",
     remedy = XDG_REMEDY
 )]
 pub struct SocketPathTooLong {

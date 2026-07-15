@@ -277,7 +277,7 @@ fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_conf
 
     assert!(
         !MANAGED_SOURCE.installed_at(&path),
-        "a blocking Rimz hook marked async is not a usable install"
+        "a blocking RimZ hook marked async is not a usable install"
     );
     assert!(matches!(
         MANAGED_SOURCE.install_into(&path).unwrap_err(),

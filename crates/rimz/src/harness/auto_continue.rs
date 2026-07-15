@@ -49,7 +49,7 @@ use crate::store::snapshot::{PaneAgent, ResumeOutcome};
 /// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
 /// nudge resumes the turn within a frame, so this mostly bounds the brief window
 /// before the agent's first hook lands; if a nudge fails to wake a still-parked
-/// agent, Rimz retries on this cadence rather than typing every frame.
+/// agent, RimZ retries on this cadence rather than typing every frame.
 const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
 
 /// A durable record of one park: written while the park is fresh, read after its
@@ -667,7 +667,7 @@ fn spawn_auto_continue(
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "agent-auto-continue") {
         // Best-effort enrichment on a throttled producer path. The CWD anchor
         // clears the gc'd-worktree ENOENT; a bad RIMZ_BIN/PATH is an
-        // environment fact, not a Rimz fault. Keep it at debug! so it never
+        // environment fact, not a RimZ fault. Keep it at debug! so it never
         // reaches Sentry.
         tracing::debug!(
             workspace = %runtime.workspace_id,

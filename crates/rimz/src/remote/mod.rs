@@ -359,7 +359,7 @@ impl SshAttachAttempt<'_> {
 
 /// How the remote session resolves the local terminal. `-t` carries the local
 /// `$TERM` across; on hosts that lack its terminfo entry the remote tmux/zellij
-/// client aborts, so Rimz provisions it before `exec`.
+/// client aborts, so RimZ provisions it before `exec`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TermPlan {
     /// `$TERM` is universally present remotely — emit nothing.

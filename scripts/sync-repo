@@ -19,7 +19,7 @@
 #     --prompt 'Repair the scheduled repository sync, then rerun ./scripts/sync-repo --loop-check.' \
 #     --every 15m
 #
-# In loop-check mode, rebase conflicts exit nonzero so Rimz loop wakes the agent
+# In loop-check mode, rebase conflicts exit nonzero so RimZ loop wakes the agent
 # through `on = "fail"` instead of this helper spawning Codex directly.
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def parse_args(argv: list[str]) -> Config:
         ),
         allow_abbrev=False,
         epilog=(
-            "Scheduled use: run this as a Rimz loop check with `on = \"fail\"`, "
+            "Scheduled use: run this as a RimZ loop check with `on = \"fail\"`, "
             "for example `rimz loop add sync-repo --check './scripts/sync-repo "
             "--loop-check' --on fail --agent codex --prompt 'Repair the scheduled "
             "repository sync, then rerun ./scripts/sync-repo --loop-check.' "
@@ -123,7 +123,7 @@ def parse_args(argv: list[str]) -> Config:
         "--loop-check",
         action="store_true",
         default=env_truthy("RIMZ_SYNC_REPO_LOOP_CHECK", "RIMZ_MAIN_GIT_LOOP_CHECK"),
-        help="defer rebase-conflict repair to Rimz loop",
+        help="defer rebase-conflict repair to RimZ loop",
     )
     args = parser.parse_args(argv)
     return Config(
@@ -541,7 +541,7 @@ Resolve the rebase conflicts in this repository. Preserve both upstream and loca
 
     def request_loop_repair(self) -> None:
         print(self.rebase_repair_text(loop_managed=True), file=sys.stderr, flush=True)
-        die('rebase conflicts need agent repair; Rimz loop should wake on `on = "fail"`')
+        die('rebase conflicts need agent repair; RimZ loop should wake on `on = "fail"`')
 
     def spawn_codex_for_rebase(self) -> None:
         if shutil.which(self.config.rimz_bin) is None:

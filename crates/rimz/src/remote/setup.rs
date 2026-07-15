@@ -1,4 +1,4 @@
-//! SSH argv builder for installing Rimz on a remote host.
+//! SSH argv builder for installing RimZ on a remote host.
 //!
 //! The CLI owns process I/O. This module keeps the SSH argv and shell snippet
 //! testable beside the remote attach and web builders.

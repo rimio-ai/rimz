@@ -243,7 +243,7 @@ fn enter_worktree(path: &Path) -> Result<PathBuf> {
         .with_context(|| format!("reading worktree marker for {}", path.display()))?;
     if marker.is_none() {
         bail!(
-            "worktree checkout {} is gone or no longer a Rimz worktree (removed by a concurrent cleanup?); refusing to launch the agent in the project root",
+            "worktree checkout {} is gone or no longer a RimZ worktree (removed by a concurrent cleanup?); refusing to launch the agent in the project root",
             path.display()
         );
     }

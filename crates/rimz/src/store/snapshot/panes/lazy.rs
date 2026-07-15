@@ -738,7 +738,7 @@ fn lazy_pairing_diagnostic(
 
 /// The common live-pane identity for agent commands: foreground command names a
 /// known agent kind, the pane is not marked as a foreign-user elevated agent,
-/// and the pane has a non-empty worktree path from the mux cwd or Rimz's
+/// and the pane has a non-empty worktree path from the mux cwd or RimZ's
 /// supervised-wrapper manifest.
 fn agent_pane_identity(pane: &PaneRef) -> Option<(&'static str, &'static AgentDescriptor, &str)> {
     agent_pane_identity_from_evidence(pane_binding_evidence(pane))

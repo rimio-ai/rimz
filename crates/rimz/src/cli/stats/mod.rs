@@ -359,10 +359,10 @@ fn ensure_shared_runtime(paths: &RuntimePaths) -> Result<()> {
     let rimz_root = paths
         .shared_root
         .parent()
-        .ok_or_else(|| anyhow!("invalid Rimz shared runtime path"))?;
+        .ok_or_else(|| anyhow!("invalid RimZ shared runtime path"))?;
     let runtime_root = rimz_root
         .parent()
-        .ok_or_else(|| anyhow!("invalid Rimz runtime path"))?;
+        .ok_or_else(|| anyhow!("invalid RimZ runtime path"))?;
     rimz::store::paths::ensure_private_runtime_dir(runtime_root)?;
     rimz::store::paths::ensure_private_runtime_dir(rimz_root)?;
     rimz::store::paths::ensure_private_runtime_dir(&paths.shared_root)?;

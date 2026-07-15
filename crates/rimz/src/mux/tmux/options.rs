@@ -177,7 +177,7 @@ pub(super) fn tmux_server_options(config: &TmuxConfig) -> Vec<(&'static str, Str
     opts
 }
 
-/// Server options Rimz appends so the user's existing array entries survive.
+/// Server options RimZ appends so the user's existing array entries survive.
 /// `*:sync` enables atomic redraws, and `*:extkeys` asks the outer terminal to
 /// send modified keys.
 pub(super) fn tmux_server_append_options(config: &TmuxConfig) -> Vec<(&'static str, String)> {
@@ -230,7 +230,7 @@ pub(super) fn tmux_session_options(config: &TmuxConfig) -> Vec<(&'static str, St
     ]
 }
 
-/// `pane-border-format` Rimz writes when it owns `pane-border-status`: titled
+/// `pane-border-format` RimZ writes when it owns `pane-border-status`: titled
 /// frames on work panes, and a blank border line on the sidebar chrome pane so
 /// it reads frameless. `#{p999: }` floods the sidebar's border row with spaces
 /// (truncated to pane width), overwriting the glyphs tmux would otherwise draw.

@@ -1,4 +1,4 @@
-// _rimz_managed: OpenCode plugin owned by Rimz. Do not edit by hand.
+// _rimz_managed: OpenCode plugin owned by RimZ. Do not edit by hand.
 import { spawn } from "node:child_process";
 import type { Plugin, PluginModule } from "@opencode-ai/plugin";
 

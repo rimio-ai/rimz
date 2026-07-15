@@ -51,7 +51,7 @@ fn paneless_codex_cwd_fallback_binds_only_the_exact_codex_worktree_pane() {
 #[test]
 fn supervised_codex_uses_wrapper_worktree_path_for_idle_and_process_rows() {
     // A first mux read can know the command before it knows the pane cwd. The
-    // wrapper carries the same worktree path Rimz used to launch the pane, so
+    // wrapper carries the same worktree path RimZ used to launch the pane, so
     // both the idle-agent and process-row paths use it as their grouping
     // fallback instead of flashing the row under external.
     let root = "/repo/rimz";

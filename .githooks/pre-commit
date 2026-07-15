@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rimz pre-commit gate: block a commit that would fail the CI `fmt` gate, so
+# RimZ pre-commit gate: block a commit that would fail the CI `fmt` gate, so
 # unformatted code never reaches the branch. The check itself lives in xtask
 # (`cargo xtask fmt` -> `cargo fmt --all -- --check`); this shim only routes
 # git's hook call there, keeping one source of truth. Install with

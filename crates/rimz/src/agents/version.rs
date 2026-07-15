@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::str::FromStr;
 
 /// A simple three-part CLI version. Agent CLIs do not need semver metadata for
-/// Rimz's gates; ordered numeric major/minor/patch is the contract.
+/// RimZ's gates; ordered numeric major/minor/patch is the contract.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct CliVersion {
     pub major: u64,

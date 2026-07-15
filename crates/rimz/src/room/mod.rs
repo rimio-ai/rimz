@@ -28,7 +28,7 @@ pub use birth::{
 #[derive(Debug, thiserror::Error)]
 pub enum LiveRoomErr {
     #[error(
-        "no live Rimz room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
+        "no live RimZ room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
     )]
     Unavailable { session_name: String },
     #[error(transparent)]
@@ -534,7 +534,7 @@ mod tests {
         };
         let mux = LiveRoomErr::Mux(MuxErr::NoMuxFound);
         let expected =
-            "no live Rimz room `rimz-demo`; run `rimz start` first or enter one with `rimz attach`";
+            "no live RimZ room `rimz-demo`; run `rimz start` first or enter one with `rimz attach`";
 
         assert_eq!(unavailable.to_string(), expected);
         assert!(std::error::Error::source(&unavailable).is_none());

@@ -428,7 +428,7 @@ pub(super) fn merge_turn_error_marker(
         Ok(updated) => {
             if updated {
                 // The agent's turn ended on a provider condition (rate limit,
-                // overload, or other API failure) — observed, not a Rimz fault.
+                // overload, or other API failure) — observed, not a RimZ fault.
                 // Warn once per transition; the Sentry reporting layer lifts it to a
                 // warning event keyed by `class`.
                 warn!(

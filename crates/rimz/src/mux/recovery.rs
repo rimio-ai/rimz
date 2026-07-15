@@ -98,7 +98,7 @@ pub fn zellij_session_cache_paths_in(cache_root: &Path, name: &str) -> Vec<PathB
 
 /// Read Zellij's best-effort session metadata and report whether browser
 /// clients are allowed to attach. Missing or malformed metadata is invisible to
-/// callers because the cache is an asynchronous Zellij side channel, not Rimz's
+/// callers because the cache is an asynchronous Zellij side channel, not RimZ's
 /// source of truth.
 pub fn zellij_session_web_clients_allowed_in(cache_root: &Path, name: &str) -> Option<bool> {
     let mut saw_false = false;
@@ -285,7 +285,7 @@ pub(crate) fn reload_stats_dashboards() -> Vec<u32> {
 }
 
 /// Whether `cmdline` is a held or standalone `rimz stats --refresh` dashboard.
-/// Token matching keeps the user-wide signal pass scoped to the Rimz stats
+/// Token matching keeps the user-wide signal pass scoped to the RimZ stats
 /// subcommand and excludes one-shot reports and unrelated commands mentioning
 /// those words.
 #[cfg(any(unix, test))]
@@ -507,7 +507,7 @@ mod tests {
     fn is_stats_refresh_matches_only_the_held_or_standalone_dashboard() {
         assert!(is_stats_refresh("/usr/bin/rimz stats --refresh --hold"));
         assert!(is_stats_refresh("rimz stats --refresh"));
-        assert!(is_stats_refresh("/tmp/Rimz Dev/rimz stats --refresh"));
+        assert!(is_stats_refresh("/tmp/RimZ Dev/rimz stats --refresh"));
         assert!(is_stats_refresh(
             "rimz --config /tmp/config.toml stats --refresh"
         ));

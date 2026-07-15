@@ -5,7 +5,7 @@
 //! time and installed whole-file to `~/.pi/agent/extensions/rimz.ts`. The
 //! extension forwards pi's lifecycle events to `rimz hooks feed --source pi`
 //! as fire-and-forget children, inverting the Claude/Codex child direction
-//! (pi runs Rimz, not the other way around); the wire it posts is the typed
+//! (pi runs RimZ, not the other way around); the wire it posts is the typed
 //! shape in [`payloads`], with the model, effort, and context gauge
 //! (`context_pct` / `context_window` / `total_tokens`) and cumulative cost
 //! stamped on every envelope from the in-process extension — payload-first, so
@@ -21,7 +21,7 @@
 //!
 //! One wired event is an ask: `tool_call`, pi's pre-tool gate, whose extension
 //! handler pi awaits. Pi draws no permission prompt of its own
-//! (`native_ask_ui: false`), so the hook returns neutral immediately and Rimz
+//! (`native_ask_ui: false`), so the hook returns neutral immediately and RimZ
 //! records no waiting state. Subagents and background tasks stay declared off
 //! (`docs/externals/agent-adapter/pi-reference.md`) and the absences render
 //! deliberately.
@@ -83,9 +83,9 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     capabilities: Capabilities {
         // `tool_call` is pi's awaited pre-tool gate. Pi has no native ask UI,
-        // so Rimz records no ask and returns neutral.
+        // so RimZ records no ask and returns neutral.
         // Pi never asks natively — no permission prompts, plan approvals, or
-        // questions — so Rimz has no surface to route to. It returns neutral
+        // questions — so RimZ has no surface to route to. It returns neutral
         // with no waiting state.
         native_ask_ui: false,
         transcript_tail_context: false,
@@ -227,7 +227,7 @@ const PI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
         event: "session_compact",
     },
     // Extension skips `/reload` shutdown: same session re-registers in place,
-    // so every shutdown reaching Rimz is a real end.
+    // so every shutdown reaching RimZ is a real end.
     ended: HookCoverage::Native {
         event: "session_shutdown",
     },
@@ -279,7 +279,7 @@ const WIRED_EVENTS: &[&str] = &[
     "tool_call",
 ];
 
-/// The Rimz pi extension, embedded at compile time and written whole-file on
+/// The RimZ pi extension, embedded at compile time and written whole-file on
 /// install. Carries [`super::managed_source::RIMZ_MANAGED_MARKER`] on its first
 /// line.
 const EXTENSION_SOURCE: &str = include_str!("extension.ts");

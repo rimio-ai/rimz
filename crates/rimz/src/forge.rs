@@ -1,6 +1,6 @@
 //! Forge pull-request ref and status parsing.
 //!
-//! Rimz keeps forge command execution outside this module. The pure helpers
+//! RimZ keeps forge command execution outside this module. The pure helpers
 //! here identify PR numbers, ref shapes, host families, and status JSON emitted
 //! by forge CLIs.
 

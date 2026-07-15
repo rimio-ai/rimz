@@ -1,5 +1,5 @@
 //! Daemon dashboard middle-column content. The mux births each content pane as
-//! a small Rimz-owned supervisor, and the supervisor resolves the child command
+//! a small RimZ-owned supervisor, and the supervisor resolves the child command
 //! from the current per-machine `[daemon]` config so edits take effect in place.
 
 use std::io;

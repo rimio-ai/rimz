@@ -10,7 +10,7 @@ use super::list_pets::{LiveGraphicsPacer, write_pet_row, write_pixel_pet_row_wit
 use super::render;
 
 const HEADER_RULE_WIDTH: usize = 48;
-const CONSENT_INTRO: &str = "Rimz routes attention across your coding agents into one sidebar.";
+const CONSENT_INTRO: &str = "RimZ routes attention across your coding agents into one sidebar.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Defaults {

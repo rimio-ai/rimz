@@ -187,7 +187,7 @@ fn remove_stale_theme_files(dir: &Path, seen: &BTreeSet<String>) -> Result<()> {
 
 fn readme(provenance: &str, count: usize) -> String {
     format!(
-        "# Bundled Alacritty Themes\n\nThis directory vendors {count} Alacritty TOML themes from [mbadolato/iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) for Rimz sidebar theme selection.\n\nSource revision: {provenance}.\n\nRefresh with `cargo xtask theme-refresh`. Set `RIMZ_THEMES_DIR=/path/to/iTerm2-Color-Schemes` to refresh from a local checkout without network access.\n\nThe theme files are data embedded into the Rimz binary at build time; they are not linked Rust dependencies.\n"
+        "# Bundled Alacritty Themes\n\nThis directory vendors {count} Alacritty TOML themes from [mbadolato/iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) for RimZ sidebar theme selection.\n\nSource revision: {provenance}.\n\nRefresh with `cargo xtask theme-refresh`. Set `RIMZ_THEMES_DIR=/path/to/iTerm2-Color-Schemes` to refresh from a local checkout without network access.\n\nThe theme files are data embedded into the RimZ binary at build time; they are not linked Rust dependencies.\n"
     )
 }
 

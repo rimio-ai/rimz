@@ -68,7 +68,7 @@ pub(crate) const RAW_RETAIN_SECS: u64 = 8 * 86_400;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SpendWindowMode {
-    /// Trailing 24 hours, matching Rimz's original "today" row behaviour.
+    /// Trailing 24 hours, matching RimZ's original "today" row behaviour.
     #[serde(rename = "24h")]
     Trailing24h,
     /// The local calendar day, using the global `timezone` when set.

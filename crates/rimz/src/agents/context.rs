@@ -192,7 +192,7 @@ pub(crate) fn clamp_pct(value: Option<f64>) -> Option<u8> {
 
 /// Per-subagent enrichment a paneless child cannot publish for itself. Claude's
 /// `subagentStatusLine` is `exec`d to render the agent panel's child rows and is
-/// handed each task's `type`, `description`, `tokenCount`, and `startTime`; Rimz
+/// handed each task's `type`, `description`, `tokenCount`, and `startTime`; RimZ
 /// harvests those into one of these per child so the expanded card paints what the
 /// child is doing, what it has spent, and how long it has run. Identity-free like
 /// [`AgentContext`] — the child it belongs to is the `(kind, agent_id)` key it is

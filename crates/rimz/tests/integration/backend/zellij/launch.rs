@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use super::support::*;
 
 /// Zellij 0.44.3 suppresses terminal mouse reporting when an attach command
-/// explicitly passes `options --mouse-mode true`. Rimz keeps the enabled case
+/// explicitly passes `options --mouse-mode true`. RimZ keeps the enabled case
 /// implicit so clicks reach the tab bar and sidebar, while still applying the
 /// rest of the room options.
 #[test]

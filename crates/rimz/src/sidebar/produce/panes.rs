@@ -127,7 +127,7 @@ fn rotate_from_prior(frame: &mut PaneFrame, prior: Option<&PaneFrame>) {
 /// The pane ids a fresh mux roster read left without a process start — the
 /// set the derived process stamp owns ([`stamp_pane_process_starts`]). Captured before
 /// the frame rotates against the prior publish, so a backend-reported start is
-/// never confused with Rimz's own derived stamp and never overwritten by one.
+/// never confused with RimZ's own derived stamp and never overwritten by one.
 fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
     frame
         .pane_states()
@@ -214,7 +214,7 @@ fn repair_pane_frame(
     hosted_carry_drops
 }
 
-/// Recover a pane's spawn command from Rimz's supervised agent wrapper when the
+/// Recover a pane's spawn command from RimZ's supervised agent wrapper when the
 /// mux did not retain one. tmux reports only the foreground program basename
 /// and no spawn command, so a `rimz agents exec <kind>` wrapper pane otherwise
 /// classifies as neither its agent kind nor its worktree. Only an empty spawn

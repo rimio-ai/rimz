@@ -776,8 +776,8 @@ fn local_link_notify_command_receives_lost_and_restored_env() {
     let text = wait_for_notify_log(
         &notify_log,
         &[
-            "link_lost|Rimz: remote link lost|SSH to dev-box dropped; reconnecting.",
-            "link_restored|Rimz: remote link restored|SSH to dev-box is responsive again.",
+            "link_lost|RimZ: remote link lost|SSH to dev-box dropped; reconnecting.",
+            "link_restored|RimZ: remote link restored|SSH to dev-box is responsive again.",
         ],
     );
     assert_eq!(

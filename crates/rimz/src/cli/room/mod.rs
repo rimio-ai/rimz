@@ -275,10 +275,10 @@ pub(crate) fn existing_web_room_for_path(
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let record = workspace_record_for_session(&workspace.session_name)
-        .context("checking Rimz workspace record")?;
+        .context("checking RimZ workspace record")?;
     let Some(record) = record else {
         bail!(
-            "workspace session `{}` has not been born by Rimz; run `rimz web open {}` or `rimz start {}` first",
+            "workspace session `{}` has not been born by RimZ; run `rimz web open {}` or `rimz start {}` first",
             workspace.session_name,
             path.display(),
             path.display(),
@@ -297,16 +297,16 @@ fn web_context_from_ready(ready: ReadyRoom) -> Result<RoomContext> {
     match ready {
         ReadyRoom::Managed(context) => Ok(*context),
         ReadyRoom::External { session_name, .. } => {
-            bail!("session `{session_name}` is not a managed Rimz room")
+            bail!("session `{session_name}` is not a managed RimZ room")
         }
     }
 }
 
 fn workspace_record_for_web_session(session: &str, mux: MuxName) -> Result<WorkspaceRecord> {
-    let record = workspace_record_for_session(session).context("checking Rimz workspace record")?;
+    let record = workspace_record_for_session(session).context("checking RimZ workspace record")?;
     let Some(record) = record else {
         bail!(
-            "session `{session}` is not a known Rimz workspace session; run `rimz list` or open the workspace with `rimz start` first"
+            "session `{session}` is not a known RimZ workspace session; run `rimz list` or open the workspace with `rimz start` first"
         );
     };
     render::room::print_notices(ensure_single_backend_room(mux, session)?)?;
@@ -542,7 +542,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
             session, record, ..
         } => match record {
             Ok(Some(record)) => {
-                // Only a session Rimz owns (a matching record) is force-reset; a bare
+                // Only a session RimZ owns (a matching record) is force-reset; a bare
                 // external session by this name is never torn down.
                 let mut context = RoomContext::from_record(
                     record,
@@ -710,7 +710,7 @@ fn prompt_project_trust(project_root: &Path) {
             }
             if let Err(err) = write_project_trust_notice(&[
                 "rimz: left untrusted; run `rimz trust grant` when ready.",
-                "Rimz won't ask again until .rimz/config.toml changes.",
+                "RimZ won't ask again until .rimz/config.toml changes.",
             ]) {
                 tracing::warn!(error = %err, "trust decline notice failed");
             }
@@ -771,7 +771,7 @@ fn mux_environment_preflight(mux: MuxName, session_name: &str) -> Result<()> {
             zellij_version_preflight()?;
         }
         // tmux sockets live under its own short per-user socket directory; the
-        // Rimz session name does not participate in an AF_UNIX path budget.
+        // RimZ session name does not participate in an AF_UNIX path budget.
         MuxName::Tmux => mux_responsive_preflight(mux)?,
     }
     Ok(())
@@ -834,14 +834,14 @@ fn zellij_version_preflight() -> Result<()> {
     let (maj, min, patch) = rimz::mux::zellij::MIN_ZELLIJ_VERSION;
     let found = caps.binary_version.trim();
     anyhow::bail!(
-        "Zellij {found} is below Rimz's floor; upgrade Zellij to >= {maj}.{min}.{patch}, or run this room with `--mux tmux`."
+        "Zellij {found} is below RimZ's floor; upgrade Zellij to >= {maj}.{min}.{patch}, or run this room with `--mux tmux`."
     );
 }
 
 fn rimz_socket_environment_preflight(workspace_id: &WorkspaceId) -> Result<()> {
     RuntimePaths::for_workspace(workspace_id.clone())
         .map(|_| ())
-        .context("checking Rimz runtime socket budget")
+        .context("checking RimZ runtime socket budget")
 }
 
 fn prompt_recover_or_fresh(

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentKind, AgentSessionId, PaneId, ViewKind};
 
-/// Pane title/name that marks Rimz's own sidebar renderer — the one chrome
+/// Pane title/name that marks RimZ's own sidebar renderer — the one chrome
 /// classification key. The renderer sets it (terminal title escape), the
 /// Zellij layout names its pane with it, and the tmux/Zellij/store
 /// classifiers all match against it.
@@ -92,7 +92,7 @@ pub struct PaneRef {
     #[serde(default)]
     pub view_kind: Option<ViewKind>,
     /// View name as reported by the multiplexer (tmux window name, Zellij tab
-    /// name). Advisory UI metadata — used to recognise Rimz-launched background
+    /// name). Advisory UI metadata — used to recognise RimZ-launched background
     /// views such as the remote-control host. Never a correctness signal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_name: Option<String>,
@@ -187,7 +187,7 @@ impl PaneRef {
         }
     }
 
-    /// Whether this pane is Rimz's own sidebar chrome. Worktree liveness checks
+    /// Whether this pane is RimZ's own sidebar chrome. Worktree liveness checks
     /// ignore it because the sidebar inherits its view's cwd without being a
     /// user pane working in that tree.
     pub fn is_rimz_sidebar(&self) -> bool {

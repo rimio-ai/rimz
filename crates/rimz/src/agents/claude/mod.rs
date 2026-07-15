@@ -251,7 +251,7 @@ const CLAUDE_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 /// for local I/O failures rather than an answer window.
 const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
 
-/// Installed events and classification policy. Rimz installs every event as a
+/// Installed events and classification policy. RimZ installs every event as a
 /// single broad hook with no matcher: the helper classifies
 /// each call from the payload's `tool_name`, so `PreToolUse: ExitPlanMode` and
 /// `PreToolUse: AskUserQuestion` still route to their blocking ask kinds off
@@ -400,13 +400,13 @@ const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --sou
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source claude";
 
 /// `settings.json` key holding the statusline command Claude `exec`s on every
-/// render. Rimz wraps it so it can capture the rich JSON Claude pipes there.
+/// render. RimZ wraps it so it can capture the rich JSON Claude pipes there.
 const STATUS_LINE_KEY: &str = "statusLine";
-/// The statusline command Rimz installs. Fixed (no per-user content) so the
+/// The statusline command RimZ installs. Fixed (no per-user content) so the
 /// install stays idempotent and snapshot-stable; the wrapped original lives
 /// under the shared managed wrapper marker, not embedded in this string.
 const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude";
-/// Stable substring identifying Rimz's own statusline reader across command
+/// Stable substring identifying RimZ's own statusline reader across command
 /// variants — and across both render commands, since the `subagentStatusLine`
 /// command is a superstring of this. A statusline command matching this marker
 /// is never a user command to wrap or pass through.
@@ -425,7 +425,7 @@ const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
     };
 
 /// The per-child render command Claude `exec`s for each subagent row, carrying
-/// the `tasks` array Rimz harvests. Wrapped the same way as the session
+/// the `tasks` array RimZ harvests. Wrapped the same way as the session
 /// statusline; its command is the session reader plus `--subagent`.
 const SUBAGENT_STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
     super::managed_statusline::ManagedStatusLineSpec {

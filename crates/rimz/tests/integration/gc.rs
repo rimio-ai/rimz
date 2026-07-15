@@ -505,7 +505,7 @@ fn git_missing() -> bool {
 fn init_repo(path: &Path) {
     git(path, &["init", "-b", "main"]);
     git(path, &["config", "user.email", "rimz@example.com"]);
-    git(path, &["config", "user.name", "Rimz Test"]);
+    git(path, &["config", "user.name", "RimZ Test"]);
     commit_file(path, "README.md", "fixture\n", "initial");
 }
 

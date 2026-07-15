@@ -152,7 +152,7 @@ fn seed_git_worktrees(
         project_root,
         &["config", "user.email", "perf@example.invalid"],
     )?;
-    run_git(project_root, &["config", "user.name", "Rimz Perf"])?;
+    run_git(project_root, &["config", "user.name", "RimZ Perf"])?;
     std::fs::write(project_root.join("README.md"), "perf fixture\n")
         .context("writing git fixture README")?;
     run_git(project_root, &["add", "README.md"])?;

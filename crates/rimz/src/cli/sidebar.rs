@@ -865,7 +865,7 @@ fn mark_unread(globals: &GlobalFlags, target: String, worktree: Option<String>) 
 /// so one key reaches the sidebar and goes back. The session is the keypress's
 /// `--session-name` (the tmux binding resolves it per room); a bare invocation
 /// resolves the room from the cwd. Focus takes only the session; the Zellij
-/// roster resolves the workspace from Rimz's known-session registry when the
+/// roster resolves the workspace from RimZ's known-session registry when the
 /// off-server `run-shell` child has no room cwd.
 fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> Result<()> {
     let session_name = match session_name {
@@ -967,7 +967,7 @@ fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> 
         .collect::<Vec<_>>();
     let title = command
         .title
-        .unwrap_or_else(|| "Rimz: notification test".to_owned());
+        .unwrap_or_else(|| "RimZ: notification test".to_owned());
     let body = command
         .body
         .unwrap_or_else(|| format!("Testing notification delivery for {}.", labels.join(", ")));

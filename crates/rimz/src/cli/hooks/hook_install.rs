@@ -140,7 +140,7 @@ fn install_selected(selected: &[&'static str], out: &mut dyn Write) -> Result<()
 
 /// Stderr notice for hooks the agent's own trust gate still skips: the gate
 /// silences every untrusted hook with no signal of its own, so the start
-/// notice is where the dead channel becomes visible. Rimz cannot trust on
+/// notice is where the dead channel becomes visible. RimZ cannot trust on
 /// the user's behalf — only the agent's own UI can — so this warns with the
 /// fix rather than gating the start. No-op when `untrusted` is empty.
 fn warn_untrusted_hooks(kind: &str, untrusted: &[String]) -> Result<()> {
@@ -187,13 +187,13 @@ fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> 
         .join(", ");
     writeln!(
         out,
-        "Rimz found {} coding {agent_word}: {}.",
+        "RimZ found {} coding {agent_word}: {}.",
         previews.len(),
         render::paint(render::palette::ACCENT, &agent_names)
     )?;
     writeln!(
         out,
-        "To show {pronoun} live in the sidebar, Rimz installs or refreshes reporting hooks in each agent's config."
+        "To show {pronoun} live in the sidebar, RimZ installs or refreshes reporting hooks in each agent's config."
     )?;
     Ok(())
 }
@@ -340,7 +340,7 @@ pub(super) fn write_uninstall_result(
     report: &rimz::agents::HookUninstallReport,
 ) -> std::io::Result<()> {
     if report.files.is_empty() {
-        writeln!(out, "{} — no Rimz-managed hooks found", report.agent)?;
+        writeln!(out, "{} — no RimZ-managed hooks found", report.agent)?;
         return Ok(());
     }
 
@@ -374,7 +374,7 @@ fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPrevi
     write_consent_footer(out)?;
     writeln!(
         out,
-        "No terminal input — nothing installed or refreshed. Rimz continues into the room; install or refresh agents later with rimz hooks install.",
+        "No terminal input — nothing installed or refreshed. RimZ continues into the room; install or refresh agents later with rimz hooks install.",
     )?;
     Ok(())
 }
@@ -598,7 +598,7 @@ mod tests {
         let noninteractive = strip(|out| write_noninteractive_notice(out, &previews));
 
         for rendered in [&interactive, &noninteractive] {
-            assert!(rendered.contains("Rimz found 2 coding agents: claude, codex."));
+            assert!(rendered.contains("RimZ found 2 coding agents: claude, codex."));
             assert!(rendered.contains("~/.claude/settings.json"));
             assert!(rendered.contains("~/.codex/settings.json"));
             assert!(rendered.contains(
@@ -614,7 +614,7 @@ mod tests {
         assert!(!interactive.contains("No terminal input"));
         assert!(!noninteractive.contains("Install or refresh reporting hooks? [Y/n]"));
         assert!(noninteractive.contains(
-            "No terminal input — nothing installed or refreshed. Rimz continues into the room; install or refresh agents later with rimz hooks install."
+            "No terminal input — nothing installed or refreshed. RimZ continues into the room; install or refresh agents later with rimz hooks install."
         ));
     }
 
@@ -766,7 +766,7 @@ mod tests {
             removed_events: Vec::new(),
         };
         let rendered = strip(|out| write_uninstall_result(out, &empty));
-        assert_eq!(rendered, "codex — no Rimz-managed hooks found\n");
+        assert_eq!(rendered, "codex — no RimZ-managed hooks found\n");
 
         let rendered = strip(|out| write_post_install_footer(out));
         assert!(rendered.contains("rimz hooks uninstall"));

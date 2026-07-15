@@ -5,4 +5,4 @@ contact_links:
     about: Report vulnerabilities privately.
   - name: Security model
     url: https://github.com/rimio-ai/rimz/blob/main/docs/guide/security.md
-    about: Read Rimz security boundaries and threat model.
+    about: Read RimZ security boundaries and threat model.

@@ -305,7 +305,7 @@ pub(super) struct TopologyWriterId {
     pub(super) loaded_at_ms: u64,
 }
 
-/// One adapter's Rimz-hook wiring state, with the fix to advance it.
+/// One adapter's RimZ-hook wiring state, with the fix to advance it.
 #[derive(Debug, Serialize)]
 pub(super) struct HookRow {
     pub(super) kind: String,

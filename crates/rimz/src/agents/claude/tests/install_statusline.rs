@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn install_wraps_and_restores_existing_subagent_status_line() {
     // The per-child `subagentStatusLine` is wrapped exactly like the session
-    // `statusLine`: the user's command is captured, replaced by Rimz's
+    // `statusLine`: the user's command is captured, replaced by RimZ's
     // `--subagent` reader, and restored verbatim on uninstall.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
@@ -27,7 +27,7 @@ fn install_wraps_and_restores_existing_subagent_status_line() {
     assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
 
     // The feed reads the wrapped subagent command back as its pass-through
-    // target, never the recursive Rimz one.
+    // target, never the recursive RimZ one.
     let root = read_existing_json(&path).unwrap();
     assert_eq!(
         wrapped_status_line_command_from(&root, &SUBAGENT_STATUS_LINE).as_deref(),
@@ -111,7 +111,7 @@ fn reinstall_does_not_double_wrap() {
     let second = std::fs::read_to_string(&path).unwrap();
     assert_eq!(first, second, "re-install must be byte-identical");
     let parsed: Value = serde_json::from_str(&second).unwrap();
-    // Still the user's command, not a nested Rimz wrapper.
+    // Still the user's command, not a nested RimZ wrapper.
     assert_eq!(
         parsed["statusLine"]["_rimz_wrapped"]["command"],
         "user-line"
@@ -125,10 +125,10 @@ fn reinstall_does_not_double_wrap() {
 
 #[test]
 fn recursive_status_line_wrap_is_repaired_on_install_and_dropped_on_uninstall() {
-    // A `_rimz_wrapped` that itself holds the Rimz command is a recursive wrap
+    // A `_rimz_wrapped` that itself holds the RimZ command is a recursive wrap
     // (a prior bug's residue): never a user command. Install discards the inner
     // command but keeps the sibling rendering options; uninstall restores
-    // nothing rather than re-installing Rimz's own command.
+    // nothing rather than re-installing RimZ's own command.
     let dir = tempfile::tempdir().unwrap();
     let recursive = |extra: serde_json::Value| {
         let mut wrapped = serde_json::Map::new();
@@ -157,7 +157,7 @@ fn recursive_status_line_wrap_is_repaired_on_install_and_dropped_on_uninstall() 
     assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
     assert!(
         parsed["statusLine"].get("_rimz_wrapped").is_none(),
-        "a Rimz statusline command is not a user command to wrap"
+        "a RimZ statusline command is not a user command to wrap"
     );
     assert_eq!(parsed["statusLine"]["padding"], 0);
     assert_eq!(parsed["statusLine"]["refreshInterval"], 10);
@@ -172,7 +172,7 @@ fn recursive_status_line_wrap_is_repaired_on_install_and_dropped_on_uninstall() 
     let parsed: Value = serde_json::from_slice(&std::fs::read(&uninstall_path).unwrap()).unwrap();
     assert!(
         parsed.get("statusLine").is_none(),
-        "uninstall must not restore Rimz's own statusline command"
+        "uninstall must not restore RimZ's own statusline command"
     );
 }
 
@@ -185,7 +185,7 @@ fn uninstall_removes_status_line_when_none_existed() {
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert!(
         parsed.get("statusLine").is_none(),
-        "a Rimz-added statusLine is removed on uninstall"
+        "a RimZ-added statusLine is removed on uninstall"
     );
 }
 

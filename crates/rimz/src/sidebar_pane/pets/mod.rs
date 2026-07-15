@@ -595,7 +595,7 @@ fn load_pet(source: PetSource) -> Result<Vec<RgbaImage>, asset::AssetErr> {
         Ok(frames) => Ok(frames),
         Err(err) => {
             // Evict only a cache entry on a decode miss; a user's local sheet
-            // is read-only to Rimz.
+            // is read-only to RimZ.
             if let Some(path) = &resolved.evictable_cache {
                 let _ = asset::remove_cached_asset(path);
             }

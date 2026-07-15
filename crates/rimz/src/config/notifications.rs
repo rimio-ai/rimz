@@ -408,7 +408,7 @@ mod tests {
         let mut vars = TemplateVars::new();
         vars.insert("kind", "waiting");
         vars.insert("agent", "codex");
-        vars.insert("title", "Rimz: codex needs you");
+        vars.insert("title", "RimZ: codex needs you");
         vars.insert("body", "codex is waiting; touch nothing");
         vars.insert("task", "\"; rm -rf /");
         vars
@@ -507,7 +507,7 @@ mod tests {
         let prefs: NotificationsPrefs = toml::from_str(
             r#"
 enabled = true
-title = "Rimz: {{agent}} {{kind}}"
+title = "RimZ: {{agent}} {{kind}}"
 body = "{{task}}"
 command = "ntfy publish rimz"
 
@@ -519,7 +519,7 @@ when = { kind = ["waiting"], worktree = ["feat/*"], handle = ["@planner"] }
         )
         .expect("parse");
         prefs.validate().expect("validate");
-        assert_eq!(prefs.title.as_deref(), Some("Rimz: {{agent}} {{kind}}"));
+        assert_eq!(prefs.title.as_deref(), Some("RimZ: {{agent}} {{kind}}"));
         assert_eq!(prefs.handler.len(), 1);
         assert_eq!(prefs.effective_handlers().len(), 2);
         assert!(prefs.has_handlers());

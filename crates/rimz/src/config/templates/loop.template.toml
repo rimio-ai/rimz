@@ -1,8 +1,8 @@
-# Rimz per-machine loop configuration.
+# RimZ per-machine loop configuration.
 #
 # Save as ~/.config/rimz/loop.toml, or run `rimz config init`.
 # Durable recurring loop tasks live here. One-shots and self-wakes created by
-# Rimz live in the state store instead, so this file stays hand-editable.
+# RimZ live in the state store instead, so this file stays hand-editable.
 
 # Supervised scheduled turns without a task-specific timeout use two hours.
 # default-timeout = "2h"

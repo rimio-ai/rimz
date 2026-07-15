@@ -76,7 +76,7 @@ fn link_stats_runtime(args: LinkStatsIngestArgs) -> Result<(rimz::RuntimePaths, 
     let workspace_id = match (args.session, args.dir) {
         (Some(session), None) => {
             workspace_record_for_session(&session)?
-                .with_context(|| format!("no Rimz workspace record for session `{session}`"))?
+                .with_context(|| format!("no RimZ workspace record for session `{session}`"))?
                 .workspace_id
         }
         (None, Some(dir)) => {

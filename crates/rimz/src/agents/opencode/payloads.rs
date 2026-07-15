@@ -1,6 +1,6 @@
 //! Typed OpenCode plugin wire structs.
 //!
-//! Rimz owns the OpenCode wire: [`plugin.ts`](./plugin.ts) flattens the
+//! RimZ owns the OpenCode wire: [`plugin.ts`](./plugin.ts) flattens the
 //! in-process OpenCode hook and bus payloads into this snake_case envelope
 //! before spawning `rimz hooks feed --source opencode`. Upstream drift is
 //! contained inside the plugin; Rust receives the stable adapter-local shape.
@@ -21,7 +21,7 @@ pub(crate) struct OpencodeQuestionOption {
     pub description: Option<String>,
 }
 
-/// The flattened payload the Rimz OpenCode plugin posts for every event.
+/// The flattened payload the RimZ OpenCode plugin posts for every event.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct OpencodeHookPayload {
     pub session_id: Option<String>,

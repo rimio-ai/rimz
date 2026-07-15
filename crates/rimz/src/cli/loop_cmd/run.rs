@@ -191,7 +191,7 @@ fn notify_loop_paused(name: &str, entry: &TaskEntry, count: u32) {
     let notification = rimz::sidebar::notify::Notification {
         agents: Vec::new(),
         notification_kind: rimz::sidebar::notify::NotificationKind::LoopPaused,
-        title: format!("Rimz: loop {name} paused"),
+        title: format!("RimZ: loop {name} paused"),
         body: format!(
             "{count} consecutive failed fires; inspect with `rimz loop show {name}`, resume with `rimz loop resume {name}`"
         ),

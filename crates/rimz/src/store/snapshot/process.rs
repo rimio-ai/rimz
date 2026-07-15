@@ -1,4 +1,4 @@
-//! Non-agent process rows: command classification past launchers, sudo, Rimz's
+//! Non-agent process rows: command classification past launchers, sudo, RimZ's
 //! supervised agent wrapper, and the agent-kind sniffing for wrapped commands.
 
 use jiff::Timestamp;
@@ -21,7 +21,7 @@ pub(super) fn pane_command_is_known(pane: &PaneRef) -> bool {
 }
 
 /// Worktree path for a pane row: prefer the mux-reported cwd when it is
-/// non-empty, then fall back to Rimz's supervised agent wrapper manifest from
+/// non-empty, then fall back to RimZ's supervised agent wrapper manifest from
 /// the spawn command and finally the foreground command. Used by both process
 /// rows and the agent-pane ladder so empty-cwd races do not diverge between
 /// the two projections.
@@ -159,7 +159,7 @@ pub(crate) fn process_is_active(command: &str) -> bool {
     !IDLE.contains(&program_label(command).as_str())
 }
 
-/// Whether a pane's foreground command is Rimz's own sidebar — chrome to filter
+/// Whether a pane's foreground command is RimZ's own sidebar — chrome to filter
 /// from rows, sibling counts, and view classification, never to render. One
 /// predicate so the frame's own-view derivation and the daemon-view fold agree.
 pub(crate) fn command_is_sidebar_chrome(command: &str) -> bool {

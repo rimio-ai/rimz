@@ -687,7 +687,7 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_tombstones() {
 
 #[test]
 fn internal_app_server_hook_is_suppressed_and_records_nothing() {
-    // A `codex app-server` that Rimz cold-spawns for read-only enrichment fires
+    // A `codex app-server` that RimZ cold-spawns for read-only enrichment fires
     // its own `SessionStart` hook on startup. The internal-app-server marker
     // rides that server's env into the hook child, so `rimz hooks feed` must
     // no-op — no rollup, no lifecycle row, no `refresh-context` spawn — which is
@@ -1463,7 +1463,7 @@ fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
     );
     assert_eq!(
         String::from_utf8_lossy(&empty.stdout),
-        "No Rimz-managed hooks are installed; nothing to uninstall.\n"
+        "No RimZ-managed hooks are installed; nothing to uninstall.\n"
     );
 }
 

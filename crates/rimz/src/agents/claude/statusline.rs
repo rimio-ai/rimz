@@ -20,7 +20,7 @@ use crate::agents::{
     transcript::{TranscriptMessage, TranscriptRole},
 };
 
-/// The statusline payload Claude pipes on stdin. Only the fields Rimz projects
+/// The statusline payload Claude pipes on stdin. Only the fields RimZ projects
 /// are modelled; `#[serde(default)]` on every level keeps a sparse or
 /// evolved payload parseable, and the absence of `deny_unknown_fields` lets new
 /// keys ride along untouched.

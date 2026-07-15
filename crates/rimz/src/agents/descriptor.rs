@@ -314,14 +314,14 @@ integration_concerns! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConcernCoverage {
     /// The concern reaches a user-complete state; `via` names the path. This is
-    /// a native signal that carries it directly, or a value Rimz reconciles to
+    /// a native signal that carries it directly, or a value RimZ reconciles to
     /// its authoritative figure at each turn boundary so the surface is visually
     /// full — complete to the user even without a continuous native push (for
     /// example the realtime-cost dollar, settled to the session spend sum every
     /// turn). Reserve `Partial` for a surface the user can still see is missing
     /// something between reconciliations.
     Wired { via: &'static str },
-    /// Native coverage is incomplete, but Rimz reconstructs the behaviour from
+    /// Native coverage is incomplete, but RimZ reconstructs the behaviour from
     /// another signal or state: `via` is the combined path, `gap` what it still
     /// lacks.
     Partial {
@@ -356,7 +356,7 @@ impl ConcernCoverage {
 pub enum HookCoverage {
     /// A native event carries the lifecycle signal directly.
     Native { event: &'static str },
-    /// No native event, but Rimz reconstructs the behaviour from other state:
+    /// No native event, but RimZ reconstructs the behaviour from other state:
     /// `via` is the derivation, `gap` what the reconstruction still lacks.
     Derived {
         via: &'static str,
@@ -476,7 +476,7 @@ impl LifecycleCoverage {
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
     /// Renders its own ask UI in the pane — permission prompts, plan
-    /// approvals, questions — so Rimz can mark the agent waiting while the
+    /// approvals, questions — so RimZ can mark the agent waiting while the
     /// prompt stays in the native UI. An agent without one (pi gates tools
     /// only through the extension) resolves the same ask neutrally with no
     /// waiting state: there is no native prompt to route the human to.
@@ -489,7 +489,7 @@ pub struct Capabilities {
     /// such a session to its pane by cwd.
     pub registers_lazily: bool,
     /// Discovers live session identity and lifecycle from a provider-owned
-    /// machine-local store, without executable hooks or Rimz store writes.
+    /// machine-local store, without executable hooks or RimZ store writes.
     pub local_session_discovery: bool,
     /// Sessions route hooks through a per-user daemon that outlives any one
     /// conversation, so a new session may succeed another in the same pane
@@ -540,7 +540,7 @@ impl AgentDescriptor {
         self.coverage.get(concern)
     }
 
-    /// Whether Rimz can install hooks this adapter executes.
+    /// Whether RimZ can install hooks this adapter executes.
     pub const fn has_wired_hook_install(&self) -> bool {
         self.concern_coverage(IntegrationConcern::HookInstall)
             .is_wired()

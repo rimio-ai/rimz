@@ -402,7 +402,7 @@ mod tests {
         std::fs::create_dir_all(&repo).expect("repo dir");
         git_run(&repo, ["init"]).expect("git init");
         git_run(&repo, ["config", "user.email", "rimz@example.test"]).expect("git email");
-        git_run(&repo, ["config", "user.name", "Rimz Test"]).expect("git name");
+        git_run(&repo, ["config", "user.name", "RimZ Test"]).expect("git name");
         git_run(&repo, ["commit", "--allow-empty", "-m", "base"]).expect("initial commit");
         let head = git_stdout(&repo, ["rev-parse", "HEAD"]).expect("head");
         let path = dir.path().join("review-69");

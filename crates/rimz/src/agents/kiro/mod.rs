@@ -45,7 +45,7 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     capabilities: Capabilities {
         // Kiro can draw native prompts, but v3 exposes no hook that records
-        // them for Rimz routing.
+        // them for RimZ routing.
         native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: true,
@@ -170,7 +170,7 @@ const KIRO_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     },
     awaiting_input: HookCoverage::Derived {
         via: "unresolved pending_interaction tool approval",
-        gap: "native prompt is visible but has no structured Rimz answer route",
+        gap: "native prompt is visible but has no structured RimZ answer route",
     },
     subagent_started: HookCoverage::Absent {
         reason: "v3 hooks do not fire in subagents",

@@ -100,7 +100,7 @@ fn notification_panes_target_agent_panes() {
             notification_agent("a3", Some(second.clone())),
         ],
         notification_kind: NotificationKind::Coalesced,
-        title: "Rimz: 3 agents need attention".to_owned(),
+        title: "RimZ: 3 agents need attention".to_owned(),
         body: "a1: waiting | a2: failed | a3: waiting".to_owned(),
         unread_count: None,
     };

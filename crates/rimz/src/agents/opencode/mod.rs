@@ -1,8 +1,8 @@
 //! OpenCode hook adapter.
 //!
 //! OpenCode loads TypeScript plugins in-process inside each embedded server.
-//! Rimz ships one plugin (`plugin.ts`) that shells out to
-//! `rimz hooks feed --source opencode`, posts a Rimz-owned snake_case payload
+//! RimZ ships one plugin (`plugin.ts`) that shells out to
+//! `rimz hooks feed --source opencode`, posts a RimZ-owned snake_case payload
 //! on stdin. Current permission and question prompts arrive through
 //! `permission.asked` and `question.asked` bus events; the compatibility
 //! `permission.ask` hook reads stdout on older releases and leaves OpenCode's
@@ -134,7 +134,7 @@ const OPENCODE_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "question.asked",
     },
     answer: ConcernCoverage::Unsupported {
-        reason: "native answers are observed; Rimz-to-OpenCode answer transport is not mapped",
+        reason: "native answers are observed; RimZ-to-OpenCode answer transport is not mapped",
     },
     compaction: ConcernCoverage::Wired {
         via: "session_compacting/session_compacted",

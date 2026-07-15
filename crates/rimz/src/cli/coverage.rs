@@ -161,7 +161,7 @@ fn hook_coverage(descriptor: &AgentDescriptor, signal_kind: LifecycleSignalKind)
 }
 
 fn render_human(report: &CoverageReport, w: &mut impl Write) -> io::Result<()> {
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), "Rimz coverage"))?;
+    writeln!(w, "{}", paint(palette::ACCENT.bold(), "RimZ coverage"))?;
     render_matrix(
         w,
         "AGENT COVERAGE",
@@ -608,7 +608,7 @@ mod tests {
         };
 
         let out = strip(|w| render_human(&report, w));
-        assert!(out.contains("Rimz coverage"), "{out}");
+        assert!(out.contains("RimZ coverage"), "{out}");
         assert!(
             out.contains("AGENT") && out.contains("codex") && out.contains("pi"),
             "grid header and agent rows:\n{out}"

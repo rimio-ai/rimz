@@ -51,7 +51,7 @@ pub struct WorkspaceRecord {
     /// start/attach re-record.
     #[serde(default = "default_root_class")]
     pub root_class: RootClass,
-    /// Room-owning Rimz binary used for session-local helpers such as the
+    /// Room-owning RimZ binary used for session-local helpers such as the
     /// Zellij presence plugin. Generic re-records preserve it; owner flows
     /// (`start`, cwd-based `attach`, `reload`) set it explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]

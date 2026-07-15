@@ -118,7 +118,7 @@ const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
 /// is configured. Adapter conformance pins this to Codex's shipped default.
 const DEFAULT_MODEL: &str = "gpt-5.5-codex";
 
-/// Marker Rimz sets on every `codex app-server` it spawns for read-only
+/// Marker RimZ sets on every `codex app-server` it spawns for read-only
 /// enrichment (the cold-spawn in [`app_server`] and the warm [`broker`]). Such a
 /// server is not a user session, yet Codex still fires its configured lifecycle
 /// hooks (e.g. `SessionStart`) when it starts. Those hook children inherit this
@@ -128,7 +128,7 @@ const DEFAULT_MODEL: &str = "gpt-5.5-codex";
 /// spawn unboundedly. Empty value means unset.
 pub const ENV_INTERNAL_APP_SERVER: &str = "RIMZ_CODEX_INTERNAL_APP_SERVER";
 
-/// True when the current process was spawned as a Rimz-internal enrichment
+/// True when the current process was spawned as a RimZ-internal enrichment
 /// `codex app-server` (the [`ENV_INTERNAL_APP_SERVER`] marker is present and
 /// non-empty). The hook entrypoint reads this to suppress re-entrant feeds.
 pub fn spawned_as_internal_app_server() -> bool {
@@ -337,7 +337,7 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 };
 
 /// Installed events and classification policy — the single source of truth for
-/// which Codex events Rimz wires and with which matcher, mirroring the Claude
+/// which Codex events RimZ wires and with which matcher, mirroring the Claude
 /// adapter's catalog. `SessionStart` filters to its
 /// lifecycle subtypes; the per-call hooks match everything (`.*`); the
 /// turn-boundary events (`UserPromptSubmit`, `Stop`) carry no matcher.
@@ -438,7 +438,7 @@ const CODEX_HOOKS: &[HookRecord] = &[
     ),
 ];
 
-/// Legacy config block written by older Rimz builds. Codex ignores this block;
+/// Legacy config block written by older RimZ builds. Codex ignores this block;
 /// uninstall still removes it so users can clean up stale config.
 const RIMZ_BLOCK: &str = "rimz";
 const HOOKS_TABLE: &str = "hooks";

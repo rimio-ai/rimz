@@ -55,7 +55,7 @@ fn link_notifications_respect_command_and_terminal_gates() {
     assert!(
         local_link_command_notification(
             rimz::sidebar::notify::NotificationKind::LinkLost,
-            "Rimz: remote link stalled",
+            "RimZ: remote link stalled",
             "No probe ack from dev for 8s.",
             LocalLinkNotificationDelivery::TerminalOnly,
             &prefs,
@@ -66,7 +66,7 @@ fn link_notifications_respect_command_and_terminal_gates() {
 
     let notification = local_link_command_notification(
         rimz::sidebar::notify::NotificationKind::LinkLost,
-        "Rimz: remote link lost",
+        "RimZ: remote link lost",
         "SSH to dev dropped; reconnecting.",
         LocalLinkNotificationDelivery::TerminalAndCommand,
         &prefs,

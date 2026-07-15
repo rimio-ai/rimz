@@ -1,4 +1,4 @@
-//! Rimz core library — domain model, store, multiplexer trait, agent hooks.
+//! RimZ core library — domain model, store, multiplexer trait, agent hooks.
 //!
 //! Read [`crate::agents`] for normalized agent state and [`crate::store`] for
 //! durability rules. The product contract lives in the repo's `DESIGN.md`;

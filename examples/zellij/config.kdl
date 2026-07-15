@@ -1,5 +1,5 @@
 // A complete Zellij starting point for coding-agent work: correct behavior
-// for agent TUIs, a look that matches Rimz's default sidebar scheme, and the
+// for agent TUIs, a look that matches RimZ's default sidebar scheme, and the
 // everyday actions on Alt chords that work without leaving locked mode.
 //
 // Zellij reads one config file, so this ships as a whole file. Starting fresh:
@@ -27,14 +27,14 @@ support_kitty_keyboard_protocol true   // Shift+Enter and friends reach TUI agen
 
 // --- Look and feel -----------------------------------------------------------
 
-theme "tokyo-night"                    // matches Rimz's default sidebar scheme
+theme "tokyo-night"                    // matches RimZ's default sidebar scheme
 pane_frames true                       // titled borders mark the focused pane
 styled_underlines true                 // colored/curly underlines from agents and editors
 osc8_hyperlinks true                   // clickable links in command output
 show_startup_tips false                // skip the startup tip banner
 show_release_notes false               // skip the release-notes pane on upgrade
 mouse_hover_effects false              // no hover frames/help text; calmer with many panes
-session_serialization false            // clean session births; Rimz owns rebirth in its rooms
+session_serialization false            // clean session births; RimZ owns rebirth in its rooms
 // default_shell "zsh"                 // uncomment to pin a shell; unset uses $SHELL
 
 // --- Alt chords in locked mode -------------------------------------------------

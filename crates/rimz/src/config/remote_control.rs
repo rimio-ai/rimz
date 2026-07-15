@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Remote-control auto-launch policy, per agent. Off unless explicitly enabled
-/// — Rimz never links your account or starts a remote-control host without
+/// — RimZ never links your account or starts a remote-control host without
 /// opt-in, so the absence of this section reads as "do nothing". Each agent has
 /// its own toggle because each links a different account and is detected
 /// independently — Claude on PATH, Codex by its managed standalone install.

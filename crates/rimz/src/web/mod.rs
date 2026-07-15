@@ -67,7 +67,7 @@ pub enum WebErr {
         source: MuxErr,
     },
     #[error(
-        "could not parse `zellij web --status` output; upgrade Rimz or report this output: {raw:?}"
+        "could not parse `zellij web --status` output; upgrade RimZ or report this output: {raw:?}"
     )]
     ZellijStatus { raw: String },
     #[error("Zellij web server did not report online after start")]

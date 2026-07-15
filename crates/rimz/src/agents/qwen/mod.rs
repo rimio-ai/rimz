@@ -90,7 +90,7 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     lifecycle_hooks: QWEN_LIFECYCLE_HOOKS,
     default_context_window: None,
     // Qwen routes across multiple provider protocols, each with its own model
-    // catalog. Preserve the model selected in Qwen settings unless a Rimz
+    // catalog. Preserve the model selected in Qwen settings unless a RimZ
     // profile explicitly supplies `--model`.
     default_model: None,
     process_names: &["qwen", "node"],

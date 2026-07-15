@@ -565,7 +565,7 @@ fn install_preview_and_uninstall_only_own_managed_files() {
     assert!(PI_MANAGED_SOURCE.installed_at(&path));
     assert!(!PI_MANAGED_SOURCE.upgrade_available_at(&path));
 
-    let stale = "// still _rimz_managed\n// older Rimz source\n";
+    let stale = "// still _rimz_managed\n// older RimZ source\n";
     std::fs::write(&path, stale).unwrap();
     assert!(PI_MANAGED_SOURCE.installed_at(&path));
     assert!(PI_MANAGED_SOURCE.upgrade_available_at(&path));

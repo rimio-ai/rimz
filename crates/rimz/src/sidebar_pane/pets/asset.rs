@@ -100,7 +100,7 @@ fn is_path_like(spec: &str) -> bool {
 pub(crate) struct ResolvedAsset {
     pub(crate) bytes: Vec<u8>,
     /// The cache file to evict if a later decode fails. `None` for a
-    /// user-supplied local sheet, which Rimz reads but never deletes.
+    /// user-supplied local sheet, which RimZ reads but never deletes.
     pub(crate) evictable_cache: Option<PathBuf>,
 }
 
@@ -174,7 +174,7 @@ fn resolve_cached(
 }
 
 /// Read and geometry-check a user-supplied local sheet. No network, no cache,
-/// and never deletes the file — it is the user's, not Rimz's to evict.
+/// and never deletes the file — it is the user's, not RimZ's to evict.
 fn resolve_local(path: &Path) -> Result<ResolvedAsset, AssetErr> {
     let bytes = std::fs::read(path).map_err(|source| AssetErr::Io {
         path: path.to_path_buf(),
@@ -188,7 +188,7 @@ fn resolve_local(path: &Path) -> Result<ResolvedAsset, AssetErr> {
 }
 
 /// A petdex pet's `pet.json`: only the spritesheet location is needed here. Its
-/// `id`/`displayName`/`description` are metadata Rimz does not render.
+/// `id`/`displayName`/`description` are metadata RimZ does not render.
 #[derive(serde::Deserialize)]
 struct PetManifest {
     #[serde(rename = "spritesheetPath")]
@@ -213,7 +213,7 @@ fn resolve_petdex_dir(dir: &Path) -> Result<ResolvedAsset, AssetErr> {
 }
 
 /// The petdex install root, `$HOME/.codex/pets`, matching where Codex installs
-/// pets (and how the rest of Rimz locates `~/.codex`). `None` when `HOME` is
+/// pets (and how the rest of RimZ locates `~/.codex`). `None` when `HOME` is
 /// unset.
 fn petdex_root() -> Option<PathBuf> {
     petdex_root_from(env::var_os("HOME").map(PathBuf::from))
@@ -583,7 +583,7 @@ mod tests {
         let sheet = dir.path().join("spritesheet.webp");
         std::fs::write(&sheet, b"not a webp").expect("seed sheet");
         // The manifest parses and the sheet path resolves; geometry fails on the
-        // stub bytes, but the installed sheet is read-only to Rimz — never deleted.
+        // stub bytes, but the installed sheet is read-only to RimZ — never deleted.
         assert!(matches!(
             resolve_petdex_dir(dir.path()),
             Err(AssetErr::Decode(_))
@@ -614,7 +614,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sheet.webp");
         std::fs::write(&path, b"not a webp").expect("seed local sheet");
-        // Geometry fails, but the user's file is read-only to Rimz — never deleted.
+        // Geometry fails, but the user's file is read-only to RimZ — never deleted.
         assert!(matches!(resolve_local(&path), Err(AssetErr::Decode(_))));
         assert!(path.exists(), "a local sheet is never evicted");
     }

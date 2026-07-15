@@ -41,7 +41,7 @@ pub struct WorktreeArgs {
 
 #[derive(Debug, Subcommand)]
 enum WorktreeSubcmd {
-    /// Create a Rimz-owned worktree.
+    /// Create a RimZ-owned worktree.
     New {
         #[arg(value_name = "NAME")]
         name: Option<String>,
@@ -55,12 +55,12 @@ enum WorktreeSubcmd {
         #[arg(long)]
         branch: Option<String>,
     },
-    /// List Rimz-owned worktrees.
+    /// List RimZ-owned worktrees.
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Remove a Rimz-owned worktree.
+    /// Remove a RimZ-owned worktree.
     Remove {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::worktrees

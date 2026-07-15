@@ -1584,7 +1584,7 @@ fn map_inline_group_to_cells<'a>(
 }
 
 fn supports_agent_resume(agent: &AgentState) -> bool {
-    // A provisional `launch_...` id only names Rimz's pre-adoption placeholder.
+    // A provisional `launch_...` id only names RimZ's pre-adoption placeholder.
     // Keep the matched cohort cell and relaunch it fresh instead of asking the
     // adapter to resume an id outside the provider session store.
     if agent.agent_id.is_provisional() {
@@ -1700,7 +1700,7 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
 }
 
 /// Wrapper argv for resuming one prior provider-native session with its durable
-/// Rimz launch identity and rebirth channel.
+/// RimZ launch identity and rebirth channel.
 pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>) -> Vec<String> {
     candidate_resume_command(
         rimz_bin,

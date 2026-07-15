@@ -36,7 +36,7 @@ pub(crate) struct SendFlags {
     /// prompt. An instance handle (pet name, ordinal) cannot create.
     #[arg(long)]
     pub(crate) create: bool,
-    /// Use Rimz's smart compact-first send when the agent's context window is at
+    /// Use RimZ's smart compact-first send when the agent's context window is at
     /// least this full: a percentage (`70%`) or an occupied-token count
     /// (`120000`, `180k`). Defaults from `[harness] smart_compact` when omitted.
     #[arg(long, value_name = "PCT|TOKENS", value_parser = AutoCompact::parse)]
@@ -197,7 +197,7 @@ pub(crate) fn warn_ignored_stdin() {
     }
 }
 
-/// The caller identity for `message`. Rimz-launched agents carry
+/// The caller identity for `message`. RimZ-launched agents carry
 /// `RIMZ_AGENT_KIND`; ordinary room shells carry `RIMZ` identity vars without it,
 /// so they stay human-authored unless an agent kind is present.
 pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSender {

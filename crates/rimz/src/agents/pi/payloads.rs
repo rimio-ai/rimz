@@ -1,9 +1,9 @@
 //! Typed Pi hook wire structs.
 //!
-//! One tolerant struct covers every event the Rimz extension forwards — the
+//! One tolerant struct covers every event the RimZ extension forwards — the
 //! fields are sparse per event, so a single optional-field shape beats a set
-//! of near-empty ones. The wire is Rimz-authored ([`extension.ts`](./extension.ts)
-//! flattens pi's in-process payloads to snake_case), so drift is a Rimz bug,
+//! of near-empty ones. The wire is RimZ-authored ([`extension.ts`](./extension.ts)
+//! flattens pi's in-process payloads to snake_case), so drift is a RimZ bug,
 //! not an upstream one; the upstream shapes are mirrored in
 //! `docs/externals/agent-adapter/pi-reference.md`.
 
@@ -34,7 +34,7 @@ impl PiCompactionReason {
     }
 }
 
-/// The flattened payload the Rimz pi extension posts for every event.
+/// The flattened payload the RimZ pi extension posts for every event.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct PiHookPayload {
     /// Every event after Pi reports session metadata: the `/name` title.

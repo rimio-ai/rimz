@@ -1,8 +1,8 @@
-# Rimz per-machine theme configuration.
+# RimZ per-machine theme configuration.
 #
 # Save as ~/.config/rimz/theme.toml, or run `rimz config init`.
 # Every key below is optional. Defaults stay commented so an untouched file
-# keeps following defaults shipped by future Rimz versions; uncomment a line
+# keeps following defaults shipped by future RimZ versions; uncomment a line
 # only when this machine needs an override.
 
 [theme]

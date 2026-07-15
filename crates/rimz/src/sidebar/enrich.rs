@@ -723,7 +723,7 @@ pub(crate) fn fold_machine_config_with(
     let bands = snapshot.theme.display.context_meter.clone();
     stamp_context_severity(&mut snapshot.worktree_groups, &bands);
 
-    // The `⇅ rc` flag per provider comes from either Rimz's auto-launch toggle
+    // The `⇅ rc` flag per provider comes from either RimZ's auto-launch toggle
     // or the provider's own pane-session auto-enable setting.
     let mut remote_control_flags: BTreeMap<String, RemoteControlBadge> = BTreeMap::new();
     for adapter in crate::agents::ADAPTERS {

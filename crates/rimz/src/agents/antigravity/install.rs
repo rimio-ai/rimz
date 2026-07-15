@@ -187,7 +187,7 @@ fn hook_candidate(path: &Path) -> Result<Map<String, Value>> {
         return Err(AgentErr::Install {
             agent: AGENT,
             reason: format!(
-                "the hook name `{RIMZ_HOOK_NAME}` in {} is user-owned; rename that hook before installing Rimz",
+                "the hook name `{RIMZ_HOOK_NAME}` in {} is user-owned; rename that hook before installing RimZ",
                 path.display()
             ),
         });

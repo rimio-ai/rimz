@@ -331,7 +331,7 @@ fn render_session_link_action(host: &str, action: SessionLinkAction) {
         SessionLinkAction::NotifyBlackout(duration) => {
             emit_local_link_notification(
                 rimz::sidebar::notify::NotificationKind::LinkLost,
-                "Rimz: remote link stalled",
+                "RimZ: remote link stalled",
                 &format!(
                     "No probe ack from {host} for {}s.",
                     duration.as_secs().max(1)
@@ -341,13 +341,13 @@ fn render_session_link_action(host: &str, action: SessionLinkAction) {
         }
         SessionLinkAction::NotifyTransportLoss => emit_local_link_notification(
             rimz::sidebar::notify::NotificationKind::LinkLost,
-            "Rimz: remote link lost",
+            "RimZ: remote link lost",
             &format!("SSH to {host} dropped; reconnecting."),
             LocalLinkNotificationDelivery::TerminalAndCommand,
         ),
         SessionLinkAction::Restore => emit_local_link_notification(
             rimz::sidebar::notify::NotificationKind::LinkRestored,
-            "Rimz: remote link restored",
+            "RimZ: remote link restored",
             &format!("SSH to {host} is responsive again."),
             LocalLinkNotificationDelivery::TerminalAndCommand,
         ),

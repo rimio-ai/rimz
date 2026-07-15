@@ -129,7 +129,7 @@ pub(crate) fn project_window(cached: RateLimitWindow, now: Timestamp) -> RateLim
 }
 
 /// Whether the cached account reading has aged past its longest dated window.
-/// At that point Rimz no longer knows the account's budget shape: the short
+/// At that point RimZ no longer knows the account's budget shape: the short
 /// window may have refilled several times, and the long cap may have refilled
 /// too. The cache remains ground truth for persistence, but display switches to
 /// unknown bars until a provider reading refreshes it.

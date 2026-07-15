@@ -76,7 +76,7 @@ pub(crate) struct TickMeter {
 
 impl TickMeter {
     /// The wall budget is one configured data tick. At the default one-second
-    /// tick this bounds Rimz in-process work. Mux subprocess wait has its own
+    /// tick this bounds RimZ in-process work. Mux subprocess wait has its own
     /// fixed budget so mux stalls do not hide real fold/enrich regressions.
     pub(crate) fn new(tick_loop: TickLoop, tick: Duration) -> Self {
         Self {

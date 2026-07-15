@@ -144,7 +144,7 @@ fn git_missing() -> bool {
 fn init_repo(path: &Path) {
     git(path, &["init", "-b", "main"]);
     git(path, &["config", "user.email", "rimz@example.com"]);
-    git(path, &["config", "user.name", "Rimz Test"]);
+    git(path, &["config", "user.name", "RimZ Test"]);
     std::fs::write(path.join("README.md"), "fixture\n").expect("write fixture");
     git(path, &["add", "README.md"]);
     git(path, &["commit", "-m", "initial"]);

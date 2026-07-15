@@ -1,4 +1,4 @@
-//! Child process lifecycle helpers. Long-lived Rimz processes hand
+//! Child process lifecycle helpers. Long-lived RimZ processes hand
 //! fire-and-forget children to the global reaper and supervise foreground
 //! children with event-driven exit and signal waits.
 
@@ -215,7 +215,7 @@ fn signal_child(pid: u32, signal: ChildSignal) {
     let _ = kill(Pid::from_raw(pid as i32), signal);
 }
 
-/// Build a detached `rimz` helper command, anchored to Rimz-owned shared
+/// Build a detached `rimz` helper command, anchored to RimZ-owned shared
 /// disk_usage so a deleted launch CWD cannot ENOENT the spawn.
 pub(crate) fn detached_rimz_command(exe: PathBuf, runtime: &RuntimePaths) -> Command {
     let mut cmd = Command::new(exe);

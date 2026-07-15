@@ -1574,7 +1574,7 @@ fn notifications_parse_per_machine_preferences() {
              debounce_ms = 2500\n\
              coalesce_ms = 0\n\
              remind_secs = 15\n\
-             title = \"Rimz: {{agent}} {{kind}}\"\n\
+             title = \"RimZ: {{agent}} {{kind}}\"\n\
              body = \"{{task}}\"\n\
              command = \"ntfy publish rimz\"\n",
     ))
@@ -1592,7 +1592,7 @@ fn notifications_parse_per_machine_preferences() {
     assert_eq!(config.notifications.remind_secs, 15);
     assert_eq!(
         config.notifications.title.as_deref(),
-        Some("Rimz: {{agent}} {{kind}}")
+        Some("RimZ: {{agent}} {{kind}}")
     );
     assert_eq!(config.notifications.body.as_deref(), Some("{{task}}"));
     assert_eq!(config.notifications.command(), Some("ntfy publish rimz"));

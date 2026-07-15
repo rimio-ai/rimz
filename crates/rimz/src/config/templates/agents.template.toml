@@ -1,8 +1,8 @@
-# Rimz per-machine agent configuration.
+# RimZ per-machine agent configuration.
 #
 # Save as ~/.config/rimz/agents.toml, or run `rimz config init`.
 # Every key below is optional. Defaults stay commented so an untouched file
-# keeps following defaults shipped by future Rimz versions; uncomment a line
+# keeps following defaults shipped by future RimZ versions; uncomment a line
 # only when this machine needs an override.
 
 [agents]
@@ -14,7 +14,7 @@
 # `codex-yolo`. `peer` (claude,codex) is a built-in team.
 
 [agents.worktree]
-# dir = "../{repo}-worktrees"          # where Rimz-owned Git worktrees live; {repo} is the root basename
+# dir = "../{repo}-worktrees"          # where RimZ-owned Git worktrees live; {repo} is the root basename
 # base = "head"                        # "head", "fresh", or any Git ref for new worktrees
 # Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
 

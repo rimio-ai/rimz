@@ -1,4 +1,4 @@
-//! Typed payload for the Rimz-owned Amp plugin wire.
+//! Typed payload for the RimZ-owned Amp plugin wire.
 
 use serde::Deserialize;
 use serde_json::Value;

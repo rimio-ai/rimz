@@ -530,10 +530,10 @@ fn pending_notification(
 ) -> PendingNotification {
     let label = opened.label.clone();
     let title = match notification_kind {
-        AgentNotificationKind::Waiting => format!("Rimz: {label} needs you"),
-        AgentNotificationKind::Failed => format!("Rimz: {label} failed"),
-        AgentNotificationKind::Paused => format!("Rimz: {label} paused"),
-        AgentNotificationKind::Success => format!("Rimz: {label} finished"),
+        AgentNotificationKind::Waiting => format!("RimZ: {label} needs you"),
+        AgentNotificationKind::Failed => format!("RimZ: {label} failed"),
+        AgentNotificationKind::Paused => format!("RimZ: {label} paused"),
+        AgentNotificationKind::Success => format!("RimZ: {label} finished"),
     };
     let body = match notification_kind {
         AgentNotificationKind::Waiting => format!("{label} is waiting for input."),
@@ -605,7 +605,7 @@ fn coalesced_notification(pending: Vec<PendingNotification>) -> Notification {
     Notification {
         agents,
         notification_kind: NotificationKind::Coalesced,
-        title: format!("Rimz: {count} agents need attention"),
+        title: format!("RimZ: {count} agents need attention"),
         body,
         unread_count: None,
     }

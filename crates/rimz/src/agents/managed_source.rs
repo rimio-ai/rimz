@@ -1,4 +1,4 @@
-//! Managed integration seam for whole-file Rimz sources and strict JSON hook
+//! Managed integration seam for whole-file RimZ sources and strict JSON hook
 //! merges. Adapters declare one source; backend-specific ownership and merge
 //! policy stays behind it.
 
@@ -91,7 +91,7 @@ impl ManagedSource {
     }
 
     /// Install is whole-file ownership: the embedded source overwrites the path
-    /// verbatim - idempotent by construction. A marked file (Rimz wrote it,
+    /// verbatim - idempotent by construction. A marked file (RimZ wrote it,
     /// however edited since) is reclaimed byte-for-byte; an unmarked file is
     /// the user's own source and refuses.
     pub fn install_into(&self, path: &Path) -> Result<HookInstallReport> {
@@ -162,7 +162,7 @@ impl ManagedSource {
     }
 
     /// Best-effort like the other adapters: a missing or unreadable file reads
-    /// as "not installed". The first-line marker distinguishes the Rimz-owned
+    /// as "not installed". The first-line marker distinguishes the RimZ-owned
     /// source from a user's own file at the same path.
     pub fn installed_at(&self, path: &Path) -> bool {
         match &self.backend {
@@ -180,7 +180,7 @@ impl ManagedSource {
         }
     }
 
-    /// Whether a Rimz-owned source differs from the source embedded in this
+    /// Whether a RimZ-owned source differs from the source embedded in this
     /// build. Best-effort: missing, unreadable, and user-owned files are not
     /// upgrade candidates.
     pub fn upgrade_available_at(&self, path: &Path) -> bool {
@@ -205,7 +205,7 @@ impl ManagedSource {
             Some(existing) if !file_is_rimz_managed(existing) => Err(AgentErr::Install {
                 agent: self.agent,
                 reason: format!(
-                    "refusing to overwrite an unmarked user {} at {}; move it aside or remove it to let Rimz manage this file",
+                    "refusing to overwrite an unmarked user {} at {}; move it aside or remove it to let RimZ manage this file",
                     artifact_noun,
                     path.display()
                 ),
@@ -225,7 +225,7 @@ impl ManagedSource {
     }
 }
 
-/// Whether the on-disk source is Rimz-owned: the ownership marker rides the
+/// Whether the on-disk source is RimZ-owned: the ownership marker rides the
 /// first line of every managed build.
 fn file_is_rimz_managed(content: &str) -> bool {
     content

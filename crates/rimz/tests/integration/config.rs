@@ -505,7 +505,7 @@ fn setup_without_tty_reports_and_writes_nothing() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.contains("Rimz setup"));
+    assert!(stdout.contains("RimZ setup"));
     assert!(stdout.contains("changed nothing"));
     assert!(!stdout.contains("Use truecolor?"));
     assert!(!stderr.contains("Use truecolor?"));

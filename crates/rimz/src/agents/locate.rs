@@ -25,7 +25,7 @@ fn probe_descriptor_version_with_locator(
 /// `$HOME`. An installer that drops its binary in a private dir (OpenCode's
 /// `~/.opencode/bin`) and edits a shell rc the running environment never sourced
 /// leaves the agent off `$PATH` yet present; this finds it. Returns the absolute
-/// path, or `None` when the binary is nowhere Rimz knows to look.
+/// path, or `None` when the binary is nowhere RimZ knows to look.
 pub fn locate_binary(descriptor: &AgentDescriptor) -> Option<PathBuf> {
     for name in descriptor.bin_names {
         if let Ok(path) = which::which(name) {

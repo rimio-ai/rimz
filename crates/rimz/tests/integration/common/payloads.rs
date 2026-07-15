@@ -103,8 +103,8 @@ pub fn codex_pre_tool_use_payload() -> String {
     .expect("payload")
 }
 
-/// Pi-shaped blocking `tool_call` payload. Rimz authors pi's wire (the
-/// extension is Rimz code), so this mirrors `extension.ts`'s envelope —
+/// Pi-shaped blocking `tool_call` payload. RimZ authors pi's wire (the
+/// extension is RimZ code), so this mirrors `extension.ts`'s envelope —
 /// lowercase pi tool names (`bash`, `read`, `edit`, …).
 pub fn pi_tool_call_payload(tool_name: &str) -> String {
     serde_json::to_string(&json!({

@@ -23,8 +23,8 @@ fn ambient_session_keys() -> impl Iterator<Item = String> {
     })
 }
 
-/// Drop every ambient Rimz/mux session variable from a child's environment, so
-/// a suite run from inside a live Rimz room behaves like a clean shell. Apply
+/// Drop every ambient RimZ/mux session variable from a child's environment, so
+/// a suite run from inside a live RimZ room behaves like a clean shell. Apply
 /// at builder construction: a test that *sets* one of these afterwards wins
 /// over the removal. Every builder that runs `rimz` or creates a mux server
 /// goes through this — a mux server captures the spawning environment and

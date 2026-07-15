@@ -531,7 +531,7 @@ pub fn exec_identity_env(inv: &ExecInvocation<'_>) -> BTreeMap<String, String> {
 }
 
 /// Wrap an agent command in the user's default shell startup path so shell rc
-/// env applies, while Rimz's launch env is re-applied after rc processing.
+/// env applies, while RimZ's launch env is re-applied after rc processing.
 ///
 /// Launch env is encoded as `KEY=VALUE` argv entries for `/usr/bin/env`, which
 /// makes those values visible to same-user process inspection during startup.
@@ -653,7 +653,7 @@ pub fn invalid_env_key(env: &BTreeMap<String, String>) -> Option<&str> {
 }
 
 /// Return whether `program` resolves in the PATH that an agent launch will
-/// see after shell startup files and Rimz's launch env are applied.
+/// see after shell startup files and RimZ's launch env are applied.
 pub fn program_resolves_after_shell_rc(
     env: &BTreeMap<String, String>,
     program: &str,

@@ -29,11 +29,11 @@ use options::{
 use super::{CommandSpec, MuxBackend, Result};
 use crate::config::TmuxConfig;
 
-/// Minimum tmux version that supports the room options Rimz applies across all
+/// Minimum tmux version that supports the room options RimZ applies across all
 /// supported hosts: `extended-keys-format` (3.5) and `allow-passthrough` (3.3).
 pub const MIN_TMUX_VERSION: (u32, u32, u32) = (3, 5, 0);
 
-/// The tmux server socket Rimz addresses by default:
+/// The tmux server socket RimZ addresses by default:
 /// `${TMUX_TMPDIR:-/tmp}/tmux-<uid>/default`.
 ///
 /// Reports the default socket the local backend uses; a `-S` override
@@ -164,7 +164,7 @@ impl TmuxBackend {
             .unwrap_or_else(|| "0".to_owned())
     }
 
-    /// Apply Rimz's tmux room options.
+    /// Apply RimZ's tmux room options.
     pub(super) fn apply_room_options(&self, session: &str, config: &TmuxConfig) -> Result<()> {
         let mut commands: Vec<Vec<String>> = Vec::new();
         for (key, value) in tmux_server_options(config) {

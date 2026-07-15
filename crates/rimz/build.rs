@@ -280,7 +280,7 @@ fn resolve_raw_json() -> String {
     }
 }
 
-/// Filter to the per-token fields Rimz reads; require both input and output
+/// Filter to the per-token fields RimZ reads; require both input and output
 /// costs. Sorted (`BTreeMap`), compact, and gzipped so the embedded full-model
 /// table stays small.
 fn compact(json: &str) -> Option<String> {

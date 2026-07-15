@@ -1,4 +1,4 @@
-//! Durable Rimz-owned cross-provider conversation log.
+//! Durable RimZ-owned cross-provider conversation log.
 //!
 //! The log is append-only JSONL under `transcript/<bucket-start>.jsonl` in the
 //! workspace state root. This transcript is distinct from provider-native
@@ -56,7 +56,7 @@ pub struct TranscriptEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<AskId>,
     /// Queue record that opened this prompt/message turn, when delivery was
-    /// confirmed against a Rimz-authored message.
+    /// confirmed against a RimZ-authored message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<MessageId>,
     /// Messages whose receiving turn authored this entry.

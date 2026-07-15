@@ -38,8 +38,8 @@ pub const DEFAULT_INACTIVE_AFTER_SECS: u32 = ATTENTION_AGE_CEILING_SECS as u32;
 pub const DEFAULT_ARCHIVE_AFTER_SECS: u32 = 24 * 60 * 60;
 
 /// Agent status as the sidebar reads it. The first five are the lifecycle
-/// rollup the agent owns and Rimz observes; [`Paused`](AgentStatus::Paused) is
-/// the one Rimz-*derived* projection — never emitted by a hook, only projected
+/// rollup the agent owns and RimZ observes; [`Paused`](AgentStatus::Paused) is
+/// the one RimZ-*derived* projection — never emitted by a hook, only projected
 /// at snapshot time when a live running turn is known to have stopped on a
 /// provider limit, the same way a stalled `Running` agent is projected to
 /// `Failed`. It lives in the one status enum so it shares the cockpit tally,
@@ -206,7 +206,7 @@ pub fn is_stalled(
 /// a rewind) advances `last_activity` past the stale marker. The two clocks
 /// (transcript wall-clock vs heartbeat) skew fail-safe — a suppressed real
 /// death still hits the stall window, and a stale error can never escalate a
-/// row whose activity moved past it. Like [`is_stalled`], a Rimz-derived
+/// row whose activity moved past it. Like [`is_stalled`], a RimZ-derived
 /// projection over enrichment, never a status the agent reports.
 pub fn is_turn_dead(
     status: AgentStatus,
@@ -268,7 +268,7 @@ fn terminal_turn_error(
 
 /// The class to use for display and auto-resume decisions. Current adapters
 /// stamp the class directly; the label fallback keeps older sidecars that saw
-/// a provider "session limit" or "spend limit" before Rimz knew that phrase
+/// a provider "session limit" or "spend limit" before RimZ knew that phrase
 /// parked instead of actionable. Only the limit-park classes remap: a legacy
 /// `Failed` with an overload-ish label stays `Failed`, so old markers never
 /// start arming overload retries.
@@ -291,7 +291,7 @@ pub(crate) fn effective_turn_error_class(error: &AgentTurnError) -> TurnErrorCla
 /// the stall window misread a finished review as failed. Only `Running` can be
 /// turn-complete — a hook-reported turn end already resolved every other status.
 /// Self-clearing like [`is_turn_dead`]: any newer hook event advances
-/// `last_activity` past the marker. A Rimz-derived projection over enrichment,
+/// `last_activity` past the marker. A RimZ-derived projection over enrichment,
 /// never a status the agent reports.
 pub fn is_turn_complete(
     status: AgentStatus,
@@ -340,7 +340,7 @@ pub fn is_native_permission_wait(
 /// postdates the agent's `last_activity`. This settles a falsely active row to
 /// `idle`, including a native ask that Esc cancelled without a lifecycle hook.
 /// Self-clearing like [`is_turn_complete`]: any newer hook event advances
-/// `last_activity` past the marker. A Rimz-derived projection over enrichment,
+/// `last_activity` past the marker. A RimZ-derived projection over enrichment,
 /// never a status the agent reports.
 pub fn is_turn_interrupted(
     status: AgentStatus,

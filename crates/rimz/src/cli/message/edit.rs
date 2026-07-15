@@ -264,7 +264,7 @@ pub(super) fn clear_messages(
         .or(channel.as_deref())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "message clear needs an @agent target or scoped channel; pass --channel NAME or run from a Rimz channel"
+                "message clear needs an @agent target or scoped channel; pass --channel NAME or run from a RimZ channel"
             )
         })?;
     let removed = store.clear_channel_messages(lane, &workspace.session_name)?;

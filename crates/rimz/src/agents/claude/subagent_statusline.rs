@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::agents::context::{SubagentContext, SubagentObservation};
 
-/// The payload Claude pipes on stdin: only the `tasks` array matters to Rimz
+/// The payload Claude pipes on stdin: only the `tasks` array matters to RimZ
 /// (`columns` and the common hook fields are ignored). `#[serde(default)]` keeps
 /// a sparse or evolved payload parseable; the absence of `deny_unknown_fields`
 /// lets new keys ride along untouched.
@@ -25,7 +25,7 @@ pub(crate) struct SubagentStatuslinePayload {
 }
 
 /// One child row. `name`, `status`, `label`, `cwd`, and `tokenSamples` are
-/// carried by the upstream payload but Rimz ignores them; `type`, `description`,
+/// carried by the upstream payload but RimZ ignores them; `type`, `description`,
 /// `tokenCount`, and `startTime` are the four it paints.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]

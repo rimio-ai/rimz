@@ -2,7 +2,7 @@
 //!
 //! This is a read-only fallback over Claude Code's local OAuth credentials. It
 //! reads `~/.claude/.credentials.json`, calls the provider usage endpoint, and
-//! normalizes the response into Rimz's account-window and paid-usage types. It
+//! normalizes the response into RimZ's account-window and paid-usage types. It
 //! never refreshes or writes credentials; retry/backoff and cache writes live in
 //! the CLI helper that calls this module.
 
@@ -49,7 +49,7 @@ pub(crate) enum ClaudeOauthUsageErr {
 impl crate::agents::credits::AccountUsageReportable for ClaudeOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent credentials, an
     /// expired token, and a missing usage scope are the normal state for an
-    /// account that does not feed Rimz its usage, not a fault; a provider 401
+    /// account that does not feed RimZ its usage, not a fault; a provider 401
     /// is the same settled auth verdict. Parse and other HTTP failures are.
     fn should_report(&self) -> bool {
         !matches!(

@@ -3,7 +3,7 @@
 //! `git worktree add` checks out only tracked files at the base ref, so the
 //! untracked files an agent needs to run — `.env`, local config, caches — never
 //! follow it into a new worktree. A project lists those files as glob patterns
-//! in `<repo_root>/.worktreeinclude`, one per line, and Rimz copies each
+//! in `<repo_root>/.worktreeinclude`, one per line, and RimZ copies each
 //! pattern's matches from the checkout into the new worktree, preserving the
 //! path relative to the repo root.
 //!

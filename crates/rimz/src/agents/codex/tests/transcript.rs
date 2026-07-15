@@ -175,7 +175,7 @@ fn turn_error_detector_maps_known_error_shapes() {
 
     // Generated from `codex app-server generate-json-schema --out …`:
     // ErrorNotification carries `error.message` plus `error.codexErrorInfo`.
-    // The rollout wrapper still supplies the timestamp Rimz needs for
+    // The rollout wrapper still supplies the timestamp RimZ needs for
     // self-clear projection.
     let schema_notification = json!({
         "timestamp": "2026-06-11T07:18:00.000Z",

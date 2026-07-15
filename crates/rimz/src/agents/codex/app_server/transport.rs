@@ -211,7 +211,7 @@ impl FramedTransport {
     ) -> Result<Self, AppServerErr> {
         let mut child = Command::new(bin)
             .args(args)
-            // Mark this as a Rimz-internal enrichment server so the lifecycle
+            // Mark this as a RimZ-internal enrichment server so the lifecycle
             // hooks it fires on startup no-op instead of spawning another
             // `refresh-context` (which would cold-spawn another app-server …).
             .env(crate::agents::codex::ENV_INTERNAL_APP_SERVER, "1")

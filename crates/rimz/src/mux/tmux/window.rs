@@ -316,7 +316,7 @@ impl TmuxBackend {
             })
     }
 
-    /// Whether `session` already holds a window named `name`. A Rimz background
+    /// Whether `session` already holds a window named `name`. A RimZ background
     /// view is idempotent on its window name, so a relaunch into a session that
     /// already carries it is skipped.
     pub(super) fn session_has_window(&self, session: &str, name: &str) -> Result<bool> {

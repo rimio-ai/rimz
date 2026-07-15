@@ -1,4 +1,4 @@
-# Rimz's own scheduled loops - shared, trust-hashed project loop tasks.
+# RimZ's own scheduled loops - shared, trust-hashed project loop tasks.
 # `rimz trust grant` applies them; the sidebar elder fires them while a room
 # for this repo is open. Reference: docs/guide/configuration.md.
 

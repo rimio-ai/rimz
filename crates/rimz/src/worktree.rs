@@ -1,4 +1,4 @@
-//! Rimz-owned git worktree lifecycle and removal policy.
+//! RimZ-owned git worktree lifecycle and removal policy.
 //!
 //! Worktrees are identified by a marker stored in the linked worktree's git
 //! admin directory, not in the checkout. The checkout remains pristine, and
@@ -53,7 +53,7 @@ pub enum WorktreeErr {
     InvalidName(String),
     #[error("worktree `{name}` already exists at {path}")]
     Exists { name: String, path: PathBuf },
-    #[error("worktree `{name}` is not a Rimz-managed worktree at {path}")]
+    #[error("worktree `{name}` is not a RimZ-managed worktree at {path}")]
     Unmarked { name: String, path: PathBuf },
     #[error(
         "worktree `{name}` has local changes or work not proven landed; use --force to remove it"
@@ -395,7 +395,7 @@ pub fn create(
     )
 }
 
-/// Resolve the cwd and optional Rimz-owned checkout for an agent launch.
+/// Resolve the cwd and optional RimZ-owned checkout for an agent launch.
 ///
 /// Callers complete trust and provider preflight before entering this
 /// side-effecting boundary.
@@ -608,7 +608,7 @@ pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {
     read_marker_file(&marker)
 }
 
-/// Read a Rimz marker by following the checkout's `.git` metadata only. This
+/// Read a RimZ marker by following the checkout's `.git` metadata only. This
 /// keeps sidebar projection code off the git subprocess path.
 pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<WorktreeMarker>> {
     let Some(marker) = marker_path_from_checkout_metadata(path)? else {

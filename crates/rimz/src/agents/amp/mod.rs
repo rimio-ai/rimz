@@ -1,6 +1,6 @@
 //! Amp plugin adapter.
 //!
-//! Amp has no command-hook or statusline protocol. Rimz installs a small
+//! Amp has no command-hook or statusline protocol. RimZ installs a small
 //! observation-only TypeScript plugin that forwards the active thread's native
 //! lifecycle events without entering Amp's tool-decision path.
 

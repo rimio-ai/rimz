@@ -1,6 +1,6 @@
 //! Antigravity CLI 1.1.2 launch, hook, statusline, local-session, and transcript adapter.
 //!
-//! Rimz installs only hooks with documented observer-neutral output. The
+//! RimZ installs only hooks with documented observer-neutral output. The
 //! policy-changing `PreToolUse` decision channel stays untouched; disjoint
 //! `PostToolUse` matchers recover tool phase after execution instead.
 

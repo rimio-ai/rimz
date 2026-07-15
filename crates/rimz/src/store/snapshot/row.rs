@@ -256,7 +256,7 @@ impl PaneAgent {
 
 /// Compose a routing channel for read-side fallback. A launch-stamped lane
 /// wins; otherwise the worktree directory basename is the fallback for agents
-/// not launched by this Rimz binary.
+/// not launched by this RimZ binary.
 pub fn compose_channel(explicit: Option<&str>, dir_basename: Option<&str>) -> Option<String> {
     if let Some(channel) = explicit.filter(|channel| !channel.is_empty()) {
         return Some(channel.to_owned());

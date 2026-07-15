@@ -188,7 +188,7 @@ fn doctor_json_reports_agent_hook_install_and_trust_states() {
         "freshly installed hooks are untrusted until /hooks"
     );
     assert!(
-        fix(codex).contains("run /hooks inside codex and trust the Rimz hooks"),
+        fix(codex).contains("run /hooks inside codex and trust the RimZ hooks"),
         "doctor names the trust fix: {codex}"
     );
     assert_eq!(
@@ -639,7 +639,7 @@ fn write_last_death_marker(
     })
 }
 
-/// Append `[hooks.state]` trust entries for every Rimz-installed codex event,
+/// Append `[hooks.state]` trust entries for every RimZ-installed codex event,
 /// key-shaped exactly as Codex writes them after the user trusts via /hooks.
 fn trust_codex_hooks(env: &Env) {
     let config = env.agent_config_path("codex");

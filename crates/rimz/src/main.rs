@@ -1,6 +1,6 @@
-//! Rimz CLI entry point.
+//! RimZ CLI entry point.
 //!
-//! The private CLI tree is the Rimz binary's `anyhow` boundary, and `main.rs`
+//! The private CLI tree is the RimZ binary's `anyhow` boundary, and `main.rs`
 //! installs the `tracing_subscriber`. Library modules return typed errors and
 //! emit `tracing` events; this wrapper renders failures and selects an exit
 //! code.

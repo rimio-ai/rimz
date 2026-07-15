@@ -22,7 +22,7 @@ pub struct SidebarConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trunk: Option<String>,
     /// The global multiplexer chord that focuses the sidebar from any pane — a
-    /// toggle, so pressing it again returns to your last working pane. Rimz
+    /// toggle, so pressing it again returns to your last working pane. RimZ
     /// registers it room-scoped at session birth (tmux as a `bind-key`, Zellij
     /// through the presence plugin), so it never touches your global config.
     /// Default `Alt+p`; set empty or `off` to register nothing and leave your

@@ -2,7 +2,7 @@
 //! `rimz sidebar wake`.
 //!
 //! The cache is Zellij's authoritative pane roster: it carries the topology
-//! fields Rimz needs for pane projection, the attached-client view when the
+//! fields RimZ needs for pane projection, the attached-client view when the
 //! plugin has sampled it, plus the plugin-retained live foreground command.
 //! `terminal_command` remains the pane's spawn command; `pane_command` is the
 //! foreground display command.

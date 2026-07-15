@@ -105,7 +105,7 @@ pub struct AgentsArgs {
     /// Seed the agent card's description line until the agent names its own session.
     #[arg(long, value_name = "TEXT")]
     description: Option<String>,
-    /// Use a Rimz-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it.
+    /// Use a RimZ-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it.
     #[arg(
         long,
         short = 'w',
@@ -124,7 +124,7 @@ pub struct AgentsArgs {
         add = clap_complete::ArgValueCandidates::new(crate::cli::complete::channels)
     )]
     channel: Option<String>,
-    /// Create or reuse a Rimz-owned worktree from a pull request number or URL.
+    /// Create or reuse a RimZ-owned worktree from a pull request number or URL.
     #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "channel")]
     from_pr: Option<rimz::forge::PrTarget>,
     /// Resume (alias --continue) a prior cohort matching SPEC, optionally scoped by -w or cwd.

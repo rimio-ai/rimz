@@ -103,7 +103,7 @@ fn assert_work_area_template(layout: &str, visible_compact_bars: usize, focused:
     assert!(layout.contains("compact-bar"), "{layout}");
     assert!(
         !layout.contains("swap_tiled_layout"),
-        "Rimz must leave Zellij's native focused-pane split path unobstructed:\n{layout}",
+        "RimZ must leave Zellij's native focused-pane split path unobstructed:\n{layout}",
     );
     assert_eq!(layout.matches("focus=true").count(), focused, "{layout}");
     assert_eq!(

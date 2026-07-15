@@ -89,7 +89,7 @@ pub(super) fn validate_agent_name_env(raw: String, source: &str, _var: &str) -> 
         warn!(
             agent_name = %raw,
             source,
-            "lifecycle: ignoring invalid Rimz agent name",
+            "lifecycle: ignoring invalid RimZ agent name",
         );
         None
     }
@@ -106,7 +106,7 @@ pub(super) fn validate_non_empty_identity_env(
     } else {
         warn!(
             env_var = var,
-            source, "lifecycle: ignoring empty Rimz agent identity",
+            source, "lifecycle: ignoring empty RimZ agent identity",
         );
         None
     }

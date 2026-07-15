@@ -807,7 +807,7 @@ fn loop_repeated_broken_deliveries_auto_pause_notify_and_resume() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     let notification = loop {
         let text = std::fs::read_to_string(&notify_log).unwrap_or_default();
-        if text.contains("loop_paused|Rimz: loop watchdog paused") {
+        if text.contains("loop_paused|RimZ: loop watchdog paused") {
             break text;
         }
         assert!(

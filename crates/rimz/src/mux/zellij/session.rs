@@ -106,7 +106,7 @@ impl ZellijBackend {
             .filter(|session| !session.is_empty())
             .ok_or_else(|| MuxErr::Output {
                 program: "zellij".to_owned(),
-                reason: "pane listing on Zellij needs a Rimz room session".to_owned(),
+                reason: "pane listing on Zellij needs a RimZ room session".to_owned(),
             })
     }
 
@@ -127,14 +127,14 @@ impl ZellijBackend {
         self.known_workspaces()
             .map_err(|err| MuxErr::Output {
                 program: "zellij".to_owned(),
-                reason: format!("reading Rimz workspace registry: {err}"),
+                reason: format!("reading RimZ workspace registry: {err}"),
             })?
             .into_iter()
             .find(|known| known.session_name == session)
             .ok_or_else(|| MuxErr::Output {
                 program: "zellij".to_owned(),
                 reason: format!(
-                    "pane listing on Zellij needs a Rimz room; found no workspace for session `{session}`"
+                    "pane listing on Zellij needs a RimZ room; found no workspace for session `{session}`"
                 ),
             })
     }
@@ -156,7 +156,7 @@ impl ZellijBackend {
         }
         .map_err(|err| MuxErr::Output {
             program: "zellij".to_owned(),
-            reason: format!("resolving Rimz runtime paths: {err}"),
+            reason: format!("resolving RimZ runtime paths: {err}"),
         })
     }
 

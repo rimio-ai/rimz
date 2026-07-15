@@ -18,7 +18,7 @@ const CODEX_BINARY_MARKER: &str = "codex";
 /// caller reads as "no daemon-mode sessions to reap".
 ///
 /// Extra matches are inert. The set classifies a session only by an owner-pid
-/// match, and no session records Rimz's own `rimz codex app-server …` broker or
+/// match, and no session records RimZ's own `rimz codex app-server …` broker or
 /// proxy as its hook owner — so a stray codex-server pid that no session points
 /// at simply never matches.
 pub fn codex_daemon_pids() -> BTreeSet<u32> {
@@ -113,7 +113,7 @@ mod tests {
         assert!(is_codex_cli_cmdline("codex --model gpt-5.5"));
         assert!(is_codex_cli_cmdline("node /usr/bin/codex"));
         assert!(is_codex_cli_cmdline("codex-aarch64-apple-darwin"));
-        // The daemon, the remote-control host, and Rimz's broker all spell a
+        // The daemon, the remote-control host, and RimZ's broker all spell a
         // daemon surface, so none reads as the in-pane CLI.
         assert!(!is_codex_cli_cmdline("codex app-server"));
         assert!(!is_codex_cli_cmdline("codex remote-control start"));

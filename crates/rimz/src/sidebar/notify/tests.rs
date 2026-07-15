@@ -279,7 +279,7 @@ fn focused_agent_is_suppressed() {
 fn global_title_body_templates_reskin_agent_notifications() {
     let mut state = NotificationState::default();
     let prefs = NotificationsPrefs {
-        title: Some("Rimz: {{agent}} {{status}} in {{worktree}}".to_owned()),
+        title: Some("RimZ: {{agent}} {{status}} in {{worktree}}".to_owned()),
         body: Some("{{handle}}: {{task}} ({{count}})".to_owned()),
         ..prefs()
     };
@@ -299,7 +299,7 @@ fn global_title_body_templates_reskin_agent_notifications() {
     );
 
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].title, "Rimz: planner waiting in feat/ntfy");
+    assert_eq!(out[0].title, "RimZ: planner waiting in feat/ntfy");
     assert_eq!(out[0].body, "planner: wire ntfy (1)");
     assert_eq!(out[0].agents[0].worktree.as_deref(), Some("feat/ntfy"));
     assert_eq!(out[0].agents[0].task.as_deref(), Some("wire ntfy"));
@@ -319,7 +319,7 @@ fn default_title_body_stay_when_templates_are_unset() {
     );
 
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].title, "Rimz: claude a1 failed");
+    assert_eq!(out[0].title, "RimZ: claude a1 failed");
     assert_eq!(out[0].body, "claude a1 needs a look.");
 }
 
@@ -638,7 +638,7 @@ fn command_spawn_receives_notification_env() {
             new_status: Some(AgentStatus::Waiting),
         }],
         notification_kind: NotificationKind::Waiting,
-        title: "Rimz: claude needs you".to_owned(),
+        title: "RimZ: claude needs you".to_owned(),
         body: "claude sess-1 is waiting for input.".to_owned(),
         unread_count: None,
     };
@@ -649,7 +649,7 @@ fn command_spawn_receives_notification_env() {
     };
     assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
 
-    let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\ntmux:%9\n/repo\nask_0123456789abcdef\n";
+    let expected = "RimZ: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\ntmux:%9\n/repo\nask_0123456789abcdef\n";
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut text = String::new();
     while Instant::now() < deadline {
@@ -711,7 +711,7 @@ fn handlers_spawn_only_matching_conditions_and_shell_quote_templates() {
             new_status: Some(AgentStatus::Waiting),
         }],
         notification_kind: NotificationKind::Waiting,
-        title: "Rimz: danger".to_owned(),
+        title: "RimZ: danger".to_owned(),
         body: "body".to_owned(),
         unread_count: None,
     };
@@ -732,7 +732,7 @@ fn command_spawn_receives_unread_env_for_reminders() {
     let notification = Notification {
         agents: Vec::new(),
         notification_kind: NotificationKind::Reminder,
-        title: "Rimz: 2 unread need you".to_owned(),
+        title: "RimZ: 2 unread need you".to_owned(),
         body: "2 unread rows still need you.".to_owned(),
         unread_count: Some(2),
     };
@@ -743,7 +743,7 @@ fn command_spawn_receives_unread_env_for_reminders() {
     };
     assert_eq!(spawn_notify_handlers(&prefs, &notification), 1);
 
-    let expected = "Rimz: 2 unread need you\n2 unread rows still need you.\n\nreminder\n2\n";
+    let expected = "RimZ: 2 unread need you\n2 unread rows still need you.\n\nreminder\n2\n";
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut text = String::new();
     while Instant::now() < deadline {

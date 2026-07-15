@@ -105,7 +105,7 @@ fn newest_crash_archive(crashes_dir: &Path) -> Option<PathBuf> {
         .max_by_key(|path| path.file_name().map(std::ffi::OsStr::to_owned))
 }
 
-/// The multiplexer section: which backend Rimz detected, its version, floor, and
+/// The multiplexer section: which backend RimZ detected, its version, floor, and
 /// server socket; once a workspace resolves, its session, duplicate-session, and
 /// presence health.
 pub(super) fn collect_mux(
@@ -464,7 +464,7 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presen
         let (maj, min, patch) = zellij_mod::MIN_ZELLIJ_VERSION;
         return model::Presence::Unavailable {
             error: format!(
-                "zellij below the Rimz floor; upgrade to >= {maj}.{min}.{patch} or use the tmux backend"
+                "zellij below the RimZ floor; upgrade to >= {maj}.{min}.{patch} or use the tmux backend"
             ),
         };
     }

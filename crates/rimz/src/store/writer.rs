@@ -174,7 +174,7 @@ impl Store {
         })
     }
 
-    /// Persist the room-owning Rimz binary for session-local helpers. Generic
+    /// Persist the room-owning RimZ binary for session-local helpers. Generic
     /// re-records preserve this value; only room owner flows update it.
     #[must_use = "durability barrier; check the result"]
     pub fn record_room_bin(&self, workspace: &ResolvedWorkspace, rimz_bin: PathBuf) -> Result<()> {

@@ -17,7 +17,7 @@ pub const DEFAULT_AUTO_CONTINUE_MAX_RETRIES: u32 = 12;
 
 /// Resume behavior, in two tenses. On session *rebirth* after a machine reboot
 /// — detected by boot id, or by boot time where the boot id is unreadable — or
-/// after a mux crash with positive lost-agent markers, Rimz offers to re-seed
+/// after a mux crash with positive lost-agent markers, RimZ offers to re-seed
 /// prior agents from the durable rollup; the prompt defaults to recovery, and
 /// non-interactive starts recover. A host with no readable boot signal and no
 /// lost-agent markers starts bare. A deliberate agent close — clean quit,
@@ -42,7 +42,7 @@ pub struct ResumeConfig {
     /// Resume any live parked agent by typing
     /// [`auto_continue_text`](Self::auto_continue_text) into its pane: rate
     /// limits at the spent-window reset, overloads and transient server errors on
-    /// the backoff ramp. Off by default: Rimz types into a pane on its own only
+    /// the backoff ramp. Off by default: RimZ types into a pane on its own only
     /// once you opt in. Best-effort and traced through message records.
     pub auto_continue: bool,
     /// Retry ramp, in seconds, for non-clocked auto-continue. The last value

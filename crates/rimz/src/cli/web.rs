@@ -1,4 +1,4 @@
-//! `rimz web` — browser access for Rimz rooms.
+//! `rimz web` — browser access for RimZ rooms.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -45,7 +45,7 @@ struct WebOpenArgs {
     /// Workspace path. Defaults to the current directory.
     #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
-    /// Existing Rimz session name to open instead of resolving a path.
+    /// Existing RimZ session name to open instead of resolving a path.
     #[arg(long, conflicts_with = "path")]
     session: Option<String>,
     /// Print the URL without launching a browser.
@@ -70,7 +70,7 @@ struct WebUrlArgs {
     /// Workspace path. Defaults to the current directory.
     #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
-    /// Existing Rimz session name to print instead of resolving a path.
+    /// Existing RimZ session name to print instead of resolving a path.
     #[arg(long, conflicts_with = "path")]
     session: Option<String>,
     /// Emit the versioned `rimz.web.v1` payload.
@@ -153,7 +153,7 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
     let config = machine_config();
     if !config.web.enabled {
         bail!(
-            "Browser access is disabled: set `[web] enabled = true` in the Rimz config on the machine serving this room (`rimz config path`) to allow browser sharing."
+            "Browser access is disabled: set `[web] enabled = true` in the RimZ config on the machine serving this room (`rimz config path`) to allow browser sharing."
         );
     }
     let context = if let Some(session) = args.session {
@@ -253,7 +253,7 @@ fn warn_if_web_sharing_unconfirmed(session: &str) {
 fn warn_web_sharing_unconfirmed(session_name: &str) {
     let _ = writeln!(
         std::io::stderr().lock(),
-        "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", check that Zellij is new enough, Rimz's presence plugin is available, and `[web] enabled = true` in `rimz config path`, then rerun `rimz web open`."
+        "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", check that Zellij is new enough, RimZ's presence plugin is available, and `[web] enabled = true` in `rimz config path`, then rerun `rimz web open`."
     );
 }
 

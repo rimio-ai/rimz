@@ -1,4 +1,4 @@
-# Rimz per-machine remote aliases.
+# RimZ per-machine remote aliases.
 #
 # Save as ~/.config/rimz/remote.toml. The `rimz remote` commands read and
 # write this file; edit it directly when you want named SSH rooms in one

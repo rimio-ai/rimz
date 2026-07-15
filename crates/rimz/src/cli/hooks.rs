@@ -73,9 +73,9 @@ enum HooksSubcmd {
         /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `qwen`). Omit to install every detected agent.
         agent: Option<String>,
     },
-    /// Remove the adapter's Rimz-managed hook block.
+    /// Remove the adapter's RimZ-managed hook block.
     Uninstall {
-        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `kiro`, `qwen`). Omit to remove every Rimz-managed hook set.
+        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `kiro`, `qwen`). Omit to remove every RimZ-managed hook set.
         agent: Option<String>,
     },
 }
@@ -102,7 +102,7 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
-    // Suppress hooks fired by a Rimz-internal enrichment `codex app-server`.
+    // Suppress hooks fired by a RimZ-internal enrichment `codex app-server`.
     // `refresh-context` cold-spawns such a server to read realtime context; it
     // is not a user session, but Codex still fires its configured lifecycle
     // hooks (e.g. `SessionStart`) on startup. Processing one here would call
@@ -113,7 +113,7 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     if rimz::agents::codex::spawned_as_internal_app_server() {
         debug!(
             source = %source,
-            "hooks feed: suppressed — fired by a Rimz-internal codex app-server",
+            "hooks feed: suppressed — fired by a RimZ-internal codex app-server",
         );
         return Ok(());
     }

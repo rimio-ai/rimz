@@ -35,7 +35,7 @@ use super::{CommandSpec, MuxBackend, Result};
 use crate::config::ZellijConfig;
 use crate::ids::PaneId;
 
-/// Minimum Zellij version Rimz supports overall and reports as the doctor
+/// Minimum Zellij version RimZ supports overall and reports as the doctor
 /// floor.
 pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 44, 0);
 
@@ -208,7 +208,7 @@ fn bool_value(value: bool) -> String {
     if value { "true" } else { "false" }.to_owned()
 }
 
-/// Zellij `options` flags Rimz owns for its rooms.
+/// Zellij `options` flags RimZ owns for its rooms.
 fn zellij_options_args(
     config: &ZellijConfig,
     parsed_version: Option<(u32, u32, u32)>,

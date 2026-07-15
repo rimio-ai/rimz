@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// These are per-machine preferences: base URLs can name private hostnames,
 /// loopback tunnels, or reverse-proxy paths, and no field executes a command;
-/// `enabled` gates auto-granting Rimz's presence-plugin permissions and
+/// `enabled` gates auto-granting RimZ's presence-plugin permissions and
 /// enabling browser sharing. The section therefore stays outside the project
 /// trust hash.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -77,7 +77,7 @@ fn rimz_exec_kind<'a>(program: &str, mut tokens: std::str::SplitWhitespace<'a>) 
         .flatten()
 }
 
-/// Worktree path carried by Rimz's own supervised agent wrapper, when the mux's
+/// Worktree path carried by RimZ's own supervised agent wrapper, when the mux's
 /// live pane read has not reported `cwd` yet. This is intentionally narrower
 /// than command parsing in general: only the hidden `rimz agents exec <kind>
 /// --worktree-path <path>` contract supplies path truth.
@@ -97,7 +97,7 @@ pub(crate) fn rimz_exec_worktree_path(command: &str) -> Option<&str> {
 }
 
 /// The program a command names — seeing past a leading `sudo` and its options,
-/// Rimz's supervised `agents exec <kind>` wrapper, and, for a JS launcher
+/// RimZ's supervised `agents exec <kind>` wrapper, and, for a JS launcher
 /// (`node`/`npx`/`bun`), through to the script it runs.
 fn effective_program(command: &str) -> &str {
     effective_program_info(command).program
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn classifier_sees_past_rimz_supervised_agent_wrapper() {
-        // `rimz agents --worktree` leaves Rimz's supervised wrapper as the
+        // `rimz agents --worktree` leaves RimZ's supervised wrapper as the
         // pane's root command while the real agent runs underneath it, so the
         // sidebar must classify the pane by the wrapped agent during the
         // startup gap.

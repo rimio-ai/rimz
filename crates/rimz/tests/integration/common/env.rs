@@ -264,8 +264,8 @@ impl Env {
     // --- agent onboarding (the user's `rimz hooks install` setup step) ---
     //
     // A real agent only ever fires `rimz hooks feed` when its per-user config
-    // carries a Rimz-managed hook block — i.e. the user ran `rimz hooks
-    // install`. Until then the agent runs but never calls Rimz, so the sidebar
+    // carries a RimZ-managed hook block — i.e. the user ran `rimz hooks
+    // install`. Until then the agent runs but never calls RimZ, so the sidebar
     // stays empty. These helpers let the journey reproduce that wiring instead
     // of hand-firing the hook unconditionally.
 
@@ -310,9 +310,9 @@ impl Env {
         );
     }
 
-    /// Whether `source`'s per-user config carries Rimz-managed hooks. A real
+    /// Whether `source`'s per-user config carries RimZ-managed hooks. A real
     /// agent fires `rimz hooks feed` only when this holds; otherwise it never
-    /// calls Rimz at all.
+    /// calls RimZ at all.
     pub fn agent_hooks_installed(&self, source: &str) -> bool {
         let Ok(text) = std::fs::read_to_string(self.agent_config_path(source)) else {
             return false;

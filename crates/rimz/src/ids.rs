@@ -1,7 +1,7 @@
 //! Strongly-typed identifiers.
 //!
 //! Every ID that travels through the store, the wakeup socket, or the agent
-//! hook protocol is a newtype. Rimz-minted long IDs (`RunId`, `EventId`,
+//! hook protocol is a newtype. RimZ-minted long IDs (`RunId`, `EventId`,
 //! `SidebarInstanceId`) use UUIDv7, while message IDs use a shorter
 //! time-sortable token. IDs derived from external truth (`WorkspaceId`,
 //! `PaneId`) keep their natural shape.
@@ -525,7 +525,7 @@ impl std::borrow::Borrow<str> for AgentKind {
 /// `(kind, agent_id)`.
 ///
 /// Opaque by contract: each agent mints its own shape (Claude/Pi UUIDs, Codex
-/// thread ids), so the only structure Rimz can assume is "non-empty string",
+/// thread ids), so the only structure RimZ can assume is "non-empty string",
 /// and the adapters enforce that at observation time. The newtype exists so a
 /// session id can never transpose with an [`AgentKind`] in a key or a
 /// signature.

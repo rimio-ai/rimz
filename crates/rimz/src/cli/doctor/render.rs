@@ -172,7 +172,7 @@ fn render_machine_config(
 }
 
 fn render_identity(w: &mut impl Write, version: &str, host: &Host) -> io::Result<()> {
-    writeln!(w, "{}", paint(palette::ACCENT.bold(), "Rimz doctor"))?;
+    writeln!(w, "{}", paint(palette::ACCENT.bold(), "RimZ doctor"))?;
     let mut kv = KeyVals::new().indent(2);
     kv.push("version", cell(version));
     let user = match &host.user {
@@ -1354,7 +1354,7 @@ mod tests {
             binary: Some("/home/eddie/.cargo/bin/rimz".to_owned()),
         };
         let out = strip(|w| render_identity(w, "0.1.0", &host));
-        assert!(out.contains("Rimz doctor"), "{out}");
+        assert!(out.contains("RimZ doctor"), "{out}");
         assert!(out.contains("0.1.0"), "{out}");
         assert!(out.contains("eddie (uid 1001)"), "{out}");
         assert!(out.contains("/home/eddie/.cargo/bin/rimz"), "{out}");

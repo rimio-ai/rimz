@@ -2,7 +2,7 @@
 //!
 //! Zellij derives an AF_UNIX socket path from its socket base, protocol
 //! contract directory, and session name. On macOS the path budget is especially
-//! tight, so Rimz checks the path before asking Zellij to birth a room and
+//! tight, so RimZ checks the path before asking Zellij to birth a room and
 //! classifies the matching stderr if a different environment reaches Zellij
 //! first.
 

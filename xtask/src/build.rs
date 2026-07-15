@@ -633,7 +633,7 @@ fn darwin_zigbuild_env(root: &Path) -> Result<Vec<(&'static str, PathBuf)>> {
 fn prepare_darwin_zigbuild_sdkroot(sdkroot: &Path) -> Result<()> {
     // `cargo-zigbuild` brings libSystem and libiconv stubs, while macOS crates
     // can still ask the linker for framework load commands. These text stubs
-    // carry the public framework symbols Rimz's current macOS process reader
+    // carry the public framework symbols RimZ's current macOS process reader
     // references; the shipped binary resolves them from macOS at runtime.
     fs::create_dir_all(sdkroot.join("usr").join("lib"))
         .with_context(|| format!("creating {}", sdkroot.join("usr").join("lib").display()))?;

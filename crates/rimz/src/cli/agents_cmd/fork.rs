@@ -1,4 +1,4 @@
-//! Provider-native conversation forks launched as fresh Rimz agent rows.
+//! Provider-native conversation forks launched as fresh RimZ agent rows.
 
 use super::*;
 use crate::cli::{machine_config, open_store};
@@ -255,7 +255,7 @@ fn validate_fork_source(
         .map(PathBuf::from)
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "agent `{}` has no recorded worktree; start it in a Rimz room before forking",
+                "agent `{}` has no recorded worktree; start it in a RimZ room before forking",
                 agent.agent_id
             )
         })?;

@@ -124,7 +124,7 @@ plan = []
 "#
     );
     let readme = format!(
-        "# {kind} Rimz plugin\n\nTranslate the agent's native events to the [canonical JSON protocol](https://github.com/rimio-ai/rimz/blob/main/docs/reference/agent-plugins.md), then pipe each envelope through `shim.sh <event>`. Hook installation stays self-managed and belongs in this file.\n"
+        "# {kind} RimZ plugin\n\nTranslate the agent's native events to the [canonical JSON protocol](https://github.com/rimio-ai/rimz/blob/main/docs/reference/agent-plugins.md), then pipe each envelope through `shim.sh <event>`. Hook installation stays self-managed and belongs in this file.\n"
     );
     let shim = format!(
         "#!/bin/sh\nset -eu\nevent=${{1:?canonical event name}}\nexec rimz hooks feed --source {kind} --event \"$event\"\n"

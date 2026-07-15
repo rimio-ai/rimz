@@ -53,7 +53,7 @@ pub enum MuxErr {
     #[error("no multiplexer found: install zellij or tmux")]
     NoMuxFound,
     #[error(
-        "[mux] default selects {mux}, which isn't installed. Install {mux}, or change [mux] default in your Rimz config (`rimz config`)."
+        "[mux] default selects {mux}, which isn't installed. Install {mux}, or change [mux] default in your RimZ config (`rimz config`)."
     )]
     ConfiguredMuxNotInstalled { mux: MuxName },
     #[error(

@@ -121,7 +121,7 @@ pub struct SidebarSnapshot {
     /// The agent kinds with an active observation path: installed hooks or
     /// declared local-session discovery. Gates the idle synthesis in
     /// `rows_from_panes`: a launched-but-unbound pane for an observable agent
-    /// has a row Rimz can later enrich, while a pane with no active integration
+    /// has a row RimZ can later enrich, while a pane with no active integration
     /// stays a process row. Cwd binding for an existing paneless session is
     /// separate pairing logic and does not read this idle-synthesis set.
     /// Environment, not store — the pure reducer leaves it empty; the `rimz sidebar snapshot` CLI and consumer enrichment fill it before folding live panes.
@@ -184,7 +184,7 @@ pub struct SidebarSnapshot {
     /// spend scope: a session recorded under a worktree that cleanup has since
     /// removed still counts toward the room's headline figure, because the home
     /// is a stable path prefix while `worktree_roots` tracks only the live `git
-    /// worktree list`. It also folds unstamped rows inside Rimz-owned worktrees
+    /// worktree list`. It also folds unstamped rows inside RimZ-owned worktrees
     /// into their `#channel` pod so grouping agrees with message addressing.
     /// Like `project_root`, the `rimz sidebar snapshot` enrichment fills it from
     /// `MachineConfig`; the pure path leaves it `None`.
@@ -390,7 +390,7 @@ impl SidebarSnapshot {
 
     /// Record the repo's durable worktree-home directory so the cockpit spend
     /// scope counts sessions from worktrees cleanup has since removed and
-    /// unstamped Rimz-owned worktree rows fold into their `#channel` pod.
+    /// unstamped RimZ-owned worktree rows fold into their `#channel` pod.
     /// Filled from `MachineConfig`'s `[agents.worktree] dir` after construction,
     /// like `with_worktree_roots`; the pure path leaves it `None`.
     pub fn with_worktree_home(mut self, worktree_home: Option<PathBuf>) -> Self {

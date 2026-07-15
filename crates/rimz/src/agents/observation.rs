@@ -85,7 +85,7 @@ pub struct AgentLifecycleObservation {
     /// this as the `agent_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
-    /// Rimz-minted durable card name. Launchers pass this through
+    /// RimZ-minted durable card name. Launchers pass this through
     /// `RIMZ_AGENT_NAME`; hand-launched agents get a deterministic fallback
     /// during reduction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -107,7 +107,7 @@ pub struct AgentLifecycleObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_owner: Option<RuntimeOwner>,
     /// Optional absolute worktree path observed from the agent payload or
-    /// filled by the CLI from the current Rimz workspace.
+    /// filled by the CLI from the current RimZ workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
     /// Optional worktree branch label observed from the payload, surfaced in

@@ -5,7 +5,7 @@
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in
 //! [`crate::trust`]. Settings here are machine-wide preferences that tune how
-//! Rimz drives *your* box or link *your* accounts, so they live outside the
+//! RimZ drives *your* box or link *your* accounts, so they live outside the
 //! repo and outside the trust hash — a clone never inherits them.
 //!
 //! A missing file is the default config, and unknown keys are ignored so an
@@ -231,7 +231,7 @@ const CONFIG_STAMP_TTL: Duration = Duration::from_secs(2);
 /// Re-reads allowed before a config load stops chasing an in-place rewrite and
 /// holds last-known-good.
 const STABLE_READ_ATTEMPTS: u8 = 3;
-// ponytail: mtime quiescence; require atomic writes if config gains a Rimz writer.
+// ponytail: mtime quiescence; require atomic writes if config gains a RimZ writer.
 const STABLE_READ_QUIET: Duration = Duration::from_millis(50);
 
 static LOAD_MEMO: OnceLock<Mutex<Option<LoadMemo>>> = OnceLock::new();

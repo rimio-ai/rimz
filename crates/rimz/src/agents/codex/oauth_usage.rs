@@ -3,7 +3,7 @@
 //! Codex's app-server is the low-latency realtime account source. This module
 //! supplies the credential-file OAuth account-usage probe: read
 //! `~/.codex/auth.json` (honoring `CODEX_HOME`), call the ChatGPT usage
-//! endpoint, and normalize the response into Rimz's account-window and
+//! endpoint, and normalize the response into RimZ's account-window and
 //! paid-usage types. It never writes auth files or refreshes tokens.
 
 use jiff::Timestamp;
@@ -41,7 +41,7 @@ impl crate::agents::credits::AccountUsageReportable for CodexOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent or API-key-only
     /// credentials are the normal state for an app-server or logged-out account,
     /// not a fault; provider 401 and 403 responses are settled auth verdicts
-    /// rather than Rimz faults. Parse and other HTTP failures are.
+    /// rather than RimZ faults. Parse and other HTTP failures are.
     fn should_report(&self) -> bool {
         !matches!(self, Self::NoCredentials | Self::ApiKeyOnly)
             && !matches!(

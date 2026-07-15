@@ -1,4 +1,4 @@
-//! `rimz uninstall` — remove Rimz's machine-wide footprint.
+//! `rimz uninstall` — remove RimZ's machine-wide footprint.
 
 use std::collections::{BTreeSet, HashSet};
 use std::env;
@@ -100,7 +100,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
     }
 
     let mut stderr = std::io::stderr().lock();
-    writeln!(stderr, "\nUninstalling Rimz...")?;
+    writeln!(stderr, "\nUninstalling RimZ...")?;
 
     teardown_rooms(&live_rooms, &mut stderr, &mut failures)?;
 
@@ -165,7 +165,7 @@ pub fn run(args: UninstallArgs, _globals: &GlobalFlags) -> Result<()> {
 
 fn render_preview(preview: Preview<'_>) -> Result<()> {
     let mut stderr = std::io::stderr().lock();
-    writeln!(stderr, "Rimz uninstall preview")?;
+    writeln!(stderr, "RimZ uninstall preview")?;
     writeln!(stderr, "Storage:")?;
     for root in &preview.disk_usage.roots {
         let action = if root_removed(root.kind, preview.remove_state, preview.remove_config) {
@@ -231,7 +231,7 @@ fn confirm_uninstall(args: &UninstallArgs) -> Result<bool> {
             "`rimz uninstall` removes hooks, rooms, runtime/cache/data, and the binary; pass --yes to confirm without a terminal"
         );
     }
-    if !super::confirm("Remove Rimz from this machine?")? {
+    if !super::confirm("Remove RimZ from this machine?")? {
         writeln!(
             std::io::stderr().lock(),
             "Uninstall aborted; nothing changed."
@@ -254,14 +254,14 @@ fn ensure_not_in_rimz_room(workspaces: &[KnownWorkspace]) -> Result<()> {
         .filter(|session| sessions.contains(session.as_str()))
         .is_some()
     {
-        anyhow::bail!("detach and rerun from outside the Rimz room");
+        anyhow::bail!("detach and rerun from outside the RimZ room");
     }
     if env::var_os("TMUX").is_some()
         && current_tmux_session()
             .as_deref()
             .is_some_and(|session| sessions.contains(session))
     {
-        anyhow::bail!("detach and rerun from outside the Rimz room");
+        anyhow::bail!("detach and rerun from outside the RimZ room");
     }
     Ok(())
 }

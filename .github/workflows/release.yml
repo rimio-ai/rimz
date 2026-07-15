@@ -108,7 +108,7 @@ jobs:
             # The push trigger is tags-only, so this is a `v*` version tag.
             tap="${owner}/${GITHUB_REPOSITORY#*/}"
             release_tag="${GITHUB_REF_NAME}"
-            release_title="Rimz ${GITHUB_REF_NAME}"
+            release_title="RimZ ${GITHUB_REF_NAME}"
             release_prerelease=false
             release_rolling=false
             release_commit="${GITHUB_SHA}"
@@ -122,7 +122,7 @@ jobs:
             # workflow_run (CI green on the default branch) or manual dispatch:
             # the rolling build published under a moving `latest-main` tag.
             release_tag="latest-main"
-            release_title="Rimz (latest main)"
+            release_title="RimZ (latest main)"
             release_prerelease=true
             release_rolling=true
             release_commit="${WORKFLOW_RUN_HEAD_SHA:-$GITHUB_SHA}"

@@ -160,7 +160,7 @@ fn start_inside_selected_mux_reports_and_skips_launch() {
     // The guard returns before `ensure_detected_agent_hooks`, so the first-run
     // hook consent gate never prints — proving the bypass skips the ceremony.
     assert!(
-        !stderr.contains("Rimz first run"),
+        !stderr.contains("RimZ first run"),
         "the nested bypass must run before hook install, got: {stderr}"
     );
 }
@@ -214,7 +214,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
         String::from_utf8_lossy(&birth_output.stderr)
     );
     let birth_stderr = String::from_utf8_lossy(&birth_output.stderr);
-    assert!(birth_stderr.contains("Rimz found 1 coding agent: antigravity."));
+    assert!(birth_stderr.contains("RimZ found 1 coding agent: antigravity."));
     assert!(birth_stderr.contains("No terminal input — nothing installed or refreshed."));
     assert!(
         !birth_heartbeat.exists(),
@@ -260,7 +260,7 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     );
     let live_stderr = String::from_utf8_lossy(&live_output.stderr);
     assert!(
-        !live_stderr.contains("Rimz found"),
+        !live_stderr.contains("RimZ found"),
         "live reattach must skip hook detection: {live_stderr}"
     );
     assert!(

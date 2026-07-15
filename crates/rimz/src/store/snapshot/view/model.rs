@@ -139,7 +139,7 @@ pub struct SidebarWorktreeGroup {
     /// The resolved trunk name the diff and commit delta compare against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trunk: Option<String>,
-    /// Whether a channel lane is backed by a live Rimz worktree checkout
+    /// Whether a channel lane is backed by a live RimZ worktree checkout
     /// (marker name matches the lane label). Stamped by the git projection
     /// every fold; drives the header's fork-vs-`#` lead without waiting for
     /// the first git read.

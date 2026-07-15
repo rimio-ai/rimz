@@ -129,7 +129,7 @@ fn tmux_room_shows_agent_after_hook() {
     tmux(&socket, &["split-window", "-h", "-t", "room", &serve]);
 
     // Wire codex the way the user does, then run it through its installed
-    // hook against the shared store — the only way a real agent reaches Rimz.
+    // hook against the shared store — the only way a real agent reaches RimZ.
     env.install_agent_hooks("codex");
     let hook_env = [
         ("TMUX_PANE", codex_pane.as_str()),

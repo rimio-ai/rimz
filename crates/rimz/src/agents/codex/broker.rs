@@ -133,7 +133,7 @@ fn spawn_and_handshake() -> Result<ChildIo, AppServerErr> {
     let bin = codex_bin();
     let mut child = Command::new(&bin)
         .arg("app-server")
-        // Mark this as a Rimz-internal enrichment server so the lifecycle hooks
+        // Mark this as a RimZ-internal enrichment server so the lifecycle hooks
         // it fires on startup no-op in `rimz hooks feed` rather than recursing
         // through `refresh-context` into another app-server spawn.
         .env(crate::agents::codex::ENV_INTERNAL_APP_SERVER, "1")

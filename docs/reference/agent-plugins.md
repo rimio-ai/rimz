@@ -1,6 +1,6 @@
 # Agent plugins
 
-Agent plugins let an external agent CLI join Rimz without compiling provider-specific Rust into Rimz. A plugin bundle declares identity, branding, launch behavior, emitted events, transcript discovery, and optional pull probes; an agent-side shim translates its native protocol into one canonical JSON envelope.
+Agent plugins let an external agent CLI join RimZ without compiling provider-specific Rust into RimZ. A plugin bundle declares identity, branding, launch behavior, emitted events, transcript discovery, and optional pull probes; an agent-side shim translates its native protocol into one canonical JSON envelope.
 
 Plugins are machine configuration and may execute the launch and probe commands they declare. Install only bundles you trust. Project configuration does not register plugins, so plugin commands stay outside the project trust hash.
 
@@ -15,7 +15,7 @@ rimz agents register --check
 rimz doctor
 ```
 
-`rimz agents register` creates `agent.toml`, `README.md`, `shim.sh`, and stub probe executables. Rimz loads every `agents.d/*/agent.toml` once per process. A malformed manifest is skipped on read-only and hook paths; `rimz start` refuses before room side effects and names the manifest and fix.
+`rimz agents register` creates `agent.toml`, `README.md`, `shim.sh`, and stub probe executables. RimZ loads every `agents.d/*/agent.toml` once per process. A malformed manifest is skipped on read-only and hook paths; `rimz start` refuses before room side effects and names the manifest and fix.
 
 The complete runnable [ScriptBot example](../../examples/agent-plugin/README.md) supplies a fake agent, canonical shim, priced spend probe, account probe, and fixture transcript.
 
@@ -45,7 +45,7 @@ agents.d/mybot/
     └── account
 ```
 
-Hook installation is self-managed because Rimz has no native configuration writer for an unknown agent. `setup-doc` points `rimz doctor` at the bundle's installation instructions. The shim owns native-to-canonical translation and invokes `rimz hooks feed --source <kind>` with one envelope on stdin. Hook stdout stays empty: Rimz expresses no decision for a plugin ask, and the agent's own UI owns the answer.
+Hook installation is self-managed because RimZ has no native configuration writer for an unknown agent. `setup-doc` points `rimz doctor` at the bundle's installation instructions. The shim owns native-to-canonical translation and invokes `rimz hooks feed --source <kind>` with one envelope on stdin. Hook stdout stays empty: RimZ expresses no decision for a plugin ask, and the agent's own UI owns the answer.
 
 ## Manifest
 
@@ -103,7 +103,7 @@ version = ["mybot", "--version"]
 
 Relative probe executables and relative transcript globs resolve from the bundle directory. A launch or resume executable containing a path separator also resolves from the bundle directory; bare executable names use `PATH`. Launch presets fail when a configured `model`, `effort`, or system-prompt field has no declared rendering, so launch intent is not silently discarded.
 
-`emits` is the shim's conformance declaration. Rimz derives the coverage and lifecycle matrices from it plus declared probes and capabilities. The feed still processes a valid canonical event omitted from `emits` and warns, because the live event is authoritative; update `emits` so coverage remains truthful.
+`emits` is the shim's conformance declaration. RimZ derives the coverage and lifecycle matrices from it plus declared probes and capabilities. The feed still processes a valid canonical event omitted from `emits` and warns, because the live event is authoritative; update `emits` so coverage remains truthful.
 
 ## Canonical event envelope
 
@@ -133,7 +133,7 @@ Shared enrichment fields may ride every event:
 }
 ```
 
-The event vocabulary maps directly onto Rimz lifecycle signals:
+The event vocabulary maps directly onto RimZ lifecycle signals:
 
 | Event | Event fields | Effect |
 | --- | --- | --- |
@@ -149,7 +149,7 @@ The event vocabulary maps directly onto Rimz lifecycle signals:
 | `session_end` | none | Tombstone the session. |
 | `context` | shared fields plus normalized context fields | Merge rich display-only context without a lifecycle transition. |
 
-`context` also accepts the optional fields in the serialized [`AgentContext`](../../crates/rimz/src/agents/context.rs) shape, including `session_name`, `session_preview`, `model_id`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. Rimz stamps `source` and `observed_at`; the shim omits them. Top-level `model`, token split, gauge, cost, and rate-limit fields normalize into the same shape.
+`context` also accepts the optional fields in the serialized [`AgentContext`](../../crates/rimz/src/agents/context.rs) shape, including `session_name`, `session_preview`, `model_id`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. RimZ stamps `source` and `observed_at`; the shim omits them. Top-level `model`, token split, gauge, cost, and rate-limit fields normalize into the same shape.
 
 Unknown event names and event payloads from a different protocol version are dropped at debug level. A known event with malformed typed fields is also dropped. This keeps a newer shim forward-compatible while preventing malformed input from mutating a row. `rimz agents check --replay` exposes those otherwise-quiet parser decisions while leaving ingestion behavior unchanged.
 
@@ -164,15 +164,15 @@ event=${1:?canonical event name}
 exec rimz hooks feed --source mybot --event "$event"
 ```
 
-The agent integration calls the shim with a JSON envelope on stdin. Native ask handling remains inside the agent. Rimz returns success with empty stdout for every plugin event, meaning no opinion; define and test what an empty response means in the native hook system before setting `native-ask-ui = true`.
+The agent integration calls the shim with a JSON envelope on stdin. Native ask handling remains inside the agent. RimZ returns success with empty stdout for every plugin event, meaning no opinion; define and test what an empty response means in the native hook system before setting `native-ask-ui = true`.
 
 ## Probe contracts
 
-Probes run as best-effort enrichment with the bundle directory as their working directory. Rimz pipes stdin, stdout, and stderr, limits stdout to 1 MiB, and kills a probe that exceeds three seconds. A missing executable, nonzero exit, timeout, oversized output, or invalid JSON omits the enrichment and writes a warning to stderr; it never invalidates durable lifecycle state.
+Probes run as best-effort enrichment with the bundle directory as their working directory. RimZ pipes stdin, stdout, and stderr, limits stdout to 1 MiB, and kills a probe that exceeds three seconds. A missing executable, nonzero exit, timeout, oversized output, or invalid JSON omits the enrichment and writes a warning to stderr; it never invalidates durable lifecycle state.
 
 ### Spend
 
-Rimz sends one request per discovered transcript file:
+RimZ sends one request per discovered transcript file:
 
 ```json
 {"file":"/home/me/.mybot/sessions/sess-123.jsonl","cursor":{"line":18}}
@@ -199,7 +199,7 @@ The first request carries `cursor: null`. Return entries after that opaque curso
 }
 ```
 
-The cursor is arbitrary JSON and round-trips unchanged. Timestamps use RFC 3339. Plugin entries are already priced: Rimz uses `cost_usd` verbatim and does not apply its built-in price book. Token components remain useful when cost is absent or zero because `rimz stats` still reports token composition.
+The cursor is arbitrary JSON and round-trips unchanged. Timestamps use RFC 3339. Plugin entries are already priced: RimZ uses `cost_usd` verbatim and does not apply its built-in price book. Token components remain useful when cost is absent or zero because `rimz stats` still reports token composition.
 
 ### Account
 
@@ -233,4 +233,4 @@ The version probe receives an empty stdin stream. Its first non-empty stdout lin
 
 Protocol version 1 is stable. Additive optional fields and new events require a future-compatible reader; a semantic change to an existing field or event requires a new integer protocol version.
 
-The protocol is the canonical envelope vocabulary delivered to Rimz. `rimz hooks feed` is the version-1 delivery mechanism, not part of the vocabulary: the envelopes contain no exec-specific assumptions, so a future resident receiver can accept the same objects over a socket without changing their fields or event semantics.
+The protocol is the canonical envelope vocabulary delivered to RimZ. `rimz hooks feed` is the version-1 delivery mechanism, not part of the vocabulary: the envelopes contain no exec-specific assumptions, so a future resident receiver can accept the same objects over a socket without changing their fields or event semantics.

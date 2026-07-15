@@ -18,12 +18,12 @@ use crate::common::Env;
 /// provider store supplies session existence, while the missing hook means no
 /// durable role or lifecycle reaches the store. After `rimz hooks install`, a
 /// fresh `SessionStart` stamps the row with its configured role. The room is
-/// deliberately correct to require explicit hook installation (Rimz never
+/// deliberately correct to require explicit hook installation (RimZ never
 /// silently rewrites the user's agent config).
 ///
 /// The harness fires agents through their *installed* hook, so an un-onboarded
 /// `agent_hook` reaches the store as a no-op — exactly what a real agent does
-/// with no Rimz hook configured — while the pane it runs in stays live.
+/// with no RimZ hook configured — while the pane it runs in stays live.
 #[test]
 fn phase0_provider_discovery_then_hook_wires_role() {
     let env = Env::new();

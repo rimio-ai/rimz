@@ -6,7 +6,7 @@
 //! `vt100`-parsed screen text — what the column actually shows. Renderer
 //! mechanics stay in `docs/internals/sidebar/sidebar.md`.
 //!
-//! "Running an agent" is simulated faithfully: Rimz only ever observes agents
+//! "Running an agent" is simulated faithfully: RimZ only ever observes agents
 //! through their hooks, and the work pane itself is opaque to it. So firing
 //! `rimz hooks feed --source claude` through an installed hook is the end-user
 //! act of running an agent. The harness's pane presence is a fixture; real
@@ -59,7 +59,7 @@ pub const KEY_RIGHT: &[u8] = b"\x1b[C";
 /// first frame on a loaded shared machine.
 pub const SETTLE: Duration = Duration::from_secs(45);
 
-/// A live Rimz "room": a real `rimz sidebar serve` renderer in a
+/// A live RimZ "room": a real `rimz sidebar serve` renderer in a
 /// `portable-pty`, reading the [`Env`] store that hooks mutate.
 ///
 /// The renderer shares the `Env` *state* (the store, via `XDG_STATE_HOME`) but
@@ -146,7 +146,7 @@ impl<'a> RoomHarness<'a> {
         let mut cmd = CommandBuilder::new(&bin);
         cmd.scrub_session_env();
         // Pin the renderer to the tempdir workspace root. Left unset, the mux
-        // process inherits the suite's cwd — a developer's real Rimz worktree —
+        // process inherits the suite's cwd — a developer's real RimZ worktree —
         // and the producer's git detection derives that worktree's channel,
         // grouping fixture agents under a stray `# <real-worktree>` lane.
         cmd.cwd(env.project_root.as_os_str());
@@ -254,7 +254,7 @@ impl<'a> RoomHarness<'a> {
     }
 
     /// Wire the room the way the user does on first run: `rimz hooks install`
-    /// for each agent. Until this runs, the agents have no Rimz hook to fire,
+    /// for each agent. Until this runs, the agents have no RimZ hook to fire,
     /// so [`agent_hook`](Self::agent_hook) is a no-op — exactly the state of a
     /// freshly-started room that nobody onboarded.
     pub fn onboard(&self, agents: &[&str]) {
@@ -267,7 +267,7 @@ impl<'a> RoomHarness<'a> {
     /// hook. The event is read from the payload's `hook_event_name`.
     ///
     /// With no hook wired (the room was never onboarded), the agent never
-    /// calls Rimz — so this is a no-op and nothing reaches the store,
+    /// calls RimZ — so this is a no-op and nothing reaches the store,
     /// faithfully reproducing "I ran an agent and nothing showed up". Hand-firing
     /// `rimz hooks feed` regardless would mask exactly that bug.
     pub fn agent_hook(&self, source: &str, payload: &Value) {
@@ -540,7 +540,7 @@ fn payload_session_id(payload: &Value, source: &str) -> String {
 }
 
 /// The journey simulates a launched agent by firing the installed hook from the
-/// test process, whose `/proc` env may carry the developer's own Rimz role.
+/// test process, whose `/proc` env may carry the developer's own RimZ role.
 /// Stamp deterministic launch identity directly on the hook command so role
 /// projection is driven by the fixture, not the shell that ran the suite.
 fn journey_launch_identity(source: &str) -> Vec<(String, String)> {

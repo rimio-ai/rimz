@@ -154,7 +154,7 @@ fn git_backed_worktree_path_accepts_worktrees_and_marked_channels() {
     assert_eq!(
         git_backed_worktree_path(&channel_group("design", repo.path())),
         None,
-        "named channels inside a Rimz worktree do not borrow the worktree story"
+        "named channels inside a RimZ worktree do not borrow the worktree story"
     );
 }
 

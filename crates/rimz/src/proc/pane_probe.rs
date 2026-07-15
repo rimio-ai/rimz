@@ -147,7 +147,7 @@ pub fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<jiff::T
 }
 
 /// The requested in-pane agent CLI process backing a live pane, including its cwd
-/// when readable. Rimz walks only a single-child chain from the pane root:
+/// when readable. RimZ walks only a single-child chain from the pane root:
 /// direct agent launches, shell-hosted agents, and wrapper-spawned subshells
 /// such as `chezmoi cd -> zsh -> codex` are unambiguous, while a branching
 /// process tree abstains.
@@ -162,7 +162,7 @@ pub fn in_pane_agent_process_for_root(kind: &str, root_pid: u32) -> Option<InPan
     )
 }
 
-/// The outermost known agent CLI hosted below a pane root. Rimz classifies the
+/// The outermost known agent CLI hosted below a pane root. RimZ classifies the
 /// full command line at each node on one single-child walk, and abstains when
 /// the tree cannot prove one unambiguous live CLI.
 pub fn hosted_agent_process_for_root(root_pid: u32) -> Option<HostedAgentProcess> {

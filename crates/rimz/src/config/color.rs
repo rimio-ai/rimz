@@ -145,7 +145,7 @@ impl<'de> Deserialize<'de> for ThemeMode {
     }
 }
 
-/// A named Alacritty palette role accepted anywhere Rimz accepts a theme color.
+/// A named Alacritty palette role accepted anywhere RimZ accepts a theme color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaletteRole {

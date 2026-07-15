@@ -1400,7 +1400,7 @@ fn assert_agents_list_requires_live_room(env: &Env, args: &[&str]) {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("no live Rimz room"),
+        stderr.contains("no live RimZ room"),
         "missing live-room guidance: {stderr}"
     );
     assert!(

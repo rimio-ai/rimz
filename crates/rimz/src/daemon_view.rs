@@ -121,7 +121,7 @@ pub(crate) const APP_SERVER_MARKER: &str = "app-server";
 /// Substring marking the always-present loop panel command.
 pub(crate) const LOOP_PANEL_MARKER: &str = "loop watch";
 
-/// Whether a command line is one of Rimz's managed daemon hosts.
+/// Whether a command line is one of RimZ's managed daemon hosts.
 pub fn command_is_host(command: &str) -> bool {
     command.contains(COMMAND_MARKER) || command.contains(APP_SERVER_MARKER)
 }

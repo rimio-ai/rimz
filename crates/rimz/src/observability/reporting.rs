@@ -4,7 +4,7 @@
 //! per-machine `[sentry]` config. When on, [`init`] returns a guard the binary
 //! holds for the process lifetime — it flushes pending events on drop, which
 //! covers the short-lived hook subprocesses — and [`sentry_tracing_layer`]
-//! bridges the `tracing` subscriber so Rimz `warn!`/`error!`, including the
+//! bridges the `tracing` subscriber so RimZ `warn!`/`error!`, including the
 //! agent turn-error warning under the `rimz::agent::turn_error` target, becomes
 //! a Sentry event (warning / error level mirrors the tracing level). Warnings
 //! under [`SIDEBAR_HEALTH_TARGET`] stay local because the durable diagnostics
@@ -18,7 +18,7 @@
 //! warning arrives with the trail that led to it.
 //!
 //! Reporting is best-effort enrichment, not a precondition: a malformed DSN
-//! logs the fix and stays off, and a network failure never blocks a Rimz path.
+//! logs the fix and stays off, and a network failure never blocks a RimZ path.
 //! The hostname is withheld and PII is off by default — the telemetry surface
 //! is documented in [`docs/guide/security.md`](../../../../docs/guide/security.md).
 
@@ -44,7 +44,7 @@ const ENV_DSN: &str = "RIMZ_SENTRY_DSN";
 const ENV_ENVIRONMENT: &str = "RIMZ_SENTRY_ENVIRONMENT";
 
 /// The tracing target the hook lifecycle emits agent-observed turn errors on —
-/// provider rate-limit/overload conditions Rimz watches, not Rimz faults.
+/// provider rate-limit/overload conditions RimZ watches, not RimZ faults.
 /// Events on this target carry `fault=agent`; every other reporting event carries
 /// `fault=rimz`, so triage filters our bugs from upstream hiccups.
 const AGENT_CONDITION_TARGET: &str = "rimz::agent::turn_error";
@@ -130,8 +130,8 @@ fn client_options(dsn: Dsn, environment: String) -> sentry::ClientOptions {
         // (a callsite's `error = &err as &dyn Error`) so a report names where it
         // came from, not just what failed. Free with the `backtrace` feature.
         attach_stacktrace: true,
-        // Mark Rimz frames in-app and the Sentry crates out-of-app so Sentry
-        // picks the Rimz callsite as the culprit instead of a `tracing`/`sentry`
+        // Mark RimZ frames in-app and the Sentry crates out-of-app so Sentry
+        // picks the RimZ callsite as the culprit instead of a `tracing`/`sentry`
         // internal. The payoff lands once debug files are uploaded per release.
         in_app_include: vec!["rimz"],
         in_app_exclude: vec!["sentry", "tracing"],
@@ -187,7 +187,7 @@ fn before_send() -> Arc<dyn Fn(Event<'static>) -> Option<Event<'static>> + Send 
 }
 
 /// Classify a reporting event by its tracing target: an agent-observed condition
-/// (provider rate-limit/overload) versus a Rimz fault.
+/// (provider rate-limit/overload) versus a RimZ fault.
 fn fault_for(logger: &str) -> &'static str {
     if logger == AGENT_CONDITION_TARGET {
         "agent"
@@ -714,7 +714,7 @@ mod tests {
                 class = "PausedRateLimit",
                 "agent paused on a provider error",
             );
-            // A hot Rimz callsite fired past the burst: fault=rimz, one
+            // A hot RimZ callsite fired past the burst: fault=rimz, one
             // fingerprint, and only the first burst reaches the transport.
             for _ in 0..(RATE_LIMIT_BURST + 3) {
                 tracing::warn!(
@@ -747,7 +747,7 @@ mod tests {
         assert!(
             rimz.iter()
                 .all(|event| event.tags.get("fault").map(String::as_str) == Some("rimz")),
-            "Rimz faults are tagged fault=rimz",
+            "RimZ faults are tagged fault=rimz",
         );
         assert!(
             rimz.iter().all(|event| event

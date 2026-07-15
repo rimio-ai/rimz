@@ -131,9 +131,9 @@ fn unread_reminder_notification(count: usize) -> Notification {
         agents: Vec::new(),
         notification_kind: NotificationKind::Reminder,
         title: if count == 1 {
-            "Rimz: 1 unread row needs you".to_owned()
+            "RimZ: 1 unread row needs you".to_owned()
         } else {
-            format!("Rimz: {count} unread rows need you")
+            format!("RimZ: {count} unread rows need you")
         },
         body: if count == 1 {
             "1 unread row still needs you.".to_owned()
@@ -425,12 +425,12 @@ mod tests {
     fn reminder_notification_carries_unread_count() {
         let notification = unread_reminder_notification(2);
         assert_eq!(notification.notification_kind, NotificationKind::Reminder);
-        assert_eq!(notification.title, "Rimz: 2 unread rows need you");
+        assert_eq!(notification.title, "RimZ: 2 unread rows need you");
         assert_eq!(notification.unread_count, Some(2));
         assert_eq!(notification.kind_env(), "reminder");
         assert_eq!(
             unread_reminder_notification(1).title,
-            "Rimz: 1 unread row needs you"
+            "RimZ: 1 unread row needs you"
         );
     }
 }

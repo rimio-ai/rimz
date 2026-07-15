@@ -5,7 +5,7 @@ labels: ["bug"]
 body:
   - type: markdown
     attributes:
-      value: Thanks for helping improve Rimz. Include enough detail for someone else to reproduce the failure.
+      value: Thanks for helping improve RimZ. Include enough detail for someone else to reproduce the failure.
   - type: textarea
     id: summary
     attributes:
@@ -27,7 +27,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Rimz version, OS, shell, tmux/Zellij version, and agent versions.
+      description: RimZ version, OS, shell, tmux/Zellij version, and agent versions.
       placeholder: |
         rimz --version:
         rimz doctor:

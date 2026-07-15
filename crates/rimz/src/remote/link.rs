@@ -376,7 +376,7 @@ pub fn stats_path(runtime: &crate::RuntimePaths) -> PathBuf {
 /// PID-scoped SSH ControlMaster socket path. Concurrent `rimz remote connect`
 /// invocations never share a master. This socket is independent of the workspace
 /// runtime budget, so callers that hand it to OpenSSH use
-/// [`validated_control_path`] to fail with Rimz's AF_UNIX remedy first.
+/// [`validated_control_path`] to fail with RimZ's AF_UNIX remedy first.
 pub fn control_path() -> PathBuf {
     control_path_under(&crate::store::paths::runtime_home(), std::process::id())
 }

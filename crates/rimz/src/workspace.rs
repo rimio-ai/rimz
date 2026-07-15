@@ -47,7 +47,7 @@ pub const ENV_WORKSPACE_ID: &str = "RIMZ_WORKSPACE_ID";
 /// Environment key carrying the session's pinned project root.
 pub const ENV_PROJECT_ROOT: &str = "RIMZ_PROJECT_ROOT";
 
-/// The identity pin a Rimz session stamps into the mux environment at birth,
+/// The identity pin a RimZ session stamps into the mux environment at birth,
 /// inherited by every pane and so by every agent and its hook children.
 pub fn pin_env(workspace_id: &WorkspaceId, project_root: &Path) -> BTreeMap<String, String> {
     BTreeMap::from([
@@ -257,7 +257,7 @@ fn normalize_known_workspace_record(
     })
 }
 
-/// Resolve the room-owning Rimz binary recorded for session-local helpers.
+/// Resolve the room-owning RimZ binary recorded for session-local helpers.
 /// Missing or removed records fall back to the current executable so legacy
 /// rooms and unowned test fixtures keep working.
 pub fn resolve_recorded_rimz_bin(recorded: Option<&Path>) -> PathBuf {
@@ -266,7 +266,7 @@ pub fn resolve_recorded_rimz_bin(recorded: Option<&Path>) -> PathBuf {
         Some(path) => {
             tracing::debug!(
                 rimz_bin = %path.display(),
-                "recorded Rimz binary is unavailable; falling back to current executable",
+                "recorded RimZ binary is unavailable; falling back to current executable",
             );
             crate::proc::rimz_exe()
         }

@@ -10,7 +10,7 @@
 //! as one `<ISO-timestamp>_<uuid>.jsonl` per session (e.g.
 //! `2026-06-04T06-45-56-308Z_019e9161-….jsonl`, the uuid being the session
 //! id). Upstream overrides: `--session-dir` / `PI_CODING_AGENT_SESSION_DIR`;
-//! the `PI_AGENT_DIR` env honored here is Rimz's own comma-separated test
+//! the `PI_AGENT_DIR` env honored here is RimZ's own comma-separated test
 //! override, not a pi variable. Upstream shapes are mirrored in
 //! `docs/externals/agent-adapter/pi-reference.md`. JSONL shape (one entry per
 //! assistant turn):
@@ -125,7 +125,7 @@ struct PiCost {
 
 /// Collect all Pi session `*.jsonl` files from `~/.pi/agent/sessions/`.
 ///
-/// Respects `PI_AGENT_DIR` (comma-separated Rimz test override) first, then
+/// Respects `PI_AGENT_DIR` (comma-separated RimZ test override) first, then
 /// Pi's own `PI_CODING_AGENT_SESSION_DIR`, then the session directory below
 /// `PI_CODING_AGENT_DIR` / `~/.pi/agent`. Pi sessions are not project-scoped,
 /// so all sessions are included regardless of worktree paths.
