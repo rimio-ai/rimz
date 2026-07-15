@@ -233,7 +233,8 @@ Rows group under channel section headers: `⑂` marks a worktree-backed or isola
 |---|---|
 | `AGENT` | the shortest handle you can type back under that header — its role (`@coder`), else its explicit `--name` (`@writer`), else its profile (`@planner`), else `@<kind>`, growing an ordinal only when two of a kind share one lane |
 | `STATUS` | the plain status label, with provider-limit and API-error turns projected to `paused` or `failed`; `show` carries the turn phase when you need it |
-| `DESC` | the same activity description the sidebar shows — session preview, session name, launch description, task, then latest prompt — clipped to the terminal width |
+
+The activity description — the same field the sidebar card shows — renders under each row, whitespace-collapsed and wrapped to at most three indented lines with an ellipsis when truncated; agents without one omit the description block.
 
 #### `show` / `inspect`
 

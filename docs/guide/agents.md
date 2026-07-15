@@ -162,18 +162,24 @@ Once a few agents are working, the same `rimz agents` command reads the room and
 
 ```console
 $ rimz agents
-AGENT         STATUS   MODEL         CTX  TOKENS  AGE  DESC
+AGENT         STATUS   MODEL         CTX  TOKENS  AGE
 
 ⑂ auth-refresh · forge team
-@planner      waiting  opus@high      42%     78k   2m  which rotation strategy should we use?
-@coder        running  gpt-5.5@high   31%     54k   0s  wire up the refresh-token path
-@reviewer     idle     opus@high       3%     12k  15m  review the diff once coder lands
+@planner      waiting  opus@high      42%     78k   2m
+  which rotation strategy should we use?
+
+@coder        running  gpt-5.5@high   31%     54k   0s
+  wire up the refresh-token path
+
+@reviewer     idle     opus@high       3%     12k  15m
+  review the diff once coder lands
 
 query-engine
-@swift-otter  success  opus@high      78%    120k   8m  store refactor
+@swift-otter  success  opus@high      78%    120k   8m
+  store refactor
 ```
 
-`@planner` sits first because it stopped to ask you something; the columns read its status, model and effort, how full its context window is, tokens used, how long since it last moved, and what it is on. Add `--all` to widen past the current channel to every lane in the room, or a scope like `rimz agents '#auth-refresh'` to read one.
+`@planner` sits first because it stopped to ask you something; the columns read its status, model and effort, how full its context window is, tokens used, and how long since it last moved, while the indented line below says what it is on. Add `--all` to widen past the current channel to every lane in the room, or a scope like `rimz agents '#auth-refresh'` to read one.
 
 **Ask why one agent is where it is.** When a card raises a question you can't answer from one line, `rimz agents show` prints the full report for a single agent, so you see what you asked it, what it is spending, and where its pane lives without switching to it:
 
