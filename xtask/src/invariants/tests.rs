@@ -191,9 +191,9 @@ fn snapshot_projection_diagnostics_stay_debug_level() {
 #[test]
 fn pane_auto_use_invariant_allows_marked_run_failure_capture_only() {
     let root = temp_repo_root("pane-capture-boundary");
-    let allowed = root.join("crates/rimz/src/cli/agents_cmd/supervised/pane.rs");
+    let allowed = root.join("crates/rimz/src/cli/supervised/pane.rs");
     let codex_allowed = root.join("crates/rimz/src/sidebar/refresh/sessions.rs");
-    let bad = root.join("crates/rimz/src/cli/agents_cmd/supervised/bad.rs");
+    let bad = root.join("crates/rimz/src/cli/supervised/bad.rs");
     for path in [&allowed, &codex_allowed, &bad] {
         std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
     }

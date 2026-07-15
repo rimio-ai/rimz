@@ -794,7 +794,7 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
         root.join("xtask"),
     ];
     let agents_show_command = "crates/rimz/src/cli/agents_cmd/show.rs";
-    let run_failure_capture = root.join("crates/rimz/src/cli/agents_cmd/supervised/pane.rs");
+    let run_failure_capture = root.join("crates/rimz/src/cli/supervised/pane.rs");
     let codex_turn_death_confirmation = "crates/rimz/src/sidebar/refresh/sessions.rs";
     for needle in [
         concat!("capture", "_pane("),
