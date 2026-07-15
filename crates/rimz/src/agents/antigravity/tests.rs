@@ -233,7 +233,9 @@ fn hook_install_round_trips_existing_and_absent_statuslines() {
             INSTALLED_EVENT_LABELS
         );
         assert!(!install::managed(&hooks_path, &settings_path));
-        assert!(read_json(&hooks_path).get("rimz").is_none());
+        let restored_hooks = read_json(&hooks_path);
+        assert!(restored_hooks.get("rimz").is_none());
+        assert_eq!(restored_hooks["mine"]["Stop"][0]["command"], "my-stop");
         assert_eq!(read_json(&settings_path), original);
     }
 }
@@ -256,7 +258,7 @@ fn statusline_projects_model_account_and_context_usage() {
     let context = AntigravityAdapter
         .observe_context(
             "antigravity",
-            &json_value(r#"{"conversation_id":"11111111-1111-4111-8111-111111111111","version":"1.1.2","model":{"id":"Gemini 3.5 Flash (Medium)","display_name":"Gemini 3.5 Flash (Medium)"},"plan_tier":"ultra","email":"user@example.com","tool_confirmation_pending":true,"context_window":{"context_window_size":1048576,"used_percentage":8.4156,"remaining_percentage":91.5844,"current_usage":{"input_tokens":63382,"output_tokens":346,"cache_creation_input_tokens":0,"cache_read_input_tokens":20857}}}"#),
+            &json_value(r#"{"conversation_id":"11111111-1111-4111-8111-111111111111","version":"1.1.2","model":{"id":"Gemini 3.5 Flash (Medium)","display_name":"Gemini 3.5 Flash (Medium)"},"plan_tier":"ultra","email":"user@example.com","tool_confirmation_pending":true,"context_window":{"context_window_size":1048576,"used_percentage":8.4156,"remaining_percentage":91.5844,"current_usage":{"input_tokens":63382,"output_tokens":346,"cache_creation_input_tokens":0,"cache_read_input_tokens":20857}},"future_field":{"ignored":true}}"#),
         )
         .unwrap();
     assert_eq!(
@@ -332,7 +334,7 @@ fn statusline_prices_canonical_and_observed_model_ids_with_current_usage() {
         r#"{"agy-priced":{"input_cost_per_token":1e-6,"output_cost_per_token":2e-6,"cache_creation_input_token_cost":3e-6,"cache_read_input_token_cost":0.25e-6},"gemini-3.5-flash":{"input_cost_per_token":1.5e-6,"output_cost_per_token":9e-6,"cache_creation_input_token_cost":1.875e-6,"cache_read_input_token_cost":0.15e-6}}"#,
     );
     for (id, usage, expected) in [
-        ("agy-priced-via-router", (10, 20, 30, 40), 150e-6),
+        ("  agy-priced-via-router  ", (10, 20, 30, 40), 150e-6),
         (
             "Gemini 3.5 Flash (Medium)",
             (2_971, 630, 0, 16_270),
