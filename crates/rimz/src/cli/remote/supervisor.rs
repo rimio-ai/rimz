@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use rimz::remote::RemoteTarget;
 use rimz::remote::link::{
     LinkAck, LinkEvent, LinkMonitor, LinkProbe, blackout_after_from_env, control_check_spec,
     probe_interval_from_env, probe_stream_spec, probe_timeout_from_env,
@@ -18,6 +17,7 @@ use rimz::remote::reachability::{
     DIAL_TIMEOUT, DialGate, DialPlan, WaitVerdict, dial_interval_from_env, parse_dial_plan,
     ssh_config_query_spec,
 };
+use rimz::remote::{RemoteTarget, SshAttachPlan};
 
 const CONTROL_MASTER_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 const CONTROL_MASTER_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
@@ -26,15 +26,8 @@ const PROBE_RESPAWN_BACKOFF_MIN: Duration = Duration::from_secs(1);
 const PROBE_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const SSH_CONFIG_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) struct AttachSpecs {
-    pub(super) control: rimz::mux::CommandSpec,
-    pub(super) plain: rimz::mux::CommandSpec,
-}
-
 pub(super) fn supervise_remote(
-    first: &AttachSpecs,
-    retry: &AttachSpecs,
-    target: &RemoteTarget,
+    plan: &SshAttachPlan,
     control_path: &Path,
     setup_hint: &str,
 ) -> Result<()> {
@@ -42,8 +35,9 @@ pub(super) fn supervise_remote(
 
     let policy = ReconnectPolicy::from_env();
     let mut reconnect = ReconnectState::new(policy);
+    let target = plan.target();
     let host = target.host_display();
-    let dial_plan = resolve_dial_plan(&target.ssh_destination().destination);
+    let dial_plan = resolve_dial_plan(target.ssh_destination().as_str());
     let stop = AtomicBool::new(false);
     let mut outage_active = false;
     let mut first_attempt = true;
@@ -67,16 +61,20 @@ pub(super) fn supervise_remote(
             drop(events_tx);
             ProbeHandle::disabled()
         };
-        let specs = if first_attempt { first } else { retry };
+        let attempt = if first_attempt {
+            plan.initial()
+        } else {
+            plan.retry()
+        };
         first_attempt = false;
         let spec = if control_ready {
-            &specs.control
+            attempt.control(control_path)
         } else {
-            &specs.plain
+            attempt.plain()
         };
         let restore_existing_outage_after_gatetime = outage_active;
         let outcome = run_ssh_session(
-            spec,
+            &spec,
             host,
             &events_rx,
             &mut outage_active,

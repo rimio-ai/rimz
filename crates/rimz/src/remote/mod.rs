@@ -57,10 +57,7 @@ enum RemoteSpec {
 /// A parsed `[user@]host:<session-or-path>` SSH attach target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteTarget {
-    /// `[user@]host` exactly as ssh wants it (IPv6 keeps its brackets).
-    destination: String,
-    /// The host alone, for human-facing hints.
-    host: String,
+    destination: SshDestination,
     spec: RemoteSpec,
 }
 
@@ -71,6 +68,17 @@ pub struct SshDestination {
     pub destination: String,
     /// The host alone, for human-facing hints.
     pub host: String,
+}
+
+#[derive(Clone, Copy)]
+enum DestinationSuffix {
+    Forbidden,
+    Required,
+}
+
+struct ParsedDestination<'a> {
+    destination: SshDestination,
+    suffix: Option<&'a str>,
 }
 
 /// How a remote target string can fail to parse. Every message carries the
@@ -111,53 +119,10 @@ pub enum RemoteTargetError {
 impl RemoteTarget {
     /// Parse an scp-flavored `[user@]host:<session-or-path>` target.
     pub fn parse(input: &str) -> Result<Self, RemoteTargetError> {
-        if input.is_empty() {
-            return Err(RemoteTargetError::Empty);
-        }
-        // A bracketed IPv6 host opens the string or follows the `@` that ends
-        // the user prefix (scp's own rule); an `@[` past the first `:` is
-        // target content, not a host.
-        let bracket = if input.starts_with('[') {
-            Some(0)
-        } else {
-            match (input.find("@["), input.find(':')) {
-                (Some(at), Some(colon)) if at < colon => Some(at + 1),
-                (Some(at), None) => Some(at + 1),
-                _ => None,
-            }
-        };
-        let (user_at, host_raw, host, target) = if let Some(open) = bracket {
-            let rest = &input[open + 1..];
-            let close = rest
-                .find(']')
-                .ok_or_else(|| RemoteTargetError::UnclosedBracket(input.to_owned()))?;
-            let host = &rest[..close];
-            let target = rest[close + 1..]
-                .strip_prefix(':')
-                .ok_or_else(|| RemoteTargetError::MissingColon(input.to_owned()))?;
-            (&input[..open], format!("[{host}]"), host.to_owned(), target)
-        } else {
-            // The first `:` ends the host; the target keeps any `:` or `@` of
-            // its own. ssh splits user from host at the last `@` (usernames
-            // can carry their own), so the host hint does too.
-            let colon = input
-                .find(':')
-                .ok_or_else(|| RemoteTargetError::MissingColon(input.to_owned()))?;
-            let destination = &input[..colon];
-            let (user_at, host) = match destination.rfind('@') {
-                Some(at) => destination.split_at(at + 1),
-                None => ("", destination),
-            };
-            (
-                user_at,
-                host.to_owned(),
-                host.to_owned(),
-                &input[colon + 1..],
-            )
-        };
-        if host.is_empty() {
-            return Err(RemoteTargetError::EmptyHost(input.to_owned()));
-        }
+        let parsed = parse_destination(input, DestinationSuffix::Required)?;
+        let target = parsed
+            .suffix
+            .ok_or_else(|| RemoteTargetError::MissingColon(input.to_owned()))?;
         if target.is_empty() {
             return Err(RemoteTargetError::EmptyTarget(input.to_owned()));
         }
@@ -173,66 +138,114 @@ impl RemoteTarget {
             RemoteSpec::Session(target.to_owned())
         };
         Ok(Self {
-            destination: format!("{user_at}{host_raw}"),
-            host,
+            destination: parsed.destination,
             spec,
         })
     }
 
     /// The host alone (no user, no brackets), for human-facing hints.
     pub fn host_display(&self) -> &str {
-        &self.host
+        &self.destination.host
     }
 
     /// The SSH destination part of this target.
-    pub fn ssh_destination(&self) -> SshDestination {
-        SshDestination {
-            destination: self.destination.clone(),
-            host: self.host.clone(),
-        }
+    pub fn ssh_destination(&self) -> &SshDestination {
+        &self.destination
     }
 }
 
-/// Parse a colon-less `[user@]host` SSH destination.
-pub fn parse_ssh_destination(input: &str) -> Result<SshDestination, RemoteTargetError> {
+impl SshDestination {
+    /// Parse a colon-less `[user@]host` SSH destination.
+    pub fn parse(input: &str) -> Result<Self, RemoteTargetError> {
+        Ok(parse_destination(input, DestinationSuffix::Forbidden)?.destination)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.destination
+    }
+
+    pub fn host_display(&self) -> &str {
+        &self.host
+    }
+}
+
+fn parse_destination(
+    input: &str,
+    suffix: DestinationSuffix,
+) -> Result<ParsedDestination<'_>, RemoteTargetError> {
     if input.is_empty() {
         return Err(RemoteTargetError::Empty);
     }
+    // A bracketed IPv6 host opens the string or follows the `@` that ends the
+    // user prefix. In a room target, `@[` after the first `:` belongs to the
+    // suffix rather than the host.
     let bracket = if input.starts_with('[') {
         Some(0)
     } else {
-        input.rfind("@[").map(|at| at + 1)
+        let candidate = match suffix {
+            DestinationSuffix::Required => input.find("@["),
+            DestinationSuffix::Forbidden => input.rfind("@["),
+        }
+        .map(|at| at + 1);
+        match (candidate, suffix, input.find(':')) {
+            (Some(open), DestinationSuffix::Required, Some(colon)) if open > colon => None,
+            (candidate, _, _) => candidate,
+        }
     };
     if let Some(open) = bracket {
         let rest = &input[open + 1..];
         let close = rest
             .find(']')
             .ok_or_else(|| RemoteTargetError::UnclosedBracket(input.to_owned()))?;
-        if !rest[close + 1..].is_empty() {
-            return Err(RemoteTargetError::MissingColon(input.to_owned()));
-        }
+        let tail = &rest[close + 1..];
+        let parsed_suffix = match suffix {
+            DestinationSuffix::Required => Some(
+                tail.strip_prefix(':')
+                    .ok_or_else(|| RemoteTargetError::MissingColon(input.to_owned()))?,
+            ),
+            DestinationSuffix::Forbidden if tail.is_empty() => None,
+            DestinationSuffix::Forbidden => {
+                return Err(RemoteTargetError::MissingColon(input.to_owned()));
+            }
+        };
         let host = &rest[..close];
         if host.is_empty() {
             return Err(RemoteTargetError::EmptyHost(input.to_owned()));
         }
-        return Ok(SshDestination {
-            destination: format!("{}[{host}]", &input[..open]),
-            host: host.to_owned(),
+        return Ok(ParsedDestination {
+            destination: SshDestination {
+                destination: format!("{}[{host}]", &input[..open]),
+                host: host.to_owned(),
+            },
+            suffix: parsed_suffix,
         });
     }
-    if input.contains(':') {
-        return Err(RemoteTargetError::MissingColon(input.to_owned()));
-    }
-    let host = match input.rfind('@') {
-        Some(at) => &input[at + 1..],
-        None => input,
+    let (destination, parsed_suffix) = match suffix {
+        DestinationSuffix::Required => {
+            let colon = input
+                .find(':')
+                .ok_or_else(|| RemoteTargetError::MissingColon(input.to_owned()))?;
+            (&input[..colon], Some(&input[colon + 1..]))
+        }
+        DestinationSuffix::Forbidden if input.contains(':') => {
+            return Err(RemoteTargetError::MissingColon(input.to_owned()));
+        }
+        DestinationSuffix::Forbidden => (input, None),
+    };
+    // ssh splits user from host at the last `@`; usernames may contain `@`.
+    let host = match destination.rfind('@') {
+        Some(at) => &destination[at + 1..],
+        None => destination,
     };
     if host.is_empty() {
         return Err(RemoteTargetError::EmptyHost(input.to_owned()));
     }
-    Ok(SshDestination {
-        destination: input.to_owned(),
-        host: host.to_owned(),
+    Ok(ParsedDestination {
+        destination: SshDestination {
+            destination: destination.to_owned(),
+            host: host.to_owned(),
+        },
+        suffix: parsed_suffix,
     })
 }
 
@@ -251,40 +264,97 @@ pub fn infocmp_program() -> String {
     std::env::var(INFOCMP_BIN_ENV).unwrap_or_else(|_| "infocmp".to_owned())
 }
 
-/// Compile a remote target into the full ssh invocation.
-///
-/// The keepalive options give the reconnect loop its dead-link signal
-/// (~15s detection); `-t` forces a remote PTY so the room renders
-/// interactively and carries the local `$TERM`, which the snippet provisions
-/// when needed; `--` stops ssh option parsing before a destination that could
-/// look flag-ish. The final argument is the guarded snippet — one argv element;
-/// ssh hands it to the remote login shell as the command string.
-pub fn ssh_attach_spec(
-    target: &RemoteTarget,
-    no_resume: bool,
-    mux: Option<MuxName>,
-    term: &TermPlan,
-    truecolor: bool,
-    reconnect: bool,
-    control: Option<&Path>,
-) -> CommandSpec {
-    CommandSpec::new(ssh_program())
-        .args([
-            "-o",
-            "ServerAliveInterval=5",
-            "-o",
-            "ServerAliveCountMax=3",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "Compression=yes",
-        ])
-        .args(control.into_iter().flat_map(link::control_options))
-        .args(["-t", "--"])
-        .arg(target.destination.clone())
-        .arg(guarded_snippet(
-            target, no_resume, mux, term, truecolor, reconnect,
-        ))
+/// Invariant inputs for one terminal attach lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshAttachOptions {
+    pub target: RemoteTarget,
+    pub no_resume: bool,
+    pub mux: Option<MuxName>,
+    pub term: TermPlan,
+    pub truecolor: bool,
+}
+
+/// Compiles initial and retry SSH attempts without exposing reconnect flags or
+/// duplicating the four plain/ControlMaster command variants at the caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshAttachPlan {
+    options: SshAttachOptions,
+}
+
+#[derive(Clone, Copy)]
+enum AttemptPhase {
+    Initial,
+    Retry,
+}
+
+enum ControlMode<'a> {
+    Plain,
+    Master(&'a Path),
+}
+
+pub struct SshAttachAttempt<'a> {
+    plan: &'a SshAttachPlan,
+    phase: AttemptPhase,
+}
+
+impl SshAttachPlan {
+    pub fn new(options: SshAttachOptions) -> Self {
+        Self { options }
+    }
+
+    pub fn target(&self) -> &RemoteTarget {
+        &self.options.target
+    }
+
+    pub fn initial(&self) -> SshAttachAttempt<'_> {
+        SshAttachAttempt {
+            plan: self,
+            phase: AttemptPhase::Initial,
+        }
+    }
+
+    pub fn retry(&self) -> SshAttachAttempt<'_> {
+        SshAttachAttempt {
+            plan: self,
+            phase: AttemptPhase::Retry,
+        }
+    }
+}
+
+impl SshAttachAttempt<'_> {
+    pub fn plain(&self) -> CommandSpec {
+        self.compile(ControlMode::Plain)
+    }
+
+    pub fn control(&self, path: &Path) -> CommandSpec {
+        self.compile(ControlMode::Master(path))
+    }
+
+    /// Compile one full SSH invocation. Keepalive options make transport loss
+    /// observable; `-t` carries the terminal; `--` fences the destination; the
+    /// guarded snippet remains one argument for the remote login shell.
+    fn compile(&self, control: ControlMode<'_>) -> CommandSpec {
+        let options = &self.plan.options;
+        let control_path = match control {
+            ControlMode::Plain => None,
+            ControlMode::Master(path) => Some(path),
+        };
+        CommandSpec::new(ssh_program())
+            .args([
+                "-o",
+                "ServerAliveInterval=5",
+                "-o",
+                "ServerAliveCountMax=3",
+                "-o",
+                "ConnectTimeout=10",
+                "-o",
+                "Compression=yes",
+            ])
+            .args(control_path.into_iter().flat_map(link::control_options))
+            .args(["-t", "--"])
+            .arg(options.target.ssh_destination().as_str())
+            .arg(guarded_snippet(options, self.phase))
+    }
 }
 
 /// How the remote session resolves the local terminal. `-t` carries the local
@@ -363,34 +433,31 @@ pub fn term_plan_from(
 /// The single remote shell command: repair the non-login-shell PATH, fail
 /// with the install fix when the host has no `rimz`, provision the carried
 /// terminal when needed, then exec into the room.
-fn guarded_snippet(
-    target: &RemoteTarget,
-    no_resume: bool,
-    mux: Option<MuxName>,
-    term: &TermPlan,
-    truecolor: bool,
-    reconnect: bool,
-) -> String {
-    let (verb, arg) = match &target.spec {
+fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase) -> String {
+    let (verb, arg) = match &options.target.spec {
         RemoteSpec::Path(path) => ("start", quote_remote_path(path)),
         RemoteSpec::Session(name) => ("attach", sh_quote(name)),
     };
     let mut rimz = format!("rimz {verb} --attach");
-    if no_resume {
+    if options.no_resume {
         rimz.push_str(" --no-resume");
     }
-    if let Some(mux) = mux {
+    if let Some(mux) = options.mux {
         rimz.push_str(&format!(" --mux {mux}"));
     }
     let mut env_setup = String::new();
-    if reconnect {
+    if matches!(phase, AttemptPhase::Retry) {
         env_setup.push_str("export RIMZ_REMOTE_RECONNECT=1; ");
     }
-    if truecolor {
+    if options.truecolor {
         env_setup.push_str("export COLORTERM=truecolor; ");
     }
-    env_setup.push_str(&term.remote_setup());
-    remote_exec_snippet(&target.host, &env_setup, &format!("{rimz} -- {arg}"))
+    env_setup.push_str(&options.term.remote_setup());
+    remote_exec_snippet(
+        options.target.host_display(),
+        &env_setup,
+        &format!("{rimz} -- {arg}"),
+    )
 }
 
 pub(crate) fn remote_exec_snippet(

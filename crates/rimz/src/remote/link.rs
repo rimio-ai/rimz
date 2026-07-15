@@ -242,7 +242,7 @@ pub fn control_check_spec(target: &RemoteTarget, control_path: &Path) -> Command
         "-o".to_owned(),
         "BatchMode=yes".to_owned(),
         "--".to_owned(),
-        target.destination.clone(),
+        target.ssh_destination().as_str().to_owned(),
     ])
 }
 
@@ -256,7 +256,7 @@ pub fn probe_stream_spec(target: &RemoteTarget, control_path: &Path) -> CommandS
         "BatchMode=yes".to_owned(),
         "--".to_owned(),
     ]);
-    spec = spec.arg(target.destination.clone());
+    spec = spec.arg(target.ssh_destination().as_str());
     spec.arg(link_ingest_snippet(target))
 }
 

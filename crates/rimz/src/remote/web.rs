@@ -58,13 +58,13 @@ pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16)
             "-L",
         ])
         .arg(format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"))
-        .args(["--".to_owned(), target.destination.clone()])
+        .args(["--", target.ssh_destination().as_str()])
 }
 
 fn one_shot_spec(target: &RemoteTarget, rimz: &str) -> CommandSpec {
     CommandSpec::new(ssh_program())
         .args(["-o", "ConnectTimeout=10", "--"])
-        .arg(target.destination.clone())
+        .arg(target.ssh_destination().as_str())
         .arg(web_snippet(target, rimz))
 }
 

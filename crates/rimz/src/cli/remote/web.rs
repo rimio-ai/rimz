@@ -93,7 +93,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     let tunnel_spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
     let guard = spawn_tunnel_supervisor(
         tunnel_spec,
-        remote.target.ssh_destination().destination,
+        remote.target.ssh_destination().destination.clone(),
         remote.target.host_display().to_owned(),
         remote.reconnect,
     )?;

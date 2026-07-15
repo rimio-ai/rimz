@@ -12,8 +12,8 @@ use crate::cli::room::{AttachAction, AttachMode, attach_action, exec_attach_comm
 use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
 use rimz::remote::{
-    RemoteTarget, RemoteTargetError, SshDestination, TermPlan, infocmp_program,
-    parse_ssh_destination, ssh_attach_spec, term_plan_from,
+    RemoteTarget, RemoteTargetError, SshAttachOptions, SshAttachPlan, SshDestination, TermPlan,
+    infocmp_program, term_plan_from,
 };
 
 mod bandwidth;
@@ -320,11 +320,13 @@ fn resolve_connect(
 
 fn resolve_setup_destination(input: &str, aliases: &RemoteAliases) -> Result<SshDestination> {
     if let Some(alias) = aliases.get(input) {
-        return Ok(RemoteTarget::parse(&alias.target)?.ssh_destination());
+        return Ok(RemoteTarget::parse(&alias.target)?
+            .ssh_destination()
+            .clone());
     }
     match RemoteTarget::parse(input) {
-        Ok(target) => Ok(target.ssh_destination()),
-        Err(RemoteTargetError::MissingColon(_)) => Ok(parse_ssh_destination(input)?),
+        Ok(target) => Ok(target.ssh_destination().clone()),
+        Err(RemoteTargetError::MissingColon(_)) => Ok(SshDestination::parse(input)?),
         Err(err) => Err(err.into()),
     }
 }
@@ -361,15 +363,14 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 bail!("--web is web-only and has no SSH attach command; drop --print");
             }
             let term = remote_term_plan();
-            let plain_spec = ssh_attach_spec(
-                &remote.target,
-                remote.no_resume,
-                remote.mux,
-                &term,
-                rimz::tui::truecolor(),
-                false,
-                None,
-            );
+            let plan = SshAttachPlan::new(SshAttachOptions {
+                target: remote.target,
+                no_resume: remote.no_resume,
+                mux: remote.mux,
+                term,
+                truecolor: rimz::tui::truecolor(),
+            });
+            let plain_spec = plan.initial().plain();
             supervisor::print_remote_command(&plain_spec);
             Ok(())
         }
@@ -385,60 +386,20 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 return web::run_remote_web(&remote);
             }
             let term = remote_term_plan();
-            let truecolor = rimz::tui::truecolor();
-            let plain_spec = ssh_attach_spec(
-                &remote.target,
-                remote.no_resume,
-                remote.mux,
-                &term,
-                truecolor,
-                false,
-                None,
-            );
+            let plan = SshAttachPlan::new(SshAttachOptions {
+                target: remote.target,
+                no_resume: remote.no_resume,
+                mux: remote.mux,
+                term,
+                truecolor: rimz::tui::truecolor(),
+            });
             if remote.reconnect {
                 let control = rimz::remote::link::validated_control_path()
                     .context("checking SSH ControlMaster socket path")?;
-                let first = supervisor::AttachSpecs {
-                    control: ssh_attach_spec(
-                        &remote.target,
-                        remote.no_resume,
-                        remote.mux,
-                        &term,
-                        truecolor,
-                        false,
-                        Some(&control),
-                    ),
-                    plain: plain_spec,
-                };
-                let retry = supervisor::AttachSpecs {
-                    control: ssh_attach_spec(
-                        &remote.target,
-                        remote.no_resume,
-                        remote.mux,
-                        &term,
-                        truecolor,
-                        true,
-                        Some(&control),
-                    ),
-                    plain: ssh_attach_spec(
-                        &remote.target,
-                        remote.no_resume,
-                        remote.mux,
-                        &term,
-                        truecolor,
-                        true,
-                        None,
-                    ),
-                };
-                supervisor::supervise_remote(
-                    &first,
-                    &retry,
-                    &remote.target,
-                    &control,
-                    remote.origin.as_str(),
-                )
+                supervisor::supervise_remote(&plan, &control, remote.origin.as_str())
             } else {
-                supervisor::report_remote_connect(remote.target.host_display(), false);
+                supervisor::report_remote_connect(plan.target().host_display(), false);
+                let plain_spec = plan.initial().plain();
                 exec_attach_command(&plain_spec)
             }
         }
@@ -533,31 +494,13 @@ mod tests {
             .unwrap();
 
         let raw = resolve_connect("prod:raw-session", false, false, None, &aliases).unwrap();
-        let raw_spec = ssh_attach_spec(
-            &raw.target,
-            raw.no_resume,
-            raw.mux,
-            &TermPlan::Keep,
-            false,
-            false,
-            None,
-        );
-        assert_eq!(raw_spec.args[10], "prod");
+        assert_eq!(raw.target.ssh_destination().as_str(), "prod");
         assert_eq!(raw.origin, "prod:raw-session");
         assert!(raw.reconnect);
         assert!(!raw.no_resume);
 
         let named = resolve_connect("prod", false, false, None, &aliases).unwrap();
-        let named_spec = ssh_attach_spec(
-            &named.target,
-            named.no_resume,
-            named.mux,
-            &TermPlan::Keep,
-            false,
-            false,
-            None,
-        );
-        assert_eq!(named_spec.args[10], "prod-box");
+        assert_eq!(named.target.ssh_destination().as_str(), "prod-box");
         assert_eq!(named.origin, "prod");
         assert!(named.reconnect);
         assert!(!named.no_resume);

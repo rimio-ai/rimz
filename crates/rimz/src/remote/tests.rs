@@ -4,6 +4,22 @@ fn parse(input: &str) -> RemoteTarget {
     RemoteTarget::parse(input).expect("target parses")
 }
 
+fn attach_plan(
+    target: &str,
+    no_resume: bool,
+    mux: Option<MuxName>,
+    term: TermPlan,
+    truecolor: bool,
+) -> SshAttachPlan {
+    SshAttachPlan::new(SshAttachOptions {
+        target: parse(target),
+        no_resume,
+        mux,
+        term,
+        truecolor,
+    })
+}
+
 #[test]
 fn target_grammar_accepts_supported_forms() {
     struct TargetCase {
@@ -82,7 +98,12 @@ fn target_grammar_accepts_supported_forms() {
         },
     ] {
         let target = parse(case.input);
-        assert_eq!(target.destination, case.destination, "{}", case.input);
+        assert_eq!(
+            target.ssh_destination().as_str(),
+            case.destination,
+            "{}",
+            case.input
+        );
         assert_eq!(target.host_display(), case.host, "{}", case.input);
         assert_eq!(target.spec, case.spec, "{}", case.input);
     }
@@ -142,7 +163,7 @@ fn ssh_destination_grammar_accepts_supported_forms() {
         ("[::1]", "[::1]", "::1"),
         ("user@[::1]", "user@[::1]", "::1"),
     ] {
-        let parsed = parse_ssh_destination(input).expect("destination parses");
+        let parsed = SshDestination::parse(input).expect("destination parses");
         assert_eq!(parsed.destination, destination, "{input}");
         assert_eq!(parsed.host, host, "{input}");
     }
@@ -164,7 +185,7 @@ fn ssh_destination_grammar_rejects_malformed_forms() {
         ("dev-box:room", ErrorKind::MissingColon),
         ("[::1", ErrorKind::UnclosedBracket),
     ] {
-        let err = parse_ssh_destination(input).expect_err("destination must fail");
+        let err = SshDestination::parse(input).expect_err("destination must fail");
         assert!(
             matches!(
                 (kind, err),
@@ -192,28 +213,20 @@ fn quote_and_display_are_shell_safe() {
     );
     assert_eq!(quote_remote_path("/abs path"), "'/abs path'");
 
-    let line = display_ssh_command(&ssh_attach_spec(
-        &parse("dev-box:query-engine"),
-        false,
-        None,
-        &TermPlan::Keep,
-        false,
-        false,
-        None,
-    ));
+    let line = display_ssh_command(
+        &attach_plan("dev-box:query-engine", false, None, TermPlan::Keep, false)
+            .initial()
+            .plain(),
+    );
     assert!(line.starts_with("ssh -o ServerAliveInterval=5"), "{line}");
     assert!(line.contains(" -t -- dev-box '"), "{line}");
     assert!(line.ends_with('\''), "{line}");
 
-    let v6 = display_ssh_command(&ssh_attach_spec(
-        &parse("[::1]:query-engine"),
-        false,
-        None,
-        &TermPlan::Keep,
-        false,
-        false,
-        None,
-    ));
+    let v6 = display_ssh_command(
+        &attach_plan("[::1]:query-engine", false, None, TermPlan::Keep, false)
+            .initial()
+            .plain(),
+    );
     assert!(
         v6.contains(" -- '[::1]' "),
         "bracketed destinations quote against shell globbing: {v6}"
@@ -278,7 +291,7 @@ fn term_plan_selects_keep_copy_or_downgrade() {
 }
 
 #[test]
-fn ssh_attach_spec_compiles_session_path_flags_control_and_term() {
+fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
     struct SpecCase {
         name: &'static str,
         target: &'static str,
@@ -395,15 +408,18 @@ fn ssh_attach_spec_compiles_session_path_flags_control_and_term() {
             )],
         },
     ] {
-        let spec = ssh_attach_spec(
-            &parse(case.target),
+        let plan = attach_plan(
+            case.target,
             case.no_resume,
             case.mux,
-            &case.term,
+            case.term,
             case.truecolor,
-            false,
-            case.control,
         );
+        let attempt = plan.initial();
+        let spec = match case.control {
+            Some(path) => attempt.control(path),
+            None => attempt.plain(),
+        };
         assert_eq!(spec.program, "ssh", "{}", case.name);
         assert_eq!(
             spec.args[..8],
@@ -463,10 +479,16 @@ fn ssh_attach_spec_compiles_session_path_flags_control_and_term() {
 }
 
 #[test]
-fn ssh_attach_spec_marks_retries_only() {
-    let target = parse("dev-box:~/code/query-engine");
-    let attended = ssh_attach_spec(&target, false, None, &TermPlan::Keep, false, false, None);
-    let retry = ssh_attach_spec(&target, false, None, &TermPlan::Keep, false, true, None);
+fn ssh_attach_plan_marks_retries_only() {
+    let plan = attach_plan(
+        "dev-box:~/code/query-engine",
+        false,
+        None,
+        TermPlan::Keep,
+        false,
+    );
+    let attended = plan.initial().plain();
+    let retry = plan.retry().plain();
 
     assert!(
         !attended.args.last().unwrap().contains(REMOTE_RECONNECT_ENV),
