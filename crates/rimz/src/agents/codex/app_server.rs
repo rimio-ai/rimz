@@ -67,7 +67,10 @@ use wire::{
 const APP_SERVER_DEADLINE_SECS: u64 = 6;
 const APP_SERVER_DEADLINE: Duration = Duration::from_secs(APP_SERVER_DEADLINE_SECS);
 
-/// Skip an app-server refresh when its owned fields were written recently.
+/// Skip an app-server refresh when its owned fields were written recently, so
+/// two close turn boundaries (a quick `UserPromptSubmit` then `Stop`) do not
+/// each spawn an app-server. Transcript context is stat-gated separately and
+/// always gets a chance to merge.
 pub const REFRESH_THROTTLE_SECS: i64 = 20;
 
 /// Whether app-server-owned context fields need another refresh.
