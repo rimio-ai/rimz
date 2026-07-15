@@ -310,7 +310,13 @@ fn task_catalog(globals: &GlobalFlags) -> Result<TaskCatalog> {
 pub(super) fn load_all_tasks(
     globals: &GlobalFlags,
 ) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
-    Ok(task_catalog(globals)?
+    load_all_tasks_from_project_root(project_root_for_globals(globals).as_deref())
+}
+
+pub(super) fn load_all_tasks_from_project_root(
+    project_root: Option<&Path>,
+) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
+    Ok(TaskCatalog::load(project_root)?
         .visible()
         .iter()
         .map(|(name, task)| (name.clone(), (task.entry.clone(), task.source)))

@@ -199,9 +199,10 @@ pub(super) fn room_open(root: &Path) -> bool {
 }
 
 pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
+    let project_root = project_root_for_globals(globals);
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Alternate)?;
     loop {
-        repaint_watch(globals, args.hold)?;
+        repaint_watch(project_root.as_deref(), args.hold)?;
         match event::poll(Duration::from_secs(1)) {
             Ok(true) => match event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => match key.code {
@@ -222,7 +223,7 @@ pub(super) fn watch(args: WatchArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
-fn repaint_watch(globals: &GlobalFlags, hold: bool) -> Result<()> {
+fn repaint_watch(project_root: Option<&Path>, hold: bool) -> Result<()> {
     use ratatui::crossterm::{
         cursor::MoveTo,
         execute,
@@ -230,7 +231,7 @@ fn repaint_watch(globals: &GlobalFlags, hold: bool) -> Result<()> {
     };
 
     let mut frame = Vec::new();
-    render_watch_frame(&mut frame, globals, hold)?;
+    render_watch_frame(&mut frame, project_root, hold)?;
     if frame.last() == Some(&b'\n') {
         frame.pop();
         if frame.last() == Some(&b'\r') {
@@ -245,8 +246,8 @@ fn repaint_watch(globals: &GlobalFlags, hold: bool) -> Result<()> {
     Ok(())
 }
 
-fn render_watch_frame(out: &mut impl Write, globals: &GlobalFlags, hold: bool) -> Result<()> {
-    let tasks = load_all_tasks(globals)?;
+fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: bool) -> Result<()> {
+    let tasks = load_all_tasks_from_project_root(project_root)?;
     let now = Timestamp::now();
     let pause_entries = pauses::load();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());

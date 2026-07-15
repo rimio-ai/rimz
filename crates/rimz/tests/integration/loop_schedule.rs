@@ -1,10 +1,13 @@
 //! Integration coverage for `rimz loop` instance-bound delivery.
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use jiff::{SignedDuration, Timestamp};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
 use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
@@ -18,6 +21,120 @@ use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::MessageStatus;
 
 use crate::common::{Env, ScrubSessionEnvExt};
+
+#[test]
+fn loop_watch_resolves_workspace_git_once_and_reloads_tasks() {
+    let env = Env::new();
+    let Some(real_git) = find_real_git() else {
+        return;
+    };
+    let initialized = Command::new(&real_git)
+        .args(["-C", env.project_root.to_str().expect("utf-8 project root")])
+        .args(["init", "-q"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !initialized {
+        return;
+    }
+
+    let bin_dir = env.home_root.join("git-trace-bin");
+    std::fs::create_dir_all(&bin_dir).expect("mkdir git trace bin");
+    std::os::unix::fs::symlink(
+        crate::common::cargo_bin("git-trace", env!("CARGO_BIN_EXE_git-trace")),
+        bin_dir.join("git"),
+    )
+    .expect("symlink git trace shim");
+    let git_log = env.home_root.join("loop-watch-git.log");
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("open loop watch pty");
+    let mut cmd = CommandBuilder::new(env.rimz_bin());
+    cmd.scrub_session_env();
+    cmd.args(["loop", "watch", "--hold"]);
+    cmd.cwd(env.project_root.as_os_str());
+    cmd.env("XDG_STATE_HOME", env.state_root());
+    cmd.env("XDG_RUNTIME_DIR", &env.runtime_root);
+    cmd.env("XDG_CONFIG_HOME", env.config_root());
+    cmd.env("HOME", &env.home_root);
+    cmd.env("SHELL", "/bin/sh");
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("RIMZ_MESSAGE_INTERVAL_MS", "0");
+    cmd.env("RIMZ_TEST_GIT_LOG", &git_log);
+    cmd.env("RIMZ_TEST_REAL_GIT", &real_git);
+    cmd.env("PATH", crate::common::path_with_front(&bin_dir));
+    cmd.env_remove("ENV");
+    cmd.env_remove("BASH_ENV");
+    cmd.env_remove("ZDOTDIR");
+    cmd.env_remove("RUST_LOG");
+
+    let mut child = pair.slave.spawn_command(cmd).expect("spawn loop watch");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone pty reader");
+    let reader_thread = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        output
+    });
+
+    let first_deadline = Instant::now() + Duration::from_millis(1_200);
+    let mut exited_early = None;
+    while Instant::now() < first_deadline {
+        if let Some(status) = child.try_wait().expect("poll loop watch") {
+            exited_early = Some(status);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.watch-reloaded]\ncheck = \"true\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+    let final_deadline = Instant::now() + Duration::from_millis(1_300);
+    while exited_early.is_none() && Instant::now() < final_deadline {
+        if let Some(status) = child.try_wait().expect("poll loop watch") {
+            exited_early = Some(status);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    if exited_early.is_none() {
+        child.kill().expect("terminate loop watch");
+        let _ = child.wait().expect("reap loop watch");
+    }
+    drop(pair.master);
+    let output =
+        String::from_utf8_lossy(&reader_thread.join().expect("join pty reader")).into_owned();
+    assert!(
+        exited_early.is_none(),
+        "loop watch exited before multiple repaints: {exited_early:?}\n{output}"
+    );
+    assert!(
+        output.contains("watch-reloaded"),
+        "loop watch should reload task files after startup:\n{output}"
+    );
+
+    let git_trace = std::fs::read_to_string(&git_log).expect("read loop watch git trace");
+    for probe in [
+        "git\trev-parse\t--show-toplevel",
+        "git\trev-parse\t--git-common-dir",
+        "git\trev-parse\t--abbrev-ref\tHEAD",
+    ] {
+        assert_eq!(
+            git_trace.lines().filter(|line| *line == probe).count(),
+            1,
+            "workspace probe should run once at startup: {probe}\n{git_trace}",
+        );
+    }
+}
 
 #[test]
 fn loop_add_bind_pins_live_session_and_run_queues_prompt() {
@@ -2329,4 +2446,10 @@ fn git_ok(cwd: &Path, args: &[&str]) -> bool {
         .args(args)
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn find_real_git() -> Option<std::path::PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join("git"))
+        .find(|candidate| candidate.is_file())
 }
