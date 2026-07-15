@@ -44,8 +44,17 @@ pub(super) struct Grid {
     /// `cells[col][row]` metric for an in-range day; `None` for a future day in
     /// the current week, drawn blank like GitHub.
     pub(super) cells: Vec<[Option<f64>; 7]>,
-    pub(super) max: f64,
+    pub(super) ceiling: f64,
 }
+
+/// Robust ceiling so one outlier day does not compress the ramp for every
+/// other active day.
+const HEAT_CEILING_PERCENTILE: f64 = 0.90;
+/// Daily usage is heavy-tailed; a square-root response spreads the mid-range
+/// perceptually evenly across the ramp.
+const HEAT_GAMMA: f64 = 0.5;
+/// Any active day clearly clears empty.
+const HEAT_TRACE_FLOOR: f64 = 0.15;
 
 impl Grid {
     pub(super) fn build(
@@ -56,7 +65,7 @@ impl Grid {
     ) -> Self {
         let last_monday = week_start(today_day);
         let mut cells = Vec::with_capacity(weeks);
-        let mut max = 0.0_f64;
+        let mut active = Vec::new();
         for col in 0..weeks {
             let col_monday = last_monday - ((weeks - 1 - col) as i64) * 7;
             let mut week = [None; 7];
@@ -67,15 +76,24 @@ impl Grid {
                 }
                 let value = by_day.get(&day).map(|d| metric(d, dollars)).unwrap_or(0.0);
                 *slot = Some(value);
-                max = max.max(value);
+                if value > 0.0 {
+                    active.push(value);
+                }
             }
             cells.push(week);
         }
+        active.sort_by(f64::total_cmp);
+        let ceiling = if active.is_empty() {
+            0.0
+        } else {
+            let rank = (HEAT_CEILING_PERCENTILE * active.len() as f64).ceil() as usize;
+            active[rank - 1]
+        };
         Self {
             weeks,
             today_day,
             cells,
-            max,
+            ceiling,
         }
     }
 
@@ -84,16 +102,26 @@ impl Grid {
     }
 }
 
-/// Map a cell value onto a ramp index `0..=4`, scaled to the busiest day in
-/// view, so the texture reads against your own rhythm. `·` (0) marks a day with
+/// Shape a cell value against the robust heat ceiling, spreading heavy-tailed
+/// daily usage across the perceptual ramp while keeping trace activity visible.
+pub(super) fn shade(value: f64, ceiling: f64) -> f64 {
+    if value <= 0.0 || ceiling <= 0.0 {
+        return 0.0;
+    }
+    (value / ceiling)
+        .clamp(0.0, 1.0)
+        .powf(HEAT_GAMMA)
+        .max(HEAT_TRACE_FLOOR)
+}
+
+/// Map a shaped intensity onto a ramp index `0..=4`. `·` (0) marks a day with
 /// no usage; any active day reads at least `░`, so an active run renders as
 /// activity rather than a gap.
-pub(super) fn level(value: f64, max: f64) -> usize {
-    if value <= 0.0 || max <= 0.0 {
+pub(super) fn level(t: f64) -> usize {
+    if t <= 0.0 {
         return 0;
     }
-    let frac = (value / max).clamp(0.0, 1.0);
-    1 + (frac * 3.0).round() as usize
+    (1 + (t * 3.0).round() as usize).min(4)
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
@@ -247,8 +275,14 @@ pub(super) fn heatmap_lines(
         for week in &grid.cells {
             match week[row] {
                 Some(value) => {
-                    let lvl = level(value, grid.max);
-                    line.push_str(&render::paint(styles[lvl], &RAMP[lvl].to_string()));
+                    let t = shade(value, grid.ceiling);
+                    let lvl = level(t);
+                    let style = if lvl == 0 {
+                        render::palette::FAINT
+                    } else {
+                        heat_color(t)
+                    };
+                    line.push_str(&render::paint(style, &RAMP[lvl].to_string()));
                     line.push(' ');
                 }
                 None => line.push_str("  "),
@@ -928,23 +962,22 @@ pub(super) fn active_tab() -> anstyle::Style {
         .bold()
 }
 
-/// One cool ramp, lightness-varying, held distinct from the status reds and
-/// greens so a busy day reads as volume, not as good or wrong. Density carries
-/// the reading under `NO_COLOR`; this only reinforces it.
-pub(super) fn ramp_styles() -> [anstyle::Style; 5] {
-    let scale = |(r, g, b): (u8, u8, u8), f: f32| {
-        (
-            (r as f32 * f) as u8,
-            (g as f32 * f) as u8,
-            (b as f32 * f) as u8,
-        )
-    };
+/// A continuous cool ramp, held distinct from the status reds and greens so a
+/// busy day reads as volume, not as good or wrong. Density carries the reading
+/// under `NO_COLOR`; this only reinforces it.
+pub(super) fn heat_color(t: f64) -> anstyle::Style {
     let cool = Semantic::DEFAULT.cool;
+    let low = rimz::sidebar_pane::render::blend(Semantic::DEFAULT.faint, cool, 0.35);
+    render::palette::rgb(rimz::sidebar_pane::render::blend(low, cool, t as f32))
+}
+
+/// The compact key samples the continuous ramp at four even stops.
+pub(super) fn ramp_styles() -> [anstyle::Style; 5] {
     [
         render::palette::rgb(Semantic::DEFAULT.faint),
-        render::palette::rgb(scale(cool, 0.50)),
-        render::palette::rgb(scale(cool, 0.66)),
-        render::palette::rgb(scale(cool, 0.82)),
-        render::palette::rgb(cool),
+        heat_color(0.25),
+        heat_color(0.5),
+        heat_color(0.75),
+        heat_color(1.0),
     ]
 }

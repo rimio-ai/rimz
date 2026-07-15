@@ -82,17 +82,24 @@ fn monday_is_row_zero() {
 }
 
 #[test]
-fn level_scales_to_the_busiest_day() {
-    assert_eq!(level(0.0, 0.0), 0, "empty graph stays empty");
-    assert_eq!(level(0.0, 100.0), 0, "zero usage stays empty");
-    assert_eq!(level(100.0, 100.0), 4, "the busiest day is full");
-    assert_eq!(level(50.0, 100.0), 3);
-    assert_eq!(
-        level(12.0, 100.0),
-        1,
-        "a low but active day reads as activity"
-    );
-    assert_eq!(level(1.0, 100.0), 1, "trace activity clears empty");
+fn shade_spreads_active_values_against_the_ceiling() {
+    assert_eq!(shade(0.0, 0.0), 0.0, "empty graph stays empty");
+    assert_eq!(shade(0.0, 100.0), 0.0, "zero usage stays empty");
+    assert_eq!(shade(10.0, 0.0), 0.0, "empty graph has no ceiling");
+    assert_eq!(shade(100.0, 100.0), 1.0, "the ceiling is full");
+    assert!(shade(50.0, 100.0) > shade(25.0, 100.0));
+    assert_eq!(shade(1.0, 1000.0), 0.15);
+    assert_eq!(shade(1000.0, 100.0), 1.0, "values above the ceiling clamp");
+}
+
+#[test]
+fn level_maps_shaped_intensity_onto_every_active_glyph() {
+    assert_eq!(level(0.0), 0);
+    assert_eq!(level(0.15), 1, "trace activity clears empty");
+    assert_eq!(level(0.2), 2);
+    assert_eq!(level(0.5), 3);
+    assert_eq!(level(0.9), 4);
+    assert_eq!(level(1.0), 4);
 }
 
 #[test]
@@ -104,7 +111,7 @@ fn grid_places_today_in_the_last_column_and_blanks_the_future() {
     let grid = Grid::build(&by_day, today, 4, false);
 
     assert_eq!(grid.cells.len(), 4);
-    assert!((grid.max - 100.0).abs() < f64::EPSILON);
+    assert!((grid.ceiling - 100.0).abs() < f64::EPSILON);
     // Today sits in the final column at its weekday row.
     let row = dow_mon0(today) as usize;
     assert_eq!(grid.cells[3][row], Some(100.0));
@@ -112,6 +119,24 @@ fn grid_places_today_in_the_last_column_and_blanks_the_future() {
     if row < 6 {
         assert_eq!(grid.cells[3][row + 1], None);
     }
+}
+
+#[test]
+fn grid_ceiling_ignores_one_spike_and_handles_one_active_day() {
+    let today = 20_009; // Sunday, so both weeks are complete.
+    let first_day = week_start(today) - 7;
+    let mut by_day = BTreeMap::new();
+    for offset in 0..9 {
+        by_day.insert(first_day + offset, day(10, 0.0));
+    }
+    by_day.insert(first_day + 9, day(1000, 0.0));
+
+    let grid = Grid::build(&by_day, today, 2, false);
+    assert_eq!(grid.ceiling, 10.0, "p90 excludes the single spike");
+
+    let one_day = BTreeMap::from([(today, day(42, 0.0))]);
+    let grid = Grid::build(&one_day, today, 2, false);
+    assert_eq!(grid.ceiling, 42.0);
 }
 
 #[test]

@@ -45,6 +45,7 @@ pub(crate) use self::ui_state::{
     BodyFilter, Browse, DashboardTab, FrozenOrder, FrozenRow, GateNotice, ManualScroll, OrderHold,
 };
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
+pub use oklab::blend;
 pub(crate) use scrollbar::ScrollbarFade;
 
 use std::collections::HashSet;

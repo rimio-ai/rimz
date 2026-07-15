@@ -1,18 +1,19 @@
-//! Perceptual color math in the OKLab space, shared by scheme derivation and
-//! the renderer. Blending, lightness lifts, and the chroma-preserving mutes
-//! that back derived semantic and component tones all happen here, so every
-//! generated tone steps evenly to the eye instead of in raw sRGB.
+//! Perceptual color math in the OKLab space, shared by scheme derivation, CLI
+//! rendering, and the sidebar renderer. Blending, lightness lifts, and the
+//! chroma-preserving mutes that back derived semantic and component tones all
+//! happen here, so every generated tone steps evenly to the eye instead of in
+//! raw sRGB.
 //!
 //! Inputs and outputs are 8-bit sRGB tuples ([`Rgb`]); the OKLab/OKLCH forms
 //! stay internal. Conversions use Björn Ottosson's coefficients; round-trips
 //! clamp per channel back into sRGB gamut.
 
-pub(crate) type Rgb = (u8, u8, u8);
+pub type Rgb = (u8, u8, u8);
 
 /// Perceptually-even interpolation between two sRGB colors: `amount` of `0.0`
 /// returns `left`, `1.0` returns `right`, blended in OKLab so the midpoint
 /// reads as the visual midpoint.
-pub(crate) fn blend(left: Rgb, right: Rgb, amount: f32) -> Rgb {
+pub fn blend(left: Rgb, right: Rgb, amount: f32) -> Rgb {
     let left = Oklab::from_rgb(left);
     let right = Oklab::from_rgb(right);
     Oklab {
