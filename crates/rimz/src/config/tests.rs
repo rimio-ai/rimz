@@ -851,6 +851,34 @@ fn worktree_config_defaults_and_parses() {
         ))
         .is_err()
     );
+
+    assert_eq!(
+        " head ".parse::<WorktreeBase>().unwrap(),
+        WorktreeBase::Head
+    );
+    assert_eq!(
+        " fresh ".parse::<WorktreeBase>().unwrap(),
+        WorktreeBase::Fresh
+    );
+    assert_eq!(
+        " refs/heads/release ".parse::<WorktreeBase>().unwrap(),
+        WorktreeBase::Explicit("refs/heads/release".to_owned())
+    );
+    assert_eq!(
+        "   ".parse::<WorktreeBase>().unwrap_err().to_string(),
+        "worktree base cannot be empty"
+    );
+
+    let serde_config: WorktreeConfig =
+        toml::from_str("base = \"  fresh  \"").expect("whitespace-trimmed worktree base");
+    assert_eq!(serde_config.base, WorktreeBase::Fresh);
+    let serde_error =
+        toml::from_str::<WorktreeConfig>("base = \"   \"").expect_err("empty serde worktree base");
+    assert!(
+        serde_error
+            .to_string()
+            .contains("worktree base cannot be empty")
+    );
 }
 
 #[test]

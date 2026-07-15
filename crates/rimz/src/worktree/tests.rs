@@ -358,6 +358,82 @@ fn checkout_metadata_marker_reader_follows_relative_gitdir_file() {
 }
 
 #[test]
+fn discovery_returns_owned_identity_before_explicit_inspection() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    let created = create(&repo, &config, Some("demo"), None, None, false).expect("create");
+    std::fs::write(
+        created.marker.worktree_path.join("feature.txt"),
+        "feature\n",
+    )
+    .expect("feature file");
+    git_run(&created.marker.worktree_path, ["add", "feature.txt"]).expect("add feature");
+    git_run(&created.marker.worktree_path, ["commit", "-m", "feature"]).expect("feature commit");
+    std::fs::write(created.marker.worktree_path.join("dirty.txt"), "dirty\n").expect("dirty file");
+
+    let discovered = discover_owned(&repo).expect("discover");
+
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].marker, created.marker);
+    assert_eq!(discovered[0].branch.as_deref(), Some("demo"));
+    let inspected = status(&discovered[0].path, &discovered[0].marker).expect("inspect");
+    assert!(inspected.dirty);
+    assert_eq!(inspected.landed, LandedVerdict::Pending);
+}
+
+#[test]
+fn reused_worktree_keeps_seeded_and_linked_destinations_unchanged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo = init_test_repo(dir.path());
+    let config = test_worktree_config(dir.path());
+    std::fs::write(repo.join(".env.local"), "first\n").expect("seed source");
+    std::fs::write(repo.join(".worktreeinclude"), ".env.local\n").expect("include config");
+    std::fs::create_dir_all(repo.join("node_modules/pkg")).expect("link source");
+    std::fs::write(
+        repo.join("node_modules/pkg/index.js"),
+        "module.exports = 1\n",
+    )
+    .expect("link file");
+    std::fs::write(repo.join(".worktreelink"), "node_modules\n").expect("link config");
+
+    let first = create(&repo, &config, Some("demo"), None, None, false).expect("fresh create");
+    assert_eq!((first.included, first.linked), (1, 1));
+    let seeded = first.marker.worktree_path.join(".env.local");
+    let linked = first.marker.worktree_path.join("node_modules");
+    std::fs::write(&seeded, "keep\n").expect("change seeded destination");
+
+    let reused = create(&repo, &config, Some("demo"), None, None, true).expect("reuse");
+
+    assert_eq!((reused.included, reused.linked), (0, 0));
+    assert_eq!(std::fs::read_to_string(seeded).unwrap(), "keep\n");
+    assert!(
+        std::fs::symlink_metadata(linked)
+            .expect("linked destination")
+            .is_symlink()
+    );
+}
+
+fn init_test_repo(parent: &Path) -> PathBuf {
+    let repo = parent.join("repo");
+    std::fs::create_dir_all(&repo).expect("repo dir");
+    git_run(&repo, ["init", "-b", "main"]).expect("git init");
+    git_run(&repo, ["config", "user.email", "rimz@example.test"]).expect("git email");
+    git_run(&repo, ["config", "user.name", "Rimz Test"]).expect("git name");
+    std::fs::write(repo.join("README.md"), "base\n").expect("base file");
+    git_run(&repo, ["add", "README.md"]).expect("git add");
+    git_run(&repo, ["commit", "-m", "base"]).expect("base commit");
+    repo
+}
+
+fn test_worktree_config(parent: &Path) -> WorktreeConfig {
+    WorktreeConfig {
+        dir: parent.join("worktrees").display().to_string(),
+        ..WorktreeConfig::default()
+    }
+}
+
+#[test]
 fn protection_facts_filter_sidebar_own_and_count_user_panes() {
     let worktree = Path::new("/repo-worktrees/demo");
     let own = PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_own");

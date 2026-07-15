@@ -340,38 +340,40 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
     };
     let protections = rimz::worktree::protection_set_from_runtime(&panes, &snapshot.agents, None);
     spinner.set("scanning worktrees…");
-    let entries = match rimz::worktree::list(&workspace.project_root) {
+    let entries = match rimz::worktree::discover_owned(&workspace.project_root) {
         Ok(entries) => entries,
         Err(err) => {
             tracing::debug!(error = %err, "worktree gc skipped");
             return WorktreeSweepStatus::Skipped(WorktreeSkip::ListFailed);
         }
     };
-    let (candidates, kept) = partition_candidates(entries, &protections);
+    let inspected = entries
+        .into_iter()
+        .map(|entry| {
+            let status = rimz::worktree::status(&entry.path, &entry.marker)
+                .unwrap_or_else(|_| rimz::worktree::WorktreeStatus::unknown());
+            (entry, status)
+        })
+        .collect();
+    let (candidates, kept) = partition_candidates(inspected, &protections);
     let total = candidates.len();
     let mut sweep = WorktreeSweep {
         kept,
         ..WorktreeSweep::default()
     };
-    for (i, entry) in candidates.into_iter().enumerate() {
+    for (i, (entry, _status)) in candidates.into_iter().enumerate() {
         let action = if dry_run { "checking" } else { "removing" };
         spinner.set(format!(
             "{action} worktree [{}/{}] {}",
             i + 1,
             total,
-            entry.name
+            entry.marker.name
         ));
-        let Some(marker) = rimz::worktree::read_marker_for_worktree(&entry.path)
-            .ok()
-            .flatten()
-        else {
-            continue;
-        };
         let bytes = rimz::disk_usage::dir_size(&entry.path);
         if dry_run {
             sweep.removed.push(SweptWorktree {
-                name: marker.name,
-                branch: marker.branch,
+                name: entry.marker.name,
+                branch: entry.marker.branch,
                 path: entry.path,
                 bytes,
                 branch_deletion: None,
@@ -382,7 +384,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
         match rimz::worktree::remove_marked_worktree(
             &workspace.project_root,
             &entry.path,
-            &marker,
+            &entry.marker,
             false,
         ) {
             Ok(removed) => {
@@ -416,20 +418,21 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
 }
 
 fn partition_candidates(
-    entries: Vec<rimz::worktree::WorktreeListEntry>,
+    entries: Vec<(
+        rimz::worktree::ManagedWorktree,
+        rimz::worktree::WorktreeStatus,
+    )>,
     protections: &rimz::worktree::ProtectionSet,
-) -> (Vec<rimz::worktree::WorktreeListEntry>, Vec<KeptWorktree>) {
+) -> (
+    Vec<(
+        rimz::worktree::ManagedWorktree,
+        rimz::worktree::WorktreeStatus,
+    )>,
+    Vec<KeptWorktree>,
+) {
     let mut candidates = Vec::new();
     let mut kept = Vec::new();
-    for entry in entries {
-        let status = rimz::worktree::WorktreeStatus {
-            dirty: entry.dirty,
-            landed: match entry.landed {
-                Some(true) => rimz::worktree::LandedVerdict::Landed,
-                Some(false) => rimz::worktree::LandedVerdict::Pending,
-                None => rimz::worktree::LandedVerdict::Unknown,
-            },
-        };
+    for (entry, status) in entries {
         let reason = match protections.assess(&entry.path, status) {
             rimz::worktree::RemovalAssessment::Removable => None,
             rimz::worktree::RemovalAssessment::InUse => Some(KeptReason::InUse),
@@ -438,12 +441,12 @@ fn partition_candidates(
         };
         if let Some(reason) = reason {
             kept.push(KeptWorktree {
-                name: entry.name,
+                name: entry.marker.name,
                 path: entry.path,
                 reason,
             });
         } else {
-            candidates.push(entry);
+            candidates.push((entry, status));
         }
     }
     (candidates, kept)
@@ -1354,7 +1357,7 @@ mod tests {
         assert_eq!(
             candidates
                 .iter()
-                .map(|entry| entry.name.as_str())
+                .map(|(entry, _)| entry.marker.name.as_str())
                 .collect::<Vec<_>>(),
             ["clean"]
         );
@@ -1625,15 +1628,35 @@ mod tests {
         path: &str,
         dirty: bool,
         landed: Option<bool>,
-    ) -> rimz::worktree::WorktreeListEntry {
-        rimz::worktree::WorktreeListEntry {
-            name: name.to_owned(),
-            path: PathBuf::from(path),
+    ) -> (
+        rimz::worktree::ManagedWorktree,
+        rimz::worktree::WorktreeStatus,
+    ) {
+        let path = PathBuf::from(path);
+        let entry = rimz::worktree::ManagedWorktree {
+            marker: rimz::worktree::WorktreeMarker {
+                version: 4,
+                name: name.to_owned(),
+                branch: name.to_owned(),
+                base_branch: Some("main".to_owned()),
+                from_pr: None,
+                base_ref: "main".to_owned(),
+                repo_root: PathBuf::from("/repo"),
+                worktree_path: path.clone(),
+                created_at: jiff::Timestamp::now(),
+            },
+            path,
             branch: Some(name.to_owned()),
-            base_ref: "main".to_owned(),
+        };
+        let status = rimz::worktree::WorktreeStatus {
             dirty,
-            landed,
-        }
+            landed: match landed {
+                Some(true) => rimz::worktree::LandedVerdict::Landed,
+                Some(false) => rimz::worktree::LandedVerdict::Pending,
+                None => rimz::worktree::LandedVerdict::Unknown,
+            },
+        };
+        (entry, status)
     }
 
     fn strip_report(outcome: &GcOutcome) -> String {

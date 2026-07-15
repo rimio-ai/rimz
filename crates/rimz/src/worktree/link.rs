@@ -7,7 +7,8 @@
 //! `info/exclude` so the machine-local link never dirties the checkout.
 
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+
+use super::git_stdout;
 
 const LINK_FILE: &str = ".worktreelink";
 
@@ -124,16 +125,7 @@ fn ensure_excluded(worktree: &Path, rel: &str) {
 }
 
 fn exclude_path(worktree: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(worktree)
-        .args(["rev-parse", "--git-path", "info/exclude"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let raw = git_stdout(worktree, ["rev-parse", "--git-path", "info/exclude"]).ok()?;
     if raw.is_empty() {
         return None;
     }
@@ -178,6 +170,7 @@ fn symlink_dir(_src: &Path, _dest: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     fn write(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {

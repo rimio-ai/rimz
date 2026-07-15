@@ -10,9 +10,9 @@ use crate::config::WorktreeConfig;
 use crate::forge;
 
 use super::{
-    Checkout, CreatedWorktree, FreshWorktree, MarkerProvenance, Result, WorktreeCreateTarget,
-    WorktreeErr, add_worktree, ensure_repo, git_run, git_stdout, is_ancestor, parse_worktree_list,
-    resolve_base_commit, resolve_branch, resolve_fresh_worktree, trunk_ref,
+    Checkout, CreatedWorktree, FreshWorktree, MarkerProvenance, PushDestination, Result,
+    WorktreeCreateTarget, WorktreeErr, add_worktree, ensure_repo, git_run, git_stdout, is_ancestor,
+    parse_worktree_list, resolve_base_commit, resolve_branch, resolve_fresh_worktree, trunk_ref,
 };
 
 const PR_HEAD_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -129,33 +129,14 @@ fn same_repo_checkout(
     git_run(repo_root, ["fetch", "origin", fetch_refspec.as_str()])
         .map_err(pr_fetch_err(context.number, &context.remote))?;
     let remote_head = git_stdout(repo_root, ["rev-parse", remote_ref.as_str()])?;
-    let base_branch = trunk_ref(repo_root);
-    let base_ref_name = base_branch.as_deref().unwrap_or("origin/HEAD");
-    let base_ref =
-        resolve_base_commit(repo_root, base_ref_name).unwrap_or_else(|_| remote_head.clone());
-    let provenance = MarkerProvenance {
-        base_branch,
-        base_ref,
-        from_pr: Some(context.number),
+    let provenance = pr_marker_provenance(repo_root, &remote_head, context.number);
+    let checkout = match prepare_local_pr_branch(repo_root, &branch, &remote_ref, &remote_head)? {
+        LocalPrBranch::New => Checkout::Tracking(&remote_ref),
+        LocalPrBranch::Existing => Checkout::Existing,
     };
-    match prepare_local_pr_branch(repo_root, &branch, &remote_ref, &remote_head)? {
-        LocalPrBranch::New => add_worktree(
-            repo_root,
-            fresh.name,
-            fresh.path,
-            branch,
-            provenance,
-            Checkout::Tracking(&remote_ref),
-        ),
-        LocalPrBranch::Existing => add_worktree(
-            repo_root,
-            fresh.name,
-            fresh.path,
-            branch,
-            provenance,
-            Checkout::Existing,
-        ),
-    }
+    add_worktree(
+        repo_root, fresh.name, fresh.path, branch, provenance, checkout,
+    )
 }
 
 fn fork_checkout(
@@ -199,7 +180,7 @@ fn fork_checkout(
         }
         prefixed
     };
-    let created = add_pr_worktree(
+    let mut created = add_pr_worktree(
         repo_root,
         fresh,
         branch.clone(),
@@ -218,23 +199,11 @@ fn fork_checkout(
         repo_root,
         ["config", merge_key.as_str(), merge_ref.as_str()],
     )?;
+    created.push_destination = Some(PushDestination {
+        remote: fork_url,
+        merge_ref,
+    });
     Ok(created)
-}
-
-/// Push destination for a branch whose config points at a fork remote (set by `create_from_pr`); `None` for origin-tracking or unconfigured branches.
-pub fn fork_push_destination(repo_root: &Path, branch: &str) -> Option<(String, String)> {
-    let remote_key = format!("branch.{branch}.remote");
-    let remote = git_stdout(repo_root, ["config", "--get", remote_key.as_str()])
-        .ok()
-        .filter(|remote| !remote.is_empty())?;
-    if matches!(remote.as_str(), "origin" | ".") {
-        return None;
-    }
-    let merge_key = format!("branch.{branch}.merge");
-    let merge_ref = git_stdout(repo_root, ["config", "--get", merge_key.as_str()])
-        .ok()
-        .filter(|merge_ref| !merge_ref.is_empty())?;
-    Some((remote, merge_ref))
 }
 
 fn pr_fetch_err(number: u64, remote: &str) -> impl FnOnce(WorktreeErr) -> WorktreeErr + '_ {
@@ -261,22 +230,30 @@ fn add_pr_worktree(
     checkout_ref: &str,
     pr_number: u64,
 ) -> Result<CreatedWorktree> {
-    let base_branch = trunk_ref(repo_root);
-    let base_ref_name = base_branch.as_deref().unwrap_or("origin/HEAD");
-    let base_ref =
-        resolve_base_commit(repo_root, base_ref_name).unwrap_or_else(|_| pr_head.clone());
     add_worktree(
         repo_root,
         fresh.name,
         fresh.path,
         branch,
-        MarkerProvenance {
-            base_branch,
-            base_ref,
-            from_pr: Some(pr_number),
-        },
+        pr_marker_provenance(repo_root, &pr_head, pr_number),
         Checkout::NewBranch(checkout_ref),
     )
+}
+
+fn pr_marker_provenance(
+    repo_root: &Path,
+    fallback_commit: &str,
+    pr_number: u64,
+) -> MarkerProvenance {
+    let base_branch = trunk_ref(repo_root);
+    let base_ref_name = base_branch.as_deref().unwrap_or("origin/HEAD");
+    let base_ref = resolve_base_commit(repo_root, base_ref_name)
+        .unwrap_or_else(|_| fallback_commit.to_owned());
+    MarkerProvenance {
+        base_branch,
+        base_ref,
+        from_pr: Some(pr_number),
+    }
 }
 
 fn resolve_pr_head_with_cli(repo_root: &Path, number: u64, remote: &str) -> Result<forge::PrHead> {

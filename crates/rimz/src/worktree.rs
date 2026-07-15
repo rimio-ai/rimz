@@ -24,7 +24,7 @@ mod include;
 mod link;
 mod pr;
 
-pub use pr::{create_from_pr, fork_push_destination};
+pub use pr::create_from_pr;
 
 const MARKER_FILE: &str = "rimz-worktree.json";
 const MARKER_VERSION: u32 = 4;
@@ -108,18 +108,21 @@ pub struct WorktreeMarker {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CreatedWorktree {
-    pub name: String,
-    pub path: PathBuf,
-    pub branch: String,
-    pub base_branch: Option<String>,
-    pub base_ref: String,
-    pub reused: bool,
+    pub marker: WorktreeMarker,
     /// Files copied into the worktree from the project's `.worktreeinclude`.
     /// Zero for a reused worktree, which is never re-seeded.
     pub included: usize,
     /// Directories symlinked into the worktree from the project's `.worktreelink`.
     /// Zero for a reused worktree, which is never re-seeded.
     pub linked: usize,
+    /// Fork push target established while creating a PR worktree.
+    pub push_destination: Option<PushDestination>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PushDestination {
+    pub remote: String,
+    pub merge_ref: String,
 }
 
 /// Checkout selected for an agent launch.
@@ -144,20 +147,17 @@ pub struct RequestedName {
     pub branch: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct WorktreeListEntry {
-    pub name: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManagedWorktree {
+    pub marker: WorktreeMarker,
     pub path: PathBuf,
     pub branch: Option<String>,
-    pub base_ref: String,
-    pub dirty: bool,
-    pub landed: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WorktreeRow {
-    pub path: PathBuf,
-    pub branch: Option<String>,
+struct WorktreeRow {
+    path: PathBuf,
+    branch: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -418,9 +418,10 @@ pub fn resolve_launch_checkout(
             None,
             name.is_some(),
         )?;
+        let marker = created.marker;
         return Ok(LaunchCheckout {
-            cwd: created.path,
-            worktree_name: Some(created.name),
+            cwd: marker.worktree_path,
+            worktree_name: Some(marker.name),
             generated_name: false,
         });
     }
@@ -444,9 +445,10 @@ pub fn resolve_launch_checkout(
         None,
         !name.is_empty(),
     )?;
+    let marker = created.marker;
     Ok(LaunchCheckout {
-        cwd: created.path,
-        worktree_name: Some(created.name),
+        cwd: marker.worktree_path,
+        worktree_name: Some(marker.name),
         generated_name: name.is_empty(),
     })
 }
@@ -497,25 +499,21 @@ pub fn remove_marked_worktree(
     })
 }
 
-pub fn list(repo_root: &Path) -> Result<Vec<WorktreeListEntry>> {
+pub fn discover_owned(repo_root: &Path) -> Result<Vec<ManagedWorktree>> {
     ensure_repo(repo_root)?;
     let rows = parse_worktree_list(&git_stdout(repo_root, ["worktree", "list", "--porcelain"])?);
     let mut entries = Vec::new();
     for row in rows {
-        let Some(marker) = read_marker_for_worktree(&row.path)? else {
+        let Some(marker) = read_marker_from_checkout_metadata(&row.path)? else {
             continue;
         };
-        let status = status(&row.path, &marker).unwrap_or_else(|_| WorktreeStatus::unknown());
-        entries.push(WorktreeListEntry {
-            name: marker.name,
+        entries.push(ManagedWorktree {
+            marker,
             path: row.path,
             branch: row.branch,
-            base_ref: marker.base_ref,
-            dirty: status.dirty,
-            landed: landed_json(status.landed),
         });
     }
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    entries.sort_by(|a, b| a.marker.name.cmp(&b.marker.name));
     Ok(entries)
 }
 
@@ -543,7 +541,7 @@ fn leave_worktree_before_removal(repo_root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn parse_worktree_list(raw: &str) -> Vec<WorktreeRow> {
+fn parse_worktree_list(raw: &str) -> Vec<WorktreeRow> {
     let mut rows = Vec::new();
     let mut path: Option<PathBuf> = None;
     let mut branch: Option<String> = None;
@@ -607,11 +605,7 @@ pub fn read_marker_for_worktree(path: &Path) -> Result<Option<WorktreeMarker>> {
         Err(WorktreeErr::Git { .. }) | Err(WorktreeErr::Io(_)) => return Ok(None),
         Err(err) => return Err(err),
     };
-    match std::fs::read_to_string(&marker) {
-        Ok(text) => serde_json::from_str(&text).map(Some).map_err(Into::into),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err.into()),
-    }
+    read_marker_file(&marker)
 }
 
 /// Read a Rimz marker by following the checkout's `.git` metadata only. This
@@ -620,7 +614,11 @@ pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<W
     let Some(marker) = marker_path_from_checkout_metadata(path)? else {
         return Ok(None);
     };
-    match std::fs::read_to_string(&marker) {
+    read_marker_file(&marker)
+}
+
+fn read_marker_file(marker: &Path) -> Result<Option<WorktreeMarker>> {
+    match std::fs::read_to_string(marker) {
         Ok(text) => serde_json::from_str(&text).map(Some).map_err(Into::into),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.into()),
@@ -628,9 +626,14 @@ pub(crate) fn read_marker_from_checkout_metadata(path: &Path) -> Result<Option<W
 }
 
 fn marker_path_from_checkout_metadata(worktree: &Path) -> Result<Option<PathBuf>> {
+    Ok(git_admin_dir_from_checkout_metadata(worktree)?.map(|path| path.join(MARKER_FILE)))
+}
+
+/// Resolve a checkout's Git admin directory without spawning Git.
+pub(crate) fn git_admin_dir_from_checkout_metadata(worktree: &Path) -> Result<Option<PathBuf>> {
     let dot_git = worktree.join(".git");
     if dot_git.is_dir() {
-        return Ok(Some(dot_git.join(MARKER_FILE)));
+        return Ok(Some(dot_git));
     }
     let text = match std::fs::read_to_string(&dot_git) {
         Ok(text) => text,
@@ -650,7 +653,7 @@ fn marker_path_from_checkout_metadata(worktree: &Path) -> Result<Option<PathBuf>
     } else {
         worktree.join(git_dir)
     };
-    Ok(Some(git_dir.join(MARKER_FILE)))
+    Ok(Some(git_dir))
 }
 
 pub fn marker_path(worktree: &Path) -> Result<PathBuf> {
@@ -722,14 +725,10 @@ fn resolve_fresh_worktree(
                 path: path.clone(),
             })?;
             return Ok(WorktreeCreateTarget::Reuse(CreatedWorktree {
-                name,
-                path,
-                branch: marker.branch,
-                base_branch: marker.base_branch,
-                base_ref: marker.base_ref,
-                reused: true,
+                marker,
                 included: 0,
                 linked: 0,
+                push_destination: None,
             }));
         }
         return Err(WorktreeErr::Exists { name, path });
@@ -818,14 +817,10 @@ fn finish_worktree(
     let included = include::copy_includes(repo_root, &path);
     let linked = link::link_dirs(repo_root, &path);
     Ok(CreatedWorktree {
-        name,
-        path,
-        branch,
-        base_branch,
-        base_ref,
-        reused: false,
+        marker,
         included,
         linked,
+        push_destination: None,
     })
 }
 
@@ -914,14 +909,6 @@ fn base_branch_superseded(cwd: &Path, base_branch: &str, trunk: Option<&str>) ->
 
 fn is_ancestor(cwd: &Path, ancestor: &str, descendant: &str) -> bool {
     git_run(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]).is_ok()
-}
-
-fn landed_json(verdict: LandedVerdict) -> Option<bool> {
-    match verdict {
-        LandedVerdict::Landed => Some(true),
-        LandedVerdict::Pending => Some(false),
-        LandedVerdict::Unknown => None,
-    }
 }
 
 fn ref_resolves(cwd: &Path, name: &str) -> bool {

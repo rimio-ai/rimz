@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
+use serde::Serialize;
 
 use super::{GlobalFlags, open_store};
 use crate::cli::render;
@@ -16,6 +17,21 @@ use rimz::forge::PrTarget;
 use rimz::workspace::{ResolvedWorkspace, RootClass, WorkspaceResolver};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
+
+struct InspectedWorktree {
+    managed: rimz::worktree::ManagedWorktree,
+    status: rimz::worktree::WorktreeStatus,
+}
+
+#[derive(Serialize)]
+struct WorktreeListJson<'a> {
+    name: &'a str,
+    path: &'a Path,
+    branch: Option<&'a str>,
+    base_ref: &'a str,
+    dirty: bool,
+    landed: Option<bool>,
+}
 
 #[derive(Debug, Args)]
 pub struct WorktreeArgs {
@@ -135,30 +151,35 @@ fn new_worktree(
         )?
     };
     store
-        .archive_channel_messages(&created.name, "channel recreated", &workspace.session_name)
+        .archive_channel_messages(
+            &created.marker.name,
+            "channel recreated",
+            &workspace.session_name,
+        )
         .context("archiving messages for recreated worktree channel")?;
-    report_created(&workspace.project_root, &created);
+    report_created(&created);
     Ok(())
 }
 
 #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
-fn report_created(repo_root: &Path, created: &rimz::worktree::CreatedWorktree) {
-    println!("created {}", created.name);
-    println!("  path   : {}", created.path.display());
-    println!("  branch : {}", created.branch);
-    if let Some((remote, merge_ref)) =
-        rimz::worktree::fork_push_destination(repo_root, &created.branch)
-    {
+fn report_created(created: &rimz::worktree::CreatedWorktree) {
+    let marker = &created.marker;
+    println!("created {}", marker.name);
+    println!("  path   : {}", marker.worktree_path.display());
+    println!("  branch : {}", marker.branch);
+    if let Some(destination) = created.push_destination.as_ref() {
+        let remote = &destination.remote;
+        let merge_ref = &destination.merge_ref;
         println!("  pushes : {remote} {merge_ref}");
-        if merge_ref.strip_prefix("refs/heads/") != Some(created.branch.as_str()) {
-            let head = merge_ref.strip_prefix("refs/heads/").unwrap_or(&merge_ref);
+        if merge_ref.strip_prefix("refs/heads/") != Some(marker.branch.as_str()) {
+            let head = merge_ref.strip_prefix("refs/heads/").unwrap_or(merge_ref);
             println!("  push   : git push {remote} HEAD:{head}");
         }
     }
-    if let Some(base_branch) = created.base_branch.as_deref() {
+    if let Some(base_branch) = marker.base_branch.as_deref() {
         println!("  base branch: {base_branch}");
     }
-    println!("  base   : {}", created.base_ref);
+    println!("  base   : {}", marker.base_ref);
     if created.included > 0 {
         println!(
             "  seeded : {} file(s) from .worktreeinclude",
@@ -171,72 +192,124 @@ fn report_created(repo_root: &Path, created: &rimz::worktree::CreatedWorktree) {
 }
 
 fn list_worktrees(workspace: &ResolvedWorkspace, json: bool) -> Result<()> {
-    let entries = rimz::worktree::list(&workspace.project_root)?;
+    let entries = rimz::worktree::discover_owned(&workspace.project_root)?
+        .into_iter()
+        .map(|managed| {
+            let status = rimz::worktree::status(&managed.path, &managed.marker)
+                .unwrap_or_else(|_| rimz::worktree::WorktreeStatus::unknown());
+            InspectedWorktree { managed, status }
+        })
+        .collect::<Vec<_>>();
     if json {
-        let rendered = serde_json::to_string_pretty(&entries)?;
-        #[expect(clippy::print_stdout, reason = "json emitter")]
-        {
-            println!("{rendered}");
-        }
+        render_worktree_json(&entries)?;
     } else {
-        // Best-effort overlay: which agent-colleagues live in each channel.
-        let snapshot = crate::cli::open_store(workspace)
-            .ok()
-            .and_then(|store| store.snapshot_cached().ok());
-        let agents: Vec<&AgentState> = snapshot
-            .as_ref()
-            .map(|snapshot| {
-                snapshot
-                    .agents
-                    .iter()
-                    .filter(|agent| agent.parent_agent_id.is_none())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mut table =
-            render::Table::new(["WORKTREE", "BRANCH", "AGENTS", "DIRTY", "MERGED", "PATH"]);
-        for entry in entries {
-            let path_str = entry.path.to_string_lossy().into_owned();
-            let here: Vec<&AgentState> = agents
-                .iter()
-                .copied()
-                .filter(|agent| {
-                    agent.worktree_path.as_deref() == Some(path_str.as_str())
-                        || (entry.branch.is_some() && agent.worktree_branch == entry.branch)
-                })
-                .collect();
-            let chips = if here.is_empty() {
-                "-".to_owned()
-            } else {
-                here.iter()
-                    .map(|agent| rimz::harness::target::agent_handle(agent, &here, false))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            };
-            let merged = match entry.landed {
-                Some(true) => render::cell("yes"),
-                Some(false) => render::cell("pending").fg(render::palette::WARN),
-                None => render::cell("?"),
-            };
-            let branch = entry.branch.clone().unwrap_or_else(|| "-".to_owned());
-            let dirty_cell = if entry.dirty {
-                render::cell("dirty").fg(render::palette::WARN)
-            } else {
-                render::cell("-").dash()
-            };
-            let path_display = render::home_relative(&path_str);
-            table.row([
-                render::cell(entry.name).fg(render::palette::ACCENT),
-                render::cell(branch).dash(),
-                render::cell(chips).fg(render::palette::ACCENT).dash(),
-                dirty_cell,
-                merged,
-                render::cell(path_display).dash(),
-            ]);
-        }
-        table.render(&mut render::out())?;
+        render_worktree_table(workspace, &entries)?;
     }
     Ok(())
+}
+
+fn render_worktree_json(entries: &[InspectedWorktree]) -> Result<()> {
+    let rows = entries.iter().map(worktree_json_row).collect::<Vec<_>>();
+    let rendered = serde_json::to_string_pretty(&rows)?;
+    #[expect(clippy::print_stdout, reason = "json emitter")]
+    {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
+fn worktree_json_row(entry: &InspectedWorktree) -> WorktreeListJson<'_> {
+    WorktreeListJson {
+        name: &entry.managed.marker.name,
+        path: &entry.managed.path,
+        branch: entry.managed.branch.as_deref(),
+        base_ref: &entry.managed.marker.base_ref,
+        dirty: entry.status.dirty,
+        landed: match entry.status.landed {
+            rimz::worktree::LandedVerdict::Landed => Some(true),
+            rimz::worktree::LandedVerdict::Pending => Some(false),
+            rimz::worktree::LandedVerdict::Unknown => None,
+        },
+    }
+}
+
+fn render_worktree_table(
+    workspace: &ResolvedWorkspace,
+    entries: &[InspectedWorktree],
+) -> Result<()> {
+    let agents = root_agents(workspace);
+    let mut table = render::Table::new(["WORKTREE", "BRANCH", "AGENTS", "DIRTY", "MERGED", "PATH"]);
+    for entry in entries {
+        append_worktree_row(&mut table, entry, &agents);
+    }
+    table.render(&mut render::out())?;
+    Ok(())
+}
+
+fn root_agents(workspace: &ResolvedWorkspace) -> Vec<AgentState> {
+    crate::cli::open_store(workspace)
+        .ok()
+        .and_then(|store| store.snapshot_cached().ok())
+        .map(|snapshot| {
+            snapshot
+                .agents
+                .into_iter()
+                .filter(|agent| agent.parent_agent_id.is_none())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn append_worktree_row(
+    table: &mut render::Table,
+    entry: &InspectedWorktree,
+    agents: &[AgentState],
+) {
+    let path = entry.managed.path.to_string_lossy().into_owned();
+    let here = agents_for_worktree(agents, &entry.managed, &path);
+    let chips = if here.is_empty() {
+        "-".to_owned()
+    } else {
+        here.iter()
+            .map(|agent| rimz::harness::target::agent_handle(agent, &here, false))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let merged = match entry.status.landed {
+        rimz::worktree::LandedVerdict::Landed => render::cell("yes"),
+        rimz::worktree::LandedVerdict::Pending => render::cell("pending").fg(render::palette::WARN),
+        rimz::worktree::LandedVerdict::Unknown => render::cell("?"),
+    };
+    let dirty = if entry.status.dirty {
+        render::cell("dirty").fg(render::palette::WARN)
+    } else {
+        render::cell("-").dash()
+    };
+    table.row([
+        render::cell(&entry.managed.marker.name).fg(render::palette::ACCENT),
+        render::cell(entry.managed.branch.as_deref().unwrap_or("-")).dash(),
+        render::cell(chips).fg(render::palette::ACCENT).dash(),
+        dirty,
+        merged,
+        render::cell(render::home_relative(&path)).dash(),
+    ]);
+}
+
+fn agents_for_worktree<'a>(
+    agents: &'a [AgentState],
+    entry: &rimz::worktree::ManagedWorktree,
+    path: &str,
+) -> Vec<&'a AgentState> {
+    agents
+        .iter()
+        .filter(|agent| {
+            agent.worktree_path.as_deref() == Some(path)
+                || entry
+                    .branch
+                    .as_deref()
+                    .is_some_and(|branch| agent.worktree_branch.as_deref() == Some(branch))
+        })
+        .collect()
 }
 
 fn remove_worktree(
@@ -265,15 +338,8 @@ fn remove_worktree(
 }
 
 fn parse_base(raw: &str) -> std::result::Result<WorktreeBase, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err("base ref cannot be empty".to_owned());
-    }
-    Ok(match trimmed {
-        "head" => WorktreeBase::Head,
-        "fresh" => WorktreeBase::Fresh,
-        other => WorktreeBase::Explicit(other.to_owned()),
-    })
+    raw.parse()
+        .map_err(|_| "base ref cannot be empty".to_owned())
 }
 
 pub(super) fn cleanup_worktree(
@@ -454,4 +520,58 @@ fn exec_shell(path: &Path) -> Result<()> {
         bail!("shell exited with {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_json_maps_typed_landing_without_marker_fields() {
+        for (verdict, landed) in [
+            (rimz::worktree::LandedVerdict::Landed, Some(true)),
+            (rimz::worktree::LandedVerdict::Pending, Some(false)),
+            (rimz::worktree::LandedVerdict::Unknown, None),
+        ] {
+            let entry = inspected_worktree(verdict);
+            let value = serde_json::to_value(worktree_json_row(&entry)).expect("serialize row");
+
+            assert_eq!(
+                value,
+                serde_json::json!({
+                    "name": "demo",
+                    "path": "/repo-worktrees/demo",
+                    "branch": "feature/demo",
+                    "base_ref": "abc123",
+                    "dirty": false,
+                    "landed": landed,
+                })
+            );
+        }
+    }
+
+    fn inspected_worktree(landed: rimz::worktree::LandedVerdict) -> InspectedWorktree {
+        let path = PathBuf::from("/repo-worktrees/demo");
+        InspectedWorktree {
+            managed: rimz::worktree::ManagedWorktree {
+                marker: rimz::worktree::WorktreeMarker {
+                    version: 4,
+                    name: "demo".to_owned(),
+                    branch: "recorded/demo".to_owned(),
+                    base_branch: Some("main".to_owned()),
+                    from_pr: Some(42),
+                    base_ref: "abc123".to_owned(),
+                    repo_root: PathBuf::from("/repo"),
+                    worktree_path: PathBuf::from("/recorded/demo"),
+                    created_at: jiff::Timestamp::now(),
+                },
+                path,
+                branch: Some("feature/demo".to_owned()),
+            },
+            status: rimz::worktree::WorktreeStatus {
+                dirty: false,
+                landed,
+            },
+        }
+    }
 }

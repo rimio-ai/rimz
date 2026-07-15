@@ -16,7 +16,9 @@ pub(super) struct GitRefs {
 }
 
 pub(super) fn resolve(worktree: &Path, configured_trunk: Option<&str>) -> Option<GitRefs> {
-    let git_dir = git_dir(worktree)?;
+    let git_dir = crate::worktree::git_admin_dir_from_checkout_metadata(worktree)
+        .ok()
+        .flatten()?;
     let common_dir = common_dir(&git_dir)?;
     let head = read_head(&git_dir, &common_dir)?;
     let (trunk_name, trunk_sha) = trunk_ref(&git_dir, &common_dir, configured_trunk)?;
@@ -33,25 +35,6 @@ pub(super) fn resolve(worktree: &Path, configured_trunk: Option<&str>) -> Option
 struct HeadRef {
     sha: String,
     branch: Option<String>,
-}
-
-fn git_dir(worktree: &Path) -> Option<PathBuf> {
-    let dot_git = worktree.join(".git");
-    if dot_git.is_dir() {
-        return Some(dot_git);
-    }
-    let text = std::fs::read_to_string(&dot_git).ok()?;
-    let raw = text.trim();
-    let path = raw.strip_prefix("gitdir:")?.trim();
-    if path.is_empty() {
-        return None;
-    }
-    let path = Path::new(path);
-    Some(if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        worktree.join(path)
-    })
 }
 
 fn common_dir(git_dir: &Path) -> Option<PathBuf> {

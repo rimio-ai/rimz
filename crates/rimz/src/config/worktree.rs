@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize, Serializer};
+use std::str::FromStr;
 
 /// Git-worktree launch defaults. Per-machine by design: it names where this
 /// machine stores sibling worktrees and which base ref it prefers for new ones.
@@ -30,6 +31,10 @@ pub enum WorktreeBase {
     Explicit(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("worktree base cannot be empty")]
+pub struct WorktreeBaseParseError;
+
 impl Serialize for WorktreeBase {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -57,20 +62,28 @@ impl WorktreeBase {
     }
 }
 
-impl<'de> Deserialize<'de> for WorktreeBase {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = String::deserialize(deserializer)?;
+impl FromStr for WorktreeBase {
+    type Err = WorktreeBaseParseError;
+
+    fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
-            return Err(serde::de::Error::custom("worktree base cannot be empty"));
+            return Err(WorktreeBaseParseError);
         }
         Ok(match trimmed {
             "head" => Self::Head,
             "fresh" => Self::Fresh,
             other => Self::Explicit(other.to_owned()),
         })
+    }
+}
+
+impl<'de> Deserialize<'de> for WorktreeBase {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
     }
 }

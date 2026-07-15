@@ -67,8 +67,28 @@ fn worktree_new_list_and_remove_round_trip() {
     assert!(out.status.success(), "list succeeds");
     let parsed: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(parsed.as_array().expect("array").len(), 1);
-    assert_eq!(parsed[0]["name"], "demo");
-    assert_eq!(parsed[0]["landed"], true);
+    assert_eq!(
+        parsed[0],
+        serde_json::json!({
+            "name": "demo",
+            "path": path,
+            "branch": "demo",
+            "base_ref": marker.base_ref,
+            "dirty": false,
+            "landed": true,
+        })
+    );
+
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    let out = env
+        .rimz()
+        .args(["worktree", "list", "--json"])
+        .output()
+        .expect("spawn pending list");
+    assert!(out.status.success(), "pending list succeeds");
+    let pending: Value = serde_json::from_slice(&out.stdout).expect("pending json");
+    assert_eq!(pending[0]["landed"], false);
+    git(&env.project_root, &["merge", "--ff-only", "demo"]);
 
     env.rimz()
         .args(["worktree", "remove", "demo"])
@@ -166,6 +186,21 @@ fn worktree_new_explicit_branch_overrides_branch_style_name() {
         .expect("marker");
     assert_eq!(marker.name, "feat-great");
     assert_eq!(marker.branch, "other");
+}
+
+#[test]
+fn worktree_new_rejects_empty_base() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    env.rimz()
+        .args(["worktree", "new", "demo", "--base", ""])
+        .assert()
+        .failure()
+        .stderr(contains("base ref cannot be empty"));
 }
 
 #[test]

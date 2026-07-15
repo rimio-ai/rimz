@@ -192,10 +192,10 @@ fn worktree_channels(workspace: &rimz::ResolvedWorkspace) -> Result<BTreeSet<Str
     if workspace.root_class != RootClass::Repo {
         return Ok(BTreeSet::new());
     }
-    let entries = rimz::worktree::list(&workspace.project_root)?;
+    let entries = rimz::worktree::discover_owned(&workspace.project_root)?;
     Ok(entries
         .into_iter()
-        .map(|entry| entry.branch.unwrap_or(entry.name))
+        .map(|entry| entry.branch.unwrap_or(entry.marker.name))
         .collect())
 }
 

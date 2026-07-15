@@ -102,7 +102,7 @@ pub use theme::{
     InlineSelectionColors, ThemeConfig, ThemeProviderStyle, ThemeStyle,
 };
 pub use web::{WebPrefs, ZellijWebPrefs};
-pub use worktree::{WorktreeBase, WorktreeConfig};
+pub use worktree::{WorktreeBase, WorktreeBaseParseError, WorktreeConfig};
 
 const CONFIG_FILE: &str = "config.toml";
 const THEME_FILE: &str = "theme.toml";

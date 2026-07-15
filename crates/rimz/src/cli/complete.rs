@@ -242,12 +242,12 @@ pub(crate) fn worktrees() -> Vec<CompletionCandidate> {
 }
 
 fn worktrees_from(context: &RoomContext) -> Vec<CompletionCandidate> {
-    rimz::worktree::list(&context.workspace.project_root)
+    rimz::worktree::discover_owned(&context.workspace.project_root)
         .unwrap_or_default()
         .into_iter()
         .map(|worktree| {
             candidate(
-                worktree.name,
+                worktree.marker.name,
                 worktree.branch.unwrap_or_else(|| "detached".to_owned()),
             )
         })

@@ -188,16 +188,14 @@ fn local_worktrees(workspace: &rimz::ResolvedWorkspace) -> Result<Vec<LaneWorktr
     if workspace.root_class != rimz::workspace::RootClass::Repo {
         return Ok(Vec::new());
     }
-    rimz::worktree::list(&workspace.project_root)?
+    rimz::worktree::discover_owned(&workspace.project_root)?
         .into_iter()
         .map(|entry| {
-            let marker = rimz::worktree::read_marker_for_worktree(&entry.path)?
-                .with_context(|| format!("reading worktree marker for {}", entry.path.display()))?;
             Ok(LaneWorktree {
-                name: entry.name,
+                name: entry.marker.name,
                 path: rimz::worktree::normalize_path_lexical(&entry.path),
                 branch: entry.branch,
-                from_pr: marker.from_pr,
+                from_pr: entry.marker.from_pr,
             })
         })
         .collect()
