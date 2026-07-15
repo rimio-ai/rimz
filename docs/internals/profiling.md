@@ -26,6 +26,29 @@ target/profiling/rimz --version
 
 `cargo xtask profile-build` writes `target/profiling/rimz`: optimized like release, with line tables, frame pointers, and v0 symbol mangling for demangled call trees. `cargo xtask install-dev` installs the same profiling profile with the dev-only `sentry` feature, so dogfooding sessions are optimized and directly profilable; the shipped release binary keeps no frame-pointer or debug-info cost.
 
+## Profile a cold account refresh safely
+
+Measure account enrichment with fresh RimZ caches while retaining the real provider login surfaces. Keep `HOME`, `XDG_DATA_HOME`, `CODEX_HOME`, Pi/OpenCode data overrides, `PATH`, and keychain access inherited; give every sample new `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, and `XDG_CONFIG_HOME` directories. Use a short `/tmp` runtime root so workspace socket paths stay below the AF_UNIX limit. This isolates `accounts.json`, `credits.json`, `rate_limits.json`, cache locks, and workspace snapshots without deleting or moving live state.
+
+Create a deterministic empty pane fixture and preserve the exact binary under comparison. `RIMZ_BIN` pins detached usage helpers to that same artifact, and an explicit `RIMZ_ACCOUNT_REFRESH_TRACE` path keeps samples separate.
+
+```sh
+cargo xtask profile-build
+cp target/profiling/rimz /tmp/rimz-account-before
+printf '[]\n' > /tmp/rimz-empty-panes.json
+state=$(mktemp -d /tmp/rimz-account-state.XXXXXX)
+runtime=$(mktemp -d /tmp/rimz-account-runtime.XXXXXX)
+config=$(mktemp -d /tmp/rimz-account-config.XXXXXX)
+trace=$state/account-refresh.jsonl
+XDG_STATE_HOME=$state XDG_RUNTIME_DIR=$runtime XDG_CONFIG_HOME=$config RIMZ_TEST_PANE_LIST=/tmp/rimz-empty-panes.json RIMZ_ACCOUNT_REFRESH_TRACE=$trace RIMZ_BIN=/tmp/rimz-account-before strace -f -tt -e trace=process,network -o "$state/strace.log" /tmp/rimz-account-before sidebar snapshot --json --workspace-id ws_0123456789abcdef01234567 --mux zellij --session-name account-refresh-profile > "$state/snapshot.json"
+```
+
+The opt-in trace is absent by default. Set `RIMZ_ACCOUNT_REFRESH_TRACE` to an explicit file, or to `1`/`true` for `account_refresh_trace.jsonl` beside the shared caches. Records use Unix `at_ms` only to order the snapshot process and detached helpers; durations come from monotonic clocks. `provider_probe` names kind, normalized outcome, and account/version/total milliseconds; `probe_batch` names due/worker/success counts and total milliseconds; `contention`, `claim`, and `helper_spawn` name only normalized decisions; `usage_helper` names kind, normalized outcome, realtime/direct/cache-publication/total milliseconds. The schema excludes commands, paths, account identities, claim nonces, tokens, URLs, request and response bodies, and plan labels.
+
+Poll the isolated cache files with a finite deadline. Account publication completes when `accounts.json` exists; usage for each discovered metered provider with a supported usage surface completes when its `credits.json` entry has a nonzero `oauth_read_at_ms` and no `direct_query_claim`. Confirm the expected provider's authoritative windows in `rate_limits.json`; a settled or failed provider result is a valid terminal outcome, while a claim still present at the deadline is reported as lingering rather than replaced by hand. Count `execve` and network timestamps from the matching `strace.log` and read claim/spawn/publication timing from the trace.
+
+Take at least three samples for each binary and report the logged-in provider set, median, and range for snapshot/account publication, per-provider usage publication, total convergence, subprocess count, and process/network timing. Compare identical isolated commands and poll criteria before and after the change; keep network-dependent wall time and all machine-specific measurements in the implementation report rather than CI assertions or this guide.
+
 Verify which build is actually running before trusting absolute numbers. Frames like `core::ub_checks::*` or `precondition_check` in a profile are the tell for a debug build (opt-level 0 with debug assertions): absolute CPU overstates release by roughly 5×, while ratios and rates — forks/s, folds/s, the producer/consumer split — stay valid. The July 5 baseline ran on exactly such a build; its ratios held, its absolute figures did not.
 
 ## Attach to the right process
