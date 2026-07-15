@@ -17,25 +17,26 @@ For a single agent in the pane you are standing in, this is the whole story. Eve
 
 ## Why `rimz agents`
 
-A bare `claude` is a general-purpose agent, and most work is not general: a planner should reason hard and edit nothing, a reviewer should read the diff and propose rather than commit, a test-writer should stay in the test tree. The stock CLI can already be shaped into any of these with its own flags:
+A bare `claude` is a general-purpose agent, and most work is not general: a planner should reason hard and edit nothing, a reviewer should read the diff and propose rather than commit, a test-writer should stay in the test tree. Even the everyday default is worth shaping — a trimmed system prompt, an explicit tool list, the effort and permission posture you actually want — and the stock CLI takes all of it through its own flags:
 
 ```sh
-claude --model opus --effort high \
-       --append-system-prompt-file ~/prompts/planner.md \
-       --allowed-tools Read Grep Glob        # reasons hard, edits nothing
+claude --permission-mode auto --effort xhigh \
+       --system-prompt-file ~/.agents/prompts/claude-slim.md \
+       --strict-mcp-config \
+       --tools 'Agent,AskUserQuestion,Bash,Edit,EnterPlanMode,ExitPlanMode,LSP,Read,Skill,TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,WebFetch,WebSearch,Write'
 ```
 
 A shaped agent beats a general one steered by hand — fewer wrong turns, less context spent wandering, a lower bill for the same result. What doesn't scale is the typing: that flag stack, re-entered in every pane, kept in sync across sessions, remembered per provider because Codex spells the same ideas differently.
 
-That flag stack is what `rimz agents` bottles. A [profile](#profiles-shape-an-agent-for-one-job) gives it a name, and the launcher replays it:
+That flag stack is what `rimz agents` bottles. A [profile](#profiles-shape-an-agent-for-one-job) — here named `claude`, the same as the kind, so it becomes the tuned default — gives it one word, and the launcher replays it:
 
 ```sh
-rimz agents planner           # the flag stack above, as one word — and a @planner handle
-rimz agents claude,codex      # two stock agents, side by side in one line
+rimz agents claude            # the flag stack above, as one word — and a @claude handle
+rimz agents claude,codex      # two agents, side by side in one line
 rimz agents forge -w feat-x   # a whole team, isolated in its own worktree
 ```
 
-The wrapper stays thin. `rimz agents planner` does exactly two things on your machine: it renders the profile into the stock CLI's own flags (the `claude --model opus …` line above, nothing you couldn't type yourself), and it runs that command in your Zellij or tmux — in the pane you are standing in for a single agent, in a fresh tab for a layout or worktree — under a small RimZ launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI; its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. Closing the pane or `rimz agents stop @planner` ends it the same way Ctrl+C would.
+The wrapper stays thin. `rimz agents claude` does exactly two things on your machine: it renders the profile into the stock CLI's own flags (the `claude --permission-mode auto …` line above, nothing you couldn't type yourself), and it runs that command in your Zellij or tmux — in the pane you are standing in for a single agent, in a fresh tab for a layout or worktree — under a small RimZ launcher that stamps the handle and hands over to the CLI. The agent process is the official CLI; its session files land where the CLI always puts them, so `claude --resume` and the provider's own apps keep working. Closing the pane or `rimz agents stop @claude` ends it the same way Ctrl+C would.
 
 Beyond the preset, the launcher carries three habits that build on it, each with its own guide:
 
@@ -225,17 +226,25 @@ That is the whole daily workflow. The two sections below are the detail it names
 A **profile** is a named preset in `agents.toml`: the base CLI plus the fields that shape it — model, reasoning effort, system prompt, permission mode, and raw flags. Define it once, launch it by name:
 
 ```toml
-[agents.profiles.planner]
+[agents.profiles.claude]                                   # named for the kind, so it becomes the tuned default
 agent = "claude"                                           # the base CLI, or another profile
-model = "opus"
+mode = "auto"
+effort = "xhigh"
+system-prompt-file = "~/.agents/prompts/claude-slim.md"    # a trimmed house prompt
+args = "--strict-mcp-config --tools 'Agent,AskUserQuestion,Bash,Edit,EnterPlanMode,ExitPlanMode,LSP,Read,Skill,TaskCreate,TaskGet,TaskList,TaskStop,TaskUpdate,WebFetch,WebSearch,Write'"
+
+[agents.profiles.claude-planner]                           # a specialist off the same base CLI
+agent = "claude"
+model = "fable"
+mode = "auto"
 effort = "high"
-budget = "20/day"                                        # local-calendar-day cap
-system-prompt-file = "~/.config/rimz/prompts/planner.md"   # its role, craft, and boundaries
-args = "--allowed-tools Read Grep Glob"                    # read and search only, no edits
+system-prompt-file = "~/.agents/prompts/claude-planner.md"  # its role, craft, and boundaries
+args = "--strict-mcp-config --tools 'Bash,Read,Edit,Write,AskUserQuestion,WebFetch,WebSearch,Skill,Agent(Explore,Plan)'"  # plan and explore, nothing that ships
 ```
 
 ```sh
-rimz agents planner           # launches Claude under the planner preset, as @planner
+rimz agents claude            # the tuned default, as @claude
+rimz agents claude-planner    # the planning specialist, as @claude-planner
 ```
 
 Each field renders into the base CLI's own flag, so a profile can pin anything the CLI can pin from its command line, and nothing it can't. The one exception is `budget`, which RimZ itself enforces:
@@ -250,7 +259,7 @@ Each field renders into the base CLI's own flag, so a profile can pin anything t
 | `mode` | the permission posture (`auto` \| `ask` \| `plan` \| `yolo`) | see [permission modes](#set-a-permission-mode) |
 | `args` | raw flags handed to the stock CLI | verbatim |
 
-The system prompt and `args` are what make a profile targeted. There is no RimZ-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--allowed-tools` for Claude, `--sandbox` for Codex — and a narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
+The system prompt and `args` are what make a profile targeted. There is no RimZ-specific tools setting: you narrow the toolset with the agent's own flags through `args` — `--tools` for Claude, `--sandbox` for Codex — and a narrow tool surface plus a focused prompt is what keeps a specialized agent fast and on-task.
 
 When does a bare kind stop being enough? The moment you type the same shaping flags a second time. One planner prompt you keep reusing, a reviewer that must never commit, a cheap low-effort triage agent — each is a profile.
 

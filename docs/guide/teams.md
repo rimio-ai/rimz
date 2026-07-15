@@ -1,6 +1,13 @@
 # Teams
 
-A team launches several agents as one unit, each in a named role with its own context window, model, and instructions, cooperating over messages in a shared channel. Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
+A team launches several agents as one unit, each in a named role with its own context window, model, and instructions, cooperating over messages in a shared channel.
+
+<p align="center">
+  <img src="../rimz-team.png" alt="A RimZ room running forge teams: the coder messages the planner about a gap in the plan, and the planner takes the design call" width="100%">
+  <br/><sub>The loop mid-conversation: <code>@coder</code> finds a gap in the plan and messages <code>@planner</code> with evidence; the planner (center pane) verifies and updates the plan.</sub>
+</p>
+
+Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
 
 ```sh
 rimz agents forge -w feat-complex         # planner, coder, reviewer on one feature
@@ -24,7 +31,7 @@ That is what a team manages: which window holds which part of the problem, and w
 
 ## The forge loop
 
-`forge` is the team RimZ builds itself with, shipped ready to copy under [`examples/teams/forge/`](../../examples/README.md): three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system-prompt file.
+`forge` is the team RimZ builds itself with, shipped ready to copy under [`examples/teams/forge/`](https://github.com/rimio-ai/rimz/tree/main/examples/teams): three roles that carry one change through plan, code, and review, each role a profile with its own model, effort, and system-prompt file.
 
 - **@planner** (Claude, on Fable) talks with you. It explores the code through subagents, drafts directions, confirms the design choices with you, and writes the plan. Planning is where a deep model earns its price: Fable reads the intention behind a question, holds a large design in view, and writes implementation plans precise enough to execute. On a complex problem that conversation alone fills 200k to 300k tokens, and by hand-off the window holds the whole design history: the exploration, the alternatives weighed, your decisions. That context is exactly what good design calls for, and exactly what execution doesn't need. Asking the same window to also type the code would push it toward 400k to 600k tokens, where every turn gets slower and pricier and a big model's reasoning starts to dull.
 - **@coder** (Codex, on Sol, the current GPT 5.6) starts fresh from the plan: a clean window, the exact files to touch, the decisions already made. Sol is fast, cheap, and writes robust code once the details are pinned down, and a precise plan makes its context loading precise too: it pulls in just the code the change touches and implements from there. It verifies the plan against the real code as it goes rather than trusting it.
@@ -33,11 +40,6 @@ That is what a team manages: which window holds which part of the problem, and w
 By the time implementation starts, two windows understand the problem from different sides: the planner's holds the design history, the coder's holds the code as it stands, and each catches what the other misses. So the roles keep talking. The coder hits a choice the plan left open and takes it to the planner, whose full design context makes it the right desk for the call. Coder and reviewer argue findings with `file:line` evidence, fix or push back, and escalate to the planner when a dispute turns out to be a design call. Three independent windows, each with its own focus, cooperating as one team.
 
 The split reads like it should multiply cost; in practice it divides it. Building RimZ with forge, a complex change that a single Fable window would carry to 400k or 500k tokens and well past $100 lands around $10 of planning, $20 of coding, and $10 of review, and the quality rises as the price falls, because each window spends its whole budget inside its comfort zone.
-
-<p align="center">
-  <img src="../rimz-team.png" alt="A RimZ room running forge teams: the coder messages the planner about a gap in the plan, and the planner takes the design call" width="100%">
-  <br/><sub>The loop mid-conversation: <code>@coder</code> finds a gap in the plan and messages <code>@planner</code> with evidence; the planner (center pane) verifies and updates the plan.</sub>
-</p>
 
 ## Set up forge
 
@@ -62,7 +64,31 @@ The planner comes back to you at its design gates; the sidebar lifts the whole t
 A team in `agents.toml` (or a drop-in fragment like forge's `team.toml`) is a list of roles, each bound to a configured profile or registered agent kind, with an optional `layout` using the same row and column operators as inline specs (commas split columns, plus signs tile rows, slashes stack them). A same-named machine profile overrides the kind's implicit base. Its cells name declared roles or roleless cells, while ad-hoc `cell:role` suffixes stay exclusive to inline specs:
 
 ```toml
+# Copy-ready drop-in fragment for ~/.agents/teams/forge/.
+# See examples/README.md for install and launch commands.
+
+# Tune Claude planner model, effort, or args here.
+[agents.profiles.claude-planner]
+agent = "claude"
+mode = "auto"
+effort = "high"
+args = "--model fable --strict-mcp-config --tools 'Bash,Read,Edit,Write,AskUserQuestion,WebFetch,WebSearch,Skill,Agent(Explore,Plan)'"
+
+# Tune Codex coder effort or feature flags here.
+[agents.profiles.codex-coder]
+agent = "codex"
+effort = "xhigh"
+args = "-c 'web_search=\"cached\"' -c 'features.goals=false' -c 'features.multi_agent=false' -c 'features.multi_agent_v2=false' -c 'features.shell_snapshot=true' -c 'features.shell_tool=true' -c 'features.skill_mcp_dependency_install=false' -c 'features.tool_call_mcp_elicitation=false' -c 'features.unified_exec=true' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'features.in_app_browser=false' -c 'features.image_generation=false' -c 'features.tool_suggest=false' -c 'features.memories=false' -c 'features.default_mode_request_user_input=false' -c 'skills.include_instructions=true'"
+
+# Tune Claude reviewer model, effort, or args here.
+[agents.profiles.claude-reviewer]
+agent = "claude"
+mode = "auto"
+effort = "xhigh"
+args = "--model opus --strict-mcp-config --tools 'Bash,Read,Edit,Write,WebFetch,WebSearch,Skill'"
+
 [agents.teams.forge]
+# Seed new work with the planner; the roles hand it through the loop from there.
 leader = "planner"
 layout = "planner,coder+reviewer"
 
@@ -70,7 +96,16 @@ layout = "planner,coder+reviewer"
 role = "planner"
 profile = "claude-planner"
 system-prompt-file = "planner.md"
-# ... coder and reviewer roles follow the same shape
+
+[[agents.teams.forge.roles]]
+role = "coder"
+profile = "codex-coder"
+system-prompt-file = "coder.md"
+
+[[agents.teams.forge.roles]]
+role = "reviewer"
+profile = "claude-reviewer"
+system-prompt-file = "reviewer.md"
 ```
 
 Launching the team name opens every member in that layout, and each answers to its role handle: `@reviewer` inside the team's channel, `forge.reviewer` from anywhere in the workspace. The optional `leader` names the role that receives a trailing launch prompt; without it, the first declared role leads. `rimz agents forge -w feat-x "task"` therefore seeds the planner directly, while the rest of the team starts ready for its hand-offs. `rimz agents forge.reviewer` launches or re-adds that one role with the same identity it has inside the full team.

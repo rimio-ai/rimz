@@ -2,14 +2,14 @@
 
 You run a fleet now, not a single agent, and the fleet spends. Tokens turn into dollars across every provider you use, and each keeps its own tally on its own billing page: none beside your code, none aware of the others. The one number you actually want, what the fleet cost and how hard it worked, is the one nobody puts in front of you.
 
-Token insight is that number, in the terminal. Every transcript-backed agent turn leaves a local usage store (the model, token counts, timestamps, and for some providers the dollar cost), and RimZ reads those files into one account-global picture across Claude, Codex, Amp, Pi, and OpenCode. If you have run `ccusage` over Claude's transcripts, this is the same trick widened across every provider with a usable local usage store and wired into the room so it updates as the work lands. Kinds without such a store surface less; the per-kind coverage is in [agent support](../reference/agent-support.md).
-
-You read it two ways. `rimz stats` prints the whole history on demand, from anywhere. The sidebar keeps a live slice of the same data in front of you while you work.
-
 <p align="center">
   <img src="../rimz-stats.png" alt="The rimz stats dashboard: a year-long token heatmap, the All time / Week / Month / Year window row, per-model and per-agent spend breakdowns, and activity insights" width="100%">
   <br/><sub><code>rimz stats</code>: a year of token activity, then where it went by model and by agent.</sub>
 </p>
+
+Token insight is that number, in the terminal. Every transcript-backed agent turn leaves a local usage store (the model, token counts, timestamps, and for some providers the dollar cost), and RimZ reads those files into one account-global picture across Claude, Codex, Amp, Pi, and OpenCode. If you have run `ccusage` over Claude's transcripts, this is the same trick widened across every provider with a usable local usage store and wired into the room so it updates as the work lands. Kinds without such a store surface less; the per-kind coverage is in [agent support](../reference/agent-support.md).
+
+You read it two ways. `rimz stats` prints the whole history on demand, from anywhere. The sidebar keeps a live slice of the same data in front of you while you work.
 
 ## The full picture: rimz stats
 

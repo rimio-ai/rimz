@@ -1,4 +1,4 @@
-# The rimz command line
+# `rimz`
 
 `rimz` is one binary. Run it in a project and it opens that project's room — a Zellij or tmux session with the sidebar — and gives you the verbs to live in it: launch and steer agents, read the fleet, schedule turns, and keep the workspace healthy. Every command resolves to the room for the directory you run it in, so the same command reaches the same workspace from any pane, any worktree, or a script on the machine. How RimZ picks that room from the directory is [the root model in ARCHITECTURE.md](../../ARCHITECTURE.md).
 
