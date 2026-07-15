@@ -29,11 +29,7 @@ pub enum LiveRoomErr {
     #[error(
         "no live Rimz room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
     )]
-    Autodetect {
-        session_name: String,
-        #[source]
-        source: MuxErr,
-    },
+    Autodetect { session_name: String },
     #[error(
         "no live Rimz room `{session_name}`; run `rimz start` first or enter one with `rimz attach`"
     )]
@@ -49,11 +45,9 @@ pub fn require_live_mux(
     explicit: Option<MuxName>,
     workspace: &ResolvedWorkspace,
 ) -> LiveRoomResult<MuxName> {
-    let mux =
-        crate::mux::auto_detect_backend(explicit).map_err(|source| LiveRoomErr::Autodetect {
-            session_name: workspace.session_name.clone(),
-            source,
-        })?;
+    let mux = crate::mux::auto_detect_backend(explicit).map_err(|_| LiveRoomErr::Autodetect {
+        session_name: workspace.session_name.clone(),
+    })?;
     let backend = crate::mux::backend_for(mux);
     require_live_session(backend.as_ref(), &workspace.session_name)?;
     Ok(mux)
@@ -549,12 +543,12 @@ mod tests {
         };
         let autodetect = LiveRoomErr::Autodetect {
             session_name: "rimz-demo".to_owned(),
-            source: MuxErr::NoMuxFound,
         };
         let expected =
             "no live Rimz room `rimz-demo`; run `rimz start` first or enter one with `rimz attach`";
 
         assert_eq!(missing.to_string(), expected);
         assert_eq!(autodetect.to_string(), expected);
+        assert!(std::error::Error::source(&autodetect).is_none());
     }
 }
