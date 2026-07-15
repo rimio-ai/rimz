@@ -1,13 +1,9 @@
 use super::*;
 use rimz::agents::{AgentState, AgentStatus};
-use rimz::harness::run::{PermissionMode, RunStatus};
-use rimz::harness::run_wake::{self, ExpectedRunFrame, WakeupFrame};
+use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::pane::PaneRef;
 use rimz::store::{RuntimePaths, StatePaths};
-use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use tokio::net::UnixDatagram;
 
 #[test]
 fn stream_json_prompt_concatenates_user_message_text() {
@@ -96,9 +92,7 @@ fn stream_event_shapes_are_ndjson_ready() {
 
 struct RunFixture {
     _dir: tempfile::TempDir,
-    workspace_id: WorkspaceId,
     paths: StatePaths,
-    runtime: RuntimePaths,
     store: rimz::Store,
     record: RunRecord,
 }
@@ -126,9 +120,7 @@ impl RunFixture {
         rimz::harness::run::create(&paths, &record).unwrap();
         Self {
             _dir: dir,
-            workspace_id,
             paths,
-            runtime,
             store,
             record,
         }
@@ -137,111 +129,6 @@ impl RunFixture {
     fn run_id(&self) -> rimz::RunId {
         self.record.run_id.clone()
     }
-
-    fn expected(&self) -> ExpectedRunFrame {
-        ExpectedRunFrame {
-            workspace_id: self.workspace_id.clone(),
-            run_id: self.run_id(),
-        }
-    }
-
-    fn bind(&self) -> (std::os::unix::net::UnixDatagram, PathBuf) {
-        run_wake::bind_run(&self.runtime, &self.record.run_id).unwrap()
-    }
-
-    fn complete(&self, message: &str) {
-        let mut record = self.record.clone();
-        record.status = RunStatus::Completed;
-        record.last_message = Some(message.to_owned());
-        rimz::store::run_store::write(&self.paths.runs_dir, &record).unwrap();
-    }
-}
-
-#[test]
-fn blocking_stream_wakeup_reloads_terminal_record() {
-    let fixture = RunFixture::new(RunStatus::Running);
-    let run_id = fixture.run_id();
-    let (sock, sock_path) = fixture.bind();
-
-    fixture.complete("done");
-    send_run_frame(
-        &sock_path,
-        &WakeupFrame::RunCompleted {
-            workspace_id: fixture.workspace_id.clone(),
-            run_id: run_id.clone(),
-            status: RunStatus::Completed,
-        },
-    );
-    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
-    let mut out = Vec::new();
-    let mut sink = output::StreamSink::ndjson(&mut out);
-
-    let loaded = stream_blocking_run(
-        sock,
-        fixture.expected(),
-        &fixture.store,
-        &rimz::agents::CodexAdapter,
-        Some(Duration::from_secs(1)),
-        &AtomicBool::new(false),
-        (&mut cursor, &mut sink),
-    )
-    .unwrap();
-
-    assert_eq!(loaded.status, RunStatus::Completed);
-    assert_eq!(loaded.last_message.as_deref(), Some("done"));
-}
-
-#[test]
-fn blocking_stream_timeout_marks_run_timed_out() {
-    let fixture = RunFixture::new(RunStatus::Running);
-    let run_id = fixture.run_id();
-    let (sock, _sock_path) = fixture.bind();
-    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
-    let mut out = Vec::new();
-    let mut sink = output::StreamSink::ndjson(&mut out);
-
-    let timed_out = stream_blocking_run(
-        sock,
-        fixture.expected(),
-        &fixture.store,
-        &rimz::agents::CodexAdapter,
-        Some(Duration::ZERO),
-        &AtomicBool::new(false),
-        (&mut cursor, &mut sink),
-    )
-    .unwrap();
-
-    assert_eq!(timed_out.status, RunStatus::TimedOut);
-    assert_eq!(
-        rimz::harness::run::load(&fixture.paths, &run_id)
-            .unwrap()
-            .status,
-        RunStatus::TimedOut
-    );
-}
-
-#[test]
-fn blocking_text_stream_leaves_forensics_to_its_caller() {
-    let fixture = RunFixture::new(RunStatus::Failed);
-    let (sock, _sock_path) = fixture.bind();
-    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let mut sink = output::StreamSink::text(&mut out, &mut err);
-
-    let failed = stream_blocking_run(
-        sock,
-        fixture.expected(),
-        &fixture.store,
-        &rimz::agents::CodexAdapter,
-        Some(Duration::from_secs(1)),
-        &AtomicBool::new(false),
-        (&mut cursor, &mut sink),
-    )
-    .unwrap();
-
-    assert_eq!(failed.status, RunStatus::Failed);
-    assert!(err.is_empty());
 }
 
 #[test]
@@ -272,160 +159,6 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
     assert!(String::from_utf8(err).unwrap().contains("wait timed out"));
 }
 
-#[test]
-fn completed_run_wakeup_reloads_terminal_record() {
-    let fixture = RunFixture::new(RunStatus::Running);
-    let run_id = fixture.run_id();
-    let (sock, sock_path) = fixture.bind();
-
-    fixture.complete("done");
-    let frame = WakeupFrame::RunCompleted {
-        workspace_id: fixture.workspace_id.clone(),
-        run_id: run_id.clone(),
-        status: RunStatus::Completed,
-    };
-    send_run_frame(&sock_path, &frame);
-
-    let outcome = wait_for_run(
-        sock,
-        fixture.expected(),
-        &fixture.paths,
-        Some(Duration::from_secs(1)),
-        &AtomicBool::new(false),
-    )
-    .unwrap();
-    let loaded = terminal_record_after_wait(&fixture.paths, &run_id, outcome).unwrap();
-
-    assert_eq!(loaded.status, RunStatus::Completed);
-    assert_eq!(loaded.last_message.as_deref(), Some("done"));
-    assert_eq!(loaded.status.exit_code(), 0);
-}
-
-#[test]
-fn neutral_run_wait_marks_timeout() {
-    let fixture = RunFixture::new(RunStatus::Running);
-    let run_id = fixture.run_id();
-    let (sock, _sock_path) = fixture.bind();
-
-    let outcome = wait_for_run(
-        sock,
-        fixture.expected(),
-        &fixture.paths,
-        Some(Duration::from_millis(10)),
-        &AtomicBool::new(false),
-    )
-    .unwrap();
-    let timed_out = terminal_record_after_wait(&fixture.paths, &run_id, outcome).unwrap();
-
-    assert_eq!(timed_out.status, RunStatus::TimedOut);
-    assert_eq!(timed_out.status.exit_code(), 124);
-}
-
-#[test]
-fn wait_for_run_observes_terminal_record_without_wakeup() {
-    let fixture = RunFixture::new(RunStatus::Completed);
-    let (sock, _sock_path) = fixture.bind();
-
-    let outcome = wait_for_run(
-        sock,
-        fixture.expected(),
-        &fixture.paths,
-        Some(Duration::from_millis(100)),
-        &AtomicBool::new(false),
-    )
-    .unwrap();
-
-    assert_eq!(outcome, RunWaitOutcome::Completed);
-}
-
-#[test]
-fn wait_for_run_polls_terminal_record_without_wakeup() {
-    let fixture = RunFixture::new(RunStatus::Running);
-    let (sock, _sock_path) = fixture.bind();
-
-    let outcome = std::thread::scope(|scope| {
-        scope.spawn(|| {
-            std::thread::sleep(Duration::from_millis(300));
-            fixture.complete("done");
-        });
-        wait_for_run(
-            sock,
-            fixture.expected(),
-            &fixture.paths,
-            Some(Duration::from_secs(1)),
-            &AtomicBool::new(false),
-        )
-    })
-    .unwrap();
-
-    assert_eq!(outcome, RunWaitOutcome::Completed);
-}
-
-#[test]
-fn wait_for_run_returns_interrupted_when_flag_is_set() {
-    let fixture = RunFixture::new(RunStatus::Running);
-    let (sock, _sock_path) = fixture.bind();
-    let interrupt = AtomicBool::new(true);
-
-    let outcome = wait_for_run(
-        sock,
-        fixture.expected(),
-        &fixture.paths,
-        Some(Duration::from_secs(1)),
-        &interrupt,
-    )
-    .unwrap();
-
-    assert_eq!(outcome, RunWaitOutcome::Interrupted);
-}
-
-#[test]
-fn interrupted_wait_marks_run_canceled() {
-    let fixture = RunFixture::new(RunStatus::Running);
-    let run_id = fixture.run_id();
-
-    let canceled =
-        terminal_record_after_wait(&fixture.paths, &run_id, RunWaitOutcome::Interrupted).unwrap();
-
-    assert_eq!(canceled.status, RunStatus::Canceled);
-    assert_eq!(
-        rimz::harness::run::load(&fixture.paths, &run_id)
-            .unwrap()
-            .status,
-        RunStatus::Canceled
-    );
-}
-
-#[test]
-fn blocking_stream_interrupt_marks_run_canceled() {
-    let fixture = RunFixture::new(RunStatus::Running);
-    let run_id = fixture.run_id();
-    let (sock, _sock_path) = fixture.bind();
-    let interrupt = AtomicBool::new(true);
-    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(true);
-    let mut out = Vec::new();
-    let mut sink = output::StreamSink::ndjson(&mut out);
-
-    let canceled = stream_blocking_run(
-        sock,
-        fixture.expected(),
-        &fixture.store,
-        &rimz::agents::CodexAdapter,
-        Some(Duration::from_secs(1)),
-        &interrupt,
-        (&mut cursor, &mut sink),
-    )
-    .unwrap();
-
-    assert_eq!(canceled.status, RunStatus::Canceled);
-    assert_eq!(
-        rimz::harness::run::load(&fixture.paths, &run_id)
-            .unwrap()
-            .status,
-        RunStatus::Canceled
-    );
-}
-
 fn run_record(kind: &str) -> RunRecord {
     RunRecord::new(
         WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
@@ -434,18 +167,6 @@ fn run_record(kind: &str) -> RunRecord {
         "go".to_owned(),
         Path::new("/tmp/rimz-run").to_path_buf(),
     )
-}
-
-fn send_run_frame(path: &Path, frame: &WakeupFrame) {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let sender = UnixDatagram::unbound().unwrap();
-        let bytes = serde_json::to_vec(frame).unwrap();
-        sender.send_to(&bytes, path).await.unwrap();
-    });
 }
 
 fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {

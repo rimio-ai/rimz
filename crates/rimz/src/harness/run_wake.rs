@@ -11,12 +11,13 @@
 //!
 use std::os::unix::net::UnixDatagram as StdUnixDatagram;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::harness::run::RunStatus;
+use crate::harness::run::{self, RunRecord, RunStatus};
 use crate::ids::{RunId, WorkspaceId};
 use crate::sock;
 use crate::store::RuntimePaths;
@@ -35,6 +36,21 @@ pub enum RunWakeErr {
 
     #[error("recv on run wake socket: {0}")]
     Recv(#[source] std::io::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WaitUntilTerminalErr<E>
+where
+    E: std::fmt::Debug + std::fmt::Display + 'static,
+{
+    #[error("creating run wait runtime: {0}")]
+    Runtime(#[source] std::io::Error),
+    #[error("waiting on run wake socket: {0}")]
+    Socket(#[source] RunWakeErr),
+    #[error("reading or updating durable run state: {0}")]
+    Store(#[source] crate::store::run_store::RunStoreErr),
+    #[error("observing durable run state: {0}")]
+    Observer(E),
 }
 
 pub type Result<T> = std::result::Result<T, RunWakeErr>;
@@ -178,10 +194,72 @@ pub async fn wait_for_run_completion_owning(
     wait_for_run_completion(&sock, &expected, cap).await
 }
 
+/// Block on one supervised run until its durable record becomes terminal.
+///
+/// Wake frames only shorten the next durable reload. Terminal records win over
+/// an interrupt or deadline observed in the same iteration.
+pub fn wait_until_terminal<E>(
+    sock: StdUnixDatagram,
+    expected: ExpectedRunFrame,
+    paths: &crate::store::StatePaths,
+    timeout: Option<Duration>,
+    interrupt: &AtomicBool,
+    mut observer: impl FnMut(&RunRecord) -> std::result::Result<(), E>,
+) -> std::result::Result<RunRecord, WaitUntilTerminalErr<E>>
+where
+    E: std::fmt::Debug + std::fmt::Display + 'static,
+{
+    const WAIT_TICK: Duration = Duration::from_millis(250);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .map_err(WaitUntilTerminalErr::Runtime)?;
+    let deadline = timeout.map(|duration| Instant::now() + duration);
+    runtime.block_on(async {
+        let sock = adopt(sock).map_err(WaitUntilTerminalErr::Socket)?;
+        loop {
+            let record = run::load(paths, &expected.run_id).map_err(WaitUntilTerminalErr::Store)?;
+            observer(&record).map_err(WaitUntilTerminalErr::Observer)?;
+            if record.status.is_terminal() {
+                return Ok(record);
+            }
+
+            if interrupt.load(Ordering::SeqCst) {
+                let (record, _wrote) =
+                    run::cancel(paths, &expected.run_id).map_err(WaitUntilTerminalErr::Store)?;
+                observer(&record).map_err(WaitUntilTerminalErr::Observer)?;
+                return Ok(record);
+            }
+
+            let wait = match deadline {
+                Some(deadline) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        let record = run::timeout(paths, &expected.run_id)
+                            .map_err(WaitUntilTerminalErr::Store)?;
+                        observer(&record).map_err(WaitUntilTerminalErr::Observer)?;
+                        return Ok(record);
+                    }
+                    (deadline - now).min(WAIT_TICK)
+                }
+                None => WAIT_TICK,
+            };
+
+            let _hint = wait_for_run_completion(&sock, &expected, Some(wait))
+                .await
+                .map_err(WaitUntilTerminalErr::Socket)?;
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::WorkspaceId;
+    use crate::harness::run::PermissionMode;
+    use crate::ids::{AgentKind, WorkspaceId};
+    use crate::store::StatePaths;
     use tokio::net::UnixDatagram;
 
     fn short_runtime_root() -> tempfile::TempDir {
@@ -223,6 +301,10 @@ mod tests {
         let (sock, sock_path) = bind_run(&rt, &run_id).expect("bind run");
         let sender = UnixDatagram::unbound().expect("sender");
 
+        sender
+            .send_to(b"not-json", &sock_path)
+            .await
+            .expect("send malformed");
         let wrong = WakeupFrame::RunCompleted {
             workspace_id: workspace_id.clone(),
             run_id: other_run_id,
@@ -277,5 +359,243 @@ mod tests {
         .await
         .expect("run wait");
         assert_eq!(outcome, RunWakeOutcome::Neutral);
+    }
+
+    struct RunFixture {
+        _dir: tempfile::TempDir,
+        workspace_id: WorkspaceId,
+        paths: StatePaths,
+        runtime: RuntimePaths,
+        record: RunRecord,
+    }
+
+    impl RunFixture {
+        fn new(status: RunStatus) -> Self {
+            let dir = short_runtime_root();
+            let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+            let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+            let runtime =
+                RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+            paths.ensure_dirs().expect("state dirs");
+            runtime.ensure_dirs().expect("runtime dirs");
+            let mut record = RunRecord::new(
+                workspace_id.clone(),
+                AgentKind::new_unchecked("codex"),
+                PermissionMode::Auto,
+                "go".to_owned(),
+                Path::new("/tmp/rimz-run").to_path_buf(),
+            );
+            record.status = status;
+            run::create(&paths, &record).expect("create run");
+            Self {
+                _dir: dir,
+                workspace_id,
+                paths,
+                runtime,
+                record,
+            }
+        }
+
+        fn expected(&self) -> ExpectedRunFrame {
+            ExpectedRunFrame {
+                workspace_id: self.workspace_id.clone(),
+                run_id: self.record.run_id.clone(),
+            }
+        }
+
+        fn bind(&self) -> (StdUnixDatagram, PathBuf) {
+            bind_run(&self.runtime, &self.record.run_id).expect("bind run")
+        }
+
+        fn write_status(&self, status: RunStatus) {
+            let mut record = run::load(&self.paths, &self.record.run_id).expect("load run");
+            record.status = status;
+            crate::store::run_store::write(&self.paths.runs_dir, &record).expect("write run");
+        }
+    }
+
+    #[test]
+    fn durable_terminal_wins_before_interrupt_and_zero_timeout() {
+        let fixture = RunFixture::new(RunStatus::Completed);
+        let (sock, path) = fixture.bind();
+        let _guard = SocketGuard::new(path);
+        let interrupt = AtomicBool::new(true);
+        let mut observed = Vec::new();
+
+        let record = wait_until_terminal(
+            sock,
+            fixture.expected(),
+            &fixture.paths,
+            Some(Duration::ZERO),
+            &interrupt,
+            |record| {
+                observed.push(record.status);
+                Ok::<(), std::io::Error>(())
+            },
+        )
+        .expect("terminal wait");
+
+        assert_eq!(record.status, RunStatus::Completed);
+        assert_eq!(observed, vec![RunStatus::Completed]);
+    }
+
+    #[test]
+    fn interrupt_cancels_and_observes_final_durable_record() {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let (sock, path) = fixture.bind();
+        let _guard = SocketGuard::new(path);
+        let interrupt = AtomicBool::new(true);
+        let mut observed = Vec::new();
+
+        let record = wait_until_terminal(
+            sock,
+            fixture.expected(),
+            &fixture.paths,
+            None,
+            &interrupt,
+            |record| {
+                observed.push(record.status);
+                Ok::<(), std::io::Error>(())
+            },
+        )
+        .expect("interrupted wait");
+
+        assert_eq!(record.status, RunStatus::Canceled);
+        assert_eq!(observed, vec![RunStatus::Running, RunStatus::Canceled]);
+        assert_eq!(
+            run::load(&fixture.paths, &fixture.record.run_id)
+                .expect("load canceled")
+                .status,
+            RunStatus::Canceled
+        );
+    }
+
+    #[test]
+    fn timeout_marks_and_observes_final_durable_record() {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let (sock, path) = fixture.bind();
+        let _guard = SocketGuard::new(path);
+        let mut observed = Vec::new();
+
+        let record = wait_until_terminal(
+            sock,
+            fixture.expected(),
+            &fixture.paths,
+            Some(Duration::ZERO),
+            &AtomicBool::new(false),
+            |record| {
+                observed.push(record.status);
+                Ok::<(), std::io::Error>(())
+            },
+        )
+        .expect("timed wait");
+
+        assert_eq!(record.status, RunStatus::TimedOut);
+        assert_eq!(observed, vec![RunStatus::Running, RunStatus::TimedOut]);
+    }
+
+    #[test]
+    fn wake_status_is_only_a_reload_hint() {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let (sock, path) = fixture.bind();
+        let _guard = SocketGuard::new(path.clone());
+        let frame = WakeupFrame::RunCompleted {
+            workspace_id: fixture.workspace_id.clone(),
+            run_id: fixture.record.run_id.clone(),
+            status: RunStatus::Completed,
+        };
+        let sender = StdUnixDatagram::unbound().expect("sender");
+        sender
+            .send_to(&serde_json::to_vec(&frame).expect("frame"), &path)
+            .expect("send frame");
+
+        let record = wait_until_terminal(
+            sock,
+            fixture.expected(),
+            &fixture.paths,
+            Some(Duration::from_millis(10)),
+            &AtomicBool::new(false),
+            |_| Ok::<(), std::io::Error>(()),
+        )
+        .expect("wait after hint");
+
+        assert_eq!(record.status, RunStatus::TimedOut);
+    }
+
+    #[test]
+    fn lost_wake_still_observes_durable_terminal_record() {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let (sock, path) = fixture.bind();
+        let _guard = SocketGuard::new(path);
+
+        let record = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(20));
+                fixture.write_status(RunStatus::Failed);
+            });
+            wait_until_terminal(
+                sock,
+                fixture.expected(),
+                &fixture.paths,
+                Some(Duration::from_secs(1)),
+                &AtomicBool::new(false),
+                |_| Ok::<(), std::io::Error>(()),
+            )
+        })
+        .expect("wait without wake");
+
+        assert_eq!(record.status, RunStatus::Failed);
+    }
+
+    #[test]
+    fn observer_failure_is_typed_and_leaves_run_unchanged() {
+        let fixture = RunFixture::new(RunStatus::Running);
+        let (sock, path) = fixture.bind();
+        let guard = SocketGuard::new(path.clone());
+
+        let err = wait_until_terminal(
+            sock,
+            fixture.expected(),
+            &fixture.paths,
+            None,
+            &AtomicBool::new(false),
+            |_| Err(std::io::Error::other("sink closed")),
+        )
+        .expect_err("observer failure");
+
+        assert!(matches!(err, WaitUntilTerminalErr::Observer(_)));
+        assert_eq!(
+            run::load(&fixture.paths, &fixture.record.run_id)
+                .expect("load unchanged")
+                .status,
+            RunStatus::Running
+        );
+        drop(guard);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn caller_guard_cleans_socket_after_success_timeout_and_interrupt() {
+        fn assert_cleanup(status: RunStatus, timeout: Option<Duration>, interrupted: bool) {
+            let fixture = RunFixture::new(status);
+            let (sock, path) = fixture.bind();
+            {
+                let _guard = SocketGuard::new(path.clone());
+                wait_until_terminal(
+                    sock,
+                    fixture.expected(),
+                    &fixture.paths,
+                    timeout,
+                    &AtomicBool::new(interrupted),
+                    |_| Ok::<(), std::io::Error>(()),
+                )
+                .expect("terminal wait");
+            }
+            assert!(!path.exists());
+        }
+
+        assert_cleanup(RunStatus::Completed, None, false);
+        assert_cleanup(RunStatus::Running, Some(Duration::ZERO), false);
+        assert_cleanup(RunStatus::Running, None, true);
     }
 }

@@ -4,14 +4,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
 use crate::cli::GlobalFlags;
 use rimz::agents::{AgentAdapter, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
-use rimz::harness::run::RunRecord;
-use rimz::harness::run_wake::{self, ExpectedRunFrame, RunWakeOutcome};
 use rimz::mux::PaneCmd;
 use rimz::workspace::WorkspaceResolver;
 
@@ -21,7 +19,6 @@ pub(super) mod run;
 pub(super) mod stream;
 pub(super) mod verify;
 
-const RUN_WAIT_INTERRUPT_POLL: Duration = Duration::from_millis(250);
 static RUN_INTERRUPT_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 static RUN_INTERRUPT_HANDLERS_INSTALLED: OnceLock<()> = OnceLock::new();
 
@@ -30,7 +27,7 @@ use output::RunStreamEvent;
 #[cfg(test)]
 use pane::{ensure_sendable, latest_resolved_run_pane, resolve_run_pane_in_snapshot};
 #[cfg(test)]
-use stream::{stream_attached_run, stream_blocking_run};
+use stream::stream_attached_run;
 
 pub(super) fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::ResolvedWorkspace> {
     WorkspaceResolver::resolve_participant(".", globals.root.clone())
@@ -137,13 +134,6 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     Ok(PaneCmd { argv })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RunWaitOutcome {
-    Completed,
-    TimedOut,
-    Interrupted,
-}
-
 pub(super) fn install_run_interrupt_flag() -> Result<Arc<AtomicBool>> {
     let flag = RUN_INTERRUPT_SIGNAL_RECEIVED
         .get_or_init(|| Arc::new(AtomicBool::new(false)))
@@ -169,75 +159,6 @@ fn install_run_interrupt_handlers(flag: Arc<AtomicBool>) -> Result<()> {
 #[cfg(not(unix))]
 fn install_run_interrupt_handlers(_flag: Arc<AtomicBool>) -> Result<()> {
     Ok(())
-}
-
-pub(super) fn wait_for_run(
-    sock: std::os::unix::net::UnixDatagram,
-    expected: ExpectedRunFrame,
-    paths: &rimz::StatePaths,
-    timeout: Option<Duration>,
-    interrupt: &AtomicBool,
-) -> Result<RunWaitOutcome> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .build()
-        .context("creating run wait runtime")?;
-    let outcome: Result<RunWaitOutcome> = runtime.block_on(async {
-        let sock = run_wake::adopt(sock).context("adopting run socket")?;
-        let deadline = timeout.map(|duration| Instant::now() + duration);
-        loop {
-            let record = rimz::harness::run::load(paths, &expected.run_id)?;
-            if record.status.is_terminal() {
-                return Ok(RunWaitOutcome::Completed);
-            }
-            if interrupt.load(Ordering::SeqCst) {
-                return Ok(RunWaitOutcome::Interrupted);
-            }
-            let Some(wait) = next_run_wait(deadline) else {
-                return Ok(RunWaitOutcome::TimedOut);
-            };
-            match run_wake::wait_for_run_completion(&sock, &expected, Some(wait)).await? {
-                RunWakeOutcome::Completed(_status) => return Ok(RunWaitOutcome::Completed),
-                RunWakeOutcome::Neutral => {}
-            }
-        }
-    });
-    outcome.context("waiting for run completion")
-}
-
-fn next_run_wait(deadline: Option<Instant>) -> Option<Duration> {
-    let Some(deadline) = deadline else {
-        return Some(RUN_WAIT_INTERRUPT_POLL);
-    };
-    let now = Instant::now();
-    if now >= deadline {
-        None
-    } else {
-        Some((deadline - now).min(RUN_WAIT_INTERRUPT_POLL))
-    }
-}
-
-pub(super) fn terminal_record_after_wait(
-    paths: &rimz::StatePaths,
-    run_id: &rimz::RunId,
-    outcome: RunWaitOutcome,
-) -> Result<RunRecord> {
-    match outcome {
-        RunWaitOutcome::Completed => Ok(rimz::harness::run::load(paths, run_id)?),
-        RunWaitOutcome::TimedOut => {
-            let current = rimz::harness::run::load(paths, run_id)?;
-            if current.status.is_terminal() {
-                Ok(current)
-            } else {
-                Ok(rimz::harness::run::timeout(paths, run_id)?)
-            }
-        }
-        RunWaitOutcome::Interrupted => {
-            let (record, _wrote) = rimz::harness::run::cancel(paths, run_id)?;
-            Ok(record)
-        }
-    }
 }
 
 pub(super) fn parse_timeout(raw: &str) -> std::result::Result<Duration, String> {

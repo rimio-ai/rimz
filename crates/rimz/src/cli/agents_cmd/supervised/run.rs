@@ -104,53 +104,65 @@ impl RunWaiter {
         prepared: &PreparedRun,
         room: &rimz::room::RoomContext,
         args: &AgentsArgs,
-        run_id: &rimz::RunId,
+        _run_id: &rimz::RunId,
     ) -> Result<RunRecord> {
         let record = if prepared.output_format == OutputFormat::StreamJson {
             let mut stdout = std::io::stdout().lock();
             let mut sink = supervised::output::StreamSink::ndjson(&mut stdout);
-            supervised::stream::stream_blocking_run(
+            let record = run_wake::wait_until_terminal(
                 self.sock.try_clone().context("cloning run stream socket")?,
                 self.expected.clone(),
-                &prepared.store,
-                prepared.adapter,
+                prepared.store.paths(),
                 args.timeout,
                 &self.interrupt,
-                (
-                    self.stream_cursor
-                        .as_mut()
-                        .context("stream run lost its transcript cursor")?,
-                    &mut sink,
-                ),
-            )?
+                |record| {
+                    supervised::stream::emit_stream_updates(
+                        &prepared.store,
+                        prepared.adapter,
+                        self.stream_cursor
+                            .as_mut()
+                            .context("stream run lost its transcript cursor")?,
+                        &mut sink,
+                        record,
+                    )
+                },
+            )?;
+            sink.end_status(record.status, record.last_message.as_deref())?;
+            record
         } else if args.stream_text {
             let mut stdout = render::out();
             let mut gutter = render::GutterWriter::new(&mut stdout);
             let mut stderr = render::err();
             let mut sink = supervised::output::StreamSink::text(&mut gutter, &mut stderr);
-            supervised::stream::stream_blocking_run(
+            let record = run_wake::wait_until_terminal(
                 self.sock.try_clone().context("cloning run stream socket")?,
                 self.expected.clone(),
-                &prepared.store,
-                prepared.adapter,
+                prepared.store.paths(),
                 args.timeout,
                 &self.interrupt,
-                (
-                    self.stream_cursor
-                        .as_mut()
-                        .context("stream run lost its transcript cursor")?,
-                    &mut sink,
-                ),
-            )?
+                |record| {
+                    supervised::stream::emit_stream_updates(
+                        &prepared.store,
+                        prepared.adapter,
+                        self.stream_cursor
+                            .as_mut()
+                            .context("stream run lost its transcript cursor")?,
+                        &mut sink,
+                        record,
+                    )
+                },
+            )?;
+            sink.end_status(record.status, record.last_message.as_deref())?;
+            record
         } else {
-            let outcome = supervised::wait_for_run(
+            run_wake::wait_until_terminal(
                 self.sock.try_clone().context("cloning run wait socket")?,
                 self.expected.clone(),
                 prepared.store.paths(),
                 args.timeout,
                 &self.interrupt,
-            )?;
-            supervised::terminal_record_after_wait(prepared.store.paths(), run_id, outcome)?
+                |_| Ok::<(), std::io::Error>(()),
+            )?
         };
         Ok(record_failure_tail_before_cleanup(
             room.backend(),
