@@ -435,12 +435,36 @@ fn healthy_daemon_frame(now_ms: u64, mux: MuxName) -> crate::sidebar::frame::Pan
 fn tracker_stamp(root: &Path, generation: u64) -> DaemonViewInputsStamp {
     DaemonViewInputsStamp {
         config_generation: generation,
-        workspace_record: StampedPath::of(&root.join("workspace.json")),
+        workspace: DaemonWorkspaceInputs {
+            project_root: root.join("project"),
+            worktree_root: root.join("worktree"),
+        },
         rimz_bin: StampedPath::of(&root.join("rimz")),
         claude_bin: Some(StampedPath::of(&root.join("claude"))),
         codex_bin: Some(StampedPath::of(&root.join("codex"))),
         claude_settings: StampedPath::of(&root.join("settings.json")),
     }
+}
+
+#[test]
+fn daemon_workspace_inputs_ignore_fields_that_do_not_shape_the_view() {
+    let mut record = workspace_record::WorkspaceRecord {
+        workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+        project_root: PathBuf::from("/repo"),
+        worktree_root: Some(PathBuf::from("/repo/worktree")),
+        session_name: "rimz-demo".to_owned(),
+        root_class: crate::workspace::RootClass::Repo,
+        rimz_bin: Some(PathBuf::from("/usr/bin/rimz")),
+        updated_at: jiff::Timestamp::from_second(1_750_000_000).unwrap(),
+    };
+    let inputs = DaemonWorkspaceInputs::from_record(&record);
+
+    record.updated_at = jiff::Timestamp::from_second(1_750_000_001).unwrap();
+    record.rimz_bin = Some(PathBuf::from("/other/rimz"));
+    assert_eq!(DaemonWorkspaceInputs::from_record(&record), inputs);
+
+    record.worktree_root = Some(PathBuf::from("/repo/other"));
+    assert_ne!(DaemonWorkspaceInputs::from_record(&record), inputs);
 }
 
 #[test]

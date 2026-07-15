@@ -621,11 +621,32 @@ pub fn claude_host_present(panes: &[PaneRef]) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DaemonViewInputsStamp {
     config_generation: u64,
-    workspace_record: StampedPath,
+    workspace: DaemonWorkspaceInputs,
     rimz_bin: StampedPath,
     claude_bin: Option<StampedPath>,
     codex_bin: Option<StampedPath>,
     claude_settings: StampedPath,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DaemonWorkspaceInputs {
+    project_root: PathBuf,
+    worktree_root: PathBuf,
+}
+
+impl DaemonWorkspaceInputs {
+    /// Keep workspace freshness metadata out of daemon invalidation: ordinary
+    /// CLI and hook entry points refresh `updated_at`, while only these roots
+    /// shape the effective view.
+    fn from_record(record: &workspace_record::WorkspaceRecord) -> Self {
+        Self {
+            project_root: record.project_root.clone(),
+            worktree_root: record
+                .worktree_root
+                .clone()
+                .unwrap_or_else(|| record.project_root.clone()),
+        }
+    }
 }
 
 struct ResolvedDaemonInputs {
@@ -635,7 +656,7 @@ struct ResolvedDaemonInputs {
 }
 
 impl ResolvedDaemonInputs {
-    fn read(state: &StatePaths) -> Self {
+    fn read(record: &workspace_record::WorkspaceRecord) -> Self {
         let rimz_bin = crate::proc::rimz_exe();
         let claude_bin = which::which("claude").ok();
         let codex_bin = which::which("codex").ok();
@@ -643,7 +664,7 @@ impl ResolvedDaemonInputs {
         Self {
             stamp: DaemonViewInputsStamp {
                 config_generation: crate::config::MachineConfig::load_stamp_generation(),
-                workspace_record: StampedPath::of(&state.workspace_record),
+                workspace: DaemonWorkspaceInputs::from_record(record),
                 rimz_bin: StampedPath::of(&rimz_bin),
                 claude_bin: claude_bin.as_deref().map(StampedPath::of),
                 codex_bin: codex_bin.as_deref().map(StampedPath::of),
@@ -722,7 +743,18 @@ impl DaemonRepairTracker {
                 return;
             }
         };
-        let resolved = ResolvedDaemonInputs::read(&state);
+        let record = match workspace_record::read(&state.workspace_record) {
+            Ok(record) => record,
+            Err(err) => {
+                tracing::debug!(
+                    workspace = %self.workspace_id,
+                    error = &err as &dyn std::error::Error,
+                    "daemon view maintenance skipped; workspace record unavailable",
+                );
+                return;
+            }
+        };
+        let resolved = ResolvedDaemonInputs::read(&record);
         let frame = crate::sidebar::cache::read_snapshot_cache(
             &runtime.pane_frame_path(),
             &self.session_name,
@@ -734,17 +766,6 @@ impl DaemonRepairTracker {
             frame.as_deref(),
             crate::sidebar::timing::unix_now_ms(),
             || {
-                let record = match workspace_record::read(&state.workspace_record) {
-                    Ok(record) => record,
-                    Err(err) => {
-                        tracing::debug!(
-                            workspace = %workspace_id,
-                            error = &err as &dyn std::error::Error,
-                            "daemon view maintenance skipped; workspace record unavailable",
-                        );
-                        return None;
-                    }
-                };
                 let machine = crate::config::MachineConfig::load_lenient();
                 let readiness =
                     crate::remote_control::ReadinessSnapshot::probe(&machine.remote_control);
