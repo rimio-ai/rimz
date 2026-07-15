@@ -59,7 +59,7 @@ A row of zeros with no unread count means nothing needs you, so you can skip the
 
 The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation, so each group reads as one bounded block, and the group header names a linked pull request (`#91`) beside the worktree name while carrying the work's git story on the right: commits ahead and behind the trunk, lines added and removed (uncommitted and untracked work counts too), and a marker for where the work stands, from a plain branch through an open, merged, or closed pull request. Panes outside every project checkout fold into a dim `external` divider at the very bottom.
 
-Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) decides the order), and a busy worktree caps at six rows with a `+K more` line that only hides idle agents and quiet shells while work remains active. A finished line of work collapses completely to its header and a `+K done · $X.YZ` cost receipt, including unread success cards; click the header or the receipt, or apply the `s` status filter, to reveal the roster.
+Cards arrive already triaged (the [ranking below](#how-the-column-is-ordered) decides the order), and a busy worktree caps at six rows with a `+K more` line that only hides idle agents and quiet shells while work remains active. A finished line of work collapses completely to its header and a `+K done` line, which appends the `· $X.YZ` cost receipt when tracked spend rounds to at least one cent, including unread success cards; click the header or the line, or apply the `s` status filter, to reveal the roster.
 
 ### The provider dashboard
 
@@ -145,7 +145,7 @@ The tiers, by distance from your next action:
 3. **Delivered, awaiting your verdict.** A `done` card leads the calm cards in its line of work because it holds a result: your review queue. This queue rots while it waits — the trunk moves on and the group header's behind count (`⇣`) climbs — so the header tells you when a delivered branch is getting more expensive to land.
 4. **In flight, healthy.** Needs nothing and wants stable positions so your eyes can track it: running cards keep a flat weight and hold their place, with live cost and last-activity age as the cheap progress cues.
 5. **Idle.** Spare capacity, relevant only when you have work to hand out. It reads last, and a freshly launched agent appends at the bottom instead of reshuffling the list.
-6. **Merged or closed.** Zero attention, so it gets out of the way entirely: a non-dirty merged or closed line skips every clock, archives immediately, and collapses to its header plus a `+K done · $X.YZ` cost receipt; click the header or the receipt to reveal it, while a fresh run or ask revives it.
+6. **Merged or closed.** Zero attention, so it gets out of the way entirely: a non-dirty merged or closed line skips every clock, archives immediately, and collapses to its header plus a `+K done` line with a cost receipt when tracked spend rounds to a cent; click the header or the line to reveal it, while a fresh run or ask revives it.
 
 The third question — burning silently — is the one no status dump answers, because a zombie run wears the same spinner as a healthy one. The column watches for you: a running agent silent past the stall window escalates to `!` and enters the work queue ([the lifecycle](#the-agent-lifecycle)), and a turn that dies on a provider error quotes the error on its own card, so quiet trouble surfaces in the same queue as loud trouble.
 
@@ -190,7 +190,7 @@ Two partitions hold regardless of any score, so the column keeps one stable outl
 - **Agent cards lead their worktree; process rows form the tail.** Shells, builds, and servers are context, so they seat below every agent card.
 - **Project worktrees lead; out-of-project panes tail.** Panes outside every project checkout fold into the dim `external` divider that always sorts last, keeping an attention-only tally (`? n` / `! n`) so an out-of-project ask still surfaces.
 
-The six-row cap trims only a worktree's idle and process tail while the line of work remains active. Anything active, blocked, parked, finished, unread, or focused stays visible under that ordinary cap. A terminal group is the deliberate exception: its non-dirty merged or closed verdict is acceptance evidence, so every row except a focused or order-held row hides behind a `+K done · $X.YZ` cost receipt; click the header or the receipt, or apply the `s` filter, to reveal it.
+The six-row cap trims only a worktree's idle and process tail while the line of work remains active. Anything active, blocked, parked, finished, unread, or focused stays visible under that ordinary cap. A terminal group is the deliberate exception: its non-dirty merged or closed verdict is acceptance evidence, so every row except a focused or order-held row hides behind a `+K done` line with a cost receipt when tracked spend rounds to a cent; click the header or the line, or apply the `s` filter, to reveal it.
 
 ## Tuning
 
