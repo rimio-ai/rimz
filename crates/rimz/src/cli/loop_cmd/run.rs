@@ -114,9 +114,7 @@ pub(super) fn run_one(
                 crate::cli::supervised::SupervisedPresentation::text(prepared.stream),
                 &run_globals,
             )
-            .map(|record| {
-                rimz::harness::schedule::runner::TaskFireEffect::Spawn(record.map(Box::new))
-            });
+            .map(rimz::harness::schedule::runner::TaskFireEffect::Spawn);
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
         rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared) => {

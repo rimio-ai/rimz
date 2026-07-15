@@ -94,6 +94,14 @@ pub struct SupervisedRunRequest {
     pub passthrough: Vec<String>,
 }
 
+/// Command-neutral result of attempting one supervised turn.
+#[derive(Debug)]
+pub enum SupervisedRunOutcome {
+    Record(Box<RunRecord>),
+    Background,
+    BudgetExceeded { reason: String },
+}
+
 impl RunCancellation {
     pub fn new() -> Self {
         Self::default()

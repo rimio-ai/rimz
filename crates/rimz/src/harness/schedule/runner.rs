@@ -24,7 +24,7 @@ use crate::agents::{
     preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
-use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunRequest};
+use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
 use crate::harness::schedule::TaskAction;
 use crate::harness::schedule::catalog::{self, TaskCatalog};
 use crate::harness::schedule::run_log::{
@@ -97,7 +97,7 @@ pub enum TaskFirePlan {
 
 #[derive(Debug)]
 pub enum TaskFireEffect {
-    Spawn(Option<Box<RunRecord>>),
+    Spawn(SupervisedRunOutcome),
     Delivered,
     TargetGone,
 }
@@ -285,12 +285,8 @@ impl<'a> TaskFire<'a> {
             .take()
             .context("loop task has no prepared effect to finish")?;
         let (outcome, notice) = match (pending, effect) {
-            (PendingEffect::Spawn { check, stream }, TaskFireEffect::Spawn(Some(record))) => (
-                LoopRunOutcome::from_run_record(*record, check, stream),
-                TaskFireNotice::None,
-            ),
-            (PendingEffect::Spawn { check, .. }, TaskFireEffect::Spawn(None)) => {
-                (LoopRunOutcome::completed(check), TaskFireNotice::None)
+            (PendingEffect::Spawn { check, stream }, TaskFireEffect::Spawn(outcome)) => {
+                finish_spawn_effect(outcome, check, stream)
             }
             (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered) => (
                 LoopRunOutcome::delivery(target.handle, check),
@@ -540,6 +536,27 @@ impl<'a> TaskFire<'a> {
             transition,
             notice,
         }
+    }
+}
+
+fn finish_spawn_effect(
+    effect: SupervisedRunOutcome,
+    check: Option<CheckRecord>,
+    stream: bool,
+) -> (LoopRunOutcome, TaskFireNotice) {
+    match effect {
+        SupervisedRunOutcome::Record(record) => (
+            LoopRunOutcome::from_run_record(*record, check, stream),
+            TaskFireNotice::None,
+        ),
+        SupervisedRunOutcome::Background => {
+            (LoopRunOutcome::completed(check), TaskFireNotice::None)
+        }
+        SupervisedRunOutcome::BudgetExceeded { reason } => (
+            LoopRunOutcome::gate_skip(LoopRunResult::BudgetSkipped, reason.clone())
+                .with_check(check),
+            TaskFireNotice::Gate { reason },
+        ),
     }
 }
 
@@ -1396,6 +1413,37 @@ mod tests {
             effective_spawn_timeout(LoopRunMode::Manual, None, Some(configured)),
             None
         );
+    }
+
+    #[test]
+    fn supervised_budget_refusal_finishes_as_a_recorded_gate() {
+        let check = CheckRecord {
+            code: Some(1),
+            timed_out: false,
+            output: "guard failed".to_owned(),
+        };
+
+        let (outcome, notice) = finish_spawn_effect(
+            SupervisedRunOutcome::BudgetExceeded {
+                reason: "room budget reached".to_owned(),
+            },
+            Some(check.clone()),
+            true,
+        );
+
+        assert_eq!(outcome.result(), LoopRunResult::BudgetSkipped);
+        assert_eq!(outcome.check(), Some(&check));
+        assert_eq!(
+            outcome
+                .record("nightly", LoopRunMode::Scheduled, 12)
+                .error
+                .as_deref(),
+            Some("room budget reached")
+        );
+        assert!(matches!(
+            notice,
+            TaskFireNotice::Gate { reason } if reason == "room budget reached"
+        ));
     }
 
     #[test]

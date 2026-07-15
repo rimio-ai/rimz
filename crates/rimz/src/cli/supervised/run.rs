@@ -5,7 +5,9 @@ use crate::cli::supervised;
 use crate::cli::render;
 use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::plan::launch_identity_requests;
-use rimz::harness::run::{PermissionMode, RunRecord, RunStatus, SupervisedRunRequest};
+use rimz::harness::run::{
+    PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome, SupervisedRunRequest,
+};
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
 use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::AgentKind;
@@ -44,7 +46,14 @@ pub(in crate::cli) fn run_print(
     globals: &GlobalFlags,
 ) -> Result<Option<RunRecord>> {
     let output_format = presentation.output_format;
-    let record = run_supervised(request, presentation, globals)?;
+    let record = match run_supervised(request, presentation, globals)? {
+        SupervisedRunOutcome::Record(record) => Some(*record),
+        SupervisedRunOutcome::Background => None,
+        SupervisedRunOutcome::BudgetExceeded { reason } => {
+            render::report(&anyhow::anyhow!(reason));
+            std::process::exit(RunStatus::BudgetExceeded.exit_code());
+        }
+    };
     let Some(record_ref) = record.as_ref() else {
         return Ok(record);
     };
@@ -538,7 +547,7 @@ pub(in crate::cli) fn run_supervised(
     request: SupervisedRunRequest,
     presentation: SupervisedPresentation,
     globals: &GlobalFlags,
-) -> Result<Option<RunRecord>> {
+) -> Result<SupervisedRunOutcome> {
     let prepared = prepare_supervised(&request, &presentation, globals)?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let mut room = rimz::room::RoomContext::from_resolved(
@@ -581,8 +590,7 @@ pub(in crate::cli) fn run_supervised(
             &prepared.machine_config,
             jiff::Timestamp::now(),
         ) {
-            crate::cli::render::report(&anyhow::anyhow!(reason));
-            std::process::exit(RunStatus::BudgetExceeded.exit_code());
+            return Ok(SupervisedRunOutcome::BudgetExceeded { reason });
         }
         let Some(blocking) = execute_attempt(
             &prepared,
@@ -594,7 +602,7 @@ pub(in crate::cli) fn run_supervised(
             retries,
         )?
         else {
-            return Ok(None);
+            return Ok(SupervisedRunOutcome::Background);
         };
         let (record, verify_error, waiter) = verify_phase(&prepared, &room, &request, blocking)?;
         if !request.keep {
@@ -615,7 +623,7 @@ pub(in crate::cli) fn run_supervised(
                     "rimz: worktree cleanup did not complete: {err}"
                 );
             }
-            return Ok(Some(record));
+            return Ok(SupervisedRunOutcome::Record(Box::new(record)));
         }
         let mut stderr = render::err();
         supervised::output::print_run_forensics(&record, &mut stderr)?;
