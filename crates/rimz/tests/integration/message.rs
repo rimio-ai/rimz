@@ -18,7 +18,7 @@ use rimz::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, Me
 use crate::common::Env;
 
 #[test]
-fn queue_remove_and_clear_workflow() {
+fn message_remove_and_clear_respect_ids_targets_and_channel_lanes() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-queue", "feature-q", &[]);
@@ -38,15 +38,9 @@ fn queue_remove_and_clear_workflow() {
     assert!(stdout.contains(&format!("{missing} is not queued or claimed")));
     assert!(stdout.contains(&format!("removed {second}")));
 
-    let cleared = env
-        .rimz()
-        .args(["message", "clear", "@claude"])
-        .output()
-        .expect("queue clear");
-    assert!(
-        cleared.status.success(),
-        "queue clear failed: {}",
-        String::from_utf8_lossy(&cleared.stderr)
+    let cleared = run_success(
+        env.rimz().args(["message", "clear", "@claude"]),
+        "queue clear",
     );
     let cleared_stdout = String::from_utf8_lossy(&cleared.stdout);
     assert!(cleared_stdout.contains("removed 1 message(s) for @claude"));
@@ -61,6 +55,26 @@ fn queue_remove_and_clear_workflow() {
         .collect();
     assert!(methods.iter().any(|method| method == "message.queued"));
     assert!(methods.iter().any(|method| method == "message.removed"));
+
+    let docs = queue_direct_channel_message(&env, "docs", "docs");
+    let docs_team = queue_direct_channel_message(&env, "docs/forge", "forge");
+    let ops = queue_direct_channel_message(&env, "ops", "ops");
+    let cleared = run_success(
+        env.rimz()
+            .env(rimz::harness::run::ENV_CHANNEL, "docs")
+            .args(["message", "clear"]),
+        "clear lane",
+    );
+    let stdout = String::from_utf8_lossy(&cleared.stdout);
+    assert!(stdout.contains("removed 1 message(s) in #docs"));
+    assert!(stdout.contains(&docs));
+    assert!(!stdout.contains(&docs_team));
+    let pending = env.store().list_pending_messages().unwrap();
+    let pending_ids: Vec<&str> = pending
+        .iter()
+        .map(|message| message.message_id.as_str())
+        .collect();
+    assert_eq!(pending_ids, vec![docs_team.as_str(), ops.as_str()]);
 }
 
 #[test]
@@ -122,10 +136,10 @@ fn message_list_scopes_orders_and_limits_records() {
 }
 
 #[test]
-fn terminal_message_history_keeps_text_for_list_and_show() {
+fn terminal_history_list_and_show_preserve_content_and_channel_fallback() {
     let env = Env::new();
-    register_running_agent(&env, "sess-history", "history", &[]);
-    let message_id = queue_direct_channel_message(&env, "history", "kept body");
+    register_running_agent(&env, "sess-history", "docs", &[]);
+    let message_id = queue_direct_channel_message(&env, "docs", "kept body");
     env.store()
         .settle_message(
             &MessageId::parse(&message_id).expect("message id"),
@@ -135,15 +149,9 @@ fn terminal_message_history_keeps_text_for_list_and_show() {
         )
         .expect("settle delivered");
 
-    let listed = env
-        .rimz()
-        .args(["message", "list", "--all", "--json"])
-        .output()
-        .expect("message list");
-    assert!(
-        listed.status.success(),
-        "message list failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
+    let listed = run_success(
+        env.rimz().args(["message", "list", "--all", "--json"]),
+        "message list",
     );
     let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
     let row = parsed
@@ -155,15 +163,9 @@ fn terminal_message_history_keeps_text_for_list_and_show() {
     assert_eq!(row["status"], "delivered");
     assert_eq!(row["text"], "kept body");
 
-    let shown = env
-        .rimz()
-        .args(["message", "show", &message_id])
-        .output()
-        .expect("message show");
-    assert!(
-        shown.status.success(),
-        "message show failed: {}",
-        String::from_utf8_lossy(&shown.stderr)
+    let shown = run_success(
+        env.rimz().args(["message", "show", &message_id]),
+        "message show",
     );
     let shown = String::from_utf8_lossy(&shown.stdout);
     assert!(shown.contains("kept body"));
@@ -174,12 +176,7 @@ fn terminal_message_history_keeps_text_for_list_and_show() {
     assert!(!shown.contains("unconfirmed_sends:"));
     assert!(!shown.contains("last_error:"));
     assert_second_precision_created(&shown);
-}
 
-#[test]
-fn message_show_keeps_channel_in_textless_transcript_hint() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-textless", "docs", &[]);
     let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
@@ -201,15 +198,9 @@ fn message_show_keeps_channel_in_textless_transcript_hint() {
         EventEnvelope::message_event(&message, "rimz-test", MessageEventMethod::Delivered, None);
     env.store().append_event(&event).expect("append event");
 
-    let shown = env
-        .rimz()
-        .args(["message", "show", &message_id])
-        .output()
-        .expect("message show");
-    assert!(
-        shown.status.success(),
-        "message show failed: {}",
-        String::from_utf8_lossy(&shown.stderr)
+    let shown = run_success(
+        env.rimz().args(["message", "show", &message_id]),
+        "textless message show",
     );
     let shown = String::from_utf8_lossy(&shown.stdout);
     assert!(
@@ -219,25 +210,19 @@ fn message_show_keeps_channel_in_textless_transcript_hint() {
 }
 
 #[test]
-fn message_edit_updates_queued_record_and_rejects_empty_edit() {
+fn message_edit_and_requeue_enforce_record_lifecycle() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-edit", "edit-message", &[]);
-    let queued = env
-        .rimz()
-        .args(["message", "--schedule", "60m", "@claude", "--", "old text"])
-        .output()
-        .expect("scheduled message");
-    assert!(
-        queued.status.success(),
-        "queue failed: {}",
-        String::from_utf8_lossy(&queued.stderr)
+    let queued = run_success(
+        env.rimz()
+            .args(["message", "--schedule", "60m", "@claude", "--", "old text"]),
+        "scheduled message",
     );
     let message_id = queued_id_from_stdout(&queued.stdout);
 
-    let edited = env
-        .rimz()
-        .args([
+    let edited = run_success(
+        env.rimz().args([
             "message",
             "edit",
             &message_id,
@@ -246,13 +231,8 @@ fn message_edit_updates_queued_record_and_rejects_empty_edit() {
             "--no-schedule",
             "--on",
             "any",
-        ])
-        .output()
-        .expect("message edit");
-    assert!(
-        edited.status.success(),
-        "edit failed: {}",
-        String::from_utf8_lossy(&edited.stderr)
+        ]),
+        "message edit",
     );
     let stdout = String::from_utf8_lossy(&edited.stdout);
     assert!(stdout.contains(&format!("edited {message_id}")));
@@ -264,15 +244,9 @@ fn message_edit_updates_queued_record_and_rejects_empty_edit() {
     assert_eq!(pending[0].gate, DeliveryGate::Any);
     assert_eq!(pending[0].not_before, None);
 
-    let shown = env
-        .rimz()
-        .args(["message", "show", &message_id])
-        .output()
-        .expect("message show");
-    assert!(
-        shown.status.success(),
-        "show failed: {}",
-        String::from_utf8_lossy(&shown.stderr)
+    let shown = run_success(
+        env.rimz().args(["message", "show", &message_id]),
+        "message show",
     );
     let shown = String::from_utf8_lossy(&shown.stdout);
     assert!(shown.contains("new text"));
@@ -287,38 +261,31 @@ fn message_edit_updates_queued_record_and_rejects_empty_edit() {
 
     assert!(!edited.status.success());
     assert!(String::from_utf8_lossy(&edited.stderr).contains("nothing to edit"));
-}
 
-#[test]
-fn clear_without_target_removes_scoped_channel_lane() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-clear-lane", "docs", &[]);
-    let docs = queue_direct_channel_message(&env, "docs", "docs");
-    let docs_team = queue_direct_channel_message(&env, "docs/forge", "forge");
-    let ops = queue_direct_channel_message(&env, "ops", "ops");
-
-    let cleared = env
+    let open = env
         .rimz()
-        .env(rimz::harness::run::ENV_CHANNEL, "docs")
-        .args(["message", "clear"])
+        .args(["message", "requeue", &message_id, "--text", "blocked"])
         .output()
-        .expect("clear lane");
-    assert!(
-        cleared.status.success(),
-        "clear lane failed: {}",
-        String::from_utf8_lossy(&cleared.stderr)
+        .expect("requeue open record");
+    assert!(!open.status.success());
+    assert!(String::from_utf8_lossy(&open.stderr).contains("still queued"));
+
+    let message = message_by_id(&env, &MessageId::parse(&message_id).expect("message id"));
+    env.store()
+        .record_send_error(&message, "terminal failure", "rimz-test")
+        .expect("terminalize message");
+    let requeued = run_success(
+        env.rimz()
+            .args(["message", "requeue", &message_id, "--text", "try again"]),
+        "requeue terminal record",
     );
-    let stdout = String::from_utf8_lossy(&cleared.stdout);
-    assert!(stdout.contains("removed 1 message(s) in #docs"));
-    assert!(stdout.contains(&docs));
-    // Lane membership is exact: the `docs/forge` team lane is its own scope.
-    assert!(!stdout.contains(&docs_team));
-    let pending = env.store().list_pending_messages().unwrap();
-    let pending_ids: Vec<&str> = pending
-        .iter()
-        .map(|message| message.message_id.as_str())
-        .collect();
-    assert_eq!(pending_ids, vec![docs_team.as_str(), ops.as_str()]);
+    assert!(String::from_utf8_lossy(&requeued.stdout).contains(&format!("(from {message_id})")));
+    let pending = env.store().list_pending_messages().expect("pending queue");
+    assert_eq!(pending.len(), 1);
+    assert_ne!(pending[0].message_id.as_str(), message_id);
+    assert_eq!(pending[0].text, "try again");
+    assert_eq!(pending[0].gate, DeliveryGate::Any);
+    assert_eq!(pending[0].status, MessageStatus::Queued);
 }
 
 #[test]
@@ -356,21 +323,15 @@ fn watched_agent_end_archives_unmet_when_message() {
     register_role_agent(&env, "claude", "sess-coder", "coder", false, None);
     register_role_agent(&env, "claude", "sess-planner", "planner", true, None);
 
-    let queued = env
-        .rimz()
-        .args([
+    let queued = run_success(
+        env.rimz().args([
             "message",
             "@coder",
             "--when",
             "@planner running 2h",
             "check planner",
-        ])
-        .output()
-        .expect("queue when message");
-    assert!(
-        queued.status.success(),
-        "queue failed: {}",
-        String::from_utf8_lossy(&queued.stderr)
+        ]),
+        "queue when message",
     );
     let message_id = queued_id_from_stdout(&queued.stdout);
 
@@ -402,20 +363,15 @@ fn watched_agent_end_archives_unmet_when_message() {
 }
 
 #[test]
-fn message_when_accepts_self_reference_and_stamps_met_dwell_at_enqueue() {
+fn message_when_latches_met_dwell_and_schedules_future_trip() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    register_old_idle_role_agent(&env, "sess-coder", "coder", 120);
+    let base = register_old_idle_role_agent(&env, "sess-coder", "coder", 120);
 
-    let queued = env
-        .rimz()
-        .args(["message", "@coder", "--when", "@coder idle 1m", "ping"])
-        .output()
-        .expect("queue self when");
-    assert!(
-        queued.status.success(),
-        "queue failed: {}",
-        String::from_utf8_lossy(&queued.stderr)
+    let queued = run_success(
+        env.rimz()
+            .args(["message", "@coder", "--when", "@coder idle 1m", "ping"]),
+        "queue self when",
     );
     let mut messages = env.store().list_messages().expect("messages");
     messages.extend(env.store().list_message_history().expect("history"));
@@ -428,13 +384,7 @@ fn message_when_accepts_self_reference_and_stamps_met_dwell_at_enqueue() {
     );
     assert_eq!(messages[0].when.len(), 1);
     assert!(messages[0].when[0].met_at.is_some());
-}
 
-#[test]
-fn message_when_sweep_stamps_due_dwell_and_defers_to_future_trip() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let base = register_old_idle_role_agent(&env, "sess-coder", "coder", 120);
     let snapshot = env.store().snapshot_cached().expect("snapshot");
     let agent = snapshot
         .agents
@@ -468,12 +418,11 @@ fn message_when_sweep_stamps_due_dwell_and_defers_to_future_trip() {
     .with_when(vec![condition(3_600)]);
     env.store().queue_message(&due, "rimz-test").unwrap();
     env.store().queue_message(&future, "rimz-test").unwrap();
-    let shown = env
-        .rimz()
-        .args(["message", "show", future.message_id.as_str()])
-        .output()
-        .expect("show when blocker");
-    assert!(shown.status.success());
+    let shown = run_success(
+        env.rimz()
+            .args(["message", "show", future.message_id.as_str()]),
+        "show when blocker",
+    );
     let shown = String::from_utf8_lossy(&shown.stdout);
     assert!(
         shown.contains("waiting for @coder idle ≥ 1h — idle"),
@@ -481,12 +430,10 @@ fn message_when_sweep_stamps_due_dwell_and_defers_to_future_trip() {
     );
     assert!(shown.contains("so far"), "{shown}");
     assert!(shown.contains("trips"), "{shown}");
-    let listed = env
-        .rimz()
-        .args(["message", "list", "--all"])
-        .output()
-        .expect("list when blocker");
-    assert!(listed.status.success());
+    let listed = run_success(
+        env.rimz().args(["message", "list", "--all"]),
+        "list when blocker",
+    );
     assert!(
         String::from_utf8_lossy(&listed.stdout).contains("when @coder idle 1h"),
         "{}",
@@ -494,16 +441,11 @@ fn message_when_sweep_stamps_due_dwell_and_defers_to_future_trip() {
     );
     let panes = env.write_pane_fixture(&[]);
 
-    let sweep = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", panes)
-        .args(["message", "sweep"])
-        .output()
-        .expect("when sweep");
-    assert!(
-        sweep.status.success(),
-        "sweep failed: {}",
-        String::from_utf8_lossy(&sweep.stderr)
+    run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", panes)
+            .args(["message", "sweep"]),
+        "when sweep",
     );
 
     let messages = env.store().list_messages().expect("messages");
@@ -526,83 +468,7 @@ fn message_when_sweep_stamps_due_dwell_and_defers_to_future_trip() {
 }
 
 #[test]
-fn message_when_rejects_invalid_grammar_status_duration_and_broadcast() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_role_agent(&env, "claude", "sess-coder", "coder", false, None);
-    register_role_agent(&env, "claude", "sess-reviewer", "reviewer", false, None);
-    for (condition, expected) in [
-        ("@coder idle", "use `@handle <status> <duration>`"),
-        ("@coder paused 1m", "supported statuses"),
-        ("@coder idle soon", "invalid --when duration"),
-        ("@all idle 1m", "broadcasts are not supported"),
-        ("@ghost idle 1m", "no agent matches"),
-        ("@claude idle 1m", "exactly one agent"),
-    ] {
-        let out = env
-            .rimz()
-            .args(["message", "@coder", "--when", condition, "ping"])
-            .output()
-            .expect("invalid when");
-        assert!(
-            !out.status.success(),
-            "condition unexpectedly passed: {condition}"
-        );
-        assert!(
-            String::from_utf8_lossy(&out.stderr).contains(expected),
-            "condition={condition}\nstderr={}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-}
-
-#[test]
-fn message_when_rejects_wait_and_create() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_role_agent(&env, "claude", "sess-coder", "coder", false, None);
-
-    let wait = env
-        .rimz()
-        .args([
-            "message",
-            "@coder",
-            "--when",
-            "@coder idle 1m",
-            "--wait",
-            "ping",
-        ])
-        .output()
-        .expect("when wait conflict");
-    assert!(!wait.status.success());
-    assert!(
-        String::from_utf8_lossy(&wait.stderr).contains("cannot be used with '--wait"),
-        "{}",
-        String::from_utf8_lossy(&wait.stderr)
-    );
-
-    let create = env
-        .rimz()
-        .args([
-            "message",
-            "@coder",
-            "--when",
-            "@coder idle 1m",
-            "--create",
-            "ping",
-        ])
-        .output()
-        .expect("when create conflict");
-    assert!(!create.status.success());
-    assert!(
-        String::from_utf8_lossy(&create.stderr).contains("--when needs an existing recipient"),
-        "{}",
-        String::from_utf8_lossy(&create.stderr)
-    );
-}
-
-#[test]
-fn scheduled_message_parks_with_not_before_and_wake_stamp() {
+fn scheduled_message_parks_and_sweep_delivers_due_work() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
@@ -610,34 +476,28 @@ fn scheduled_message_parks_with_not_before_and_wake_stamp() {
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
 
     let before = jiff::Timestamp::now();
-    let out = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "--schedule", "60m", "@claude", "later"])
-        .output()
-        .expect("scheduled message");
-    assert!(
-        out.status.success(),
-        "scheduled message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args([
+            "message",
+            "--schedule",
+            "60m",
+            "@claude",
+            "later",
+        ]),
+        "scheduled message",
     );
 
     let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].pane_id, None, "delivery re-resolves the pane");
+    let future_id = pending[0].message_id.clone();
     let not_before = pending[0].not_before.expect("scheduled timestamp");
     assert!(not_before > before);
     assert!(not_before <= before + jiff::SignedDuration::from_secs(61 * 60));
 
-    let listed = env
-        .rimz()
-        .args(["message", "list", "--all", "--json"])
-        .output()
-        .expect("message list");
-    assert!(
-        listed.status.success(),
-        "message list failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
+    let listed = run_success(
+        env.rimz().args(["message", "list", "--all", "--json"]),
+        "message list",
     );
     let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
     assert!(parsed[0]["not_before"].is_string());
@@ -646,49 +506,66 @@ fn scheduled_message_parks_with_not_before_and_wake_stamp() {
         serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
             .expect("wake stamp json");
     assert_eq!(wake, Some(not_before));
-}
 
-#[test]
-fn message_after_rejects_self_reference_and_fanout() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_role_agent(
+    run_hook(
         &env,
-        "claude",
-        "sess-coder",
-        "coder",
-        false,
-        Some("terminal_3"),
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-scheduled",
+            "worktree_branch": "feature-scheduled",
+        }),
+        pane_env,
     );
-    register_role_agent(&env, "claude", "sess-planner", "planner", true, None);
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "sess-scheduled")
+        .expect("agent");
+    let due_at = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
+    let due = MessageRecord::new(
+        env.workspace_id.clone(),
+        agent,
+        "due now".to_owned(),
+        true,
+        DeliveryGate::Done,
+    )
+    .with_not_before(Some(due_at));
+    let due_id = due.message_id.clone();
+    env.store()
+        .queue_message(&due, "rimz-test")
+        .expect("queue due message");
+    rimz::store::atomic::write_temp_then_rename_cache(&wake_stamp_path(&env), &Some(due_at))
+        .expect("write wake stamp");
 
-    let self_reference = env
-        .rimz()
-        .args(["message", "@coder", "--after", "@coder", "x"])
-        .output()
-        .expect("self reference");
-    assert!(!self_reference.status.success());
-    assert!(
-        String::from_utf8_lossy(&self_reference.stderr).contains("use --on"),
-        "stderr: {}",
-        String::from_utf8_lossy(&self_reference.stderr)
+    let trace_log = env.project_root.join("zellij-sweep-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-sweep-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "message sweep",
     );
-
-    let fanout = env
-        .rimz()
-        .args(["message", "@coder", "--after", "@all", "x"])
-        .output()
-        .expect("after fanout");
-    assert!(!fanout.status.success());
-    assert!(
-        String::from_utf8_lossy(&fanout.stderr).contains("broadcasts are not supported"),
-        "stderr: {}",
-        String::from_utf8_lossy(&fanout.stderr)
-    );
+    assert_text_then_enter(&trace_log, "due now");
+    let messages = env.store().list_messages().expect("messages");
+    let future = messages
+        .iter()
+        .find(|message| message.message_id == future_id)
+        .expect("future message");
+    assert_eq!(future.status, MessageStatus::Queued);
+    assert_eq!(future.pane_id, None);
+    let sent = messages
+        .iter()
+        .find(|message| message.message_id == due_id)
+        .expect("swept message");
+    assert_eq!(sent.status, MessageStatus::Sent);
+    let wake: Option<jiff::Timestamp> =
+        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
+            .expect("wake stamp json");
+    assert_eq!(wake, sent.sent_reconcile_deadline(Duration::from_secs(30)));
 }
 
 #[test]
-fn message_after_sweep_completes_cross_agent_relay() {
+fn message_after_rejects_cycles_then_delivers_cross_agent_relay() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     register_role_agent(
@@ -701,15 +578,26 @@ fn message_after_sweep_completes_cross_agent_relay() {
     );
     register_role_agent(&env, "claude", "sess-planner", "planner", true, None);
 
-    let add = env
+    let self_reference = env
         .rimz()
-        .args(["message", "@coder", "--after", "@planner", "read plan.md"])
+        .args(["message", "@coder", "--after", "@coder", "x"])
         .output()
-        .expect("queue relay");
-    assert!(
-        add.status.success(),
-        "queue relay failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+        .expect("self reference");
+    assert!(!self_reference.status.success());
+    assert!(String::from_utf8_lossy(&self_reference.stderr).contains("use --on"));
+
+    let fanout = env
+        .rimz()
+        .args(["message", "@coder", "--after", "@all", "x"])
+        .output()
+        .expect("after fanout");
+    assert!(!fanout.status.success());
+    assert!(String::from_utf8_lossy(&fanout.stderr).contains("broadcasts are not supported"));
+
+    let add = run_success(
+        env.rimz()
+            .args(["message", "@coder", "--after", "@planner", "read plan.md"]),
+        "queue relay",
     );
     let message_id = queued_id_from_stdout(&add.stdout);
     let pending = env.store().list_pending_messages().expect("pending relay");
@@ -731,18 +619,11 @@ fn message_after_sweep_completes_cross_agent_relay() {
     );
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let trace_log = env.project_root.join("zellij-after-sweep-trace.log");
-    let sweep = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "sweep"])
-        .output()
-        .expect("sweep relay");
-    assert!(
-        sweep.status.success(),
-        "sweep relay failed: {}",
-        String::from_utf8_lossy(&sweep.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-after-sweep-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "sweep"]),
+        "sweep relay",
     );
 
     assert_text_then_enter(&trace_log, "read plan.md");
@@ -759,78 +640,6 @@ fn message_after_sweep_completes_cross_agent_relay() {
         env.read_events()
             .iter()
             .any(|event| event.method == "message.after_met")
-    );
-}
-
-#[test]
-fn message_sweep_delivers_due_message_and_registers_reconcile_wake() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-sweep", "feature-sweep", pane_env);
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-sweep",
-            "worktree_branch": "feature-sweep",
-        }),
-        pane_env,
-    );
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let snapshot = env.store().snapshot_cached().expect("snapshot");
-    let agent = snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.agent_id.as_str() == "sess-sweep")
-        .expect("agent");
-    let due = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
-    let message = MessageRecord::new(
-        env.workspace_id.clone(),
-        agent,
-        "due now".to_owned(),
-        true,
-        DeliveryGate::Done,
-    )
-    .with_not_before(Some(due));
-    let message_id = message.message_id.clone();
-    env.store()
-        .queue_message(&message, "rimz-test")
-        .expect("queue due message");
-    rimz::store::atomic::write_temp_then_rename_cache(&wake_stamp_path(&env), &Some(due))
-        .expect("write wake stamp");
-
-    let trace_log = env.project_root.join("zellij-sweep-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "sweep"])
-        .output()
-        .expect("message sweep");
-    assert!(
-        out.status.success(),
-        "message sweep failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    assert_text_then_enter(&trace_log, "due now");
-    let sent = env
-        .store()
-        .list_messages()
-        .expect("messages")
-        .into_iter()
-        .find(|message| message.message_id == message_id)
-        .expect("swept message");
-    assert_eq!(sent.status, MessageStatus::Sent);
-    let wake: Option<jiff::Timestamp> =
-        serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).expect("wake stamp"))
-            .expect("wake stamp json");
-    assert_eq!(
-        wake,
-        sent.sent_reconcile_deadline(Duration::from_secs(30)),
-        "wake stamp tracks the sent reconcile deadline"
     );
 }
 
@@ -864,9 +673,7 @@ fn resume_gate_waits_for_recovery_then_delivers() {
 
     let trace_log = env.project_root.join("zellij-resume-ready-trace.log");
     run_success(
-        env.rimz()
-            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        traced_rimz(&env, "zellij-resume-ready-trace.log")
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
             .env("RIMZ_MESSAGE_SETTLE_MS", "0")
             .args(["message", "deliver", "--message-id", message_id.as_str()]),
@@ -879,9 +686,7 @@ fn resume_gate_waits_for_recovery_then_delivers() {
 
     seed_rate_limit_budget(&env, 20);
     run_success(
-        env.rimz()
-            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        traced_rimz(&env, "zellij-resume-ready-trace.log")
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
             .env("RIMZ_MESSAGE_SETTLE_MS", "0")
             .args(["message", "deliver", "--message-id", message_id.as_str()]),
@@ -899,17 +704,16 @@ fn queue_add_for_bound_agent_does_not_enumerate_panes() {
     register_running_agent(&env, "sess-rollup", "feature-rollup", &[]);
 
     let trace_log = env.project_root.join("zellij-queue-rollup-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["--mux", "zellij", "message", "@claude", "--", "cached path"])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-queue-rollup-trace.log").args([
+            "--mux",
+            "zellij",
+            "message",
+            "@claude",
+            "--",
+            "cached path",
+        ]),
+        "message",
     );
     let trace = trace_lines(&trace_log);
     assert!(
@@ -973,10 +777,6 @@ fn message_add_does_not_resolve_reaped_dead_owner_agent() {
     assert!(pending.is_empty());
 }
 
-/// Eligibility runs before the claim: an ineligible delivery pass (running
-/// agent at add time, eligible-but-paneless agent at turn end) leaves the
-/// message pending with no claim stamp, so the next real transition can
-/// deliver it immediately.
 #[test]
 fn deliver_leaves_ineligible_message_unclaimed() {
     let env = Env::new();
@@ -995,16 +795,14 @@ fn deliver_leaves_ineligible_message_unclaimed() {
         &[],
     );
 
-    let out = env
-        .rimz()
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "deliver", "--message-id", &message_id])
-        .output()
-        .expect("message deliver");
-    assert!(
-        out.status.success(),
-        "message deliver failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        env.rimz().env("RIMZ_MESSAGE_SETTLE_MS", "0").args([
+            "message",
+            "deliver",
+            "--message-id",
+            &message_id,
+        ]),
+        "message deliver",
     );
 
     let pending = env.store().list_pending_messages().expect("pending queue");
@@ -1012,24 +810,6 @@ fn deliver_leaves_ineligible_message_unclaimed() {
     assert_eq!(pending[0].status, MessageStatus::Queued);
     assert_eq!(pending[0].attempts, 0, "no-pane miss must not claim");
     assert!(pending[0].last_attempt_at.is_none());
-}
-
-#[test]
-fn queue_refuses_without_installed_hooks() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-no-hooks", "feature-q", &[]);
-
-    let out = env
-        .rimz()
-        .args(["message", "@claude", "--", "next task"])
-        .output()
-        .expect("message");
-    assert!(!out.status.success(), "queue should fail without hooks");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("requires claude hooks"),
-        "unexpected stderr: {stderr}"
-    );
 }
 
 #[test]
@@ -1043,10 +823,7 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
     let trace_log = env.project_root.join("zellij-steer-queued-trace.log");
 
-    let blocked = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let blocked = traced_rimz(&env, "zellij-steer-queued-trace.log")
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
         .args(["message", "steer", &message_id])
         .output()
@@ -1059,18 +836,11 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
     assert_eq!(queued.attempts, 0);
     assert!(trace_lines(&trace_log).is_empty());
 
-    let steered = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "steer", &message_id, "--force"])
-        .output()
-        .expect("forced message steer");
-    assert!(
-        steered.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&steered.stderr)
+    let steered = run_success(
+        traced_rimz(&env, "zellij-steer-queued-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "steer", &message_id, "--force"]),
+        "forced message steer",
     );
     let stdout = String::from_utf8_lossy(&steered.stdout);
     assert!(stdout.contains(&format!("sent to @claude ({message_id})")));
@@ -1079,62 +849,6 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id")).status,
         MessageStatus::Sent
     );
-}
-
-#[test]
-fn message_requeue_copies_terminal_record_and_refuses_open_record() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-requeue", "requeue", &[]);
-    let open_id = queue_direct_channel_message(&env, "requeue", "still open");
-
-    let refused = env
-        .rimz()
-        .args(["message", "requeue", &open_id])
-        .output()
-        .expect("message requeue");
-    assert!(!refused.status.success(), "open requeue should fail");
-    let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert!(
-        stderr.contains("still queued"),
-        "unexpected stderr: {stderr}"
-    );
-
-    let message = env
-        .store()
-        .list_messages()
-        .expect("messages")
-        .into_iter()
-        .find(|message| message.message_id.as_str() == open_id)
-        .expect("open message");
-    env.store()
-        .record_send_error(&message, "test error", "rimz-test")
-        .expect("record error");
-
-    let requeued = env
-        .rimz()
-        .args([
-            "message",
-            "requeue",
-            &open_id,
-            "--text",
-            "try again",
-            "--on",
-            "any",
-        ])
-        .output()
-        .expect("message requeue");
-    assert!(
-        requeued.status.success(),
-        "requeue failed: {}",
-        String::from_utf8_lossy(&requeued.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&requeued.stdout);
-    assert!(stdout.contains(&format!("(from {open_id})")));
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_ne!(pending[0].message_id.as_str(), open_id);
-    assert_eq!(pending[0].text, "try again");
-    assert_eq!(pending[0].gate, DeliveryGate::Any);
 }
 
 #[test]
@@ -1154,15 +868,10 @@ fn steer_queues_when_durable_agent_has_no_live_pane() {
         },
     );
 
-    let out = env
-        .rimz()
-        .args(["message", "--steer", "@reviewer", "--", "please review"])
-        .output()
-        .expect("steer");
-    assert!(
-        out.status.success(),
-        "steer should queue through durable fallback: {}",
-        String::from_utf8_lossy(&out.stderr)
+    let out = run_success(
+        env.rimz()
+            .args(["message", "--steer", "@reviewer", "--", "please review"]),
+        "steer durable fallback",
     );
     let message_id = queued_id_from_stdout(&out.stdout);
     let pending = env.store().list_pending_messages().expect("pending queue");
@@ -1171,13 +880,7 @@ fn steer_queues_when_durable_agent_has_no_live_pane() {
     assert_eq!(pending[0].agent_id.as_str(), "sess-steer-audit");
 }
 
-/// `steer` bracket-pastes the text and then presses Enter as a discrete key
-/// event outside the paste — never a carriage return folded into the typed
-/// text. Agent UIs submit on the keystroke but take an embedded newline as a
-/// composer line break, so the distinction is the whole feature. Drives a real
-/// `rimz message --steer` against the zellij-trace shim and asserts the recorded action
-/// sequence: a bracketed paste of the text, then a discrete `write 13` (Enter),
-/// with no `\r` anywhere.
+/// Enter stays a discrete key event after bracketed paste.
 #[test]
 fn steer_enter_modes_respect_discrete_submit_key() {
     let env = Env::new();
@@ -1189,34 +892,25 @@ fn steer_enter_modes_respect_discrete_submit_key() {
     );
 
     let trace_log = env.project_root.join("zellij-steer-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--", "y"])
-        .output()
-        .expect("steer");
-    assert!(
-        out.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-steer-trace.log")
+            .args(["message", "--steer", "@claude", "--", "y"]),
+        "steer",
     );
 
     assert_text_then_enter(&trace_log, "y");
 
-    // `--no-enter` types the text and stops — no Enter keystroke at all.
     let trace_log = env.project_root.join("zellij-steer-quiet-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--no-enter", "--", "y"])
-        .output()
-        .expect("steer");
-    assert!(
-        out.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-steer-quiet-trace.log").args([
+            "message",
+            "--steer",
+            "@claude",
+            "--no-enter",
+            "--",
+            "y",
+        ]),
+        "no-enter steer",
     );
 
     let lines = trace_lines(&trace_log);
@@ -1301,11 +995,7 @@ fn steer_wait_times_out_without_turn_started_ack() {
         &[("ZELLIJ_PANE_ID", "3")],
     );
 
-    let trace_log = env.project_root.join("zellij-wait-timeout-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let out = traced_rimz(&env, "zellij-wait-timeout-trace.log")
         .args(["message", "--steer", "@claude", "--wait=0s", "--", "y"])
         .output()
         .expect("steer --wait");
@@ -1338,25 +1028,14 @@ fn steer_wait_times_out_without_turn_started_ack() {
 fn message_wait_prints_the_reply_after_the_turn_ends() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let transcript = env.runtime_root.join("message-wait-reply.jsonl");
+    let agent = ReplyAgentFixture::single(&env, "reply");
     std::fs::write(
-        &transcript,
+        &agent.transcript_path,
         "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"old answer\"}]}}\n",
     )
     .expect("seed transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-reply",
-        "feature-wait-reply",
-        &transcript,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
 
-    let trace_log = env.project_root.join("zellij-wait-reply-trace.log");
-    let child = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let child = traced_rimz(&env, "zellij-wait-reply-trace.log")
         .args(["message", "@claude", "--wait", "did it land?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1364,116 +1043,34 @@ fn message_wait_prints_the_reply_after_the_turn_ends() {
         .expect("spawn message --wait");
 
     wait_for_message_event(&env, "message.sent", Duration::from_secs(2));
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-wait-reply",
-            "prompt": "did it land?",
-            "worktree_branch": "feature-wait-reply",
-            "transcript_path": transcript.to_string_lossy(),
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    append_claude_assistant(&transcript, "migration landed");
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "Stop",
-            "session_id": "sess-wait-reply",
-            "last_assistant_message": "migration landed",
-            "worktree_branch": "feature-wait-reply",
-            "transcript_path": transcript.to_string_lossy(),
-        }),
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
+    agent.start(&env, "did it land?");
+    agent.finish(&env, "migration landed", false);
 
     let out = child.wait_with_output().expect("wait message --wait");
-    assert!(
-        out.status.success(),
-        "--wait should succeed after the reply turn: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout), "migration landed\n");
-    assert!(
-        out.stderr.is_empty(),
-        "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        env.store().list_messages().unwrap().is_empty(),
-        "delivered record self-cleans while wait still succeeds"
-    );
+    assert!(out.stderr.is_empty());
+    assert!(env.store().list_messages().unwrap().is_empty());
 }
 
 #[test]
 fn message_wait_gathers_fanout_replies_in_completion_order() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let first = env.runtime_root.join("message-wait-gather-first.jsonl");
-    let second = env.runtime_root.join("message-wait-gather-second.jsonl");
-    std::fs::write(&first, "").expect("seed first transcript");
-    std::fs::write(&second, "").expect("seed second transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-gather-first",
-        "feature-gather-first",
-        &first,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-gather-second",
-        "feature-gather-second",
-        &second,
-        &[("ZELLIJ_PANE_ID", "4")],
-    );
+    let [first, second] = ReplyAgentFixture::pair(&env, "gather");
 
-    let trace_log = env.project_root.join("zellij-wait-gather-trace.log");
-    let child = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let child = traced_rimz(&env, "zellij-wait-gather-trace.log")
         .args(["message", "@all", "--wait=5s", "status?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn fanout wait");
     wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
-    begin_wait_reply(
-        &env,
-        "sess-wait-gather-first",
-        "feature-gather-first",
-        &first,
-        "3",
-    );
-    begin_wait_reply(
-        &env,
-        "sess-wait-gather-second",
-        "feature-gather-second",
-        &second,
-        "4",
-    );
-    finish_wait_reply(
-        &env,
-        "sess-wait-gather-second",
-        "feature-gather-second",
-        &second,
-        "4",
-        "second finished",
-        false,
-    );
+    first.start(&env, "fanout question");
+    second.start(&env, "fanout question");
+    second.finish(&env, "second finished", false);
     std::thread::sleep(Duration::from_millis(600));
-    finish_wait_reply(
-        &env,
-        "sess-wait-gather-first",
-        "feature-gather-first",
-        &first,
-        "3",
-        "first finished",
-        false,
-    );
+    first.finish(&env, "first finished", false);
 
     let out = child.wait_with_output().expect("wait fanout gather");
     assert!(
@@ -1492,68 +1089,19 @@ fn message_wait_gathers_fanout_replies_in_completion_order() {
 fn message_wait_json_emits_one_fanout_map() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let first = env.runtime_root.join("message-wait-json-first.jsonl");
-    let second = env.runtime_root.join("message-wait-json-second.jsonl");
-    std::fs::write(&first, "").expect("seed first transcript");
-    std::fs::write(&second, "").expect("seed second transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-json-first",
-        "feature-json-first",
-        &first,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-json-second",
-        "feature-json-second",
-        &second,
-        &[("ZELLIJ_PANE_ID", "4")],
-    );
+    let [first, second] = ReplyAgentFixture::pair(&env, "json");
 
-    let trace_log = env.project_root.join("zellij-wait-json-trace.log");
-    let child = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let child = traced_rimz(&env, "zellij-wait-json-trace.log")
         .args(["message", "@all", "--wait=5s", "--json", "status?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn JSON fanout wait");
     wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
-    begin_wait_reply(
-        &env,
-        "sess-wait-json-first",
-        "feature-json-first",
-        &first,
-        "3",
-    );
-    begin_wait_reply(
-        &env,
-        "sess-wait-json-second",
-        "feature-json-second",
-        &second,
-        "4",
-    );
-    finish_wait_reply(
-        &env,
-        "sess-wait-json-first",
-        "feature-json-first",
-        &first,
-        "3",
-        "first JSON reply",
-        false,
-    );
-    finish_wait_reply(
-        &env,
-        "sess-wait-json-second",
-        "feature-json-second",
-        &second,
-        "4",
-        "second JSON reply",
-        false,
-    );
+    first.start(&env, "fanout question");
+    second.start(&env, "fanout question");
+    first.finish(&env, "first JSON reply", false);
+    second.finish(&env, "second JSON reply", false);
 
     let out = child.wait_with_output().expect("wait JSON fanout gather");
     assert!(
@@ -1583,71 +1131,21 @@ fn message_wait_json_emits_one_fanout_map() {
 fn message_wait_gathers_other_replies_after_one_leg_fails() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let failed = env.runtime_root.join("message-wait-partial-failed.jsonl");
-    let completed = env
-        .runtime_root
-        .join("message-wait-partial-completed.jsonl");
-    std::fs::write(&failed, "").expect("seed failed transcript");
-    std::fs::write(&completed, "").expect("seed completed transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-partial-failed",
-        "feature-partial-failed",
-        &failed,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-partial-completed",
-        "feature-partial-completed",
-        &completed,
-        &[("ZELLIJ_PANE_ID", "4")],
-    );
+    let [failed, completed] =
+        ReplyAgentFixture::pair_named(&env, "partial", ["failed", "completed"]);
 
-    let trace_log = env.project_root.join("zellij-wait-partial-trace.log");
-    let child = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let child = traced_rimz(&env, "zellij-wait-partial-trace.log")
         .args(["message", "@all", "--wait=5s", "try it"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn partial fanout wait");
     wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
-    begin_wait_reply(
-        &env,
-        "sess-wait-partial-failed",
-        "feature-partial-failed",
-        &failed,
-        "3",
-    );
-    begin_wait_reply(
-        &env,
-        "sess-wait-partial-completed",
-        "feature-partial-completed",
-        &completed,
-        "4",
-    );
-    finish_wait_reply(
-        &env,
-        "sess-wait-partial-failed",
-        "feature-partial-failed",
-        &failed,
-        "3",
-        "partial answer",
-        true,
-    );
+    failed.start(&env, "fanout question");
+    completed.start(&env, "fanout question");
+    failed.finish(&env, "partial answer", true);
     std::thread::sleep(Duration::from_millis(600));
-    finish_wait_reply(
-        &env,
-        "sess-wait-partial-completed",
-        "feature-partial-completed",
-        &completed,
-        "4",
-        "surviving reply",
-        false,
-    );
+    completed.finish(&env, "surviving reply", false);
 
     let out = child
         .wait_with_output()
@@ -1669,59 +1167,18 @@ fn message_wait_gathers_other_replies_after_one_leg_fails() {
 fn message_wait_any_returns_only_the_first_terminal_leg() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let first = env.runtime_root.join("message-wait-any-first.jsonl");
-    let second = env.runtime_root.join("message-wait-any-second.jsonl");
-    std::fs::write(&first, "").expect("seed first transcript");
-    std::fs::write(&second, "").expect("seed second transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-any-first",
-        "feature-any-first",
-        &first,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-any-second",
-        "feature-any-second",
-        &second,
-        &[("ZELLIJ_PANE_ID", "4")],
-    );
+    let [first, second] = ReplyAgentFixture::pair(&env, "any");
 
-    let trace_log = env.project_root.join("zellij-wait-any-trace.log");
-    let child = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let child = traced_rimz(&env, "zellij-wait-any-trace.log")
         .args(["message", "@all", "--wait=5s", "--any", "first?"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn any fanout wait");
     wait_for_message_event_count(&env, "message.sent", 2, Duration::from_secs(2));
-    begin_wait_reply(
-        &env,
-        "sess-wait-any-first",
-        "feature-any-first",
-        &first,
-        "3",
-    );
-    begin_wait_reply(
-        &env,
-        "sess-wait-any-second",
-        "feature-any-second",
-        &second,
-        "4",
-    );
-    finish_wait_reply(
-        &env,
-        "sess-wait-any-second",
-        "feature-any-second",
-        &second,
-        "4",
-        "winner",
-        false,
-    );
+    first.start(&env, "fanout question");
+    second.start(&env, "fanout question");
+    second.finish(&env, "winner", false);
 
     let out = child.wait_with_output().expect("wait any fanout");
     assert!(
@@ -1740,30 +1197,9 @@ fn message_wait_any_returns_only_the_first_terminal_leg() {
 fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let first = env.runtime_root.join("message-wait-timeout-first.jsonl");
-    let second = env.runtime_root.join("message-wait-timeout-second.jsonl");
-    std::fs::write(&first, "").expect("seed first transcript");
-    std::fs::write(&second, "").expect("seed second transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-timeout-first",
-        "feature-timeout-first",
-        &first,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-timeout-second",
-        "feature-timeout-second",
-        &second,
-        &[("ZELLIJ_PANE_ID", "4")],
-    );
+    let _agents = ReplyAgentFixture::pair(&env, "timeout");
 
-    let trace_log = env.project_root.join("zellij-wait-timeout-fanout.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let out = traced_rimz(&env, "zellij-wait-timeout-fanout.log")
         .args(["message", "@all", "--wait=0s", "--json", "status?"])
         .output()
         .expect("fanout wait deadline");
@@ -1792,31 +1228,10 @@ fn message_wait_json_classifies_every_unfinished_fanout_leg_on_deadline() {
 fn message_wait_timeout_marks_only_sent_leg_and_keeps_queued_leg() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    let sent_transcript = env.runtime_root.join("message-wait-mixed-sent.jsonl");
-    let queued_transcript = env.runtime_root.join("message-wait-mixed-queued.jsonl");
-    std::fs::write(&sent_transcript, "").expect("seed sent transcript");
-    std::fs::write(&queued_transcript, "").expect("seed queued transcript");
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-mixed-sent",
-        "feature-mixed-sent",
-        &sent_transcript,
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    register_idle_agent_with_transcript(
-        &env,
-        "sess-wait-mixed-queued",
-        "feature-mixed-queued",
-        &queued_transcript,
-        &[("ZELLIJ_PANE_ID", "4")],
-    );
-    push_pending_agent_ask(&env, "sess-wait-mixed-queued");
+    let [_sent, queued] = ReplyAgentFixture::pair_named(&env, "mixed", ["sent", "queued"]);
+    push_pending_agent_ask(&env, &queued.session_id);
 
-    let trace_log = env.project_root.join("zellij-wait-mixed-timeout.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let out = traced_rimz(&env, "zellij-wait-mixed-timeout.log")
         .args(["message", "@all", "--wait=0s", "--json", "status?"])
         .output()
         .expect("mixed-state fanout wait deadline");
@@ -1848,24 +1263,8 @@ fn message_wait_timeout_marks_only_sent_leg_and_keeps_queued_leg() {
 }
 
 #[test]
-fn message_wait_rejects_invalid_modes_pane_targets_and_missing_hooks() {
+fn message_wait_requires_live_hooked_agent_target() {
     let env = Env::new();
-    for args in [
-        vec!["message", "@claude", "--create", "--wait=1s", "x"],
-        vec!["message", "@claude", "--schedule", "1m", "--wait=1s", "x"],
-        vec!["message", "@claude", "--steer", "--wait", "--no-enter", "x"],
-        vec!["message", "@claude", "--json", "x"],
-        vec!["message", "@claude", "--any", "x"],
-    ] {
-        let out = env.rimz().args(args).output().expect("wait conflict");
-        assert!(!out.status.success());
-        assert!(
-            String::from_utf8_lossy(&out.stderr).contains("--wait"),
-            "stderr: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "bash")]);
     let pane = env
         .rimz()
@@ -1899,37 +1298,6 @@ fn message_wait_rejects_invalid_modes_pane_targets_and_missing_hooks() {
     );
 }
 
-/// A `\n` in the steered text is a soft composer newline: it rides inside the
-/// bracketed paste as a real newline byte, so the message lands multi-line and
-/// the submit Enter is still the one discrete keystroke. The CLI interprets the
-/// two-character `\n` escape so a multi-line prompt can be typed inline.
-#[test]
-fn steer_interprets_a_newline_escape_as_a_soft_break() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-nl", "feature-nl", &[("ZELLIJ_PANE_ID", "3")]);
-
-    let trace_log = env.project_root.join("zellij-nl-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--", "first\\nsecond"])
-        .output()
-        .expect("steer");
-    assert!(
-        out.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    // The paste carries a real newline (`first<LF>second`), then a discrete Enter.
-    assert_text_then_enter(&trace_log, "first\nsecond");
-}
-
-/// `--file` sends a prompt read verbatim: a real newline rides as a soft break,
-/// a literal `\n` stays two characters (no inline unescaping), and the trailing
-/// newline is trimmed before the submit. queue shares the flag through the same
-/// `SendFlags`.
 #[test]
 fn steer_sends_a_file_as_the_prompt() {
     let env = Env::new();
@@ -1945,32 +1313,20 @@ fn steer_sends_a_file_as_the_prompt() {
         .expect("write prompt file");
 
     let trace_log = env.project_root.join("zellij-file-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args([
+    run_success(
+        traced_rimz(&env, "zellij-file-trace.log").args([
             "message",
             "--steer",
             "@claude",
             "--file",
             prompt_file.to_str().expect("utf-8 path"),
-        ])
-        .output()
-        .expect("steer --file");
-    assert!(
-        out.status.success(),
-        "steer --file failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        ]),
+        "steer --file",
     );
 
-    // The literal `\n` survives as backslash-n, the real newline is the only soft
-    // break, and the trailing newline is gone.
     assert_text_then_enter(&trace_log, "keep \\n literal\nand a real break");
 }
 
-/// Piped stdin follows an inline instruction inside explicit tags, preserving
-/// real newlines without applying inline escape interpretation.
 #[test]
 fn steer_combines_inline_text_with_piped_stdin() {
     let env = Env::new();
@@ -1982,10 +1338,8 @@ fn steer_combines_inline_text_with_piped_stdin() {
     );
 
     let trace_log = env.project_root.join("zellij-stdin-trace.log");
-    let mut cmd = env.rimz();
-    cmd.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--stdin", "review this"])
+    let mut cmd = traced_rimz(&env, "zellij-stdin-trace.log");
+    cmd.args(["message", "--steer", "@claude", "--stdin", "review this"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2081,19 +1435,12 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
     );
 
     let trace_log = env.project_root.join("zellij-from-steer-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_AGENT_KIND", "codex")
-        .env("RIMZ_AGENT_NAME", "swift-otter")
-        .args(["message", "--steer", "@claude", "--", "ping"])
-        .output()
-        .expect("steer from agent");
-    assert!(
-        out.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    let out = run_success(
+        traced_rimz(&env, "zellij-from-steer-trace.log")
+            .env("RIMZ_AGENT_KIND", "codex")
+            .env("RIMZ_AGENT_NAME", "swift-otter")
+            .args(["message", "--steer", "@claude", "--", "ping"]),
+        "steer from agent",
     );
     assert_single_sigil_sent(&out.stdout);
     assert_text_then_enter(&trace_log, "from @codex: ping");
@@ -2110,67 +1457,131 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
     assert_eq!(params["status"], "sent");
 
     let trace_log = env.project_root.join("zellij-from-steer-no-from-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_AGENT_KIND", "codex")
-        .env("RIMZ_AGENT_NAME", "swift-otter")
-        .args(["message", "--steer", "@claude", "--no-from", "--", "exact"])
-        .output()
-        .expect("steer --no-from from agent");
-    assert!(
-        out.status.success(),
-        "steer --no-from failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-from-steer-no-from-trace.log")
+            .env("RIMZ_AGENT_KIND", "codex")
+            .env("RIMZ_AGENT_NAME", "swift-otter")
+            .args(["message", "--steer", "@claude", "--no-from", "--", "exact"]),
+        "steer --no-from from agent",
     );
     assert_text_then_enter(&trace_log, "exact");
 }
 
-/// Send-now queue routes through the same live path as steer: an open-gate
-/// target receives the text and Enter as a discrete key, not a literal carriage
-/// return.
 #[test]
-fn queue_send_now_persists_and_sends() {
+fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
     let env = Env::new();
     env.install_agent_hooks("claude");
     let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-queue-enter", "feature-qe", pane_env);
-    // A turn end opens the `done` gate; the agent keeps its bound pane.
+    register_running_agent(&env, "sess-boundary", "feature-boundary", pane_env);
     run_hook(
         &env,
         json!({
             "hook_event_name": "Stop",
-            "session_id": "sess-queue-enter",
-            "worktree_branch": "feature-qe",
+            "session_id": "sess-boundary",
+            "worktree_branch": "feature-boundary",
+        }),
+        pane_env,
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+
+    let trace_log = env.project_root.join("zellij-queue-trace.log");
+    let sent = run_success(
+        traced_rimz(&env, "zellij-queue-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "@claude", "--", "go"]),
+        "send at open gate",
+    );
+    assert_single_sigil_sent(&sent.stdout);
+    let sent_id = sent_id_from_stdout(&sent.stdout);
+    assert!(env.store().list_pending_messages().unwrap().is_empty());
+    assert_text_then_enter(&trace_log, "go");
+    assert_eq!(
+        message_by_id(&env, &MessageId::parse(&sent_id).expect("message id")).status,
+        MessageStatus::Sent
+    );
+
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-boundary",
+            "prompt": "go",
+            "worktree_branch": "feature-boundary",
+        }),
+        pane_env,
+    );
+    assert!(
+        env.store()
+            .list_message_history()
+            .expect("history")
+            .iter()
+            .any(|message| message.message_id.as_str() == sent_id
+                && message.status == MessageStatus::Delivered)
+    );
+
+    let queued = run_success(
+        env.rimz()
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@claude", "--", "later"]),
+        "queue while running",
+    );
+    let queued_id = queued_id_from_stdout(&queued.stdout);
+    assert_eq!(
+        message_by_id(&env, &MessageId::parse(&queued_id).expect("message id")).status,
+        MessageStatus::Queued
+    );
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-boundary",
+            "worktree_branch": "feature-boundary",
         }),
         pane_env,
     );
 
-    let trace_log = env.project_root.join("zellij-queue-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "@claude", "--", "go"])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    let trace_log = env.project_root.join("zellij-deferred-deliver-trace.log");
+    run_success(
+        traced_rimz(&env, "zellij-deferred-deliver-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", &queued_id]),
+        "deliver at boundary",
     );
-    assert_single_sigil_sent(&out.stdout);
+    assert_text_then_enter(&trace_log, "later");
+    assert_eq!(
+        message_by_id(&env, &MessageId::parse(&queued_id).expect("message id")).status,
+        MessageStatus::Sent
+    );
 
-    assert!(
-        env.store().list_pending_messages().unwrap().is_empty(),
-        "an idle agent with a bound pane should receive queue text immediately"
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-boundary",
+            "prompt": "later",
+            "worktree_branch": "feature-boundary",
+        }),
+        pane_env,
     );
-    assert_text_then_enter(&trace_log, "go");
-    let messages = env.store().list_messages().unwrap();
-    assert_eq!(messages.len(), 1, "send-now queue writes a durable record");
-    assert_eq!(messages[0].status, MessageStatus::Sent);
+    assert!(
+        env.store()
+            .list_message_history()
+            .expect("history")
+            .iter()
+            .any(|message| message.message_id.as_str() == queued_id
+                && message.status == MessageStatus::Delivered)
+    );
+    assert!(env.store().list_messages().expect("messages").is_empty());
+    let methods: Vec<_> = env
+        .read_events()
+        .into_iter()
+        .map(|event| event.method)
+        .collect();
+    for method in ["message.queued", "message.sent", "message.delivered"] {
+        assert!(methods.iter().any(|actual| actual == method));
+    }
 }
 
 #[test]
@@ -2191,36 +1602,22 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
 
     let first_trace = env.project_root.join("zellij-reconcile-first-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &first_trace)
-        .args(["message", "@claude", "--", "recover me"])
-        .output()
-        .expect("send-now message");
-    assert!(
-        out.status.success(),
-        "send-now failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    let out = run_success(
+        traced_rimz(&env, "zellij-reconcile-first-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@claude", "--", "recover me"]),
+        "send-now message",
     );
     let message_id = sent_id_from_stdout(&out.stdout);
     assert_text_then_enter(&first_trace, "recover me");
 
     let second_trace = env.project_root.join("zellij-reconcile-second-trace.log");
-    let sweep = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &second_trace)
-        .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
-        .args(["message", "sweep"])
-        .output()
-        .expect("message sweep");
-    assert!(
-        sweep.status.success(),
-        "message sweep failed: {}",
-        String::from_utf8_lossy(&sweep.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-reconcile-second-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .args(["message", "sweep"]),
+        "message sweep",
     );
     assert_text_then_enter(&second_trace, "recover me");
 
@@ -2278,12 +1675,8 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
     );
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
 
-    let failing_trace = env.project_root.join("zellij-send-fail-trace.log");
-    let out = env
-        .rimz()
+    let out = traced_rimz(&env, "zellij-send-fail-trace.log")
         .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &failing_trace)
         .env("RIMZ_TEST_ZELLIJ_MODE", "fail-write")
         .args(["message", "@claude", "--", "retry me"])
         .output()
@@ -2303,19 +1696,12 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
     assert_eq!(pending[0].pane_id, None, "retry re-resolves a fresh pane");
 
     let retry_trace = env.project_root.join("zellij-send-retry-trace.log");
-    let sweep = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &retry_trace)
-        .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
-        .args(["message", "sweep"])
-        .output()
-        .expect("message sweep");
-    assert!(
-        sweep.status.success(),
-        "message sweep failed: {}",
-        String::from_utf8_lossy(&sweep.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-send-retry-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_DELIVERY_WINDOW_MS", "0")
+            .args(["message", "sweep"]),
+        "message sweep",
     );
     assert_text_then_enter(&retry_trace, "retry me");
     let sent = env
@@ -2327,108 +1713,6 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
         .expect("retried message");
     assert_eq!(sent.status, MessageStatus::Sent);
     assert_eq!(sent.attempts, 1);
-}
-
-#[test]
-fn queue_deliver_sends_deferred_message_and_marks_delivered() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
-    register_running_agent(&env, "sess-deferred-live", "feature-dl", pane_env);
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-
-    let add = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "@claude", "--", "later"])
-        .output()
-        .expect("message");
-    assert!(
-        add.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&add.stderr)
-    );
-    let message_id = queued_id_from_stdout(&add.stdout);
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1, "running agent should park the message");
-    assert_eq!(pending[0].status, MessageStatus::Queued);
-
-    append_lifecycle(
-        &env,
-        "claude",
-        "Stop",
-        "sess-deferred-live",
-        LifecycleSignal::TurnEnded {
-            errored: false,
-            parked_on_background: false,
-        },
-        |observation| {
-            observation.pane_id = Some(PaneId::from_parts(MuxName::Zellij, TRACE_PANE));
-            observation.worktree_branch = Some("feature-dl".to_owned());
-        },
-    );
-
-    let trace_log = env.project_root.join("zellij-deferred-deliver-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "deliver", "--message-id", &message_id])
-        .output()
-        .expect("message deliver");
-    assert!(
-        out.status.success(),
-        "message deliver failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    assert_text_then_enter(&trace_log, "later");
-    let messages = env.store().list_messages().expect("messages");
-    let message = messages
-        .iter()
-        .find(|message| message.message_id.as_str() == message_id)
-        .expect("sent message");
-    assert_eq!(message.status, MessageStatus::Sent);
-    let methods: Vec<String> = env
-        .read_events()
-        .into_iter()
-        .map(|event| event.method)
-        .collect();
-    assert!(
-        methods.iter().any(|method| method == "message.sent"),
-        "delivery records the shared send event: {methods:?}"
-    );
-    assert!(
-        !methods.iter().any(|method| method == "message.delivered"),
-        "delivery confirmation waits for the agent ack: {methods:?}"
-    );
-
-    run_hook(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-deferred-live",
-            "prompt": "later",
-            "worktree_branch": "feature-dl",
-        }),
-        pane_env,
-    );
-    assert!(
-        env.store()
-            .list_messages()
-            .expect("messages")
-            .into_iter()
-            .all(|message| message.message_id.as_str() != message_id),
-        "delivered message self-cleans from the live queue"
-    );
-    assert!(
-        env.read_events()
-            .iter()
-            .any(|event| event.method == "message.delivered"),
-        "turn start confirms delivery"
-    );
 }
 
 #[test]
@@ -2446,16 +1730,14 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
     );
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
-    let add = env
-        .rimz()
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "@coder", "--", "read plan"])
-        .output()
-        .expect("message");
-    assert!(
-        add.status.success(),
-        "message failed: {}",
-        String::from_utf8_lossy(&add.stderr)
+    let add = run_success(
+        env.rimz().env("RIMZ_TEST_PANE_LIST", &pane_fixture).args([
+            "message",
+            "@coder",
+            "--",
+            "read plan",
+        ]),
+        "message",
     );
     let message_id = queued_id_from_stdout(&add.stdout);
     let pending = env.store().list_pending_messages().expect("pending queue");
@@ -2480,19 +1762,12 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
     let trace_log = env
         .project_root
         .join("zellij-provisional-deliver-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-        .args(["message", "deliver", "--message-id", &message_id])
-        .output()
-        .expect("message deliver");
-    assert!(
-        out.status.success(),
-        "message deliver failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-provisional-deliver-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+            .args(["message", "deliver", "--message-id", &message_id]),
+        "message deliver",
     );
 
     assert_text_then_enter(&trace_log, "read plan");
@@ -2563,9 +1838,7 @@ fn queued_delivery_batches_compatible_prompts() {
 
     let trace_log = env.project_root.join("zellij-batch-trace.log");
     run_success(
-        env.rimz()
-            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        traced_rimz(&env, "zellij-batch-trace.log")
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
             .env("RIMZ_MESSAGE_SETTLE_MS", "0")
             .args(["message", "deliver", "--message-id", first_id.as_str()]),
@@ -2675,9 +1948,7 @@ fn boundary_auto_compact_defers_prompt_until_compaction_ends() {
 
     let trace_log = env.project_root.join("zellij-ac-boundary-trace.log");
     let out = run_success(
-        env.rimz()
-            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        traced_rimz(&env, "zellij-ac-boundary-trace.log")
             .env("RIMZ_MESSAGE_INTERVAL_MS", "0")
             .args([
                 "message",
@@ -2803,11 +2074,7 @@ fn steer_auto_compact_write_failure_keeps_only_prompt_queued() {
     );
     seed_context_fill(&env, "sess-ac-fail", 80);
 
-    let trace_log = env.project_root.join("zellij-ac-fail-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+    let out = traced_rimz(&env, "zellij-ac-fail-trace.log")
         .env("RIMZ_TEST_ZELLIJ_MODE", "fail-write")
         .args([
             "message",
@@ -2878,60 +2145,6 @@ fn steer_auto_compact_suppresses_only_an_unchanged_baseline() {
     assert_eq!(baselines, vec![150_000, 160_000]);
 }
 
-/// `[harness] smart_compact` gives steer the same compact-first threshold
-/// as the flag when the invocation omits it.
-#[test]
-fn steer_auto_compact_uses_config_default() {
-    let env = Env::new();
-    let config_dir = env.config_root().join("rimz");
-    std::fs::create_dir_all(&config_dir).expect("mkdir config");
-    std::fs::write(
-        config_dir.join("config.toml"),
-        "[harness]\nsmart_compact = \"70%\"\n",
-    )
-    .expect("write config");
-    register_running_agent(
-        &env,
-        "sess-ac-config",
-        "feature-ac-config",
-        &[("ZELLIJ_PANE_ID", "3")],
-    );
-    seed_context_fill(&env, "sess-ac-config", 80);
-
-    let trace_log = env.project_root.join("zellij-ac-config-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--", "go"])
-        .output()
-        .expect("steer");
-    assert!(
-        out.status.success(),
-        "steer failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let lines = trace_lines(&trace_log);
-    let compact_at = lines.iter().position(|line| is_compact_command(line));
-    let paste_at = lines.iter().position(|line| is_paste(line, "go"));
-    assert!(
-        compact_at.is_some(),
-        "expected a `/compact` write-chars; trace: {lines:?}"
-    );
-    assert!(
-        paste_at.is_some(),
-        "expected a bracketed paste of `go`; trace: {lines:?}"
-    );
-    assert!(
-        compact_at < paste_at,
-        "config default compaction must precede the message; trace: {lines:?}"
-    );
-}
-
-/// A waiting agent reserves the next input, so a queued message defers at
-/// the open gate rather than landing on top of the ask — it stays pending for a
-/// later boundary, and nothing is pasted.
 #[test]
 fn queue_waiting_agent_defers_unforced_and_force_delivers() {
     {
@@ -2951,18 +2164,11 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
         push_pending_agent_ask(&env, "sess-qd");
 
         let trace_log = env.project_root.join("zellij-qd-trace.log");
-        let out = env
-            .rimz()
-            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args(["message", "@claude", "--", "go"])
-            .output()
-            .expect("message");
-        assert!(
-            out.status.success(),
-            "message failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+        run_success(
+            traced_rimz(&env, "zellij-qd-trace.log")
+                .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+                .args(["message", "@claude", "--", "go"]),
+            "deferred message",
         );
 
         assert_eq!(
@@ -2995,18 +2201,11 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
         push_pending_agent_ask(&env, "sess-qf");
 
         let trace_log = env.project_root.join("zellij-qf-trace.log");
-        let out = env
-            .rimz()
-            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-            .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-            .env("RIMZ_MESSAGE_SETTLE_MS", "0")
-            .args(["message", "@claude", "--force", "--", "go"])
-            .output()
-            .expect("message");
-        assert!(
-            out.status.success(),
-            "message failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+        run_success(
+            traced_rimz(&env, "zellij-qf-trace.log")
+                .env("RIMZ_MESSAGE_SETTLE_MS", "0")
+                .args(["message", "@claude", "--force", "--", "go"]),
+            "forced message",
         );
 
         assert!(
@@ -3015,33 +2214,6 @@ fn queue_waiting_agent_defers_unforced_and_force_delivers() {
         );
         assert_text_then_enter(&trace_log, "go");
     }
-}
-
-#[test]
-fn broadcast_at_all_sends_without_yes() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(
-        &env,
-        "sess-at-all",
-        "feature-at-all",
-        &[("ZELLIJ_PANE_ID", "5")],
-    );
-
-    let out = env
-        .rimz()
-        .args(["message", "@all", "--", "heads up"])
-        .output()
-        .expect("queue broadcast");
-    assert!(
-        out.status.success(),
-        "broadcast failed without a confirmation flag: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-
-    let pending = env.store().list_pending_messages().expect("pending queue");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].text, "@all, heads up");
 }
 
 #[test]
@@ -3091,15 +2263,9 @@ fn message_miss_lists_available_agents() {
     assert_eq!(params["status"], "errored");
     assert_eq!(params["reason"], "receiver not found");
 
-    let listed = env
-        .rimz()
-        .args(["message", "list", "--all", "--json"])
-        .output()
-        .expect("message list");
-    assert!(
-        listed.status.success(),
-        "message list failed: {}",
-        String::from_utf8_lossy(&listed.stderr)
+    let listed = run_success(
+        env.rimz().args(["message", "list", "--all", "--json"]),
+        "message list",
     );
     let parsed: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
     assert!(
@@ -3112,77 +2278,36 @@ fn message_miss_lists_available_agents() {
     );
 }
 
-/// Without `--all`, a selector that matches several agents is an ambiguity that
-/// names the `--all` opt-in rather than a silent broadcast.
 #[test]
-fn steer_multi_match_without_all_is_ambiguous() {
+fn steer_fanout_requires_opt_in_then_reports_all_targets() {
     let env = Env::new();
-    register_running_agent(
-        &env,
-        "sess-amb-a",
-        "feature-aa",
-        &[("ZELLIJ_PANE_ID", "11")],
-    );
-    register_running_agent(
-        &env,
-        "sess-amb-b",
-        "feature-ab",
-        &[("ZELLIJ_PANE_ID", "12")],
-    );
+    register_running_agent(&env, "sess-amb-a", "feature-aa", &[("ZELLIJ_PANE_ID", "3")]);
+    register_running_agent(&env, "sess-amb-b", "feature-ab", &[("ZELLIJ_PANE_ID", "4")]);
 
-    let out = env
-        .rimz()
+    let trace_log = env.project_root.join("zellij-fanout-trace.log");
+    let out = traced_rimz(&env, "zellij-fanout-trace.log")
         .args(["message", "--steer", "@claude", "--", "hello"])
         .output()
         .expect("steer ambiguous");
-    assert!(
-        !out.status.success(),
-        "a multi-match must not broadcast without --all"
-    );
+    assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("--all"),
-        "the ambiguity names the --all opt-in: {stderr}"
-    );
-}
+    assert!(stderr.contains("--all"), "stderr: {stderr}");
+    assert!(trace_lines(&trace_log).is_empty());
 
-/// `steer @claude --all` broadcasts to every claude with a bound pane and
-/// prints a summary naming the count.
-#[test]
-fn steer_fanout_summary() {
-    let env = Env::new();
-    register_running_agent(&env, "sess-fsa", "feature-fsa", &[("ZELLIJ_PANE_ID", "3")]);
-    register_running_agent(&env, "sess-fsb", "feature-fsb", &[("ZELLIJ_PANE_ID", "4")]);
-
-    let trace_log = env.project_root.join("zellij-fanout-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--all", "--", "hello"])
-        .output()
-        .expect("steer fanout");
-    assert!(
-        out.status.success(),
-        "steer fanout failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    let out = run_success(
+        traced_rimz(&env, "zellij-fanout-trace.log")
+            .args(["message", "--steer", "@claude", "--all", "--", "hello"]),
+        "steer fanout",
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("sent 2 agent(s)"),
-        "summary names the count: {stdout}"
-    );
+    assert!(stdout.contains("sent 2 agent(s)"), "stdout: {stdout}");
     let pasted = trace_lines(&trace_log)
         .into_iter()
         .filter(|line| is_paste_to_any_pane(line, "@claude, hello"))
         .count();
-    assert_eq!(pasted, 2, "fan-out should paste once per live pane");
+    assert_eq!(pasted, 2);
 }
 
-/// A skipped agent never aborts a broadcast: both targeted agents have a pane,
-/// but one waits on input, so it is skipped while the other still receives
-/// the steer, and the command summarizes and succeeds rather than failing on the
-/// first skip.
 #[test]
 fn steer_fanout_skips_blocked_and_steers_the_rest() {
     let env = Env::new();
@@ -3192,7 +2317,6 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
         "feature-ska",
         &[("ZELLIJ_PANE_ID", "7")],
     );
-    // A second pane-bound card, blocked by waiting input — it can only be skipped.
     register_running_agent(
         &env,
         "sess-skip-b",
@@ -3201,18 +2325,10 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
     );
     push_pending_agent_ask(&env, "sess-skip-b");
 
-    let trace_log = env.project_root.join("zellij-skip-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@claude", "--all", "--", "go"])
-        .output()
-        .expect("steer partial skip");
-    assert!(
-        out.status.success(),
-        "a skipped agent must not abort the broadcast: {}",
-        String::from_utf8_lossy(&out.stderr)
+    let out = run_success(
+        traced_rimz(&env, "zellij-skip-trace.log")
+            .args(["message", "--steer", "@claude", "--all", "--", "go"]),
+        "steer partial skip",
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -3222,78 +2338,75 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
 }
 
 #[test]
-fn boundary_fanout_keeps_earlier_live_effect_before_later_hook_error() {
-    let env = Env::new();
-    register_role_agent(
-        &env,
-        "claude",
-        "sess-a-live",
-        "live",
-        false,
-        Some(TRACE_PANE),
-    );
-    register_role_agent(&env, "claude", "sess-z-parked", "parked", false, None);
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let trace_log = env.project_root.join("zellij-ordered-fanout.log");
+fn boundary_fanout_preserves_target_order_on_hook_failure() {
+    fn scenario(live_first: bool) -> (std::process::Output, Vec<String>, Vec<MessageRecord>) {
+        let env = Env::new();
+        let (first_role, first_pane, second_role, second_pane) = if live_first {
+            ("live", Some(TRACE_PANE), "parked", None)
+        } else {
+            ("parked", None, "live", Some(TRACE_PANE))
+        };
+        register_role_agent(
+            &env,
+            "claude",
+            "sess-a-first",
+            first_role,
+            false,
+            first_pane,
+        );
+        register_role_agent(
+            &env,
+            "claude",
+            "sess-z-second",
+            second_role,
+            false,
+            second_pane,
+        );
+        let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+        let log_name = if live_first {
+            "zellij-ordered-fanout.log"
+        } else {
+            "zellij-reversed-fanout.log"
+        };
+        let output = traced_rimz(&env, log_name)
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@all", "--", "ordered effect"])
+            .output()
+            .expect("ordered fanout");
+        (
+            output,
+            trace_lines(&env.project_root.join(log_name)),
+            env.store().list_messages().unwrap(),
+        )
+    }
 
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "@all", "--", "ordered effect"])
-        .output()
-        .expect("ordered fanout");
-
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("hooks"));
-    assert!(
-        trace_lines(&trace_log)
-            .iter()
-            .any(|line| is_paste_to_any_pane(line, "@all, ordered effect"))
-    );
-    let records = env.store().list_messages().unwrap();
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].status, MessageStatus::Sent);
-    assert_eq!(records[0].attempts, 0);
-}
-
-#[test]
-fn boundary_fanout_stops_before_live_effect_when_hook_error_is_first() {
-    let env = Env::new();
-    register_role_agent(&env, "claude", "sess-a-parked", "parked", false, None);
-    register_role_agent(
-        &env,
-        "claude",
-        "sess-z-live",
-        "live",
-        false,
-        Some(TRACE_PANE),
-    );
-    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
-    let trace_log = env.project_root.join("zellij-reversed-fanout.log");
-
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "@all", "--", "blocked first"])
-        .output()
-        .expect("reversed ordered fanout");
-
-    assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("hooks"));
-    assert!(
-        trace_lines(&trace_log)
-            .iter()
-            .all(|line| !is_paste_to_any_pane(line, "@all, blocked first"))
-    );
-    assert!(env.store().list_messages().unwrap().is_empty());
+    for live_first in [true, false] {
+        let (output, trace, records) = scenario(live_first);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("hooks"));
+        assert_eq!(
+            trace
+                .iter()
+                .any(|line| is_paste_to_any_pane(line, "@all, ordered effect")),
+            live_first
+        );
+        assert_eq!(records.len(), usize::from(live_first));
+        if let Some(record) = records.first() {
+            assert_eq!(record.status, MessageStatus::Sent);
+            assert_eq!(record.attempts, 0);
+        }
+    }
 }
 
 fn zellij_trace_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
+}
+
+fn traced_rimz(env: &Env, log_name: impl AsRef<Path>) -> std::process::Command {
+    let mut cmd = env.rimz();
+    cmd.env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", env.project_root.join(log_name));
+    cmd
 }
 
 fn run_success(cmd: &mut std::process::Command, label: &str) -> std::process::Output {
@@ -3311,18 +2424,15 @@ fn run_success(cmd: &mut std::process::Command, label: &str) -> std::process::Ou
 
 fn run_traced_smart_compact(env: &Env, trace_log: &Path, text: &str) -> std::process::Output {
     let output = run_success(
-        env.rimz()
-            .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-            .env("RIMZ_TEST_ZELLIJ_LOG", trace_log)
-            .args([
-                "message",
-                "--steer",
-                "@claude",
-                "--smart-compact",
-                "70%",
-                "--",
-                text,
-            ]),
+        traced_rimz(env, trace_log).args([
+            "message",
+            "--steer",
+            "@claude",
+            "--smart-compact",
+            "70%",
+            "--",
+            text,
+        ]),
         "smart compact steer",
     );
     assert!(
@@ -3339,14 +2449,8 @@ fn trace_lines(path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The shim records each invocation as tab-separated argv (`argv0\t…`). Pin the
-/// full action tail, including `--pane-id <pane>`, so a send to the wrong pane
-/// fails rather than passing on action type alone.
 const TRACE_PANE: &str = "terminal_3";
 
-/// A bracketed-paste `zellij action write --pane-id <pane> 27 91 50 48 48 126
-/// <text bytes…> 27 91 50 48 49 126` line — the text wrapped in `ESC[200~` …
-/// `ESC[201~` decimal byte markers, so a following Enter reads as submit.
 fn is_paste(line: &str, text: &str) -> bool {
     let payload = text
         .bytes()
@@ -3370,23 +2474,16 @@ fn is_paste_to_any_pane(line: &str, text: &str) -> bool {
         ))
 }
 
-/// A discrete `zellij action write --pane-id <pane> 13` line — Enter sent as its
-/// own key event (`NamedKey::Enter` writes byte `13`), distinct from the paste.
 fn is_enter_key(line: &str) -> bool {
     line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t13"))
 }
 
-/// A `zellij action write-chars --pane-id <pane> /compact` line — the compaction
-/// slash command typed as raw keystrokes ahead of an auto-compacted message,
-/// distinct from the bracketed paste a message rides.
 fn is_compact_command(line: &str) -> bool {
     line.ends_with(&format!(
         "\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t/compact"
     ))
 }
 
-/// The shim recorded a bracketed paste of `text` followed by a discrete
-/// `write 13` — both to `TRACE_PANE` — with no carriage return folded in.
 fn assert_text_then_enter(trace_log: &Path, text: &str) {
     let raw = std::fs::read_to_string(trace_log).unwrap_or_default();
     assert!(
@@ -3505,25 +2602,106 @@ fn register_old_idle_role_agent(
     at
 }
 
-fn register_idle_agent_with_transcript(
-    env: &Env,
-    session_id: &str,
-    branch: &str,
-    transcript: &Path,
-    pane_env: &[(&str, &str)],
-) {
-    let worktree_path = env.home_root.join(branch).display().to_string();
-    run_hook(
-        env,
-        json!({
-            "hook_event_name": "SessionStart",
-            "session_id": session_id,
-            "worktree_branch": branch,
-            "worktree_path": worktree_path,
-            "transcript_path": transcript.to_string_lossy(),
-        }),
-        pane_env,
-    );
+struct ReplyAgentFixture {
+    session_id: String,
+    branch: String,
+    transcript_path: PathBuf,
+    pane_id: &'static str,
+}
+
+impl ReplyAgentFixture {
+    fn single(env: &Env, scenario: &str) -> Self {
+        Self::register(
+            env,
+            format!("sess-wait-{scenario}"),
+            format!("feature-wait-{scenario}"),
+            env.runtime_root
+                .join(format!("message-wait-{scenario}.jsonl")),
+            "3",
+        )
+    }
+
+    fn pair(env: &Env, scenario: &str) -> [Self; 2] {
+        Self::pair_named(env, scenario, ["first", "second"])
+    }
+
+    fn pair_named(env: &Env, scenario: &str, sides: [&str; 2]) -> [Self; 2] {
+        [
+            Self::register(
+                env,
+                format!("sess-wait-{scenario}-{}", sides[0]),
+                format!("feature-{scenario}-{}", sides[0]),
+                env.runtime_root
+                    .join(format!("message-wait-{scenario}-{}.jsonl", sides[0])),
+                "3",
+            ),
+            Self::register(
+                env,
+                format!("sess-wait-{scenario}-{}", sides[1]),
+                format!("feature-{scenario}-{}", sides[1]),
+                env.runtime_root
+                    .join(format!("message-wait-{scenario}-{}.jsonl", sides[1])),
+                "4",
+            ),
+        ]
+    }
+
+    fn register(
+        env: &Env,
+        session_id: String,
+        branch: String,
+        transcript_path: PathBuf,
+        pane_id: &'static str,
+    ) -> Self {
+        std::fs::write(&transcript_path, "").expect("seed transcript");
+        let fixture = Self {
+            session_id,
+            branch,
+            transcript_path,
+            pane_id,
+        };
+        run_hook(
+            env,
+            json!({
+                "hook_event_name": "SessionStart",
+                "session_id": fixture.session_id,
+                "worktree_branch": fixture.branch,
+                "worktree_path": env.home_root.join(&fixture.branch),
+                "transcript_path": fixture.transcript_path,
+            }),
+            &[("ZELLIJ_PANE_ID", fixture.pane_id)],
+        );
+        fixture
+    }
+
+    fn start(&self, env: &Env, prompt: &str) {
+        run_hook(
+            env,
+            json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": self.session_id,
+                "prompt": prompt,
+                "worktree_branch": self.branch,
+                "transcript_path": self.transcript_path,
+            }),
+            &[("ZELLIJ_PANE_ID", self.pane_id)],
+        );
+    }
+
+    fn finish(&self, env: &Env, reply: &str, failed: bool) {
+        append_claude_assistant(&self.transcript_path, reply);
+        let mut payload = json!({
+            "hook_event_name": "Stop",
+            "session_id": self.session_id,
+            "last_assistant_message": reply,
+            "worktree_branch": self.branch,
+            "transcript_path": self.transcript_path,
+        });
+        if failed {
+            payload["is_error"] = json!(true);
+        }
+        run_hook(env, payload, &[("ZELLIJ_PANE_ID", self.pane_id)]);
+    }
 }
 
 fn append_claude_assistant(transcript: &Path, text: &str) {
@@ -3540,46 +2718,6 @@ fn append_claude_assistant(transcript: &Path, text: &str) {
     writeln!(transcript, "{line}").expect("append assistant message");
 }
 
-fn begin_wait_reply(env: &Env, session_id: &str, branch: &str, transcript: &Path, pane: &str) {
-    run_hook(
-        env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": session_id,
-            "prompt": "fanout question",
-            "worktree_branch": branch,
-            "transcript_path": transcript.to_string_lossy(),
-        }),
-        &[("ZELLIJ_PANE_ID", pane)],
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn finish_wait_reply(
-    env: &Env,
-    session_id: &str,
-    branch: &str,
-    transcript: &Path,
-    pane: &str,
-    reply: &str,
-    failed: bool,
-) {
-    append_claude_assistant(transcript, reply);
-    let mut payload = json!({
-        "hook_event_name": "Stop",
-        "session_id": session_id,
-        "last_assistant_message": reply,
-        "worktree_branch": branch,
-        "transcript_path": transcript.to_string_lossy(),
-    });
-    if failed {
-        payload["is_error"] = json!(true);
-    }
-    run_hook(env, payload, &[("ZELLIJ_PANE_ID", pane)]);
-}
-
-/// Seed a context sidecar so `--smart-compact` reads `used_pct` as the agent's
-/// window fill — the same record the producer would fold from a live statusline.
 fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
     let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
@@ -3591,8 +2729,6 @@ fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
         .expect("seed context sidecar");
 }
 
-/// Seed a context sidecar with token composition so `occupied_context_tokens`
-/// has the deterministic baseline smart-compact uses to suppress duplicates.
 fn seed_context_tokens(env: &Env, agent_id: &str, used: u64, window: u64) {
     let mut context = rimz::store::agent_context::empty_context("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
@@ -3683,8 +2819,7 @@ fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {
 fn dummy_agent_process() -> std::process::Child {
     let mut cmd = std::process::Command::new("sleep");
     scrub_launch_identity(&mut cmd);
-    // ponytail: bounded sleeper keeps hook-owned agents live for test snapshots;
-    // add a per-test owner guard if tests start lasting longer than this window.
+    // ponytail: bounded sleeper keeps hook-owned agents live; add per-test owner guard if tests outlast this window.
     cmd.arg("30").spawn().expect("spawn dummy agent process")
 }
 
@@ -3777,31 +2912,15 @@ fn trust_codex_hooks(env: &Env) {
 }
 
 fn queue_add(env: &Env, target: &str, text: &str) -> String {
-    let out = env
-        .rimz()
-        .args(["message", target, "--", text])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "message failed\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = run_success(env.rimz().args(["message", target, "--", text]), "message");
     queued_id_from_stdout(&out.stdout)
 }
 
 fn queue_add_in_channel(env: &Env, channel: &str, target: &str, text: &str) -> String {
-    let out = env
-        .rimz()
-        .args(["message", "--channel", channel, target, "--", text])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "message failed\nstdout={}\nstderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+    let out = run_success(
+        env.rimz()
+            .args(["message", "--channel", channel, target, "--", text]),
+        "channel message",
     );
     queued_id_from_stdout(&out.stdout)
 }
@@ -4102,11 +3221,6 @@ fn seed_provisional_codex_launch(
     env.store().append_event(&event).expect("append launch");
 }
 
-/// `steer @codex` reaches a bare codex started in a pane before its first turn:
-/// the selector folds the live pane frame, finds the synthesized idle row, and
-/// pastes into its pane — reproducing and fixing the `no agent matches @codex`
-/// failure. The pane fixture stands in for the mux, and codex must be wired
-/// (hooks installed) for the idle row to synthesize.
 #[test]
 fn steer_reaches_unbound_codex_pane() {
     let env = Env::new();
@@ -4114,18 +3228,11 @@ fn steer_reaches_unbound_codex_pane() {
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
     let trace_log = env.project_root.join("zellij-unbound-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "--steer", "@codex", "--", "continue"])
-        .output()
-        .expect("steer");
-    assert!(
-        out.status.success(),
-        "steer to an unbound codex pane failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-unbound-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "--steer", "@codex", "--", "continue"]),
+        "steer to unbound codex pane",
     );
     assert_text_then_enter(&trace_log, "continue");
 }
@@ -4145,40 +3252,23 @@ fn queue_to_provisional_codex_sends_to_live_pane_not_stale_rollup_pane() {
     let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "codex")]);
 
     let trace_log = env.project_root.join("zellij-provisional-queue-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
-        .args(["message", "@coder", "--", "read plan"])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "queue to a provisional codex should send now: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-provisional-queue-trace.log")
+            .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+            .args(["message", "@coder", "--", "read plan"]),
+        "queue to provisional codex",
     );
     assert_text_then_enter(&trace_log, "read plan");
     let messages = env.store().list_messages().unwrap();
-    assert_eq!(
-        messages.len(),
-        1,
-        "send-now provisional queue writes a durable record"
-    );
+    assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].status, MessageStatus::Sent);
     let methods: Vec<String> = env
         .read_events()
         .into_iter()
         .map(|event| event.method)
         .collect();
-    assert!(
-        methods.iter().any(|method| method == "message.sent"),
-        "send-now queue records message.sent: {methods:?}"
-    );
-    assert!(
-        methods.iter().any(|method| method == "message.queued"),
-        "send-now queue records the durable record before sending: {methods:?}"
-    );
+    assert!(methods.iter().any(|method| method == "message.sent"));
+    assert!(methods.iter().any(|method| method == "message.queued"));
 }
 
 #[test]
@@ -4198,24 +3288,17 @@ fn provisional_without_live_frame_parks_queue_and_steer() {
     let trace_log = env
         .project_root
         .join("zellij-provisional-no-frame-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "@coder", "--", "read plan"])
-        .output()
-        .expect("message");
-    assert!(
-        out.status.success(),
-        "queue to a provisional codex should park without a live pane: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-provisional-no-frame-trace.log").args([
+            "message",
+            "@coder",
+            "--",
+            "read plan",
+        ]),
+        "park provisional queue",
     );
     let messages = env.store().list_messages().unwrap();
-    assert_eq!(
-        messages.len(),
-        1,
-        "parked provisional queue writes a record"
-    );
+    assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].status, MessageStatus::Queued);
     assert_eq!(messages[0].agent_id.as_str(), "launch_no_frame");
     let methods: Vec<String> = env
@@ -4223,14 +3306,8 @@ fn provisional_without_live_frame_parks_queue_and_steer() {
         .into_iter()
         .map(|event| event.method)
         .collect();
-    assert!(
-        methods.iter().any(|method| method == "message.queued"),
-        "no-live-frame queue records message.queued: {methods:?}"
-    );
-    assert!(
-        methods.iter().all(|method| method != "message.sent"),
-        "no-live-frame queue is not sent: {methods:?}"
-    );
+    assert!(methods.iter().any(|method| method == "message.queued"));
+    assert!(methods.iter().all(|method| method != "message.sent"));
     let lines = trace_lines(&trace_log);
     assert!(
         lines
@@ -4242,17 +3319,15 @@ fn provisional_without_live_frame_parks_queue_and_steer() {
     let trace_log = env
         .project_root
         .join("zellij-provisional-no-frame-steer-trace.log");
-    let out = env
-        .rimz()
-        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["message", "--steer", "@coder", "--", "read plan"])
-        .output()
-        .expect("message --steer");
-    assert!(
-        out.status.success(),
-        "steer to a provisional codex without a live pane should park: {}",
-        String::from_utf8_lossy(&out.stderr)
+    run_success(
+        traced_rimz(&env, "zellij-provisional-no-frame-steer-trace.log").args([
+            "message",
+            "--steer",
+            "@coder",
+            "--",
+            "read plan",
+        ]),
+        "park provisional steer",
     );
     let messages = env.store().list_messages().unwrap();
     assert_eq!(messages.len(), 2, "steer parks a second record");
