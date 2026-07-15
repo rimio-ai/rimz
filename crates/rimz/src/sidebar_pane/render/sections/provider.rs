@@ -1440,7 +1440,7 @@ fn extra_value_label(theme: &Theme, credits: &ExtraCredits) -> String {
             format!("{}/{}", dollars_compact(used), dollars_compact(limit))
         }
         (_, Some(remaining), _) => dollars_compact(remaining),
-        (Some(used), _, None) => format!("{}{infinity}", dollars_compact(used)),
+        (Some(used), _, None) => dollars_compact(used),
         (None, None, Some(limit)) => format!("?/{}", dollars_compact(limit)),
         (None, None, None) => infinity.to_owned(),
     }

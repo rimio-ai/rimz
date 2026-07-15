@@ -523,7 +523,9 @@ fn api_key_provider_uses_month_spend_bar_with_optional_ceiling() {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>();
-    assert!(text.contains("$12∞"), "{text:?}");
+    assert!(text.contains("$12"), "{text:?}");
+    assert!(!text.contains('/'), "{text:?}");
+    assert!(!text.contains('∞'), "{text:?}");
     assert!(
         !text.contains('▰'),
         "uncapped API spend shows dollars without claiming a fill: {text:?}"
