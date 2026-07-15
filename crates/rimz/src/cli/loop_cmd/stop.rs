@@ -64,25 +64,6 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
     )
 }
 
-pub(super) fn newest_active_run(paths: &StatePaths, name: &str) -> Result<Option<RunRecord>> {
-    let mut records = rimz::harness::run::list(paths)?;
-    records
-        .retain(|record| !record.status.is_terminal() && record.loop_task.as_deref() == Some(name));
-    records.sort_by_key(|record| std::cmp::Reverse(record.started_at));
-    Ok(records.into_iter().next())
-}
-
-pub(super) fn newest_active_run_for_entry(
-    name: &str,
-    entry: &TaskEntry,
-) -> Result<Option<RunRecord>> {
-    let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve(&root, None)
-        .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let paths = StatePaths::for_workspace(workspace.workspace_id)?;
-    newest_active_run(&paths, name)
-}
-
 fn lock_info(state: &RunLockState) -> Option<RunLockInfo> {
     match state {
         RunLockState::Held(info) => *info,

@@ -1029,7 +1029,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     let show_agent_runs = has_agent_runs_section(&entry);
     let lock_state = probe_run_lock(&args.name, &entry).ok();
     let active_run = if matches!(lock_state.as_ref(), Some(RunLockState::Held(_))) {
-        stop::newest_active_run_for_entry(&args.name, &entry)?
+        newest_active_run_for_entry(&args.name, &entry)?
     } else {
         None
     };

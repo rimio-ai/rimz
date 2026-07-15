@@ -6,8 +6,9 @@
 //! machinery stays generic by evaluating an externally resolved reset instant.
 //!
 //! This module owns task action validation, catalog precedence and mutation,
-//! runner policy, terminal transitions, schedule parsing, and due evaluation.
-//! CLI handlers translate flags, orchestrate terminal actions, and render.
+//! the [`runner::TaskFire`] state machine, terminal transitions, schedule
+//! parsing, and due evaluation. CLI handlers translate flags, execute prepared
+//! effects, orchestrate terminal actions, and render.
 
 use std::time::Duration;
 

@@ -8,14 +8,6 @@ const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
 
 type RunOutcome = LoopRunOutcome;
 
-#[derive(Clone, Copy)]
-struct RunExecution<'a> {
-    catalog: &'a TaskCatalog,
-    mode: LoopRunMode,
-    keep: bool,
-    globals: &'a GlobalFlags,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProjectTrustDecision {
     Proceed,
@@ -67,79 +59,77 @@ pub(super) fn run_one(
             ui::paint(ui::palette::MUTED, "  task is paused; firing anyway")
         )?;
     }
-    let now = Timestamp::now().to_zoned(MachineConfig::load_lenient().time_zone());
-    if let Some(gate) =
-        run_log::daily_budget_gate(&state_home(), name, &entry, &now).map_err(anyhow::Error::msg)?
-    {
-        return finish_gate_skip(
-            name,
-            &entry,
-            mode,
-            started,
-            now.timestamp(),
-            LoopRunResult::BudgetSkipped,
-            gate.reason(),
-        );
-    }
     let config = MachineConfig::load_lenient();
-    let scope = task_scope_target(name, &entry)?;
-    if let Some((kind, workspace_id)) = &scope
-        && let Some(reason) = rimz::harness::budget::scope_gate(
-            &RuntimePaths::for_workspace(workspace_id.clone())?,
-            kind,
-            &config,
-            now.timestamp(),
-        )
-    {
-        return finish_gate_skip(
-            name,
-            &entry,
-            mode,
-            started,
-            now.timestamp(),
-            LoopRunResult::BudgetSkipped,
-            reason,
-        );
-    }
-    if let Some((kind, _)) = &scope
-        && let Some(reason) = surplus_gate(&entry, kind.as_str(), now.timestamp())?
-    {
-        return finish_gate_skip(
-            name,
-            &entry,
-            mode,
-            started,
-            now.timestamp(),
-            LoopRunResult::SurplusSkipped,
-            reason,
-        );
-    }
-    let _run_lock = match acquire_run_lock(name, &entry) {
-        Ok(RunLockAttempt::Acquired(guard)) => guard,
-        Ok(RunLockAttempt::Held(info)) => {
-            return finish_overlapped(name, &entry, mode, started, info);
-        }
+    let check_echo = match mode {
+        LoopRunMode::Scheduled => CheckEcho::Capture,
+        LoopRunMode::Manual => CheckEcho::Stream {
+            announcement: entry.check.as_deref().map(|cmd| {
+                format!(
+                    "{}\n",
+                    ui::paint(ui::palette::MUTED, &format!("  check: {cmd}"))
+                )
+            }),
+            prefix: ui::paint(ui::palette::FAINT, "  │ "),
+        },
+    };
+    let mut fire = rimz::harness::schedule::runner::TaskFire::new(
+        name,
+        entry.clone(),
+        &catalog,
+        mode,
+        keep,
+        Timestamp::now(),
+        config,
+        check_echo,
+        started,
+    )?;
+    let plan = match fire.prepare() {
+        Ok(plan) => plan,
         Err(err) => {
-            append_error_record(name, &entry, mode, started, &err);
-            return Err(err);
+            return Err(record_task_error(&mut fire, name, &entry, err));
         }
     };
-    match execute_task(name, &entry, &catalog, mode, keep, globals) {
-        Ok(outcome) => {
-            let duration_ms = elapsed_ms(started);
-            let record = outcome.record(name, mode, duration_ms);
-            record_run(name, &entry, record);
-            print_run_summary(name, &entry, duration_ms, mode, keep, &outcome)?;
-            if let Some(code) = outcome.exit_code() {
-                std::process::exit(code);
+    let finished = match plan {
+        rimz::harness::schedule::runner::TaskFirePlan::Done(finished) => finished,
+        rimz::harness::schedule::runner::TaskFirePlan::Spawn(prepared) => {
+            if mode == LoopRunMode::Manual
+                && let (Some(check), Some(duration_ms)) =
+                    (prepared.check.as_ref(), prepared.check_duration_ms)
+                && let Err(source) =
+                    write_check_trip_line(&mut ui::out(), &entry, check, duration_ms)
+            {
+                return Err(record_task_error(&mut fire, name, &entry, source.into()));
             }
-            Ok(())
+            let mut run_globals = globals.clone();
+            run_globals.root = Some(prepared.root.clone());
+            let effect = crate::cli::supervised::run::run_supervised(
+                prepared.request,
+                crate::cli::supervised::SupervisedPresentation::text(prepared.stream),
+                &run_globals,
+            )
+            .map(|record| {
+                rimz::harness::schedule::runner::TaskFireEffect::Spawn(record.map(Box::new))
+            });
+            finish_task_effect(&mut fire, effect, name, &entry)?
         }
-        Err(err) => {
-            append_error_record(name, &entry, mode, started, &err);
-            Err(err)
+        rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared) => {
+            if mode == LoopRunMode::Manual
+                && let (Some(check), Some(duration_ms)) =
+                    (prepared.check.as_ref(), prepared.check_duration_ms)
+                && let Err(source) =
+                    write_check_trip_line(&mut ui::out(), &entry, check, duration_ms)
+            {
+                return Err(record_task_error(&mut fire, name, &entry, source.into()));
+            }
+            let effect = execute_prepared_delivery(prepared, globals);
+            finish_task_effect(&mut fire, effect, name, &entry)?
         }
+    };
+    present_finished(name, &entry, mode, keep, &finished)?;
+    if let Some(code) = finished.outcome.exit_code() {
+        std::process::exit(code);
     }
+    Ok(())
 }
 
 fn gate_project_trust(
@@ -163,80 +153,35 @@ fn gate_project_trust(
     Ok(())
 }
 
-fn finish_overlapped(
+fn finish_task_effect(
+    fire: &mut rimz::harness::schedule::runner::TaskFire<'_>,
+    effect: Result<rimz::harness::schedule::runner::TaskFireEffect>,
     name: &str,
     entry: &TaskEntry,
-    mode: LoopRunMode,
-    started: Instant,
-    info: Option<RunLockInfo>,
-) -> Result<()> {
-    let record_detail = info.map(|info| {
-        format!(
-            "previous run still active (pid {}, started {}) — skipped",
-            info.pid,
-            ui::rel_age(info.started_at, Timestamp::now())
-        )
-    });
-    let record = RunOutcome::overlap(record_detail.clone()).record(name, mode, elapsed_ms(started));
-    record_run(name, entry, record);
-    let stop_hint = format!("stop it with `rimz loop stop {name}`");
-    if mode == LoopRunMode::Manual {
-        let detail = record_detail
-            .map(|detail| format!("{detail}; {stop_hint}"))
-            .unwrap_or_else(|| format!("previous run still active — skipped; {stop_hint}"));
-        write_manual_verdict(&mut ui::out(), LoopRunResult::Overlapped, &detail)?;
-    } else if let Some(detail) = record_detail {
-        writeln!(ui::out(), "loop `{name}`: {detail}; {stop_hint}")?;
-    } else {
-        writeln!(
-            ui::out(),
-            "loop `{name}`: previous run still active; skipping; {stop_hint}"
-        )?;
+) -> Result<rimz::harness::schedule::runner::TaskFireFinished> {
+    match effect {
+        Ok(effect) => match fire.finish(effect) {
+            Ok(finished) => Ok(finished),
+            Err(err) => Err(record_task_error(fire, name, entry, err)),
+        },
+        Err(err) => Err(record_task_error(fire, name, entry, err)),
     }
-    Ok(())
 }
 
-fn finish_gate_skip(
+fn record_task_error(
+    fire: &mut rimz::harness::schedule::runner::TaskFire<'_>,
     name: &str,
     entry: &TaskEntry,
-    mode: LoopRunMode,
-    started: Instant,
-    at: Timestamp,
-    result: LoopRunResult,
-    reason: String,
-) -> Result<()> {
-    let mut record =
-        RunOutcome::gate_skip(result, reason.clone()).record(name, mode, elapsed_ms(started));
-    record.at = at;
-    record_run(name, entry, record);
-    if mode == LoopRunMode::Manual {
-        write_manual_verdict(
-            &mut ui::out(),
-            result,
-            &format!("{} — {reason}", result.label()),
-        )?;
-    } else {
-        writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;
-    }
-    Ok(())
+    err: anyhow::Error,
+) -> anyhow::Error {
+    let finished = fire.finish_error(&err);
+    handle_run_transition(name, entry, finished.transition);
+    tracing::warn!(task = name, error = %err, "loop task run failed");
+    err
 }
 
-fn append_error_record(
-    name: &str,
-    entry: &TaskEntry,
-    mode: LoopRunMode,
-    started: Instant,
-    err: &anyhow::Error,
-) {
-    let duration_ms = elapsed_ms(started);
-    let error = format!("{err:#}");
-    let record = RunOutcome::error(error.clone()).record(name, mode, duration_ms);
-    record_run(name, entry, record);
-    tracing::warn!(task = name, error = %error, "loop task run failed");
-}
-
-fn record_run(name: &str, entry: &TaskEntry, record: LoopRunRecord) {
-    if let RunTransition::AutoPaused { strikes } = run_log::record_transition(name, entry, record) {
+fn handle_run_transition(name: &str, entry: &TaskEntry, transition: RunTransition) {
+    if let RunTransition::AutoPaused { strikes } = transition {
         let _ = writeln!(
             ui::out(),
             "loop `{name}`: paused after {strikes} consecutive failed fires; resume with `rimz loop resume {name}`"
@@ -282,6 +227,127 @@ fn notify_loop_paused(name: &str, entry: &TaskEntry, count: u32) {
     }
 }
 
+fn present_finished(
+    name: &str,
+    entry: &TaskEntry,
+    mode: LoopRunMode,
+    keep: bool,
+    finished: &rimz::harness::schedule::runner::TaskFireFinished,
+) -> Result<()> {
+    use rimz::harness::schedule::runner::TaskFireNotice;
+
+    handle_run_transition(name, entry, finished.transition);
+    match &finished.notice {
+        TaskFireNotice::Gate { reason } => {
+            if mode == LoopRunMode::Manual {
+                write_manual_verdict(
+                    &mut ui::out(),
+                    finished.outcome.result(),
+                    &format!("{} — {reason}", finished.outcome.result().label()),
+                )?;
+            } else {
+                writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;
+            }
+            return Ok(());
+        }
+        TaskFireNotice::Overlap { detail } => {
+            let stop_hint = format!("stop it with `rimz loop stop {name}`");
+            if mode == LoopRunMode::Manual {
+                let detail = detail
+                    .as_ref()
+                    .map(|detail| format!("{detail}; {stop_hint}"))
+                    .unwrap_or_else(|| format!("previous run still active — skipped; {stop_hint}"));
+                write_manual_verdict(&mut ui::out(), LoopRunResult::Overlapped, &detail)?;
+            } else if let Some(detail) = detail {
+                writeln!(ui::out(), "loop `{name}`: {detail}; {stop_hint}")?;
+            } else {
+                writeln!(
+                    ui::out(),
+                    "loop `{name}`: previous run still active; skipping; {stop_hint}"
+                )?;
+            }
+            return Ok(());
+        }
+        TaskFireNotice::PingWindow { kind } if mode == LoopRunMode::Scheduled => {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: {kind} budget window already active; skipping ping"
+            )?;
+        }
+        TaskFireNotice::TargetGone { handle } if mode == LoopRunMode::Scheduled => {
+            writeln!(
+                ui::out(),
+                "loop `{name}`: target {handle} not alive; removing schedule"
+            )?;
+        }
+        TaskFireNotice::None
+        | TaskFireNotice::PingWindow { .. }
+        | TaskFireNotice::TargetGone { .. } => {}
+    }
+    print_run_summary(
+        name,
+        entry,
+        finished.duration_ms,
+        mode,
+        keep,
+        &finished.outcome,
+    )
+}
+
+fn execute_prepared_delivery(
+    prepared: rimz::harness::schedule::runner::PreparedDelivery,
+    globals: &GlobalFlags,
+) -> Result<rimz::harness::schedule::runner::TaskFireEffect> {
+    let workspace = WorkspaceResolver::resolve_participant(".", Some(prepared.root))?;
+    let store = crate::cli::open_store(&workspace)?;
+    let channel = crate::cli::current_channel(&workspace);
+    let sender = crate::cli::send::sender_from_env(channel.as_deref(), false);
+    tracing::debug!(
+        kind = prepared.target.kind,
+        session = prepared.target.session,
+        "queueing loop wake-up"
+    );
+    let dispatched = rimz::message::dispatch::dispatch(
+        &workspace,
+        &store,
+        rimz::message::dispatch::DispatchRequest {
+            target: format!("@{}", prepared.target.session),
+            text: prepared.prompt,
+            target_scope: None,
+            current_channel: channel,
+            sender,
+            automated: true,
+            allow_fanout: false,
+            reply: None,
+            mux: globals.mux,
+            mode: rimz::message::dispatch::DispatchMode::Boundary {
+                enter: true,
+                gate: DeliveryGate::Done,
+                force: false,
+                auto_compact: None,
+                not_before: None,
+                after: Vec::new(),
+                when: Vec::new(),
+            },
+        },
+    );
+    match dispatched {
+        Ok(result) => {
+            crate::cli::send::report_dispatch(
+                crate::cli::send::ReportMode::Boundary,
+                &prepared.target.handle,
+                &result.outcomes,
+                &result.compacted,
+            )?;
+            Ok(rimz::harness::schedule::runner::TaskFireEffect::Delivered)
+        }
+        Err(rimz::message::dispatch::DispatchErr::Recipient(
+            rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. },
+        )) => Ok(rimz::harness::schedule::runner::TaskFireEffect::TargetGone),
+        Err(err) => Err(err.into()),
+    }
+}
+
 fn write_manual_header(out: &mut impl Write, name: &str, entry: &TaskEntry) -> std::io::Result<()> {
     writeln!(
         out,
@@ -307,330 +373,6 @@ fn write_manual_verdict(
             &format!("{} {label}", render::loop_result_glyph(result))
         )
     )
-}
-
-enum CheckPhase {
-    Done(Box<RunOutcome>),
-    Fire {
-        check: Option<CheckRecord>,
-        prompt_override: Option<String>,
-    },
-}
-
-fn execute_task(
-    name: &str,
-    entry: &TaskEntry,
-    catalog: &TaskCatalog,
-    mode: LoopRunMode,
-    keep: bool,
-    globals: &GlobalFlags,
-) -> Result<RunOutcome> {
-    let action = TaskAction::from_entry(name, entry)?;
-    if deadline_expired(entry) {
-        if mode == LoopRunMode::Scheduled {
-            let _ = catalog.consume_scheduled(name)?;
-        }
-        return Ok(RunOutcome::expiry());
-    }
-    let (check, prompt_override) = match run_check_phase(name, entry, action, catalog, mode)? {
-        CheckPhase::Done(outcome) => return Ok(*outcome),
-        CheckPhase::Fire {
-            check,
-            prompt_override,
-        } => (check, prompt_override),
-    };
-    let execution = RunExecution {
-        catalog,
-        mode,
-        keep,
-        globals,
-    };
-    match action {
-        TaskAction::Spawn(spec) => {
-            execute_spawn_task(name, entry, execution, spec, prompt_override, check)
-        }
-        TaskAction::Deliver(target) => {
-            execute_delivery_task(name, entry, execution, target, prompt_override, check)
-        }
-        TaskAction::CheckOnly => {
-            unreachable!("check-only task without check is rejected by task_action")
-        }
-    }
-}
-
-fn run_check_phase(
-    name: &str,
-    entry: &TaskEntry,
-    action: TaskAction<'_>,
-    catalog: &TaskCatalog,
-    mode: LoopRunMode,
-) -> Result<CheckPhase> {
-    let Some(cmd) = entry.check.as_deref() else {
-        return Ok(CheckPhase::Fire {
-            check: None,
-            prompt_override: None,
-        });
-    };
-    let echo = if mode == LoopRunMode::Manual {
-        let mut out = ui::out();
-        writeln!(
-            out,
-            "{}",
-            ui::paint(ui::palette::MUTED, &format!("  check: {cmd}"))
-        )?;
-        out.flush()?;
-        CheckEcho::Stream {
-            prefix: ui::paint(ui::palette::FAINT, "  │ "),
-        }
-    } else {
-        CheckEcho::Capture
-    };
-    let check_started = Instant::now();
-    let outcome = run_check(
-        &entry.resolved_root(),
-        cmd,
-        check_timeout(entry)?.unwrap_or(CHECK_DEFAULT_TIMEOUT),
-        echo,
-    )?;
-    let check_duration_ms = elapsed_ms(check_started);
-    let record = check_record(&outcome);
-    if action == TaskAction::CheckOnly {
-        if mode == LoopRunMode::Scheduled && schedule::catalog::is_ephemeral(entry) {
-            let _ = catalog.consume_scheduled(name)?;
-        }
-        return Ok(CheckPhase::Done(Box::new(RunOutcome::check_result(
-            check_only_result(&outcome),
-            record,
-            check_duration_ms,
-        ))));
-    }
-    if !polarity_fires(entry.on, &outcome) {
-        return Ok(CheckPhase::Done(Box::new(RunOutcome::check_result(
-            LoopRunResult::CheckSkipped,
-            record,
-            check_duration_ms,
-        ))));
-    }
-    if mode == LoopRunMode::Manual {
-        write_check_trip_line(&mut ui::out(), entry, &record, check_duration_ms)?;
-    }
-    Ok(CheckPhase::Fire {
-        check: Some(record),
-        prompt_override: Some(augment_prompt(
-            resolve_task_prompt(name, entry)?,
-            cmd,
-            &outcome,
-        )),
-    })
-}
-
-fn execute_spawn_task(
-    name: &str,
-    entry: &TaskEntry,
-    execution: RunExecution<'_>,
-    spec: &str,
-    prompt_override: Option<String>,
-    check_detail: Option<CheckRecord>,
-) -> Result<RunOutcome> {
-    let resolved = preflight_task(entry)?;
-    let is_ping = agents_spec::virtual_ping_shape(spec);
-    // The ping exists only to start a sliding budget window, so a token spent on
-    // one already counting down buys nothing. A cold reading falls through.
-    if is_ping {
-        let window_running = if entry.every.as_deref() == Some("reset") {
-            reset_window_already_running(entry, resolved.kind())?
-        } else {
-            window_already_running(entry, resolved.kind())?
-        };
-        if window_running {
-            if execution.mode == LoopRunMode::Scheduled {
-                writeln!(
-                    ui::out(),
-                    "loop `{name}`: {} budget window already active; skipping ping",
-                    resolved.kind()
-                )?;
-            }
-            return Ok(RunOutcome::skipped_window(
-                format!("{} budget window already counting down", resolved.kind()),
-                check_detail,
-            ));
-        }
-    }
-    let prompt = match prompt_override {
-        Some(prompt) => prompt,
-        None => resolve_task_prompt(name, entry)?,
-    };
-    let system_prompt_file = entry
-        .system_prompt_file
-        .as_deref()
-        .map(resolve_config_path)
-        .transpose()?;
-    let task_mode = entry
-        .mode
-        .as_deref()
-        .filter(|mode| !mode.trim().is_empty())
-        .map(parse_mode_value)
-        .transpose()?;
-    let task_timeout = entry
-        .timeout
-        .as_deref()
-        .map(parse_task_timeout)
-        .transpose()
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
-    let configured_timeout = MachineConfig::load_lenient()
-        .r#loop
-        .default_timeout
-        .as_deref()
-        .map(parse_task_timeout)
-        .transpose()
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
-    let timeout = effective_spawn_timeout(execution.mode, task_timeout, configured_timeout);
-    let mut run_globals = execution.globals.clone();
-    run_globals.root = Some(entry.resolved_root());
-    if execution.mode == LoopRunMode::Scheduled && schedule::catalog::is_ephemeral(entry) {
-        // One-shot cleanup happens before the terminal run. A one-shot removed
-        // pre-fire that then fails to launch is not retried.
-        let _ = execution.catalog.consume_scheduled(name)?;
-    }
-    let effort = entry
-        .effort
-        .clone()
-        .or_else(|| is_ping.then(|| "low".to_owned()));
-    let stream = execution.mode == LoopRunMode::Manual;
-    let request = rimz::harness::run::SupervisedRunRequest {
-        spec: spec.to_owned(),
-        prompt,
-        description: None,
-        worktree: entry.worktree.clone(),
-        from_pr: None,
-        channel: None,
-        name: None,
-        background: false,
-        force_new_tab: false,
-        permission_mode: task_mode.unwrap_or(rimz::harness::run::PermissionMode::Auto),
-        model: None,
-        system_prompt_file,
-        append_system_prompt_file: None,
-        effort,
-        budget: entry
-            .budget
-            .as_deref()
-            .map(str::parse::<rimz::harness::budget::BudgetSpec>)
-            .transpose()?,
-        max_turns: None,
-        timeout,
-        keep: execution.keep,
-        retries: 0,
-        verify: entry.verify.clone(),
-        max_attempts: entry.max_attempts,
-        loop_zone: execution.mode == LoopRunMode::Scheduled,
-        loop_task: Some(name.to_owned()),
-        passthrough: Vec::new(),
-    };
-    match crate::cli::supervised::run::run_supervised(
-        request,
-        crate::cli::supervised::SupervisedPresentation::text(stream),
-        &run_globals,
-    ) {
-        Ok(Some(record)) => Ok(RunOutcome::from_run_record(record, check_detail, stream)),
-        Ok(None) => Ok(RunOutcome::completed(check_detail)),
-        Err(err) => Err(err),
-    }
-}
-
-fn execute_delivery_task(
-    name: &str,
-    entry: &TaskEntry,
-    execution: RunExecution<'_>,
-    target: &TaskTarget,
-    prompt_override: Option<String>,
-    check_record: Option<CheckRecord>,
-) -> Result<RunOutcome> {
-    if !delivery_target_alive(entry, target)? {
-        if execution.mode == LoopRunMode::Scheduled {
-            writeln!(
-                ui::out(),
-                "loop `{name}`: target {} not alive; removing schedule",
-                target.handle
-            )?;
-            let _ = execution.catalog.consume_scheduled(name)?;
-        }
-        return Ok(target_gone_outcome(target, check_record));
-    }
-    let prompt = match prompt_override {
-        Some(prompt) => prompt,
-        None => resolve_task_prompt(name, entry)?,
-    };
-    if execution.mode == LoopRunMode::Scheduled && schedule::catalog::is_ephemeral(entry) {
-        let _ = execution.catalog.consume_scheduled(name)?;
-    }
-    let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve_participant(".", Some(root.clone()))?;
-    let store = crate::cli::open_store(&workspace)?;
-    let channel = crate::cli::current_channel(&workspace);
-    let sender = crate::cli::send::sender_from_env(channel.as_deref(), false);
-    tracing::debug!(
-        kind = target.kind,
-        session = target.session,
-        "queueing loop wake-up"
-    );
-    let dispatched = rimz::message::dispatch::dispatch(
-        &workspace,
-        &store,
-        rimz::message::dispatch::DispatchRequest {
-            target: format!("@{}", target.session),
-            text: prompt,
-            target_scope: None,
-            current_channel: channel,
-            sender,
-            automated: true,
-            allow_fanout: false,
-            reply: None,
-            mux: execution.globals.mux,
-            mode: rimz::message::dispatch::DispatchMode::Boundary {
-                enter: true,
-                gate: DeliveryGate::Done,
-                force: false,
-                auto_compact: None,
-                not_before: None,
-                after: Vec::new(),
-                when: Vec::new(),
-            },
-        },
-    );
-    match dispatched {
-        Ok(result) => {
-            crate::cli::send::report_dispatch(
-                crate::cli::send::ReportMode::Boundary,
-                &target.handle,
-                &result.outcomes,
-                &result.compacted,
-            )?;
-            Ok(RunOutcome::delivery(target.handle.clone(), check_record))
-        }
-        Err(rimz::message::dispatch::DispatchErr::Recipient(
-            rimz::TargetErr::NoMatch { .. } | rimz::TargetErr::NoMatchInChannel { .. },
-        )) => {
-            if execution.mode == LoopRunMode::Scheduled {
-                writeln!(
-                    ui::out(),
-                    "loop `{name}`: target {} not alive; removing schedule",
-                    target.handle
-                )?;
-                let _ = execution.catalog.consume_scheduled(name)?;
-            }
-            Ok(target_gone_outcome(target, check_record))
-        }
-        Err(err) => Err(err.into()),
-    }
-}
-
-fn target_gone_outcome(target: &TaskTarget, check: Option<CheckRecord>) -> RunOutcome {
-    RunOutcome::target_gone(target.handle.clone(), check)
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn print_run_summary(
@@ -1029,44 +771,9 @@ fn write_failure_tail(out: &mut impl Write, tail: &str) -> std::io::Result<()> {
     render::write_gutter_block(out, Some(ui::palette::ALARM), tail)
 }
 
-fn delivery_target_alive(entry: &TaskEntry, target: &TaskTarget) -> Result<bool> {
-    let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve(&root, None)
-        .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let store = crate::cli::open_store(&workspace)?;
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    Ok(snapshot.agents.iter().any(|agent| {
-        agent.parent_agent_id.is_none()
-            && agent.kind.as_str() == target.kind.as_str()
-            && agent.agent_id.as_str() == target.session
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn scheduled_spawn_timeout_prefers_task_then_config_then_builtin() {
-        let task = Duration::from_secs(30);
-        let configured = Duration::from_secs(60);
-        assert_eq!(
-            effective_spawn_timeout(LoopRunMode::Scheduled, Some(task), Some(configured)),
-            Some(task)
-        );
-        assert_eq!(
-            effective_spawn_timeout(LoopRunMode::Scheduled, None, Some(configured)),
-            Some(configured)
-        );
-        assert_eq!(
-            effective_spawn_timeout(LoopRunMode::Scheduled, None, None),
-            Some(rimz::harness::schedule::runner::SCHEDULED_RUN_DEFAULT_TIMEOUT)
-        );
-        assert_eq!(
-            effective_spawn_timeout(LoopRunMode::Manual, None, Some(configured)),
-            None
-        );
-    }
 
     #[test]
     fn manual_tty_prompts_for_blocked_project_trust() {

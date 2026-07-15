@@ -8,13 +8,12 @@
 //! optimization.
 //!
 //! This handler parses commands, lists room-open and next-fire state, inspects
-//! run history, and owns the hidden runner the elder spawns. The runner appends
-//! exactly one history record after loading a task:
-//! the pure executor returns an outcome, and this wrapper records success,
-//! failure, or error with capped forensics.
-//! Pure schedule parsing and due evaluation live in [`rimz::harness::schedule`];
-//! delivery mode reuses the shared message seam, and ephemeral self-wakes live
-//! in [`rimz::harness::schedule::instances`].
+//! run history, executes prepared supervised-run or message effects, and owns
+//! terminal presentation. [`rimz::harness::schedule::runner::TaskFire`] owns the
+//! hidden runner policy and its exactly-one history transition. Pure schedule
+//! parsing and due evaluation live in [`rimz::harness::schedule`]; delivery mode
+//! reuses the shared message seam, and ephemeral self-wakes live in
+//! [`rimz::harness::schedule::instances`].
 
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
@@ -32,14 +31,10 @@ use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunOutcome, LoopRunRecord, LoopRunResult, RunTransition,
 };
 use rimz::harness::schedule::runner::{
-    CHECK_DEFAULT_TIMEOUT, CheckEcho, ResolvedTaskSpec, RunLockAttempt, RunLockInfo, RunLockState,
-    SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL, StopAction, acquire_run_lock, augment_prompt,
-    check_only_result, check_record, check_timeout, deadline_expired, effective_spawn_timeout,
-    next_stop_action, parse_mode, parse_mode_value, parse_task_timeout, ping_kind_supported,
-    polarity_fires, preflight_entry, preflight_task, probe_run_lock, reset_window_already_running,
-    resolve_config_path, resolve_task_prompt, resolve_task_spec, run_check, run_lock_path,
-    signal_run_lock_holder, surplus_gate, tail_output, task_scope_target,
-    wait_for_run_lock_release, window_already_running, window_reset_at,
+    CheckEcho, ResolvedTaskSpec, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
+    StopAction, newest_active_run, newest_active_run_for_entry, next_stop_action, parse_mode,
+    parse_task_timeout, ping_kind_supported, preflight_entry, probe_run_lock, resolve_task_spec,
+    run_lock_path, signal_run_lock_holder, tail_output, wait_for_run_lock_release, window_reset_at,
 };
 use rimz::harness::schedule::{
     self, TaskAction,

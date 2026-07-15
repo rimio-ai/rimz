@@ -367,7 +367,10 @@ fn remove_definition(name: &str, task: &LoadedTask) -> Result<bool> {
     }
 }
 
-fn delivery_target_alive(entry: &TaskEntry, target: &crate::config::TaskTarget) -> Result<bool> {
+pub fn delivery_target_alive(
+    entry: &TaskEntry,
+    target: &crate::config::TaskTarget,
+) -> Result<bool> {
     let root = entry.resolved_root();
     let workspace = WorkspaceResolver::resolve(&root, None)
         .with_context(|| format!("resolving project root at {}", root.display()))?;
