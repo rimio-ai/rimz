@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::{BTreeSet, HashSet};
 
 use jiff::Timestamp;
 

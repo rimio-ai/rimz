@@ -329,7 +329,7 @@ mod tests {
             true,
             DeliveryGate::Done,
         );
-        replace_all(&messages_dir, &[message.clone()]).unwrap();
+        replace_all(&messages_dir, std::slice::from_ref(&message)).unwrap();
         let mut bytes = std::fs::read(queue_path(&messages_dir)).unwrap();
         bytes.extend_from_slice(b"{\"message_id\"");
         std::fs::write(queue_path(&messages_dir), bytes).unwrap();
