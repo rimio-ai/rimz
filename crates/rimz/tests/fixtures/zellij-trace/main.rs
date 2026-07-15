@@ -155,6 +155,18 @@ fn handle_list_sessions(log_path: &Path) {
 }
 
 fn handle_web(command: WebCommand<'_>, log_path: &Path) {
+    let name = match &command {
+        WebCommand::Help => "help",
+        WebCommand::Status => "status",
+        WebCommand::ListTokens => "list-tokens",
+        WebCommand::Start => "start",
+        WebCommand::CreateToken { .. } => "create-token",
+        WebCommand::OtherMutation => "mutation",
+    };
+    if env::var("RIMZ_TEST_ZELLIJ_WEB_FAIL").is_ok_and(|value| value == name) {
+        write_stderr(&format!("simulated zellij web {name} failure"));
+        std::process::exit(9);
+    }
     match command {
         WebCommand::Help => write_stdout("zellij-web"),
         WebCommand::Status => write_stdout_raw(&web_status_output(log_path)),

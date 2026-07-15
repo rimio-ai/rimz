@@ -1,101 +1,64 @@
-//! Zellij web domain logic: URL construction, command argv, status parsing,
-//! JSON payloads, token cache, and deterministic local tunnel ports.
-//!
-//! Process execution and human presentation live in `cli/`; this module owns
-//! the structured web data and the machine-local token cache.
+//! Zellij web lifecycle, credential cache, status parsing, and client config.
 
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use jiff::Timestamp;
 use kdl::{KdlDocument, KdlEntry, KdlNode};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
-use crate::config::{InlinePalette, parse_hex};
+use crate::config::{InlinePalette, MachineConfig, parse_hex};
 use crate::mux::CommandSpec;
 use crate::store::{atomic, paths};
 
-pub const DEFAULT_ZELLIJ_WEB_BASE_URL: &str = "http://127.0.0.1:8082";
-pub const DEFAULT_ZELLIJ_WEB_IP: &str = "127.0.0.1";
-pub const DEFAULT_ZELLIJ_WEB_PORT: u16 = 8082;
+use super::{
+    CredentialCommand, CredentialOutcome, RawCommandOutput, Result, WebAccessOutcome,
+    WebCredential, WebEngine, WebErr, WebOpenPayload, WebStartOptions, WebWarning,
+    normalized_base_url,
+};
+
+pub(super) const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8082";
+const DEFAULT_IP: &str = "127.0.0.1";
+const DEFAULT_PORT: u16 = 8082;
 const WEB_LOGIN_TOKEN_CACHE_FILE: &str = "web-login-token.json";
-
-/// Binary override for tests, mirroring the Zellij backend.
-pub const ZELLIJ_BIN_ENV: &str = "RIMZ_ZELLIJ_BIN";
-
-#[derive(Debug, thiserror::Error)]
-pub enum WebLoginTokenCacheErr {
-    #[error("cannot access {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: io::Error,
-    },
-    #[error("could not parse cached web login token at {path}: {source}")]
-    Json {
-        path: PathBuf,
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error(transparent)]
-    Atomic(#[from] atomic::AtomicErr),
-}
-
-pub type WebLoginTokenCacheResult<T> = std::result::Result<T, WebLoginTokenCacheErr>;
-
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum WebLoginTokenParseErr {
-    #[error("`zellij web --create-token` output did not contain a token line")]
-    MissingToken,
-}
+const ZELLIJ_BIN_ENV: &str = "RIMZ_ZELLIJ_BIN";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct WebLoginTokenCache {
     token: String,
-    created: Timestamp,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ParsedWebStatus {
+enum ParsedWebStatus {
     Recognized(WebServerStatus),
     Unrecognized { raw: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WebServerStatus {
+pub(super) struct WebServerStatus {
     pub online: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ZellijWebEndpoint {
-    pub ip: String,
-    pub port: u16,
+pub(super) struct ZellijWebEndpoint {
+    pub(super) ip: String,
+    pub(super) port: u16,
 }
 
 impl Default for ZellijWebEndpoint {
     fn default() -> Self {
         Self {
-            ip: DEFAULT_ZELLIJ_WEB_IP.to_owned(),
-            port: DEFAULT_ZELLIJ_WEB_PORT,
+            ip: DEFAULT_IP.to_owned(),
+            port: DEFAULT_PORT,
         }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct WebStartOptions {
-    pub daemonize: bool,
-    pub ip: Option<String>,
-    pub port: Option<u16>,
-    pub cert: Option<String>,
-    pub key: Option<String>,
-    pub config_file: Option<PathBuf>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WebClientColors {
+struct WebClientColors {
     pub background: (u8, u8, u8),
     pub foreground: (u8, u8, u8),
     pub cursor: (u8, u8, u8),
@@ -111,7 +74,7 @@ impl WebClientColors {
     /// optional colors fall back to terminal conventions; malformed provided
     /// colors return `None` so callers can skip browser theming without
     /// discarding the user's Zellij config.
-    pub fn from_palette(palette: &InlinePalette) -> Option<Self> {
+    fn from_palette(palette: &InlinePalette) -> Option<Self> {
         let primary = palette.primary.as_ref()?;
         let normal = palette.normal.as_ref()?;
         let background = parse_required_color(primary.background.as_deref())?;
@@ -160,34 +123,185 @@ impl WebClientColors {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WebTokenCommand {
-    Create { read_only: bool },
-    List,
-    Revoke { name: String },
-    RevokeAll,
-}
-
-pub fn zellij_program() -> String {
+fn zellij_program() -> String {
     std::env::var(ZELLIJ_BIN_ENV).unwrap_or_else(|_| "zellij".to_owned())
 }
 
-pub fn read_cached_login_token() -> WebLoginTokenCacheResult<Option<String>> {
+pub(super) fn preflight() -> Result<()> {
+    web_help_spec()
+        .run()
+        .map(|_| ())
+        .map_err(|source| WebErr::ZellijUnavailable { source })
+}
+
+pub(super) fn available() -> bool {
+    web_help_spec().run().is_ok()
+}
+
+pub(super) fn open_session(
+    session: &str,
+    config: &MachineConfig,
+    may_start: bool,
+) -> Result<WebAccessOutcome> {
+    preflight()?;
+    let mut web_status = status()?;
+    let mut warnings = Vec::new();
+    if !web_status.online {
+        if may_start {
+            let (config_file, config_warnings) = web_client_config_file(config);
+            warnings = config_warnings;
+            let output = web_start_spec(
+                &WebStartOptions {
+                    daemonize: true,
+                    ..WebStartOptions::default()
+                },
+                config_file,
+            )
+            .run()
+            .map_err(|source| WebErr::ZellijCommand {
+                operation: "starting zellij web server",
+                source,
+            })?;
+            if !output.stdout.is_empty() || !output.stderr.is_empty() {
+                tracing::debug!(
+                    stdout = %String::from_utf8_lossy(&output.stdout).trim(),
+                    stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                    "zellij web start output",
+                );
+            }
+            web_status = status()?;
+            if !web_status.online {
+                return Err(WebErr::ZellijStartOffline);
+            }
+        } else {
+            return Err(WebErr::ZellijOffline);
+        }
+    }
+    Ok(WebAccessOutcome {
+        payload: payload(session, config, &web_status)?,
+        credential: None,
+        warnings,
+    })
+}
+
+pub(super) fn inspect_session(session: &str, config: &MachineConfig) -> Result<WebOpenPayload> {
+    preflight()?;
+    let status = status()?;
+    payload(session, config, &status)
+}
+
+fn payload(
+    session: &str,
+    config: &MachineConfig,
+    status: &WebServerStatus,
+) -> Result<WebOpenPayload> {
+    let base_url = normalized_base_url(
+        config.web.zellij.base_url.as_deref(),
+        status.base_url.as_deref(),
+        DEFAULT_BASE_URL,
+    );
+    let endpoint = endpoint_from_status_base(status.base_url.as_deref());
+    Ok(WebOpenPayload::for_session(
+        WebEngine::Zellij,
+        session,
+        base_url,
+        endpoint.ip,
+        endpoint.port,
+        token_count()?,
+    ))
+}
+
+pub(super) fn status() -> Result<WebServerStatus> {
+    let output = web_status_spec()
+        .run()
+        .map_err(|source| WebErr::ZellijCommand {
+            operation: "reading web status",
+            source,
+        })?;
+    match parse_status(&output.stdout) {
+        ParsedWebStatus::Recognized(status) => Ok(status),
+        ParsedWebStatus::Unrecognized { raw } => Err(WebErr::ZellijStatus { raw }),
+    }
+}
+
+pub(super) fn token_count() -> Result<usize> {
+    let output = web_token_spec(&CredentialCommand::List)
+        .run()
+        .map_err(|source| WebErr::ZellijCommand {
+            operation: "listing tokens",
+            source,
+        })?;
+    Ok(parse_token_count(&output.stdout))
+}
+
+pub(super) fn stop() -> Result<()> {
+    web_stop_spec()
+        .run()
+        .map(|_| ())
+        .map_err(|source| WebErr::ZellijCommand {
+            operation: "stopping zellij web server",
+            source,
+        })
+}
+
+pub(super) fn credential(command: CredentialCommand) -> Result<CredentialOutcome> {
+    if command == CredentialCommand::Ensure {
+        return Ok(CredentialOutcome::Ensured(WebCredential::ZellijLogin {
+            secret: ensure_login_token()?,
+        }));
+    }
+    preflight()?;
+    let operation = match &command {
+        CredentialCommand::Create { .. } => "creating token",
+        CredentialCommand::List => "listing tokens",
+        CredentialCommand::Revoke { .. } => "revoking token",
+        CredentialCommand::RevokeAll => "revoking all tokens",
+        // Ensure returns above before operation labeling.
+        CredentialCommand::Ensure => unreachable!(),
+    };
+    let clears_cache = matches!(
+        &command,
+        CredentialCommand::Revoke { .. } | CredentialCommand::RevokeAll
+    );
+    let output = web_token_spec(&command)
+        .run()
+        .map_err(|source| WebErr::ZellijCommand { operation, source })?;
+    if clears_cache {
+        clear_cached_login_token()?;
+    }
+    Ok(CredentialOutcome::Raw(RawCommandOutput::from(output)))
+}
+
+fn ensure_login_token() -> Result<String> {
+    if let Some(token) = read_cached_login_token()? {
+        return Ok(token);
+    }
+    preflight()?;
+    let output = web_token_spec(&CredentialCommand::Create { read_only: false })
+        .run()
+        .map_err(|source| WebErr::ZellijCommand {
+            operation: "creating token",
+            source,
+        })?;
+    let token = parse_created_login_token(&output.stdout)?;
+    cache_login_token(&token)?;
+    Ok(token)
+}
+
+fn read_cached_login_token() -> Result<Option<String>> {
     read_cached_login_token_at(&web_login_token_cache_path())
         .map(|record| record.map(|record| record.token))
 }
 
-pub fn cache_login_token(token: &str) -> WebLoginTokenCacheResult<()> {
+fn cache_login_token(token: &str) -> Result<()> {
     cache_login_token_at(&web_login_token_cache_path(), token)
 }
 
-pub fn clear_cached_login_token() -> WebLoginTokenCacheResult<()> {
+fn clear_cached_login_token() -> Result<()> {
     clear_cached_login_token_at(&web_login_token_cache_path())
 }
 
-pub fn parse_created_login_token(
-    stdout: &[u8],
-) -> std::result::Result<String, WebLoginTokenParseErr> {
+fn parse_created_login_token(stdout: &[u8]) -> Result<String> {
     String::from_utf8_lossy(stdout)
         .lines()
         .map(str::trim)
@@ -202,10 +316,10 @@ pub fn parse_created_login_token(
             let token = token.trim();
             (!token.is_empty()).then(|| token.to_owned())
         })
-        .ok_or(WebLoginTokenParseErr::MissingToken)
+        .ok_or(WebErr::MissingLoginToken)
 }
 
-pub fn active_zellij_config_path() -> Option<PathBuf> {
+fn active_zellij_config_path() -> Option<PathBuf> {
     config_file_from_env()
         .or_else(config_dir_from_env)
         .or_else(home_zellij_config)
@@ -219,34 +333,33 @@ fn web_login_token_cache_path() -> PathBuf {
         .join(WEB_LOGIN_TOKEN_CACHE_FILE)
 }
 
-fn read_cached_login_token_at(path: &Path) -> WebLoginTokenCacheResult<Option<WebLoginTokenCache>> {
+fn read_cached_login_token_at(path: &Path) -> Result<Option<WebLoginTokenCache>> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(source) => {
-            return Err(WebLoginTokenCacheErr::Io {
+            return Err(WebErr::Io {
                 path: path.to_path_buf(),
                 source,
             });
         }
     };
-    let record = serde_json::from_slice(&bytes).map_err(|source| WebLoginTokenCacheErr::Json {
+    let record = serde_json::from_slice(&bytes).map_err(|source| WebErr::LoginTokenJson {
         path: path.to_path_buf(),
         source,
     })?;
     Ok(Some(record))
 }
 
-fn cache_login_token_at(path: &Path, token: &str) -> WebLoginTokenCacheResult<()> {
+fn cache_login_token_at(path: &Path, token: &str) -> Result<()> {
     let record = WebLoginTokenCache {
         token: token.to_owned(),
-        created: Timestamp::now(),
     };
     atomic::write_private_temp_then_rename(path, &record)?;
     Ok(())
 }
 
-fn clear_cached_login_token_at(path: &Path) -> WebLoginTokenCacheResult<()> {
+fn clear_cached_login_token_at(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
         Ok(()) => {
             if let Some(parent) = path.parent() {
@@ -255,14 +368,14 @@ fn clear_cached_login_token_at(path: &Path) -> WebLoginTokenCacheResult<()> {
             Ok(())
         }
         Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(WebLoginTokenCacheErr::Io {
+        Err(source) => Err(WebErr::Io {
             path: path.to_path_buf(),
             source,
         }),
     }
 }
 
-pub fn merge_web_client_config(
+fn merge_web_client_config(
     existing: Option<&str>,
     font: &str,
     colors: &WebClientColors,
@@ -281,17 +394,17 @@ pub fn merge_web_client_config(
     Ok(document.to_string())
 }
 
-pub fn web_help_spec() -> CommandSpec {
+fn web_help_spec() -> CommandSpec {
     CommandSpec::new(zellij_program()).args(["web", "--help"])
 }
 
-pub fn web_status_spec() -> CommandSpec {
+fn web_status_spec() -> CommandSpec {
     CommandSpec::new(zellij_program()).args(["web", "--status"])
 }
 
-pub fn web_start_spec(opts: &WebStartOptions) -> CommandSpec {
+pub(super) fn web_start_spec(opts: &WebStartOptions, config_file: Option<PathBuf>) -> CommandSpec {
     let mut spec = CommandSpec::new(zellij_program()).args(["web", "--start"]);
-    if let Some(path) = &opts.config_file {
+    if let Some(path) = config_file {
         spec = spec.env("ZELLIJ_CONFIG_FILE", path.display().to_string());
     }
     if opts.daemonize {
@@ -312,40 +425,32 @@ pub fn web_start_spec(opts: &WebStartOptions) -> CommandSpec {
     spec
 }
 
-pub fn web_stop_spec() -> CommandSpec {
+fn web_stop_spec() -> CommandSpec {
     CommandSpec::new(zellij_program()).args(["web", "--stop"])
 }
 
-pub fn web_token_spec(command: &WebTokenCommand) -> CommandSpec {
+fn web_token_spec(command: &CredentialCommand) -> CommandSpec {
     let mut spec = CommandSpec::new(zellij_program()).arg("web");
     match command {
-        WebTokenCommand::Create { read_only } => {
+        CredentialCommand::Create { read_only } => {
             spec = spec.arg(if *read_only {
                 "--create-read-only-token"
             } else {
                 "--create-token"
             });
         }
-        WebTokenCommand::List => spec = spec.arg("--list-tokens"),
-        WebTokenCommand::Revoke { name } => {
+        CredentialCommand::List => spec = spec.arg("--list-tokens"),
+        CredentialCommand::Revoke { name } => {
             spec = spec.args(["--revoke-token".to_owned(), name.clone()]);
         }
-        WebTokenCommand::RevokeAll => spec = spec.arg("--revoke-all-tokens"),
+        CredentialCommand::RevokeAll => spec = spec.arg("--revoke-all-tokens"),
+        // Ensure is handled by credential() and never becomes upstream argv.
+        CredentialCommand::Ensure => unreachable!("ensure uses create-token after cache read"),
     }
     spec
 }
 
-pub fn effective_base_url(configured: Option<&str>, status: Option<&str>) -> String {
-    configured
-        .map(str::trim)
-        .filter(|url| !url.is_empty())
-        .or(status)
-        .unwrap_or(DEFAULT_ZELLIJ_WEB_BASE_URL)
-        .trim_end_matches('/')
-        .to_owned()
-}
-
-pub fn parse_status(stdout: &[u8]) -> ParsedWebStatus {
+fn parse_status(stdout: &[u8]) -> ParsedWebStatus {
     let raw = String::from_utf8_lossy(stdout).trim().to_owned();
     let lower = raw.to_ascii_lowercase();
     let base_url = checked_url(&raw);
@@ -364,7 +469,7 @@ pub fn parse_status(stdout: &[u8]) -> ParsedWebStatus {
     ParsedWebStatus::Unrecognized { raw }
 }
 
-pub fn parse_token_count(stdout: &[u8]) -> usize {
+fn parse_token_count(stdout: &[u8]) -> usize {
     String::from_utf8_lossy(stdout)
         .lines()
         .filter_map(token_name_from_line)
@@ -379,7 +484,7 @@ fn token_name_from_line(line: &str) -> Option<&str> {
     Some(line.split_once(':').map_or(line, |(name, _)| name).trim())
 }
 
-pub fn endpoint_from_status_base(status_base_url: Option<&str>) -> ZellijWebEndpoint {
+pub(super) fn endpoint_from_status_base(status_base_url: Option<&str>) -> ZellijWebEndpoint {
     status_base_url
         .and_then(endpoint_from_url)
         .unwrap_or_default()
@@ -393,39 +498,74 @@ fn checked_url(raw: &str) -> Option<String> {
 }
 
 fn endpoint_from_url(url: &str) -> Option<ZellijWebEndpoint> {
-    let (scheme, rest) = url.split_once("://").unwrap_or(("http", url));
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .rsplit('@')
-        .next()
-        .unwrap_or_default();
-    if authority.is_empty() {
+    if url.starts_with("http:///") || url.starts_with("https:///") {
         return None;
     }
-    let (host, port) = if let Some(after_open) = authority.strip_prefix('[') {
-        let (host, rest) = after_open.split_once(']')?;
-        let port = rest.strip_prefix(':').and_then(|p| p.parse::<u16>().ok());
-        (host, port)
-    } else {
-        match authority.rsplit_once(':') {
-            Some((host, port)) => (host, port.parse::<u16>().ok()),
-            None => (authority, None),
-        }
-    };
+    let parsed = Url::parse(url)
+        .ok()
+        .filter(|url| url.host_str().is_some())
+        .or_else(|| {
+            (!url.contains("://"))
+                .then(|| Url::parse(&format!("http://{url}")).ok())
+                .flatten()
+                .filter(|url| url.host_str().is_some())
+        })?;
+    let host = parsed.host_str()?.trim_matches(['[', ']']);
     Some(ZellijWebEndpoint {
         ip: host.to_owned(),
-        port: port.unwrap_or_else(|| default_port_for_scheme(scheme)),
+        port: parsed.port_or_known_default().unwrap_or(DEFAULT_PORT),
     })
 }
 
-fn default_port_for_scheme(scheme: &str) -> u16 {
-    match scheme {
-        "https" => 443,
-        "http" => 80,
-        _ => DEFAULT_ZELLIJ_WEB_PORT,
+pub(super) fn web_client_config_file(config: &MachineConfig) -> (Option<PathBuf>, Vec<WebWarning>) {
+    if !config.web.enabled || !config.web.zellij.style_client {
+        return (None, Vec::new());
     }
+    let colors = match WebClientColors::from_palette(&crate::config::resolve_inline_palette(
+        &config.theme,
+    )) {
+        Some(colors) => colors,
+        None => {
+            return (
+                None,
+                vec![WebWarning::BrowserThemeSkipped(
+                    "scheme palette is incomplete or malformed".to_owned(),
+                )],
+            );
+        }
+    };
+    let existing = match active_zellij_config_path() {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(text) => Some(text),
+            Err(err) => {
+                return (
+                    None,
+                    vec![WebWarning::BrowserThemeSkipped(format!(
+                        "could not read Zellij config `{}`: {err}",
+                        path.display()
+                    ))],
+                );
+            }
+        },
+        None => None,
+    };
+    let kdl = match merge_web_client_config(existing.as_deref(), &config.web.zellij.font, &colors) {
+        Ok(kdl) => kdl,
+        Err(err) => return (None, vec![WebWarning::BrowserThemeSkipped(err)]),
+    };
+    let path = paths::state_home()
+        .join("rimz")
+        .join("zellij-web-config.kdl");
+    if let Err(err) = atomic::write_bytes_atomically(&path, kdl.as_bytes()) {
+        return (
+            None,
+            vec![WebWarning::BrowserThemeSkipped(format!(
+                "could not write generated Zellij config `{}`: {err}",
+                path.display()
+            ))],
+        );
+    }
+    (Some(path), Vec::new())
 }
 
 fn web_client_node(font: &str, colors: &WebClientColors) -> KdlNode {
@@ -602,10 +742,10 @@ mod tests {
             parse_created_login_token(b"Created token successfully\n\ntoken_1: rimz-tok-123\nnote: still use the token line\n").expect("token parses"),
             "rimz-tok-123"
         );
-        assert_eq!(
-            parse_created_login_token(b"Created token successfully\n").unwrap_err(),
-            WebLoginTokenParseErr::MissingToken
-        );
+        assert!(matches!(
+            parse_created_login_token(b"Created token successfully\n"),
+            Err(WebErr::MissingLoginToken)
+        ));
     }
 
     #[test]
@@ -642,14 +782,16 @@ mod tests {
 
     #[test]
     fn builds_zellij_web_argv() {
-        let start = web_start_spec(&WebStartOptions {
-            daemonize: true,
-            ip: Some("127.0.0.1".to_owned()),
-            port: Some(8082),
-            cert: Some("/cert.pem".to_owned()),
-            key: Some("/key.pem".to_owned()),
-            config_file: Some(PathBuf::from("/zellij-web.kdl")),
-        });
+        let start = web_start_spec(
+            &WebStartOptions {
+                daemonize: true,
+                ip: Some("127.0.0.1".to_owned()),
+                port: Some(8082),
+                cert: Some("/cert.pem".to_owned()),
+                key: Some("/key.pem".to_owned()),
+            },
+            Some(PathBuf::from("/zellij-web.kdl")),
+        );
         assert_eq!(
             start.args,
             [
@@ -671,26 +813,38 @@ mod tests {
             Some("/zellij-web.kdl")
         );
 
-        let token = web_token_spec(&WebTokenCommand::Create { read_only: true });
+        let token = web_token_spec(&CredentialCommand::Create { read_only: true });
         assert_eq!(token.args, ["web", "--create-read-only-token"]);
     }
 
     #[test]
-    fn endpoint_parsing_keeps_zellij_defaults() {
-        assert_eq!(
-            endpoint_from_status_base(Some("http://127.0.0.1:8082")),
-            ZellijWebEndpoint {
-                ip: "127.0.0.1".to_owned(),
-                port: 8082,
-            }
-        );
-        assert_eq!(
-            endpoint_from_status_base(Some("https://[::1]:9443/zellij")),
-            ZellijWebEndpoint {
-                ip: "::1".to_owned(),
-                port: 9443,
-            }
-        );
+    fn endpoint_parsing_keeps_url_and_fallback_contract() {
+        let cases = [
+            ("http://127.0.0.1:8082", "127.0.0.1", 8082),
+            ("http://web.example", "web.example", 80),
+            ("https://web.example", "web.example", 443),
+            ("https://[::1]:9443/zellij", "::1", 9443),
+            ("https://[::1]/zellij", "::1", 443),
+            ("https://user:pass@web.example/path", "web.example", 443),
+            ("web.example:8090/path", "web.example", 8090),
+        ];
+        for (url, ip, port) in cases {
+            assert_eq!(
+                endpoint_from_status_base(Some(url)),
+                ZellijWebEndpoint {
+                    ip: ip.to_owned(),
+                    port,
+                },
+                "{url}"
+            );
+        }
+        for malformed in ["http:///missing-host", "http://["] {
+            assert_eq!(
+                endpoint_from_status_base(Some(malformed)),
+                ZellijWebEndpoint::default(),
+                "{malformed}"
+            );
+        }
     }
 
     #[test]

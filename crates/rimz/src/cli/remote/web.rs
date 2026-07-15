@@ -79,7 +79,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
         remote.target.host_display(),
         remote.origin.as_str(),
     )?;
-    let payload = rimz::web::parse_web_open_payload(&prep)
+    let payload: rimz::web::WebOpenPayload = serde_json::from_slice(&prep)
         .with_context(|| remote_output_context("parsing remote `rimz web open --json`", &prep))?;
     if !payload.version_ok() {
         bail!(
@@ -106,9 +106,9 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
             bail!("web tunnel exited before local port accepted connections");
         }
     }
-    let url = super::super::web::local_tunnel_url(&payload, local_port);
-    super::super::web::print_url(&url)?;
-    super::super::web::open_browser_best_effort(&url);
+    let url = rimz::web::local_tunnel_url(&payload, local_port);
+    writeln!(std::io::stdout().lock(), "{url}")?;
+    super::super::open_browser_best_effort(&url);
     report_web_tunnel_up(remote.target.host_display(), remote.reconnect);
     guard.wait()
 }

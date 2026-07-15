@@ -55,6 +55,23 @@ use rimz::agents::AgentState;
 use rimz::ids::MuxName;
 use rimz::{RuntimePaths, StatePaths, Store};
 
+pub(crate) fn open_browser_best_effort(url: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if which::which(opener).is_err() {
+        return;
+    }
+    let _ = std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 /// Render a command failure at the binary boundary.
 pub fn report(error: &anyhow::Error) {
     render::report(error);

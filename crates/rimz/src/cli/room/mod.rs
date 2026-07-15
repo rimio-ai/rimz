@@ -194,7 +194,7 @@ pub(crate) fn ensure_workspace_room_for_web(
     globals: &GlobalFlags,
     no_resume: bool,
     confirm_resume: bool,
-) -> Result<WebRoom> {
+) -> Result<RoomContext> {
     validate_agent_plugins()?;
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
@@ -215,7 +215,7 @@ pub(crate) fn ensure_workspace_room_for_web(
         },
         globals,
     )?;
-    web_room_from_ready(ready)
+    web_context_from_ready(ready)
 }
 
 fn validate_agent_plugins() -> Result<()> {
@@ -239,7 +239,7 @@ pub(crate) fn ensure_session_room_for_web(
     globals: &GlobalFlags,
     no_resume: bool,
     confirm_resume: bool,
-) -> Result<WebRoom> {
+) -> Result<RoomContext> {
     let mux = render::room::present_mux_pick(pick_mux_for_session(
         session,
         globals.mux,
@@ -255,22 +255,23 @@ pub(crate) fn ensure_session_room_for_web(
         },
         globals,
     )?;
-    web_room_from_ready(ready)
+    web_context_from_ready(ready)
 }
 
-pub(crate) fn web_room_for_session(session: &str, globals: &GlobalFlags) -> Result<WebRoom> {
+pub(crate) fn web_room_for_session(session: &str, globals: &GlobalFlags) -> Result<RoomContext> {
     let mux = render::room::present_mux_pick(pick_mux_for_session(
         session,
         globals.mux,
         MissingSessionReport::Silent,
     ))?;
     let record = workspace_record_for_web_session(session, mux)?;
-    Ok(WebRoom {
-        context: RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)?,
-    })
+    RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)
 }
 
-pub(crate) fn existing_web_room_for_path(path: &Path, globals: &GlobalFlags) -> Result<WebRoom> {
+pub(crate) fn existing_web_room_for_path(
+    path: &Path,
+    globals: &GlobalFlags,
+) -> Result<RoomContext> {
     let workspace = rimz::WorkspaceResolver::resolve(path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", path.display()))?;
     let record = workspace_record_for_session(&workspace.session_name)
@@ -289,14 +290,12 @@ pub(crate) fn existing_web_room_for_path(path: &Path, globals: &GlobalFlags) -> 
         MissingSessionReport::Silent,
     ))?;
     render::room::print_notices(ensure_single_backend_room(mux, &record.session_name)?)?;
-    Ok(WebRoom {
-        context: RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)?,
-    })
+    RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)
 }
 
-fn web_room_from_ready(ready: ReadyRoom) -> Result<WebRoom> {
+fn web_context_from_ready(ready: ReadyRoom) -> Result<RoomContext> {
     match ready {
-        ReadyRoom::Managed(context) => Ok(WebRoom { context: *context }),
+        ReadyRoom::Managed(context) => Ok(*context),
         ReadyRoom::External { session_name, .. } => {
             bail!("session `{session_name}` is not a managed Rimz room")
         }
@@ -316,7 +315,7 @@ fn workspace_record_for_web_session(session: &str, mux: MuxName) -> Result<Works
 
 fn preflight_web_engine(mux: MuxName) -> Result<()> {
     if mux == MuxName::Tmux {
-        rimz::web::ttyd::ttyd_program()?;
+        rimz::web::WebEngine::from(mux).preflight()?;
     }
     Ok(())
 }
@@ -341,10 +340,6 @@ fn report_initialized_config() -> Result<()> {
         render::home_relative(&config_dir.display().to_string())
     )?;
     Ok(())
-}
-
-pub(crate) struct WebRoom {
-    pub context: RoomContext,
 }
 
 pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {

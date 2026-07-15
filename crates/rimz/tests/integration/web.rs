@@ -62,6 +62,106 @@ fn permission_children(document: &kdl::KdlDocument, key: &str) -> Vec<String> {
         .collect()
 }
 
+struct ZellijOpenFixture {
+    env: Env,
+    workspace: rimz::ResolvedWorkspace,
+    log: PathBuf,
+    output: std::process::Output,
+}
+
+fn zellij_open_json_fixture(explicit_mux: bool, log_name: &str) -> ZellijOpenFixture {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let log = env.project_root.join(log_name);
+    let mut command = env.rimz();
+    if explicit_mux {
+        command.args(["--mux", "zellij"]);
+    }
+    let output = command
+        .args(["web", "open", "--session"])
+        .arg(&workspace.session_name)
+        .args(["--print", "--json"])
+        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 0s ago]\n", workspace.session_name),
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
+            "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_WEB_START_STDOUT",
+            "Web Server started on 127.0.0.1 port 8082\n",
+        )
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            materialized_room_panes_json(),
+        )
+        .bounded_output()
+        .expect("run rimz web open");
+    ZellijOpenFixture {
+        env,
+        workspace,
+        log,
+        output,
+    }
+}
+
+fn assert_zellij_open_json(fixture: &ZellijOpenFixture) -> String {
+    assert!(
+        fixture.output.status.success(),
+        "open succeeds\nstderr:\n{}",
+        String::from_utf8_lossy(&fixture.output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&fixture.output.stdout);
+    assert!(
+        !stdout.contains("Web Server started"),
+        "stdout should contain only JSON: {stdout}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&fixture.output.stdout).expect("open json parses");
+    assert_eq!(json["version"], "rimz.web.v1");
+    assert_eq!(
+        json["session"].as_str(),
+        Some(fixture.workspace.session_name.as_str())
+    );
+    assert_eq!(
+        json["url"],
+        format!("http://127.0.0.1:8082/{}", fixture.workspace.session_name)
+    );
+    let stderr = String::from_utf8_lossy(&fixture.output.stderr);
+    assert!(
+        !stderr.contains("Web Server started"),
+        "autostart banner should stay out of human stderr on success: {stderr}"
+    );
+
+    let log = std::fs::read_to_string(&fixture.log).expect("read zellij log");
+    assert!(log.contains("web\t--start\t--daemonize"), "{log}");
+    assert!(log.contains("web\t--status"), "{log}");
+    assert!(log.contains("web\t--list-tokens"), "{log}");
+    assert!(!log.contains("web\t--create-token"), "{log}");
+    assert!(
+        !log.contains("\t--web-sharing\ton\t"),
+        "runtime plugin sharing is authoritative; birth-time --web-sharing is dead: {log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "--session\t{}\tpipe\t--plugin",
+            fixture.workspace.session_name
+        )),
+        "web open should pipe the presence plugin for this session: {log}"
+    );
+    assert!(
+        log.contains("\t--name\trimz:share_session\t--\tshare"),
+        "web open should request runtime web sharing through the presence plugin: {log}"
+    );
+    log
+}
+
 #[test]
 fn web_status_json_parses_zellij_status_and_token_count() {
     let env = Env::new();
@@ -95,6 +195,46 @@ fn web_status_json_parses_zellij_status_and_token_count() {
     assert!(log.contains("web\t--help"), "{log}");
     assert!(log.contains("web\t--status"), "{log}");
     assert!(log.contains("web\t--list-tokens"), "{log}");
+}
+
+#[test]
+fn captured_zellij_web_failures_keep_stderr_and_clean_stdout() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["--mux", "zellij", "web", "status", "--json"], "status"),
+        (&["--mux", "zellij", "web", "token", "list"], "list-tokens"),
+        (
+            &["--mux", "zellij", "web", "token", "ensure"],
+            "create-token",
+        ),
+    ];
+
+    for (args, failed_command) in cases {
+        let env = Env::new();
+        let log = env
+            .project_root
+            .join(format!("zellij-web-{failed_command}-failure.log"));
+        let output = env
+            .rimz()
+            .args(*args)
+            .env("RIMZ_ZELLIJ_BIN", zellij_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", log)
+            .env("RIMZ_TEST_ZELLIJ_WEB_FAIL", failed_command)
+            .bounded_output()
+            .expect("run failing zellij web command");
+
+        assert!(!output.status.success(), "{failed_command} should fail");
+        assert!(
+            output.stdout.is_empty(),
+            "{failed_command} failure polluted stdout: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains(&format!("simulated zellij web {failed_command} failure")),
+            "{failed_command} failure lost subprocess stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -132,85 +272,10 @@ fn web_open_disabled_fails_before_room_side_effects() {
 
 #[test]
 fn web_open_json_keeps_autostart_banner_off_stdout() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
-    let log = env.project_root.join("zellij-web-open.log");
-    let output = env
-        .rimz()
-        .args(["--mux", "zellij", "web", "open", "--session"])
-        .arg(&workspace.session_name)
-        .args(["--print", "--json"])
-        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 0s ago]\n", workspace.session_name),
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
-            "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_WEB_START_STDOUT",
-            "Web Server started on 127.0.0.1 port 8082\n",
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            materialized_room_panes_json(),
-        )
-        .bounded_output()
-        .expect("run rimz web open");
+    let fixture = zellij_open_json_fixture(true, "zellij-web-open.log");
+    assert_zellij_open_json(&fixture);
 
-    assert!(
-        output.status.success(),
-        "open succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !stdout.contains("Web Server started"),
-        "stdout should contain only JSON: {stdout}"
-    );
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("open json parses");
-    assert_eq!(json["version"], "rimz.web.v1");
-    assert_eq!(
-        json["session"].as_str(),
-        Some(workspace.session_name.as_str())
-    );
-    assert_eq!(
-        json["url"],
-        format!("http://127.0.0.1:8082/{}", workspace.session_name)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("Web Server started"),
-        "autostart banner should stay out of human stderr on success: {stderr}"
-    );
-
-    let log = std::fs::read_to_string(log).expect("read zellij log");
-    assert!(log.contains("web\t--start\t--daemonize"), "{log}");
-    assert!(log.contains("web\t--status"), "{log}");
-    assert!(log.contains("web\t--list-tokens"), "{log}");
-    assert!(!log.contains("web\t--create-token"), "{log}");
-    assert!(
-        !log.contains("\t--web-sharing\ton\t"),
-        "runtime plugin sharing is authoritative; birth-time --web-sharing is dead: {log}"
-    );
-    assert!(
-        log.contains(&format!(
-            "--session\t{}\tpipe\t--plugin",
-            workspace.session_name
-        )),
-        "web open should pipe the presence plugin for this session: {log}"
-    );
-    assert!(
-        log.contains("\t--name\trimz:share_session\t--\tshare"),
-        "web open should request runtime web sharing through the presence plugin: {log}"
-    );
-
-    let permissions_path = env.home_root.join(".cache/zellij/permissions.kdl");
+    let permissions_path = fixture.env.home_root.join(".cache/zellij/permissions.kdl");
     let permissions = std::fs::read_to_string(&permissions_path).unwrap_or_else(|err| {
         panic!(
             "read seeded Zellij permission cache at {}: {err}",
@@ -218,7 +283,8 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
         )
     });
     let document: kdl::KdlDocument = permissions.parse().expect("permissions KDL parses");
-    let plugin_key = env
+    let plugin_key = fixture
+        .env
         .home_root
         .join(".local/share/rimz/plugins/rimz-presence-zellij.wasm")
         .display()
@@ -236,83 +302,8 @@ fn web_open_json_keeps_autostart_banner_off_stdout() {
 
 #[test]
 fn web_open_assumes_zellij_without_mux_flag() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    let workspace =
-        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
-    let log = env.project_root.join("zellij-web-open-default-mux.log");
-    let output = env
-        .rimz()
-        .args(["web", "open", "--session"])
-        .arg(&workspace.session_name)
-        .args(["--print", "--json"])
-        .env("RIMZ_ZELLIJ_BIN", zellij_shim())
-        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
-            format!("{} [Created 0s ago]\n", workspace.session_name),
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_WEB_STATUS_AFTER_START",
-            "Web server online with version: 0.44.3. Checked: http://127.0.0.1:8082\n",
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_WEB_START_STDOUT",
-            "Web Server started on 127.0.0.1 port 8082\n",
-        )
-        .env(
-            "RIMZ_TEST_ZELLIJ_LIST_PANES",
-            materialized_room_panes_json(),
-        )
-        .bounded_output()
-        .expect("run rimz web open");
-
-    assert!(
-        output.status.success(),
-        "open succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !stdout.contains("Web Server started"),
-        "stdout should contain only JSON: {stdout}"
-    );
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("open json parses");
-    assert_eq!(json["version"], "rimz.web.v1");
-    assert_eq!(
-        json["session"].as_str(),
-        Some(workspace.session_name.as_str())
-    );
-    assert_eq!(
-        json["url"],
-        format!("http://127.0.0.1:8082/{}", workspace.session_name)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("Web Server started"),
-        "autostart banner should stay out of human stderr on success: {stderr}"
-    );
-
-    let log = std::fs::read_to_string(log).expect("read zellij log");
-    assert!(log.contains("web\t--start\t--daemonize"), "{log}");
-    assert!(log.contains("web\t--status"), "{log}");
-    assert!(log.contains("web\t--list-tokens"), "{log}");
-    assert!(!log.contains("web\t--create-token"), "{log}");
-    assert!(
-        !log.contains("\t--web-sharing\ton\t"),
-        "runtime plugin sharing is authoritative; birth-time --web-sharing is dead: {log}"
-    );
-    assert!(
-        log.contains(&format!(
-            "--session\t{}\tpipe\t--plugin",
-            workspace.session_name
-        )),
-        "web open should pipe the presence plugin for this session: {log}"
-    );
-    assert!(
-        log.contains("\t--name\trimz:share_session\t--\tshare"),
-        "web open should request runtime web sharing through the presence plugin: {log}"
-    );
+    let fixture = zellij_open_json_fixture(false, "zellij-web-open-default-mux.log");
+    assert_zellij_open_json(&fixture);
 }
 
 #[test]
@@ -603,6 +594,66 @@ fn web_tmux_open_fails_fast_when_ttyd_is_missing() {
             && stderr.contains("apt install ttyd"),
         "stderr should carry the ttyd install fix: {stderr}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn web_tmux_url_reports_deterministic_offline_route_without_spawning_ttyd() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let (bin_dir, tmux_log) = tmux_shim(&env);
+    let ttyd_log = env.project_root.join("ttyd-web-url.log");
+    let command = || {
+        let mut command = env.rimz();
+        command
+            .env("PATH", &bin_dir)
+            .env("RIMZ_TTYD_BIN", ttyd_shim())
+            .env("RIMZ_TEST_TTYD_LOG", &ttyd_log)
+            .env("RIMZ_TEST_TMUX_LOG", &tmux_log)
+            .env("RIMZ_TEST_TMUX_SESSION", &workspace.session_name)
+            .env("RIMZ_TEST_TMUX_CWD", &env.project_root);
+        command
+    };
+
+    let mut ensure = command();
+    let ensure = ensure
+        .args(["--mux", "tmux", "web", "token", "ensure"])
+        .bounded_output()
+        .expect("seed ttyd credential");
+    assert!(
+        ensure.status.success(),
+        "credential seed succeeds: {}",
+        String::from_utf8_lossy(&ensure.stderr)
+    );
+
+    let mut url = command();
+    let output = url
+        .args(["--mux", "tmux", "web", "url", "--session"])
+        .arg(&workspace.session_name)
+        .arg("--json")
+        .bounded_output()
+        .expect("print tmux web url");
+
+    assert!(
+        output.status.success(),
+        "tmux url succeeds: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("url json");
+    let expected_port = rimz::web::derive_port(&workspace.session_name, &(8200_u16..=8299_u16));
+    assert_eq!(json["engine"], "ttyd");
+    assert_eq!(json["port"], expected_port);
+    assert_eq!(json["token_count"], 1);
+    assert_eq!(
+        json["url"],
+        format!(
+            "http://127.0.0.1:{expected_port}/{}",
+            workspace.session_name
+        )
+    );
+    assert!(!ttyd_log.exists(), "web url must not spawn ttyd");
 }
 
 #[cfg(unix)]

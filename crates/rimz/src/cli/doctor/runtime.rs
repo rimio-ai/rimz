@@ -166,18 +166,10 @@ pub(super) fn collect_mux(
 }
 
 fn collect_ttyd() -> model::Probe<model::TtydWeb> {
-    let path = match rimz::web::ttyd::ttyd_program() {
-        Ok(path) => path,
-        Err(err) => {
-            return model::Probe::Unavailable {
-                error: err.to_string(),
-            };
-        }
-    };
-    match rimz::web::ttyd::version() {
-        Ok(version) => model::Probe::Ready(model::TtydWeb {
-            path: path.display().to_string(),
-            version,
+    match rimz::web::ttyd_diagnostic() {
+        Ok(diagnostic) => model::Probe::Ready(model::TtydWeb {
+            path: diagnostic.path.display().to_string(),
+            version: diagnostic.version,
         }),
         Err(err) => model::Probe::Unavailable {
             error: err.to_string(),
