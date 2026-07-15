@@ -60,6 +60,9 @@ jobs:
           # event's own ref.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
+      - name: Trust checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
         with:
