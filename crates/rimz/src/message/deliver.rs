@@ -774,13 +774,10 @@ fn delivery_candidate<'a>(
     message_id: &MessageId,
     policy: DeliveryPolicy,
 ) -> Option<DeliveryCandidate<'a>> {
-    let Some(message) = pending
+    let message = pending
         .iter()
         .find(|message| message.message_id == *message_id)
-        .cloned()
-    else {
-        return None;
-    };
+        .cloned()?;
     let now = Timestamp::now();
     let evaluation =
         evaluate_delivery(&message, pending, snapshot, now, delivery_window_from_env());
@@ -793,9 +790,7 @@ fn delivery_candidate<'a>(
     if check.ask.waiting && !matches!(policy, DeliveryPolicy::Steer { force: true }) {
         return None;
     }
-    let Some(agent) = evaluation.agent else {
-        return None;
-    };
+    let agent = evaluation.agent?;
     let status = agent.effective_status();
     let batch_tail = match policy {
         DeliveryPolicy::Boundary => queue_batch_tail(pending.iter(), &message, status, now)
@@ -804,9 +799,7 @@ fn delivery_candidate<'a>(
             .collect(),
         DeliveryPolicy::Steer { .. } => Vec::new(),
     };
-    let Some(target) = evaluation.binding.map(|binding| binding.pane) else {
-        return None;
-    };
+    let target = evaluation.binding.map(|binding| binding.pane)?;
     Some(DeliveryCandidate {
         message,
         batch_tail,
