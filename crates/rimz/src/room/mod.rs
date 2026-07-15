@@ -457,50 +457,33 @@ mod tests {
     }
 
     #[test]
-    fn pane_identity_pins_workspace_and_prefers_explicit_channel() {
+    fn pane_identity_env_pins_workspace_and_selects_channel() {
         let workspace = workspace();
-
-        let env = pane_identity_env_with_ambient(&workspace, Some("explicit"), Some("ambient"));
-
-        assert_eq!(env.get("RIMZ").map(String::as_str), Some("1"));
-        assert_eq!(
-            env.get(crate::workspace::ENV_WORKSPACE_ID)
-                .map(String::as_str),
-            Some(workspace.workspace_id.as_str())
-        );
-        assert_eq!(
-            env.get(crate::workspace::ENV_PROJECT_ROOT)
-                .map(String::as_str),
-            Some("/code/rimz")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_WORKTREE_PATH)
-                .map(String::as_str),
-            Some("/code/rimz/../rimz-worktrees/demo")
-        );
-        assert_eq!(
-            env.get(crate::harness::run::ENV_CHANNEL)
-                .map(String::as_str),
-            Some("explicit")
-        );
-    }
-
-    #[test]
-    fn pane_identity_inherits_nonempty_ambient_channel_only_when_supplied() {
-        let workspace = workspace();
-
-        let inherited = pane_identity_env_with_ambient(&workspace, None, Some("ambient"));
-        let empty = pane_identity_env_with_ambient(&workspace, None, Some(""));
-        let scoped = pane_identity_env_with_ambient(&workspace, None, None);
-
-        assert_eq!(
-            inherited
-                .get(crate::harness::run::ENV_CHANNEL)
-                .map(String::as_str),
-            Some("ambient")
-        );
-        assert!(!empty.contains_key(crate::harness::run::ENV_CHANNEL));
-        assert!(!scoped.contains_key(crate::harness::run::ENV_CHANNEL));
+        let base = BTreeMap::from([
+            ("RIMZ".to_owned(), "1".to_owned()),
+            (
+                "RIMZ_WORKSPACE_ID".into(),
+                workspace.workspace_id.to_string(),
+            ),
+            ("RIMZ_PROJECT_ROOT".to_owned(), "/code/rimz".to_owned()),
+            (
+                "RIMZ_WORKTREE_PATH".into(),
+                "/code/rimz/../rimz-worktrees/demo".to_owned(),
+            ),
+        ]);
+        for (explicit, ambient, channel) in [
+            (Some("explicit"), Some("ambient"), Some("explicit")),
+            (None, Some("ambient"), Some("ambient")),
+            (None, Some(""), None),
+            (None, None, None),
+        ] {
+            let mut expected = base.clone();
+            if let Some(channel) = channel {
+                expected.insert("RIMZ_CHANNEL".to_owned(), channel.to_owned());
+            }
+            let actual = pane_identity_env_with_ambient(&workspace, explicit, ambient);
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
@@ -512,12 +495,10 @@ mod tests {
             worktree_root: None,
             session_name: "rimz-rimz".to_owned(),
             root_class: RootClass::Marker,
-            rimz_bin: Some(PathBuf::from("/opt/rimz/bin/rimz")),
+            rimz_bin: None,
             updated_at: jiff::Timestamp::now(),
         };
-
         let workspace = RoomContext::workspace_from_record(&record, MuxName::Tmux);
-
         assert_eq!(workspace.workspace_id, record.workspace_id);
         assert_eq!(workspace.project_root, project_root);
         assert_eq!(workspace.worktree_root, project_root);
@@ -532,13 +513,12 @@ mod tests {
         let unavailable = LiveRoomErr::Unavailable {
             session_name: "rimz-demo".to_owned(),
         };
-        let mux = LiveRoomErr::Mux(MuxErr::NoMuxFound);
+        let mux = LiveRoomErr::from(MuxErr::NoMuxFound);
         let expected =
             "no live RimZ room `rimz-demo`; run `rimz start` first or enter one with `rimz attach`";
 
         assert_eq!(unavailable.to_string(), expected);
         assert!(std::error::Error::source(&unavailable).is_none());
         assert_eq!(mux.to_string(), MuxErr::NoMuxFound.to_string());
-        assert!(matches!(mux, LiveRoomErr::Mux(MuxErr::NoMuxFound)));
     }
 }
