@@ -362,6 +362,67 @@ fn unselected_blank_idle_agent_stays_single_line() {
 }
 
 #[test]
+fn running_agent_without_enrichment_keeps_full_placeholder_shape() {
+    let running = agent(
+        "running-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("implement the fix"),
+    );
+    let snapshot = snapshot_with(vec![running]);
+    let theme = Theme::fixed(true);
+
+    let card_lines = line_texts(&group_lines(&snapshot, &theme, usize::MAX))
+        .into_iter()
+        .skip(1)
+        .collect::<Vec<_>>();
+
+    assert_eq!(card_lines.len(), 4, "{}", card_lines.join("\n"));
+    assert!(
+        card_lines[1].contains("implement the fix"),
+        "{card_lines:?}"
+    );
+    assert!(
+        card_lines[2].contains('▢') && card_lines[2].contains("0%"),
+        "{card_lines:?}"
+    );
+    assert!(card_lines[3].contains("▤ 0"), "{card_lines:?}");
+}
+
+#[test]
+fn idle_agent_with_submitted_prompt_keeps_full_placeholder_shape() {
+    let mut idle = agent(
+        "idle-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        None,
+    );
+    idle.prompt = Some("first real prompt".to_owned());
+    let snapshot = snapshot_with(vec![idle]);
+    let theme = Theme::fixed(true);
+
+    let card_lines = line_texts(&group_lines(&snapshot, &theme, usize::MAX))
+        .into_iter()
+        .skip(1)
+        .collect::<Vec<_>>();
+
+    assert_eq!(card_lines.len(), 4, "{}", card_lines.join("\n"));
+    assert!(
+        card_lines[1].contains("first real prompt"),
+        "{card_lines:?}"
+    );
+    assert!(
+        card_lines[2].contains('▢') && card_lines[2].contains("0%"),
+        "{card_lines:?}"
+    );
+    assert!(card_lines[3].contains("▤ 0"), "{card_lines:?}");
+}
+
+#[test]
 fn selected_idle_agent_with_history_keeps_existing_shape() {
     let mut idle = agent(
         "idle-1",

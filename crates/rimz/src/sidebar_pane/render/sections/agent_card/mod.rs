@@ -1,7 +1,8 @@
 //! The per-agent card: identity line, description, the context meter and its
-//! token line, and the expanded subagent list. The card anatomy is drawn in
-//! docs/interface/sidebar.md; the density and selection invariants live in
-//! docs/internals/sidebar/sidebar.md.
+//! token line, and the expanded subagent list. [`CardStage`] fixes the card's
+//! shape from lifecycle state; late or absent data only fills that shape. The
+//! card anatomy is drawn in docs/interface/sidebar.md; the density and
+//! selection invariants live in docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
@@ -39,13 +40,25 @@ use super::{Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width,
 /// pushing the model/effort tokens off the line.
 const NAME_MAX: usize = 18;
 
-/// A just-started agent: idle, sitting on the `Some(0)` baseline context gauge
-/// with no real usage or spend history behind it yet. Its 0% bar and zeroed stat
-/// lines are noise, so the card rests at identity plus any real description.
-fn idle_unstarted(row: &SidebarRow) -> bool {
-    matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
-        && gauge_percent(row).unwrap_or(0) == 0
-        && !row.as_agent().is_some_and(AgentCard::has_session_history)
+/// The card lifecycle state. Its line set is stable; enrichment only changes
+/// the contents of those lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CardStage {
+    Fresh,
+    Engaged,
+}
+
+impl CardStage {
+    fn of(row: &SidebarRow) -> Self {
+        if awaiting_first_prompt(row)
+            && !row.as_agent().is_some_and(AgentCard::has_session_history)
+            && gauge_percent(row).unwrap_or(0) == 0
+        {
+            Self::Fresh
+        } else {
+            Self::Engaged
+        }
+    }
 }
 
 fn agent(row: &SidebarRow) -> Option<&AgentCard> {
@@ -53,7 +66,7 @@ fn agent(row: &SidebarRow) -> Option<&AgentCard> {
 }
 
 pub(in crate::sidebar_pane::render) fn awaiting_first_prompt_affordance(row: &SidebarRow) -> bool {
-    awaiting_first_prompt(row) && idle_unstarted(row)
+    CardStage::of(row) == CardStage::Fresh
 }
 
 pub(super) fn row_lines(
@@ -87,10 +100,10 @@ pub(super) fn row_lines(
     let wash = (!selected && attention.emphasis == CardEmphasis::Blink)
         .then(|| ctx.theme.unread_wash())
         .flatten();
-    // Auto/expanded modes keep the stable card shape: selection only appends
-    // subagents (expanded appends them on every card). Compact is deliberately
-    // different: resting cards trim by status, and the selected card opens back
-    // to the full shape.
+    // Auto/expanded modes keep the stage-fixed card shape: selection only
+    // appends subagents (expanded appends them on every card). Compact is
+    // deliberately different: resting cards trim by status, and the selected
+    // card opens back to its stage's full shape.
     let mut inner = vec![identity_line(ctx, row, attention)];
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
@@ -101,51 +114,35 @@ pub(super) fn row_lines(
         inner.push(line);
     }
     if let Some(agent) = agent(row) {
+        let stage = CardStage::of(row);
         let compact_resting = ctx.card_density == CardDensityMode::Compact && !selected;
-        if compact_resting {
-            match row.status().unwrap_or(AgentStatus::Idle) {
-                AgentStatus::Idle => {}
-                AgentStatus::Running | AgentStatus::Waiting => {
-                    inner.push(description_line(ctx, row, attention));
-                    if let Some(line) = gauge_line(ctx, row, meter_pixels.as_deref_mut()) {
-                        inner.push(line);
-                    }
-                }
-                AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed => {
-                    inner.push(description_line(ctx, row, attention));
-                }
-            }
-        } else {
-            let compose_affordance = awaiting_first_prompt_affordance(row);
-            let blank_idle = status == AgentStatus::Idle && descriptor(row).is_none();
-            if !blank_idle && !compose_affordance {
+        match (stage, compact_resting, status) {
+            (_, true, AgentStatus::Idle) => {}
+            (_, true, AgentStatus::Running | AgentStatus::Waiting) => {
                 inner.push(description_line(ctx, row, attention));
-            } else if selected && compose_affordance {
-                inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
+                inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
             }
-            // A just-started idle agent sits on the 0% baseline gauge with no
-            // history behind it, so it rests at identity plus any real
-            // description. Once an agent has real context, spend, or
-            // compaction history, the bar and the context line — the per-card
-            // `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill last-activity age —
-            // join the resting card.
-            if !idle_unstarted(row) {
-                if let Some(line) = gauge_line(ctx, row, meter_pixels.as_deref_mut()) {
-                    inner.push(line);
-                }
-                if let Some(line) = context_tokens_line(ctx, row) {
-                    inner.push(line);
-                }
-            } else if selected && compose_affordance {
-                inner.push(empty_gauge_line(ctx, meter_pixels));
+            (_, true, AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed) => {
+                inner.push(description_line(ctx, row, attention));
             }
-            // The subagents this agent spawned this turn, appended after the
-            // stats. Auto and compact show them on the selected card; expanded
-            // shows them on every card.
-            if (selected || ctx.card_density == CardDensityMode::Expanded)
-                && !agent.sub_agents.is_empty()
-            {
-                inner.extend(sub_agent_lines(ctx, &agent.sub_agents));
+            (CardStage::Fresh, false, _) => {
+                if selected {
+                    inner.push(awaiting_prompt_line(ctx.animation_phase, cw));
+                    inner.push(gauge_line(ctx, row, meter_pixels.as_deref_mut()));
+                }
+            }
+            (CardStage::Engaged, false, _) => {
+                inner.push(description_line(ctx, row, attention));
+                inner.push(gauge_line(ctx, row, meter_pixels));
+                inner.push(context_tokens_line(ctx, row));
+                // The subagents this agent spawned this turn, appended after the
+                // stats. Auto and compact show them on the selected card; expanded
+                // shows them on every card.
+                if (selected || ctx.card_density == CardDensityMode::Expanded)
+                    && !agent.sub_agents.is_empty()
+                {
+                    inner.extend(sub_agent_lines(ctx, &agent.sub_agents));
+                }
             }
         }
     }

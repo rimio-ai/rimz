@@ -238,7 +238,7 @@ fn codex_subagent_renders_nickname_nested_path_and_current_context() {
             ..Default::default()
         },
         60,
-        18,
+        20,
     );
 
     assert!(

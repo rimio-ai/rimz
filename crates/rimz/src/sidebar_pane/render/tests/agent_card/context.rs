@@ -114,9 +114,11 @@ fn droid_card_renders_resolved_custom_model_session_usage_and_plain_cost() {
     assert!(
         !rendered.contains("custom:DeepSeek-V4-Pro-0")
             && !rendered.contains('▣')
+            && rendered.contains('▢')
+            && rendered.contains("0%")
             && !rendered.contains('▤')
-            && !rendered.contains('%'),
-        "a cumulative-only Droid reading implies neither raw identity nor context fill:\n{rendered}"
+            && rendered.contains('◇'),
+        "a cumulative-only Droid reading keeps the placeholder meter without claiming context fill:\n{rendered}"
     );
 }
 
@@ -143,10 +145,12 @@ fn unresolved_droid_selector_is_friendly_without_claiming_capacity_or_cost() {
         !rendered.contains("custom:")
             && !rendered.contains("-0")
             && !rendered.contains('▣')
-            && !rendered.contains('%')
+            && rendered.contains('▢')
+            && rendered.contains("0%")
+            && rendered.contains("▤ 0")
             && !identity.contains('$')
             && !identity.contains("200k"),
-        "presentation-only fallback establishes neither capacity nor dollars:\n{rendered}"
+        "presentation-only fallback keeps zeroed placeholders without claiming capacity or dollars:\n{rendered}"
     );
 }
 
@@ -429,7 +433,7 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
     tokens.remaining_percentage = None;
     let second = render(qwen);
     assert!(second.contains("◇ 14k ↘ 12k ↗ 2k ◌ 7k"), "{second}");
-    assert!(!second.contains('%'), "{second}");
+    assert!(second.contains('▢') && second.contains("0%"), "{second}");
     assert!(!second.contains('▤'), "{second}");
     assert_ne!(first, second);
 }
@@ -545,7 +549,7 @@ fn context_meter_can_restore_linear_fill_geometry() {
 }
 
 #[test]
-fn copilot_token_only_context_shows_model_and_composition_without_a_fake_gauge() {
+fn copilot_token_only_context_shows_composition_with_placeholder_gauge() {
     let mut copilot = agent(
         "copilot-1",
         "copilot",
@@ -598,10 +602,10 @@ fn copilot_token_only_context_shows_model_and_composition_without_a_fake_gauge()
         "the latest call remains visible:\n{rendered}"
     );
     assert!(
-        !rendered
+        rendered
             .lines()
-            .any(|line| line.contains("▌  ▣") || line.contains("▌  ▢")),
-        "no denominator means no gauge:\n{rendered}"
+            .any(|line| line.contains("▌  ▢") && line.contains("0%")),
+        "no denominator keeps the stage-fixed placeholder gauge:\n{rendered}"
     );
     assert!(
         rendered
@@ -625,10 +629,10 @@ fn copilot_token_only_context_shows_model_and_composition_without_a_fake_gauge()
     assert!(rendered.contains("GPT 5 Mini"));
     assert!(rendered.contains("▤ 90 · ◌ 80 ↘ 10 ↗ 3"));
     assert!(
-        !rendered
+        rendered
             .lines()
-            .any(|line| line.contains("▌  ▣") || line.contains("▌  ▢")),
-        "selected idle token-only cards still have no gauge:\n{rendered}",
+            .any(|line| line.contains("▌  ▢") && line.contains("0%")),
+        "selected idle token-only cards keep the placeholder gauge:\n{rendered}",
     );
 
     let selected = agent(
@@ -649,7 +653,7 @@ fn copilot_token_only_context_shows_model_and_composition_without_a_fake_gauge()
             ..Default::default()
         },
         48,
-        17,
+        19,
     );
     assert!(rendered.contains("GPT 5 Mini"));
     assert!(

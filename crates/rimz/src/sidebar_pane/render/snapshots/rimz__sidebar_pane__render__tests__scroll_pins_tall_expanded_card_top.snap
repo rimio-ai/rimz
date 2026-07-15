@@ -12,6 +12,8 @@ expression: screen
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
 ▌⢄ claude                                            ▐
 ▌  db migrate                                        ▐
+▌  ▢ ──────────────────────────────────────────    0%▐
+▌  ▤ 0                                               ▐
 ▌  ⧉ subagents (4)                                   ▐
 ▌    ⣾ Explore — survey area 0                       ▐
 ▌      ◇ 1k                                     ◔  4m▐

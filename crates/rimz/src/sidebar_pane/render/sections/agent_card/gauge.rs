@@ -101,11 +101,11 @@ pub(super) fn gauge_line(
     ctx: &RowCtx<'_>,
     row: &SidebarRow,
     meter_pixels: Option<&mut MeterPixels>,
-) -> Option<Line<'static>> {
+) -> Line<'static> {
     let theme = ctx.theme;
     let bands = ctx.bands;
     let width = content_width(ctx.width);
-    let percent = gauge_percent(row)?;
+    let percent = gauge_percent(row).unwrap_or(0);
     let precise = precise_context_pct(row);
     let value = pct_label(precise, percent);
     let fill = precise.unwrap_or_else(|| f64::from(percent));
@@ -128,7 +128,7 @@ pub(super) fn gauge_line(
     } else {
         theme.glyph(GlyphRole::MeterContextFull)
     };
-    Some(bar_row(
+    bar_row(
         theme,
         glyph,
         theme.style(color, Modifier::empty()),
@@ -155,7 +155,7 @@ pub(super) fn gauge_line(
             }
         },
         width,
-    ))
+    )
 }
 
 /// Window below which the drawn fill stays linear.
@@ -178,34 +178,6 @@ fn log_scaled_fill(pct: f64, window: Option<u64>) -> f64 {
     }
     let fraction = (pct / 100.0).clamp(0.0, 1.0);
     100.0 * (1.0 + k * fraction).ln() / (1.0 + k).ln()
-}
-
-/// The placeholder context bar for a selected, not-yet-started idle card.
-pub(super) fn empty_gauge_line(
-    ctx: &RowCtx<'_>,
-    meter_pixels: Option<&mut MeterPixels>,
-) -> Line<'static> {
-    let theme = ctx.theme;
-    let bands = ctx.bands;
-    let width = content_width(ctx.width);
-    let severity = ContextSeverity::classify(0, None, bands);
-    let amount = severity_heat_amount(severity, 0, None, bands);
-    let color = theme.heat_tone(amount);
-    bar_row(
-        theme,
-        theme.glyph(GlyphRole::MeterContextEmpty),
-        theme.style(color, Modifier::empty()),
-        &pct_label(None, 0),
-        |bar_width| {
-            if let Some(pixels) = meter_pixels
-                && let Some(spans) = pixel_gauge_spans(theme, 0.0, color, &[], bar_width, pixels)
-            {
-                return spans;
-            }
-            context_gauge_spans(theme, amount, &[], 0.0, bar_width)
-        },
-        width,
-    )
 }
 
 fn pixel_gauge_spans(
@@ -346,16 +318,15 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// [`SidebarRow::call_split`] stands in when the blob carries no split. The
 /// exact latest-call `▤` composition wins over cumulative `◇` session totals,
 /// which are the honest fallback when the hook/transcript split is absent.
-/// Falls back to the bare `▤` rollup total when no categorized source exists (Claude
-/// before the first API call and right after `/compact`), so the line shows
-/// *something* for every agent. The age rides the right edge only once it
-/// crosses five minutes
+/// Falls back to the bare `▤` rollup total when no categorized source exists,
+/// using zero before the first token measurement. The age rides the right edge
+/// only once it crosses five minutes
 /// — a recently active agent shows the breakdown alone, left-aligned, rather than
 /// a noisy sub-`5m` clock — as the clock-fill glyph ([`elapsed_glyph`]) over the
 /// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
 /// through warn, caution, and alarm toward the hour, when resuming would likely
 /// re-read the whole context uncached.
-pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Option<Line<'static>> {
+pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Line<'static> {
     let theme = row_ctx.theme;
     let bands = row_ctx.bands;
     let now = row_ctx.now;
@@ -421,14 +392,14 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Opt
             &TokenColumns::default(),
         ));
     } else {
-        let total = agent(row).and_then(|agent| agent.total_tokens)?;
+        let total = agent(row).and_then(|agent| agent.total_tokens).unwrap_or(0);
         left.extend(context_total_spans(theme, severity, total, tokens_int));
     }
     left.extend(context_compaction_spans(
         theme,
         agent(row).map_or(0, |agent| agent.compaction_count),
     ));
-    Some(pin_right(left, age, width))
+    pin_right(left, age, width)
 }
 
 #[cfg(test)]

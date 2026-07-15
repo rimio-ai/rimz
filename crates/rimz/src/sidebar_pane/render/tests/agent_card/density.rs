@@ -63,7 +63,7 @@ fn compact_density_trims_resting_cards_by_status() {
             ..Default::default()
         },
         54,
-        31,
+        33,
     );
 
     assert!(
@@ -84,15 +84,16 @@ fn compact_density_trims_resting_cards_by_status() {
         2,
         "only running and waiting resting cards keep the context bar:\n{rendered}"
     );
-    assert!(
-        !rendered.contains('▤'),
-        "compact resting cards drop token-stat rows:\n{rendered}"
+    assert_eq!(
+        rendered.matches('▤').count(),
+        1,
+        "compact resting cards drop token-stat rows while the selected card opens fully:\n{rendered}"
     );
     assert_snapshot("card_density_compact_resting_statuses", rendered);
 }
 
 #[test]
-fn compact_density_running_waiting_preserve_absent_context() {
+fn compact_density_running_waiting_render_placeholder_meter() {
     let mut running = density_agent(
         "run-1",
         "runner",
@@ -116,7 +117,7 @@ fn compact_density_running_waiting_preserve_absent_context() {
         "selector",
         AgentStatus::Idle,
         Some("selected other"),
-        0,
+        1,
     );
     selected.worktree_path = Some("/repo/other".to_owned());
     selected.worktree_branch = Some("other".to_owned());
@@ -132,7 +133,7 @@ fn compact_density_running_waiting_preserve_absent_context() {
             ..Default::default()
         },
         54,
-        21,
+        25,
     );
 
     assert!(
@@ -145,12 +146,13 @@ fn compact_density_running_waiting_preserve_absent_context() {
     );
     assert_eq!(
         rendered.matches('▢').count(),
-        0,
-        "missing source context stays absent for running/waiting agent cards:\n{rendered}"
+        2,
+        "running and waiting cards hold their meter line before context arrives:\n{rendered}"
     );
-    assert!(
-        !rendered.contains('▤'),
-        "compact resting cards still drop token-stat rows:\n{rendered}"
+    assert_eq!(
+        rendered.matches('▤').count(),
+        1,
+        "compact resting cards still drop token-stat rows while the selection opens fully:\n{rendered}"
     );
 }
 
@@ -240,7 +242,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
             ..Default::default()
         },
         54,
-        21,
+        23,
     );
 
     let subagent_line = rendered

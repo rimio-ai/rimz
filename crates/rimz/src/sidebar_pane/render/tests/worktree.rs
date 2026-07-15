@@ -30,7 +30,7 @@ fn render_directory_room_root_pod_is_name_only() {
     child.diff_removed = Some(3);
     child.commits_ahead = Some(2);
 
-    let rendered = snapshot_to_screen(&snapshot, 44, 18);
+    let rendered = snapshot_to_screen(&snapshot, 44, 20);
 
     assert!(
         rendered.contains("⑂ main"),

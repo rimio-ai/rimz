@@ -93,7 +93,7 @@ fn render_scroll_overflow_shows_bar() {
             ..Default::default()
         },
         38,
-        21,
+        27,
     );
     let lines: Vec<&str> = rendered.lines().collect();
     assert!(
@@ -162,7 +162,7 @@ fn render_scroll_offset_follows_selection_to_bottom() {
         selected_index: 5,
         ..Default::default()
     };
-    let rendered = snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, 38, 21);
+    let rendered = snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, 38, 29);
     assert!(
         rendered.contains("task-5"),
         "the selected last card is in view:\n{rendered}"
@@ -173,7 +173,7 @@ fn render_scroll_offset_follows_selection_to_bottom() {
     );
     let mut no_bar = overflowing_fleet();
     no_bar.theme.display.scrollbar = ScrollbarMode::Never;
-    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &ui, 38, 21);
+    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &ui, 38, 29);
     assert_eq!(
         rendered, expected,
         "a settled viewport carries no scrollbar overlay"
@@ -285,7 +285,7 @@ fn render_scroll_pins_tall_expanded_card_top() {
     let snapshot = snapshot_with(agents);
 
     let rendered =
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 22);
+        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 54, 24);
     // The viewport opens below the pinned cockpit separator, so the card
     // block's first line holds one row lower while the subagent list fills down.
     let lines: Vec<&str> = rendered.lines().collect();
@@ -316,7 +316,7 @@ fn render_scroll_manual_offset_holds() {
             ..Default::default()
         },
         38,
-        24,
+        34,
     );
     assert!(
         !rendered.contains("task-0"),
@@ -355,11 +355,11 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         &snapshot,
         None,
         &UiState {
-            scroll_offset: 6,
+            scroll_offset: 10,
             manual_scroll: Some(ManualScroll {
                 selection_at_start: None,
             }),
-            scrollbar: scrolled_fade(6, 0),
+            scrollbar: scrolled_fade(10, 0),
             ..Default::default()
         },
         38,
