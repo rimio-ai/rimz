@@ -745,11 +745,12 @@ impl DispatchState<'_> {
     fn enqueue(
         &self,
         target: &ResolvedTarget,
+        pane: Option<&PaneAgent>,
         text: &str,
         mode: &PreparedMode,
         handle: &str,
     ) -> Result<MessageRecord> {
-        let recipient = match (target.agent.as_ref(), target.pane.as_ref()) {
+        let recipient = match (target.agent.as_ref(), pane) {
             (Some(agent), pane) => send::Recipient::Agent { agent, pane },
             (None, Some(pane)) => send::Recipient::Pane {
                 pane,
@@ -869,7 +870,7 @@ fn dispatch_one(
         return Err(DispatchErr::NoDurableSession { label: handle });
     };
     let bound = target.bound(state.snapshot);
-    let message = state.enqueue(target, text, mode, &handle)?;
+    let message = state.enqueue(target, Some(pane), text, mode, &handle)?;
     let message_id = message.message_id.clone();
     match send_live_with_recovery(
         state,
@@ -946,7 +947,7 @@ fn dispatch_parked(
     mode: &PreparedMode,
     handle: String,
 ) -> Result<DispatchOutcome> {
-    let message = state.enqueue(target, text, mode, &handle)?;
+    let message = state.enqueue(target, None, text, mode, &handle)?;
     let message_id = message.message_id.clone();
     push_pending(state, message);
     Ok(DispatchOutcome::Queued {

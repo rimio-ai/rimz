@@ -605,11 +605,14 @@ fn message_when_rejects_wait_and_create() {
 fn scheduled_message_parks_with_not_before_and_wake_stamp() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-scheduled", "feature-scheduled", &[]);
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-scheduled", "feature-scheduled", pane_env);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
 
     let before = jiff::Timestamp::now();
     let out = env
         .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
         .args(["message", "--schedule", "60m", "@claude", "later"])
         .output()
         .expect("scheduled message");
@@ -621,6 +624,7 @@ fn scheduled_message_parks_with_not_before_and_wake_stamp() {
 
     let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].pane_id, None, "delivery re-resolves the pane");
     let not_before = pending[0].not_before.expect("scheduled timestamp");
     assert!(not_before > before);
     assert!(not_before <= before + jiff::SignedDuration::from_secs(61 * 60));
