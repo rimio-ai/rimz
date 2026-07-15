@@ -548,17 +548,30 @@ impl MuxBackend for ZellijBackend {
         if let Some(target) = &target {
             ensure_pane_backend(target, MuxName::Zellij)?;
         }
-        // Pane listings carry positional `tab_N` view ids because the presence
-        // plugin cannot see Zellij's stable tab id. Resolve the target pane
-        // through Zellij before using `--tab-id`; positions diverge after a tab
-        // move or close and would otherwise route the split into the wrong tab.
-        let target_tab_id = match (
-            opts.session_name.as_deref(),
-            target.as_ref(),
-            opts.target_view_id.as_deref(),
-        ) {
-            (Some(session), Some(target), Some(_)) => Some(self.tab_id_for_pane(session, target)?),
-            (_, _, view_id) => view_id.and_then(zellij_numeric_id),
+        let anchored_stack = opts.stacked && target.is_some();
+        // Zellij gives `--tab-id` precedence over the CLI pane context, so an
+        // anchored stack must use `--near-current-pane` and let
+        // `ZELLIJ_PANE_ID` imply the tab. Only stacked spawns honor that flag;
+        // directional spawns silently no-op with it and keep resolving a stable
+        // tab id. An anchored stack leaves client focus alone, while the
+        // `focus-pane-id` restore below always switches the client's tab.
+        let target_tab_id = if anchored_stack {
+            None
+        } else {
+            // Pane listings carry positional `tab_N` view ids because the
+            // presence plugin cannot see Zellij's stable tab id. Resolve the
+            // target pane through Zellij before using `--tab-id`; positions
+            // diverge after a tab move or close.
+            match (
+                opts.session_name.as_deref(),
+                target.as_ref(),
+                opts.target_view_id.as_deref(),
+            ) {
+                (Some(session), Some(target), Some(_)) => {
+                    Some(self.tab_id_for_pane(session, target)?)
+                }
+                (_, _, view_id) => view_id.and_then(zellij_numeric_id),
+            }
         };
         let mut spec = match opts.session_name.as_deref() {
             Some(session) => self.zellij_action(session).arg("new-pane"),
@@ -566,6 +579,9 @@ impl MuxBackend for ZellijBackend {
         };
         if opts.stacked {
             spec = spec.arg("--stacked");
+            if anchored_stack {
+                spec = spec.arg("--near-current-pane");
+            }
         } else {
             let direction = match opts.direction {
                 SplitDirection::Right => "right",
@@ -601,9 +617,10 @@ impl MuxBackend for ZellijBackend {
             }
         }
         spec.run()?;
-        // `new-pane` focuses the pane it creates; for the `--bg` path
-        // return focus to the splitting pane (best-effort — the pane is open).
-        if !opts.focus
+        // Directional `new-pane` can focus the pane it creates; for the `--bg`
+        // path return focus to the splitting pane (best-effort — it is open).
+        if !anchored_stack
+            && !opts.focus
             && let Some(target) = &target
         {
             let _ = self.focus_pane(target, opts.session_name.as_deref());

@@ -159,7 +159,7 @@ fn split_pane_injects_env_vars() {
 }
 
 #[test]
-fn split_pane_targets_non_focused_tab() {
+fn split_pane_targets_non_focused_tab_without_moving_client_focus() {
     require_zellij!();
 
     let xdg = scoped_runtime_dir();
@@ -225,6 +225,22 @@ fn split_pane_targets_non_focused_tab() {
     assert!(authoritative.panes.iter().any(|pane| {
         pane.pane_id == target.pane_id && pane.view_id.as_deref() == Some(first_tab.as_str())
     }));
+    let focused_before = backend
+        .client_view(ClientFocusOptions {
+            session_name: Some(name.clone()),
+            ..Default::default()
+        })
+        .expect("client focus before targeted split")
+        .viewed_panes;
+    assert_eq!(
+        focused_before.len(),
+        1,
+        "one attached client should remain in the active tab: {focused_before:?}",
+    );
+    assert_ne!(
+        focused_before[0], target.pane_id,
+        "the target stack should be in the background tab",
+    );
 
     backend
         .split_pane(SplitPaneOptions {
@@ -282,10 +298,10 @@ fn split_pane_targets_non_focused_tab() {
         "stacked split should use the requested pane's column: {:?}",
         snapshot.panes,
     );
+    let focused_after = wait_for_focused_client_pane(&backend, &name, &focused_before[0]);
     assert_eq!(
-        new_geometry.pane_rows, 1,
-        "unfocused native-stack child should collapse to its title row: {:?}",
-        snapshot.panes,
+        focused_after, focused_before,
+        "targeting a background stack must not switch the attached client's tab",
     );
 }
 

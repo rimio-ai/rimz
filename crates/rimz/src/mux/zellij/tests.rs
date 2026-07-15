@@ -59,6 +59,53 @@ exit 0
 
 #[cfg(unix)]
 #[test]
+fn split_pane_anchors_stack_without_moving_focus() {
+    use crate::ids::PaneId;
+    use crate::mux::{MuxBackend, SplitDirection, SplitPaneOptions};
+
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0")
+printf '%s | pane=%s\n' "$*" "$ZELLIJ_PANE_ID" >> "$dir/zellij.log"
+exit 0
+"#,
+    );
+    let backend = ZellijBackend::with_program_for_test(&shim);
+
+    backend
+        .split_pane(SplitPaneOptions {
+            session_name: Some("rimz-test".to_owned()),
+            target_view_id: Some("tab_2".to_owned()),
+            target_pane_id: Some(PaneId::from_parts(crate::MuxName::Zellij, "terminal_7")),
+            stacked: true,
+            direction: SplitDirection::Down,
+            focus: false,
+            ..Default::default()
+        })
+        .expect("split_pane");
+
+    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    assert!(
+        log.contains("action new-pane --stacked --near-current-pane | pane=7"),
+        "stacked split must anchor on the target pane context:\n{log}",
+    );
+    assert!(
+        !log.contains("--tab-id"),
+        "tab-id overrides the target pane context:\n{log}",
+    );
+    assert!(
+        !log.contains("focus-pane-id"),
+        "anchored stack must leave attached-client focus unchanged:\n{log}",
+    );
+    assert_eq!(
+        log.lines().count(),
+        1,
+        "split needs one Zellij call:\n{log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn list_panes_uses_fresh_topology_without_zellij_action() {
     use crate::ids::WorkspaceId;
     use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
