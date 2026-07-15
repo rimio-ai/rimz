@@ -16,6 +16,8 @@ The serving engine owns terminal transport, browser rendering, connections, and 
 
 The store, hooks, sidebar, and wake paths are unchanged for a browser client, and RimZ proxies no pane I/O.
 
+The `web` module exposes one concrete `WebEngine` lifecycle seam for preflight, open, inspection, status, stop, and credentials; its private Zellij and ttyd modules own subprocesses, parsing, generated config, credential state, and instance inventory, while CLI handlers own room orchestration and presentation.
+
 ## Zellij engine
 
 Zellij uses one machine-wide `zellij web` server, normally at `127.0.0.1:8082`.
@@ -46,13 +48,13 @@ RimZ spawns ttyd with null stdio and its own process group, waits up to five sec
 
 The credential cache is `$XDG_STATE_HOME/rimz/web-ttyd-credential.json`, mode 0600, with `name`, `created_at`, and `secret`.
 
-One credential named `rimz` serves the machine; rotation stops and restarts every live recorded instance so the old secret stops working immediately.
+One credential named `rimz` serves the machine; rotation snapshots the sorted live inventory once, stops that exact batch, and restarts those sessions in the same order so the old secret stops working immediately.
 
-Instance records live under `$XDG_STATE_HOME/rimz/web-ttyd/<encoded-session>.json` with `session`, `pid`, `port`, and `started_at`.
+Instance records live under `$XDG_STATE_HOME/rimz/web-ttyd/<encoded-session>.json` with `session`, `pid`, and `port`; readers continue to accept old records with extra fields.
 
-An instance is live only when its pid exists and its loopback port accepts a connection; readers discard stale records.
+An instance is live only when its pid exists and its loopback port accepts a connection; one inventory read snapshots the process table, probes every record, sorts live sessions, and discards stale records.
 
-`stop` sends SIGTERM, allows a one-second grace period, then uses SIGKILL when necessary.
+`stop` sends SIGTERM to the full batch, shares one one-second grace window while refreshing the process table once per poll, then uses SIGKILL for survivors and removes their records.
 
 ## Commands
 

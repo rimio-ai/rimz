@@ -8,7 +8,7 @@
 rimz remote add dev-box dev-box:query-engine     # save an alias in remote.toml
 rimz remote setup dev-box                        # install rimz on the remote host
 rimz remote connect dev-box                      # attach the saved room over SSH
-rimz remote connect dev-box --web                # open the remote Zellij web UI locally
+rimz remote connect dev-box --web                # open the remote room's web UI locally
 rimz remote connect agent@prod-box:/srv/query-engine
 rimz remote bandwidth --secs 5                   # attribute pane write-rate in this room
 ```
@@ -42,8 +42,8 @@ The details that matter in practice:
 `rimz remote connect <target> --web` opens the remote room in your local browser instead of your terminal. The sequence:
 
 1. Runs remote `rimz web open --print --json` over a prep connection, asking the recovery prompt there when your terminal is interactive.
-2. Relays the serving machine's cached Zellij web login token.
-3. Starts a supervised SSH local-forward tunnel to the remote Zellij web server.
+2. Selects Zellij or ttyd from the remote room mux and relays its login token or Basic-Auth credential.
+3. Starts a supervised SSH local-forward tunnel to the selected remote web engine.
 4. Prints the bare `http://127.0.0.1:<port>/<session>` URL and opens your local browser best-effort.
 5. Stays in the foreground until Ctrl-C, which tears the tunnel down.
 

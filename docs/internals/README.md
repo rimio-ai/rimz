@@ -46,7 +46,7 @@ Each of these subsystems is one file at the top level.
 | [store.md](./store.md) | The durable state engine: the on-disk shape, the write classes, the event log, and wakeups. |
 | [multiplexers.md](./multiplexers.md) | The Zellij and tmux contracts behind the backend seam. |
 | [remote.md](./remote.md) | SSH attach, the reconnect policy, and link health. |
-| [web.md](./web.md) | Zellij browser access. |
+| [web.md](./web.md) | Zellij and ttyd browser access. |
 | [welcome.md](./welcome.md) | The lobby room picker and `rimz stats`. |
 | [diagnostics.md](./diagnostics.md) | The diagnostics log, the frame observer, and off-box Sentry. |
 | [performance.md](./performance.md) | The render budget, the cost map, and fleet overhead. |
