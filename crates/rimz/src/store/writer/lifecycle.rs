@@ -46,7 +46,11 @@ impl Store {
         intent: AgentLifecycleIntent<'_>,
         rotation_threshold: u64,
     ) -> Result<AgentLifecycleOutcome> {
-        if !append_lifecycle_event(&intent.observation.signal, intent.transition) {
+        if !append_lifecycle_event(
+            &intent.observation.signal,
+            intent.transition,
+            intent.observation.parent_agent_id.is_some(),
+        ) {
             return Ok(AgentLifecycleOutcome::Suppressed);
         }
 
@@ -86,8 +90,13 @@ fn proof_of_work_tool(signal: &LifecycleSignal) -> bool {
     )
 }
 
-fn append_lifecycle_event(signal: &LifecycleSignal, transition: Option<Transition>) -> bool {
-    !proof_of_work_tool(signal)
+fn append_lifecycle_event(
+    signal: &LifecycleSignal,
+    transition: Option<Transition>,
+    child_owned: bool,
+) -> bool {
+    child_owned
+        || !proof_of_work_tool(signal)
         || transition.is_some_and(|transition| {
             transition.compaction_closed
                 || transition.waiting_cleared
@@ -99,7 +108,7 @@ fn event_lifecycle_observation(
     observation: &AgentLifecycleObservation,
 ) -> AgentLifecycleObservation {
     let mut trimmed = observation.clone();
-    if observation.signal.establishes_identity() {
+    if observation.signal.establishes_identity() || observation.parent_agent_id.is_some() {
         return trimmed;
     }
     if !matches!(observation.signal, LifecycleSignal::TurnEnded { .. }) {
@@ -173,11 +182,13 @@ mod tests {
             edits: false,
         };
 
-        assert!(append_lifecycle_event(&mutating, None));
-        assert!(!append_lifecycle_event(&proof, None));
+        assert!(append_lifecycle_event(&mutating, None, false));
+        assert!(!append_lifecycle_event(&proof, None, false));
+        assert!(append_lifecycle_event(&proof, None, true));
         assert!(!append_lifecycle_event(
             &proof,
-            Some(transition(TransitionKind::Normal, false))
+            Some(transition(TransitionKind::Normal, false)),
+            false,
         ));
         assert!(append_lifecycle_event(
             &proof,
@@ -187,15 +198,17 @@ mod tests {
                     reason: "tool used outside a running turn",
                 },
                 false,
-            ))
+            )),
+            false,
         ));
         assert!(append_lifecycle_event(
             &proof,
-            Some(transition(TransitionKind::Normal, true))
+            Some(transition(TransitionKind::Normal, true)),
+            false,
         ));
         let mut clears_waiting = transition(TransitionKind::Normal, false);
         clears_waiting.waiting_cleared = true;
-        assert!(append_lifecycle_event(&proof, Some(clears_waiting)));
+        assert!(append_lifecycle_event(&proof, Some(clears_waiting), false));
     }
 
     #[test]

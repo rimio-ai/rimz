@@ -4,7 +4,7 @@
 
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{LazyLock, Mutex};
@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use super::DEFAULT_CONTEXT_WINDOW;
 use super::install::{codex_config_path, read_existing_table};
+use super::spend::wire::{CodexSessionMeta, CodexSessionSource, CodexTimestamp};
 use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass,
 };
@@ -22,6 +23,112 @@ use crate::agents::{
     LocalContextRefresh, ProviderCapacity, SessionOrigin, TranscriptStat, optional_payload_string,
     read_transcript_tail,
 };
+
+const MAX_ROLLOUT_HEADER_BYTES: u64 = 1024 * 1024;
+
+/// Normalized identity and child metadata from a rollout's `session_meta`
+/// header. Hooks remain lifecycle authority; every field here is optional
+/// enrichment except `is_subagent`, which local root discovery uses to reject
+/// positively identified child rollouts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct CodexRolloutHeader {
+    pub(super) session_id: Option<String>,
+    pub(super) cwd: Option<PathBuf>,
+    pub(super) timestamp: Option<Timestamp>,
+    pub(super) forked_from_id: Option<String>,
+    pub(super) is_subagent: bool,
+    pub(super) parent_thread_id: Option<String>,
+    pub(super) depth: Option<u32>,
+    pub(super) agent_nickname: Option<String>,
+    pub(super) agent_path: Option<String>,
+    pub(super) agent_role: Option<String>,
+    pub(super) multi_agent_version: Option<String>,
+}
+
+/// Read and normalize one rollout header without scanning its body.
+pub(super) fn read_rollout_header(path: &Path) -> Option<CodexRolloutHeader> {
+    let file = File::open(path).ok()?;
+    let mut line = String::new();
+    BufReader::new(file)
+        .take(MAX_ROLLOUT_HEADER_BYTES)
+        .read_line(&mut line)
+        .ok()?;
+    let meta = serde_json::from_str::<CodexSessionMeta<'_>>(line.trim()).ok()?;
+    if meta.entry_type.as_deref() != Some("session_meta") {
+        return None;
+    }
+    let payload = meta.payload?;
+    let spawn = match payload.source.as_ref() {
+        Some(CodexSessionSource::Structured(source)) => source
+            .subagent
+            .as_ref()
+            .and_then(|subagent| subagent.thread_spawn.as_ref()),
+        Some(CodexSessionSource::Name(name)) => {
+            let _ = name;
+            None
+        }
+        Some(CodexSessionSource::Other(value)) => {
+            let _ = value;
+            None
+        }
+        None => None,
+    };
+    let is_subagent = payload
+        .thread_source
+        .as_deref()
+        .is_some_and(|source| source.trim().eq_ignore_ascii_case("subagent"))
+        || spawn.is_some();
+    Some(CodexRolloutHeader {
+        session_id: owned_non_empty(payload.id.as_deref()),
+        cwd: owned_non_empty(payload.cwd.as_deref()).map(PathBuf::from),
+        timestamp: codex_timestamp(meta.timestamp.as_ref()),
+        forked_from_id: owned_non_empty(payload.forked_from_id.as_deref()),
+        is_subagent,
+        parent_thread_id: owned_non_empty(payload.parent_thread_id.as_deref())
+            .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.parent_thread_id.as_deref()))),
+        depth: spawn.and_then(|spawn| spawn.depth),
+        agent_nickname: owned_non_empty(payload.agent_nickname.as_deref())
+            .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.agent_nickname.as_deref()))),
+        agent_path: owned_non_empty(payload.agent_path.as_deref())
+            .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.agent_path.as_deref())))
+            .and_then(|path| normalize_agent_path(&path)),
+        agent_role: owned_non_empty(payload.agent_role.as_deref())
+            .or_else(|| spawn.and_then(|spawn| owned_non_empty(spawn.agent_role.as_deref()))),
+        multi_agent_version: owned_non_empty(payload.multi_agent_version.as_deref()),
+    })
+}
+
+fn owned_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn normalize_agent_path(path: &str) -> Option<String> {
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    let first = segments.next()?;
+    let normalized = if first == "root" {
+        segments.collect::<Vec<_>>()
+    } else {
+        std::iter::once(first).chain(segments).collect::<Vec<_>>()
+    };
+    (!normalized.is_empty()).then(|| normalized.join("/"))
+}
+
+fn codex_timestamp(timestamp: Option<&CodexTimestamp<'_>>) -> Option<Timestamp> {
+    match timestamp? {
+        CodexTimestamp::String(raw) => raw.trim().parse().ok(),
+        CodexTimestamp::Number(raw) => {
+            let (seconds, nanos) = if *raw > 10_000_000_000 {
+                (raw / 1_000, (raw % 1_000) * 1_000_000)
+            } else {
+                (*raw, 0)
+            };
+            Timestamp::new(i64::try_from(seconds).ok()?, nanos as i32).ok()
+        }
+    }
+}
 
 /// Refresh Codex's local transcript-derived context for one session, skipping the
 /// tail read when the persisted transcript stat still matches.
@@ -79,21 +186,11 @@ pub fn refresh_transcript_context(
 /// `session_meta`, so callers keep every session.
 pub fn session_origin(session_id: &str) -> Option<SessionOrigin> {
     let path = find_session_transcript(session_id)?;
-    let file = File::open(path).ok()?;
-    let mut line = String::new();
-    BufReader::new(file).read_line(&mut line).ok()?;
-    let value = serde_json::from_str::<Value>(line.trim()).ok()?;
-    (value.get("type").and_then(Value::as_str) == Some("session_meta")).then(|| {
-        let forked = value
-            .get("payload")
-            .and_then(|payload| payload.get("forked_from_id"))
-            .and_then(Value::as_str)
-            .is_some_and(|parent| !parent.is_empty());
-        if forked {
-            SessionOrigin::Forked
-        } else {
-            SessionOrigin::Fresh
-        }
+    let header = read_rollout_header(&path)?;
+    Some(if header.forked_from_id.is_some() {
+        SessionOrigin::Forked
+    } else {
+        SessionOrigin::Fresh
     })
 }
 

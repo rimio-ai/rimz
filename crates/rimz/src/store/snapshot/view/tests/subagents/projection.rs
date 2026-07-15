@@ -28,15 +28,52 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     let sub = sub_agent_from_state(&finished, now);
     assert_eq!(sub.elapsed_secs, Some(40));
 
-    // A child with no enrichment (Codex, or pre-first-render) degrades cleanly.
-    let bare = child_state("sess-root", "child-3", AgentStatus::Running, 5);
+    // Codex has no statusline start time, so registration supplies elapsed.
+    let mut bare = child_state("sess-root", "child-3", AgentStatus::Running, 5);
+    bare.registered_at = Some(ago(5));
     let sub = sub_agent_from_state(&bare, now);
     assert_eq!(sub.phase, TurnPhase::Idle);
     assert_eq!(sub.description, None);
     assert_eq!(sub.total_tokens, None);
-    assert_eq!(sub.elapsed_secs, None);
+    assert_eq!(sub.elapsed_secs, Some(5));
     assert_eq!(sub.model, None);
     assert_eq!(sub.effort, None);
+
+    let mut named = child_state("sess-root", "child-4", AgentStatus::Running, 5);
+    named.name = Some("Atlas".to_owned());
+    named.name_explicit = true;
+    named.task = Some("research/explore_hooks".to_owned());
+    let sub = sub_agent_from_state(&named, now);
+    assert_eq!(sub.name, "Atlas");
+    assert_eq!(sub.task.as_deref(), Some("research/explore_hooks"));
+}
+
+#[test]
+fn live_descendant_projects_clean_resting_parents_to_delegating_running() {
+    for status in [
+        AgentStatus::Idle,
+        AgentStatus::Success,
+        AgentStatus::Running,
+    ] {
+        let parent = agent("codex", "sess-root", status, 100).worktree("/repo/main");
+        let mut child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
+        child.kind = AgentKind::new_unchecked("codex");
+        let snapshot = room_with_agent_panes(vec![parent, child]);
+        assert_eq!(
+            row(&snapshot, "sess-root").status(),
+            Some(AgentStatus::Running)
+        );
+    }
+
+    let parent = agent("codex", "sess-root", AgentStatus::Success, 100).worktree("/repo/main");
+    let mut child = child_state("sess-root", "child-1", AgentStatus::Success, 5);
+    child.kind = AgentKind::new_unchecked("codex");
+    let snapshot = room_with_agent_panes(vec![parent, child]);
+    assert_eq!(
+        row(&snapshot, "sess-root").status(),
+        Some(AgentStatus::Success),
+        "the durable resting state returns after the final child stops"
+    );
 }
 
 #[test]

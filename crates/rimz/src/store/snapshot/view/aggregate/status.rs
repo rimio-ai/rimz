@@ -237,13 +237,18 @@ fn settle(facts: SettleFacts<'_>) -> Settled {
         }
         return Settled::status(AgentStatus::Paused);
     }
-    if status == AgentStatus::Running && has_live_child {
-        return Settled::status(AgentStatus::Running);
-    }
     if let Some((error, _class)) = turn_error
         .filter(|(_, class)| matches!(class, TurnErrorClass::Unknown | TurnErrorClass::Failed))
     {
         return Settled::with_label(AgentStatus::Failed, error.label.clone());
+    }
+    if has_live_child
+        && matches!(
+            status,
+            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Running
+        )
+    {
+        return Settled::status(AgentStatus::Running);
     }
     if crate::agents::is_turn_complete(status, context, last_activity) {
         // A turn that finished without a `Stop` hook (Codex `/review` review

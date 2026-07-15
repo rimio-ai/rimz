@@ -61,6 +61,59 @@ pub(crate) struct CodexSessionMetaPayload<'a> {
     pub(crate) id: Option<Cow<'a, str>>,
     #[serde(borrow, default)]
     pub(crate) cwd: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) forked_from_id: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) thread_source: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) parent_thread_id: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) agent_nickname: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) agent_path: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) agent_role: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) multi_agent_version: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) source: Option<CodexSessionSource<'a>>,
+}
+
+/// Codex has emitted both a plain source name and the structured V1 subagent
+/// spawn object. The catch-all keeps rollout-header enrichment tolerant of new
+/// source encodings.
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(crate) enum CodexSessionSource<'a> {
+    Name(#[serde(borrow)] Cow<'a, str>),
+    Structured(#[serde(borrow)] CodexStructuredSessionSource<'a>),
+    Other(serde_json::Value),
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct CodexStructuredSessionSource<'a> {
+    #[serde(borrow, default)]
+    pub(crate) subagent: Option<CodexSubagentSource<'a>>,
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct CodexSubagentSource<'a> {
+    #[serde(borrow, default)]
+    pub(crate) thread_spawn: Option<CodexThreadSpawnSource<'a>>,
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct CodexThreadSpawnSource<'a> {
+    #[serde(borrow, default)]
+    pub(crate) parent_thread_id: Option<Cow<'a, str>>,
+    #[serde(default)]
+    pub(crate) depth: Option<u32>,
+    #[serde(borrow, default)]
+    pub(crate) agent_path: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) agent_nickname: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
+    pub(crate) agent_role: Option<Cow<'a, str>>,
 }
 
 /// Codex session log entry — structural detection before deeper parsing.

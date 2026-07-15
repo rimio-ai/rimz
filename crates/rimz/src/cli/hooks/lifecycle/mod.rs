@@ -77,10 +77,17 @@ pub(crate) fn handle_lifecycle_hook(
     let transcript_path = recorded
         .as_ref()
         .and_then(|recorded| recorded.observation.transcript_path.as_deref());
-    if let Some(agent_id) = agent_id {
+    let context_agent_id = recorded
+        .as_ref()
+        .and_then(|recorded| recorded.observation.agent_id.as_deref())
+        .or(agent_id);
+    if let Some(agent_id) = context_agent_id {
         let observed_turn_error = recorded
             .as_ref()
             .and_then(|recorded| recorded.observation.turn_error.clone());
+        let parent_agent_id = recorded
+            .as_ref()
+            .and_then(|recorded| recorded.observation.parent_agent_id.as_deref());
         manage_agent_context(AgentContextHook {
             workspace,
             store,
@@ -89,6 +96,7 @@ pub(crate) fn handle_lifecycle_hook(
                 event_name,
                 payload,
                 agent_id,
+                parent_agent_id,
                 model_hint,
                 transcript_path,
                 turn_ended,
@@ -196,6 +204,7 @@ struct LifecycleEventContext<'a> {
     event_name: &'a str,
     payload: &'a Value,
     agent_id: &'a str,
+    parent_agent_id: Option<&'a str>,
     model_hint: Option<&'a str>,
     transcript_path: Option<&'a str>,
     turn_ended: bool,

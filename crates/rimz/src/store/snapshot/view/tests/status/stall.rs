@@ -81,7 +81,7 @@ fn quiet_parked_agent_settles_after_the_stall_window() {
 //
 // docs/internals/agents/model.md commits to a strict order among the derived display
 // states: a human-blocked `waiting` outranks them all, then a paused-class
-// marker, then the live-subagent exemption, then a failed marker, then settled
+// marker, then a failed marker, then the live-subagent exemption, then settled
 // completion/interruption markers, then the stalled parked settle, then the
 // stalled-running fallback (paused when the kind's window is spent, failed
 // otherwise). The single-cause cases each prove one rung; this grid pins the
@@ -175,15 +175,15 @@ fn displayed_status_rungs() -> Vec<StatusRung> {
             expect_error_label: true,
         },
         StatusRung {
-            name: "child exemption beats marker + stall",
+            name: "failed marker beats child exemption + stall",
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
                 .turn_error(10, "API Error: Bad Request"),
             with_live_child: true,
             budget_windows: Vec::new(),
-            expect: AgentStatus::Running,
-            expect_error_label: false,
+            expect: AgentStatus::Failed,
+            expect_error_label: true,
         },
         StatusRung {
             name: "failed marker beats stall",

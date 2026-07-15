@@ -161,7 +161,7 @@ pub(super) fn row_lines(
 /// thinking head while the child reasons, the working fill while it acts,
 /// the static `✓`/`!` verdict once it finishes — then the type and the
 /// description of what the parent asked it to do; line 2 (deeper indent) is
-/// its token spend `◇` (the card's whole-unit figure, never a decimal), model,
+/// its reported token figure `◇` (the card's whole-unit figure, never a decimal), model,
 /// and reasoning effort — one per-card column grid, each slot sized to its
 /// widest sibling so the figures, models, and efforts stack — with elapsed
 /// work (the clock-fill glyph over a fixed `<1m`/`9m`/`2h` label in the
@@ -170,10 +170,10 @@ pub(super) fn row_lines(
 /// subordinate to the parent card, so their text stays at the soft middle
 /// weight — the model/effort metadata a step deeper at the dim chrome, like
 /// the parent's capability tokens — and indented past the parent's stat
-/// lines. The description, tokens,
-/// and elapsed ride in from
-/// Claude's `subagentStatusLine`; the model, effort, and phase from the
-/// child's own lifecycle events. A child with none of them — and any finished
+/// lines. Claude's description, cumulative tokens, and elapsed ride in from
+/// `subagentStatusLine`; Codex reports current child context from the rollout
+/// tail. Model, effort, and phase come from child lifecycle events. A child
+/// with none of them — and any finished
 /// child, whose work span is over — degrades to the bare type line, with line 2
 /// dropped.
 fn sub_agent_lines(ctx: &RowCtx<'_>, sub_agents: &[SidebarSubAgent]) -> Vec<Line<'static>> {

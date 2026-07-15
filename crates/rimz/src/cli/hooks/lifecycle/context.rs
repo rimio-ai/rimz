@@ -13,6 +13,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         event_name,
         payload,
         agent_id,
+        parent_agent_id,
         model_hint,
         transcript_path,
         turn_ended,
@@ -36,7 +37,7 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
     }
     // Refresh the activity heartbeat on progress-proving events so the
     // sidebar's `last_activity` advances per tool call, not just per turn.
-    if agent.descriptor().records_activity(event_name)
+    if (agent.descriptor().records_activity(event_name) || parent_agent_id.is_some())
         && let Err(err) =
             rimz::agent_activity::touch(store.runtime_paths(), agent.descriptor().kind, agent_id)
     {
@@ -46,6 +47,12 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
             error = %err,
             "lifecycle: failed to touch the agent activity heartbeat",
         );
+    }
+    // Codex child rollout details travel on the durable child observation.
+    // Root-scoped sidecars and app-server refreshes would otherwise read the
+    // parent's context under `session_id` and contaminate both rows.
+    if agent.descriptor().kind == "codex" && parent_agent_id.is_some() {
+        return;
     }
     if let Some(context_agent_id) = payload_context_agent_id(payload) {
         merge_agent_context_sidecars(ContextSidecarInput {

@@ -175,11 +175,10 @@ pub struct AgentLifecycleObservation {
     /// sessions to the in-pane process rather than the shared daemon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_stamp: Option<PaneRef>,
-    /// The root session id this observation's agent is a *child* of, set only
-    /// on `SubagentStart`/`SubagentStop` (the payload `session_id`, which both
-    /// adapters report as the parent for a subagent event). `None` for root
-    /// agents. Identity lifetime in the reducer, so a child row links to its
-    /// parent row by `(kind, parent_agent_id)` for the whole child's life.
+    /// The root session id this observation's agent is a *child* of, set on
+    /// every hook that carries a distinct child and parent identity. `None` for
+    /// root agents. Identity lifetime in the reducer, so a child row links to
+    /// its parent row by `(kind, parent_agent_id)` for the whole child's life.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_agent_id: Option<AgentSessionId>,
 }

@@ -17,6 +17,20 @@ use crate::agents::hook_types::{CompactTrigger, HookEventCommon, SessionSource};
 pub struct CodexCommon {
     #[serde(flatten)]
     pub common: HookEventCommon,
+    pub transcript_path: Option<String>,
+    pub cwd: Option<String>,
+    pub hook_event_name: Option<String>,
+    pub model: Option<String>,
+    pub permission_mode: Option<String>,
+    pub turn_id: Option<String>,
+}
+
+/// Optional identity stamped on hooks that fire inside a Codex child thread.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CodexChildIdentity {
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
 }
 
 // ── Per-event input structs ────────────────────────────────────────────────
@@ -24,12 +38,18 @@ pub struct CodexCommon {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexSessionStart {
+    #[serde(flatten)]
+    pub common: CodexCommon,
     pub source: SessionSource,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexUserPromptSubmit {
+    #[serde(flatten)]
+    pub common: CodexCommon,
+    #[serde(flatten)]
+    pub child: CodexChildIdentity,
     pub prompt: Option<String>,
 }
 
@@ -38,8 +58,8 @@ pub struct CodexUserPromptSubmit {
 pub struct CodexSubagentStart {
     #[serde(flatten)]
     pub common: CodexCommon,
-    pub agent_id: Option<String>,
-    pub agent_type: Option<String>,
+    #[serde(flatten)]
+    pub child: CodexChildIdentity,
 }
 
 /// Silent lifecycle event. `tool_name` and `tool_input` are available for audit
@@ -49,9 +69,10 @@ pub struct CodexSubagentStart {
 pub struct CodexPreToolUse {
     #[serde(flatten)]
     pub common: CodexCommon,
-    pub agent_id: Option<String>,
-    pub agent_type: Option<String>,
+    #[serde(flatten)]
+    pub child: CodexChildIdentity,
     pub tool_name: Option<String>,
+    pub tool_use_id: Option<String>,
     pub tool_input: Option<Value>,
 }
 
@@ -62,8 +83,8 @@ pub struct CodexPreToolUse {
 pub struct CodexPermissionRequest {
     #[serde(flatten)]
     pub common: CodexCommon,
-    pub agent_id: Option<String>,
-    pub agent_type: Option<String>,
+    #[serde(flatten)]
+    pub child: CodexChildIdentity,
     pub tool_name: Option<String>,
     /// Full tool input object; `tool_input.description` (if present) is reached
     /// as `tool_input.get("description")`.
@@ -74,7 +95,12 @@ pub struct CodexPermissionRequest {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexPostToolUse {
+    #[serde(flatten)]
+    pub common: CodexCommon,
+    #[serde(flatten)]
+    pub child: CodexChildIdentity,
     pub tool_name: Option<String>,
+    pub tool_use_id: Option<String>,
     pub tool_input: Option<Value>,
     pub tool_response: Option<Value>,
 }
@@ -84,21 +110,39 @@ pub struct CodexPostToolUse {
 pub struct CodexSubagentStop {
     #[serde(flatten)]
     pub common: CodexCommon,
-    pub agent_id: Option<String>,
-    pub agent_type: Option<String>,
+    #[serde(flatten)]
+    pub child: CodexChildIdentity,
+    pub agent_transcript_path: Option<String>,
+    pub stop_hook_active: Option<bool>,
+    pub last_assistant_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexStop {
+    pub stop_hook_active: Option<bool>,
     /// Final assistant message text from the completed turn.
     pub last_assistant_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CodexPreCompact {
+    #[serde(flatten)]
+    pub common: CodexCommon,
+    #[serde(flatten)]
+    pub child: CodexChildIdentity,
+    pub trigger: CompactTrigger,
 }
 
 /// Fires after conversation compaction completes.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexPostCompact {
+    #[serde(flatten)]
+    pub common: CodexCommon,
+    #[serde(flatten)]
+    pub child: CodexChildIdentity,
     pub trigger: CompactTrigger,
 }
 
@@ -120,6 +164,7 @@ parse_fn!(parse_permission_request, CodexPermissionRequest);
 parse_fn!(parse_post_tool_use, CodexPostToolUse);
 parse_fn!(parse_subagent_stop, CodexSubagentStop);
 parse_fn!(parse_stop, CodexStop);
+parse_fn!(parse_pre_compact, CodexPreCompact);
 parse_fn!(parse_post_compact, CodexPostCompact);
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -155,19 +200,50 @@ mod tests {
         let subagent = parse_subagent_stop(&json!({
             "agent_id": "child-1",
             "agent_type": "code-reviewer",
+            "agent_transcript_path": "/tmp/child.jsonl",
+            "stop_hook_active": true,
+            "last_assistant_message": "done",
         }));
-        assert_eq!(subagent.agent_id.as_deref(), Some("child-1"));
-        assert_eq!(subagent.agent_type.as_deref(), Some("code-reviewer"));
+        assert_eq!(subagent.child.agent_id.as_deref(), Some("child-1"));
+        assert_eq!(subagent.child.agent_type.as_deref(), Some("code-reviewer"));
+        assert_eq!(
+            subagent.agent_transcript_path.as_deref(),
+            Some("/tmp/child.jsonl")
+        );
+        assert_eq!(subagent.stop_hook_active, Some(true));
+        assert_eq!(subagent.last_assistant_message.as_deref(), Some("done"));
         assert!(
-            parse_permission_request(
-                &json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}})
-            )
+            parse_permission_request(&json!({
+                "session_id": "root",
+                "agent_id": "child-1",
+                "agent_type": "reviewer",
+                "tool_name": "Bash",
+                "tool_input": {"command": "rm -rf /"}
+            }))
             .tool_input
             .is_some()
         );
+        let prompt = parse_user_prompt_submit(&json!({
+            "session_id": "root",
+            "agent_id": "child-1",
+            "agent_type": "reviewer",
+            "prompt": "continue"
+        }));
+        assert_eq!(prompt.child.agent_id.as_deref(), Some("child-1"));
         assert_eq!(
             parse_post_compact(&json!({"trigger": "manual"})).trigger,
             CompactTrigger::Manual
         );
+
+        // V2 nickname, task-path, and token usage are rollout/app-server data,
+        // not fields in the stable hook contract.
+        let hook = json!({
+            "session_id": "root",
+            "agent_id": "child-1",
+            "agent_type": "default"
+        });
+        assert!(hook.get("agent_nickname").is_none());
+        assert!(hook.get("agent_path").is_none());
+        assert!(hook.get("last_token_usage").is_none());
     }
 }

@@ -198,8 +198,9 @@ impl CardIdentityAllocator {
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
         let name = self.assign_name(&key, observation, prior);
-        let name_explicit =
-            prior
+        let name_explicit = observation.parent_agent_id.is_some()
+            && observation.agent_name.as_deref() == Some(name.as_str())
+            || prior
                 .and_then(|state| state.name.as_deref())
                 .is_some_and(|prior_name| {
                     prior.is_some_and(|state| state.name_explicit) && name == prior_name

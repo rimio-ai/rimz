@@ -2,10 +2,10 @@
 //!
 //! Classifies `PermissionRequest` and blocking `PreToolUse` questions
 //! (`request_user_input`) onto Waiting, plus the lifecycle events
-//! (`SessionStart` registers idle, `SubagentStart` / `UserPromptSubmit` move
-//! to running, `SubagentStop` returns the child to idle, and `Stop` either
-//! raises a rollout-derived plan ask or completes the root turn); neutral hook
-//! output is empty stdout.
+//! (`SessionStart` registers idle, prompt/tool/compaction hooks advance their
+//! typed root or child, `SubagentStop` returns the child to idle, and `Stop`
+//! either raises a rollout-derived plan ask or completes the root turn);
+//! neutral hook output is empty stdout.
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
@@ -50,10 +50,11 @@ use self::install::{
 #[cfg(test)]
 use self::install::{has_rimz_hook_command, snake_event_token};
 use self::payloads::{
-    CodexPermissionRequest, CodexPostCompact, CodexPreToolUse, CodexSessionStart,
-    CodexSubagentStart, CodexSubagentStop, CodexUserPromptSubmit, parse_permission_request,
-    parse_post_compact, parse_post_tool_use, parse_pre_tool_use, parse_session_start, parse_stop,
-    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
+    CodexChildIdentity, CodexCommon, CodexPermissionRequest, CodexPostCompact, CodexPostToolUse,
+    CodexPreCompact, CodexPreToolUse, CodexSessionStart, CodexSubagentStart, CodexSubagentStop,
+    CodexUserPromptSubmit, parse_permission_request, parse_post_compact, parse_post_tool_use,
+    parse_pre_compact, parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start,
+    parse_subagent_stop, parse_user_prompt_submit,
 };
 pub(crate) use self::process::is_codex_cli_cmdline;
 pub use self::process::{
@@ -61,9 +62,9 @@ pub use self::process::{
 };
 pub(crate) use self::transcript::infer_turn_death_from_spent_window;
 use self::transcript::{
-    TranscriptUsage, configured_model, configured_reasoning_effort, detect_plan_proposed,
-    detect_turn_error, find_session_transcript, payload_reasoning_effort,
-    usage_from_transcript_tail,
+    CodexRolloutHeader, TranscriptUsage, configured_model, configured_reasoning_effort,
+    detect_plan_proposed, detect_turn_error, find_session_transcript, payload_reasoning_effort,
+    read_rollout_header, usage_from_transcript_tail,
 };
 #[cfg(test)]
 use self::transcript::{
@@ -266,7 +267,7 @@ const CODEX_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "PreCompact/PostCompact/SessionStart:compact",
     },
     subagents: ConcernCoverage::Wired {
-        via: "SubagentStart/SubagentStop",
+        via: "all child-identified lifecycle hooks + child rollout enrichment",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
@@ -618,7 +619,12 @@ impl AgentAdapter for CodexAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         let parts = CodexLifecycleParts::parse(event_name, payload);
-        let transcript = codex_transcript_observation(payload, event_name == "Stop");
+        let child_id = parts.distinct_child_id();
+        let transcript = codex_transcript_observation(
+            payload,
+            child_id,
+            matches!(event_name, "Stop" | "SubagentStop"),
+        );
         let signal = map_codex_lifecycle_signal(
             self.descriptor(),
             event_name,
@@ -632,7 +638,6 @@ impl AgentAdapter for CodexAdapter {
             event_name,
             payload,
             &parts,
-            &signal,
         )?;
         let root_identity_event = parent_agent_id.is_none()
             && matches!(
@@ -821,25 +826,33 @@ struct CodexLifecycleParts {
     subagent_stop: Option<CodexSubagentStop>,
     pre_tool_use: Option<CodexPreToolUse>,
     permission_request: Option<CodexPermissionRequest>,
+    post_tool_use: Option<CodexPostToolUse>,
+    pre_compact: Option<CodexPreCompact>,
     post_compact: Option<CodexPostCompact>,
 }
 
-type CodexSubagent<'a> = (&'a Option<String>, &'a Option<String>, &'a Option<String>);
+struct CodexChild<'a> {
+    identity: &'a CodexChildIdentity,
+    common: &'a CodexCommon,
+}
 
-fn codex_child_event<'a>(
-    agent_id: &'a Option<String>,
-    agent_type: &'a Option<String>,
-    session_id: &'a Option<String>,
-) -> Option<CodexSubagent<'a>> {
-    let child = agent_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let parent = session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    (child != parent).then_some((agent_id, agent_type, session_id))
+impl CodexChild<'_> {
+    fn is_distinct(&self) -> bool {
+        let child = self
+            .identity
+            .agent_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let parent = self
+            .common
+            .common
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        matches!((child, parent), (Some(child), Some(parent)) if child != parent)
+    }
 }
 
 impl CodexLifecycleParts {
@@ -853,30 +866,76 @@ impl CodexLifecycleParts {
             pre_tool_use: (event_name == "PreToolUse").then(|| parse_pre_tool_use(payload)),
             permission_request: (event_name == "PermissionRequest")
                 .then(|| parse_permission_request(payload)),
+            post_tool_use: (event_name == "PostToolUse").then(|| parse_post_tool_use(payload)),
+            pre_compact: (event_name == "PreCompact").then(|| parse_pre_compact(payload)),
             post_compact: (event_name == "PostCompact").then(|| parse_post_compact(payload)),
         }
     }
 
-    fn subagent_for_signal(&self, signal: &LifecycleSignal) -> Option<CodexSubagent<'_>> {
+    fn child(&self) -> Option<CodexChild<'_>> {
         self.subagent_start
             .as_ref()
-            .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
-            .or_else(|| {
-                self.subagent_stop
-                    .as_ref()
-                    .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
+            .map(|p| CodexChild {
+                identity: &p.child,
+                common: &p.common,
             })
             .or_else(|| {
-                self.permission_request.as_ref().and_then(|p| {
-                    codex_child_event(&p.agent_id, &p.agent_type, &p.common.common.session_id)
+                self.subagent_stop.as_ref().map(|p| CodexChild {
+                    identity: &p.child,
+                    common: &p.common,
                 })
             })
-            .or_else(|| match signal {
-                LifecycleSignal::AwaitingInput { .. } => self.pre_tool_use.as_ref().and_then(|p| {
-                    codex_child_event(&p.agent_id, &p.agent_type, &p.common.common.session_id)
-                }),
-                _ => None,
+            .or_else(|| {
+                self.user_prompt.as_ref().map(|p| CodexChild {
+                    identity: &p.child,
+                    common: &p.common,
+                })
             })
+            .or_else(|| {
+                self.pre_tool_use.as_ref().map(|p| CodexChild {
+                    identity: &p.child,
+                    common: &p.common,
+                })
+            })
+            .or_else(|| {
+                self.permission_request.as_ref().map(|p| CodexChild {
+                    identity: &p.child,
+                    common: &p.common,
+                })
+            })
+            .or_else(|| {
+                self.post_tool_use.as_ref().map(|p| CodexChild {
+                    identity: &p.child,
+                    common: &p.common,
+                })
+            })
+            .or_else(|| {
+                self.pre_compact.as_ref().map(|p| CodexChild {
+                    identity: &p.child,
+                    common: &p.common,
+                })
+            })
+            .or_else(|| {
+                self.post_compact.as_ref().map(|p| CodexChild {
+                    identity: &p.child,
+                    common: &p.common,
+                })
+            })
+    }
+
+    fn distinct_child_id(&self) -> Option<&str> {
+        let child = self.child()?;
+        child
+            .is_distinct()
+            .then(|| child.identity.agent_id.as_deref())
+            .flatten()
+    }
+
+    fn hook_model(&self) -> Option<String> {
+        self.session_start
+            .as_ref()
+            .and_then(|session| session.common.model.clone())
+            .or_else(|| self.child().and_then(|child| child.common.model.clone()))
     }
 }
 
@@ -898,7 +957,9 @@ fn map_codex_lifecycle_signal(
         }
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
-        "SubagentStop" => Some(LifecycleSignal::SubagentStopped { errored: false }),
+        "SubagentStop" => Some(LifecycleSignal::SubagentStopped {
+            errored: stop_payload_errored(payload) || turn_error.is_some(),
+        }),
         "Stop" if plan_proposed => Some(LifecycleSignal::AwaitingInput {
             kind: AskKind::PlanApproval,
             ask_id: None,
@@ -962,8 +1023,27 @@ fn codex_transcript_path(payload: &Value) -> Option<PathBuf> {
         })
 }
 
+fn codex_child_transcript_path(payload: &Value, child_id: &str) -> Option<PathBuf> {
+    optional_payload_string(payload, &["agent_transcript_path"])
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            optional_payload_string(payload, &["transcript_path"])
+                .map(PathBuf::from)
+                .filter(|path| path.is_file())
+                .filter(|path| {
+                    read_rollout_header(path)
+                        .and_then(|header| header.session_id)
+                        .as_deref()
+                        == Some(child_id)
+                })
+        })
+        .or_else(|| find_session_transcript(child_id))
+}
+
 struct CodexTranscriptObservation {
     path: Option<PathBuf>,
+    header: Option<CodexRolloutHeader>,
     usage: TranscriptUsage,
     turn_error: Option<AgentTurnError>,
     plan_proposed: Option<self::transcript::PlanProposal>,
@@ -971,9 +1051,17 @@ struct CodexTranscriptObservation {
 
 fn codex_transcript_observation(
     payload: &Value,
+    child_id: Option<&str>,
     detect_turn_death: bool,
 ) -> CodexTranscriptObservation {
-    let path = codex_transcript_path(payload);
+    let path = match child_id {
+        Some(child_id) => codex_child_transcript_path(payload, child_id),
+        None => codex_transcript_path(payload),
+    };
+    let header = child_id.and_then(|child_id| {
+        let header = path.as_deref().and_then(read_rollout_header)?;
+        (header.session_id.as_deref() == Some(child_id)).then_some(header)
+    });
     let tail = path.as_deref().and_then(read_transcript_tail);
     let usage = tail
         .as_deref()
@@ -987,6 +1075,7 @@ fn codex_transcript_observation(
         .flatten();
     CodexTranscriptObservation {
         path,
+        header,
         usage,
         turn_error,
         plan_proposed,
@@ -1003,31 +1092,42 @@ fn resolve_codex_observation_identity(
     event_name: &str,
     payload: &Value,
     parts: &CodexLifecycleParts,
-    signal: &LifecycleSignal,
 ) -> Option<ObservationIdentity> {
-    match parts.subagent_for_signal(signal) {
-        Some((child, _, parent)) => match resolve_subagent_identity(
-            kind,
-            event_name,
-            child.as_deref(),
-            parent.as_deref(),
-            payload,
-        ) {
+    let child = parts.child();
+    let subagent_event = matches!(event_name, "SubagentStart" | "SubagentStop")
+        || child.as_ref().is_some_and(CodexChild::is_distinct);
+    if subagent_event {
+        let child_id = child
+            .as_ref()
+            .and_then(|child| child.identity.agent_id.as_deref());
+        let parent_id = child
+            .as_ref()
+            .and_then(|child| child.common.common.session_id.as_deref());
+        match resolve_subagent_identity(kind, event_name, child_id, parent_id, payload) {
             SubagentIdentity::Resolved {
                 agent_id,
                 parent_agent_id,
             } => Some((Some(agent_id), Some(parent_agent_id))),
             SubagentIdentity::Quarantined => None,
-        },
-        None => match resolve_root_identity(
+        }
+    } else {
+        let typed_agent_id = child
+            .as_ref()
+            .and_then(|child| child.identity.agent_id.as_deref());
+        let typed_session_id = child
+            .as_ref()
+            .and_then(|child| child.common.common.session_id.as_deref());
+        let payload_agent_id = optional_payload_string(payload, &["agent_id"]);
+        let payload_session_id = optional_payload_string(payload, &["session_id"]);
+        match resolve_root_identity(
             kind,
             event_name,
-            optional_payload_string(payload, &["agent_id"]).as_deref(),
-            optional_payload_string(payload, &["session_id"]).as_deref(),
+            typed_agent_id.or(payload_agent_id.as_deref()),
+            typed_session_id.or(payload_session_id.as_deref()),
         ) {
             RootIdentity::Root { agent_id } => Some((agent_id, None)),
             RootIdentity::ForeignChild => None,
-        },
+        }
     }
 }
 
@@ -1039,14 +1139,33 @@ fn build_codex_observation(
     parent_agent_id: Option<crate::ids::AgentSessionId>,
     transcript: CodexTranscriptObservation,
 ) -> AgentLifecycleObservation {
+    let header = transcript
+        .header
+        .as_ref()
+        .filter(|header| header.is_subagent);
     let usage = transcript.usage;
     let usage_effort = usage.effort.clone();
     let is_subagent = parent_agent_id.is_some();
-    let subagent = parts.subagent_for_signal(&signal);
+    let agent_type = is_subagent
+        .then(|| parts.child()?.identity.agent_type.clone())
+        .flatten();
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
     observation.parent_agent_id = parent_agent_id;
-    observation.task = codex_task(payload, subagent);
+    observation.agent_name = is_subagent
+        .then(|| {
+            header
+                .and_then(|header| header.agent_nickname.clone())
+                .or_else(|| agent_type.clone())
+        })
+        .flatten();
+    observation.task = if is_subagent {
+        header
+            .and_then(|header| header.agent_path.clone())
+            .or_else(|| agent_type.clone())
+    } else {
+        sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref())
+    };
     observation.prompt =
         sanitize_user_prompt(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
     observation.transcript_path = transcript
@@ -1054,29 +1173,33 @@ fn build_codex_observation(
         .map(|path| path.to_string_lossy().into_owned());
     observation.turn_error = transcript.turn_error;
     let reported_context_window = usage.reported_context_window();
-    observation.launch.model = optional_payload_string(payload, &["model"]).or(usage.model);
+    observation.launch.role = is_subagent
+        .then(|| {
+            header
+                .and_then(|header| header.agent_role.clone())
+                .or_else(|| agent_type.clone())
+        })
+        .flatten();
+    observation.launch.model = parts
+        .hook_model()
+        .or_else(|| optional_payload_string(payload, &["model"]))
+        .or(usage.model)
+        .or_else(|| is_subagent.then(configured_model).flatten());
     observation.launch.effort = payload_reasoning_effort(payload)
         .or(usage_effort)
         .or_else(|| is_subagent.then(configured_reasoning_effort).flatten());
     observation.context_window = reported_context_window;
-    observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+    observation.total_tokens = if is_subagent {
+        usage.total_tokens
+    } else {
+        payload_total_tokens(payload, usage.total_tokens)
+    };
     observation.cache_read_input_tokens = usage.last_cached_input_tokens;
     observation.fresh_input_tokens = usage
         .last_input_tokens
         .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0)));
     observation.output_tokens = usage.last_output_tokens;
     observation
-}
-
-fn codex_task(payload: &Value, subagent: Option<CodexSubagent<'_>>) -> Option<String> {
-    match subagent {
-        Some((_, agent_type, _)) => agent_type.clone().or_else(|| {
-            sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref())
-        }),
-        None => {
-            sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref())
-        }
-    }
 }
 
 /// Read Codex's read-only realtime details from the app-server and project them

@@ -132,9 +132,11 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
     now: Timestamp,
 ) -> SidebarSubAgent {
     let name = child
-        .task
-        .clone()
-        .filter(|task| !task.is_empty())
+        .name_explicit
+        .then(|| child.name.clone())
+        .flatten()
+        .filter(|name| !name.is_empty())
+        .or_else(|| child.task.clone().filter(|task| !task.is_empty()))
         .unwrap_or_else(|| {
             debug!(
                 target: "rimz::agent::lifecycle",
@@ -144,7 +146,8 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
             );
             degraded_subagent_label(&child.agent_id)
         });
-    let elapsed_secs = child.subagent_started_at.map(|started| {
+    let started_at = child.subagent_started_at.or(child.registered_at);
+    let elapsed_secs = started_at.map(|started| {
         let until = if child.status == AgentStatus::Running {
             now
         } else {
@@ -163,7 +166,7 @@ pub(in crate::store::snapshot) fn sub_agent_from_state(
         description: child.subagent_description.clone(),
         total_tokens: child.total_tokens,
         elapsed_secs,
-        started_at: child.subagent_started_at,
+        started_at,
         last_activity: child.last_activity,
         registered_at: child.registered_at,
     }

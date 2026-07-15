@@ -2,13 +2,12 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 
 use jiff::{Timestamp, civil::Date};
 use uuid::Uuid;
 
-use super::spend::wire::{CodexSessionMeta, CodexTimestamp};
+use super::transcript::read_rollout_header;
 use crate::agents::{LocalSessionObservation, LocalSessionProjection};
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -202,25 +201,15 @@ fn relative_date(relative: &Path) -> Option<Date> {
 }
 
 fn observation(path: PathBuf, workspaces: &HashSet<&Path>) -> Option<LocalSessionObservation> {
-    let file = fs::File::open(&path).ok()?;
-    let mut first_line = String::new();
-    std::io::BufReader::new(file)
-        .read_line(&mut first_line)
-        .ok()?;
-    let meta = serde_json::from_str::<CodexSessionMeta<'_>>(&first_line).ok()?;
-    if meta.entry_type.as_deref() != Some("session_meta") {
+    let header = read_rollout_header(&path)?;
+    if header.is_subagent {
         return None;
     }
-    let payload = meta.payload?;
-    let workspace = *workspaces.get(Path::new(payload.cwd.as_deref()?))?;
-    let session_id = payload
-        .id
-        .as_deref()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(ToOwned::to_owned)
+    let workspace = *workspaces.get(header.cwd.as_deref()?)?;
+    let session_id = header
+        .session_id
         .or_else(|| session_id_from_filename(&path))?;
-    let created_at = timestamp(meta.timestamp.as_ref())?;
+    let created_at = header.timestamp?;
     let last_activity = file_mtime(&path).unwrap_or(created_at).max(created_at);
     Some(LocalSessionObservation {
         kind: AgentKind::new_unchecked("codex"),
@@ -239,20 +228,6 @@ fn session_id_from_filename(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     let suffix = stem.get(stem.len().checked_sub(36)?..)?;
     Uuid::parse_str(suffix).ok().map(|_| suffix.to_owned())
-}
-
-fn timestamp(timestamp: Option<&CodexTimestamp<'_>>) -> Option<Timestamp> {
-    match timestamp? {
-        CodexTimestamp::String(raw) => raw.trim().parse().ok(),
-        CodexTimestamp::Number(raw) => {
-            let (seconds, nanos) = if *raw > 10_000_000_000 {
-                (raw / 1_000, (raw % 1_000) * 1_000_000)
-            } else {
-                (*raw, 0)
-            };
-            Timestamp::new(i64::try_from(seconds).ok()?, nanos as i32).ok()
-        }
-    }
 }
 
 fn file_mtime(path: &Path) -> Option<Timestamp> {
@@ -320,6 +295,17 @@ mod tests {
         created_at: &str,
         modified_secs: u64,
     ) -> PathBuf {
+        write_rollout_with_extra(dir, id, cwd, created_at, modified_secs, "")
+    }
+
+    fn write_rollout_with_extra(
+        dir: &Path,
+        id: &str,
+        cwd: &str,
+        created_at: &str,
+        modified_secs: u64,
+        extra: &str,
+    ) -> PathBuf {
         fs::create_dir_all(dir).unwrap();
         let today = Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date();
         let path = dir.join(format!(
@@ -331,7 +317,7 @@ mod tests {
         fs::write(
             &path,
             format!(
-                r#"{{"timestamp":"{created_at}","type":"session_meta","payload":{{"id":"{id}","cwd":"{cwd}"}}}}"#
+                r#"{{"timestamp":"{created_at}","type":"session_meta","payload":{{"id":"{id}","cwd":"{cwd}"{extra}}}}}"#
             ),
         )
         .unwrap();
@@ -484,5 +470,56 @@ mod tests {
             discover_under(temp.path(), &[workspace]).len(),
             MAX_EXAMINED_FILES
         );
+    }
+
+    #[test]
+    fn excludes_v2_and_structured_subagents_but_keeps_user_forks() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = Path::new("/workspace/project");
+        let active = date_path(temp.path(), false, 0);
+        let archived = date_path(temp.path(), true, 0);
+        let root = "11111111-1111-4111-8111-111111111111";
+        let fork = "22222222-2222-4222-8222-222222222222";
+        let v2_child = "33333333-3333-4333-8333-333333333333";
+        let structured_child = "44444444-4444-4444-8444-444444444444";
+        write_rollout(
+            &active,
+            root,
+            "/workspace/project",
+            "2026-01-01T00:00:00Z",
+            100,
+        );
+        write_rollout_with_extra(
+            &active,
+            fork,
+            "/workspace/project",
+            "2026-01-01T00:00:01Z",
+            200,
+            &format!(r#","forked_from_id":"{root}","thread_source":"user""#),
+        );
+        write_rollout_with_extra(
+            &active,
+            v2_child,
+            "/workspace/project",
+            "2026-01-01T00:00:02Z",
+            300,
+            &format!(r#","thread_source":"subagent","parent_thread_id":"{root}""#),
+        );
+        write_rollout_with_extra(
+            &archived,
+            structured_child,
+            "/workspace/project",
+            "2026-01-01T00:00:03Z",
+            400,
+            &format!(
+                r#","source":{{"subagent":{{"thread_spawn":{{"parent_thread_id":"{root}","depth":1}}}}}}"#
+            ),
+        );
+
+        let ids = discover_under(temp.path(), &[workspace])
+            .into_iter()
+            .map(|observation| observation.session_id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [fork, root]);
     }
 }

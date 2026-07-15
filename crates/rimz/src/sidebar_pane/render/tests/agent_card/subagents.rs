@@ -203,3 +203,50 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
         "no bare `◇` over a blank figure:\n{rendered}"
     );
 }
+
+#[test]
+fn codex_subagent_renders_nickname_nested_path_and_current_context() {
+    let parent = agent(
+        "codex-root",
+        "codex",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("ship hooks"),
+    );
+    let mut child = agent(
+        "codex-child",
+        "codex",
+        AgentStatus::Running,
+        None,
+        None,
+        Some("research/explore_hooks"),
+    );
+    child.parent_agent_id = Some("codex-root".into());
+    child.name = Some("Atlas".to_owned());
+    child.name_explicit = true;
+    child.total_tokens = Some(32_100);
+    child.model = Some("gpt-5.5-codex".to_owned());
+    child.effort = Some("xhigh".to_owned());
+
+    let snapshot = snapshot_with(vec![parent, child]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            ..Default::default()
+        },
+        60,
+        18,
+    );
+
+    assert!(
+        rendered.contains("Atlas — research/explore_hooks"),
+        "nickname and flat nested path stay distinct:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("◇ 32k"),
+        "Codex's current context reading is rendered:\n{rendered}"
+    );
+}

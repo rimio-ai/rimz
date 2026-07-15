@@ -1179,3 +1179,42 @@ fn session_origin_reads_only_rollout_head_lineage() {
         assert_eq!(session_origin("missing"), None);
     });
 }
+
+#[test]
+fn rollout_header_normalizes_v2_and_structured_child_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let v2 = dir.path().join("v2.jsonl");
+    std::fs::write(
+        &v2,
+        r#"{"timestamp":"2026-06-26T00:00:00Z","type":"session_meta","payload":{"id":"child-v2","cwd":"/workspace/project","thread_source":"subagent","parent_thread_id":"root","agent_nickname":"Atlas","agent_path":"//root//research/explore_hooks/","agent_role":"explorer","multi_agent_version":"v2"}}"#,
+    )
+    .unwrap();
+    let header = read_rollout_header(&v2).unwrap();
+    assert!(header.is_subagent);
+    assert_eq!(header.session_id.as_deref(), Some("child-v2"));
+    assert_eq!(header.parent_thread_id.as_deref(), Some("root"));
+    assert_eq!(header.agent_nickname.as_deref(), Some("Atlas"));
+    assert_eq!(header.agent_path.as_deref(), Some("research/explore_hooks"));
+    assert_eq!(header.agent_role.as_deref(), Some("explorer"));
+    assert_eq!(header.multi_agent_version.as_deref(), Some("v2"));
+
+    let structured = dir.path().join("structured.jsonl");
+    std::fs::write(
+        &structured,
+        r#"{"timestamp":1735689600000,"type":"session_meta","payload":{"id":"child-v1","source":{"subagent":{"thread_spawn":{"parent_thread_id":"nested-parent","depth":2,"agent_path":"/root/research/worker","agent_nickname":"Scout","agent_role":"default"}}}}}"#,
+    )
+    .unwrap();
+    let header = read_rollout_header(&structured).unwrap();
+    assert!(header.is_subagent);
+    assert_eq!(header.parent_thread_id.as_deref(), Some("nested-parent"));
+    assert_eq!(header.depth, Some(2));
+    assert_eq!(header.agent_path.as_deref(), Some("research/worker"));
+
+    let root_only = dir.path().join("root-only.jsonl");
+    std::fs::write(
+        &root_only,
+        r#"{"type":"session_meta","payload":{"id":"root-only","thread_source":"subagent","agent_path":"/root//"}}"#,
+    )
+    .unwrap();
+    assert_eq!(read_rollout_header(&root_only).unwrap().agent_path, None);
+}

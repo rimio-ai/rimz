@@ -910,61 +910,135 @@ fn pi_tool_call_emits_neutral_and_no_waiting_row() {
 #[test]
 fn codex_subagent_lifecycle_uses_child_agent_identity() {
     let env = Env::new();
+    let run = |payload: Value| {
+        let payload = serde_json::to_string(&payload).expect("payload");
+        let mut cmd = env.hook_command("codex");
+        cmd.env("RIMZ_CODEX_BIN", "/nonexistent/codex-binary-xyz");
+        let output = env
+            .spawn_payload(cmd, &payload)
+            .wait_with_output()
+            .expect("wait codex hook");
+        assert_hook_succeeded_neutral("codex", output);
+    };
+    run(json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-codex-parent",
+        "source": "startup",
+    }));
+
+    let mut context = rimz::store::agent_context::empty_context("codex", Timestamp::now());
+    context.model_id = Some("parent-model".to_owned());
+    let parent_context =
+        rimz::store::agent_context::new_record("codex", "sess-codex-parent", context);
+    rimz::store::agent_context::write_record(&env.runtime_paths(), &parent_context)
+        .expect("seed parent context");
+    let parent_context_path = env
+        .runtime_paths()
+        .agent_context_path("codex", "sess-codex-parent");
+    let parent_context_before = std::fs::read(&parent_context_path).expect("parent context bytes");
+
+    let sessions = env.home_root.join(".codex/sessions/2026/06/26");
+    std::fs::create_dir_all(&sessions).expect("mkdir codex sessions");
+    let child_rollout = sessions.join("rollout-child-thread-1.jsonl");
+    std::fs::write(
+        &child_rollout,
+        concat!(
+            r#"{"timestamp":"2026-06-26T00:00:00Z","type":"session_meta","payload":{"id":"child-thread-1","thread_source":"subagent","parent_thread_id":"nested-parent","agent_nickname":"Atlas","agent_path":"/root/research/explore_hooks","agent_role":"explorer","multi_agent_version":"v2"}}"#,
+            "\n",
+            r#"{"type":"turn_context","payload":{"model":"gpt-5.5-codex","effort":"xhigh"}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300,"cached_input_tokens":200,"output_tokens":21,"total_tokens":321},"model_context_window":1000}}}"#,
+            "\n",
+            r#"{"timestamp":"2026-06-26T00:00:05Z","type":"event_msg","payload":{"type":"stream_error","message":"child failed"}}"#,
+            "\n",
+        ),
+    )
+    .expect("write child rollout");
+
     let start_payload = serde_json::to_string(&json!({
         "hook_event_name": "SubagentStart",
         "session_id": "sess-codex-parent",
         "agent_id": "child-thread-1",
-        "agent_type": "review",
+        "agent_type": "default",
         "permission_mode": "acceptEdits",
         "worktree_branch": "feature-x",
+        "transcript_path": child_rollout.to_string_lossy(),
     }))
     .expect("payload");
+    let mut cmd = env.hook_command("codex");
+    cmd.env("RIMZ_CODEX_BIN", "/nonexistent/codex-binary-xyz");
+    assert_hook_succeeded_neutral(
+        "codex",
+        env.spawn_payload(cmd, &start_payload)
+            .wait_with_output()
+            .expect("wait start"),
+    );
 
-    let output = env.run_hook("codex", &start_payload);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "subagent lifecycle hook is silent"
-    );
+    run(json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-codex-parent",
+        "agent_id": "child-thread-1",
+        "agent_type": "default",
+        "tool_name": "Bash",
+        "transcript_path": child_rollout.to_string_lossy(),
+    }));
+    run(json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": "sess-codex-parent",
+        "agent_id": "child-thread-1",
+        "agent_type": "default",
+        "tool_name": "Bash",
+        "transcript_path": child_rollout.to_string_lossy(),
+    }));
 
     let parsed = env.snapshot_json();
     let agents = parsed["agents"].as_array().expect("agents array");
-    assert_eq!(
-        agents.len(),
-        1,
-        "exactly one subagent rolled up: {agents:?}"
-    );
-    assert_eq!(agents[0]["agent_id"], "child-thread-1");
-    assert_eq!(agents[0]["status"], "running");
-    assert_eq!(agents[0]["task"], "review");
+    assert_eq!(agents.len(), 2, "one root plus one child: {agents:?}");
+    let child = agents
+        .iter()
+        .find(|agent| agent["agent_id"] == "child-thread-1")
+        .expect("child row");
+    assert_eq!(child["status"], "waiting");
+    assert_eq!(child["name"], "Atlas");
+    assert_eq!(child["task"], "research/explore_hooks");
+    assert_eq!(child["role"], "explorer");
+    assert_eq!(child["model"], "gpt-5.5-codex");
+    assert_eq!(child["effort"], "xhigh");
+    assert_eq!(child["total_tokens"], 321);
     // The child keys off `agent_id`; the payload's `session_id` is captured as
     // the parent root so the sidebar can nest the child under it.
-    assert_eq!(agents[0]["parent_agent_id"], "sess-codex-parent");
+    assert_eq!(child["parent_agent_id"], "sess-codex-parent");
 
-    let stop_payload = serde_json::to_string(&json!({
+    run(json!({
         "hook_event_name": "SubagentStop",
         "session_id": "sess-codex-parent",
         "agent_id": "child-thread-1",
-        "agent_type": "review",
-    }))
-    .expect("payload");
-    let output = env.run_hook("codex", &stop_payload);
-    assert!(output.status.success());
-    assert!(output.stdout.is_empty(), "subagent stop hook is silent");
+        "agent_type": "default",
+        "agent_transcript_path": child_rollout.to_string_lossy(),
+    }));
 
     let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["agent_id"], "child-thread-1");
-    // Codex reports no subagent error signal, so a stop resolves success and
-    // the finished child reads `✓` in the parent's expanded list.
-    assert_eq!(parsed["agents"][0]["status"], "success");
-    // The type label and the parent link both persist past stop so a finished
-    // child stays labeled and nested while it lingers in the parent's list.
-    assert_eq!(parsed["agents"][0]["task"], "review");
-    assert_eq!(parsed["agents"][0]["parent_agent_id"], "sess-codex-parent");
+    let child = parsed["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == "child-thread-1")
+        .unwrap();
+    assert_eq!(child["status"], "failed");
+    assert_eq!(child["name"], "Atlas");
+    assert_eq!(child["task"], "research/explore_hooks");
+    assert_eq!(child["parent_agent_id"], "sess-codex-parent");
+    assert_eq!(
+        std::fs::read(&parent_context_path).expect("parent context after child hooks"),
+        parent_context_before,
+        "child hooks never merge transcript data into the parent sidecar"
+    );
+    let activity = rimz::agent_activity::read_all(&env.runtime_paths());
+    assert!(
+        activity
+            .iter()
+            .any(|touch| { touch.kind == "codex" && touch.agent_id == "child-thread-1" })
+    );
 }
 
 #[test]

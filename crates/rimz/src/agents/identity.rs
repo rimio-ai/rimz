@@ -62,11 +62,10 @@ pub(crate) enum RootIdentity {
     /// A normal root event: key on the session id, no parent link.
     Root { agent_id: Option<AgentSessionId> },
     /// The event is stamped with a distinct child `agent_id` — it fired inside
-    /// a subagent. The caller drops it: the lifecycle channel is bracket-grained
-    /// for children (only `Subagent*` folds to the child's rollup), per-tool
-    /// child activity rides the child-keyed heartbeat, and folding the event
-    /// onto the parent would advance the parent's `last_activity` past its
-    /// waiting mark while it is still blocked.
+    /// a subagent. Adapters whose child contract is bracket-grained drop it;
+    /// adapters with typed child progress resolve that identity before calling
+    /// this root-only helper. Folding it onto the parent would advance the
+    /// parent's `last_activity` while it remains blocked.
     ForeignChild,
 }
 

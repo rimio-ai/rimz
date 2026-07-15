@@ -39,8 +39,8 @@ pub(super) fn payload_agent_id(payload: &Value) -> Option<&str> {
 
 /// The sidecar key for local context enrichment. Root sessions file context
 /// under the snake/camel session id (or Cursor's `conversation_id` and
-/// Antigravity's `conversationId`); child-specific `agent_id`s are lifecycle
-/// identities, not Codex rollout files.
+/// Antigravity's `conversationId`). Codex child observations bypass sidecar
+/// context management before this generic precedence is consulted.
 pub(super) fn payload_context_agent_id(payload: &Value) -> Option<&str> {
     [
         "session_id",

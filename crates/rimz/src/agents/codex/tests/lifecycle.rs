@@ -198,7 +198,9 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         .unwrap();
     assert_eq!(start.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(start.signal, LifecycleSignal::SubagentStarted);
+    assert_eq!(start.agent_name.as_deref(), Some("review"));
     assert_eq!(start.task.as_deref(), Some("review"));
+    assert_eq!(start.launch.role.as_deref(), Some("review"));
     assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
 
     let stop = CodexAdapter
@@ -267,10 +269,20 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
 
     for (event, payload) in [
         (
+            "UserPromptSubmit",
+            json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-thread-1",
+                "agent_type": "review",
+                "prompt": "continue",
+            }),
+        ),
+        (
             "PostToolUse",
             json!({
                 "session_id": "sess-parent",
                 "agent_id": "child-thread-1",
+                "agent_type": "review",
                 "tool_name": "shell",
             }),
         ),
@@ -279,7 +291,17 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
             json!({
                 "session_id": "sess-parent",
                 "agent_id": "child-thread-1",
+                "agent_type": "review",
                 "tool_name": "shell",
+            }),
+        ),
+        (
+            "PreCompact",
+            json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-thread-1",
+                "agent_type": "review",
+                "trigger": "auto",
             }),
         ),
         (
@@ -287,14 +309,21 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
             json!({
                 "session_id": "sess-parent",
                 "agent_id": "child-thread-1",
+                "agent_type": "review",
                 "trigger": "auto",
             }),
         ),
     ] {
-        assert!(
-            CodexAdapter.observe_lifecycle(event, &payload).is_none(),
+        let child = CodexAdapter
+            .observe_lifecycle(event, &payload)
+            .unwrap_or_else(|| panic!("{event} should update the child"));
+        assert_eq!(child.agent_id.as_deref(), Some("child-thread-1"), "{event}");
+        assert_eq!(
+            child.parent_agent_id.as_deref(),
+            Some("sess-parent"),
             "{event}"
         );
+        assert_eq!(child.task.as_deref(), Some("review"), "{event}");
     }
 
     let root = CodexAdapter
@@ -305,6 +334,87 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         .unwrap();
     assert_eq!(root.agent_id.as_deref(), Some("sess-parent"));
     assert_eq!(root.parent_agent_id, None);
+}
+
+#[test]
+fn v2_child_rollout_enriches_every_hook_without_parent_transcript_leakage() {
+    let dir = tempfile::tempdir().unwrap();
+    let day_dir = dir.path().join("2026").join("06").join("26");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let parent_path = day_dir.join("rollout-parent.jsonl");
+    std::fs::write(
+        &parent_path,
+        concat!(
+            r#"{"type":"session_meta","payload":{"id":"sess-parent","thread_source":"user"}}"#,
+            "\n",
+            r#"{"type":"turn_context","payload":{"model":"parent-model","effort":"low"}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999,"cached_input_tokens":0,"output_tokens":1,"total_tokens":1000},"model_context_window":2000}}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let child_path = day_dir.join("rollout-child-thread-1.jsonl");
+    std::fs::write(
+        &child_path,
+        concat!(
+            r#"{"timestamp":"2026-06-26T00:00:00Z","type":"session_meta","payload":{"id":"child-thread-1","thread_source":"subagent","parent_thread_id":"nested-parent","agent_nickname":"Atlas","agent_path":"//root//research/explore_hooks/","agent_role":"explorer","multi_agent_version":"v2","source":{"subagent":{"thread_spawn":{"parent_thread_id":"nested-parent","depth":2}}}}}"#,
+            "\n",
+            r#"{"type":"turn_context","payload":{"model":"child-model","effort":"xhigh"}}"#,
+            "\n",
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":300,"cached_input_tokens":200,"output_tokens":21,"total_tokens":321},"total_token_usage":{"input_tokens":9999,"output_tokens":9999},"model_context_window":1000}}}"#,
+            "\n",
+            r#"{"timestamp":"2026-06-26T00:00:05Z","type":"event_msg","payload":{"type":"stream_error","message":"child failed"}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let start = with_codex_sessions_root(dir.path(), || {
+        CodexAdapter
+            .observe_lifecycle(
+                "SubagentStart",
+                &json!({
+                    "session_id": "sess-parent",
+                    "agent_id": "child-thread-1",
+                    "agent_type": "default",
+                    "transcript_path": parent_path,
+                }),
+            )
+            .unwrap()
+    });
+    assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
+    assert_eq!(start.agent_name.as_deref(), Some("Atlas"));
+    assert_eq!(start.task.as_deref(), Some("research/explore_hooks"));
+    assert_eq!(start.launch.role.as_deref(), Some("explorer"));
+    assert_eq!(start.launch.model.as_deref(), Some("child-model"));
+    assert_eq!(start.launch.effort.as_deref(), Some("xhigh"));
+    assert_eq!(start.total_tokens, Some(321));
+    assert_eq!(start.context_window, Some(1000));
+    assert_eq!(start.cache_read_input_tokens, Some(200));
+    assert_eq!(start.fresh_input_tokens, Some(100));
+    assert_eq!(start.output_tokens, Some(21));
+    assert_eq!(start.transcript_path.as_deref(), child_path.to_str());
+
+    let stop = CodexAdapter
+        .observe_lifecycle(
+            "SubagentStop",
+            &json!({
+                "session_id": "sess-parent",
+                "agent_id": "child-thread-1",
+                "agent_type": "default",
+                "transcript_path": parent_path,
+                "agent_transcript_path": child_path,
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        stop.signal,
+        LifecycleSignal::SubagentStopped { errored: true }
+    );
+    assert_eq!(stop.launch.model.as_deref(), Some("child-model"));
+    assert_ne!(stop.launch.model.as_deref(), Some("parent-model"));
+    assert_eq!(stop.total_tokens, Some(321));
 }
 
 #[test]
