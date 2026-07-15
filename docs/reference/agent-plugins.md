@@ -2,6 +2,8 @@
 
 Agent plugins let an external agent CLI join RimZ without compiling provider-specific Rust into RimZ. A plugin bundle declares identity, branding, launch behavior, emitted events, transcript discovery, and optional pull probes; an agent-side shim translates its native protocol into one canonical JSON envelope.
 
+> **Early surface, not ready for public use.** The bundle format, the canonical wire, and the probe contracts are under active development and change without notice. Treat this as experimental: prototype against it and send feedback, but do not depend on it in production. A stable third-party integration ships as a [built-in adapter](../internals/agents/model.md) today.
+
 Plugins are machine configuration and may execute the launch and probe commands they declare. Install only bundles you trust. Project configuration does not register plugins, so plugin commands stay outside the project trust hash.
 
 ## Register a bundle
