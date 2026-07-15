@@ -208,8 +208,8 @@ impl Store {
             let messages_rewritten = messages.len();
             for message in &mut messages {
                 message.workspace_id = workspace.workspace_id.clone();
-                message_store::write(&self.inner.paths.messages_dir, message)?;
             }
+            message_store::replace_all(&self.inner.paths.messages_dir, &messages)?;
 
             let mut events = event_log::read_all(&self.inner.paths.events_log)?;
             let events_rewritten = events.len();

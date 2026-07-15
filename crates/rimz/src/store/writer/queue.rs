@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -111,11 +112,165 @@ enum MessageUpdate {
     },
 }
 
-fn claim_message_locked(
-    txn: &mut Txn<'_>,
-    message: &MessageRecord,
+struct QueueTxn<'txn, 'paths> {
+    txn: &'txn mut Txn<'paths>,
+    live: Vec<MessageRecord>,
+    history: Vec<MessageRecord>,
+    events: Vec<EventEnvelope>,
+    terminal_ids: BTreeSet<String>,
+    live_changed: bool,
+}
+
+impl<'txn, 'paths> QueueTxn<'txn, 'paths> {
+    fn new(txn: &'txn mut Txn<'paths>) -> Result<Self> {
+        let live = message_store::list(&txn.paths.messages_dir)?;
+        Ok(Self {
+            txn,
+            live,
+            history: Vec::new(),
+            events: Vec::new(),
+            terminal_ids: BTreeSet::new(),
+            live_changed: false,
+        })
+    }
+
+    fn live(&self) -> &[MessageRecord] {
+        &self.live
+    }
+
+    fn get(&self, message_id: &MessageId) -> Option<MessageRecord> {
+        self.live
+            .iter()
+            .find(|message| message.message_id == *message_id)
+            .cloned()
+    }
+
+    fn pending(&self) -> impl Iterator<Item = &MessageRecord> {
+        self.live
+            .iter()
+            .filter(|message| message.status == MessageStatus::Queued)
+    }
+
+    fn upsert(&mut self, message: MessageRecord) {
+        match self
+            .live
+            .iter_mut()
+            .find(|existing| existing.message_id == message.message_id)
+        {
+            Some(existing) => *existing = message,
+            None => self.live.push(message),
+        }
+        self.live_changed = true;
+    }
+
+    fn stage_event(&mut self, event: EventEnvelope) {
+        self.events.push(event);
+    }
+
+    fn force_publish(&mut self) {
+        self.txn.force_publish();
+    }
+
+    fn terminalize(
+        &mut self,
+        message: MessageRecord,
+        status: MessageStatus,
+        session_name: &str,
+        reason: Option<&str>,
+        now: Timestamp,
+    ) -> MessageRecord {
+        let message = normalize_terminal(message, status, now, reason);
+        let method = MessageEventMethod::for_terminal_status(status)
+            .expect("terminal message statuses have an event method");
+        if self
+            .live
+            .iter()
+            .any(|live| live.message_id == message.message_id)
+        {
+            self.live_changed = true;
+        }
+        self.terminal_ids.insert(message.message_id.to_string());
+        self.history.push(message.clone());
+        self.events.push(EventEnvelope::message_event(
+            &message,
+            session_name,
+            method,
+            reason,
+        ));
+        message
+    }
+
+    fn apply_all(
+        &mut self,
+        session_name: &str,
+        now: Timestamp,
+        mut update: impl FnMut(&mut MessageRecord) -> MessageUpdate,
+    ) -> Vec<MessageRecord> {
+        let mut updated = Vec::new();
+        let mut terminal = Vec::new();
+        for message in &mut self.live {
+            match update(message) {
+                MessageUpdate::Keep => {}
+                MessageUpdate::SilentRewrite => {
+                    self.live_changed = true;
+                    updated.push(message.clone());
+                }
+                MessageUpdate::Rewrite { method, reason } => {
+                    self.live_changed = true;
+                    updated.push(message.clone());
+                    self.events.push(EventEnvelope::message_event(
+                        message,
+                        session_name,
+                        method,
+                        reason.as_deref(),
+                    ));
+                }
+                MessageUpdate::Finalize { status, reason } => {
+                    terminal.push((message.clone(), status, reason));
+                }
+            }
+        }
+        for (message, status, reason) in terminal {
+            updated.push(self.terminalize(message, status, session_name, reason.as_deref(), now));
+        }
+        updated
+    }
+
+    fn finish(mut self) -> Result<()> {
+        message_store::append_history_many(&self.txn.paths.messages_dir, &self.history)?;
+        if self.live_changed {
+            self.live
+                .retain(|message| !self.terminal_ids.contains(message.message_id.as_str()));
+            message_store::replace_all(&self.txn.paths.messages_dir, &self.live)?;
+        }
+        for event in &self.events {
+            self.txn.append(event)?;
+        }
+        Ok(())
+    }
+}
+
+fn normalize_terminal(
+    mut message: MessageRecord,
+    status: MessageStatus,
     now: Timestamp,
-) -> Result<Option<MessageRecord>> {
+    reason: Option<&str>,
+) -> MessageRecord {
+    debug_assert!(status.is_terminal());
+    message.status = status;
+    message.updated_at = now;
+    if status == MessageStatus::Archived
+        && let Some(reason) = reason
+    {
+        message.last_error = Some(reason.to_owned());
+    }
+    if status == MessageStatus::Delivered {
+        message.delivered_at = Some(now);
+    }
+    message
+}
+
+fn claim_message(message: &MessageRecord, now: Timestamp) -> MessageRecord {
     let mut claimed = message.clone();
     claimed.status = MessageStatus::Claimed;
     claimed.attempts = claimed.attempts.saturating_add(1);
@@ -123,29 +278,7 @@ fn claim_message_locked(
     claimed.last_error = None;
     claimed.retry_after = None;
     claimed.updated_at = now;
-    message_store::write(&txn.paths.messages_dir, &claimed)?;
-    Ok(Some(claimed))
-}
-
-fn transition_terminal_record(
-    message: &mut MessageRecord,
-    status: MessageStatus,
-    session_name: &str,
-    reason: Option<&str>,
-    now: Timestamp,
-) -> EventEnvelope {
-    debug_assert!(status.is_terminal());
-    message.status = status;
-    message.updated_at = now;
-    if status == MessageStatus::Archived {
-        message.last_error = reason.map(ToOwned::to_owned);
-    }
-    if status == MessageStatus::Delivered {
-        message.delivered_at = Some(now);
-    }
-    let method = MessageEventMethod::for_terminal_status(status)
-        .expect("terminal transition requires a terminal message status");
-    EventEnvelope::message_event(message, session_name, method, reason)
+    claimed
 }
 
 fn apply_sweep_update(
@@ -248,90 +381,28 @@ impl Store {
         Ok(message_store::list_pending(&self.inner.paths.messages_dir)?)
     }
 
-    fn finalize_message_locked(
-        &self,
-        txn: &mut Txn<'_>,
-        mut message: MessageRecord,
-        status: MessageStatus,
-        session_name: &str,
-        reason: Option<&str>,
-        now: Timestamp,
-    ) -> Result<(MessageRecord, EventEnvelope)> {
-        let event = transition_terminal_record(&mut message, status, session_name, reason, now);
-        message_store::append_history(&txn.paths.messages_dir, &message)?;
-        message_store::remove(&txn.paths.messages_dir, &message.message_id)?;
-        txn.append(&event)?;
-        Ok((message, event))
-    }
-
     fn update_messages_locked(
         &self,
-        txn: &mut Txn<'_>,
+        queue: &mut QueueTxn<'_, '_>,
         session_name: &str,
         now: Timestamp,
-        mut update: impl FnMut(&mut MessageRecord) -> MessageUpdate,
-    ) -> Result<Vec<MessageRecord>> {
-        let mut messages = message_store::list(&txn.paths.messages_dir)?;
-        let mut removed_ids = std::collections::BTreeSet::new();
-        let mut updated = Vec::new();
-        let mut history = Vec::new();
-        let mut events = Vec::new();
-        for message in &mut messages {
-            match update(message) {
-                MessageUpdate::Keep => {}
-                MessageUpdate::SilentRewrite => {
-                    updated.push(message.clone());
-                }
-                MessageUpdate::Rewrite { method, reason } => {
-                    updated.push(message.clone());
-                    events.push(EventEnvelope::message_event(
-                        message,
-                        session_name,
-                        method,
-                        reason.as_deref(),
-                    ));
-                }
-                MessageUpdate::Finalize { status, reason } => {
-                    let event = transition_terminal_record(
-                        message,
-                        status,
-                        session_name,
-                        reason.as_deref(),
-                        now,
-                    );
-                    removed_ids.insert(message.message_id.to_string());
-                    updated.push(message.clone());
-                    history.push(message.clone());
-                    events.push(event);
-                }
-            }
-        }
-        if updated.is_empty() {
-            return Ok(updated);
-        }
-        for message in &history {
-            message_store::append_history(&txn.paths.messages_dir, message)?;
-        }
-        messages.retain(|message| !removed_ids.contains(message.message_id.as_str()));
-        message_store::replace_all(&txn.paths.messages_dir, &messages)?;
-        for event in &events {
-            txn.append(event)?;
-        }
-        Ok(updated)
+        update: impl FnMut(&mut MessageRecord) -> MessageUpdate,
+    ) -> Vec<MessageRecord> {
+        queue.apply_all(session_name, now, update)
     }
 
     fn finalize_matching_messages_locked(
         &self,
-        txn: &mut Txn<'_>,
+        queue: &mut QueueTxn<'_, '_>,
         status: MessageStatus,
         session_name: &str,
         reason: &str,
         mut select: impl FnMut(&MessageRecord) -> bool,
         mut update: impl FnMut(&mut MessageRecord),
-    ) -> Result<Vec<MessageRecord>> {
+    ) -> Vec<MessageRecord> {
         debug_assert!(status.is_terminal());
         let now = Timestamp::now();
-        self.update_messages_locked(txn, session_name, now, |message| {
+        self.update_messages_locked(queue, session_name, now, |message| {
             if !select(message) {
                 return MessageUpdate::Keep;
             }
@@ -348,8 +419,10 @@ impl Store {
         let event =
             EventEnvelope::message_event(message, session_name, MessageEventMethod::Queued, None);
         self.commit(|txn| {
-            message_store::write(&txn.paths.messages_dir, message)?;
-            txn.append(&event)
+            let mut queue = QueueTxn::new(txn)?;
+            queue.upsert(message.clone());
+            queue.stage_event(event);
+            queue.finish()
         })
     }
 
@@ -365,7 +438,8 @@ impl Store {
                 .iter()
                 .map(|update| (update.message_id.as_str(), update))
                 .collect::<std::collections::BTreeMap<_, _>>();
-            self.update_messages_locked(txn, session_name, now, |message| {
+            let mut queue = QueueTxn::new(txn)?;
+            self.update_messages_locked(&mut queue, session_name, now, |message| {
                 if message.status != MessageStatus::Queued {
                     return MessageUpdate::Keep;
                 }
@@ -373,8 +447,8 @@ impl Store {
                     return MessageUpdate::Keep;
                 };
                 apply_sweep_update(message, update, now)
-            })?;
-            Ok(())
+            });
+            queue.finish()
         })
     }
 
@@ -386,17 +460,17 @@ impl Store {
         session_name: &str,
     ) -> Result<EditOutcome> {
         self.commit(|txn| {
-            let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
-                Ok(message) => message,
-                Err(message_store::MessageStoreErr::NotFound(_)) => {
-                    return Ok(message_store::list_history(&txn.paths.messages_dir)?
+            let mut queue = QueueTxn::new(txn)?;
+            let mut message = match queue.get(message_id) {
+                Some(message) => message,
+                None => {
+                    return Ok(message_store::list_history(&queue.txn.paths.messages_dir)?
                         .into_iter()
                         .find(|message| message.message_id == *message_id)
                         .map_or(EditOutcome::NotFound, |message| {
                             EditOutcome::NotOpen(message.status)
                         }));
                 }
-                Err(err) => return Err(err.into()),
             };
             if message.status != MessageStatus::Queued {
                 return Ok(EditOutcome::NotOpen(message.status));
@@ -405,7 +479,7 @@ impl Store {
             edit.apply(&mut message);
             message.retry_after = None;
             message.updated_at = Timestamp::now();
-            message_store::write(&txn.paths.messages_dir, &message)?;
+            queue.upsert(message.clone());
             let reason = fields.join(", ");
             let event = EventEnvelope::message_event(
                 &message,
@@ -413,7 +487,8 @@ impl Store {
                 MessageEventMethod::Edited,
                 Some(&reason),
             );
-            txn.append(&event)?;
+            queue.stage_event(event);
+            queue.finish()?;
             Ok(EditOutcome::Edited(Box::new(message)))
         })
     }
@@ -425,35 +500,35 @@ impl Store {
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
         self.commit(|txn| {
-            let mut message =
-                match message_store::load(&txn.paths.messages_dir, &message.message_id) {
-                    Ok(existing)
-                        if matches!(
-                            existing.status,
-                            MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
-                        ) =>
-                    {
-                        let mut existing = existing;
-                        existing.pane_id = message.pane_id.clone();
-                        existing.batch_id = message.batch_id.clone();
-                        existing
-                    }
-                    Ok(_) => return Ok(None),
-                    Err(message_store::MessageStoreErr::NotFound(_)) => message.clone(),
-                    Err(err) => return Err(err.into()),
-                };
+            let mut queue = QueueTxn::new(txn)?;
+            let mut message = match queue.get(&message.message_id) {
+                Some(existing)
+                    if matches!(
+                        existing.status,
+                        MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
+                    ) =>
+                {
+                    let mut existing = existing;
+                    existing.pane_id = message.pane_id.clone();
+                    existing.batch_id = message.batch_id.clone();
+                    existing
+                }
+                Some(_) => return Ok(None),
+                None => message.clone(),
+            };
             let now = Timestamp::now();
             message.status = MessageStatus::Sent;
             message.updated_at = now;
             message.last_error = None;
-            message_store::write(&txn.paths.messages_dir, &message)?;
+            queue.upsert(message.clone());
             let event = EventEnvelope::message_event(
                 &message,
                 session_name,
                 MessageEventMethod::Sent,
                 None,
             );
-            txn.append(&event)?;
+            queue.stage_event(event);
+            queue.finish()?;
             Ok(Some(message))
         })
     }
@@ -465,7 +540,8 @@ impl Store {
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
         self.commit(|txn| {
-            let queued = message_store::list_pending(&txn.paths.messages_dir)?;
+            let mut queue = QueueTxn::new(txn)?;
+            let queued = queue.pending().cloned().collect::<Vec<_>>();
             let Some(message) = queued
                 .iter()
                 .find(|message| message.message_id == *message_id)
@@ -481,7 +557,10 @@ impl Store {
             if head.message_id != *message_id {
                 return Ok(None);
             }
-            claim_message_locked(txn, message, now)
+            let claimed = claim_message(message, now);
+            queue.upsert(claimed.clone());
+            queue.finish()?;
+            Ok(Some(claimed))
         })
     }
 
@@ -492,7 +571,8 @@ impl Store {
         now: Timestamp,
     ) -> Result<Option<MessageRecord>> {
         self.commit(|txn| {
-            let queued = message_store::list_pending(&txn.paths.messages_dir)?;
+            let mut queue = QueueTxn::new(txn)?;
+            let queued = queue.pending().cloned().collect::<Vec<_>>();
             let Some(message) = queued
                 .iter()
                 .find(|message| message.message_id == *message_id)
@@ -502,7 +582,10 @@ impl Store {
             if !claim_expired(message.last_attempt_at, now) {
                 return Ok(None);
             }
-            claim_message_locked(txn, message, now)
+            let claimed = claim_message(message, now);
+            queue.upsert(claimed.clone());
+            queue.finish()?;
+            Ok(Some(claimed))
         })
     }
 
@@ -514,8 +597,9 @@ impl Store {
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
         self.commit(|txn| {
+            let mut queue = QueueTxn::new(txn)?;
             let now = Timestamp::now();
-            let updated = self.update_messages_locked(txn, session_name, now, |message| {
+            let updated = self.update_messages_locked(&mut queue, session_name, now, |message| {
                 if message.message_id != *message_id
                     || !matches!(
                         message.status,
@@ -539,7 +623,8 @@ impl Store {
                     method: MessageEventMethod::Queued,
                     reason: Some(note.to_owned()),
                 }
-            })?;
+            });
+            queue.finish()?;
             Ok(updated.into_iter().next())
         })
     }
@@ -547,14 +632,14 @@ impl Store {
     #[must_use = "durability barrier; check the result"]
     pub fn defer_message_wake(&self, message_id: &MessageId, until: Timestamp) -> Result<()> {
         self.commit(|txn| {
-            let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
-                Ok(message) if message.status == MessageStatus::Queued => message,
-                Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(()),
-                Err(err) => return Err(err.into()),
+            let mut queue = QueueTxn::new(txn)?;
+            let mut message = match queue.get(message_id) {
+                Some(message) if message.status == MessageStatus::Queued => message,
+                Some(_) | None => return Ok(()),
             };
             message.retry_after = Some(until);
-            message_store::write(&txn.paths.messages_dir, &message)?;
-            Ok(())
+            queue.upsert(message);
+            queue.finish()
         })
     }
 
@@ -568,8 +653,9 @@ impl Store {
     ) -> Result<Option<MessageRecord>> {
         debug_assert!(status.is_terminal());
         self.commit(|txn| {
-            let message = match message_store::load(&txn.paths.messages_dir, message_id) {
-                Ok(message)
+            let mut queue = QueueTxn::new(txn)?;
+            let message = match queue.get(message_id) {
+                Some(message)
                     if matches!(
                         message.status,
                         MessageStatus::Queued | MessageStatus::Claimed | MessageStatus::Sent
@@ -577,12 +663,11 @@ impl Store {
                 {
                     message
                 }
-                Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(None),
-                Err(err) => return Err(err.into()),
+                Some(_) | None => return Ok(None),
             };
             let now = Timestamp::now();
-            let (settled, _event) =
-                self.finalize_message_locked(txn, message, status, session_name, reason, now)?;
+            let settled = queue.terminalize(message, status, session_name, reason, now);
+            queue.finish()?;
             Ok(Some(settled))
         })
     }
@@ -598,8 +683,9 @@ impl Store {
     ) -> Result<Vec<MessageRecord>> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
         self.commit(|txn| {
-            let messages = message_store::list(&txn.paths.messages_dir)?;
-            let Some(oldest) = messages
+            let mut queue = QueueTxn::new(txn)?;
+            let Some(oldest) = queue
+                .live()
                 .iter()
                 .filter(|message| {
                     message.status == MessageStatus::Sent
@@ -612,7 +698,7 @@ impl Store {
                 return Ok(Vec::new());
             };
             let now = Timestamp::now();
-            let delivered = self.update_messages_locked(txn, session_name, now, |message| {
+            let delivered = self.update_messages_locked(&mut queue, session_name, now, |message| {
                 let selected = if message.message_id == oldest.message_id {
                     true
                 } else {
@@ -629,7 +715,8 @@ impl Store {
                     status: MessageStatus::Delivered,
                     reason: None,
                 }
-            })?;
+            });
+            queue.finish()?;
             Ok(delivered)
         })
     }
@@ -642,22 +729,22 @@ impl Store {
         reason: Option<&str>,
     ) -> Result<Option<MessageRecord>> {
         self.commit(|txn| {
-            let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
-                Ok(message) if message.status == MessageStatus::Sent => message,
-                Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(None),
-                Err(err) => return Err(err.into()),
+            let mut queue = QueueTxn::new(txn)?;
+            let mut message = match queue.get(message_id) {
+                Some(message) if message.status == MessageStatus::Sent => message,
+                Some(_) | None => return Ok(None),
             };
             let now = Timestamp::now();
             let reason = reason.unwrap_or("delivery window elapsed");
             message.last_error = Some(reason.to_owned());
-            let (message, _event) = self.finalize_message_locked(
-                txn,
+            let message = queue.terminalize(
                 message,
                 MessageStatus::TimedOut,
                 session_name,
                 Some(reason),
                 now,
-            )?;
+            );
+            queue.finish()?;
             Ok(Some(message))
         })
     }
@@ -672,8 +759,9 @@ impl Store {
         defer: impl Fn(&MessageRecord) -> bool,
     ) -> Result<ReconcileReport> {
         self.commit(|txn| {
+            let mut queue = QueueTxn::new(txn)?;
             let mut report = ReconcileReport::default();
-            let updated = self.update_messages_locked(txn, session_name, now, |message| {
+            let updated = self.update_messages_locked(&mut queue, session_name, now, |message| {
                 if message.status != MessageStatus::Sent {
                     return MessageUpdate::Keep;
                 }
@@ -709,10 +797,11 @@ impl Store {
                         reason: Some("reconcile".to_owned()),
                     }
                 }
-            })?;
+            });
             if !updated.is_empty() {
-                txn.force_publish();
+                queue.force_publish();
             }
+            queue.finish()?;
             Ok(report)
         })
     }
@@ -737,32 +826,31 @@ impl Store {
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
         self.commit(|txn| {
-            let mut message =
-                match message_store::load(&txn.paths.messages_dir, &message.message_id) {
-                    Ok(existing)
-                        if matches!(
-                            existing.status,
-                            MessageStatus::Queued | MessageStatus::Claimed
-                        ) =>
-                    {
-                        let mut existing = existing;
-                        existing.pane_id = message.pane_id.clone();
-                        existing
-                    }
-                    Ok(existing) if existing.status == MessageStatus::Sent => return Ok(None),
-                    Ok(_) => return Ok(None),
-                    Err(message_store::MessageStoreErr::NotFound(_)) => message.clone(),
-                    Err(err) => return Err(err.into()),
-                };
+            let mut queue = QueueTxn::new(txn)?;
+            let mut message = match queue.get(&message.message_id) {
+                Some(existing)
+                    if matches!(
+                        existing.status,
+                        MessageStatus::Queued | MessageStatus::Claimed
+                    ) =>
+                {
+                    let mut existing = existing;
+                    existing.pane_id = message.pane_id.clone();
+                    existing
+                }
+                Some(existing) if existing.status == MessageStatus::Sent => return Ok(None),
+                Some(_) => return Ok(None),
+                None => message.clone(),
+            };
             message.last_error = Some(error.to_owned());
-            let (errored, _event) = self.finalize_message_locked(
-                txn,
+            let errored = queue.terminalize(
                 message,
                 MessageStatus::Errored,
                 session_name,
                 Some(error),
                 Timestamp::now(),
-            )?;
+            );
+            queue.finish()?;
             Ok(Some(errored))
         })
     }
@@ -775,8 +863,9 @@ impl Store {
         session_name: &str,
     ) -> Result<Option<MessageRecord>> {
         self.commit(|txn| {
-            let mut message = match message_store::load(&txn.paths.messages_dir, message_id) {
-                Ok(message)
+            let mut queue = QueueTxn::new(txn)?;
+            let mut message = match queue.get(message_id) {
+                Some(message)
                     if matches!(
                         message.status,
                         MessageStatus::Queued | MessageStatus::Claimed
@@ -784,26 +873,26 @@ impl Store {
                 {
                     message
                 }
-                Ok(_) | Err(message_store::MessageStoreErr::NotFound(_)) => return Ok(None),
-                Err(err) => return Err(err.into()),
+                Some(_) | None => return Ok(None),
             };
             message.last_error = Some(error.to_owned());
             message.pane_id = None;
             message.batch_id = None;
             message.updated_at = Timestamp::now();
             if message.attempts >= MAX_DELIVERY_ATTEMPTS {
-                let (message, _event) = self.finalize_message_locked(
-                    txn,
+                let message = queue.terminalize(
                     message,
                     MessageStatus::Abandoned,
                     session_name,
                     Some(error),
                     Timestamp::now(),
-                )?;
+                );
+                queue.finish()?;
                 Ok(Some(message))
             } else {
                 message.status = MessageStatus::Queued;
-                message_store::write(&txn.paths.messages_dir, &message)?;
+                queue.upsert(message.clone());
+                queue.finish()?;
                 Ok(Some(message))
             }
         })
@@ -855,14 +944,17 @@ impl Store {
     ) -> Result<Vec<MessageRecord>> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
         self.commit(|txn| {
-            self.finalize_matching_messages_locked(
-                txn,
+            let mut queue = QueueTxn::new(txn)?;
+            let cleared = self.finalize_matching_messages_locked(
+                &mut queue,
                 MessageStatus::Removed,
                 session_name,
                 "clear",
                 |message| message.status.is_open() && message.same_card(card),
                 |_| {},
-            )
+            );
+            queue.finish()?;
+            Ok(cleared)
         })
     }
 
@@ -873,14 +965,17 @@ impl Store {
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
         self.commit(|txn| {
-            self.finalize_matching_messages_locked(
-                txn,
+            let mut queue = QueueTxn::new(txn)?;
+            let cleared = self.finalize_matching_messages_locked(
+                &mut queue,
                 MessageStatus::Removed,
                 session_name,
                 "clear",
                 |message| message.status.is_open() && message.channel.as_deref() == Some(channel),
                 |_| {},
-            )
+            );
+            queue.finish()?;
+            Ok(cleared)
         })
     }
 
@@ -889,8 +984,12 @@ impl Store {
         let snapshot = self.snapshot()?;
         let live_agents = snapshot.agents;
         let archived = self.commit(|txn| {
-            let archived =
-                self.update_messages_locked(txn, session_name, Timestamp::now(), |message| {
+            let mut queue = QueueTxn::new(txn)?;
+            let archived = self.update_messages_locked(
+                &mut queue,
+                session_name,
+                Timestamp::now(),
+                |message| {
                     if !message.status.is_open() {
                         return MessageUpdate::Keep;
                     }
@@ -921,10 +1020,12 @@ impl Store {
                         status: MessageStatus::Archived,
                         reason: Some(reason),
                     }
-                })?;
+                },
+            );
             if !archived.is_empty() {
-                txn.force_publish();
+                queue.force_publish();
             }
+            queue.finish()?;
             Ok(archived)
         })?;
         Ok(archived.len())
@@ -941,14 +1042,17 @@ impl Store {
     ) -> Result<usize> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
         let archived = self.commit(|txn| {
-            self.finalize_matching_messages_locked(
-                txn,
+            let mut queue = QueueTxn::new(txn)?;
+            let archived = self.finalize_matching_messages_locked(
+                &mut queue,
                 MessageStatus::Archived,
                 session_name,
                 reason,
                 |message| message.status.is_open() && message.same_card(card),
                 |message| message.last_error = Some(reason.to_owned()),
-            )
+            );
+            queue.finish()?;
+            Ok(archived)
         })?;
         Ok(archived.len())
     }
@@ -963,22 +1067,30 @@ impl Store {
     ) -> Result<usize> {
         let card = AgentCardRef::new(kind, agent_id, agent_name);
         let archived = self.commit(|txn| {
-            self.update_messages_locked(txn, session_name, Timestamp::now(), |message| {
-                if message.status != MessageStatus::Queued {
-                    return MessageUpdate::Keep;
-                }
-                let Some(condition) = message.when.iter().find(|condition| {
-                    condition.met_at.is_none() && condition.card_ref().matches(card)
-                }) else {
-                    return MessageUpdate::Keep;
-                };
-                let reason = condition.expiry_reason();
-                message.last_error = Some(reason.clone());
-                MessageUpdate::Finalize {
-                    status: MessageStatus::Archived,
-                    reason: Some(reason),
-                }
-            })
+            let mut queue = QueueTxn::new(txn)?;
+            let archived = self.update_messages_locked(
+                &mut queue,
+                session_name,
+                Timestamp::now(),
+                |message| {
+                    if message.status != MessageStatus::Queued {
+                        return MessageUpdate::Keep;
+                    }
+                    let Some(condition) = message.when.iter().find(|condition| {
+                        condition.met_at.is_none() && condition.card_ref().matches(card)
+                    }) else {
+                        return MessageUpdate::Keep;
+                    };
+                    let reason = condition.expiry_reason();
+                    message.last_error = Some(reason.clone());
+                    MessageUpdate::Finalize {
+                        status: MessageStatus::Archived,
+                        reason: Some(reason),
+                    }
+                },
+            );
+            queue.finish()?;
+            Ok(archived)
         })?;
         Ok(archived.len())
     }
@@ -991,14 +1103,17 @@ impl Store {
         session_name: &str,
     ) -> Result<usize> {
         let archived = self.commit(|txn| {
-            self.finalize_matching_messages_locked(
-                txn,
+            let mut queue = QueueTxn::new(txn)?;
+            let archived = self.finalize_matching_messages_locked(
+                &mut queue,
                 MessageStatus::Archived,
                 session_name,
                 reason,
                 |message| message.status.is_open() && message.channel.as_deref() == Some(channel),
                 |message| message.last_error = Some(reason.to_owned()),
-            )
+            );
+            queue.finish()?;
+            Ok(archived)
         })?;
         Ok(archived.len())
     }

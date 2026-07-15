@@ -981,6 +981,80 @@ fn earliest_message_wake_includes_sent_reconcile_deadline() {
     assert_eq!(wake, Some(sent.updated_at + Duration::from_secs(30)));
 }
 
+#[test]
+fn single_terminal_transitions_share_exact_history_and_event_contract() {
+    for (index, status, method) in [
+        (1, MessageStatus::Delivered, "message.delivered"),
+        (2, MessageStatus::TimedOut, "message.timed_out"),
+        (3, MessageStatus::Errored, "message.errored"),
+        (4, MessageStatus::Abandoned, "message.abandoned"),
+        (5, MessageStatus::Archived, "message.archived"),
+    ] {
+        let (_dir, store, workspace_id) = store();
+        let mut queued = message(&workspace_id);
+        queued.message_id = message_id(index);
+        queued.text = format!("terminal {index}");
+        store.queue_message(&queued, "session").unwrap();
+        let before = Timestamp::now();
+
+        let terminal = store
+            .settle_message(
+                &queued.message_id,
+                status,
+                "session",
+                Some("terminal reason"),
+            )
+            .unwrap()
+            .expect("accepted terminal transition");
+
+        assert!(store.list_messages().unwrap().is_empty());
+        let history = store.list_message_history().unwrap();
+        assert_eq!(history, vec![terminal.clone()]);
+        assert_eq!(terminal.status, status);
+        assert_eq!(terminal.text, format!("terminal {index}"));
+        assert!(terminal.updated_at >= before);
+        assert_eq!(
+            terminal.delivered_at,
+            (status == MessageStatus::Delivered).then_some(terminal.updated_at)
+        );
+        assert_eq!(
+            terminal.last_error.as_deref(),
+            (status == MessageStatus::Archived).then_some("terminal reason")
+        );
+        let event = event_log::read_all(&store.inner.paths.events_log)
+            .unwrap()
+            .pop()
+            .expect("terminal event");
+        assert_eq!(event.method, method);
+        let params: serde_json::Value = serde_json::from_str(event.params.get()).unwrap();
+        assert_eq!(params["status"], status.as_str());
+        assert_eq!(params["reason"], "terminal reason");
+    }
+}
+
+#[test]
+fn send_error_for_missing_message_archives_supplied_record_once() {
+    let (_dir, store, workspace_id) = store();
+    let supplied = message(&workspace_id);
+
+    let errored = store
+        .record_send_error(&supplied, "pane vanished", "session")
+        .unwrap()
+        .expect("missing record fallback");
+
+    assert!(store.list_messages().unwrap().is_empty());
+    assert_eq!(store.list_message_history().unwrap(), vec![errored.clone()]);
+    assert_eq!(errored.status, MessageStatus::Errored);
+    assert_eq!(errored.text, supplied.text);
+    assert_eq!(errored.last_error.as_deref(), Some("pane vanished"));
+    assert_eq!(errored.delivered_at, None);
+    let events = event_log::read_all(&store.inner.paths.events_log).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].method, "message.errored");
+    let params: serde_json::Value = serde_json::from_str(events[0].params.get()).unwrap();
+    assert_eq!(params["reason"], "pane vanished");
+}
+
 fn store() -> (tempfile::TempDir, Store, WorkspaceId) {
     let dir = tempdir().unwrap();
     let state_root = dir.path().join("state");
