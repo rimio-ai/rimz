@@ -327,8 +327,11 @@ impl ResumeCandidate {
         }
     }
 
-    fn from_observation(observation: &LocalSessionObservation) -> Self {
-        Self {
+    fn from_observation(observation: &LocalSessionObservation) -> Option<Self> {
+        if observation.session_id.is_empty() || observation.workspace.as_os_str().is_empty() {
+            return None;
+        }
+        Some(Self {
             kind: observation.kind.clone(),
             session_id: observation.session_id.clone(),
             name: None,
@@ -343,7 +346,7 @@ impl ResumeCandidate {
             pane_id: None,
             last_activity: observation.last_activity,
             conversation_present: true,
-        }
+        })
     }
 
     fn key(&self) -> ResumeCandidateKey {
@@ -696,7 +699,7 @@ fn plan_discovered_lane(
     let (resume, discovery_skipped) = concurrent_session_set(observations);
     let candidates = resume
         .iter()
-        .map(ResumeCandidate::from_observation)
+        .filter_map(ResumeCandidate::from_observation)
         .collect::<Vec<_>>();
     let preflight_kinds = candidates
         .iter()

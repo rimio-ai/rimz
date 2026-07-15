@@ -133,7 +133,19 @@ pub fn rename(store: TaskStore<'_>, name: &str, new_name: &str) -> Result<bool> 
 }
 
 fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Result<Table> {
-    let mut table = toml_edit::ser::to_document(entry)
+    // Serde rejects non-UTF-8 paths; config text historically persisted their
+    // lossy display form, so normalize only path values before serialization.
+    let mut serializable = entry.clone();
+    serializable.root = PathBuf::from(entry.root.to_string_lossy().into_owned());
+    serializable.prompt_file = entry
+        .prompt_file
+        .as_deref()
+        .map(|path| PathBuf::from(path.to_string_lossy().into_owned()));
+    serializable.system_prompt_file = entry
+        .system_prompt_file
+        .as_deref()
+        .map(|path| PathBuf::from(path.to_string_lossy().into_owned()));
+    let mut table = toml_edit::ser::to_document(&serializable)
         .context("serializing loop task")?
         .into_table();
     if !include_root {
@@ -224,5 +236,29 @@ mod tests {
                 .expect("project round trip");
         project_round.root = entry.root.clone();
         assert_eq!(project_round, entry);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn task_entry_serialization_lossy_encodes_non_utf8_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(OsString::from_vec(b"/repo/\xff".to_vec()));
+        let entry = TaskEntry {
+            root: path.clone(),
+            prompt_file: Some(path.clone()),
+            system_prompt_file: Some(path.clone()),
+            ..TaskEntry::default()
+        };
+
+        let table = task_entry_table(&entry, true).expect("serialize lossy paths");
+        let expected = path.to_string_lossy();
+        assert_eq!(table["root"].as_str(), Some(expected.as_ref()));
+        assert_eq!(table["prompt-file"].as_str(), Some(expected.as_ref()));
+        assert_eq!(
+            table["system-prompt-file"].as_str(),
+            Some(expected.as_ref())
+        );
     }
 }

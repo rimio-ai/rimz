@@ -913,6 +913,9 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         .copied()
         .find(|peer| std::ptr::eq(*peer, agent))
         .or_else(|| scoped_peers.iter().copied().find(|peer| *peer == agent));
+    if target_peer.is_none() {
+        return absent_agent_handle_base(agent, &scoped_peers, scoped);
+    }
     let resolves = |text: &str| {
         let selector = classify_selector(text);
         let exact = exact_session_match(&selector, peers);
@@ -948,6 +951,58 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         }
     }
     format!("@{}", agent.agent_id)
+}
+
+/// Best-effort identity for a durable agent outside the live peer snapshot.
+/// Condition records keep this historical label even though it cannot resolve
+/// back through that live snapshot until the agent returns.
+fn absent_agent_handle_base(
+    agent: &AgentState,
+    scoped_peers: &[&AgentState],
+    scoped: bool,
+) -> String {
+    if let Some(role) = agent.role.as_deref()
+        && scoped_peers
+            .iter()
+            .filter(|peer| peer.role.as_deref() == Some(role))
+            .count()
+            <= 1
+    {
+        return format!("@{role}");
+    }
+    if agent.name_explicit
+        && let Some(name) = agent.name.as_deref()
+    {
+        return format!("@{name}");
+    }
+    if let Some(profile) = agent.profile.as_deref() {
+        let profile_rivals = scoped_peers
+            .iter()
+            .filter(|peer| peer.profile.as_deref() == Some(profile))
+            .count();
+        let shadowed_by_name = scoped_peers
+            .iter()
+            .any(|peer| peer.name_explicit && peer.name.as_deref() == Some(profile));
+        let known_kind = crate::agents::known_kinds().any(|kind| kind == profile);
+        if profile_rivals <= 1 && !shadowed_by_name && !known_kind {
+            return format!("@{profile}");
+        }
+    }
+    if scoped_peers
+        .iter()
+        .filter(|peer| peer.kind == agent.kind)
+        .count()
+        <= 1
+    {
+        return format!("@{}", agent.kind);
+    }
+    if scoped && let Some(ordinal) = agent.kind_ordinal {
+        return format!("@{}-{ordinal}", agent.kind);
+    }
+    match agent.name.as_deref() {
+        Some(name) => format!("@{name}"),
+        None => format!("@{}", agent.agent_id),
+    }
 }
 
 /// A deduplicated, quoted list of the channels a selector matches.

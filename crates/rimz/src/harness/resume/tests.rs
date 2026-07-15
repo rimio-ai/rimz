@@ -204,7 +204,7 @@ fn discovered_candidate_is_paneless_and_keeps_native_facts() {
         "2025-01-01T10:00:00Z",
     );
 
-    let candidate = ResumeCandidate::from_observation(&observation);
+    let candidate = ResumeCandidate::from_observation(&observation).expect("native candidate");
 
     assert_eq!(candidate.session_id.as_str(), "only");
     assert_eq!(candidate.cwd, PathBuf::from("/code/query-engine"));
@@ -213,6 +213,22 @@ fn discovered_candidate_is_paneless_and_keeps_native_facts() {
     assert!(candidate.team.is_none());
     assert!(candidate.role.is_none());
     assert!(candidate.conversation_present);
+}
+
+#[test]
+fn discovered_candidate_requires_session_and_workspace() {
+    let mut observation = local_session(
+        "claude",
+        "only",
+        "2025-01-01T09:00:00Z",
+        "2025-01-01T10:00:00Z",
+    );
+    observation.session_id = AgentSessionId::from("");
+    assert!(ResumeCandidate::from_observation(&observation).is_none());
+
+    observation.session_id = AgentSessionId::from("only");
+    observation.workspace = PathBuf::new();
+    assert!(ResumeCandidate::from_observation(&observation).is_none());
 }
 
 #[test]

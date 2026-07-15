@@ -453,6 +453,19 @@ fn handle_is_shortest_unambiguous_and_round_trips() {
 }
 
 #[test]
+fn absent_durable_agent_keeps_its_best_effort_handle() {
+    let mut offline = agent(
+        "claude",
+        "session-offline",
+        Some("auth"),
+        "terminal_offline",
+    );
+    offline.role = Some("coder".to_owned());
+
+    assert_eq!(agent_handle(&offline, &[], true), "@coder#auth");
+}
+
+#[test]
 fn handle_falls_back_to_petname_without_an_ordinal() {
     let mut snapshot = empty_snapshot();
     // Two codex sessions share a channel but carry no ordinal — the stable
