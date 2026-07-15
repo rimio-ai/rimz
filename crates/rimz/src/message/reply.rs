@@ -11,10 +11,10 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 
 use crate::agents::transcript::TranscriptCursor;
-use crate::agents::{AgentAdapter, AgentState, AgentStatus};
+use crate::agents::{AgentAdapter, AgentCardRef, AgentState, AgentStatus};
 use crate::harness::run::RunStatus;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
-use crate::message::{MessageRecord, MessageSender, MessageStatus, card_matches};
+use crate::message::{MessageRecord, MessageSender, MessageStatus};
 use crate::store::event::EventKind;
 use crate::store::event_log;
 use crate::{SidebarSnapshot, Store};
@@ -400,14 +400,8 @@ impl ReplyTarget {
     }
 
     fn matches(&self, agent: &AgentState) -> bool {
-        card_matches(
-            &self.kind,
-            &self.agent_id,
-            self.agent_name.as_deref(),
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-        )
+        AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+            .matches(agent.card_ref())
     }
 }
 
@@ -867,14 +861,7 @@ fn running_sender_index(record: &MessageRecord, agents: &[AgentState]) -> Option
 }
 
 fn same_card(left: &AgentState, right: &AgentState) -> bool {
-    card_matches(
-        &left.kind,
-        &left.agent_id,
-        left.name.as_deref(),
-        &right.kind,
-        &right.agent_id,
-        right.name.as_deref(),
-    )
+    left.card_ref().matches(right.card_ref())
 }
 
 fn deadlocked_legs(

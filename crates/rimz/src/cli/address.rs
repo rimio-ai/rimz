@@ -1,6 +1,5 @@
-use rimz::agents::AgentState;
+use rimz::agents::{AgentCardRef, AgentState};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::message::card_matches;
 
 pub(in crate::cli) fn message_target(
     address: Option<&str>,
@@ -16,16 +15,7 @@ pub(in crate::cli) fn message_target(
     agents
         .iter()
         .copied()
-        .find(|agent| {
-            card_matches(
-                kind,
-                agent_id,
-                agent_name,
-                &agent.kind,
-                &agent.agent_id,
-                agent.name.as_deref(),
-            )
-        })
+        .find(|agent| AgentCardRef::new(kind, agent_id, agent_name).matches(agent.card_ref()))
         .map(|agent| rimz::harness::target::agent_handle(agent, agents, true))
         .or_else(|| {
             let agent_name = agent_name.filter(|value| !value.is_empty())?;

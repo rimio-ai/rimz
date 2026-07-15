@@ -73,6 +73,7 @@ pub use crate::store::snapshot::{
     WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use crate::store::workspace_record::WorkspaceRecord;
+pub(crate) use crate::store::writer::DeliverySweepUpdate;
 pub use crate::store::writer::{
     AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_LOG_ROTATE_BYTES, EditOutcome,
     MessageEdit,

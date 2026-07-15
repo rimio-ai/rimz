@@ -4,7 +4,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use crate::agents::AgentState;
-use crate::ids::{AgentSessionId, MessageId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 use crate::message::{
     AfterCondition, AutoCompact, DeliveryGate, MessageBody, MessageRecord, MessageSender,
     MessageStatus, WhenCondition,
@@ -75,6 +75,44 @@ pub enum Recipient<'a> {
     },
 }
 
+struct RecipientIdentity {
+    kind: AgentKind,
+    agent_id: AgentSessionId,
+    agent_name: Option<String>,
+    channel: Option<String>,
+    pane_id: Option<PaneId>,
+}
+
+impl Recipient<'_> {
+    fn into_identity(self, scope_channel: Option<&str>) -> RecipientIdentity {
+        match self {
+            Self::Agent { agent, pane } => RecipientIdentity {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                agent_name: agent.name.clone(),
+                channel: crate::harness::target::agent_channel(agent).or_else(|| {
+                    pane.and_then(|pane| {
+                        crate::harness::target::recipient_channel(pane, Some(agent), scope_channel)
+                    })
+                }),
+                pane_id: pane.map(|pane| pane.pane_id.clone()),
+            },
+            Self::Pane { pane, bound } => RecipientIdentity {
+                kind: pane.kind.clone(),
+                agent_id: bound
+                    .map(|agent| agent.agent_id.clone())
+                    .or_else(|| pane.agent_id.clone())
+                    .unwrap_or_else(|| synthetic_session_for_pane(&pane.pane_id)),
+                agent_name: bound
+                    .and_then(|agent| agent.name.clone())
+                    .or_else(|| pane.name.clone()),
+                channel: crate::harness::target::recipient_channel(pane, bound, scope_channel),
+                pane_id: Some(pane.pane_id.clone()),
+            },
+        }
+    }
+}
+
 impl MessageDraft {
     pub fn into_record(
         self,
@@ -82,65 +120,30 @@ impl MessageDraft {
         recipient: Recipient<'_>,
         scope_channel: Option<&str>,
     ) -> MessageRecord {
-        match recipient {
-            Recipient::Agent { agent, pane } => {
-                let channel = crate::harness::target::agent_channel(agent).or_else(|| {
-                    pane.and_then(|pane| {
-                        crate::harness::target::recipient_channel(pane, Some(agent), scope_channel)
-                    })
-                });
-                let record =
-                    MessageRecord::new(workspace_id, agent, self.text, self.enter, self.gate)
-                        .with_body(self.body)
-                        .with_force(self.force)
-                        .with_address(self.address)
-                        .with_channel(channel)
-                        .with_sender(self.sender)
-                        .with_automated(self.automated)
-                        .with_auto_compact(self.auto_compact)
-                        .with_not_before(self.not_before)
-                        .with_after(self.after)
-                        .with_when(self.when);
-                if let Some(pane) = pane {
-                    record.with_pane_id(pane.pane_id.clone())
-                } else {
-                    record
-                }
-            }
-            Recipient::Pane { pane, bound } => {
-                let agent_id = bound
-                    .map(|agent| agent.agent_id.clone())
-                    .or_else(|| pane.agent_id.clone())
-                    .unwrap_or_else(|| synthetic_session_for_pane(&pane.pane_id));
-                let agent_name = bound
-                    .and_then(|agent| agent.name.clone())
-                    .or_else(|| pane.name.clone());
-                MessageRecord::new_for_card(
-                    workspace_id,
-                    pane.kind.clone(),
-                    agent_id,
-                    agent_name,
-                    self.text,
-                    self.enter,
-                    self.gate,
-                )
-                .with_channel(crate::harness::target::recipient_channel(
-                    pane,
-                    bound,
-                    scope_channel,
-                ))
-                .with_address(self.address)
-                .with_sender(self.sender)
-                .with_automated(self.automated)
-                .with_body(self.body)
-                .with_force(self.force)
-                .with_pane_id(pane.pane_id.clone())
-                .with_auto_compact(self.auto_compact)
-                .with_not_before(self.not_before)
-                .with_after(self.after)
-                .with_when(self.when)
-                .with_status(MessageStatus::Queued)
-            }
+        let recipient = recipient.into_identity(scope_channel);
+        let record = MessageRecord::new_for_card(
+            workspace_id,
+            recipient.kind,
+            recipient.agent_id,
+            recipient.agent_name,
+            self.text,
+            self.enter,
+            self.gate,
+        )
+        .with_body(self.body)
+        .with_force(self.force)
+        .with_address(self.address)
+        .with_channel(recipient.channel)
+        .with_sender(self.sender)
+        .with_automated(self.automated)
+        .with_auto_compact(self.auto_compact)
+        .with_not_before(self.not_before)
+        .with_after(self.after)
+        .with_when(self.when)
+        .with_status(MessageStatus::Queued);
+        match recipient.pane_id {
+            Some(pane_id) => record.with_pane_id(pane_id),
+            None => record,
         }
     }
 }
@@ -404,19 +407,6 @@ pub fn already_compacted_at(store: &Store, agent: &AgentState, command: &str, us
     agent.last_compact_command_tokens == Some(used)
 }
 
-/// The rollup session behind a bound pane target. A lazy pane carries no session,
-/// so it never gates on Waiting or context compaction.
-pub fn bound_agent<'a>(
-    snapshot: &'a SidebarSnapshot,
-    target: &PaneAgent,
-) -> Option<&'a AgentState> {
-    let agent_id = target.agent_id.as_ref()?;
-    snapshot
-        .agents
-        .iter()
-        .find(|agent| agent.kind == target.kind && &agent.agent_id == agent_id)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +482,99 @@ mod tests {
     }
 
     #[test]
+    fn draft_record_normalizes_bound_provisional_lazy_and_pane_identity() {
+        let workspace_id = WorkspaceId::from_project_root(std::path::Path::new("/repo"));
+        let mut bound = agent();
+        bound.channel = Some("bound-channel".to_owned());
+        let bound_pane = pane(
+            "claude",
+            Some("pane-session"),
+            Some("pane-name"),
+            Some("pane-channel"),
+            Some("/repo/pane-worktree"),
+            "terminal_1",
+        );
+        let record = draft(None).into_record(
+            workspace_id.clone(),
+            Recipient::Pane {
+                pane: &bound_pane,
+                bound: Some(&bound),
+            },
+            Some("scope"),
+        );
+        assert_eq!(record.agent_id, bound.agent_id);
+        assert_eq!(record.agent_name, bound.name);
+        assert_eq!(record.channel.as_deref(), Some("bound-channel"));
+        assert_eq!(record.pane_id.as_ref(), Some(&bound_pane.pane_id));
+
+        let mut provisional = agent();
+        provisional.agent_id = AgentSessionId::from("launch_pending");
+        provisional.channel = None;
+        let provisional_pane = pane(
+            "claude",
+            None,
+            None,
+            Some("provisional-channel"),
+            None,
+            "terminal_2",
+        );
+        let record = draft(None).into_record(
+            workspace_id.clone(),
+            Recipient::Agent {
+                agent: &provisional,
+                pane: Some(&provisional_pane),
+            },
+            Some("scope"),
+        );
+        assert_eq!(record.agent_id.as_str(), "launch_pending");
+        assert_eq!(record.channel.as_deref(), Some("provisional-channel"));
+        assert_eq!(record.pane_id.as_ref(), Some(&provisional_pane.pane_id));
+
+        let lazy = pane("codex", None, None, None, Some("/repo/lazy"), "terminal_3");
+        let record = draft(None).into_record(
+            workspace_id.clone(),
+            Recipient::Pane {
+                pane: &lazy,
+                bound: None,
+            },
+            Some("scope"),
+        );
+        assert_eq!(record.agent_id, synthetic_session_for_pane(&lazy.pane_id));
+        assert_eq!(record.channel.as_deref(), Some("lazy"));
+
+        let pane_only = pane(
+            "codex",
+            Some("pane-session"),
+            Some("pane-name"),
+            None,
+            None,
+            "terminal_4",
+        );
+        let record = draft(None).into_record(
+            workspace_id.clone(),
+            Recipient::Pane {
+                pane: &pane_only,
+                bound: None,
+            },
+            Some("scope"),
+        );
+        assert_eq!(record.agent_id.as_str(), "pane-session");
+        assert_eq!(record.agent_name.as_deref(), Some("pane-name"));
+        assert_eq!(record.channel.as_deref(), Some("scope"));
+
+        let fresh = pane("codex", None, None, None, None, "terminal_5");
+        let record = draft(None).into_record(
+            workspace_id,
+            Recipient::Pane {
+                pane: &fresh,
+                bound: None,
+            },
+            Some("explicit"),
+        );
+        assert_eq!(record.channel.as_deref(), Some("explicit"));
+    }
+
+    #[test]
     fn pacer_skips_first_write_and_honors_configured_interval() {
         let mut pacer = Pacer::new(Duration::from_millis(40));
         let mut sleeps = Vec::new();
@@ -507,5 +590,29 @@ mod tests {
             assert!(!zero.tick_with(|duration| zero_sleeps.push(duration)));
         }
         assert!(zero_sleeps.is_empty());
+    }
+
+    fn pane(
+        kind: &str,
+        agent_id: Option<&str>,
+        name: Option<&str>,
+        channel: Option<&str>,
+        worktree_path: Option<&str>,
+        raw: &str,
+    ) -> PaneAgent {
+        PaneAgent {
+            kind: crate::ids::AgentKind::new_unchecked(kind),
+            kind_ordinal: None,
+            name: name.map(ToOwned::to_owned),
+            name_explicit: false,
+            profile: None,
+            role: None,
+            channel: channel.map(ToOwned::to_owned),
+            agent_id: agent_id.map(AgentSessionId::from),
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
+            pane_pid: None,
+            worktree_path: worktree_path.map(ToOwned::to_owned),
+            worktree_branch: None,
+        }
     }
 }

@@ -12,7 +12,7 @@ pub mod reply;
 pub mod send;
 
 use crate::agents::lifecycle::LifecycleSignal;
-use crate::agents::{AgentState, AgentStatus};
+use crate::agents::{AgentCardRef, AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId, WorkspaceId};
 
 pub const DEFAULT_SETTLE: Duration = Duration::from_millis(400);
@@ -280,11 +280,25 @@ pub struct WhenCondition {
     pub met_at: Option<Timestamp>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WhenState {
-    Met,
-    Pending { trip_at: Option<Timestamp> },
-    Gone,
+impl AfterCondition {
+    pub fn card_ref(&self) -> AgentCardRef<'_> {
+        AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+    }
+}
+
+impl WhenCondition {
+    pub fn card_ref(&self) -> AgentCardRef<'_> {
+        AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+    }
+
+    pub fn expiry_reason(&self) -> String {
+        format!(
+            "watched agent {} ended before '{} {}' was met",
+            self.address,
+            self.status.as_str(),
+            format_dwell(self.dwell_secs)
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -589,24 +603,16 @@ impl MessageRecord {
     /// message queued against a provisional `launch_*` card keeps the launch id,
     /// so name matching is what folds it into the session that card becomes on
     /// registration — one card, one FIFO queue.
-    pub fn same_card(
-        &self,
-        kind: &AgentKind,
-        agent_id: &AgentSessionId,
-        agent_name: Option<&str>,
-    ) -> bool {
-        card_matches(
-            &self.kind,
-            &self.agent_id,
-            self.agent_name.as_deref(),
-            kind,
-            agent_id,
-            agent_name,
-        )
+    pub fn card_ref(&self) -> AgentCardRef<'_> {
+        AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+    }
+
+    pub fn same_card(&self, card: AgentCardRef<'_>) -> bool {
+        self.card_ref().matches(card)
     }
 
     pub fn same_agent_card(&self, agent: &AgentState) -> bool {
-        self.same_card(&agent.kind, &agent.agent_id, agent.name.as_deref())
+        self.same_card(agent.card_ref())
     }
 
     pub fn is_ready(&self, now: Timestamp) -> bool {
@@ -663,19 +669,6 @@ impl MessageRecord {
     }
 }
 
-pub fn card_matches(
-    record_kind: &AgentKind,
-    record_agent_id: &AgentSessionId,
-    record_agent_name: Option<&str>,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-    agent_name: Option<&str>,
-) -> bool {
-    record_kind == kind
-        && (record_agent_id == agent_id
-            || (agent_name.is_some() && record_agent_name == agent_name))
-}
-
 pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
     match gate {
         DeliveryGate::Done => matches!(status, AgentStatus::Idle | AgentStatus::Success),
@@ -684,79 +677,6 @@ pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
             AgentStatus::Idle | AgentStatus::Success | AgentStatus::Failed
         ),
         DeliveryGate::Resume => status == AgentStatus::Paused,
-    }
-}
-
-pub fn after_condition_open(
-    condition: &AfterCondition,
-    gate: DeliveryGate,
-    agents: &[AgentState],
-    pending: &[MessageRecord],
-    now: Timestamp,
-) -> bool {
-    let Some(agent) = agents.iter().find(|agent| {
-        card_matches(
-            &condition.kind,
-            &condition.agent_id,
-            condition.agent_name.as_deref(),
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-        )
-    }) else {
-        return false;
-    };
-    gate_open_for_agent(gate, agent, false, now)
-        && !pending.iter().any(|message| {
-            !message.status.is_terminal()
-                && message.is_ready(now)
-                && message.same_card(
-                    &condition.kind,
-                    &condition.agent_id,
-                    condition.agent_name.as_deref(),
-                )
-        })
-}
-
-pub fn when_condition_state(
-    condition: &WhenCondition,
-    agents: &[AgentState],
-    now: Timestamp,
-) -> WhenState {
-    if condition.met_at.is_some() {
-        return WhenState::Met;
-    }
-    let Some(agent) = agents.iter().find(|agent| {
-        card_matches(
-            &condition.kind,
-            &condition.agent_id,
-            condition.agent_name.as_deref(),
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-        )
-    }) else {
-        return WhenState::Gone;
-    };
-    if agent.status != condition.status {
-        return WhenState::Pending { trip_at: None };
-    }
-    let base = match condition.status {
-        AgentStatus::Running => agent.turn_started_at,
-        AgentStatus::Waiting => agent.waiting_since,
-        AgentStatus::Idle | AgentStatus::Success | AgentStatus::Failed => None,
-        AgentStatus::Paused => None,
-    }
-    .unwrap_or(agent.last_activity);
-    let elapsed = now.duration_since(base).as_secs();
-    if elapsed >= 0 && elapsed as u64 >= condition.dwell_secs {
-        WhenState::Met
-    } else {
-        WhenState::Pending {
-            trip_at: base
-                .checked_add(Duration::from_secs(condition.dwell_secs))
-                .ok(),
-        }
     }
 }
 
@@ -821,7 +741,7 @@ pub fn queue_head<'a>(
         .filter(|message| {
             message.status == MessageStatus::Queued
                 && message.gate != DeliveryGate::Resume
-                && message.same_card(kind, agent_id, agent_name)
+                && message.same_card(AgentCardRef::new(kind, agent_id, agent_name))
                 && message.is_deliverable(now)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
@@ -832,20 +752,32 @@ pub fn queue_head<'a>(
 /// user messages that can only deliver after the turn resumes.
 pub fn queue_head_for_message<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
-    candidate: &MessageRecord,
+    candidate: &'a MessageRecord,
     now: Timestamp,
+) -> Option<&'a MessageRecord> {
+    if candidate.status != MessageStatus::Queued || !candidate.is_deliverable(now) {
+        return None;
+    }
+    older_ready_blocker(pending, candidate, |message| message.is_deliverable(now))
+        .or(Some(candidate))
+}
+
+/// Oldest ready record ahead of `candidate` in the same logical-card lane.
+/// Callers choose what readiness means: Store claims use durable stamps, while
+/// diagnosis can use currently true dynamic conditions for the candidate.
+pub fn older_ready_blocker<'a>(
+    pending: impl IntoIterator<Item = &'a MessageRecord>,
+    candidate: &MessageRecord,
+    ready: impl Fn(&MessageRecord) -> bool,
 ) -> Option<&'a MessageRecord> {
     pending
         .into_iter()
         .filter(|message| {
             message.status == MessageStatus::Queued
-                && message.same_card(
-                    &candidate.kind,
-                    &candidate.agent_id,
-                    candidate.agent_name.as_deref(),
-                )
-                && message.is_deliverable(now)
+                && message.same_card(candidate.card_ref())
                 && same_delivery_lane(candidate.gate, message.gate)
+                && message.message_id.as_str() < candidate.message_id.as_str()
+                && ready(message)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
@@ -869,7 +801,7 @@ pub fn queue_batch_tail<'a>(
         .filter(|message| {
             message.status == MessageStatus::Queued
                 && message.gate != DeliveryGate::Resume
-                && message.same_card(&head.kind, &head.agent_id, head.agent_name.as_deref())
+                && message.same_card(head.card_ref())
                 && message.is_deliverable(now)
                 && message.message_id.as_str() > head.message_id.as_str()
         })

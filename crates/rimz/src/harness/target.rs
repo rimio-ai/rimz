@@ -1,5 +1,8 @@
-//! The agent-address grammar: `@<handle>#<channel>`, parsed, resolved, and
-//! rendered here (the canonical handle is the inverse of the parser).
+//! Agent-address parsing, rendering, and live pane binding.
+//!
+//! The address grammar is `@<handle>#<channel>` (the canonical handle is the
+//! inverse of the parser). Pane binding joins resolved panes to exact lifecycle
+//! sessions, provisional launch cards, or sessionless lazy targets.
 //!
 //! Handles read like Slack. A role handle names a team member (`@coder`). A
 //! *type handle* names a profile to fill — `@<kind>` (`@codex`) or `@<profile>`
@@ -264,6 +267,90 @@ pub fn resolve_targets<'a>(
 ) -> Result<Vec<&'a PaneAgent>, TargetErr> {
     let candidates: Vec<&PaneAgent> = snapshot.agent_panes.iter().collect();
     resolve_mentions(raw, worktree_flag, current_channel, &candidates)
+}
+
+/// How one live pane relates to lifecycle state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneBindingKind {
+    Exact,
+    Provisional,
+    Lazy,
+}
+
+/// One resolved live pane and any lifecycle card it represents.
+///
+/// `agent` includes a provisional launch card. `exact_agent` is present only
+/// after the pane carries a registered lifecycle session and is safe for
+/// Waiting, gate, and context decisions.
+#[derive(Clone, Copy, Debug)]
+pub struct PaneBinding<'snapshot, 'pane> {
+    pub pane: &'pane PaneAgent,
+    pub agent: Option<&'snapshot AgentState>,
+    pub exact_agent: Option<&'snapshot AgentState>,
+    pub kind: PaneBindingKind,
+}
+
+impl PaneBinding<'_, '_> {
+    pub fn matches_agent(&self, agent: &AgentState) -> bool {
+        self.agent
+            .is_some_and(|bound| bound.card_ref().matches(agent.card_ref()))
+    }
+}
+
+/// Bind one pane to exact lifecycle state, a same-channel provisional launch,
+/// or a sessionless lazy target. A pinned pane filters this result in place;
+/// it never redirects to another pane.
+pub fn pane_binding<'snapshot, 'pane>(
+    snapshot: &'snapshot SidebarSnapshot,
+    pane: &'pane PaneAgent,
+    pinned: Option<&PaneId>,
+) -> Option<PaneBinding<'snapshot, 'pane>> {
+    if pinned.is_some_and(|pinned| pinned != &pane.pane_id) {
+        return None;
+    }
+    if let Some(agent_id) = pane.agent_id.as_ref() {
+        let agent = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.kind == pane.kind && &agent.agent_id == agent_id)?;
+        return Some(PaneBinding {
+            pane,
+            agent: Some(agent),
+            exact_agent: Some(agent),
+            kind: PaneBindingKind::Exact,
+        });
+    }
+    if let Some(agent) = snapshot.root_agents().find(|agent| {
+        agent.kind == pane.kind
+            && agent.agent_id.is_provisional()
+            && agent_channel(agent) == pane.channel()
+    }) {
+        return Some(PaneBinding {
+            pane,
+            agent: Some(agent),
+            exact_agent: None,
+            kind: PaneBindingKind::Provisional,
+        });
+    }
+    Some(PaneBinding {
+        pane,
+        agent: None,
+        exact_agent: None,
+        kind: PaneBindingKind::Lazy,
+    })
+}
+
+/// Find the exact or provisional live pane associated with one logical card.
+pub fn bind_agent<'a>(
+    snapshot: &'a SidebarSnapshot,
+    agent: &AgentState,
+    pinned: Option<&PaneId>,
+) -> Option<PaneBinding<'a, 'a>> {
+    snapshot
+        .agent_panes
+        .iter()
+        .filter_map(|pane| pane_binding(snapshot, pane, pinned))
+        .find(|binding| binding.matches_agent(agent))
 }
 
 fn root_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {

@@ -28,6 +28,7 @@ mod reap;
 mod reset;
 
 pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_LOG_ROTATE_BYTES};
+pub(crate) use queue::DeliverySweepUpdate;
 pub use queue::{EditOutcome, MessageEdit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

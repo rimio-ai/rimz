@@ -108,32 +108,18 @@ pub(super) fn spawn_queue_delivery_if_checkpoint(
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
     let agent_name = recorded.observation.agent_name.as_deref();
+    let card = rimz::agents::AgentCardRef::new(&kind, agent_id, agent_name);
     if pending.iter().any(|message| {
         message.status == rimz::message::MessageStatus::Queued
             && delivery_checkpoint
-            && message.after.iter().any(|condition| {
-                condition.met_at.is_none()
-                    && rimz::message::card_matches(
-                        &condition.kind,
-                        &condition.agent_id,
-                        condition.agent_name.as_deref(),
-                        &kind,
-                        agent_id,
-                        agent_name,
-                    )
-            })
+            && message
+                .after
+                .iter()
+                .any(|condition| condition.met_at.is_none() && condition.card_ref().matches(card))
             || message.status == rimz::message::MessageStatus::Queued
                 && condition_checkpoint
                 && message.when.iter().any(|condition| {
-                    condition.met_at.is_none()
-                        && rimz::message::card_matches(
-                            &condition.kind,
-                            &condition.agent_id,
-                            condition.agent_name.as_deref(),
-                            &kind,
-                            agent_id,
-                            agent_name,
-                        )
+                    condition.met_at.is_none() && condition.card_ref().matches(card)
                 })
     }) {
         spawn_refresh_detached(&rimz::agents::RefreshSpawn {

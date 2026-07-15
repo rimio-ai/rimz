@@ -122,10 +122,22 @@ fn stamp_after_conditions_persists_event_and_skips_non_queued_records() {
         .expect("claimed");
 
     store
-        .stamp_delivery_conditions(
+        .apply_delivery_sweep(
             &[
-                (queued.message_id.clone(), vec![0], Vec::new()),
-                (claimed.message_id.clone(), vec![0], Vec::new()),
+                DeliverySweepUpdate {
+                    message_id: queued.message_id.clone(),
+                    after_indices: vec![0],
+                    when_indices: Vec::new(),
+                    retry_after: None,
+                    archive_reason: None,
+                },
+                DeliverySweepUpdate {
+                    message_id: claimed.message_id.clone(),
+                    after_indices: vec![0],
+                    when_indices: Vec::new(),
+                    retry_after: None,
+                    archive_reason: None,
+                },
             ],
             now,
             "session",
@@ -151,6 +163,138 @@ fn stamp_after_conditions_persists_event_and_skips_non_queued_records() {
     assert_eq!(stamped.len(), 1);
     let params: serde_json::Value = serde_json::from_str(stamped[0].params.get()).unwrap();
     assert_eq!(params["reason"], "@planner finished");
+}
+
+#[test]
+fn delivery_sweep_applies_mixed_effects_in_one_transaction() {
+    let (_dir, store, workspace_id) = store();
+    let now = Timestamp::now();
+    let retry_at = now + Duration::from_secs(30);
+    let after = AfterCondition {
+        kind: AgentKind::new_unchecked("claude"),
+        agent_id: AgentSessionId::from("sess-planner"),
+        agent_name: Some("planner".to_owned()),
+        address: "@planner".to_owned(),
+        met_at: None,
+    };
+    let when = WhenCondition {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: AgentSessionId::from("sess-coder"),
+        agent_name: Some("coder".to_owned()),
+        address: "@coder".to_owned(),
+        status: AgentStatus::Running,
+        dwell_secs: 60,
+        met_at: None,
+    };
+    let after_only = message(&workspace_id).with_after(vec![after.clone()]);
+    let combined = message(&workspace_id)
+        .with_after(vec![after])
+        .with_when(vec![when.clone()]);
+    let retry_only = message(&workspace_id).with_when(vec![when.clone()]);
+    let archived = message(&workspace_id).with_when(vec![when.clone()]);
+    let claimed = message(&workspace_id).with_when(vec![when]);
+    for record in [&after_only, &combined, &retry_only, &archived, &claimed] {
+        store.queue_message(record, "session").unwrap();
+    }
+    store
+        .claim_message_for_steer(&claimed.message_id, now)
+        .unwrap()
+        .expect("claimed");
+
+    store
+        .apply_delivery_sweep(
+            &[
+                DeliverySweepUpdate {
+                    message_id: after_only.message_id.clone(),
+                    after_indices: vec![0],
+                    when_indices: Vec::new(),
+                    retry_after: None,
+                    archive_reason: None,
+                },
+                DeliverySweepUpdate {
+                    message_id: combined.message_id.clone(),
+                    after_indices: vec![0],
+                    when_indices: vec![0],
+                    retry_after: None,
+                    archive_reason: None,
+                },
+                DeliverySweepUpdate {
+                    message_id: retry_only.message_id.clone(),
+                    after_indices: Vec::new(),
+                    when_indices: Vec::new(),
+                    retry_after: Some(retry_at),
+                    archive_reason: None,
+                },
+                DeliverySweepUpdate {
+                    message_id: archived.message_id.clone(),
+                    after_indices: Vec::new(),
+                    when_indices: vec![0],
+                    retry_after: Some(retry_at),
+                    archive_reason: Some("watched agent ended".to_owned()),
+                },
+                DeliverySweepUpdate {
+                    message_id: claimed.message_id.clone(),
+                    after_indices: Vec::new(),
+                    when_indices: vec![0],
+                    retry_after: Some(retry_at),
+                    archive_reason: None,
+                },
+                DeliverySweepUpdate {
+                    message_id: message_id(999),
+                    after_indices: vec![0],
+                    when_indices: vec![0],
+                    retry_after: Some(retry_at),
+                    archive_reason: None,
+                },
+            ],
+            now,
+            "session",
+        )
+        .unwrap();
+
+    let live = store.list_messages().unwrap();
+    let find = |id: &MessageId| live.iter().find(|record| record.message_id == *id).unwrap();
+    assert_eq!(find(&after_only.message_id).after[0].met_at, Some(now));
+    assert_eq!(find(&combined.message_id).after[0].met_at, Some(now));
+    assert_eq!(find(&combined.message_id).when[0].met_at, Some(now));
+    assert_eq!(find(&retry_only.message_id).retry_after, Some(retry_at));
+    assert_eq!(find(&claimed.message_id).status, MessageStatus::Claimed);
+    assert_eq!(find(&claimed.message_id).when[0].met_at, None);
+    assert!(
+        live.iter()
+            .all(|record| record.message_id != archived.message_id)
+    );
+
+    let history = store.list_message_history().unwrap();
+    let archived = history
+        .iter()
+        .find(|record| record.message_id == archived.message_id)
+        .expect("archived history");
+    assert_eq!(archived.status, MessageStatus::Archived);
+    assert_eq!(archived.last_error.as_deref(), Some("watched agent ended"));
+
+    let events = event_log::read_all(&store.inner.paths.events_log).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.method == "message.after_met")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.method == "message.when_met")
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.method == "message.archived")
+            .count(),
+        1
+    );
 }
 
 #[test]

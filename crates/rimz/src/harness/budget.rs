@@ -734,7 +734,7 @@ fn enforce_agent(agent: &AgentState, ctx: &mut EnforceCtx<'_>) {
     let latest_delivery = ctx
         .human_deliveries
         .iter()
-        .filter(|message| message.same_card(&agent.kind, &agent.agent_id, agent.name.as_deref()))
+        .filter(|message| message.same_agent_card(agent))
         .filter_map(|message| message.delivered_at)
         .max();
     let verdict = ledger.as_mut().map_or(BudgetVerdict::Disabled, |ledger| {

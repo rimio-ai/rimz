@@ -99,9 +99,11 @@ fn when_condition_uses_raw_status_and_status_specific_dwell_base() {
         watched.waiting_since = waiting_since.map(|secs| Timestamp::from_second(secs).unwrap());
         watched.last_activity = Timestamp::from_second(last_activity).unwrap();
         let condition = when_condition(&watched, status, 75, None);
-        assert_eq!(
-            when_condition_state(&condition, &[watched], now),
-            WhenState::Met,
+        let snapshot = condition_snapshot(vec![watched]);
+        assert!(
+            deliver::evaluate_when_condition(&condition, &snapshot, now, Duration::from_secs(30))
+                .check
+                .met,
             "{status:?}"
         );
     }
@@ -110,12 +112,11 @@ fn when_condition_uses_raw_status_and_status_specific_dwell_base() {
     running.status = AgentStatus::Running;
     running.last_activity = Timestamp::from_second(9_950).unwrap();
     let condition = when_condition(&running, AgentStatus::Running, 75, None);
-    assert_eq!(
-        when_condition_state(&condition, &[running], now),
-        WhenState::Pending {
-            trip_at: Some(Timestamp::from_second(10_025).unwrap())
-        }
-    );
+    let snapshot = condition_snapshot(vec![running]);
+    let check =
+        deliver::evaluate_when_condition(&condition, &snapshot, now, Duration::from_secs(30)).check;
+    assert!(!check.met);
+    assert_eq!(check.trip_at, Some(Timestamp::from_second(10_025).unwrap()));
 }
 
 #[test]
@@ -123,14 +124,33 @@ fn when_condition_reports_mismatch_gone_and_preserves_latch() {
     let now = Timestamp::from_second(10_000).unwrap();
     let watched = agent("watched", Some("coder"));
     let pending = when_condition(&watched, AgentStatus::Running, 60, None);
-    assert_eq!(
-        when_condition_state(&pending, std::slice::from_ref(&watched), now),
-        WhenState::Pending { trip_at: None }
+    let snapshot = condition_snapshot(vec![watched.clone()]);
+    let mismatch =
+        deliver::evaluate_when_condition(&pending, &snapshot, now, Duration::from_secs(30));
+    assert!(!mismatch.check.met);
+    assert_eq!(mismatch.check.trip_at, None);
+    let gone = deliver::evaluate_when_condition(
+        &pending,
+        &condition_snapshot(Vec::new()),
+        now,
+        Duration::from_secs(30),
     );
-    assert_eq!(when_condition_state(&pending, &[], now), WhenState::Gone);
+    assert_eq!(
+        gone.archive_reason.as_deref(),
+        Some(pending.expiry_reason().as_str())
+    );
 
     let latched = when_condition(&watched, AgentStatus::Running, 60, Some(now));
-    assert_eq!(when_condition_state(&latched, &[], now), WhenState::Met);
+    assert!(
+        deliver::evaluate_when_condition(
+            &latched,
+            &condition_snapshot(Vec::new()),
+            now,
+            Duration::from_secs(30),
+        )
+        .check
+        .met
+    );
 
     let receiver = agent("receiver", None);
     let blocked = MessageRecord::new(
@@ -216,30 +236,42 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
 
     for status in [AgentStatus::Running, AgentStatus::Waiting] {
         upstream.status = status;
-        assert!(!after_condition_open(
-            &condition,
-            DeliveryGate::Done,
-            std::slice::from_ref(&upstream),
-            &[],
-            now
-        ));
+        assert!(
+            !deliver::evaluate_after_condition(
+                &condition,
+                DeliveryGate::Done,
+                &[],
+                &condition_snapshot(vec![upstream.clone()]),
+                now
+            )
+            .check
+            .met
+        );
     }
 
     upstream.status = AgentStatus::Failed;
-    assert!(!after_condition_open(
-        &condition,
-        DeliveryGate::Done,
-        std::slice::from_ref(&upstream),
-        &[],
-        now
-    ));
-    assert!(after_condition_open(
-        &condition,
-        DeliveryGate::Any,
-        std::slice::from_ref(&upstream),
-        &[],
-        now
-    ));
+    assert!(
+        !deliver::evaluate_after_condition(
+            &condition,
+            DeliveryGate::Done,
+            &[],
+            &condition_snapshot(vec![upstream.clone()]),
+            now
+        )
+        .check
+        .met
+    );
+    assert!(
+        deliver::evaluate_after_condition(
+            &condition,
+            DeliveryGate::Any,
+            &[],
+            &condition_snapshot(vec![upstream.clone()]),
+            now
+        )
+        .check
+        .met
+    );
 
     upstream.status = AgentStatus::Idle;
     let ready = MessageRecord::new(
@@ -249,39 +281,55 @@ fn after_condition_requires_an_open_gate_and_quiescent_ready_queue() {
         true,
         DeliveryGate::Done,
     );
-    assert!(!after_condition_open(
-        &condition,
-        DeliveryGate::Done,
-        std::slice::from_ref(&upstream),
-        std::slice::from_ref(&ready),
-        now
-    ));
+    assert!(
+        !deliver::evaluate_after_condition(
+            &condition,
+            DeliveryGate::Done,
+            std::slice::from_ref(&ready),
+            &condition_snapshot(vec![upstream.clone()]),
+            now
+        )
+        .check
+        .met
+    );
     let sent = MessageRecord {
         status: MessageStatus::Sent,
         ..ready.clone()
     };
-    assert!(!after_condition_open(
-        &condition,
-        DeliveryGate::Done,
-        std::slice::from_ref(&upstream),
-        std::slice::from_ref(&sent),
-        now
-    ));
+    assert!(
+        !deliver::evaluate_after_condition(
+            &condition,
+            DeliveryGate::Done,
+            std::slice::from_ref(&sent),
+            &condition_snapshot(vec![upstream.clone()]),
+            now
+        )
+        .check
+        .met
+    );
     let scheduled = ready.with_not_before(Some(now + jiff::SignedDuration::from_secs(60)));
-    assert!(after_condition_open(
-        &condition,
-        DeliveryGate::Done,
-        std::slice::from_ref(&upstream),
-        std::slice::from_ref(&scheduled),
-        now
-    ));
-    assert!(after_condition_open(
-        &condition,
-        DeliveryGate::Done,
-        std::slice::from_ref(&upstream),
-        &[],
-        now
-    ));
+    assert!(
+        deliver::evaluate_after_condition(
+            &condition,
+            DeliveryGate::Done,
+            std::slice::from_ref(&scheduled),
+            &condition_snapshot(vec![upstream.clone()]),
+            now
+        )
+        .check
+        .met
+    );
+    assert!(
+        deliver::evaluate_after_condition(
+            &condition,
+            DeliveryGate::Done,
+            &[],
+            &condition_snapshot(vec![upstream]),
+            now
+        )
+        .check
+        .met
+    );
 }
 
 #[test]
@@ -491,13 +539,15 @@ fn requeue_preserves_intent_and_rearms_dependencies() {
     original.batch_id = Some(message_id(1));
 
     assert!(original.is_deliverable(now));
-    assert!(!after_condition_open(
+    let latched = deliver::evaluate_after_condition(
         &original.after[0],
         original.gate,
-        std::slice::from_ref(&upstream),
         &[],
-        now
-    ));
+        &condition_snapshot(vec![upstream.clone()]),
+        now,
+    );
+    assert!(latched.check.met);
+    assert!(!latched.stamp_needed);
 
     let requeued = MessageRecord::requeue_from(&original);
 
@@ -1016,6 +1066,14 @@ fn agent(id: &str, name: Option<&str>) -> AgentState {
     let mut agent = AgentState::stub("claude", id, AgentStatus::Idle);
     agent.name = name.map(ToOwned::to_owned);
     agent
+}
+
+fn condition_snapshot(agents: Vec<AgentState>) -> crate::SidebarSnapshot {
+    crate::SidebarSnapshot::build_with_agents(
+        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+        agents,
+        Timestamp::now(),
+    )
 }
 
 fn after_condition(agent: &AgentState, met_at: Option<Timestamp>) -> AfterCondition {

@@ -512,14 +512,12 @@ fn show_messages(store: &rimz::Store, agent: &AgentState) -> Result<Vec<ShowMess
             continue;
         };
         if payload.status != rimz::message::MessageStatus::Delivered
-            || !rimz::message::card_matches(
+            || !rimz::agents::AgentCardRef::new(
                 &payload.kind,
                 &payload.agent_id,
                 payload.agent_name.as_deref(),
-                &agent.kind,
-                &agent.agent_id,
-                agent.name.as_deref(),
             )
+            .matches(agent.card_ref())
         {
             continue;
         }

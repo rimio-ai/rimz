@@ -35,13 +35,14 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::SidebarSnapshot;
 use crate::agents::{
-    AgentState, ProviderCapacity, TurnErrorClass, display_turn_error, effective_turn_error_class,
+    AgentCardRef, AgentState, ProviderCapacity, TurnErrorClass, display_turn_error,
+    effective_turn_error_class,
 };
 #[cfg(not(test))]
 use crate::child_process::detached_rimz_command;
 use crate::config::{DEFAULT_AUTO_CONTINUE_BACKOFF_SECS, ResumeConfig};
 use crate::ids::{AgentKind, AgentSessionId, MessageId, PaneId};
-use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus, card_matches};
+use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
 use crate::store::atomic::write_temp_then_rename_cache;
 use crate::store::snapshot::{PaneAgent, ResumeOutcome};
 
@@ -503,14 +504,8 @@ impl ResumeMessage {
     }
 
     fn same_agent_card(&self, agent: &AgentState) -> bool {
-        card_matches(
-            &self.kind,
-            &self.agent_id,
-            self.agent_name.as_deref(),
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-        )
+        AgentCardRef::new(&self.kind, &self.agent_id, self.agent_name.as_deref())
+            .matches(agent.card_ref())
     }
 }
 

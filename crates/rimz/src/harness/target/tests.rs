@@ -944,6 +944,58 @@ fn sender_prefix_fallback_uses_profile_before_petname() {
 }
 
 #[test]
+fn pane_binding_distinguishes_exact_provisional_and_lazy_targets() {
+    let mut snapshot = empty_snapshot();
+    let exact = agent("codex", "session-exact", Some("auth"), "terminal_1");
+    let mut provisional = agent("claude", "launch_pending", Some("docs"), "terminal_2");
+    provisional.name = Some("fresh-launch".to_owned());
+    snapshot.agents = vec![exact, provisional];
+
+    let exact_pane = bound_pane("codex", 1, "exact", "session-exact", "auth", "terminal_1");
+    let provisional_pane = lazy_pane("claude", "/repo/docs", "terminal_2");
+    let lazy = lazy_pane("codex", "/repo/other", "terminal_3");
+
+    let binding = pane_binding(&snapshot, &exact_pane, None).unwrap();
+    assert_eq!(binding.kind, PaneBindingKind::Exact);
+    assert_eq!(
+        binding.exact_agent.map(|agent| agent.agent_id.as_str()),
+        Some("session-exact")
+    );
+
+    let binding = pane_binding(&snapshot, &provisional_pane, None).unwrap();
+    assert_eq!(binding.kind, PaneBindingKind::Provisional);
+    assert_eq!(
+        binding.agent.map(|agent| agent.agent_id.as_str()),
+        Some("launch_pending")
+    );
+    assert!(binding.exact_agent.is_none());
+
+    let binding = pane_binding(&snapshot, &lazy, None).unwrap();
+    assert_eq!(binding.kind, PaneBindingKind::Lazy);
+    assert!(binding.agent.is_none());
+}
+
+#[test]
+fn pane_binding_rejects_wrong_channel_stale_and_wrong_pinned_panes() {
+    let mut snapshot = empty_snapshot();
+    let provisional = agent("claude", "launch_pending", Some("docs"), "terminal_1");
+    snapshot.agents = vec![provisional];
+
+    let wrong_channel = lazy_pane("claude", "/repo/auth", "terminal_1");
+    assert_eq!(
+        pane_binding(&snapshot, &wrong_channel, None).unwrap().kind,
+        PaneBindingKind::Lazy
+    );
+
+    let stale = bound_pane("claude", 1, "stale", "session-gone", "docs", "terminal_2");
+    assert!(pane_binding(&snapshot, &stale, None).is_none());
+
+    let matching = lazy_pane("claude", "/repo/docs", "terminal_3");
+    let other_pane = PaneId::from_parts(MuxName::Zellij, "terminal_4");
+    assert!(pane_binding(&snapshot, &matching, Some(&other_pane)).is_none());
+}
+
+#[test]
 fn create_mention_extracts_type_handles_but_not_panes_or_broadcast() {
     // A kind/profile mention yields its selector and resolved channel.
     let create = create_mention("@planner#auth", None, None)

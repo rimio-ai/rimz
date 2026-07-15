@@ -177,14 +177,12 @@ pub(super) fn list_messages(
         rimz::harness::target::require_mention(&raw)?;
         let agent = crate::cli::resolve_agent_one(&snapshot, &raw, None, lane_scope.named())?;
         messages.retain(|message| {
-            rimz::message::card_matches(
+            rimz::agents::AgentCardRef::new(
                 &message.kind,
                 &message.agent_id,
                 message.agent_name.as_deref(),
-                &agent.kind,
-                &agent.agent_id,
-                agent.name.as_deref(),
             )
+            .matches(agent.card_ref())
         });
     }
     messages.sort_by(|a, b| {

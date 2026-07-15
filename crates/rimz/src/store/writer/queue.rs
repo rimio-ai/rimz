@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 
+use crate::agents::AgentCardRef;
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
 use crate::message::{
     AutoCompact, DeliveryGate, MAX_DELIVERY_ATTEMPTS, MessageBody, MessageRecord, MessageStatus,
@@ -26,6 +27,15 @@ pub struct MessageEdit {
     pub force: Option<bool>,
     pub enter: Option<bool>,
     pub auto_compact: Option<Option<AutoCompact>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeliverySweepUpdate {
+    pub message_id: MessageId,
+    pub after_indices: Vec<usize>,
+    pub when_indices: Vec<usize>,
+    pub retry_after: Option<Timestamp>,
+    pub archive_reason: Option<String>,
 }
 
 impl MessageEdit {
@@ -117,6 +127,114 @@ fn claim_message_locked(
     Ok(Some(claimed))
 }
 
+fn transition_terminal_record(
+    message: &mut MessageRecord,
+    status: MessageStatus,
+    session_name: &str,
+    reason: Option<&str>,
+    now: Timestamp,
+) -> EventEnvelope {
+    debug_assert!(status.is_terminal());
+    message.status = status;
+    message.updated_at = now;
+    if status == MessageStatus::Archived {
+        message.last_error = reason.map(ToOwned::to_owned);
+    }
+    if status == MessageStatus::Delivered {
+        message.delivered_at = Some(now);
+    }
+    let method = MessageEventMethod::for_terminal_status(status)
+        .expect("terminal transition requires a terminal message status");
+    EventEnvelope::message_event(message, session_name, method, reason)
+}
+
+fn apply_sweep_update(
+    message: &mut MessageRecord,
+    update: &DeliverySweepUpdate,
+    now: Timestamp,
+) -> MessageUpdate {
+    if let Some(reason) = update.archive_reason.as_ref() {
+        return MessageUpdate::Finalize {
+            status: MessageStatus::Archived,
+            reason: Some(reason.clone()),
+        };
+    }
+    let after = stamp_after_conditions(message, &update.after_indices, now);
+    let when = stamp_when_conditions(message, &update.when_indices, now);
+    let retry_changed = update.retry_after.is_some() && message.retry_after != update.retry_after;
+    if retry_changed {
+        message.retry_after = update.retry_after;
+    }
+    if after.is_empty() && when.is_empty() {
+        return if retry_changed {
+            MessageUpdate::SilentRewrite
+        } else {
+            MessageUpdate::Keep
+        };
+    }
+    message.updated_at = now;
+    MessageUpdate::Rewrite {
+        method: if when.is_empty() {
+            MessageEventMethod::AfterMet
+        } else {
+            MessageEventMethod::WhenMet
+        },
+        reason: Some(condition_stamp_reason(&after, &when)),
+    }
+}
+
+fn stamp_after_conditions(
+    message: &mut MessageRecord,
+    indices: &[usize],
+    now: Timestamp,
+) -> Vec<String> {
+    indices
+        .iter()
+        .filter_map(|index| {
+            let condition = message.after.get_mut(*index)?;
+            if condition.met_at.is_some() {
+                return None;
+            }
+            condition.met_at = Some(now);
+            Some(condition.address.clone())
+        })
+        .collect()
+}
+
+fn stamp_when_conditions(
+    message: &mut MessageRecord,
+    indices: &[usize],
+    now: Timestamp,
+) -> Vec<String> {
+    indices
+        .iter()
+        .filter_map(|index| {
+            let condition = message.when.get_mut(*index)?;
+            if condition.met_at.is_some() {
+                return None;
+            }
+            condition.met_at = Some(now);
+            Some(format!(
+                "{} {} {}",
+                condition.address,
+                condition.status.as_str(),
+                crate::message::format_dwell(condition.dwell_secs)
+            ))
+        })
+        .collect()
+}
+
+fn condition_stamp_reason(after: &[String], when: &[String]) -> String {
+    [
+        (!after.is_empty()).then(|| format!("{} finished", after.join(", "))),
+        (!when.is_empty()).then(|| format!("{} reached", when.join(", "))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("; ")
+}
+
 impl Store {
     pub fn list_messages(&self) -> Result<Vec<MessageRecord>> {
         Ok(message_store::list(&self.inner.paths.messages_dir)?)
@@ -139,20 +257,7 @@ impl Store {
         reason: Option<&str>,
         now: Timestamp,
     ) -> Result<(MessageRecord, EventEnvelope)> {
-        debug_assert!(status.is_terminal());
-        message.status = status;
-        message.updated_at = now;
-        if status == MessageStatus::Archived
-            && let Some(reason) = reason
-        {
-            message.last_error = Some(reason.to_owned());
-        }
-        if status == MessageStatus::Delivered {
-            message.delivered_at = Some(now);
-        }
-        let method = MessageEventMethod::for_terminal_status(status)
-            .expect("finalize_message_locked only accepts terminal message statuses");
-        let event = EventEnvelope::message_event(&message, session_name, method, reason);
+        let event = transition_terminal_record(&mut message, status, session_name, reason, now);
         message_store::append_history(&txn.paths.messages_dir, &message)?;
         message_store::remove(&txn.paths.messages_dir, &message.message_id)?;
         txn.append(&event)?;
@@ -187,23 +292,17 @@ impl Store {
                     ));
                 }
                 MessageUpdate::Finalize { status, reason } => {
-                    debug_assert!(status.is_terminal());
-                    message.status = status;
-                    message.updated_at = now;
-                    if status == MessageStatus::Delivered {
-                        message.delivered_at = Some(now);
-                    }
-                    let method = MessageEventMethod::for_terminal_status(status)
-                        .expect("MessageUpdate::Finalize only accepts terminal statuses");
+                    let event = transition_terminal_record(
+                        message,
+                        status,
+                        session_name,
+                        reason.as_deref(),
+                        now,
+                    );
                     removed_ids.insert(message.message_id.to_string());
                     updated.push(message.clone());
                     history.push(message.clone());
-                    events.push(EventEnvelope::message_event(
-                        message,
-                        session_name,
-                        method,
-                        reason.as_deref(),
-                    ));
+                    events.push(event);
                 }
             }
         }
@@ -255,72 +354,25 @@ impl Store {
     }
 
     #[must_use = "durability barrier; check the result"]
-    pub fn stamp_delivery_conditions(
+    pub fn apply_delivery_sweep(
         &self,
-        stamps: &[(MessageId, Vec<usize>, Vec<usize>)],
+        updates: &[DeliverySweepUpdate],
         now: Timestamp,
         session_name: &str,
     ) -> Result<()> {
         self.commit(PublishPolicy::Skip, |txn| {
+            let updates = updates
+                .iter()
+                .map(|update| (update.message_id.as_str(), update))
+                .collect::<std::collections::BTreeMap<_, _>>();
             self.update_messages_locked(txn, session_name, now, |message| {
                 if message.status != MessageStatus::Queued {
                     return MessageUpdate::Keep;
                 }
-                let Some((_, after_indices, when_indices)) = stamps
-                    .iter()
-                    .find(|(message_id, _, _)| *message_id == message.message_id)
-                else {
+                let Some(update) = updates.get(message.message_id.as_str()) else {
                     return MessageUpdate::Keep;
                 };
-                let mut addresses = Vec::new();
-                for index in after_indices {
-                    let Some(condition) = message.after.get_mut(*index) else {
-                        continue;
-                    };
-                    if condition.met_at.is_some() {
-                        continue;
-                    }
-                    condition.met_at = Some(now);
-                    addresses.push(condition.address.clone());
-                }
-                let mut when = Vec::new();
-                for index in when_indices {
-                    let Some(condition) = message.when.get_mut(*index) else {
-                        continue;
-                    };
-                    if condition.met_at.is_some() {
-                        continue;
-                    }
-                    condition.met_at = Some(now);
-                    when.push(format!(
-                        "{} {} {}",
-                        condition.address,
-                        condition.status.as_str(),
-                        crate::message::format_dwell(condition.dwell_secs)
-                    ));
-                }
-                if addresses.is_empty() && when.is_empty() {
-                    return MessageUpdate::Keep;
-                }
-                message.updated_at = now;
-                MessageUpdate::Rewrite {
-                    method: if when.is_empty() {
-                        MessageEventMethod::AfterMet
-                    } else {
-                        MessageEventMethod::WhenMet
-                    },
-                    reason: Some(
-                        [
-                            (!addresses.is_empty())
-                                .then(|| format!("{} finished", addresses.join(", "))),
-                            (!when.is_empty()).then(|| format!("{} reached", when.join(", "))),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                    ),
-                }
+                apply_sweep_update(message, update, now)
             })?;
             Ok(())
         })
@@ -544,6 +596,7 @@ impl Store {
         body: MessageBody,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
+        let card = AgentCardRef::new(kind, agent_id, agent_name);
         self.commit(PublishPolicy::Skip, |txn| {
             let messages = message_store::list(&txn.paths.messages_dir)?;
             let Some(oldest) = messages
@@ -551,7 +604,7 @@ impl Store {
                 .filter(|message| {
                     message.status == MessageStatus::Sent
                         && message.body == body
-                        && message.same_card(kind, agent_id, agent_name)
+                        && message.same_card(card)
                 })
                 .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
                 .cloned()
@@ -566,7 +619,7 @@ impl Store {
                     oldest.batch_id.is_some()
                         && message.status == MessageStatus::Sent
                         && message.body == body
-                        && message.same_card(kind, agent_id, agent_name)
+                        && message.same_card(card)
                         && message.batch_id == oldest.batch_id
                 };
                 if !selected {
@@ -800,13 +853,14 @@ impl Store {
         agent_name: Option<&str>,
         session_name: &str,
     ) -> Result<Vec<MessageRecord>> {
+        let card = AgentCardRef::new(kind, agent_id, agent_name);
         self.commit(PublishPolicy::Skip, |txn| {
             self.finalize_matching_messages_locked(
                 txn,
                 MessageStatus::Removed,
                 session_name,
                 "clear",
-                |message| message.status.is_open() && message.same_card(kind, agent_id, agent_name),
+                |message| message.status.is_open() && message.same_card(card),
                 |_| {},
             )
         })
@@ -851,18 +905,11 @@ impl Store {
                             .iter()
                             .filter(|condition| condition.met_at.is_none())
                             .find(|condition| {
-                                !live_agents.iter().any(|agent| {
-                                    crate::message::card_matches(
-                                        &condition.kind,
-                                        &condition.agent_id,
-                                        condition.agent_name.as_deref(),
-                                        &agent.kind,
-                                        &agent.agent_id,
-                                        agent.name.as_deref(),
-                                    )
-                                })
+                                !live_agents
+                                    .iter()
+                                    .any(|agent| condition.card_ref().matches(agent.card_ref()))
                             })
-                            .map(when_expiry_reason)
+                            .map(crate::message::WhenCondition::expiry_reason)
                     } else {
                         None
                     };
@@ -892,13 +939,14 @@ impl Store {
         reason: &str,
         session_name: &str,
     ) -> Result<usize> {
+        let card = AgentCardRef::new(kind, agent_id, agent_name);
         let archived = self.commit(PublishPolicy::Skip, |txn| {
             self.finalize_matching_messages_locked(
                 txn,
                 MessageStatus::Archived,
                 session_name,
                 reason,
-                |message| message.status.is_open() && message.same_card(kind, agent_id, agent_name),
+                |message| message.status.is_open() && message.same_card(card),
                 |message| message.last_error = Some(reason.to_owned()),
             )
         })?;
@@ -913,25 +961,18 @@ impl Store {
         agent_name: Option<&str>,
         session_name: &str,
     ) -> Result<usize> {
+        let card = AgentCardRef::new(kind, agent_id, agent_name);
         let archived = self.commit(PublishPolicy::Skip, |txn| {
             self.update_messages_locked(txn, session_name, Timestamp::now(), |message| {
                 if message.status != MessageStatus::Queued {
                     return MessageUpdate::Keep;
                 }
                 let Some(condition) = message.when.iter().find(|condition| {
-                    condition.met_at.is_none()
-                        && crate::message::card_matches(
-                            &condition.kind,
-                            &condition.agent_id,
-                            condition.agent_name.as_deref(),
-                            kind,
-                            agent_id,
-                            agent_name,
-                        )
+                    condition.met_at.is_none() && condition.card_ref().matches(card)
                 }) else {
                     return MessageUpdate::Keep;
                 };
-                let reason = when_expiry_reason(condition);
+                let reason = condition.expiry_reason();
                 message.last_error = Some(reason.clone());
                 MessageUpdate::Finalize {
                     status: MessageStatus::Archived,
@@ -961,15 +1002,6 @@ impl Store {
         })?;
         Ok(archived.len())
     }
-}
-
-fn when_expiry_reason(condition: &crate::message::WhenCondition) -> String {
-    format!(
-        "watched agent {} ended before '{} {}' was met",
-        condition.address,
-        condition.status.as_str(),
-        crate::message::format_dwell(condition.dwell_secs)
-    )
 }
 
 #[cfg(test)]

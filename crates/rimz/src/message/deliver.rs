@@ -11,15 +11,14 @@ use serde::Serialize;
 use crate::agents::AgentStatus;
 use crate::ids::{MessageId, MuxName, PaneId};
 use crate::message::{
-    AfterCondition, DeliveryGate, MessageRecord, MessageStatus, WhenCondition, WhenState,
-    after_condition_open, card_matches, delivery_window_from_env, gate_open_for_agent,
-    max_delivery_attempts_from_env, message_interval_from_env, queue_batch_tail, queue_head,
-    queue_head_for_message, when_condition_state,
+    AfterCondition, DeliveryGate, MessageRecord, MessageStatus, WhenCondition,
+    delivery_window_from_env, gate_open_for_agent, max_delivery_attempts_from_env,
+    message_interval_from_env, older_ready_blocker, queue_batch_tail, queue_head,
 };
 use crate::workspace::ResolvedWorkspace;
 use crate::{PaneAgent, RuntimePaths, SidebarSnapshot, Store};
 
-use super::{dispatch, send};
+use super::send;
 
 pub type Result<T> = std::result::Result<T, DeliverErr>;
 
@@ -93,7 +92,23 @@ pub fn deliver_one(
     if !settle.is_zero() {
         std::thread::sleep(settle);
     }
-    let Some(candidate) = delivery_candidate(workspace, store, message_id, mux, policy)? else {
+    let pending = store.list_pending_messages()?;
+    let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
+    if let Ok(runtime) = RuntimePaths::for_workspace(workspace.workspace_id.clone()) {
+        snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime));
+    }
+    attempt_delivery(workspace, store, message_id, policy, &pending, &snapshot)
+}
+
+fn attempt_delivery(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    message_id: &MessageId,
+    policy: DeliveryPolicy,
+    pending: &[MessageRecord],
+    snapshot: &SidebarSnapshot,
+) -> Result<bool> {
+    let Some(candidate) = delivery_candidate(pending, snapshot, message_id, policy) else {
         return Ok(false);
     };
     let Some(claimed) = claim_batch(store, policy, &candidate)? else {
@@ -111,12 +126,14 @@ pub fn deliver_one(
         .cloned()
         .map(|message| message.with_pane_id(candidate.target.pane_id.clone()))
         .collect();
+    let bound = crate::harness::target::pane_binding(candidate.snapshot, candidate.target, None)
+        .and_then(|binding| binding.exact_agent);
     let sent = send::send_batch_to_live_pane(
         workspace,
         store,
-        &candidate.snapshot,
-        &candidate.target,
-        send::bound_agent(&candidate.snapshot, &candidate.target),
+        candidate.snapshot,
+        candidate.target,
+        bound,
         &send_messages,
         &mut live_send,
     );
@@ -166,7 +183,7 @@ pub fn deliver_one(
 fn claim_batch(
     store: &Store,
     policy: DeliveryPolicy,
-    candidate: &DeliveryCandidate,
+    candidate: &DeliveryCandidate<'_>,
 ) -> Result<Option<Vec<MessageRecord>>> {
     let claimed_head = match policy {
         DeliveryPolicy::Boundary => {
@@ -234,10 +251,9 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
     let now = Timestamp::now();
     let delivery_window = delivery_window_from_env();
     let live = store.list_messages()?;
-    let needs_snapshot = live.iter().any(|message| {
-        message.status == MessageStatus::Sent
-            || (message.status == MessageStatus::Queued && !message.conditions_met())
-    });
+    let needs_snapshot = live
+        .iter()
+        .any(|message| matches!(message.status, MessageStatus::Sent | MessageStatus::Queued));
     let snapshot = if needs_snapshot {
         let snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
         Some(snapshot.with_agent_context(crate::store::agent_context::read_all(&runtime)))
@@ -266,9 +282,10 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
         let snapshot = snapshot
             .as_ref()
             .expect("unmet delivery conditions require a resolution snapshot");
-        evaluate_delivery_conditions(workspace, store, snapshot, &live, now)?;
+        evaluate_delivery_conditions(workspace, store, snapshot, &live, now, delivery_window)?;
     }
     let pending = store.list_pending_messages()?;
+    let snapshot = snapshot.as_ref();
     let mut heads_seen = std::collections::BTreeSet::new();
     for message in pending.iter().filter(|message| message.is_deliverable(now)) {
         let Some(head) = queue_head(
@@ -281,13 +298,13 @@ pub fn sweep(workspace: &ResolvedWorkspace, store: &Store, mux: Option<MuxName>)
             continue;
         };
         if heads_seen.insert(head.message_id.to_string()) {
-            let delivered = deliver_one(
+            let delivered = attempt_delivery(
                 workspace,
                 store,
                 &head.message_id,
-                Duration::ZERO,
-                mux,
                 DeliveryPolicy::Boundary,
+                &pending,
+                snapshot.expect("queued delivery requires a resolution snapshot"),
             )?;
             if !delivered {
                 store.defer_message_wake(&head.message_id, now + delivery_window)?;
@@ -304,86 +321,24 @@ fn evaluate_delivery_conditions(
     snapshot: &SidebarSnapshot,
     pending: &[MessageRecord],
     now: Timestamp,
+    delivery_window: Duration,
 ) -> Result<()> {
-    let mut stamps = Vec::new();
-    let mut deferred = Vec::new();
+    let mut updates = Vec::new();
     for message in pending
         .iter()
         .filter(|message| message.status == MessageStatus::Queued && !message.conditions_met())
     {
-        let after_met = message
-            .after
-            .iter()
-            .enumerate()
-            .filter(|(_, condition)| condition.met_at.is_none())
-            .filter_map(|(index, condition)| {
-                after_condition_open(condition, message.gate, &snapshot.agents, pending, now)
-                    .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        let after_unmet_count = message
-            .after
-            .iter()
-            .filter(|condition| condition.met_at.is_none())
-            .count();
-        let mut when_met = Vec::new();
-        let mut next_wake = None;
-        let mut gone = None;
-        for (index, condition) in message
-            .when
-            .iter()
-            .enumerate()
-            .filter(|(_, condition)| condition.met_at.is_none())
-        {
-            match when_condition_state(condition, &snapshot.agents, now) {
-                WhenState::Met => when_met.push(index),
-                WhenState::Pending {
-                    trip_at: Some(trip_at),
-                } => {
-                    next_wake =
-                        Some(next_wake.map_or(trip_at, |wake: Timestamp| wake.min(trip_at)));
-                }
-                WhenState::Pending { trip_at: None } => {
-                    let retry = now + delivery_window_from_env();
-                    next_wake = Some(next_wake.map_or(retry, |wake: Timestamp| wake.min(retry)));
-                }
-                WhenState::Gone => {
-                    gone = Some(condition);
-                    break;
-                }
-            }
-        }
-        if let Some(condition) = gone {
-            let reason = format!(
-                "watched agent {} ended before '{} {}' was met",
-                condition.address,
-                condition.status.as_str(),
-                crate::message::format_dwell(condition.dwell_secs)
-            );
-            store.settle_message(
-                &message.message_id,
-                MessageStatus::Archived,
-                &workspace.session_name,
-                Some(&reason),
-            )?;
-            continue;
-        }
-        if after_met.len() < after_unmet_count {
-            let retry = now + delivery_window_from_env();
-            next_wake = Some(next_wake.map_or(retry, |wake: Timestamp| wake.min(retry)));
-        }
-        if let Some(next_wake) = next_wake {
-            deferred.push((message.message_id.clone(), next_wake));
-        }
-        if !after_met.is_empty() || !when_met.is_empty() {
-            stamps.push((message.message_id.clone(), after_met, when_met));
-        }
+        let evaluation = evaluate_delivery(message, pending, snapshot, now, delivery_window);
+        updates.push(crate::store::DeliverySweepUpdate {
+            message_id: message.message_id.clone(),
+            after_indices: evaluation.after_stamps,
+            when_indices: evaluation.when_stamps,
+            retry_after: evaluation.retry_at,
+            archive_reason: evaluation.archive_reason,
+        });
     }
-    if !stamps.is_empty() {
-        store.stamp_delivery_conditions(&stamps, now, &workspace.session_name)?;
-    }
-    for (message_id, retry_at) in deferred {
-        store.defer_message_wake(&message_id, retry_at)?;
+    if !updates.is_empty() {
+        store.apply_delivery_sweep(&updates, now, &workspace.session_name)?;
     }
     Ok(())
 }
@@ -417,11 +372,11 @@ fn try_start_sweep(runtime: &RuntimePaths) -> Result<Option<SweepRunGuard>> {
     }
 }
 
-struct DeliveryCandidate {
+struct DeliveryCandidate<'a> {
     message: MessageRecord,
     batch_tail: Vec<MessageRecord>,
-    snapshot: SidebarSnapshot,
-    target: PaneAgent,
+    snapshot: &'a SidebarSnapshot,
+    target: &'a PaneAgent,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -580,12 +535,44 @@ pub struct PaneCheck {
     pub pinned_pane_id: Option<PaneId>,
 }
 
+pub(crate) struct AfterEvaluation {
+    pub check: AfterConditionCheck,
+    pub stamp_needed: bool,
+}
+
+pub(crate) struct WhenEvaluation {
+    pub check: WhenConditionCheck,
+    pub stamp_needed: bool,
+    retry_at: Option<Timestamp>,
+    pub(crate) archive_reason: Option<String>,
+}
+
+struct DeliveryEvaluation<'a> {
+    check: DeliveryCheck,
+    agent: Option<&'a crate::agents::AgentState>,
+    binding: Option<crate::harness::target::PaneBinding<'a, 'a>>,
+    after_stamps: Vec<usize>,
+    when_stamps: Vec<usize>,
+    retry_at: Option<Timestamp>,
+    archive_reason: Option<String>,
+}
+
 pub fn explain(
     message: &MessageRecord,
     pending: &[MessageRecord],
     snapshot: &SidebarSnapshot,
     now: Timestamp,
 ) -> DeliveryCheck {
+    evaluate_delivery(message, pending, snapshot, now, delivery_window_from_env()).check
+}
+
+fn evaluate_delivery<'a>(
+    message: &MessageRecord,
+    pending: &[MessageRecord],
+    snapshot: &'a SidebarSnapshot,
+    now: Timestamp,
+    delivery_window: Duration,
+) -> DeliveryEvaluation<'a> {
     let schedule = ScheduleCheck {
         ready: message.is_ready(now),
         not_before: message.not_before,
@@ -594,40 +581,24 @@ pub fn explain(
     let after = message
         .after
         .iter()
-        .map(|condition| after_condition_check(condition, message.gate, pending, snapshot, now))
+        .map(|condition| evaluate_after_condition(condition, message.gate, pending, snapshot, now))
         .collect::<Vec<_>>();
-    let after_ready = after.iter().all(|condition| condition.met);
+    let after_ready = after.iter().all(|condition| condition.check.met);
     let when = message
         .when
         .iter()
-        .map(|condition| when_condition_check(condition, snapshot, now))
+        .map(|condition| evaluate_when_condition(condition, snapshot, now, delivery_window))
         .collect::<Vec<_>>();
-    let when_ready = when.iter().all(|condition| condition.met);
+    let when_ready = when.iter().all(|condition| condition.check.met);
     let fifo =
         if message.status == MessageStatus::Queued && schedule.ready && after_ready && when_ready {
-            let mut candidate = message.clone();
-            for condition in &mut candidate.after {
-                condition.met_at.get_or_insert(now);
-            }
-            for condition in &mut candidate.when {
-                condition.met_at.get_or_insert(now);
-            }
-            let candidates = std::iter::once(&candidate).chain(
-                pending
-                    .iter()
-                    .filter(|pending| pending.message_id != message.message_id),
-            );
-            match queue_head_for_message(candidates, &candidate, now) {
-                Some(head) if head.message_id == message.message_id => FifoCheck {
-                    head: true,
-                    blocker: None,
-                },
+            match older_ready_blocker(pending, message, |pending| pending.is_deliverable(now)) {
                 Some(head) => FifoCheck {
                     head: false,
                     blocker: Some(head.message_id.clone()),
                 },
                 None => FifoCheck {
-                    head: false,
+                    head: true,
                     blocker: None,
                 },
             }
@@ -655,19 +626,37 @@ pub fn explain(
         _ => None,
     };
     let waiting = !message.force && agent.is_some_and(crate::agents::AgentState::is_awaiting_input);
-    let pane = agent.and_then(|agent| {
-        snapshot.agent_panes.iter().find(|pane| {
-            dispatch::pane_matches_agent(pane, agent)
-                && message
-                    .pane_id
-                    .as_ref()
-                    .is_none_or(|pane_id| pane.pane_id == *pane_id)
-        })
+    let binding = agent.and_then(|agent| {
+        crate::harness::target::bind_agent(snapshot, agent, message.pane_id.as_ref())
     });
-    DeliveryCheck {
+    let retry_at = after
+        .iter()
+        .filter_map(|evaluation| (!evaluation.check.met).then_some(now + delivery_window))
+        .chain(when.iter().filter_map(|evaluation| evaluation.retry_at))
+        .min();
+    let archive_reason = when
+        .iter()
+        .find_map(|evaluation| evaluation.archive_reason.clone());
+    let after_stamps = after
+        .iter()
+        .enumerate()
+        .filter_map(|(index, evaluation)| evaluation.stamp_needed.then_some(index))
+        .collect();
+    let when_stamps = when
+        .iter()
+        .enumerate()
+        .filter_map(|(index, evaluation)| evaluation.stamp_needed.then_some(index))
+        .collect();
+    let check = DeliveryCheck {
         schedule,
-        after,
-        when,
+        after: after
+            .into_iter()
+            .map(|evaluation| evaluation.check)
+            .collect(),
+        when: when
+            .into_iter()
+            .map(|evaluation| evaluation.check)
+            .collect(),
         fifo,
         agent: AgentCheck {
             present: agent.is_some(),
@@ -684,28 +673,32 @@ pub fn explain(
             force: message.force,
         },
         pane: PaneCheck {
-            present: pane.is_some(),
-            pane_id: pane.map(|pane| pane.pane_id.clone()),
+            present: binding.is_some(),
+            pane_id: binding.map(|binding| binding.pane.pane_id.clone()),
             pinned_pane_id: message.pane_id.clone(),
         },
+    };
+    DeliveryEvaluation {
+        check,
+        agent,
+        binding,
+        after_stamps,
+        when_stamps,
+        retry_at,
+        archive_reason,
     }
 }
 
-fn when_condition_check(
+pub(crate) fn evaluate_when_condition(
     condition: &WhenCondition,
     snapshot: &SidebarSnapshot,
     now: Timestamp,
-) -> WhenConditionCheck {
-    let agent = snapshot.agents.iter().find(|agent| {
-        card_matches(
-            &condition.kind,
-            &condition.agent_id,
-            condition.agent_name.as_deref(),
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-        )
-    });
+    delivery_window: Duration,
+) -> WhenEvaluation {
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| condition.card_ref().matches(agent.card_ref()));
     let status = agent.map(|agent| agent.status);
     let matching = agent.filter(|agent| agent.status == condition.status);
     let base = matching.map(|agent| {
@@ -722,85 +715,86 @@ fn when_condition_check(
         base.checked_add(Duration::from_secs(condition.dwell_secs))
             .ok()
     });
-    WhenConditionCheck {
-        address: condition.address.clone(),
-        expected: condition.status,
-        dwell_secs: condition.dwell_secs,
-        met: condition.met_at.is_some()
-            || when_condition_state(condition, &snapshot.agents, now) == WhenState::Met,
-        met_at: condition.met_at,
-        agent_present: agent.is_some(),
-        status,
-        dwell_so_far_secs,
-        trip_at,
+    let met = condition.met_at.is_some()
+        || dwell_so_far_secs.is_some_and(|elapsed| elapsed >= condition.dwell_secs);
+    let agent_gone = condition.met_at.is_none() && agent.is_none();
+    WhenEvaluation {
+        check: WhenConditionCheck {
+            address: condition.address.clone(),
+            expected: condition.status,
+            dwell_secs: condition.dwell_secs,
+            met,
+            met_at: condition.met_at,
+            agent_present: agent.is_some(),
+            status,
+            dwell_so_far_secs,
+            trip_at,
+        },
+        stamp_needed: condition.met_at.is_none() && met,
+        retry_at: (!met && !agent_gone).then(|| trip_at.unwrap_or(now + delivery_window)),
+        archive_reason: agent_gone.then(|| condition.expiry_reason()),
     }
 }
 
-fn after_condition_check(
+pub(crate) fn evaluate_after_condition(
     condition: &AfterCondition,
     gate: DeliveryGate,
     pending: &[MessageRecord],
     snapshot: &SidebarSnapshot,
     now: Timestamp,
-) -> AfterConditionCheck {
-    let agent = snapshot.agents.iter().find(|agent| {
-        card_matches(
-            &condition.kind,
-            &condition.agent_id,
-            condition.agent_name.as_deref(),
-            &agent.kind,
-            &agent.agent_id,
-            agent.name.as_deref(),
-        )
-    });
-    AfterConditionCheck {
-        address: condition.address.clone(),
-        met: condition.met_at.is_some()
-            || after_condition_open(condition, gate, &snapshot.agents, pending, now),
-        met_at: condition.met_at,
-        agent_present: agent.is_some(),
-        status: agent.map(crate::agents::AgentState::effective_status),
+) -> AfterEvaluation {
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| condition.card_ref().matches(agent.card_ref()));
+    let met = condition.met_at.is_some()
+        || agent.is_some_and(|agent| {
+            gate_open_for_agent(gate, agent, false, now)
+                && !pending.iter().any(|message| {
+                    !message.status.is_terminal()
+                        && message.is_ready(now)
+                        && message.same_card(condition.card_ref())
+                })
+        });
+    AfterEvaluation {
+        check: AfterConditionCheck {
+            address: condition.address.clone(),
+            met,
+            met_at: condition.met_at,
+            agent_present: agent.is_some(),
+            status: agent.map(crate::agents::AgentState::effective_status),
+        },
+        stamp_needed: condition.met_at.is_none() && met,
     }
 }
 
-fn delivery_candidate(
-    workspace: &ResolvedWorkspace,
-    store: &Store,
+fn delivery_candidate<'a>(
+    pending: &[MessageRecord],
+    snapshot: &'a SidebarSnapshot,
     message_id: &MessageId,
-    mux: Option<MuxName>,
     policy: DeliveryPolicy,
-) -> Result<Option<DeliveryCandidate>> {
-    let pending = store.list_pending_messages()?;
+) -> Option<DeliveryCandidate<'a>> {
     let Some(message) = pending
         .iter()
         .find(|message| message.message_id == *message_id)
         .cloned()
     else {
-        return Ok(None);
+        return None;
     };
     let now = Timestamp::now();
-    let mut snapshot = crate::sidebar::produce::resolution_snapshot(workspace, store, mux)?;
-    // The resolution snapshot carries live panes but not rich context sidecars.
-    // Fold them here for smart-compact gauges and parked-status delivery gates.
-    let runtime = RuntimePaths::for_workspace(message.workspace_id.clone()).ok();
-    if let Some(runtime) = runtime.as_ref() {
-        snapshot = snapshot.with_agent_context(crate::store::agent_context::read_all(runtime));
-    }
-    let check = explain(&message, &pending, &snapshot, now);
+    let evaluation =
+        evaluate_delivery(&message, pending, snapshot, now, delivery_window_from_env());
+    let check = &evaluation.check;
     if matches!(policy, DeliveryPolicy::Boundary)
         && (!message.is_deliverable(now) || !check.fifo.head || !check.gate_ready())
     {
-        return Ok(None);
+        return None;
     }
     if check.ask.waiting && !matches!(policy, DeliveryPolicy::Steer { force: true }) {
-        return Ok(None);
+        return None;
     }
-    let Some(agent) = snapshot
-        .agents
-        .iter()
-        .find(|agent| message.same_agent_card(agent))
-    else {
-        return Ok(None);
+    let Some(agent) = evaluation.agent else {
+        return None;
     };
     let status = agent.effective_status();
     let batch_tail = match policy {
@@ -810,26 +804,15 @@ fn delivery_candidate(
             .collect(),
         DeliveryPolicy::Steer { .. } => Vec::new(),
     };
-    let Some(target) = snapshot
-        .agent_panes
-        .iter()
-        .find(|pane| {
-            dispatch::pane_matches_agent(pane, agent)
-                && message
-                    .pane_id
-                    .as_ref()
-                    .is_none_or(|pane_id| pane.pane_id == *pane_id)
-        })
-        .cloned()
-    else {
-        return Ok(None);
+    let Some(target) = evaluation.binding.map(|binding| binding.pane) else {
+        return None;
     };
-    Ok(Some(DeliveryCandidate {
+    Some(DeliveryCandidate {
         message,
         batch_tail,
         snapshot,
         target,
-    }))
+    })
 }
 
 pub fn register_message_wake(workspace: &ResolvedWorkspace, store: &Store) -> Result<()> {
@@ -1032,6 +1015,85 @@ mod tests {
             }
         );
         assert!(!check.passes());
+    }
+
+    #[test]
+    fn candidate_uses_shared_evaluation_but_requires_durable_condition_stamp() {
+        let now = Timestamp::from_second(10_000).unwrap();
+        let receiver = agent("sess-receiver", AgentStatus::Idle);
+        let upstream = agent("sess-upstream", AgentStatus::Idle);
+        let mut live = snapshot(receiver.clone(), true, now);
+        live.agents.push(upstream.clone());
+        let mut candidate =
+            message(&receiver, 1, "after upstream").with_after(vec![AfterCondition {
+                kind: upstream.kind.clone(),
+                agent_id: upstream.agent_id.clone(),
+                agent_name: upstream.name.clone(),
+                address: "@upstream".to_owned(),
+                met_at: None,
+            }]);
+        let pending = vec![candidate.clone()];
+
+        assert_eq!(
+            explain(&candidate, &pending, &live, now).verdict(),
+            DeliveryVerdict::Ready
+        );
+        assert!(
+            delivery_candidate(
+                &pending,
+                &live,
+                &candidate.message_id,
+                DeliveryPolicy::Boundary,
+            )
+            .is_none(),
+            "dynamic truth explains readiness but cannot cross claim boundary"
+        );
+
+        candidate.after[0].met_at = Some(now);
+        let pending = vec![candidate.clone()];
+        assert!(
+            delivery_candidate(
+                &pending,
+                &live,
+                &candidate.message_id,
+                DeliveryPolicy::Boundary,
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn when_evaluation_handles_exact_boundary_clock_skew_and_expiry() {
+        let now = Timestamp::from_second(10_000).unwrap();
+        let mut watched = agent("sess-watched", AgentStatus::Running);
+        watched.turn_started_at = Some(Timestamp::from_second(9_940).unwrap());
+        let condition = WhenCondition {
+            kind: watched.kind.clone(),
+            agent_id: watched.agent_id.clone(),
+            agent_name: watched.name.clone(),
+            address: "@watched".to_owned(),
+            status: AgentStatus::Running,
+            dwell_secs: 60,
+            met_at: None,
+        };
+        let live = snapshot(watched.clone(), false, now);
+        let exact = evaluate_when_condition(&condition, &live, now, Duration::from_secs(30));
+        assert!(exact.check.met);
+        assert!(exact.stamp_needed);
+
+        watched.turn_started_at = Some(Timestamp::from_second(10_010).unwrap());
+        let skewed = snapshot(watched, false, now);
+        let skewed = evaluate_when_condition(&condition, &skewed, now, Duration::from_secs(30));
+        assert!(!skewed.check.met);
+        assert_eq!(skewed.check.dwell_so_far_secs, Some(0));
+        assert_eq!(
+            skewed.check.trip_at,
+            Some(Timestamp::from_second(10_070).unwrap())
+        );
+
+        let gone = snapshot(agent("other", AgentStatus::Idle), false, now);
+        let gone = evaluate_when_condition(&condition, &gone, now, Duration::from_secs(30));
+        assert_eq!(gone.archive_reason, Some(condition.expiry_reason()));
     }
 
     fn ready_check() -> DeliveryCheck {

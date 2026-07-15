@@ -3217,6 +3217,77 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
     );
 }
 
+#[test]
+fn boundary_fanout_keeps_earlier_live_effect_before_later_hook_error() {
+    let env = Env::new();
+    register_role_agent(
+        &env,
+        "claude",
+        "sess-a-live",
+        "live",
+        false,
+        Some(TRACE_PANE),
+    );
+    register_role_agent(&env, "claude", "sess-z-parked", "parked", false, None);
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-ordered-fanout.log");
+
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "@all", "--", "ordered effect"])
+        .output()
+        .expect("ordered fanout");
+
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("hooks"));
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .any(|line| is_paste_to_any_pane(line, "@all, ordered effect"))
+    );
+    let records = env.store().list_messages().unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].status, MessageStatus::Sent);
+    assert_eq!(records[0].attempts, 0);
+}
+
+#[test]
+fn boundary_fanout_stops_before_live_effect_when_hook_error_is_first() {
+    let env = Env::new();
+    register_role_agent(&env, "claude", "sess-a-parked", "parked", false, None);
+    register_role_agent(
+        &env,
+        "claude",
+        "sess-z-live",
+        "live",
+        false,
+        Some(TRACE_PANE),
+    );
+    let pane_fixture = env.write_pane_fixture(&[agent_pane(&env, "claude")]);
+    let trace_log = env.project_root.join("zellij-reversed-fanout.log");
+
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["message", "@all", "--", "blocked first"])
+        .output()
+        .expect("reversed ordered fanout");
+
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("hooks"));
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .all(|line| !is_paste_to_any_pane(line, "@all, blocked first"))
+    );
+    assert!(env.store().list_messages().unwrap().is_empty());
+}
+
 fn zellij_trace_shim() -> PathBuf {
     crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace"))
 }

@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn logical_card_matches_exact_sessions_or_shared_stable_names() {
+    let claude = AgentKind::new_unchecked("claude");
+    let codex = AgentKind::new_unchecked("codex");
+    let launch = AgentSessionId::from("launch_pending");
+    let session = AgentSessionId::from("session-live");
+    let other = AgentSessionId::from("session-other");
+
+    let provisional = AgentCardRef::new(&claude, &launch, Some("coder"));
+    assert!(provisional.matches(AgentCardRef::new(&claude, &session, Some("coder"))));
+    assert!(provisional.matches(AgentCardRef::new(&claude, &launch, None)));
+    assert!(!provisional.matches(AgentCardRef::new(&claude, &other, Some("reviewer"))));
+    assert!(!provisional.matches(AgentCardRef::new(&codex, &session, Some("coder"))));
+}
+
+#[test]
 fn compacting_marker_expires_after_delivery_window() {
     let now = Timestamp::from_second(1_000).unwrap();
     let mut agent = AgentState::stub("claude", "sess-compact", AgentStatus::Idle);

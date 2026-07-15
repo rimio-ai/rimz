@@ -364,6 +364,37 @@ pub const COMPACTING_WINDOW_SECS: i64 = 90;
 /// How many user prompts a session rollup retains, newest last.
 const RECENT_PROMPTS_LIMIT: usize = 16;
 
+/// Borrowed identity for one logical agent card.
+///
+/// A provisional launch and its registered session share a card when they
+/// carry the same stable name, while exact session ids keep unnamed sessions
+/// distinct.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AgentCardRef<'a> {
+    pub kind: &'a AgentKind,
+    pub agent_id: &'a AgentSessionId,
+    pub name: Option<&'a str>,
+}
+
+impl<'a> AgentCardRef<'a> {
+    pub const fn new(
+        kind: &'a AgentKind,
+        agent_id: &'a AgentSessionId,
+        name: Option<&'a str>,
+    ) -> Self {
+        Self {
+            kind,
+            agent_id,
+            name,
+        }
+    }
+
+    pub fn matches(self, other: Self) -> bool {
+        self.kind == other.kind
+            && (self.agent_id == other.agent_id || (self.name.is_some() && self.name == other.name))
+    }
+}
+
 /// Append one concrete prompt without duplicating a repeated observation.
 pub(crate) fn append_recent_prompt(recent_prompts: &mut Vec<String>, prompt: &str) {
     if prompt.is_empty() || recent_prompts.last().is_some_and(|prior| prior == prompt) {
@@ -718,6 +749,10 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
+    pub fn card_ref(&self) -> AgentCardRef<'_> {
+        AgentCardRef::new(&self.kind, &self.agent_id, self.name.as_deref())
+    }
+
     /// Whether this agent is inside the bounded compaction window.
     pub fn is_compacting(&self, now: Timestamp) -> bool {
         self.compacting_since
