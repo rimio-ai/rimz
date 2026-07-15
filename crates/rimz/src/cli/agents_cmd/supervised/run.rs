@@ -101,7 +101,7 @@ impl RunWaiter {
     fn await_terminal(
         &mut self,
         prepared: &PreparedRun,
-        room: &crate::cli::room::RunRoom,
+        room: &rimz::room::RoomContext,
         args: &AgentsArgs,
         run_id: &rimz::RunId,
     ) -> Result<RunRecord> {
@@ -167,19 +167,16 @@ struct BlockingAttempt {
 
 fn open_attempt_pane(
     prepared: &PreparedRun,
-    room: &crate::cli::room::RunRoom,
+    room: &rimz::room::RoomContext,
     args: &AgentsArgs,
     run_id: &rimz::RunId,
     launch_identity: &LaunchIdentity,
     pane: &PaneCmd,
 ) -> Result<()> {
-    let target = own_pane_id(room.mux());
-    let direction = rimz::mux::detect_terminal_size()
-        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
-        .unwrap_or_default();
-    let room_target = room.target(&prepared.workspace, &prepared.launch.cwd);
+    let target = own_pane_id(room.mux_name());
+    let direction = room.split_direction();
     let tab = || -> Result<()> {
-        let sidebar = crate::cli::room::build_sidebar_opts(&room_target, Vec::new())?;
+        let sidebar = room.sidebar_options(&prepared.launch.cwd, Vec::new(), None);
         room.backend()
             .open_tab(&TabOptions {
                 session_name: prepared.workspace.session_name.clone(),
@@ -347,7 +344,7 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
 
 fn execute_attempt(
     prepared: &PreparedRun,
-    room: &crate::cli::room::RunRoom,
+    room: &rimz::room::RoomContext,
     args: &AgentsArgs,
     prompt: &str,
     retry_of: Option<&rimz::RunId>,
@@ -471,7 +468,7 @@ fn execute_attempt(
 
 fn verify_phase(
     prepared: &PreparedRun,
-    room: &crate::cli::room::RunRoom,
+    room: &rimz::room::RoomContext,
     args: &AgentsArgs,
     blocking: BlockingAttempt,
 ) -> Result<(RunRecord, Option<anyhow::Error>, RunWaiter)> {
@@ -569,11 +566,7 @@ fn verify_phase(
     Ok((record, verify_error, waiter))
 }
 
-fn close_attempt_pane(
-    prepared: &PreparedRun,
-    room: &crate::cli::room::RunRoom,
-    record: &RunRecord,
-) {
+fn close_attempt_pane(prepared: &PreparedRun, room: &rimz::room::RoomContext, record: &RunRecord) {
     if record.status == RunStatus::Canceled {
         supervised::pane::close_stopped_run_pane_after_grace(
             room.backend(),
@@ -597,12 +590,18 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
     globals: &GlobalFlags,
 ) -> Result<Option<RunRecord>> {
     let prepared = prepare_supervised(&args, globals)?;
-    let room = crate::cli::room::birth_room_for_run(
+    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    let mut room = rimz::room::RoomContext::from_resolved(
         &prepared.workspace,
-        &prepared.launch.cwd,
-        &prepared.machine_config,
-        globals.mux,
+        prepared.machine_config.clone(),
+        mux,
+        rimz::room::RoomSizing::Birth,
     )?;
+    room.birth(rimz::room::RoomBirth::Supervised(
+        rimz::room::SupervisedBirth {
+            cwd: prepared.launch.cwd.clone(),
+        },
+    ))?;
     let retries = args.retries.unwrap_or(0);
     let owns_worktree = args.worktree.is_some() || args.from_pr.is_some();
     let base_prompt = prepared.prompt.clone();

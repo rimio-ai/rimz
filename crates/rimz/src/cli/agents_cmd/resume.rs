@@ -19,7 +19,7 @@ use rimz::ids::{AgentKind, AgentSessionId, PaneId};
 use rimz::mux::{ResumeTab, SplitPaneOptions, TabOptions};
 use rimz::store::runtime::AgentLiveness;
 
-use super::{GlobalFlags, RoomTarget, build_sidebar_opts, room_env_for_workspace};
+use super::{GlobalFlags, RoomContext, RoomSizing};
 
 #[derive(Clone, Debug)]
 struct LocalWorktree {
@@ -81,8 +81,15 @@ pub(super) fn resume_lane(
             &workspace.session_name
         ))
     })?;
-    let backend = rimz::mux::backend_for(mux);
-    crate::cli::agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
+    let machine_config = crate::cli::machine_config();
+    let room = RoomContext::from_resolved(
+        &workspace,
+        machine_config.clone(),
+        mux,
+        RoomSizing::OrdinaryTab,
+    )?;
+    let backend = room.backend();
+    crate::cli::agents_launch::ensure_live_session(backend, &workspace.session_name)?;
     crate::cli::record_workspace(&workspace)?;
 
     let store = crate::cli::open_store(&workspace)?;
@@ -140,11 +147,10 @@ pub(super) fn resume_lane(
         .into());
     }
 
-    let machine_config = crate::cli::machine_config();
     if !liveness.live.is_empty() {
         return resume_closed_into_live_lane(
             &workspace,
-            backend.as_ref(),
+            backend,
             &lane,
             &liveness,
             machine_config.resume.max,
@@ -154,7 +160,7 @@ pub(super) fn resume_lane(
 
     resume_closed_lane(
         &workspace,
-        backend.as_ref(),
+        &room,
         &store,
         &lane,
         &liveness.closed,
@@ -450,7 +456,7 @@ fn resume_closed_into_live_lane(
 
 fn resume_closed_lane(
     workspace: &rimz::ResolvedWorkspace,
-    backend: &dyn rimz::mux::MuxBackend,
+    room: &RoomContext,
     store: &rimz::Store,
     lane: &ResolvedLane,
     agents: &[AgentState],
@@ -510,7 +516,7 @@ fn resume_closed_lane(
     }
     let count = tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
     for tab in tabs {
-        open_resume_tab(workspace, backend, machine_config, tab, bg)?;
+        open_resume_tab(workspace, room, tab, bg)?;
     }
     writeln!(
         std::io::stdout().lock(),
@@ -539,26 +545,12 @@ fn flat_resume_plan(
 
 fn open_resume_tab(
     workspace: &rimz::ResolvedWorkspace,
-    backend: &dyn rimz::mux::MuxBackend,
-    machine_config: &rimz::config::MachineConfig,
+    room: &RoomContext,
     tab: ResumeTab,
     bg: bool,
 ) -> Result<()> {
-    let mux_config = rimz::config::MultiplexerConfig::from(machine_config);
-    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
-    let room = RoomTarget {
-        workspace_id: &workspace.workspace_id,
-        project_root: &workspace.project_root,
-        session_name: &workspace.session_name,
-        extra_env: room_env_for_workspace(&workspace.workspace_id)?,
-        cwd: &tab.cwd,
-        mux_config: &mux_config,
-        width,
-        detected_size: None,
-        refresh_ms: None,
-    };
-    let sidebar = build_sidebar_opts(&room, Vec::new())?;
-    backend
+    let sidebar = room.sidebar_options(&tab.cwd, Vec::new(), None);
+    room.backend()
         .open_tab(&TabOptions {
             session_name: workspace.session_name.clone(),
             title: tab.label,

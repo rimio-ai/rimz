@@ -2,20 +2,6 @@
 
 use std::io::Write;
 
-use rimz::mux::{MuxBackend, SessionHealth};
-
-pub(crate) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &str) -> bool {
-    let exists = backend
-        .list_sessions()
-        .map(|sessions| sessions.iter().any(|name| name == session_name))
-        .unwrap_or(false);
-    exists
-        && matches!(
-            backend.probe_session_health(session_name),
-            Ok(SessionHealth::Healthy)
-        )
-}
-
 pub(super) fn report_previous_session_death(death: &rimz::store::event::LastDeathMarker) {
     let _ = writeln!(std::io::stderr().lock(), "{}", death_notice(death));
 }

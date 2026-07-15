@@ -30,6 +30,7 @@ pub mod proc;
 pub mod reload;
 pub mod remote;
 pub mod remote_control;
+pub mod room;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;

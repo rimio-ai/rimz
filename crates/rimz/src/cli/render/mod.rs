@@ -9,6 +9,7 @@
 //! the `print_stdout` lint still guards the protocol surface.
 
 pub(crate) mod palette;
+pub(crate) mod room;
 pub(crate) mod status;
 
 use std::io::Write;

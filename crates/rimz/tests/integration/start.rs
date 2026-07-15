@@ -36,6 +36,8 @@ fn configure_actionable_hooks(
     zellij_log: &Path,
     sessions: &str,
 ) {
+    let presence = env.project_root.join("presence.wasm");
+    std::fs::write(&presence, b"test-presence").expect("write presence fixture");
     command
         .args(["--mux", "zellij", "start", "--no-attach"])
         .env("PATH", bin_dir)
@@ -43,6 +45,7 @@ fn configure_actionable_hooks(
         .env("RIMZ_PETS_OFFLINE", "1")
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", zellij_log)
+        .env("RIMZ_PRESENCE_PLUGIN", presence)
         .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", sessions)
         .env("RIMZ_TEST_ZELLIJ_HEALTH_PROBE_MS", "250")
         .env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES)
@@ -54,6 +57,42 @@ fn configure_actionable_hooks(
             "RIMZ_ANTIGRAVITY_SETTINGS",
             env.home_root.join("agent-config/settings.json"),
         );
+}
+
+fn seed_sidebar_heartbeat(env: &Env, session_name: &str, label: &str) -> PathBuf {
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        rimz::ids::SidebarInstanceId::new(),
+        rimz::MuxName::Zellij,
+        session_name,
+        runtime.sock_dir.join(format!("{label}.sock")),
+        None,
+    );
+    let path = runtime.heartbeat_dir.join(format!("sidebar.{label}.json"));
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
+    )
+    .expect("write heartbeat");
+    path
+}
+
+fn assert_health_before_presence(trace: &str) {
+    let lines = trace.lines().collect::<Vec<_>>();
+    let presence = lines
+        .iter()
+        .position(|line| line.contains("\tpipe\t--plugin\t"))
+        .expect("presence pipe in trace");
+    let health = lines[..presence]
+        .iter()
+        .rposition(|line| line.contains("\tlist-sessions"))
+        .expect("health list before presence");
+    assert!(
+        health < presence,
+        "health gate must precede presence:\n{trace}"
+    );
 }
 
 #[test]
@@ -161,14 +200,11 @@ fn start_rejects_unsupported_account_budget_before_room_state() {
 fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let birth = Env::new();
     let birth_bin = seed_actionable_agent(&birth);
+    let birth_workspace = WorkspaceResolver::resolve(&birth.project_root, None).expect("resolve");
+    let birth_heartbeat = seed_sidebar_heartbeat(&birth, &birth_workspace.session_name, "birth");
+    let birth_trace = birth.project_root.join("zellij-birth.log");
     let mut birth_command = birth.rimz();
-    configure_actionable_hooks(
-        &mut birth_command,
-        &birth,
-        &birth_bin,
-        &birth.project_root.join("zellij-birth.log"),
-        "",
-    );
+    configure_actionable_hooks(&mut birth_command, &birth, &birth_bin, &birth_trace, "");
     let birth_output = birth_command
         .bounded_output()
         .expect("run absent-room start");
@@ -180,19 +216,42 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
     let birth_stderr = String::from_utf8_lossy(&birth_output.stderr);
     assert!(birth_stderr.contains("Rimz found 1 coding agent: antigravity."));
     assert!(birth_stderr.contains("No terminal input — nothing installed or refreshed."));
+    assert!(
+        !birth_heartbeat.exists(),
+        "fresh birth must purge prior heartbeat"
+    );
+    let birth_events = birth.read_events();
+    assert_eq!(
+        birth_events
+            .iter()
+            .filter(|event| matches!(event.kind(), rimz::store::event::EventKind::SessionRebirth))
+            .count(),
+        1,
+        "fresh birth records one rebirth boundary"
+    );
+    let birth_trace = std::fs::read_to_string(&birth_trace).expect("read birth trace");
+    let create = birth_trace
+        .lines()
+        .position(|line| line.contains("\tattach\t--create-background\t"))
+        .expect("fresh session/sidebar create");
+    let presence = birth_trace
+        .lines()
+        .position(|line| line.contains("\tpipe\t--plugin\t"))
+        .expect("fresh presence pipe");
+    assert!(
+        create < presence,
+        "sidebar create must precede presence:\n{birth_trace}"
+    );
+    assert_health_before_presence(&birth_trace);
 
     let live = Env::new();
     let live_bin = seed_actionable_agent(&live);
     let workspace = WorkspaceResolver::resolve(&live.project_root, None).expect("resolve live");
+    let live_heartbeat = seed_sidebar_heartbeat(&live, &workspace.session_name, "live");
     let sessions = format!("{} [Created 1m ago]\n", workspace.session_name);
+    let live_trace = live.project_root.join("zellij-live.log");
     let mut live_command = live.rimz();
-    configure_actionable_hooks(
-        &mut live_command,
-        &live,
-        &live_bin,
-        &live.project_root.join("zellij-live.log"),
-        &sessions,
-    );
+    configure_actionable_hooks(&mut live_command, &live, &live_bin, &live_trace, &sessions);
     let live_output = live_command.bounded_output().expect("run live-room start");
     assert!(
         live_output.status.success(),
@@ -208,6 +267,25 @@ fn start_checks_hooks_on_birth_but_not_live_reattach() {
         !live_stderr.contains("No terminal input"),
         "live reattach must skip the hook fallback notice: {live_stderr}"
     );
+    assert!(live_heartbeat.exists(), "live reattach preserves heartbeat");
+    assert_eq!(
+        live.read_events()
+            .iter()
+            .filter(|event| matches!(event.kind(), rimz::store::event::EventKind::SessionRebirth))
+            .count(),
+        0,
+        "live reattach records no rebirth boundary"
+    );
+    let live_trace = std::fs::read_to_string(&live_trace).expect("read live trace");
+    assert!(
+        !live_trace.contains("\tattach\t--create-background\t"),
+        "live reattach must not recreate session/sidebar:\n{live_trace}"
+    );
+    assert!(
+        !live_trace.contains("\tdelete-all-sessions") && !live_trace.contains("\tkill-session"),
+        "live reattach must not delete session:\n{live_trace}"
+    );
+    assert_health_before_presence(&live_trace);
 }
 
 #[test]

@@ -35,7 +35,6 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 
 use super::GlobalFlags;
-use crate::cli::room::{RoomTarget, build_sidebar_opts, room_env_for_workspace};
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
@@ -48,6 +47,7 @@ use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
+use rimz::room::{RoomContext, RoomSizing};
 use rimz::store::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::workspace::WorkspaceResolver;
 

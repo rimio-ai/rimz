@@ -8,9 +8,9 @@ use serde::Serialize;
 
 use super::{GlobalFlags, machine_config, open_store, record_workspace};
 use crate::cli::render;
-use crate::cli::room::{RoomTarget, build_sidebar_opts};
 use rimz::agents::AgentState;
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, TabOptions};
+use rimz::room::{RoomContext, RoomSizing};
 use rimz::workspace::{RootClass, WorkspaceResolver};
 
 #[derive(Debug, Args)]
@@ -222,7 +222,13 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
         return;
     };
-    let backend = rimz::mux::backend_for(mux);
+    let machine_config = machine_config();
+    let Ok(room) =
+        RoomContext::from_resolved(workspace, machine_config, mux, RoomSizing::OrdinaryTab)
+    else {
+        return;
+    };
+    let backend = room.backend();
     let Ok(sessions) = backend.list_sessions() else {
         return;
     };
@@ -232,26 +238,7 @@ fn open_channel_tab(workspace: &rimz::ResolvedWorkspace, globals: &GlobalFlags, 
     {
         return;
     }
-    let machine_config = machine_config();
-    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
-    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
-    let Ok(extra_env) = crate::cli::room::room_env_for_workspace(&workspace.workspace_id) else {
-        return;
-    };
-    let room = RoomTarget {
-        workspace_id: &workspace.workspace_id,
-        project_root: &workspace.project_root,
-        session_name: &workspace.session_name,
-        extra_env,
-        cwd: &workspace.worktree_root,
-        mux_config: &mux_config,
-        width,
-        detected_size: None,
-        refresh_ms: None,
-    };
-    let Ok(sidebar) = build_sidebar_opts(&room, Vec::new()) else {
-        return;
-    };
+    let sidebar = room.sidebar_options(&workspace.worktree_root, Vec::new(), None);
     let _ = backend.open_tab(&TabOptions {
         session_name: workspace.session_name.clone(),
         title: format!("#{channel}"),

@@ -9,12 +9,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Args;
 
-use super::GlobalFlags;
-use crate::cli::room::{
-    MissingSessionReport, ensure_single_backend_room, pick_mux_for_session, print_reset_report,
-    rebirth_room,
-};
-use rimz::RuntimePaths;
+use super::{AttachFlags, GlobalFlags, StartArgs};
+use crate::cli::room::{MissingSessionReport, ensure_single_backend_room, pick_mux_for_session};
+use rimz::room::{RoomContext, RoomSizing};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -65,19 +62,14 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
 
-    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())?;
-    let backend = rimz::mux::backend_for(mux);
-    let report = rimz::mux::recovery::teardown_room(
-        backend.as_ref(),
-        &workspace.workspace_id,
-        &workspace.session_name,
-        &runtime,
-    );
-    let store = super::open_store(&workspace)?;
-    let records = store
-        .reset_records(&workspace.session_name, args.hard)
-        .context("resetting workspace records")?;
-    print_reset_report(&report, Some(&records))?;
+    let context = RoomContext::from_resolved(
+        &workspace,
+        super::machine_config(),
+        mux,
+        RoomSizing::OrdinaryTab,
+    )?;
+    let report = context.reset(args.hard)?;
+    super::render::room::print_reset_report(&report)?;
 
     if args.no_start {
         writeln!(
@@ -86,5 +78,15 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         )?;
         return Ok(());
     }
-    rebirth_room(args.path, globals)
+    super::room::start(
+        StartArgs {
+            attach: AttachFlags::default(),
+            path: args.path,
+            // A manual reset is a deliberate fresh start. Store carryover stays
+            // available for audit, but it does not re-seed the reborn room.
+            no_resume: true,
+            refresh_ms: None,
+        },
+        globals,
+    )
 }

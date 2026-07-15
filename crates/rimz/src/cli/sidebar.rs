@@ -672,29 +672,20 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let backend = rimz::mux::backend_for(mux);
     let machine_config = super::machine_config();
-    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
-    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
-    let detected_size = rimz::mux::detect_terminal_size();
-    let room = crate::cli::room::RoomTarget {
-        workspace_id: &workspace.workspace_id,
-        project_root: &workspace.project_root,
-        session_name: &workspace.session_name,
-        extra_env: crate::cli::room::room_env_for_workspace(&workspace.workspace_id)?,
-        cwd: &workspace.worktree_root,
-        mux_config: &mux_config,
-        width,
-        detected_size,
-        refresh_ms: None,
-    };
+    let room = rimz::room::RoomContext::from_resolved(
+        &workspace,
+        machine_config,
+        mux,
+        rimz::room::RoomSizing::Birth,
+    )?;
     let rimz_bin = rimz::proc::rimz_exe().to_string_lossy().into_owned();
     let mut argv = vec![rimz_bin, "sidebar".to_owned(), "gallery-render".to_owned()];
     if pets {
         argv.push("--pets".to_owned());
     }
     let gallery_pane = rimz::mux::PaneCmd { argv };
-    backend
+    room.backend()
         .open_tab(&rimz::mux::TabOptions {
             session_name: workspace.session_name.clone(),
             title: "gallery".to_owned(),
@@ -707,7 +698,7 @@ fn gallery(globals: &GlobalFlags, pets: bool) -> Result<()> {
             },
             focus: true,
             dock_sidebar: false,
-            sidebar: crate::cli::room::build_sidebar_opts(&room, Vec::new())?,
+            sidebar: room.sidebar_options(&workspace.worktree_root, Vec::new(), None),
         })
         .context("opening sidebar gallery")
 }

@@ -1,7 +1,6 @@
 //! Provider-native conversation forks launched as fresh Rimz agent rows.
 
 use super::*;
-use crate::cli::room::build_sidebar_opts;
 use crate::cli::{agents_launch, machine_config, open_store};
 
 #[derive(Debug, Args)]
@@ -87,8 +86,10 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         true,
     );
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let backend = rimz::mux::backend_for(mux);
-    agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
+    let room =
+        RoomContext::from_resolved(&workspace, config.clone(), mux, RoomSizing::OrdinaryTab)?;
+    let backend = room.backend();
+    agents_launch::ensure_live_session(backend, &workspace.session_name)?;
 
     let request = AgentLaunchRequest {
         kind: seed.kind.clone(),
@@ -150,24 +151,11 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
             stacked: false,
         }],
     };
-    let mux_config = rimz::config::MultiplexerConfig::from(config.as_ref());
-    let width = rimz::mux::SidebarWidth::from_config(&config.theme.display);
     let title = channel.as_deref().map_or_else(
         || rimz::harness::resume::build_label(seed.kind.as_str(), None, &seed.cwd),
         |channel| format!("#{channel}"),
     );
-    let room = RoomTarget {
-        workspace_id: &workspace.workspace_id,
-        project_root: &workspace.project_root,
-        session_name: &workspace.session_name,
-        extra_env: crate::cli::room::room_env_for_workspace(&workspace.workspace_id)?,
-        cwd: &seed.cwd,
-        mux_config: &mux_config,
-        width,
-        detected_size: None,
-        refresh_ms: None,
-    };
-    let sidebar = build_sidebar_opts(&room, Vec::new())?;
+    let sidebar = room.sidebar_options(&seed.cwd, Vec::new(), None);
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
         .unwrap_or_default();

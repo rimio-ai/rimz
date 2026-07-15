@@ -158,11 +158,9 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
         room::ensure_workspace_room_for_web(&path, globals, args.no_resume, args.confirm_resume)?
     };
-    let room::WebRoom {
-        session_name: session,
-        workspace_id,
-        mux,
-    } = web_room;
+    let context = web_room.context;
+    let session = context.session_name().to_owned();
+    let mux = context.mux_name();
     ensure_session_addressable_for_web(mux, &session)?;
     let (payload, credential) = match mux {
         MuxName::Zellij => {
@@ -176,16 +174,10 @@ fn open(args: WebOpenArgs, globals: &GlobalFlags) -> Result<()> {
                 },
                 Some(&config),
             )?;
-            let backend = rimz::mux::backend_for(MuxName::Zellij);
-            if room::enable_web_sharing(
-                backend.as_ref(),
-                &session,
-                &workspace_id,
-                &config.zellij,
-                config.web.enabled,
-                config.sidebar.focus_key_label(),
-            ) {
+            if context.share_web() {
                 warn_if_web_sharing_unconfirmed(&session);
+            } else {
+                warn_web_sharing_unconfirmed(&session);
             }
             (payload, None)
         }
@@ -335,7 +327,7 @@ fn warn_if_web_sharing_unconfirmed(session: &str) {
             return;
         }
         if Instant::now() >= deadline {
-            room::warn_web_sharing_unconfirmed(session);
+            warn_web_sharing_unconfirmed(session);
             return;
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -349,11 +341,8 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
         let path = args.path.unwrap_or_else(|| PathBuf::from("."));
         room::existing_web_room_for_path(&path, globals)?
     };
-    let room::WebRoom {
-        session_name: session,
-        mux,
-        ..
-    } = web_room;
+    let session = web_room.context.session_name().to_owned();
+    let mux = web_room.context.mux_name();
     let config = machine_config();
     let payload = match mux {
         MuxName::Zellij => {
@@ -390,6 +379,13 @@ fn url(args: WebUrlArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         print_url(&payload.url)
     }
+}
+
+fn warn_web_sharing_unconfirmed(session_name: &str) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", check that Zellij is new enough, Rimz's presence plugin is available, and `[web] enabled = true` in `rimz config path`, then rerun `rimz web open`."
+    );
 }
 
 fn status(args: WebStatusArgs) -> Result<()> {

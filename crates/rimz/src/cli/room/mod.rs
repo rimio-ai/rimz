@@ -1,50 +1,44 @@
 //! Room entry: the start/attach pipeline from workspace resolution to the mux attach command.
 
 mod attach_exec;
-mod daemon_view;
 mod hook_install;
 mod resume;
-mod room_recovery;
 mod session_record;
 mod start_notice;
 #[cfg(test)]
 mod tests;
 
 use std::io::{IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
 use rimz::ids::{MuxName, WorkspaceId};
-use rimz::mux::{
-    BackgroundViewOptions, DaemonView, MuxBackend, PresencePluginOptions, SessionOptions,
-    SidebarPaneOptions, SidebarWidth,
+use rimz::room::{
+    AttendedRecovery, BackgroundViewBirth, NormalBirth, NormalRebirth, RoomBirth, RoomContext,
+    RoomSizing,
 };
-use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
+use rimz::{RuntimePaths, WorkspaceRecord};
 
 use crate::cli::{
-    AttachArgs, GlobalFlags, StartArgs, confirm_with_default, first_run, machine_config,
-    open_store, render, setup,
+    AttachArgs, GlobalFlags, StartArgs, confirm_with_default, first_run, machine_config, render,
+    setup,
 };
 
 use attach_exec::{
     inside_selected_mux, report_already_inside, run_attach_action, should_report_already_inside,
 };
-use daemon_view::{build_daemon_view, maybe_launch_remote_control};
 pub(crate) use hook_install::{
     detected_installable_adapters, ensure_detected_agent_hooks, install_disposition,
     render_dry_run, write_install_result, write_post_install_footer, write_uninstall_result,
     write_untrusted_hooks_notice,
 };
 use resume::{report_previous_session_death, report_resume};
-use rimz::harness::rebirth::{RebirthChoice, RebirthPlan};
-pub(crate) use room_recovery::gate_room_before_attach;
+use rimz::harness::rebirth::RebirthChoice;
 use session_record::{retire_renamed_session, session_probe_retry_timeout, session_probe_timeout};
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
-pub(crate) use resume::session_is_healthy_live;
-pub(crate) use room_recovery::{print_reset_report, rebirth_room};
 pub(crate) use session_record::{
     ensure_single_backend_room, pick_mux_for_session, workspace_record_for_session,
 };
@@ -224,20 +218,16 @@ pub(crate) fn ensure_workspace_room_for_web(
     ensure_single_backend_room(mux, &workspace.session_name)?;
     preflight_web_engine(mux)?;
     setup::ensure_default_config()?;
-    prepare_room(
+    let ready = prepare_room(
         RoomEntry::StartWeb {
-            workspace: workspace.clone(),
+            workspace,
             mux,
             no_resume,
             confirm_resume,
         },
         globals,
     )?;
-    Ok(WebRoom {
-        session_name: workspace.session_name,
-        workspace_id: workspace.workspace_id,
-        mux,
-    })
+    web_room_from_ready(ready)
 }
 
 fn validate_agent_plugins() -> Result<()> {
@@ -265,7 +255,7 @@ pub(crate) fn ensure_session_room_for_web(
     let mux = pick_mux_for_session(session, globals.mux, MissingSessionReport::Silent)?;
     let record = workspace_record_for_web_session(session, mux)?;
     preflight_web_engine(mux)?;
-    prepare_room(
+    let ready = prepare_room(
         RoomEntry::WebSession {
             record: &record,
             no_resume,
@@ -273,20 +263,14 @@ pub(crate) fn ensure_session_room_for_web(
         },
         globals,
     )?;
-    Ok(WebRoom {
-        session_name: record.session_name,
-        workspace_id: record.workspace_id,
-        mux,
-    })
+    web_room_from_ready(ready)
 }
 
 pub(crate) fn web_room_for_session(session: &str, globals: &GlobalFlags) -> Result<WebRoom> {
     let mux = pick_mux_for_session(session, globals.mux, MissingSessionReport::Silent)?;
     let record = workspace_record_for_web_session(session, mux)?;
     Ok(WebRoom {
-        session_name: record.session_name,
-        workspace_id: record.workspace_id,
-        mux,
+        context: RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)?,
     })
 }
 
@@ -310,10 +294,17 @@ pub(crate) fn existing_web_room_for_path(path: &Path, globals: &GlobalFlags) -> 
     )?;
     ensure_single_backend_room(mux, &record.session_name)?;
     Ok(WebRoom {
-        session_name: record.session_name,
-        workspace_id: record.workspace_id,
-        mux,
+        context: RoomContext::from_record(&record, machine_config(), mux, RoomSizing::OrdinaryTab)?,
     })
+}
+
+fn web_room_from_ready(ready: ReadyRoom) -> Result<WebRoom> {
+    match ready {
+        ReadyRoom::Managed(context) => Ok(WebRoom { context: *context }),
+        ReadyRoom::External { session_name, .. } => {
+            bail!("session `{session_name}` is not a managed Rimz room")
+        }
+    }
 }
 
 fn workspace_record_for_web_session(session: &str, mux: MuxName) -> Result<WorkspaceRecord> {
@@ -357,9 +348,7 @@ fn report_initialized_config() -> Result<()> {
 }
 
 pub(crate) struct WebRoom {
-    pub session_name: String,
-    pub workspace_id: WorkspaceId,
-    pub mux: MuxName,
+    pub context: RoomContext,
 }
 
 pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
@@ -393,22 +382,16 @@ pub(crate) fn attach(args: AttachArgs, globals: &GlobalFlags) -> Result<()> {
 fn enter_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<()> {
     let mode = entry.mode();
     let ready = prepare_room(entry, globals)?;
-    let backend = rimz::mux::backend_for(ready.mux);
-    finish_attach(
-        backend.as_ref(),
-        &ready.session_name,
-        ready.workspace_id.as_ref(),
-        &ready.mux_config,
-        mode,
-        ready.mux,
-    )
+    finish_attach(ready, mode)
 }
 
-struct ReadyRoom {
-    session_name: String,
-    workspace_id: Option<WorkspaceId>,
-    mux_config: rimz::config::MultiplexerConfig,
-    mux: MuxName,
+enum ReadyRoom {
+    Managed(Box<RoomContext>),
+    External {
+        session_name: String,
+        mux_config: rimz::config::MultiplexerConfig,
+        mux: MuxName,
+    },
 }
 
 fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom> {
@@ -452,7 +435,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     // Capture whether this is a plain reattach *before* `ensure_session`, which on
     // tmux would create the session and erase the distinction. A healthy live room
     // re-seeds nothing; only a birth (absent or stuck) resumes prior agents.
-    let was_live = session_is_healthy_live(backend.as_ref(), entry.session_name());
+    let was_live = RoomContext::session_is_healthy_live(mux, entry.session_name());
 
     let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
         ensure_detected_agent_hooks(start_attended())?
@@ -481,24 +464,11 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         }
     }
 
-    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
-    let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
-    // One terminal probe per command flow: the width picks every sidebar
-    // pane's birth size; the pair sizes a detached tmux birth.
-    let detected_size = rimz::mux::detect_terminal_size();
-    let remote_control = &machine_config.remote_control;
     if let RoomEntry::Start { workspace, .. }
     | RoomEntry::StartWeb { workspace, .. }
     | RoomEntry::AttachCwd { workspace, .. } = &entry
     {
         retire_renamed_session(backend.as_ref(), workspace);
-    }
-    if let RoomEntry::Start { workspace, .. }
-    | RoomEntry::StartWeb { workspace, .. }
-    | RoomEntry::AttachCwd { workspace, .. } = &entry
-    {
-        let rimz_bin = room_owner_bin();
-        record_room_bin(workspace, rimz_bin.as_path())?;
     }
     if let RoomEntry::Start { workspace, .. } = &entry
         && !was_live
@@ -507,131 +477,93 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
         prompt_project_trust(&workspace.project_root);
     }
 
-    let mut attached_workspace_id = None;
-    match &entry {
+    let ready = match &entry {
         RoomEntry::Start { workspace, .. } | RoomEntry::StartWeb { workspace, .. } => {
-            let room = RoomTarget {
-                workspace_id: &workspace.workspace_id,
-                project_root: &workspace.project_root,
-                session_name: &workspace.session_name,
-                extra_env: room_env_for_workspace(&workspace.workspace_id)?,
-                cwd: &workspace.worktree_root,
-                mux_config: &mux_config,
-                width: sidebar_width,
-                detected_size,
-                refresh_ms: entry.refresh_ms(),
-            };
-            // The daemon view (`rimzd`) is computed once: its middle column is
-            // configurable (default stats), and its daemon hosts depend on config and
-            // which agents are on PATH. When present, it leads the session — on Zellij
-            // that order is fixed at birth (`open_sidebar` renders the daemon tab
-            // first), since Zellij can't reorder tabs afterwards.
-            let daemon_view = build_daemon_view(
-                remote_control,
-                &machine_config.daemon,
+            let mut context = RoomContext::from_resolved(
                 workspace,
-                &mux_config,
-                &room,
-            );
-            let daemon = daemon_view.as_ref().map(|view| &view.view);
-            birth_room(&RoomBirth {
-                backend: backend.as_ref(),
-                machine_config: &machine_config,
-                room,
+                machine_config.clone(),
+                mux,
+                RoomSizing::Birth,
+            )?;
+            context.claim_owner()?;
+            birth_managed_room(
+                &mut context,
                 was_live,
-                no_resume: entry.no_resume(),
-                resume_prompt: entry.resume_prompt_mode(),
-                daemon,
-                remote: Some(RemoteControlLaunch {
-                    workspace,
-                    config: remote_control,
-                    daemon_view: daemon_view.as_ref(),
-                }),
-            })?;
-            attached_workspace_id = Some(workspace.workspace_id.clone());
+                entry.no_resume(),
+                entry.resume_prompt_mode(),
+                entry.refresh_ms(),
+                true,
+                workspace.worktree_root.clone(),
+            )?;
+            ReadyRoom::Managed(Box::new(context))
         }
         RoomEntry::AttachCwd { workspace, .. } => {
-            let room = RoomTarget {
-                workspace_id: &workspace.workspace_id,
-                project_root: &workspace.project_root,
-                session_name: &workspace.session_name,
-                extra_env: room_env_for_workspace(&workspace.workspace_id)?,
-                cwd: &workspace.worktree_root,
-                mux_config: &mux_config,
-                width: sidebar_width,
-                detected_size,
-                refresh_ms: entry.refresh_ms(),
-            };
-            birth_room(&RoomBirth {
-                backend: backend.as_ref(),
-                machine_config: &machine_config,
-                room,
+            let mut context = RoomContext::from_resolved(
+                workspace,
+                machine_config.clone(),
+                mux,
+                RoomSizing::Birth,
+            )?;
+            context.claim_owner()?;
+            birth_managed_room(
+                &mut context,
                 was_live,
-                no_resume: entry.no_resume(),
-                resume_prompt: entry.resume_prompt_mode(),
-                daemon: None,
-                remote: None,
-            })?;
-            attached_workspace_id = Some(workspace.workspace_id.clone());
+                entry.no_resume(),
+                entry.resume_prompt_mode(),
+                entry.refresh_ms(),
+                false,
+                workspace.worktree_root.clone(),
+            )?;
+            ReadyRoom::Managed(Box::new(context))
         }
         RoomEntry::WebSession { record, .. } => {
-            let room = RoomTarget {
-                workspace_id: &record.workspace_id,
-                project_root: &record.project_root,
-                session_name: &record.session_name,
-                extra_env: room_env_for_workspace(&record.workspace_id)?,
-                cwd: &record.project_root,
-                mux_config: &mux_config,
-                width: sidebar_width,
-                detected_size,
-                refresh_ms: entry.refresh_ms(),
-            };
-            birth_room(&RoomBirth {
-                backend: backend.as_ref(),
-                machine_config: &machine_config,
-                room,
+            let mut context =
+                RoomContext::from_record(record, machine_config.clone(), mux, RoomSizing::Birth)?;
+            birth_managed_room(
+                &mut context,
                 was_live,
-                no_resume: entry.no_resume(),
-                resume_prompt: entry.resume_prompt_mode(),
-                daemon: None,
-                remote: None,
-            })?;
-            attached_workspace_id = Some(record.workspace_id.clone());
+                entry.no_resume(),
+                entry.resume_prompt_mode(),
+                entry.refresh_ms(),
+                false,
+                record.project_root.clone(),
+            )?;
+            ReadyRoom::Managed(Box::new(context))
         }
         RoomEntry::AttachSession {
             session, record, ..
         } => match record {
             Ok(Some(record)) => {
-                let room = RoomTarget {
-                    workspace_id: &record.workspace_id,
-                    project_root: &record.project_root,
-                    session_name: &record.session_name,
-                    extra_env: room_env_for_workspace(&record.workspace_id)?,
-                    cwd: &record.project_root,
-                    mux_config: &mux_config,
-                    width: sidebar_width,
-                    detected_size,
-                    refresh_ms: entry.refresh_ms(),
-                };
                 // Only a session Rimz owns (a matching record) is force-reset; a bare
                 // external session by this name is never torn down.
-                birth_room(&RoomBirth {
-                    backend: backend.as_ref(),
-                    machine_config: &machine_config,
-                    room,
+                let mut context = RoomContext::from_record(
+                    record,
+                    machine_config.clone(),
+                    mux,
+                    RoomSizing::Birth,
+                )?;
+                context.claim_owner()?;
+                birth_managed_room(
+                    &mut context,
                     was_live,
-                    no_resume: entry.no_resume(),
-                    resume_prompt: entry.resume_prompt_mode(),
-                    daemon: None,
-                    remote: None,
-                })?;
-                attached_workspace_id = Some(record.workspace_id.clone());
+                    entry.no_resume(),
+                    entry.resume_prompt_mode(),
+                    entry.refresh_ms(),
+                    false,
+                    record.project_root.clone(),
+                )?;
+                ReadyRoom::Managed(Box::new(context))
             }
             Ok(None) => {
                 tracing::warn!(
                     session = %session,
                     "no workspace record matches session; emitting attach command only",
                 );
+                ReadyRoom::External {
+                    session_name: session.clone(),
+                    mux_config: rimz::config::MultiplexerConfig::from(machine_config.as_ref()),
+                    mux,
+                }
             }
             Err(err) => {
                 tracing::warn!(
@@ -639,16 +571,90 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
                     error = %err,
                     "workspace record lookup failed; emitting attach command only",
                 );
+                ReadyRoom::External {
+                    session_name: session.clone(),
+                    mux_config: rimz::config::MultiplexerConfig::from(machine_config.as_ref()),
+                    mux,
+                }
             }
         },
-    }
+    };
 
-    Ok(ReadyRoom {
-        session_name: entry.session_name().to_owned(),
-        workspace_id: attached_workspace_id,
-        mux_config,
-        mux,
-    })
+    Ok(ready)
+}
+
+fn birth_managed_room(
+    context: &mut RoomContext,
+    was_live: bool,
+    no_resume: bool,
+    resume_prompt: ResumePromptMode,
+    refresh_ms: Option<u16>,
+    launch_background_view: bool,
+    cwd: std::path::PathBuf,
+) -> Result<()> {
+    let rebirth = if was_live {
+        NormalRebirth::Live
+    } else {
+        match context.inspect_rebirth(no_resume) {
+            Ok(plan) => {
+                let preview = plan.preview();
+                if preview.pane_count() > 0
+                    && let Some(death) = preview.death()
+                {
+                    report_previous_session_death(death);
+                }
+                let choice = prompt_recover_or_fresh(&preview, resume_prompt)?;
+                NormalRebirth::Selected {
+                    plan: Box::new(plan),
+                    choice,
+                }
+            }
+            Err(err) => {
+                tracing::warn!(workspace = %context.workspace_id(), error = %err, "rebirth inspection skipped");
+                NormalRebirth::Fresh
+            }
+        }
+    };
+    let outcome = match context.birth(RoomBirth::Normal(NormalBirth {
+        cwd,
+        rebirth,
+        background_view: if launch_background_view {
+            BackgroundViewBirth::Launch
+        } else {
+            BackgroundViewBirth::Skip
+        },
+        refresh_ms,
+        recovery: if std::io::stdin().is_terminal() {
+            AttendedRecovery::Reset
+        } else {
+            AttendedRecovery::RequireExplicitReset
+        },
+    })) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            if let Some(reset) = err.downcast_ref::<rimz::room::ResetRecoveryError>() {
+                render_automatic_reset(context, &reset.report)?;
+            }
+            return Err(err);
+        }
+    };
+    if let Some(reset) = outcome.reset.as_ref() {
+        render_automatic_reset(context, reset)?;
+    }
+    report_resume(&outcome.resume);
+    Ok(())
+}
+
+fn render_automatic_reset(
+    context: &RoomContext,
+    reset: &rimz::room::RoomResetReport,
+) -> Result<()> {
+    writeln!(
+        std::io::stderr().lock(),
+        "rimz: resetting the '{}' room to clear a wedged mux session...",
+        context.session_name(),
+    )?;
+    render::room::print_reset_report(reset)
 }
 
 fn preflight_account_budgets(
@@ -851,139 +857,6 @@ fn rimz_socket_environment_preflight(workspace_id: &WorkspaceId) -> Result<()> {
         .context("checking Rimz runtime socket budget")
 }
 
-/// Best-effort load of the session's presence plugin — the Zellij push
-/// channel that retires the producer's steady-state pane poll (tmux is a
-/// no-op; its control-mode watch already pushes). Fired on every attach-shaped
-/// flow: the load verb is idempotent and clientless-safe, so a room born
-/// detached, a reattach, and a permission granted minutes after the first
-/// prompt all converge with no machinery of their own. Failure costs latency
-/// only — the producer keeps today's poll — so it never blocks an attach.
-pub(crate) fn ensure_presence_plugin(
-    backend: &dyn MuxBackend,
-    session_name: &str,
-    workspace_id: &WorkspaceId,
-    zellij_config: &rimz::config::ZellijConfig,
-    seed_permissions: bool,
-    focus_key: Option<&str>,
-) {
-    let Some(opts) = presence_plugin_options(
-        session_name,
-        workspace_id,
-        zellij_config,
-        seed_permissions,
-        focus_key,
-        false,
-    ) else {
-        tracing::debug!(
-            session = %session_name,
-            "presence plugin unavailable; the producer keeps its pane poll",
-        );
-        return;
-    };
-    if let Err(err) = backend.ensure_presence_plugin(&opts) {
-        tracing::debug!(
-            session = %session_name,
-            error = %err,
-            "presence plugin load failed; the producer keeps its pane poll",
-        );
-    }
-}
-
-pub(crate) fn enable_web_sharing(
-    backend: &dyn MuxBackend,
-    session_name: &str,
-    workspace_id: &WorkspaceId,
-    zellij_config: &rimz::config::ZellijConfig,
-    seed_permissions: bool,
-    focus_key: Option<&str>,
-) -> bool {
-    let Some(opts) = presence_plugin_options(
-        session_name,
-        workspace_id,
-        zellij_config,
-        seed_permissions,
-        focus_key,
-        true,
-    ) else {
-        tracing::debug!(
-            session = %session_name,
-            "presence plugin unavailable; Zellij web sharing was not requested",
-        );
-        warn_web_sharing_unconfirmed(session_name);
-        return false;
-    };
-    if let Err(err) = backend.share_web_session(&opts) {
-        tracing::debug!(
-            session = %session_name,
-            error = %err,
-            "Zellij web-sharing pipe failed",
-        );
-        warn_web_sharing_unconfirmed(session_name);
-        return false;
-    }
-    true
-}
-
-pub(crate) fn warn_web_sharing_unconfirmed(session_name: &str) {
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "rimz: could not confirm Zellij web sharing for `{session_name}`; if the browser says \"Web clients are not allowed to attach to this session\", check that Zellij is new enough, Rimz's presence plugin is available, and `[web] enabled = true` in `rimz config path`, then rerun `rimz web open`."
-    );
-}
-
-fn presence_plugin_options(
-    session_name: &str,
-    workspace_id: &WorkspaceId,
-    zellij_config: &rimz::config::ZellijConfig,
-    seed_permissions: bool,
-    focus_key: Option<&str>,
-    materialize_artifact: bool,
-) -> Option<PresencePluginOptions> {
-    let wasm = if materialize_artifact {
-        rimz::mux::zellij::ensure_presence_plugin_artifact()?
-    } else {
-        rimz::mux::zellij::presence_plugin_path()?
-    };
-    let rimz_bin = room_bin_for_workspace(workspace_id);
-    Some(PresencePluginOptions {
-        session_name: session_name.to_owned(),
-        workspace_id: workspace_id.clone(),
-        wasm,
-        rimz_bin,
-        converge: false,
-        seed_permissions,
-        focus_key: focus_key.map(str::to_owned),
-        focus_follows_mouse: zellij_config.focus_follows_mouse,
-        mouse_click_through: zellij_config.mouse_click_through,
-    })
-}
-
-/// Register the focus-sidebar chord with the backend. tmux binds it directly;
-/// the Zellij backend's default is a no-op (its key routes through the presence
-/// plugin). The binding carries no room identity — the tmux command resolves the
-/// pressing session at keypress — so this is safe to call per room. A
-/// misconfigured chord warns and registers nothing; a backend error is logged —
-/// the key is convenience, never a launch precondition.
-pub(crate) fn register_focus_key(
-    backend: &dyn MuxBackend,
-    machine_config: &rimz::config::MachineConfig,
-) {
-    let Some(label) = machine_config.sidebar.focus_key_label() else {
-        return;
-    };
-    let rimz_bin = rimz::proc::rimz_exe();
-    let Some(binding) = rimz::mux::FocusKeyBinding::resolve(label, &rimz_bin) else {
-        tracing::warn!(
-            focus_key = label,
-            "ignoring invalid [sidebar] focus_key; expected e.g. Alt+p"
-        );
-        return;
-    };
-    if let Err(err) = backend.register_focus_key(&binding) {
-        tracing::debug!(error = %err, "registering the focus-sidebar keybind failed");
-    }
-}
-
 fn prompt_recover_or_fresh(
     plan: &rimz::harness::rebirth::RebirthPreview,
     mode: ResumePromptMode,
@@ -1006,404 +879,27 @@ fn prompt_recover_or_fresh(
     }
 }
 
-struct RoomBirth<'a> {
-    backend: &'a dyn MuxBackend,
-    machine_config: &'a rimz::config::MachineConfig,
-    room: RoomTarget<'a>,
-    was_live: bool,
-    no_resume: bool,
-    resume_prompt: ResumePromptMode,
-    daemon: Option<&'a DaemonView>,
-    remote: Option<RemoteControlLaunch<'a>>,
-}
-
-struct RemoteControlLaunch<'a> {
-    workspace: &'a rimz::ResolvedWorkspace,
-    config: &'a rimz::config::RemoteControlConfig,
-    daemon_view: Option<&'a BackgroundViewOptions>,
-}
-
-fn birth_room(birth: &RoomBirth<'_>) -> Result<()> {
-    let room = &birth.room;
-    let machine_config = birth.machine_config;
-    let rebirth = if birth.was_live {
-        None
-    } else {
-        match RebirthPlan::inspect(
-            birth.backend,
-            room.workspace_id,
-            room.session_name,
-            room.project_root,
-            machine_config,
-            birth.no_resume,
-        ) {
-            Ok(plan) => Some(plan),
-            Err(err) => {
-                tracing::warn!(workspace = %room.workspace_id, error = %err, "rebirth inspection skipped");
-                None
-            }
-        }
-    };
-    let rebirth_choice = if let Some(plan) = rebirth.as_ref() {
-        let preview = plan.preview();
-        if preview.pane_count() > 0
-            && let Some(death) = preview.death()
-        {
-            report_previous_session_death(death);
-        }
-        prompt_recover_or_fresh(&preview, birth.resume_prompt)?
-    } else {
-        RebirthChoice::Fresh
-    };
-    let pre_existed = match birth.backend.list_sessions() {
-        Ok(sessions) => sessions
-            .iter()
-            .any(|name| name.as_str() == room.session_name),
-        Err(err) => {
-            tracing::debug!(
-                session = %room.session_name,
-                error = %err,
-                "could not prove session is absent before birth; using non-destructive sidebar split",
+fn finish_attach(ready: ReadyRoom, mode: AttachMode) -> Result<()> {
+    match ready {
+        ReadyRoom::Managed(context) => {
+            let spec = context.prepare_attach();
+            tracing::info!(
+                workspace = %context.workspace_id(),
+                session = %context.session_name(),
+                mux = %context.mux_name(),
+                "workspace ready",
             );
-            true
+            run_attach_action(&spec, mode, context.mux_name())
         }
-    };
-    if !pre_existed {
-        purge_rebirth_heartbeats_for_workspace(room.workspace_id);
-    }
-    birth.backend.ensure_session(&SessionOptions {
-        session_name: room.session_name.to_owned(),
-        workspace_id: room.workspace_id.clone(),
-        project_root: room.project_root.to_path_buf(),
-        extra_env: room.extra_env.clone(),
-        cwd: room.cwd.to_path_buf(),
-        config: room.mux_config.clone(),
-        detected_size: room.detected_size,
-        truecolor: rimz::tui::truecolor(),
-    })?;
-    // Register the focus-sidebar chord (tmux binds it here; Zellij routes it
-    // through the presence plugin). Best-effort: a convenience key never blocks
-    // the room from opening.
-    register_focus_key(birth.backend, machine_config);
-    let resume_plan = match rebirth {
-        Some(plan) => plan.materialize(rebirth_choice, room.session_name).resume,
-        None if !birth.was_live => {
-            rimz::harness::rebirth::record_boundary(room.workspace_id, room.session_name);
-            rimz::harness::resume::ResumePlan::default()
-        }
-        None => rimz::harness::resume::ResumePlan::default(),
-    };
-    launch_sidebar_for_workspace(
-        birth.backend,
-        room,
-        birth.daemon,
-        !pre_existed,
-        &resume_plan.tabs,
-    );
-    if let Some(remote) = &birth.remote {
-        maybe_launch_remote_control(
-            birth.backend,
-            remote.workspace,
-            remote.config,
-            remote.daemon_view,
-        );
-    }
-    // Authoritative gate before the resurrecting `attach --create`: live rooms
-    // attach as-is, absent/exited rooms are (re)birthed, and a room that cannot
-    // self-heal resets on an attached terminal or fails fast with the fix
-    // without one. Accepted recovery seeds the reborn room with resume tabs.
-    gate_room_before_attach(birth.backend, room, birth.daemon, &resume_plan.tabs)?;
-    report_resume(&resume_plan);
-    ensure_presence_plugin(
-        birth.backend,
-        room.session_name,
-        room.workspace_id,
-        &room.mux_config.zellij,
-        machine_config.web.enabled,
-        machine_config.sidebar.focus_key_label(),
-    );
-    Ok(())
-}
-
-/// Room resources prepared for one supervised run.
-pub(crate) struct RunRoom {
-    backend: Box<dyn MuxBackend>,
-    mux: MuxName,
-    mux_config: rimz::config::MultiplexerConfig,
-    width: SidebarWidth,
-    detected_size: Option<(u16, u16)>,
-    extra_env: std::collections::BTreeMap<String, String>,
-}
-
-impl RunRoom {
-    pub(crate) fn backend(&self) -> &dyn MuxBackend {
-        self.backend.as_ref()
-    }
-
-    pub(crate) fn mux(&self) -> MuxName {
-        self.mux
-    }
-
-    pub(crate) fn target<'a>(
-        &'a self,
-        workspace: &'a rimz::ResolvedWorkspace,
-        cwd: &'a Path,
-    ) -> RoomTarget<'a> {
-        RoomTarget {
-            workspace_id: &workspace.workspace_id,
-            project_root: &workspace.project_root,
-            session_name: &workspace.session_name,
-            extra_env: self.extra_env.clone(),
-            cwd,
-            mux_config: &self.mux_config,
-            width: self.width,
-            detected_size: self.detected_size,
-            refresh_ms: None,
+        ReadyRoom::External {
+            session_name,
+            mux_config,
+            mux,
+        } => {
+            let backend = rimz::mux::backend_for(mux);
+            let spec = backend.attach_command(&session_name, &mux_config);
+            tracing::info!(session = %session_name, mux = %mux, "workspace ready");
+            run_attach_action(&spec, mode, mux)
         }
     }
-}
-
-/// Birth a room for a supervised run and return its mux resources.
-///
-/// This sequence skips incarnation inspection, resume planning, and remote
-/// control; it records the rebirth boundary itself before launching the
-/// sidebar and presence plugin.
-pub(crate) fn birth_room_for_run(
-    workspace: &rimz::ResolvedWorkspace,
-    cwd: &Path,
-    machine_config: &rimz::config::MachineConfig,
-    mux_override: Option<MuxName>,
-) -> Result<RunRoom> {
-    let mux = rimz::mux::auto_detect_backend(mux_override)?;
-    let backend = rimz::mux::backend_for(mux);
-    let mux_config = rimz::config::MultiplexerConfig::from(machine_config);
-    let width = SidebarWidth::from_config(&machine_config.theme.display);
-    let detected_size = rimz::mux::detect_terminal_size();
-    let was_live = backend.list_sessions()?.contains(&workspace.session_name);
-    if !was_live {
-        purge_rebirth_heartbeats_for_workspace(&workspace.workspace_id);
-    }
-    let extra_env = room_env_for_workspace(&workspace.workspace_id)?;
-    backend.ensure_session(&SessionOptions {
-        session_name: workspace.session_name.clone(),
-        workspace_id: workspace.workspace_id.clone(),
-        project_root: workspace.project_root.clone(),
-        extra_env: extra_env.clone(),
-        cwd: cwd.to_path_buf(),
-        config: mux_config.clone(),
-        detected_size,
-        truecolor: rimz::tui::truecolor(),
-    })?;
-    if !was_live {
-        rimz::harness::rebirth::record_boundary(&workspace.workspace_id, &workspace.session_name);
-    }
-    register_focus_key(backend.as_ref(), machine_config);
-    let room = RoomTarget {
-        workspace_id: &workspace.workspace_id,
-        project_root: &workspace.project_root,
-        session_name: &workspace.session_name,
-        extra_env: extra_env.clone(),
-        cwd,
-        mux_config: &mux_config,
-        width,
-        detected_size: if was_live { None } else { detected_size },
-        refresh_ms: None,
-    };
-    launch_sidebar_for_workspace(backend.as_ref(), &room, None, !was_live, &[]);
-    gate_room_before_attach(backend.as_ref(), &room, None, &[])?;
-    ensure_presence_plugin(
-        backend.as_ref(),
-        &workspace.session_name,
-        &workspace.workspace_id,
-        &mux_config.zellij,
-        machine_config.web.enabled,
-        machine_config.sidebar.focus_key_label(),
-    );
-    Ok(RunRoom {
-        backend,
-        mux,
-        mux_config,
-        width,
-        detected_size: if was_live { None } else { detected_size },
-        extra_env,
-    })
-}
-
-pub(crate) fn purge_rebirth_heartbeats_for_workspace(workspace_id: &WorkspaceId) {
-    match RuntimePaths::for_workspace(workspace_id.clone()) {
-        Ok(runtime) => rimz::sidebar::purge_rebirth_heartbeats(&runtime),
-        Err(err) => tracing::debug!(
-            workspace = %workspace_id,
-            error = %err,
-            "sidebar rebirth heartbeat purge skipped because runtime paths are unavailable",
-        ),
-    }
-}
-
-pub(crate) fn room_env_for_workspace(
-    workspace_id: &WorkspaceId,
-) -> Result<std::collections::BTreeMap<String, String>> {
-    let runtime = RuntimePaths::for_workspace(workspace_id.clone())
-        .context("preparing adapter runtime paths")?;
-    runtime
-        .ensure_dirs()
-        .context("preparing adapter runtime directories")?;
-    Ok(rimz::agents::registry::room_env(&runtime))
-}
-
-fn finish_attach(
-    backend: &dyn MuxBackend,
-    session_name: &str,
-    workspace_id: Option<&WorkspaceId>,
-    mux_config: &rimz::config::MultiplexerConfig,
-    mode: AttachMode,
-    mux: MuxName,
-) -> Result<()> {
-    // A corrupt serialized layout makes Zellij reject attach even while the
-    // target session is live. Rimz owns room rebirth and never resurrects, so
-    // clear stale resurrection state before both printed and executed attaches.
-    let cache_removed = backend.purge_resurrection_cache(session_name);
-    if !cache_removed.is_empty() {
-        tracing::debug!(
-            session = %session_name,
-            paths = ?cache_removed,
-            "purged stale resurrection cache before attach",
-        );
-    }
-    let spec = backend.attach_command(session_name, mux_config);
-    if let Some(workspace_id) = workspace_id {
-        tracing::info!(
-            workspace = %workspace_id,
-            session = %session_name,
-            mux = %mux,
-            "workspace ready",
-        );
-    } else {
-        tracing::info!(
-            session = %session_name,
-            mux = %mux,
-            "workspace ready",
-        );
-    }
-    run_attach_action(&spec, mode, mux)
-}
-
-/// The room a sidebar launch or pre-attach gate targets: workspace identity
-/// plus the per-machine knobs every [`SidebarPaneOptions`] build shares.
-pub(crate) struct RoomTarget<'a> {
-    pub(crate) workspace_id: &'a rimz::WorkspaceId,
-    /// The workspace root behind the id — paired into the identity pin a
-    /// session birth stamps into the mux environment.
-    pub(crate) project_root: &'a Path,
-    pub(crate) session_name: &'a str,
-    /// Registry-owned environment computed once for every birth/options flow.
-    pub(crate) extra_env: std::collections::BTreeMap<String, String>,
-    pub(crate) cwd: &'a Path,
-    pub(crate) mux_config: &'a rimz::config::MultiplexerConfig,
-    pub(crate) width: SidebarWidth,
-    /// The launching terminal's `(cols, rows)`, probed once per command that can
-    /// birth the session ([`rimz::mux::detect_terminal_size`]): the width picks
-    /// the sidebar's birth size, the pair sizes a detached tmux birth. Commands
-    /// targeting an already-live session leave this `None`.
-    pub(crate) detected_size: Option<(u16, u16)>,
-    /// One-shot sidebar render-cadence override for panes born during this
-    /// launch. Recovery rebuilt from workspace state falls back to config.
-    pub(crate) refresh_ms: Option<u16>,
-}
-
-impl RoomTarget<'_> {
-    fn width_override(&self) -> Option<std::num::NonZeroU16> {
-        rimz::RuntimePaths::for_workspace(self.workspace_id.clone())
-            .ok()
-            .and_then(|runtime| rimz::sidebar::width_override::load(&runtime))
-    }
-
-    /// The width verdict this command's sidebar panes are born with: the
-    /// room-runtime override, or `min(percent × terminal, max_cols)`.
-    fn birth_size(&self, width_override: Option<std::num::NonZeroU16>) -> rimz::mux::BirthSize {
-        self.width
-            .birth_size_with_override(self.detected_size.map(|(cols, _)| cols), width_override)
-    }
-}
-
-pub(crate) fn build_sidebar_opts(
-    target: &RoomTarget<'_>,
-    resume_tabs: Vec<rimz::mux::ResumeTab>,
-) -> Result<SidebarPaneOptions> {
-    let rimz_bin = room_bin_for_workspace(target.workspace_id);
-    let width_override = target.width_override();
-    Ok(SidebarPaneOptions {
-        session_name: target.session_name.to_owned(),
-        workspace_id: target.workspace_id.clone(),
-        project_root: target.project_root.to_path_buf(),
-        extra_env: target.extra_env.clone(),
-        cwd: target.cwd.to_path_buf(),
-        width: target.width,
-        birth_size: target.birth_size(width_override),
-        width_override,
-        rimz_bin,
-        replace_existing: false,
-        pristine_birth: false,
-        config: target.mux_config.clone(),
-        resume_tabs,
-        refresh_ms: target.refresh_ms,
-    })
-}
-
-fn room_owner_bin() -> PathBuf {
-    rimz::reload::current_reexec_target().unwrap_or_else(rimz::proc::rimz_exe)
-}
-
-fn record_room_bin(workspace: &rimz::ResolvedWorkspace, rimz_bin: &Path) -> Result<()> {
-    open_store(workspace)?
-        .record_room_bin(workspace, rimz_bin.to_path_buf())
-        .context("recording room binary")
-}
-
-fn room_bin_for_workspace(workspace_id: &WorkspaceId) -> PathBuf {
-    let recorded = StatePaths::for_workspace(workspace_id.clone())
-        .ok()
-        .and_then(|paths| rimz::store::workspace_record::read(&paths.workspace_record).ok())
-        .and_then(|record| record.rimz_bin);
-    rimz::workspace::resolve_recorded_rimz_bin(recorded.as_deref())
-}
-
-pub(crate) fn launch_sidebar_for_workspace(
-    backend: &dyn MuxBackend,
-    target: &RoomTarget<'_>,
-    daemon: Option<&DaemonView>,
-    pristine_birth: bool,
-    resume_tabs: &[rimz::mux::ResumeTab],
-) -> rimz::sidebar::SidebarLaunchOutcome {
-    let runtime = match RuntimePaths::for_workspace(target.workspace_id.clone()) {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            tracing::warn!(
-                workspace = %target.workspace_id,
-                error = %err,
-                "sidebar launch skipped because runtime paths are unavailable",
-            );
-            return rimz::sidebar::SidebarLaunchOutcome::Failed;
-        }
-    };
-    if pristine_birth && let Err(err) = rimz::sidebar::width_override::clear(&runtime) {
-        tracing::debug!(
-            workspace = %target.workspace_id,
-            error = %err,
-            "clearing room-runtime sidebar width override failed",
-        );
-    }
-    let mut opts = match build_sidebar_opts(target, resume_tabs.to_vec()) {
-        Ok(opts) => opts,
-        Err(err) => {
-            tracing::warn!(
-                workspace = %target.workspace_id,
-                error = %err,
-                "sidebar launch skipped because room options are unavailable",
-            );
-            return rimz::sidebar::SidebarLaunchOutcome::Failed;
-        }
-    };
-    opts.pristine_birth = pristine_birth;
-    rimz::sidebar::launch_sidebar_if_needed(backend, &runtime, &opts, daemon)
 }

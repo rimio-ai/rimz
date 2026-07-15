@@ -1,7 +1,6 @@
 //! Interactive launch orchestration and presentation.
 
 use super::*;
-use crate::cli::room::build_sidebar_opts;
 use crate::cli::{agents_launch, machine_config, open_store, record_workspace};
 
 pub(super) fn launch_layout(
@@ -83,8 +82,14 @@ pub(super) fn launch_layout(
     );
     let in_place = placement == Placement::SamePane;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let backend = rimz::mux::backend_for(mux);
-    agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
+    let room = RoomContext::from_resolved(
+        &workspace,
+        machine_config.clone(),
+        mux,
+        RoomSizing::OrdinaryTab,
+    )?;
+    let backend = room.backend();
+    agents_launch::ensure_live_session(backend, &workspace.session_name)?;
     let store = open_store(&workspace)?;
 
     let explicit_worktree_name = args
@@ -103,7 +108,7 @@ pub(super) fn launch_layout(
         match reconcile::reconcile_cohort_launch(
             &workspace,
             &machine_config,
-            backend.as_ref(),
+            backend,
             &store,
             name,
             spec_display,
@@ -129,8 +134,6 @@ pub(super) fn launch_layout(
         }
     }
 
-    let mux_config = rimz::config::MultiplexerConfig::from(machine_config.as_ref());
-    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let launch = agents_launch::resolve_cwd(
         &workspace,
         &machine_config.agents.worktree,
@@ -185,18 +188,7 @@ pub(super) fn launch_layout(
         },
         |channel| format!("#{channel}"),
     );
-    let room = RoomTarget {
-        workspace_id: &workspace.workspace_id,
-        project_root: &workspace.project_root,
-        session_name: &workspace.session_name,
-        extra_env: crate::cli::room::room_env_for_workspace(&workspace.workspace_id)?,
-        cwd: &cwd,
-        mux_config: &mux_config,
-        width,
-        detected_size: None,
-        refresh_ms: None,
-    };
-    let sidebar = build_sidebar_opts(&room, Vec::new())?;
+    let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
     let panes = layout_panes_with_names(
         &layout,
         LayoutPaneParams {
@@ -354,8 +346,14 @@ fn launch_resume_layout(
     };
     let in_place = placement == Placement::SamePane;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
-    let backend = rimz::mux::backend_for(mux);
-    agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
+    let room = RoomContext::from_resolved(
+        workspace,
+        std::sync::Arc::new(machine_config.clone()),
+        mux,
+        RoomSizing::OrdinaryTab,
+    )?;
+    let backend = room.backend();
+    agents_launch::ensure_live_session(backend, &workspace.session_name)?;
     record_workspace(workspace)?;
 
     let launch_requests = fresh_resume_launch_requests(
@@ -382,24 +380,11 @@ fn launch_resume_layout(
         },
     )?;
 
-    let mux_config = rimz::config::MultiplexerConfig::from(machine_config);
-    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let title = channel.as_deref().map_or_else(
         || rimz::harness::spec::default_tab_title(&layout, &cwd, None, team_name.as_deref()),
         |channel| format!("#{channel}"),
     );
-    let room = RoomTarget {
-        workspace_id: &workspace.workspace_id,
-        project_root: &workspace.project_root,
-        session_name: &workspace.session_name,
-        extra_env: crate::cli::room::room_env_for_workspace(&workspace.workspace_id)?,
-        cwd: &cwd,
-        mux_config: &mux_config,
-        width,
-        detected_size: None,
-        refresh_ms: None,
-    };
-    let sidebar = build_sidebar_opts(&room, Vec::new())?;
+    let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
     let panes = layout_panes_with_names(
         &layout,
         LayoutPaneParams {

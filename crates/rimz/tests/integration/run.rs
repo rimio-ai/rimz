@@ -1,6 +1,8 @@
 use crate::common::Env;
 #[cfg(unix)]
-use crate::common::{path_with_front, write_failing_agent_shim, write_fake_login_shell};
+use crate::common::{
+    CommandTimeoutExt, path_with_front, write_failing_agent_shim, write_fake_login_shell,
+};
 use jiff::Timestamp;
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
@@ -37,6 +39,90 @@ fn kiro_supervised_run_fails_before_recording_or_launching() {
             .expect("list runs")
             .is_empty(),
         "unsupported run must fail before creating state"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn fresh_background_supervised_run_uses_shared_room_birth() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
+        env.workspace_id.clone(),
+        rimz::ids::SidebarInstanceId::new(),
+        MuxName::Zellij,
+        &workspace.session_name,
+        runtime.sock_dir.join("supervised-stale.sock"),
+        None,
+    );
+    let heartbeat_path = runtime.heartbeat_dir.join("sidebar.supervised-stale.json");
+    std::fs::write(
+        &heartbeat_path,
+        serde_json::to_vec(&heartbeat).expect("serialize heartbeat"),
+    )
+    .expect("write heartbeat");
+    let trace_path = env.project_root.join("fresh-supervised.log");
+    let presence = env.project_root.join("presence.wasm");
+    std::fs::write(&presence, b"test-presence").expect("write presence fixture");
+
+    let output = env
+        .rimz()
+        .args([
+            "--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg",
+        ])
+        .env("PATH", path_with_front(&agent_bin))
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
+        .env("RIMZ_PRESENCE_PLUGIN", presence)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("RIMZ_TEST_ZELLIJ_LIST_SESSIONS", "")
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_PANES",
+            r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar"},{"id":2,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+        )
+        .bounded_output()
+        .expect("run background supervised birth");
+    assert!(
+        output.status.success(),
+        "supervised birth failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !heartbeat_path.exists(),
+        "fresh supervised birth must purge stale heartbeat"
+    );
+    let events = env.read_events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.kind(), rimz::store::event::EventKind::SessionRebirth))
+            .count(),
+        1,
+        "supervised birth records one boundary"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event.kind(), rimz::store::event::EventKind::SessionDeath(_))),
+        "supervised birth skips normal rebirth inspection"
+    );
+    let trace = std::fs::read_to_string(&trace_path).expect("read supervised trace");
+    let create = trace
+        .lines()
+        .position(|line| line.contains("\tattach\t--create-background\t"))
+        .expect("session/sidebar create");
+    let presence = trace
+        .lines()
+        .position(|line| line.contains("\tpipe\t--plugin\t"))
+        .expect("presence pipe");
+    assert!(
+        create < presence,
+        "session/sidebar creation must precede presence:\n{trace}"
     );
 }
 
