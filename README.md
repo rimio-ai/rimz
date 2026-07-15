@@ -273,24 +273,24 @@ The install is additive (your existing hooks stay), and `rimz hooks uninstall` u
 
 Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and give the best experience today. Every other agent is **experimental**: wired and tested against its documented surface, but not yet dogfooded enough by the author, so expect the occasional bug and please [report what you hit](https://github.com/rimio-ai/rimz/issues). Any of them still mostly just works: the CLI runs stock in your terminal and the official apps stay untouched.
 
-| Agent       | Status          | State | Live | History | Ask | Plan | Subagents |
-|-------------|-----------------|:-----:|:----:|:-------:|:---:|:----:|:---------:|
-| Claude Code | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
-| Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
-| Pi          | 🧪 Experimental |   ●   |  ●   |    ●    |  ✗  |  ✗   |     ✗     |
-| OpenCode    | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ●     |
-| Antigravity | 🧪 Experimental |   ◐   |  ◐   |    ◐    |  ✗  |  ✗   |     ✗     |
-| Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |  ✗   |     ✗     |
-| Droid       | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ✗  |  ✗   |     ✗     |
-| Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ✗  |  ✗   |     ✗     |
-| Amp         | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ✗   |     ✗     |
-| Kiro CLI    | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ✗  |  ✗   |     ✗     |
-| Qwen Code   | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |  ●   |     ●     |
-| Kimi        | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |  ●   |     ◐     |
+| Agent       | Status          | State | Live | History | Ask | Subagents | Account |
+|-------------|-----------------|:-----:|:----:|:-------:|:---:|:---------:|:-------:|
+| Claude Code | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |     ●     |    ●    |
+| Codex       | ✅ Supported    |   ●   |  ●   |    ●    |  ●  |     ●     |    ●    |
+| Pi          | 🧪 Experimental |   ●   |  ●   |    ●    |  ✗  |     ✗     |    ●    |
+| OpenCode    | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |     ●     |    ●    |
+| Antigravity | 🧪 Experimental |   ◐   |  ◐   |    ◐    |  ◐  |     ✗     |    ●    |
+| Copilot     | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ●  |     ✗     |    ◐    |
+| Droid       | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ◐  |     ✗     |    ✗    |
+| Cursor      | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ✗  |     ✗     |    ◐    |
+| Amp         | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |     ✗     |    ◐    |
+| Kiro CLI    | 🧪 Experimental |   ●   |  ◐   |    ◐    |  ◐  |     ✗     |    ✗    |
+| Qwen Code   | 🧪 Experimental |   ●   |  ◐   |    ●    |  ●  |     ●     |    ◐    |
+| Kimi        | 🧪 Experimental |   ●   |  ●   |    ●    |  ●  |     ◐     |    ●    |
 
-<sub>● full · ◐ partial · ✗ no verified RimZ surface today (Codex ships no plan gate; Antigravity deliberately leaves policy-changing pre-tool decisions untouched); an agent-side extension or validated upstream wire can add it.</sub>
+<sub>● full · ◐ partial · ✗ the native CLI lacks a verified signal sufficient for this capability; an agent-side extension or validated upstream wire can add it.</sub>
 
-*See it* — **State** live working/idle/waiting, **Live** realtime context health and cost on the card, **History** full session read (transcript, per-turn tokens, spend). *Do it* — **Ask** blocking prompts routed to your keyboard, **Plan** the plan-approval gate, **Subagents** the child-agent tree. The full per-mechanism detail, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md), and `rimz coverage` prints the live grid on your own machine with a reason on every cell.
+*See it* — **State** live working/idle/waiting, **Live** realtime context health and cost on the card, **History** full session read (transcript, per-turn tokens, spend), **Account** login, plan, and provider-exposed rate-limit or balance/budget facts. *Do it* — **Ask** blocking prompts routed to your keyboard, **Subagents** the child-agent tree. The full per-mechanism detail, permission-mode mapping, and install targets live in [agent support](./docs/reference/agent-support.md), and `rimz coverage` prints the live grid on your own machine with a reason on every cell.
 
 ## Contributing
 
