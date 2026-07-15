@@ -142,13 +142,17 @@ fn with_credentials_mtime(probe: AccountProbe, path: &std::path::Path) -> Accoun
 fn probe_login_status() -> AccountProbe {
     let mut command = Command::new("codex");
     command.args(["login", "status"]).stdin(Stdio::null());
+    probe_login_status_with(&mut command)
+}
+
+fn probe_login_status_with(command: &mut Command) -> AccountProbe {
     let Ok(output) = crate::proc::run_bounded_output(
-        &mut command,
+        command,
         crate::agents::account::INFORMATIONAL_PROBE_TIMEOUT,
     ) else {
         return AccountProbe::Unavailable;
     };
-    if output.timed_out || !output.status.success() {
+    if output.timed_out {
         return AccountProbe::Unavailable;
     }
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -353,6 +357,18 @@ mod tests {
         assert!(matches!(
             parse_login_status("Error checking login status: boom\n"),
             AccountProbe::Unavailable
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonzero_cli_logout_is_authoritative() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf 'Not logged in\\n' >&2; exit 1"]);
+
+        assert!(matches!(
+            probe_login_status_with(&mut command),
+            AccountProbe::LoggedOut
         ));
     }
 
