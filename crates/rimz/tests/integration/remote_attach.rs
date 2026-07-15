@@ -467,6 +467,10 @@ fn established_link_drop_reconnects_and_notifies_once() {
         "the supervisor narrates the retry: {stderr}"
     );
     assert!(
+        !stderr.contains("network to dev-box restored — reconnecting now"),
+        "a plain link drop must not report network restoration: {stderr}"
+    );
+    assert!(
         stderr.contains("(attempt 1)"),
         "attempts number per outage, not per lifetime: {stderr}"
     );
