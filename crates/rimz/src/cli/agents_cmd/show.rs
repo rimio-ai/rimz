@@ -280,7 +280,7 @@ pub(super) fn render_activity_section(
     let mut kv = render::KeyVals::new().indent(2);
     kv.push(
         "description",
-        render::cell(agent.activity_description().unwrap_or("-")).dash(),
+        render::cell(agent.activity_line().unwrap_or_else(|| "-".to_owned())).dash(),
     );
     kv.push(
         "status",

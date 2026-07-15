@@ -1103,8 +1103,12 @@ mod render {
             text.contains("@writer") && !text.contains("@claude"),
             "{text}"
         );
-        assert!(text.contains("DESC"), "{text}");
-        assert!(text.contains("fix failing auth flow"), "{text}");
+        let header = text.lines().next().unwrap_or_default();
+        assert!(!header.contains("DESC"), "{text}");
+        assert!(
+            text.lines().any(|line| line == "  fix failing auth flow"),
+            "{text}"
+        );
         assert!(text.contains("failed"), "{text}");
         assert!(text.contains("paused"), "{text}");
         assert!(text.contains("running"), "{text}");
@@ -1115,7 +1119,7 @@ mod render {
     }
 
     #[test]
-    fn agents_table_clips_description_to_width() {
+    fn agents_table_wraps_collapsed_description_to_width() {
         let now = jiff::Timestamp::from_second(2_000).unwrap();
         let mut agent = agent_with_status(
             "long-desc",
@@ -1123,7 +1127,10 @@ mod render {
             rimz::agents::TurnPhase::Idle,
             1_000,
         );
-        agent.description = Some("this description is far too long for the terminal".to_owned());
+        agent.description = Some(
+            "this description starts\nwith pasted\tcontent and keeps going across enough words to fill the first line, then the second line, then the third line, and finally more preview text that must be truncated because agent cards only show a bounded activity summary instead of the entire prompt or attached reference content"
+                .to_owned(),
+        );
         let snapshot = rimz::SidebarSnapshot::build_with_agents(
             WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
             vec![agent],
@@ -1143,12 +1150,69 @@ mod render {
         .expect("render agents table");
         let text = String::from_utf8(out.into_inner()).expect("utf8");
 
-        assert!(text.contains('…'), "{text}");
         assert!(
             text.lines()
                 .all(|line| unicode_width::UnicodeWidthStr::width(line) <= 72),
             "{text}"
         );
+        let description_lines: Vec<_> =
+            text.lines().filter(|line| line.starts_with("  ")).collect();
+        assert!(!description_lines.is_empty(), "{text}");
+        assert!(description_lines.len() <= 3, "{text}");
+        assert!(
+            description_lines
+                .join(" ")
+                .contains("this description starts with pasted content"),
+            "{text}"
+        );
+        assert!(
+            description_lines
+                .last()
+                .is_some_and(|line| line.ends_with('…')),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn agents_table_separates_descriptionless_cards() {
+        let now = jiff::Timestamp::from_second(2_000).unwrap();
+        let mut first = agent_with_status(
+            "first",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        first.name = Some("alpha".to_owned());
+        first.name_explicit = true;
+        let mut second = agent_with_status(
+            "second",
+            rimz::agents::AgentStatus::Idle,
+            rimz::agents::TurnPhase::Idle,
+            1_000,
+        );
+        second.name = Some("beta".to_owned());
+        second.name_explicit = true;
+        let snapshot = rimz::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/tmp/rimz-agents-table")),
+            vec![first, second],
+            now,
+        );
+
+        let text = render_agents_text(&snapshot, now, 120);
+        let lines: Vec<_> = text.lines().collect();
+        let first = lines
+            .iter()
+            .position(|line| line.starts_with("@alpha"))
+            .expect("alpha row");
+        let second = lines
+            .iter()
+            .position(|line| line.starts_with("@beta"))
+            .expect("beta row");
+        let earlier = first.min(second);
+
+        assert_eq!(first.abs_diff(second), 2, "{text}");
+        assert!(lines[earlier + 1].is_empty(), "{text}");
+        assert!(!text.ends_with("\n\n"), "{text}");
     }
 
     #[test]
@@ -1215,12 +1279,13 @@ mod render {
     #[test]
     fn show_activity_projects_phase_only_for_active_turns() {
         let now = jiff::Timestamp::from_second(2_000).unwrap();
-        let active = agent_with_status(
+        let mut active = agent_with_status(
             "active",
             rimz::agents::AgentStatus::Running,
             rimz::agents::TurnPhase::Acting,
             1_000,
         );
+        active.description = Some("ship\nwide\tfix".to_owned());
         let idle = agent_with_status(
             "idle",
             rimz::agents::AgentStatus::Idle,
@@ -1242,6 +1307,10 @@ mod render {
             active_text
                 .lines()
                 .any(|line| line.contains("phase:") && line.contains("acting")),
+            "{active_text}"
+        );
+        assert!(
+            active_text.contains("description:   ship wide fix"),
             "{active_text}"
         );
 

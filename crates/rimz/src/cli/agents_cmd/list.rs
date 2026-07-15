@@ -85,14 +85,17 @@ pub(crate) fn render_agents_table(
         .flat_map(|group| group.agents.iter().copied())
         .collect();
     let glyph = rimz::sidebar_pane::render::theme_glyphs(theme);
-    let mut table =
-        render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE", "DESC"])
-            .right(&[3, 4, 5])
-            .max_width(max_width);
+    let mut table = render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"])
+        .right(&[3, 4, 5])
+        .max_width(max_width)
+        .card_rows();
     for group in groups {
         table.section_cells(group_header_cells(&group, snapshot, &glyph));
         for &agent in &group.agents {
             table.row(agent_row(agent, &ordered_agents, now));
+            if let Some(line) = agent.activity_line() {
+                table.sub(render::cell(line).fg(render::palette::MUTED));
+            }
         }
     }
     table.render(w)
@@ -195,7 +198,6 @@ fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) ->
         context_cell(agent),
         render::cell(tokens_label(agent)).dash(),
         render::cell(render::age_short(agent.last_seen, now)),
-        render::cell(agent.activity_description().unwrap_or("-")).dash(),
     ]
 }
 
