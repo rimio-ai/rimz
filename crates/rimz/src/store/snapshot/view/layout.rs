@@ -20,46 +20,6 @@ pub(super) fn group_branch_label(rows: &[SidebarRow]) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// The worktree paths that host more than one branch. A path keyed by branch
-/// (rather than by path alone) keeps each branch its own group instead of
-/// collapsing two checkouts under one mislabeled header. Shared by the live
-/// row fold ([`build_worktree_groups_from_rows`]) and the `rimz agents list`
-/// roster ([`group_live_agents_by_worktree`]) so both split identically.
-pub(super) fn multi_branch_paths<'a>(
-    entries: impl Iterator<Item = (Option<&'a str>, Option<&'a str>)>,
-) -> BTreeSet<String> {
-    let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for (path, branch) in entries {
-        if let (Some(path), Some(branch)) = (
-            path.filter(|path| !path.is_empty()),
-            branch.filter(|branch| !branch.is_empty()),
-        ) {
-            branches_per_path.entry(path).or_default().insert(branch);
-        }
-    }
-    branches_per_path
-        .into_iter()
-        .filter(|(_, branches)| branches.len() > 1)
-        .map(|(path, _)| path.to_owned())
-        .collect()
-}
-
-pub(super) fn effective_worktree_roots<'a>(
-    worktree_roots: &[PathBuf],
-    entries: impl Iterator<Item = (Option<&'a str>, Option<&'a str>)>,
-) -> Vec<PathBuf> {
-    let mut roots: BTreeSet<PathBuf> = worktree_roots.iter().cloned().collect();
-    for (path, branch) in entries {
-        let Some(path) = path.filter(|path| !path.is_empty()) else {
-            continue;
-        };
-        if branch.is_some_and(|branch| !branch.is_empty()) {
-            roots.insert(PathBuf::from(path));
-        }
-    }
-    roots.into_iter().collect()
-}
-
 #[derive(Clone, Copy)]
 pub(super) struct GroupRoots<'a> {
     pub project_root: Option<&'a Path>,
@@ -68,123 +28,166 @@ pub(super) struct GroupRoots<'a> {
     pub root_class: RootClass,
 }
 
-pub(super) fn worktree_group_key(
-    explicit_channel: Option<&str>,
-    path: Option<&str>,
-    branch: Option<&str>,
-    split_by_branch: bool,
-    roots: GroupRoots<'_>,
-) -> (SidebarWorktreeKind, String, String) {
-    if let Some(channel) = explicit_channel.filter(|channel| !channel.is_empty()) {
-        return (
-            SidebarWorktreeKind::Channel,
-            format!("channel:{channel}"),
-            channel.to_owned(),
-        );
-    }
-    let branch = branch.filter(|branch| !branch.is_empty());
-    if let Some(path) = path.filter(|path| !path.is_empty()) {
-        let cwd = Path::new(path);
-        if roots
-            .worktree_home
-            .is_some_and(|home| is_within(home, cwd) && cwd != home)
-            && roots.project_root != Some(cwd)
-        {
-            // Mirror `compose_channel`'s worktree-basename fallback so grouping
-            // agrees with addressing and `rimz channel list` for unstamped
-            // agents launched inside a Rimz-owned worktree.
-            let label = path_basename(cwd);
-            return (
-                SidebarWorktreeKind::Channel,
-                format!("channel:{label}"),
-                label,
-            );
-        }
-        // A cwd belongs to the *deepest* group root that contains it: the room
-        // root or any group root — a repo room's `git worktree list` checkouts
-        // plus every git-backed row's own resolved toplevel. Keying on the
-        // matched root is what folds every pane of one checkout into one pod.
-        // Two cases keep per-path pods: a repo room's own checkout (so a nested
-        // worktree the enumeration hasn't caught up with never folds into the
-        // main pod), and a snapshot with no known root and no known roots. A cwd
-        // outside every root (a home shell, `/tmp`, CI) falls through to the
-        // `external` catch-all unless its path still carries the reported branch
-        // name — the short pre-enumeration window for a real worktree checkout.
-        let matched = roots
-            .worktree_roots
-            .iter()
-            .map(PathBuf::as_path)
-            .chain(roots.project_root)
-            .filter(|root| is_within(root, cwd))
-            .max_by_key(|root| root.components().count());
-        let per_path = match matched {
-            Some(root) => roots.project_root == Some(root) && roots.root_class == RootClass::Repo,
-            None => roots.project_root.is_none() && roots.worktree_roots.is_empty(),
-        };
-        if per_path {
-            let label = branch
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| path_basename(cwd));
-            // Disambiguate the key by branch only for a path that holds more
-            // than one — a newline can appear in neither a path nor a branch, so
-            // it is an unambiguous separator. The git projection recovers the
-            // bare path from the key's first line, so the split never breaks
-            // git reads.
-            let key = match branch.filter(|_| split_by_branch) {
-                Some(branch) => format!("{path}\n{branch}"),
-                None => path.to_owned(),
-            };
-            return (SidebarWorktreeKind::Worktree, key, label);
-        }
-        if let Some(root) = matched {
-            let root_key = root.to_string_lossy().into_owned();
-            // The room root of a non-repo room: one name-only pod for panes at
-            // the root and in non-repo subdirs. Branches never split or label
-            // it — a non-repo root has no git story to disagree about.
-            if roots.project_root == Some(root) {
-                let label = path_basename(root);
-                return (SidebarWorktreeKind::Root, root_key, label);
-            }
-            let label = branch
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| path_basename(root));
-            let key = match branch.filter(|_| split_by_branch) {
-                Some(branch) => format!("{root_key}\n{branch}"),
-                None => root_key,
-            };
-            return (SidebarWorktreeKind::Worktree, key, label);
-        }
-        if let Some(branch) = branch.filter(|branch| path_mentions_branch(cwd, branch)) {
-            return branch_group(branch);
-        }
-        return (
-            SidebarWorktreeKind::External,
-            "external".to_owned(),
-            "external".to_owned(),
-        );
-    }
-    if let Some(branch) = branch {
-        // Branch-only rows have no cwd to anchor to a project root. Keep their
-        // label visible until the next pane or workspace observation supplies a
-        // path.
-        return branch_group(branch);
-    }
-    // Catch-all: untethered scripts/CI and out-of-project shells. `external`
-    // is both the stable grouping key and the header label, so it reads as
-    // "outside the project."
-    (
-        SidebarWorktreeKind::External,
-        "external".to_owned(),
-        "external".to_owned(),
-    )
+#[derive(Clone, Copy)]
+pub(super) struct GroupEntry<'a> {
+    pub channel: Option<&'a str>,
+    pub path: Option<&'a str>,
+    pub branch: Option<&'a str>,
 }
 
-fn branch_group(branch: &str) -> (SidebarWorktreeKind, String, String) {
-    (
-        SidebarWorktreeKind::Worktree,
-        format!("branch:{branch}"),
-        branch.to_owned(),
-    )
+pub(super) struct GroupIdentity {
+    pub kind: SidebarWorktreeKind,
+    pub key: String,
+    pub label: String,
+}
+
+pub(super) struct GroupResolver<'a> {
+    project_root: Option<&'a Path>,
+    worktree_roots: Vec<PathBuf>,
+    worktree_home: Option<&'a Path>,
+    root_class: RootClass,
+    multi_branch_paths: BTreeSet<String>,
+}
+
+impl<'a> GroupResolver<'a> {
+    pub(super) fn new<'entry>(
+        roots: GroupRoots<'a>,
+        entries: impl IntoIterator<Item = GroupEntry<'entry>>,
+    ) -> Self {
+        let mut worktree_roots: BTreeSet<PathBuf> = roots.worktree_roots.iter().cloned().collect();
+        let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for entry in entries {
+            let (Some(path), Some(branch)) = (
+                entry.path.filter(|path| !path.is_empty()),
+                entry.branch.filter(|branch| !branch.is_empty()),
+            ) else {
+                continue;
+            };
+            worktree_roots.insert(PathBuf::from(path));
+            branches_per_path.entry(path).or_default().insert(branch);
+        }
+        let multi_branch_paths = branches_per_path
+            .into_iter()
+            .filter(|(_, branches)| branches.len() > 1)
+            .map(|(path, _)| path.to_owned())
+            .collect();
+        Self {
+            project_root: roots.project_root,
+            worktree_roots: worktree_roots.into_iter().collect(),
+            worktree_home: roots.worktree_home,
+            root_class: roots.root_class,
+            multi_branch_paths,
+        }
+    }
+
+    pub(super) fn resolve(&self, entry: GroupEntry<'_>) -> GroupIdentity {
+        if let Some(channel) = entry.channel.filter(|channel| !channel.is_empty()) {
+            return channel_group(channel);
+        }
+        let branch = entry.branch.filter(|branch| !branch.is_empty());
+        let Some(path) = entry.path.filter(|path| !path.is_empty()) else {
+            return branch.map_or_else(external_group, branch_group);
+        };
+        self.resolve_path(path, branch)
+    }
+
+    fn resolve_path(&self, path: &str, branch: Option<&str>) -> GroupIdentity {
+        let cwd = Path::new(path);
+        if self.is_owned_worktree(cwd) {
+            return channel_group(&path_basename(cwd));
+        }
+        let matched = self.deepest_root(cwd);
+        if self.groups_per_path(matched) {
+            return worktree_group(path, cwd, branch, self.multi_branch_paths.contains(path));
+        }
+        if let Some(root) = matched {
+            return self.matched_root_group(root, branch, self.multi_branch_paths.contains(path));
+        }
+        branch
+            .filter(|branch| path_mentions_branch(cwd, branch))
+            .map_or_else(external_group, branch_group)
+    }
+
+    fn is_owned_worktree(&self, cwd: &Path) -> bool {
+        self.worktree_home
+            .is_some_and(|home| is_within(home, cwd) && cwd != home)
+            && self.project_root != Some(cwd)
+    }
+
+    fn deepest_root(&self, cwd: &Path) -> Option<&Path> {
+        self.worktree_roots
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(self.project_root)
+            .filter(|root| is_within(root, cwd))
+            .max_by_key(|root| root.components().count())
+    }
+
+    fn groups_per_path(&self, matched: Option<&Path>) -> bool {
+        match matched {
+            Some(root) => self.project_root == Some(root) && self.root_class == RootClass::Repo,
+            None => self.project_root.is_none() && self.worktree_roots.is_empty(),
+        }
+    }
+
+    fn matched_root_group(
+        &self,
+        root: &Path,
+        branch: Option<&str>,
+        split_by_branch: bool,
+    ) -> GroupIdentity {
+        let root_key = root.to_string_lossy().into_owned();
+        if self.project_root == Some(root) {
+            return GroupIdentity {
+                kind: SidebarWorktreeKind::Root,
+                key: root_key,
+                label: path_basename(root),
+            };
+        }
+        worktree_group(&root_key, root, branch, split_by_branch)
+    }
+}
+
+fn channel_group(channel: &str) -> GroupIdentity {
+    GroupIdentity {
+        kind: SidebarWorktreeKind::Channel,
+        key: format!("channel:{channel}"),
+        label: channel.to_owned(),
+    }
+}
+
+fn worktree_group(
+    key_path: &str,
+    label_path: &Path,
+    branch: Option<&str>,
+    split_by_branch: bool,
+) -> GroupIdentity {
+    GroupIdentity {
+        kind: SidebarWorktreeKind::Worktree,
+        key: branch.filter(|_| split_by_branch).map_or_else(
+            || key_path.to_owned(),
+            |branch| format!("{key_path}\n{branch}"),
+        ),
+        label: branch
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| path_basename(label_path)),
+    }
+}
+
+fn branch_group(branch: &str) -> GroupIdentity {
+    GroupIdentity {
+        kind: SidebarWorktreeKind::Worktree,
+        key: format!("branch:{branch}"),
+        label: branch.to_owned(),
+    }
+}
+
+fn external_group() -> GroupIdentity {
+    GroupIdentity {
+        kind: SidebarWorktreeKind::External,
+        key: "external".to_owned(),
+        label: "external".to_owned(),
+    }
 }
 
 fn path_mentions_branch(path: &Path, branch: &str) -> bool {
@@ -808,48 +811,31 @@ pub fn group_live_agents_by_worktree<'a>(
 ) -> Vec<AgentWorktreeGroup<'a>> {
     let project_root = snapshot.project_root.as_deref();
     let (inactive_after_secs, archive_after_secs) = rank_windows(snapshot);
-    // Split a path that hosts more than one branch into per-branch pods, exactly
-    // as the sidebar's row fold does, so two checkouts of one path never collapse
-    // under a single mislabeled header.
-    let multi_branch = multi_branch_paths(agents.iter().map(|agent| {
-        (
-            agent.worktree_path.as_deref(),
-            agent.worktree_branch.as_deref(),
-        )
-    }));
-    let effective_roots = effective_worktree_roots(
-        &snapshot.worktree_roots,
-        agents.iter().map(|agent| {
-            (
-                agent.worktree_path.as_deref(),
-                agent.worktree_branch.as_deref(),
-            )
+    let resolver = GroupResolver::new(
+        GroupRoots {
+            project_root,
+            worktree_roots: &snapshot.worktree_roots,
+            worktree_home: snapshot.worktree_home.as_deref(),
+            root_class: snapshot.root_class,
+        },
+        agents.iter().map(|agent| GroupEntry {
+            channel: agent.channel.as_deref(),
+            path: agent.worktree_path.as_deref(),
+            branch: agent.worktree_branch.as_deref(),
         }),
     );
-    let roots = GroupRoots {
-        project_root,
-        worktree_roots: &effective_roots,
-        worktree_home: snapshot.worktree_home.as_deref(),
-        root_class: snapshot.root_class,
-    };
     let mut by_key: BTreeMap<String, AgentWorktreeGroup<'a>> = BTreeMap::new();
     for &agent in agents {
-        let split_by_branch = agent
-            .worktree_path
-            .as_deref()
-            .is_some_and(|path| multi_branch.contains(path));
-        let (kind, key, label) = worktree_group_key(
-            agent.channel.as_deref(),
-            agent.worktree_path.as_deref(),
-            agent.worktree_branch.as_deref(),
-            split_by_branch,
-            roots,
-        );
+        let identity = resolver.resolve(GroupEntry {
+            channel: agent.channel.as_deref(),
+            path: agent.worktree_path.as_deref(),
+            branch: agent.worktree_branch.as_deref(),
+        });
         by_key
-            .entry(key)
+            .entry(identity.key)
             .or_insert_with(|| AgentWorktreeGroup {
-                label,
-                kind,
+                label: identity.label,
+                kind: identity.kind,
                 agents: Vec::new(),
             })
             .agents

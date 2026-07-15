@@ -7,8 +7,8 @@ use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
 use super::layout::{
-    GroupRoots, compare_groups, effective_worktree_roots, group_branch_label, multi_branch_paths,
-    sort_rows, status_counts, worktree_group_key,
+    GroupEntry, GroupResolver, GroupRoots, compare_groups, group_branch_label, sort_rows,
+    status_counts,
 };
 use super::score;
 use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
@@ -84,40 +84,27 @@ pub(super) fn build_worktree_groups_from_rows(
     );
     stamp_attention(&mut rows, now, windows);
 
-    let multi_branch = multi_branch_paths(
-        rows.iter()
-            .map(|row| (row.worktree_path.as_deref(), row.worktree_branch.as_deref())),
+    let resolver = GroupResolver::new(
+        roots,
+        rows.iter().map(|row| GroupEntry {
+            channel: row.channel.as_deref(),
+            path: row.worktree_path.as_deref(),
+            branch: row.worktree_branch.as_deref(),
+        }),
     );
-    let effective_roots = effective_worktree_roots(
-        roots.worktree_roots,
-        rows.iter()
-            .map(|row| (row.worktree_path.as_deref(), row.worktree_branch.as_deref())),
-    );
-    let roots = GroupRoots {
-        project_root: roots.project_root,
-        worktree_roots: &effective_roots,
-        worktree_home: roots.worktree_home,
-        root_class: roots.root_class,
-    };
 
     let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
         BTreeMap::new();
     for row in rows {
-        let split_by_branch = row
-            .worktree_path
-            .as_deref()
-            .is_some_and(|path| multi_branch.contains(path));
-        let (kind, key, label) = worktree_group_key(
-            row.channel.as_deref(),
-            row.worktree_path.as_deref(),
-            row.worktree_branch.as_deref(),
-            split_by_branch,
-            roots,
-        );
+        let identity = resolver.resolve(GroupEntry {
+            channel: row.channel.as_deref(),
+            path: row.worktree_path.as_deref(),
+            branch: row.worktree_branch.as_deref(),
+        });
         by_group
-            .entry(key)
+            .entry(identity.key)
             .and_modify(|(_, _, rows)| rows.push(row.clone()))
-            .or_insert_with(|| (label, kind, vec![row]));
+            .or_insert_with(|| (identity.label, identity.kind, vec![row]));
     }
 
     let mut groups = by_group
