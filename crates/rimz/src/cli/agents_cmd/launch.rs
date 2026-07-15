@@ -679,18 +679,11 @@ pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::
         "--append-system-prompt-file",
     )?;
     Ok(rimz::agents::LaunchPreset {
-        model: normalized_preset_value(args.model.as_deref()),
-        effort: normalized_preset_value(args.effort.as_deref()),
+        model: rimz::harness::plan::normalized_preset_value(args.model.as_deref()),
+        effort: rimz::harness::plan::normalized_preset_value(args.effort.as_deref()),
         system_prompt_file,
         append_system_prompt_file,
     })
-}
-
-fn normalized_preset_value(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 pub(super) fn resolve_launch_prompt_file(
@@ -709,27 +702,6 @@ pub(super) fn resolve_launch_prompt_file(
     Ok(Some(resolved))
 }
 
-pub(super) fn reject_prompt_that_looks_like_spec(
-    spec: Option<&str>,
-    prompt: Option<&str>,
-    profiles: &rimz::config::ProfilesConfig,
-    commands: &rimz::config::CommandsConfig,
-    layouts: &rimz::config::TeamsConfig,
-) -> Result<()> {
-    let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
-        return Ok(());
-    };
-    let Some(prompt) = prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) else {
-        return Ok(());
-    };
-    if rimz::harness::spec::is_known_spec_token(prompt, profiles, commands, layouts) {
-        bail!(
-            "prompt `{prompt}` looks like another spec cell; did you mean `rimz agents {spec},{prompt}`?"
-        );
-    }
-    Ok(())
-}
-
 /// Apply CLI-owned launch validation in its user-visible precedence order.
 pub(super) fn validate_resolved_launch_inputs(
     args: &AgentsArgs,
@@ -738,7 +710,7 @@ pub(super) fn validate_resolved_launch_inputs(
     layout: &LayoutSpec,
     enforce_name_cardinality: bool,
 ) -> Result<rimz::agents::LaunchPreset> {
-    reject_prompt_that_looks_like_spec(
+    rimz::harness::plan::reject_prompt_that_looks_like_spec(
         args.spec.as_deref(),
         args.prompt.as_deref(),
         &effective.profiles,
@@ -750,57 +722,6 @@ pub(super) fn validate_resolved_launch_inputs(
         bail!("--name requires a layout with exactly one agent cell");
     }
     launch_override_preset(args)
-}
-
-/// Resolve and finalize the one-cell layout for a command-neutral supervised request.
-pub(in crate::cli) fn prepare_supervised_launch_layout(
-    request: &rimz::harness::run::SupervisedRunRequest,
-    workspace: &rimz::ResolvedWorkspace,
-    machine_config: &rimz::config::MachineConfig,
-) -> Result<LayoutSpec> {
-    let effective = rimz::config::effective::load(
-        &machine_config.agents,
-        &workspace.project_root,
-        &rimz::store::paths::config_home(),
-    )?;
-    let mut resolved = rimz::harness::plan::resolve_launch(
-        &effective,
-        &machine_config.agents.commands,
-        Some(&request.spec),
-    )?;
-    reject_prompt_that_looks_like_spec(
-        Some(&request.spec),
-        Some(&request.prompt),
-        &effective.profiles,
-        &machine_config.agents.commands,
-        &effective.teams,
-    )?;
-    rimz::harness::plan::validate_profile_prompt_files(&resolved.layout)?;
-    let preset = rimz::agents::LaunchPreset {
-        model: normalized_preset_value(request.model.as_deref()),
-        effort: normalized_preset_value(request.effort.as_deref()),
-        system_prompt_file: request.system_prompt_file.clone(),
-        append_system_prompt_file: request.append_system_prompt_file.clone(),
-    };
-    let warnings = rimz::harness::plan::finalize_launch_layout(
-        &mut resolved.layout,
-        LaunchFinalizeOptions {
-            permission_mode: Some(request.permission_mode),
-            preset: &preset,
-            passthrough: &request.passthrough,
-            budget: request.budget,
-            max_turns: request.max_turns,
-        },
-    )
-    .inspect_err(|err| {
-        for warning in err.warnings() {
-            let _ = writeln!(std::io::stderr(), "{warning}");
-        }
-    })?;
-    for warning in warnings {
-        writeln!(std::io::stderr(), "{warning}")?;
-    }
-    Ok(resolved.layout)
 }
 
 #[cfg(test)]

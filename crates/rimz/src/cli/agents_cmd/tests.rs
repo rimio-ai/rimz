@@ -321,19 +321,6 @@ mod parse {
             let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject flag");
             assert!(err.to_string().contains(fragment), "{err:#}");
         }
-
-        let err = reject_prompt_that_looks_like_spec(
-            Some("claude"),
-            Some("codex"),
-            &rimz::config::ProfilesConfig::default(),
-            &rimz::config::CommandsConfig::default(),
-            &rimz::config::TeamsConfig::default(),
-        )
-        .expect_err("reject fan-out typo");
-        assert!(
-            err.to_string().contains("rimz agents claude,codex"),
-            "{err:#}"
-        );
     }
 
     #[test]
@@ -616,7 +603,7 @@ mod launch_options {
         let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None)
             .expect("resolve workspace");
 
-        let prepared = prepare_supervised_launch_layout(
+        let prepared = crate::cli::supervised::run::prepare_supervised_launch_layout(
             &request,
             &workspace,
             &rimz::config::MachineConfig::default(),

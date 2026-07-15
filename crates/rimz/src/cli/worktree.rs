@@ -16,7 +16,6 @@ use rimz::forge::PrTarget;
 use rimz::workspace::{ResolvedWorkspace, RootClass, WorkspaceResolver};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
-pub(super) const WORKTREE_REMOVED_ARCHIVE_REASON: &str = "worktree removed";
 
 #[derive(Debug, Args)]
 pub struct WorktreeArgs {
@@ -251,7 +250,7 @@ fn remove_worktree(
     store
         .archive_channel_messages(
             removed.worktree_name(),
-            WORKTREE_REMOVED_ARCHIVE_REASON,
+            rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
             &workspace.session_name,
         )
         .context("archiving messages for removed worktree channel")?;
@@ -324,9 +323,11 @@ fn remove_for_cleanup(
     force: bool,
 ) -> Result<rimz::worktree::RemovalOutcome> {
     let removed = rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)?;
-    if let Err(err) =
-        archive_removed_worktree_messages(&removed, globals, WORKTREE_REMOVED_ARCHIVE_REASON)
-    {
+    if let Err(err) = archive_removed_worktree_messages(
+        &removed,
+        globals,
+        rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
+    ) {
         tracing::debug!(
             branch = %marker.branch,
             error = %err,
@@ -379,39 +380,7 @@ fn runtime_protection_set(
         Some(snapshot) => snapshot.agents,
         None => Vec::new(),
     };
-    protection_set_from_runtime(&panes, &agents, own.as_ref())
-}
-
-pub(super) fn protection_set_from_runtime(
-    panes: &[rimz::pane::PaneRef],
-    agents: &[AgentState],
-    own: Option<&rimz::PaneId>,
-) -> rimz::worktree::ProtectionSet {
-    let pane_facts = panes
-        .iter()
-        .map(|pane| rimz::worktree::PaneProtectionFact {
-            pane_id: pane.pane_id.clone(),
-            cwd: pane.cwd.as_deref().map(PathBuf::from),
-            sidebar: pane.is_rimz_sidebar(),
-        })
-        .collect::<Vec<_>>();
-    let agent_facts = agents
-        .iter()
-        .map(|agent| {
-            let liveness = rimz::store::runtime::agent_liveness(agent);
-            rimz::worktree::AgentProtectionFact {
-                pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
-                liveness,
-                stored_path: agent.worktree_path.as_deref().map(PathBuf::from),
-                process_cwd: match liveness {
-                    rimz::store::runtime::AgentLiveness::Live { pid } => rimz::proc::cwd(pid),
-                    rimz::store::runtime::AgentLiveness::Dead
-                    | rimz::store::runtime::AgentLiveness::Unknown => None,
-                },
-            }
-        })
-        .collect::<Vec<_>>();
-    rimz::worktree::ProtectionSet::from_facts(&pane_facts, &agent_facts, own)
+    rimz::worktree::protection_set_from_runtime(&panes, &agents, own.as_ref())
 }
 
 fn archive_removed_worktree_messages(
@@ -485,158 +454,4 @@ fn exec_shell(path: &Path) -> Result<()> {
         bail!("shell exited with {status}");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rimz::{MuxName, PaneId};
-
-    #[test]
-    fn protection_facts_filter_sidebar_own_and_count_user_panes() {
-        let worktree = Path::new("/repo-worktrees/demo");
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
-        let panes = vec![
-            pane("terminal_side", Some("rimz-sidebar"), Some(worktree)),
-            pane("terminal_outside", Some("zsh"), Some(Path::new("/repo"))),
-            pane("terminal_own", Some("codex"), Some(worktree)),
-        ];
-
-        assert!(!protection_set_from_runtime(&panes, &[], Some(&own)).protects(worktree));
-
-        let shell_dir = worktree.join("src");
-        let agent = vec![pane("terminal_agent", Some("codex"), Some(worktree))];
-        let shell = vec![pane("terminal_shell", Some("zsh"), Some(&shell_dir))];
-
-        assert!(protection_set_from_runtime(&agent, &[], Some(&own)).protects(worktree));
-        assert!(protection_set_from_runtime(&shell, &[], Some(&own)).protects(worktree));
-    }
-
-    #[test]
-    fn protection_facts_apply_agent_liveness_and_own_pane() {
-        let worktree = Path::new("/repo-worktrees/demo");
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
-        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-
-        assert!(
-            protection_set_from_runtime(
-                &[],
-                &[agent(
-                    "inflight",
-                    Some("/repo/../repo-worktrees/demo"),
-                    None,
-                    now
-                )],
-                Some(&own),
-            )
-            .protects(worktree)
-        );
-        assert!(
-            protection_set_from_runtime(
-                &[],
-                &[agent(
-                    "other-pane",
-                    Some("/repo-worktrees/demo/src"),
-                    Some("terminal_other"),
-                    now,
-                )],
-                Some(&own),
-            )
-            .protects(worktree)
-        );
-        assert!(
-            !protection_set_from_runtime(
-                &[],
-                &[agent(
-                    "own",
-                    Some("/repo-worktrees/demo"),
-                    Some("terminal_own"),
-                    now,
-                )],
-                Some(&own),
-            )
-            .protects(worktree)
-        );
-        assert!(
-            protection_set_from_runtime(
-                &[],
-                &[agent(
-                    "idle-live-unknown",
-                    Some("/repo-worktrees/demo"),
-                    None,
-                    now - Duration::from_secs(30),
-                )],
-                Some(&own),
-            )
-            .protects(worktree)
-        );
-        #[cfg(target_os = "linux")]
-        {
-            let mut dead = agent("dead", Some("/repo-worktrees/demo"), None, now);
-            dead.runtime_owner = Some(rimz::RuntimeOwner::new(
-                rimz::RuntimeOwnerKind::Agent,
-                "dead",
-                u32::MAX,
-                None,
-            ));
-            assert!(!protection_set_from_runtime(&[], &[dead], Some(&own)).protects(worktree));
-        }
-        let mut live = agent("live", Some("/repo-worktrees/demo"), None, now);
-        live.runtime_owner = Some(rimz::store::runtime::current_process_owner(
-            rimz::RuntimeOwnerKind::Agent,
-            "live",
-        ));
-        assert!(protection_set_from_runtime(&[], &[live], Some(&own)).protects(worktree));
-        assert!(
-            !protection_set_from_runtime(
-                &[],
-                &[agent(
-                    "other-worktree",
-                    Some("/repo-worktrees/other"),
-                    None,
-                    now
-                )],
-                Some(&own),
-            )
-            .protects(worktree)
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn runtime_protection_includes_realtime_process_cwd() {
-        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-        let mut live = agent("live", Some("/repo-worktrees/other"), None, now);
-        live.runtime_owner = Some(rimz::store::runtime::current_process_owner(
-            rimz::RuntimeOwnerKind::Agent,
-            "live",
-        ));
-
-        let current =
-            rimz::worktree::normalize_path_lexical(&std::env::current_dir().expect("current dir"));
-
-        assert!(protection_set_from_runtime(&[], &[live], None).protects(&current));
-    }
-
-    fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> rimz::pane::PaneRef {
-        rimz::pane::PaneRef {
-            command: command.map(ToOwned::to_owned),
-            cwd: cwd.map(|path| path.display().to_string()),
-            ..rimz::pane::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
-        }
-    }
-
-    fn agent(
-        id: &str,
-        worktree_path: Option<&str>,
-        raw_pane: Option<&str>,
-        last_seen: jiff::Timestamp,
-    ) -> AgentState {
-        AgentState {
-            name: Some(id.to_owned()),
-            pane: raw_pane.map(|raw| pane(raw, Some("codex"), None)),
-            worktree_path: worktree_path.map(ToOwned::to_owned),
-            ..rimz::testkit::agent_state("codex", id, last_seen)
-        }
-    }
 }

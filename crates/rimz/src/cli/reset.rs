@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use super::{AttachFlags, GlobalFlags, StartArgs};
-use crate::cli::room::{MissingSessionReport, ensure_single_backend_room, pick_mux_for_session};
+use rimz::room::session::MissingSessionReport;
 use rimz::room::{RoomContext, RoomSizing};
 use rimz::workspace::WorkspaceResolver;
 
@@ -37,12 +37,23 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
     // Reset the backend that owns the live room, so teardown and shared-store
     // reset target the same session. An explicit rival `--mux` refuses before
     // prompting or destroying anything.
-    let mux = pick_mux_for_session(
+    let pick = rimz::room::session::pick_mux_for_session(
         &workspace.session_name,
         globals.mux,
         MissingSessionReport::Silent,
-    )?;
-    ensure_single_backend_room(mux, &workspace.session_name)?;
+    );
+    let mut err = super::render::err();
+    let (mux, notices) = match pick {
+        Ok(pick) => (Ok(pick.mux), pick.notices),
+        Err(err) => (Err(err.source), err.notices),
+    };
+    for notice in notices {
+        writeln!(err, "note: {notice}")?;
+    }
+    let mux = mux?;
+    for notice in rimz::room::session::ensure_single_backend_room(mux, &workspace.session_name)? {
+        writeln!(err, "note: {notice}")?;
+    }
 
     if !args.yes {
         if !std::io::stdin().is_terminal() {

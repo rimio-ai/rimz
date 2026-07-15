@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use crate::cli::room::workspace_record_for_session;
 use rimz::remote::link::{LinkAck, LinkProbe, LinkStatsFile};
+use rimz::room::session::workspace_record_for_session;
 
 const LINK_SCHEMA_MISMATCH_EXIT: i32 = 2;
 

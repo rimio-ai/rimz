@@ -1,9 +1,7 @@
 //! Room entry: the start/attach pipeline from workspace resolution to the mux attach command.
 
 mod attach_exec;
-mod hook_install;
 mod resume;
-mod session_record;
 mod start_notice;
 #[cfg(test)]
 mod tests;
@@ -14,12 +12,17 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use rimz::ids::{MuxName, WorkspaceId};
+use rimz::room::session::{
+    MissingSessionReport, retire_renamed_session, session_probe_retry_timeout,
+    session_probe_timeout, workspace_record_for_session,
+};
 use rimz::room::{
     AttendedRecovery, BackgroundViewBirth, NormalBirth, NormalRebirth, RoomBirth, RoomContext,
     RoomSizing,
 };
 use rimz::{RuntimePaths, WorkspaceRecord};
 
+use crate::cli::hooks::ensure_detected_agent_hooks;
 use crate::cli::{
     AttachArgs, GlobalFlags, StartArgs, confirm_with_default, first_run, machine_config, render,
     setup,
@@ -28,20 +31,11 @@ use crate::cli::{
 use attach_exec::{
     inside_selected_mux, report_already_inside, run_attach_action, should_report_already_inside,
 };
-pub(crate) use hook_install::{
-    detected_installable_adapters, ensure_detected_agent_hooks, install_disposition,
-    render_dry_run, write_install_result, write_post_install_footer, write_uninstall_result,
-    write_untrusted_hooks_notice,
-};
 use resume::{report_previous_session_death, report_resume};
 use rimz::harness::rebirth::RebirthChoice;
-use session_record::{retire_renamed_session, session_probe_retry_timeout, session_probe_timeout};
 use start_notice::report_start_notices;
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
-pub(crate) use session_record::{
-    ensure_single_backend_room, pick_mux_for_session, workspace_record_for_session,
-};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AttachMode {
@@ -56,16 +50,33 @@ pub(crate) enum AttachAction {
     Print,
 }
 
+fn pick_mux_for_session(
+    session_name: &str,
+    explicit: Option<MuxName>,
+    missing_report: MissingSessionReport,
+) -> Result<MuxName> {
+    let (mux, notices) =
+        match rimz::room::session::pick_mux_for_session(session_name, explicit, missing_report) {
+            Ok(pick) => (Ok(pick.mux), pick.notices),
+            Err(err) => (Err(err.source), err.notices),
+        };
+    for notice in notices {
+        writeln!(render::err(), "note: {notice}")?;
+    }
+    Ok(mux?)
+}
+
+fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<()> {
+    for notice in rimz::room::session::ensure_single_backend_room(mux, session_name)? {
+        writeln!(render::err(), "note: {notice}")?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResumePromptMode {
     Interactive,
     Silent,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MissingSessionReport {
-    Silent,
-    Warn,
 }
 
 enum RoomEntry<'a> {

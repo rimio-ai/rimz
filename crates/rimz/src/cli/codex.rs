@@ -15,19 +15,12 @@ use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
 use rimz::agents;
-use rimz::agents::AgentContext;
 use rimz::agents::codex;
 use rimz::ids::{PaneId, WorkspaceId};
 use rimz::store::workspace_record;
 use rimz::{ResolvedWorkspace, RuntimePaths, StatePaths, Store};
 
 use super::GlobalFlags;
-
-/// Skip an app-server refresh when this session's app-server-owned fields were
-/// written within this window, so two close turn boundaries (a quick
-/// `UserPromptSubmit` then `Stop`) don't each spawn an app-server. Transcript
-/// context is stat-gated separately and always gets a chance to merge.
-const REFRESH_THROTTLE_SECS: i64 = 20;
 
 #[derive(Debug, Args)]
 pub struct CodexArgs {
@@ -160,7 +153,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     }
 
     let prior = rimz::store::agent_context::read_one(&runtime, "codex", session_id);
-    if !app_server_due(prior.as_ref(), REFRESH_THROTTLE_SECS) {
+    if !codex::app_server_due(prior.as_ref(), codex::REFRESH_THROTTLE_SECS) {
         if wrote {
             let _ = rimz::store::wakeup::wake_sidebars(&runtime);
         }
@@ -217,20 +210,10 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
             enrichment.context.rate_limits.is_none(),
         );
     }
-    merge_app_server_context(&runtime, session_id, enrichment.context)
+    codex::merge_app_server_context(&runtime, session_id, enrichment.context)
         .context("writing app-server agent-context sidecar")?;
     let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     Ok(())
-}
-
-fn app_server_due(
-    record: Option<&rimz::store::agent_context::AgentContextRecord>,
-    within: i64,
-) -> bool {
-    let now = Timestamp::now().as_second();
-    record
-        .and_then(|record| record.rate_limits_observed_at)
-        .is_none_or(|observed_at| now - observed_at.as_second() >= within)
 }
 
 fn confirm_codex_turn_death(
@@ -282,220 +265,4 @@ fn codex_session_pane(
                     .is_some_and(|agent_id| agent_id.as_str() == session_id)
         })
         .map(|pane| pane.pane_id)
-}
-
-fn merge_app_server_context(
-    runtime: &RuntimePaths,
-    session_id: &str,
-    context: AgentContext,
-) -> Result<()> {
-    let observed_at = context.observed_at;
-    let prior = rimz::store::agent_context::read_one(runtime, "codex", session_id);
-    let mut record = prior.unwrap_or_else(|| {
-        rimz::store::agent_context::new_record("codex", session_id, {
-            rimz::store::agent_context::empty_context("codex", observed_at)
-        })
-    });
-
-    record.context.source = context.source;
-    if context.session_name.is_some() {
-        record.context.session_name = context.session_name;
-    }
-    if context.session_preview.is_some() {
-        record.context.session_preview = context.session_preview;
-    }
-    if context.model_id.is_some() {
-        record.context.model_id = context.model_id;
-    }
-    record.context.model_display_name = context.model_display_name;
-    record.context.agent_version = context.agent_version;
-    record.context.rate_limits = context.rate_limits;
-    record.context.account = context.account;
-    record.context.observed_at = observed_at;
-    record.rate_limits_observed_at = Some(observed_at);
-    rimz::store::agent_context::write_record(runtime, &record)
-        .context("writing merged app-server context")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rimz::agents::{
-        AgentAccount, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage,
-        LocalContextRefresh, RateLimitWindow, TranscriptStat,
-    };
-
-    fn runtime() -> (tempfile::TempDir, RuntimePaths) {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(dir.path());
-        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-        runtime.ensure_dirs().unwrap();
-        (dir, runtime)
-    }
-
-    #[test]
-    fn app_server_due_uses_app_server_stamp_not_whole_sidecar() {
-        let now = Timestamp::now();
-        let mut record = rimz::store::agent_context::new_record(
-            "codex",
-            "sess-1",
-            rimz::store::agent_context::empty_context("codex", now),
-        );
-        assert!(app_server_due(None, REFRESH_THROTTLE_SECS));
-        assert!(
-            app_server_due(Some(&record), REFRESH_THROTTLE_SECS),
-            "a fresh transcript-only sidecar has no app-server stamp and is due"
-        );
-
-        record.rate_limits_observed_at = Some(now);
-        assert!(!app_server_due(Some(&record), REFRESH_THROTTLE_SECS));
-
-        record.rate_limits_observed_at =
-            Some(Timestamp::from_second(now.as_second() - REFRESH_THROTTLE_SECS - 1).unwrap());
-        assert!(app_server_due(Some(&record), REFRESH_THROTTLE_SECS));
-    }
-
-    #[test]
-    fn app_server_merge_preserves_transcript_owned_fields() {
-        let (_dir, runtime) = runtime();
-        seed_transcript_context(&runtime);
-        let app_at = Timestamp::from_second(1_700_000_050).unwrap();
-        merge_app_server_context(&runtime, "sess-1", app_server_context(app_at)).unwrap();
-        assert_merged_context(&runtime, app_at);
-    }
-
-    fn seed_transcript_context(runtime: &RuntimePaths) {
-        let transcript_at = Timestamp::from_second(1_700_000_000).unwrap();
-        rimz::store::agent_context::merge_local_context(
-            runtime,
-            "codex",
-            "sess-1",
-            LocalContextRefresh {
-                model_id: Some("gpt-5".to_owned()),
-                model_display_name: None,
-                effort: Some("xhigh".to_owned()),
-                tokens: Some(transcript_tokens()),
-                cost: Some(AgentCost {
-                    total_cost_usd: Some(0.42),
-                    ..AgentCost::default()
-                }),
-                turn_error: None,
-                turn_complete: None,
-                plan_proposed: None,
-                native_permission_wait: None,
-                turn_interrupted: None,
-                transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
-                transcript_stat: Some(TranscriptStat {
-                    mtime_secs: 10,
-                    mtime_nanos: 20,
-                    len: 30,
-                    companion: None,
-                }),
-            },
-            transcript_at,
-        )
-        .unwrap();
-    }
-
-    fn transcript_tokens() -> AgentTokenUsage {
-        AgentTokenUsage {
-            context_window_size: Some(1000),
-            used_percentage: Some(25),
-            remaining_percentage: Some(75),
-            current_usage: Some(AgentCurrentUsage {
-                input_tokens: Some(200),
-                output_tokens: Some(50),
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: Some(50),
-            }),
-            session_usage: None,
-        }
-    }
-
-    fn app_server_context(app_at: Timestamp) -> AgentContext {
-        AgentContext {
-            source: "codex".to_owned(),
-            session_name: Some("TUI prototype".to_owned()),
-            session_preview: Some("Create a TUI".to_owned()),
-            model_id: Some("gpt-5".to_owned()),
-            model_display_name: Some("GPT-5".to_owned()),
-            effort: Some("high".to_owned()),
-            thinking_enabled: None,
-            output_style: None,
-            vim_mode: None,
-            agent_version: Some("1.2.3".to_owned()),
-            exceeds_200k_tokens: None,
-            cost: None,
-            tokens: None,
-            rate_limits: Some(AgentRateLimits {
-                windows: vec![RateLimitWindow {
-                    used_percentage: Some(55),
-                    resets_at: None,
-                    duration_mins: Some(300),
-                    ..Default::default()
-                }],
-            }),
-            pr: None,
-            account: Some(AgentAccount {
-                scope: Default::default(),
-                plan: Some("pro".to_owned()),
-                account_id: None,
-                metered: Some(true),
-                version: None,
-                sub_provider: None,
-                credentials_updated_at_ms: None,
-            }),
-            turn_opened_by: Vec::new(),
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
-            observed_at: app_at,
-        }
-    }
-
-    fn assert_merged_context(runtime: &RuntimePaths, app_at: Timestamp) {
-        let merged = rimz::store::agent_context::read_one(runtime, "codex", "sess-1").unwrap();
-        assert_eq!(
-            merged
-                .context
-                .tokens
-                .as_ref()
-                .and_then(|t| t.used_percentage),
-            Some(25)
-        );
-        assert_eq!(
-            merged
-                .context
-                .cost
-                .as_ref()
-                .and_then(|cost| cost.total_cost_usd),
-            Some(0.42)
-        );
-        assert_eq!(
-            merged.transcript_path.as_deref(),
-            Some("/tmp/rollout.jsonl")
-        );
-        assert_eq!(merged.context.model_display_name.as_deref(), Some("GPT-5"));
-        assert_eq!(
-            merged.context.session_preview.as_deref(),
-            Some("Create a TUI")
-        );
-        assert_eq!(
-            merged.context.session_name.as_deref(),
-            Some("TUI prototype")
-        );
-        assert_eq!(merged.context.effort.as_deref(), Some("xhigh"));
-        assert_eq!(
-            merged
-                .context
-                .rate_limits
-                .as_ref()
-                .and_then(|limits| limits.windows.first())
-                .and_then(|window| window.used_percentage),
-            Some(55)
-        );
-        assert_eq!(merged.rate_limits_observed_at, Some(app_at));
-    }
 }

@@ -1,4 +1,4 @@
-//! Start-time agent hook auto-install prompt.
+//! Hook install consent, previews, diffs, and result presentation.
 
 use std::io::{BufRead, Write};
 
@@ -14,13 +14,13 @@ use crate::cli::{first_run, render};
 const DIFF_CONTEXT_LINES: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InstallDisposition {
+pub(super) enum InstallDisposition {
     Installed,
     Refreshed,
     Current,
 }
 
-pub(crate) fn install_disposition(agent: &dyn rimz::agents::AgentAdapter) -> InstallDisposition {
+pub(super) fn install_disposition(agent: &dyn rimz::agents::AgentAdapter) -> InstallDisposition {
     if !agent.hooks_installed() {
         InstallDisposition::Installed
     } else if agent.hook_upgrade_available() {
@@ -30,7 +30,7 @@ pub(crate) fn install_disposition(agent: &dyn rimz::agents::AgentAdapter) -> Ins
     }
 }
 
-pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::AgentAdapter> {
+pub(super) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::AgentAdapter> {
     let mut detected = Vec::new();
     for agent in rimz::agents::ADAPTERS {
         let descriptor = agent.descriptor();
@@ -55,7 +55,7 @@ pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::
     detected
 }
 
-pub(crate) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool> {
+pub(in crate::cli) fn ensure_detected_agent_hooks(attended: bool) -> Result<bool> {
     let mut actionable = Vec::new();
 
     for agent in detected_installable_adapters() {
@@ -148,7 +148,7 @@ fn warn_untrusted_hooks(kind: &str, untrusted: &[String]) -> Result<()> {
     Ok(write_untrusted_hooks_notice(kind, untrusted, &mut out)?)
 }
 
-pub(crate) fn write_untrusted_hooks_notice(
+pub(super) fn write_untrusted_hooks_notice(
     kind: &str,
     untrusted: &[String],
     out: &mut dyn Write,
@@ -253,7 +253,7 @@ fn write_prompt(out: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn render_dry_run(
+pub(super) fn render_dry_run(
     out: &mut dyn Write,
     previews: &[HookInstallPreview],
 ) -> std::io::Result<()> {
@@ -286,7 +286,7 @@ fn color_diff_line(line: &str) -> String {
     }
 }
 
-pub(crate) fn write_install_result(
+pub(super) fn write_install_result(
     out: &mut dyn Write,
     report: &HookInstallReport,
     disposition: InstallDisposition,
@@ -335,7 +335,7 @@ pub(crate) fn write_install_result(
     Ok(())
 }
 
-pub(crate) fn write_uninstall_result(
+pub(super) fn write_uninstall_result(
     out: &mut dyn Write,
     report: &rimz::agents::HookUninstallReport,
 ) -> std::io::Result<()> {
@@ -415,7 +415,7 @@ fn write_consent_footer(out: &mut dyn Write) -> Result<()> {
     Ok(write_undo_preview_hints(out)?)
 }
 
-pub(crate) fn write_post_install_footer(out: &mut dyn Write) -> std::io::Result<()> {
+pub(super) fn write_post_install_footer(out: &mut dyn Write) -> std::io::Result<()> {
     writeln!(out)?;
     write_undo_preview_hints(out)?;
     writeln!(

@@ -37,6 +37,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::Context;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -65,6 +66,54 @@ use wire::{
 /// wedged app-server is killed rather than lingering.
 const APP_SERVER_DEADLINE_SECS: u64 = 6;
 const APP_SERVER_DEADLINE: Duration = Duration::from_secs(APP_SERVER_DEADLINE_SECS);
+
+/// Skip an app-server refresh when its owned fields were written recently.
+pub const REFRESH_THROTTLE_SECS: i64 = 20;
+
+/// Whether app-server-owned context fields need another refresh.
+pub fn app_server_due(
+    record: Option<&crate::store::agent_context::AgentContextRecord>,
+    within: i64,
+) -> bool {
+    let now = Timestamp::now().as_second();
+    record
+        .and_then(|record| record.rate_limits_observed_at)
+        .is_none_or(|observed_at| now - observed_at.as_second() >= within)
+}
+
+/// Merge app-server-owned fields while preserving transcript-owned context.
+pub fn merge_app_server_context(
+    runtime: &crate::RuntimePaths,
+    session_id: &str,
+    context: AgentContext,
+) -> anyhow::Result<()> {
+    let observed_at = context.observed_at;
+    let prior = crate::store::agent_context::read_one(runtime, "codex", session_id);
+    let mut record = prior.unwrap_or_else(|| {
+        crate::store::agent_context::new_record("codex", session_id, {
+            crate::store::agent_context::empty_context("codex", observed_at)
+        })
+    });
+
+    record.context.source = context.source;
+    if context.session_name.is_some() {
+        record.context.session_name = context.session_name;
+    }
+    if context.session_preview.is_some() {
+        record.context.session_preview = context.session_preview;
+    }
+    if context.model_id.is_some() {
+        record.context.model_id = context.model_id;
+    }
+    record.context.model_display_name = context.model_display_name;
+    record.context.agent_version = context.agent_version;
+    record.context.rate_limits = context.rate_limits;
+    record.context.account = context.account;
+    record.context.observed_at = observed_at;
+    record.rate_limits_observed_at = Some(observed_at);
+    crate::store::agent_context::write_record(runtime, &record)
+        .context("writing merged app-server context")
+}
 
 /// Short budget for warm unix-socket probes. A stale broker or daemon socket
 /// costs little before the cold-spawn fallback takes over; the sidebar's daemon

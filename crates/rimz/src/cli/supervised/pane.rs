@@ -1,6 +1,7 @@
 //! Supervised-run pane lookup and reclamation effects.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -11,10 +12,10 @@ use anyhow::bail;
 #[cfg(test)]
 use super::output;
 use crate::cli::GlobalFlags;
-use crate::cli::room::{MissingSessionReport, pick_mux_for_session};
 use rimz::harness::run::RunRecord;
 use rimz::ids::PaneId;
 use rimz::mux::{PaneCmd, PaneListOptions, SplitDirection, SplitPaneOptions};
+use rimz::room::session::MissingSessionReport;
 
 pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
@@ -112,12 +113,19 @@ pub(crate) fn backend_for_workspace_session(
     workspace: &rimz::ResolvedWorkspace,
     globals: &GlobalFlags,
 ) -> Result<Box<dyn rimz::mux::MuxBackend>> {
-    let mux = pick_mux_for_session(
+    let pick = rimz::room::session::pick_mux_for_session(
         &workspace.session_name,
         globals.mux,
         MissingSessionReport::Silent,
-    )?;
-    Ok(rimz::mux::backend_for(mux))
+    );
+    let (mux, notices) = match pick {
+        Ok(pick) => (Ok(pick.mux), pick.notices),
+        Err(err) => (Err(err.source), err.notices),
+    };
+    for notice in notices {
+        writeln!(crate::cli::render::err(), "note: {notice}")?;
+    }
+    Ok(rimz::mux::backend_for(mux?))
 }
 
 pub(crate) fn close_run_pane(

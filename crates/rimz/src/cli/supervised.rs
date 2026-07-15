@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use clap::ValueEnum;
 
 use crate::cli::GlobalFlags;
 use rimz::agents::{AgentAdapter, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
@@ -18,15 +19,28 @@ pub(super) mod run;
 pub(super) mod stream;
 pub(super) mod verify;
 
+/// Output projection for a supervised `--print` run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub(in crate::cli) enum OutputFormat {
+    /// The final assistant message as plain text.
+    #[default]
+    Text,
+    /// The full run record as pretty JSON.
+    Json,
+    /// Newline-delimited JSON run events (NDJSON).
+    StreamJson,
+}
+
 pub(in crate::cli) struct SupervisedPresentation {
-    pub(in crate::cli) output_format: crate::cli::agents_cmd::OutputFormat,
+    pub(in crate::cli) output_format: OutputFormat,
     pub(in crate::cli) stream_text: bool,
 }
 
 impl SupervisedPresentation {
     pub(in crate::cli) fn text(stream_text: bool) -> Self {
         Self {
-            output_format: crate::cli::agents_cmd::OutputFormat::Text,
+            output_format: OutputFormat::Text,
             stream_text,
         }
     }

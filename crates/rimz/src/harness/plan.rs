@@ -120,6 +120,36 @@ pub fn validate_profile_prompt_files(
     Ok(())
 }
 
+/// Normalize an optional launch preset override, dropping blank values.
+pub fn normalized_preset_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Reject a likely comma-separated spec typo parsed as a supervised prompt.
+pub fn reject_prompt_that_looks_like_spec(
+    spec: Option<&str>,
+    prompt: Option<&str>,
+    profiles: &crate::config::ProfilesConfig,
+    commands: &crate::config::CommandsConfig,
+    layouts: &crate::config::TeamsConfig,
+) -> Result<()> {
+    let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
+        return Ok(());
+    };
+    let Some(prompt) = prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) else {
+        return Ok(());
+    };
+    if crate::harness::spec::is_known_spec_token(prompt, profiles, commands, layouts) {
+        bail!(
+            "prompt `{prompt}` looks like another spec cell; did you mean `rimz agents {spec},{prompt}`?"
+        );
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaunchFinalizeWarning {
     LaterModelWins {

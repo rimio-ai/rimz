@@ -71,6 +71,7 @@ use restart::restart_agent;
 use resume::resume_lane;
 use show::{focus_agent, show_agent};
 use stop::stop_agent;
+use supervised::OutputFormat;
 use supervised::run::run_print;
 #[cfg(test)]
 use supervised::run::{RunPlacement, run_placement};
@@ -228,19 +229,6 @@ pub struct AgentsArgs {
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     passthrough: Vec<String>,
-}
-
-/// Output projection for a supervised `--print` run.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub(super) enum OutputFormat {
-    /// The final assistant message as plain text.
-    #[default]
-    Text,
-    /// The full run record as pretty JSON.
-    Json,
-    /// Newline-delimited JSON run events (NDJSON).
-    StreamJson,
 }
 
 /// Prompt source for a supervised `--print` run.

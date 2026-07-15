@@ -338,7 +338,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
-    let protections = super::worktree::protection_set_from_runtime(&panes, &snapshot.agents, None);
+    let protections = rimz::worktree::protection_set_from_runtime(&panes, &snapshot.agents, None);
     spinner.set("scanning worktrees…");
     let entries = match rimz::worktree::list(&workspace.project_root) {
         Ok(entries) => entries,
@@ -389,7 +389,7 @@ fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner, dry_run: bool) -> W
                 let archive_error = store
                     .archive_channel_messages(
                         removed.worktree_name(),
-                        super::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
+                        rimz::worktree::WORKTREE_REMOVED_ARCHIVE_REASON,
                         &workspace.session_name,
                     )
                     .err()
@@ -1322,10 +1322,10 @@ mod tests {
             pane("terminal_empty", Some("zsh"), None),
         ];
 
-        let protections = crate::cli::worktree::protection_set_from_runtime(&panes, &[], None);
+        let protections = rimz::worktree::protection_set_from_runtime(&panes, &[], None);
         assert!(protections.protects(std::path::Path::new("/repo-worktrees/demo")));
         assert!(
-            !crate::cli::worktree::protection_set_from_runtime(&panes[..1], &[], None)
+            !rimz::worktree::protection_set_from_runtime(&panes[..1], &[], None)
                 .protects(std::path::Path::new("/repo-worktrees/demo"))
         );
     }

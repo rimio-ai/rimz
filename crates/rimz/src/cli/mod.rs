@@ -760,7 +760,7 @@ mod tests {
         ));
         let mut snapshot = rimz::SidebarSnapshot::build_with_agents(workspace_id, vec![ghost], now);
         assert!(
-            super::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
+            rimz::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
                 .protects(std::path::Path::new(worktree_path))
         );
 
@@ -768,7 +768,7 @@ mod tests {
 
         assert!(snapshot.agents.is_empty());
         assert!(
-            !super::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
+            !rimz::worktree::protection_set_from_runtime(&[], &snapshot.agents, None)
                 .protects(std::path::Path::new(worktree_path))
         );
     }

@@ -7,7 +7,7 @@ use rimz::ids::MuxName;
 
 use crate::cli::render;
 
-use super::session_record::session_probe_timeout;
+use rimz::room::session::session_probe_timeout;
 
 fn broken_config_notice(err: &rimz::config::ConfigErr) -> String {
     let path = render::home_relative(&err.path().display().to_string());

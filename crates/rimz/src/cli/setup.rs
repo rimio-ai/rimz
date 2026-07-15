@@ -10,7 +10,7 @@ use rimz::ids::MuxName;
 use rimz::trust::TrustState;
 use rimz::workspace::WorkspaceResolver;
 
-use super::{GlobalFlags, first_run, room};
+use super::{GlobalFlags, first_run, hooks};
 use crate::cli::render;
 
 #[derive(Debug, Args)]
@@ -62,7 +62,7 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
         write_fresh_config()?;
     }
     report_remote_template()?;
-    let hook_intro_rendered = room::ensure_detected_agent_hooks(interactive)?;
+    let hook_intro_rendered = hooks::ensure_detected_agent_hooks(interactive)?;
     let config = rimz::config::MachineConfig::load().context("loading per-machine config")?;
     let defaults = first_run::Defaults::from_config(&config, rimz::tui::truecolor());
     first_run::run(defaults, config.theme.pets.clone(), hook_intro_rendered)?;

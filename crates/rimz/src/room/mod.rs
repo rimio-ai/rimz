@@ -1,6 +1,7 @@
 //! Managed room context and lifecycle seam.
 
 mod birth;
+pub mod session;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

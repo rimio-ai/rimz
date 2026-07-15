@@ -1,10 +1,10 @@
 use std::io::Write as _;
 
-use super::*;
-use crate::cli::room::{
+use super::hook_install::{
     detected_installable_adapters, install_disposition, render_dry_run, write_install_result,
     write_post_install_footer, write_uninstall_result, write_untrusted_hooks_notice,
 };
+use super::*;
 use rimz::agents::HookUninstallReport;
 
 pub(super) fn run_install(agent: Option<String>, dry_run: bool) -> Result<()> {

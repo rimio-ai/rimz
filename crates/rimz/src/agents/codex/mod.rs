@@ -43,6 +43,7 @@ use serde_json::Value;
 use jiff::Timestamp;
 
 use self::app_server::CodexAppServer;
+pub use self::app_server::{REFRESH_THROTTLE_SECS, app_server_due, merge_app_server_context};
 use self::install::{
     codex_config_path, hooks_installed_at, install_into, managed_artifacts_at, preview_install_at,
     uninstall_from, untrusted_hook_events_at,

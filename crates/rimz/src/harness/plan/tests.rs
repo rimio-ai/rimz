@@ -1178,3 +1178,30 @@ fn pane_command_resume_replays_prior_identity_without_launch_preset() {
         "--agent-model" | "--agent-effort" | "--prompt"
     )));
 }
+
+#[test]
+fn preset_values_trim_and_drop_blanks() {
+    assert_eq!(
+        normalized_preset_value(Some(" gpt-5 ")),
+        Some("gpt-5".to_owned())
+    );
+    assert_eq!(normalized_preset_value(Some("  ")), None);
+    assert_eq!(normalized_preset_value(None), None);
+}
+
+#[test]
+fn prompt_that_looks_like_spec_reports_the_fan_out_fix() {
+    let err = reject_prompt_that_looks_like_spec(
+        Some("claude"),
+        Some("codex"),
+        &crate::config::ProfilesConfig::default(),
+        &crate::config::CommandsConfig::default(),
+        &crate::config::TeamsConfig::default(),
+    )
+    .expect_err("reject fan-out typo");
+
+    assert!(
+        err.to_string().contains("rimz agents claude,codex"),
+        "{err:#}"
+    );
+}

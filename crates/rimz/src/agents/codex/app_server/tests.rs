@@ -5,6 +5,11 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::*;
+use crate::agents::{
+    AgentCost, AgentCurrentUsage, AgentTokenUsage, LocalContextRefresh, RateLimitWindow,
+    TranscriptStat,
+};
+use crate::{RuntimePaths, WorkspaceId};
 
 struct CannedTransport {
     results: HashMap<&'static str, Value>,
@@ -568,4 +573,178 @@ fn connection_attempts_prefer_warm_paths_before_cold_spawn() {
         other => panic!("broker must come first, got {other:?}"),
     }
     assert_spawn(&attempts[1], &["app-server"], APP_SERVER_DEADLINE);
+}
+
+#[test]
+fn app_server_due_uses_app_server_stamp_not_whole_sidecar() {
+    let now = Timestamp::now();
+    let mut record = crate::store::agent_context::new_record(
+        "codex",
+        "sess-1",
+        crate::store::agent_context::empty_context("codex", now),
+    );
+    assert!(app_server_due(None, REFRESH_THROTTLE_SECS));
+    assert!(
+        app_server_due(Some(&record), REFRESH_THROTTLE_SECS),
+        "a fresh transcript-only sidecar has no app-server stamp and is due"
+    );
+
+    record.rate_limits_observed_at = Some(now);
+    assert!(!app_server_due(Some(&record), REFRESH_THROTTLE_SECS));
+
+    record.rate_limits_observed_at =
+        Some(Timestamp::from_second(now.as_second() - REFRESH_THROTTLE_SECS - 1).unwrap());
+    assert!(app_server_due(Some(&record), REFRESH_THROTTLE_SECS));
+}
+
+#[test]
+fn app_server_merge_preserves_transcript_owned_fields() {
+    let (_dir, runtime) = runtime();
+    seed_transcript_context(&runtime);
+    let app_at = Timestamp::from_second(1_700_000_050).unwrap();
+    merge_app_server_context(&runtime, "sess-1", app_server_context(app_at)).unwrap();
+    assert_merged_context(&runtime, app_at);
+}
+
+fn runtime() -> (tempfile::TempDir, RuntimePaths) {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    (dir, runtime)
+}
+
+fn seed_transcript_context(runtime: &RuntimePaths) {
+    let transcript_at = Timestamp::from_second(1_700_000_000).unwrap();
+    crate::store::agent_context::merge_local_context(
+        runtime,
+        "codex",
+        "sess-1",
+        LocalContextRefresh {
+            model_id: Some("gpt-5".to_owned()),
+            model_display_name: None,
+            effort: Some("xhigh".to_owned()),
+            tokens: Some(transcript_tokens()),
+            cost: Some(AgentCost {
+                total_cost_usd: Some(0.42),
+                ..AgentCost::default()
+            }),
+            turn_error: None,
+            turn_complete: None,
+            plan_proposed: None,
+            native_permission_wait: None,
+            turn_interrupted: None,
+            transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
+            transcript_stat: Some(TranscriptStat {
+                mtime_secs: 10,
+                mtime_nanos: 20,
+                len: 30,
+                companion: None,
+            }),
+        },
+        transcript_at,
+    )
+    .unwrap();
+}
+
+fn transcript_tokens() -> AgentTokenUsage {
+    AgentTokenUsage {
+        context_window_size: Some(1000),
+        used_percentage: Some(25),
+        remaining_percentage: Some(75),
+        current_usage: Some(AgentCurrentUsage {
+            input_tokens: Some(200),
+            output_tokens: Some(50),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(50),
+        }),
+        session_usage: None,
+    }
+}
+
+fn app_server_context(app_at: Timestamp) -> AgentContext {
+    AgentContext {
+        source: "codex".to_owned(),
+        session_name: Some("TUI prototype".to_owned()),
+        session_preview: Some("Create a TUI".to_owned()),
+        model_id: Some("gpt-5".to_owned()),
+        model_display_name: Some("GPT-5".to_owned()),
+        effort: Some("high".to_owned()),
+        thinking_enabled: None,
+        output_style: None,
+        vim_mode: None,
+        agent_version: Some("1.2.3".to_owned()),
+        exceeds_200k_tokens: None,
+        cost: None,
+        tokens: None,
+        rate_limits: Some(AgentRateLimits {
+            windows: vec![RateLimitWindow {
+                used_percentage: Some(55),
+                resets_at: None,
+                duration_mins: Some(300),
+                ..Default::default()
+            }],
+        }),
+        pr: None,
+        account: Some(AgentAccount {
+            scope: Default::default(),
+            plan: Some("pro".to_owned()),
+            account_id: None,
+            metered: Some(true),
+            version: None,
+            sub_provider: None,
+            credentials_updated_at_ms: None,
+        }),
+        turn_opened_by: Vec::new(),
+        turn_error: None,
+        turn_complete: None,
+        plan_proposed: None,
+        native_permission_wait: None,
+        turn_interrupted: None,
+        observed_at: app_at,
+    }
+}
+
+fn assert_merged_context(runtime: &RuntimePaths, app_at: Timestamp) {
+    let merged = crate::store::agent_context::read_one(runtime, "codex", "sess-1").unwrap();
+    assert_eq!(
+        merged
+            .context
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.used_percentage),
+        Some(25)
+    );
+    assert_eq!(
+        merged
+            .context
+            .cost
+            .as_ref()
+            .and_then(|cost| cost.total_cost_usd),
+        Some(0.42)
+    );
+    assert_eq!(
+        merged.transcript_path.as_deref(),
+        Some("/tmp/rollout.jsonl")
+    );
+    assert_eq!(merged.context.model_display_name.as_deref(), Some("GPT-5"));
+    assert_eq!(
+        merged.context.session_preview.as_deref(),
+        Some("Create a TUI")
+    );
+    assert_eq!(
+        merged.context.session_name.as_deref(),
+        Some("TUI prototype")
+    );
+    assert_eq!(merged.context.effort.as_deref(), Some("xhigh"));
+    assert_eq!(
+        merged
+            .context
+            .rate_limits
+            .as_ref()
+            .and_then(|limits| limits.windows.first())
+            .and_then(|window| window.used_percentage),
+        Some(55)
+    );
+    assert_eq!(merged.rate_limits_observed_at, Some(app_at));
 }

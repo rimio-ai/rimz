@@ -24,6 +24,7 @@ use rimz::store::{AgentLifecycleIntent, AgentLifecycleOutcome};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
 mod binding;
+mod hook_install;
 mod install;
 mod lifecycle;
 mod owner;
@@ -34,6 +35,7 @@ mod proctree;
 mod tests;
 
 use binding::{enrich_pane_stamp_from_cache, recover_focused_pane_binding};
+pub(in crate::cli) use hook_install::ensure_detected_agent_hooks;
 pub(crate) use install::uninstall_managed_hooks;
 use install::{run_install, run_uninstall};
 pub(crate) use lifecycle::handle_lifecycle_hook;

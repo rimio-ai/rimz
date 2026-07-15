@@ -1,10 +1,9 @@
 use super::*;
-use crate::cli::agents_cmd::{OutputFormat, launch};
 use crate::cli::supervised;
 
 use crate::cli::render;
 use rimz::agents::transcript::TranscriptCursor;
-use rimz::harness::plan::launch_identity_requests;
+use rimz::harness::plan::{LaunchFinalizeOptions, launch_identity_requests};
 use rimz::harness::run::{
     PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome, SupervisedRunRequest,
 };
@@ -38,6 +37,57 @@ pub(in crate::cli) fn run_placement(
     } else {
         RunPlacement::Split
     }
+}
+
+/// Resolve and finalize the one-cell layout for a command-neutral supervised request.
+pub(in crate::cli) fn prepare_supervised_launch_layout(
+    request: &SupervisedRunRequest,
+    workspace: &rimz::ResolvedWorkspace,
+    machine_config: &rimz::config::MachineConfig,
+) -> Result<LayoutSpec> {
+    let effective = rimz::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
+    let mut resolved = rimz::harness::plan::resolve_launch(
+        &effective,
+        &machine_config.agents.commands,
+        Some(&request.spec),
+    )?;
+    rimz::harness::plan::reject_prompt_that_looks_like_spec(
+        Some(&request.spec),
+        Some(&request.prompt),
+        &effective.profiles,
+        &machine_config.agents.commands,
+        &effective.teams,
+    )?;
+    rimz::harness::plan::validate_profile_prompt_files(&resolved.layout)?;
+    let preset = rimz::agents::LaunchPreset {
+        model: rimz::harness::plan::normalized_preset_value(request.model.as_deref()),
+        effort: rimz::harness::plan::normalized_preset_value(request.effort.as_deref()),
+        system_prompt_file: request.system_prompt_file.clone(),
+        append_system_prompt_file: request.append_system_prompt_file.clone(),
+    };
+    let warnings = rimz::harness::plan::finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
+            permission_mode: Some(request.permission_mode),
+            preset: &preset,
+            passthrough: &request.passthrough,
+            budget: request.budget,
+            max_turns: request.max_turns,
+        },
+    )
+    .inspect_err(|err| {
+        for warning in err.warnings() {
+            let _ = writeln!(std::io::stderr(), "{warning}");
+        }
+    })?;
+    for warning in warnings {
+        writeln!(std::io::stderr(), "{warning}")?;
+    }
+    Ok(resolved.layout)
 }
 
 pub(in crate::cli) fn run_print(
@@ -243,7 +293,7 @@ fn prepare_supervised(
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
     let mode = request.permission_mode;
-    let layout = launch::prepare_supervised_launch_layout(request, &workspace, &machine_config)?;
+    let layout = prepare_supervised_launch_layout(request, &workspace, &machine_config)?;
     let agent_cells = agent_cells(&layout);
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");

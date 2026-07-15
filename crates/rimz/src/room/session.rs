@@ -1,30 +1,45 @@
 //! Session-record lookup, mux choice, and renamed-session retirement.
 
-use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
+use crate::ids::MuxName;
+use crate::mux::MuxBackend;
+use crate::store::workspace_record;
+use crate::{RuntimePaths, StatePaths, WorkspaceRecord};
 use anyhow::{Context, Result, bail};
-use rimz::ids::MuxName;
-use rimz::mux::MuxBackend;
-use rimz::store::workspace_record;
-use rimz::{RuntimePaths, StatePaths, WorkspaceRecord};
-
-use crate::cli::render;
-
-use super::MissingSessionReport;
 
 const LIST_SESSIONS_ATTEMPTS: u8 = 3;
 const LIST_SESSIONS_RETRY_DELAY: Duration = Duration::from_millis(250);
-pub(crate) const SESSION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
-pub(crate) const SESSION_PROBE_RETRY_TIMEOUT: Duration = Duration::from_secs(3);
+const SESSION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+const SESSION_PROBE_RETRY_TIMEOUT: Duration = Duration::from_secs(3);
 const TEST_SESSION_PROBE_MS: &str = "RIMZ_TEST_SESSION_PROBE_MS";
 
-pub(crate) fn session_probe_timeout() -> Duration {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingSessionReport {
+    Silent,
+    Warn,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MuxPick {
+    pub mux: MuxName,
+    pub notices: Vec<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
+pub struct MuxPickErr {
+    pub notices: Vec<String>,
+    #[source]
+    pub source: crate::mux::MuxErr,
+}
+
+pub fn session_probe_timeout() -> Duration {
     test_session_probe_timeout().unwrap_or(SESSION_PROBE_TIMEOUT)
 }
 
-pub(crate) fn session_probe_retry_timeout() -> Duration {
+pub fn session_probe_retry_timeout() -> Duration {
     test_session_probe_timeout()
         .map(|duration| duration.saturating_mul(3))
         .unwrap_or(SESSION_PROBE_RETRY_TIMEOUT)
@@ -36,28 +51,39 @@ fn test_session_probe_timeout() -> Option<Duration> {
     Some(Duration::from_millis(value))
 }
 
-pub(crate) fn pick_mux_for_session(
+pub fn pick_mux_for_session(
     session: &str,
     explicit: Option<MuxName>,
     missing_report: MissingSessionReport,
-) -> Result<MuxName> {
+) -> std::result::Result<MuxPick, MuxPickErr> {
     if let Some(mux) = explicit {
-        return Ok(mux);
+        return Ok(MuxPick {
+            mux,
+            notices: Vec::new(),
+        });
     }
+    let mut notices = Vec::new();
     for candidate in [MuxName::Zellij, MuxName::Tmux] {
-        let backend = rimz::mux::backend_for(candidate);
+        let backend = crate::mux::backend_for(candidate);
         match list_sessions_with_retry(backend.as_ref()) {
-            Ok(sessions) if sessions.iter().any(|s| s == session) => return Ok(candidate),
+            Ok(sessions) if sessions.iter().any(|s| s == session) => {
+                return Ok(MuxPick {
+                    mux: candidate,
+                    notices,
+                });
+            }
             Ok(_) => {}
-            Err(rimz::mux::MuxErr::NotInstalled { .. }) => {}
-            Err(err @ rimz::mux::MuxErr::Timeout { .. }) => {
-                let mut out = render::err();
-                writeln!(out, "note: {err}; skipping {candidate} session lookup.")?;
+            Err(crate::mux::MuxErr::NotInstalled { .. }) => {}
+            Err(err @ crate::mux::MuxErr::Timeout { .. }) => {
+                notices.push(format!("{err}; skipping {candidate} session lookup."))
             }
             Err(err) => tracing::warn!(mux = %candidate, error = %err, "list_sessions failed"),
         }
     }
-    let detected = rimz::mux::auto_detect_backend(None)?;
+    let detected = match crate::mux::auto_detect_backend(None) {
+        Ok(detected) => detected,
+        Err(source) => return Err(MuxPickErr { notices, source }),
+    };
     if missing_report == MissingSessionReport::Warn {
         tracing::warn!(
             session = %session,
@@ -65,7 +91,10 @@ pub(crate) fn pick_mux_for_session(
             "no live session matches; emitting attach command for auto-detected mux",
         );
     }
-    Ok(detected)
+    Ok(MuxPick {
+        mux: detected,
+        notices,
+    })
 }
 
 /// Whether a rival backend already owns this path's room. Session identity is
@@ -79,20 +108,20 @@ fn rival_backend_owns_room(session_name: &str, rival_sessions: &[String]) -> boo
 /// Fail-fast guard for a new-room birth: refuse when the other backend already
 /// runs this path's room. A rival that isn't installed or can't be listed never
 /// blocks — best-effort probe, hard refusal only on a positive.
-pub(crate) fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<()> {
+pub fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Result<Vec<String>> {
     let rival = mux.other();
-    let backend = rimz::mux::backend_for(rival);
+    let backend = crate::mux::backend_for(rival);
     let sessions = match list_sessions_with_retry(backend.as_ref()) {
         Ok(sessions) => sessions,
-        Err(rimz::mux::MuxErr::NotInstalled { .. }) => return Ok(()),
-        Err(err @ rimz::mux::MuxErr::Timeout { .. }) => {
-            let mut out = render::err();
-            writeln!(out, "note: {err}; skipping the cross-backend room check.")?;
-            return Ok(());
+        Err(crate::mux::MuxErr::NotInstalled { .. }) => return Ok(Vec::new()),
+        Err(err @ crate::mux::MuxErr::Timeout { .. }) => {
+            return Ok(vec![format!(
+                "{err}; skipping the cross-backend room check."
+            )]);
         }
         Err(err) => {
             tracing::warn!(mux = %rival, error = %err, "rival list_sessions failed; allowing start");
-            return Ok(());
+            return Ok(Vec::new());
         }
     };
     if rival_backend_owns_room(session_name, &sessions) {
@@ -104,10 +133,10 @@ pub(crate) fn ensure_single_backend_room(mux: MuxName, session_name: &str) -> Re
              Or close it, then start under {mux}:\n    rimz --mux {rival} reset --no-start"
         );
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
-fn list_sessions_with_retry(backend: &dyn MuxBackend) -> rimz::mux::Result<Vec<String>> {
+fn list_sessions_with_retry(backend: &dyn MuxBackend) -> crate::mux::Result<Vec<String>> {
     list_sessions_retrying(
         || backend.list_sessions_within(session_probe_timeout()),
         LIST_SESSIONS_ATTEMPTS,
@@ -116,16 +145,16 @@ fn list_sessions_with_retry(backend: &dyn MuxBackend) -> rimz::mux::Result<Vec<S
 }
 
 fn list_sessions_retrying(
-    mut list_sessions: impl FnMut() -> rimz::mux::Result<Vec<String>>,
+    mut list_sessions: impl FnMut() -> crate::mux::Result<Vec<String>>,
     attempts: u8,
     retry_delay: Duration,
-) -> rimz::mux::Result<Vec<String>> {
+) -> crate::mux::Result<Vec<String>> {
     let attempts = attempts.max(1);
     for attempt in 0..attempts {
         match list_sessions() {
             Ok(sessions) => return Ok(sessions),
-            Err(err @ rimz::mux::MuxErr::NotInstalled { .. }) => return Err(err),
-            Err(err @ rimz::mux::MuxErr::Timeout { .. }) => return Err(err),
+            Err(err @ crate::mux::MuxErr::NotInstalled { .. }) => return Err(err),
+            Err(err @ crate::mux::MuxErr::Timeout { .. }) => return Err(err),
             Err(err) if attempt + 1 == attempts => return Err(err),
             Err(_) => std::thread::sleep(retry_delay),
         }
@@ -156,10 +185,7 @@ fn renamed_session_to_retire<'a>(
 /// sidebar) instead of orphaning the old one. Must run before `record_workspace`
 /// overwrites the stored name — that record is the only breadcrumb to the old
 /// session. Best-effort: any lookup failure leaves the launch to proceed.
-pub(super) fn retire_renamed_session(
-    backend: &dyn MuxBackend,
-    workspace: &rimz::ResolvedWorkspace,
-) {
+pub fn retire_renamed_session(backend: &dyn MuxBackend, workspace: &crate::ResolvedWorkspace) {
     let Ok(paths) = StatePaths::for_workspace(workspace.workspace_id.clone()) else {
         return;
     };
@@ -185,11 +211,11 @@ pub(super) fn retire_renamed_session(
     }
 }
 
-pub(crate) fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
+pub fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
     workspace_record_for_session_under(
         session,
-        &rimz::store::paths::state_home(),
-        &rimz::store::paths::runtime_home(),
+        &crate::store::paths::state_home(),
+        &crate::store::paths::runtime_home(),
     )
 }
 
@@ -198,7 +224,7 @@ fn workspace_record_for_session_under(
     state_root: &Path,
     runtime_root: &Path,
 ) -> Result<Option<WorkspaceRecord>> {
-    let root = rimz::store::paths::workspaces_dir_under(state_root);
+    let root = crate::store::paths::workspaces_dir_under(state_root);
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -269,7 +295,7 @@ fn freshest_matching_sidebar_heartbeat(
 ) -> Option<SystemTime> {
     let runtime = RuntimePaths::under(record.workspace_id.clone(), runtime_root).ok()?;
     let heartbeats =
-        rimz::sidebar::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir).ok()?;
+        crate::sidebar::heartbeat::read_current_heartbeats(&runtime.heartbeat_dir).ok()?;
     heartbeats
         .into_iter()
         .filter_map(|(path, heartbeat)| {
@@ -282,11 +308,11 @@ fn matching_sidebar_heartbeat_mtime(
     session: &str,
     record: &WorkspaceRecord,
     path: &Path,
-    heartbeat: &rimz::sidebar::heartbeat::SidebarHeartbeat,
+    heartbeat: &crate::sidebar::heartbeat::SidebarHeartbeat,
 ) -> Option<SystemTime> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
     let fresh = match SystemTime::now().duration_since(modified) {
-        Ok(age) => age <= rimz::sidebar::timing::SIDEBAR_HEARTBEAT_TTL,
+        Ok(age) => age <= crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL,
         Err(_) => true,
     };
     if !fresh {
@@ -299,7 +325,7 @@ fn matching_sidebar_heartbeat_mtime(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::ids::WorkspaceId;
+    use crate::ids::WorkspaceId;
 
     #[test]
     fn list_sessions_retrying_follows_retry_policy() {
@@ -339,7 +365,7 @@ mod tests {
         let err = list_sessions_retrying(
             || {
                 calls += 1;
-                Err(rimz::mux::MuxErr::NotInstalled {
+                Err(crate::mux::MuxErr::NotInstalled {
                     program: "zellij".to_owned(),
                 })
             },
@@ -348,14 +374,14 @@ mod tests {
         )
         .expect_err("not-installed is definitive");
 
-        assert!(matches!(err, rimz::mux::MuxErr::NotInstalled { .. }));
+        assert!(matches!(err, crate::mux::MuxErr::NotInstalled { .. }));
         assert_eq!(calls, 1);
 
         let mut calls = 0;
         let err = list_sessions_retrying(
             || {
                 calls += 1;
-                Err(rimz::mux::MuxErr::Timeout {
+                Err(crate::mux::MuxErr::Timeout {
                     program: "zellij".to_owned(),
                     args: "list-sessions".to_owned(),
                     seconds: 1,
@@ -366,7 +392,7 @@ mod tests {
         )
         .expect_err("timeout is definitive");
 
-        assert!(matches!(err, rimz::mux::MuxErr::Timeout { .. }));
+        assert!(matches!(err, crate::mux::MuxErr::Timeout { .. }));
         assert_eq!(calls, 1);
     }
 
@@ -403,8 +429,8 @@ mod tests {
 
         let runtime = RuntimePaths::under(live_id.clone(), &runtime_root).unwrap();
         runtime.ensure_dirs().unwrap();
-        let instance = rimz::SidebarInstanceId::new();
-        let heartbeat = rimz::sidebar::heartbeat::SidebarHeartbeat::new(
+        let instance = crate::SidebarInstanceId::new();
+        let heartbeat = crate::sidebar::heartbeat::SidebarHeartbeat::new(
             live_id.clone(),
             instance.clone(),
             MuxName::Zellij,
@@ -441,15 +467,15 @@ mod tests {
             project_root: project_root.into(),
             worktree_root: None,
             session_name: session_name.to_owned(),
-            root_class: rimz::workspace::RootClass::Repo,
+            root_class: crate::workspace::RootClass::Repo,
             rimz_bin: None,
             updated_at: jiff::Timestamp::now(),
         };
         workspace_record::write(&paths, &record).unwrap();
     }
 
-    fn transient_list_sessions_error() -> rimz::mux::MuxErr {
-        rimz::mux::MuxErr::Command {
+    fn transient_list_sessions_error() -> crate::mux::MuxErr {
+        crate::mux::MuxErr::Command {
             program: "zellij".to_owned(),
             args: "list-sessions".to_owned(),
             stderr: "transient".to_owned(),
