@@ -181,7 +181,7 @@ fn date_directories(root: &Path, cutoff: Date) -> Vec<(Date, PathBuf, PathBuf)> 
             }
         }
     }
-    dates.sort_by(|left, right| right.0.cmp(&left.0));
+    dates.sort_by_key(|(date, _, _)| std::cmp::Reverse(*date));
     dates
 }
 
