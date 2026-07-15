@@ -164,8 +164,8 @@ fn ssh_destination_grammar_accepts_supported_forms() {
         ("user@[::1]", "user@[::1]", "::1"),
     ] {
         let parsed = SshDestination::parse(input).expect("destination parses");
-        assert_eq!(parsed.destination, destination, "{input}");
-        assert_eq!(parsed.host, host, "{input}");
+        assert_eq!(parsed.as_str(), destination, "{input}");
+        assert_eq!(parsed.host_display(), host, "{input}");
     }
 }
 

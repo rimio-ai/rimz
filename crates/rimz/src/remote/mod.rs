@@ -65,9 +65,9 @@ pub struct RemoteTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshDestination {
     /// `[user@]host` exactly as ssh wants it (IPv6 keeps its brackets).
-    pub destination: String,
+    destination: String,
     /// The host alone, for human-facing hints.
-    pub host: String,
+    host: String,
 }
 
 #[derive(Clone, Copy)]

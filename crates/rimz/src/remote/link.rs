@@ -1,8 +1,8 @@
-//! Remote-link health protocol and pure probe accounting.
+//! Remote-link health protocol and pure terminal-session transitions.
 //!
 //! The remote supervisor owns process I/O. This module only names the JSONL
 //! probe/ack/file schema, classifies link health, builds SSH argv fragments, and
-//! maintains the rolling probe window.
+//! reduces transport, health, and child-exit inputs into session actions.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};

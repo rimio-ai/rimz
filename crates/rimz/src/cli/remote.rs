@@ -530,20 +530,20 @@ mod tests {
             .unwrap();
 
         let named = resolve_setup_destination("prod", &aliases).unwrap();
-        assert_eq!(named.destination, "prod-box");
-        assert_eq!(named.host, "prod-box");
+        assert_eq!(named.as_str(), "prod-box");
+        assert_eq!(named.host_display(), "prod-box");
 
         let target =
             resolve_setup_destination("agent@prod-box:/srv/query-engine", &aliases).unwrap();
-        assert_eq!(target.destination, "agent@prod-box");
-        assert_eq!(target.host, "prod-box");
+        assert_eq!(target.as_str(), "agent@prod-box");
+        assert_eq!(target.host_display(), "prod-box");
 
         let bare = resolve_setup_destination("alice@new-box", &aliases).unwrap();
-        assert_eq!(bare.destination, "alice@new-box");
-        assert_eq!(bare.host, "new-box");
+        assert_eq!(bare.as_str(), "alice@new-box");
+        assert_eq!(bare.host_display(), "new-box");
 
         let ipv6 = resolve_setup_destination("user@[::1]", &aliases).unwrap();
-        assert_eq!(ipv6.destination, "user@[::1]");
-        assert_eq!(ipv6.host, "::1");
+        assert_eq!(ipv6.as_str(), "user@[::1]");
+        assert_eq!(ipv6.host_display(), "::1");
     }
 }

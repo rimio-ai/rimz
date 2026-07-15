@@ -20,9 +20,10 @@ pub(super) fn run(alias_or_host: String, _globals: &GlobalFlags) -> Result<()> {
     let _ = writeln!(
         std::io::stderr().lock(),
         "rimz: installing rimz on {} over ssh…",
-        destination.host
+        destination.host_display()
     );
-    let spec = rimz::remote::setup::setup_install_spec(&destination.destination, &destination.host);
+    let spec =
+        rimz::remote::setup::setup_install_spec(destination.as_str(), destination.host_display());
     let status = spec
         .to_command()
         .status()
@@ -31,14 +32,14 @@ pub(super) fn run(alias_or_host: String, _globals: &GlobalFlags) -> Result<()> {
         let _ = writeln!(
             std::io::stderr().lock(),
             "rimz installed on {}; run `{connect_hint}`",
-            destination.host
+            destination.host_display()
         );
         return Ok(());
     }
     bail!(
         "remote setup on {} failed with {status}; install rimz manually: \
          https://github.com/rimio-ai/rimz/blob/main/docs/guide/installation.md",
-        destination.host
+        destination.host_display()
     )
 }
 

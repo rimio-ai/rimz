@@ -1,7 +1,11 @@
+//! Foreground remote-web preparation, SSH tunnel ownership, and browser open.
+//!
+//! One `RemoteTunnel` owns each live child, readiness result, reconnect state,
+//! and shutdown path for the command lifetime.
+
 use std::io::{IsTerminal, Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -27,7 +31,6 @@ struct RemoteTunnel {
     started: Instant,
     wake_tx: mpsc::Sender<()>,
     wake_rx: mpsc::Receiver<()>,
-    stop: AtomicBool,
 }
 
 impl Drop for RemoteTunnel {
@@ -57,7 +60,6 @@ impl RemoteTunnel {
             started: Instant::now(),
             wake_tx,
             wake_rx,
-            stop: AtomicBool::new(false),
         };
         tunnel.spawn_child()?;
         Ok(tunnel)
@@ -166,7 +168,7 @@ impl RemoteTunnel {
                         delay,
                         self.policy.backoff_cap,
                         &self.host,
-                        &self.stop,
+                        None,
                     ),
                     rimz::remote::reachability::WaitVerdict::AttachNow {
                         network_restored: true
@@ -227,7 +229,7 @@ pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
     let spec = rimz::remote::web::web_tunnel_spec(&remote.target, local_port, payload.port);
     let mut tunnel = RemoteTunnel::start(
         spec,
-        remote.target.ssh_destination().destination.clone(),
+        remote.target.ssh_destination().as_str().to_owned(),
         remote.target.host_display().to_owned(),
         remote.reconnect,
     )?;

@@ -109,7 +109,13 @@ pub(super) fn supervise_remote(
                     render_session_link_action(host, action);
                 }
                 if matches!(
-                    wait_before_retry(dial_plan.as_ref(), delay, policy.backoff_cap, host, &stop,),
+                    wait_before_retry(
+                        dial_plan.as_ref(),
+                        delay,
+                        policy.backoff_cap,
+                        host,
+                        Some(&stop),
+                    ),
                     WaitVerdict::AttachNow {
                         network_restored: true
                     }
@@ -269,16 +275,16 @@ pub(super) fn wait_before_retry(
     delay: Duration,
     hold: Duration,
     host: &str,
-    stop: &AtomicBool,
+    stop: Option<&AtomicBool>,
 ) -> WaitVerdict {
     let Some(plan) = dial_plan else {
-        super::sleep_interruptibly(delay, stop);
+        sleep_retry_wait(delay, stop);
         return WaitVerdict::AttachNow {
             network_restored: false,
         };
     };
     let Some(interval) = dial_interval_from_env() else {
-        super::sleep_interruptibly(delay, stop);
+        sleep_retry_wait(delay, stop);
         return WaitVerdict::AttachNow {
             network_restored: false,
         };
@@ -294,7 +300,7 @@ pub(super) fn wait_before_retry(
         if !matches!(verdict, WaitVerdict::KeepWaiting) {
             return verdict;
         }
-        if stop.load(Ordering::SeqCst) {
+        if stop.is_some_and(|stop| stop.load(Ordering::SeqCst)) {
             return WaitVerdict::AttachNow {
                 network_restored: false,
             };
@@ -320,7 +326,15 @@ pub(super) fn wait_before_retry(
             next_dial = Instant::now() + interval;
         }
         let wake_at = next_dial.min(gate.effective_deadline());
-        super::sleep_interruptibly(wake_at.saturating_duration_since(Instant::now()), stop);
+        sleep_retry_wait(wake_at.saturating_duration_since(Instant::now()), stop);
+    }
+}
+
+fn sleep_retry_wait(duration: Duration, stop: Option<&AtomicBool>) {
+    if let Some(stop) = stop {
+        super::sleep_interruptibly(duration, stop);
+    } else {
+        std::thread::sleep(duration);
     }
 }
 
