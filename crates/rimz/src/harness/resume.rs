@@ -35,6 +35,151 @@ use crate::store::runtime::AgentLiveness;
 /// Anything past it is reported, never silently dropped.
 pub const DEFAULT_RESUME_MAX: usize = 128;
 
+/// One local worktree available to lane resume resolution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaneWorktree {
+    pub name: String,
+    pub path: PathBuf,
+    pub branch: Option<String>,
+    pub from_pr: Option<u64>,
+}
+
+/// User-facing way to select lane resume work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaneResumeSelector {
+    List,
+    Scope(String),
+    PullRequest(u64),
+    Current,
+}
+
+/// Effective launch configuration used only when every lane member is closed.
+#[derive(Clone, Debug)]
+pub struct LaneRestoreConfig {
+    pub teams: TeamsConfig,
+    pub profiles: ProfilesConfig,
+    pub commands: CommandsConfig,
+}
+
+/// Pure facts needed to decide one lane resume request.
+#[derive(Clone, Debug)]
+pub struct LaneResumeRequest<'a> {
+    pub selector: LaneResumeSelector,
+    pub agents: &'a [AgentState],
+    pub worktrees: &'a [LaneWorktree],
+    pub current_root: &'a Path,
+    pub project_root: &'a Path,
+    pub max: usize,
+    pub rimz_bin: &'a Path,
+}
+
+/// One row in the root-level lane resume listing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LaneSummary {
+    pub path: PathBuf,
+    pub label: String,
+    pub members: usize,
+    pub live: usize,
+    pub freshest: Timestamp,
+}
+
+/// Why lane qualification or planning cannot proceed.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum LaneResumeError {
+    #[error("no lane '{scope}' in this workspace")]
+    Unknown { scope: String },
+    #[error(
+        "worktree for '{scope}' was removed; recreate it with rimz agents <spec> -w {worktree}"
+    )]
+    Removed { scope: String, worktree: String },
+    #[error(
+        "PR {number} has no local worktree; start one with rimz agents <spec> --from-pr {number}"
+    )]
+    PrNotLocal { number: u64 },
+    #[error("nothing to resume in '{scope}'")]
+    Nothing { scope: String },
+    #[error("live lane has no focus candidate")]
+    LiveNoFocus,
+    #[error("live lane agent has no bound pane")]
+    LiveNoPane,
+    #[error("{message}")]
+    RestoreConfig { message: String },
+}
+
+/// All-closed lane plan awaiting durable identity allocation.
+#[derive(Clone, Debug)]
+pub struct LaneRestorePlan {
+    teams: TeamsConfig,
+    team: Vec<PlannedTeamTab>,
+    flat: ResumePlan,
+    discovery_skipped: Vec<LocalSessionObservation>,
+    preflight_kinds: Vec<AgentKind>,
+}
+
+impl LaneRestorePlan {
+    pub fn skipped(&self) -> &[ResumeSkip] {
+        &self.flat.skipped
+    }
+
+    pub fn discovery_skipped(&self) -> &[LocalSessionObservation] {
+        &self.discovery_skipped
+    }
+}
+
+/// Boundary work chosen by lane resume policy.
+#[derive(Clone, Debug)]
+pub enum LaneResumeAction {
+    List {
+        lanes: Vec<LaneSummary>,
+    },
+    Focus {
+        lane_label: String,
+        pane_id: PaneId,
+    },
+    SplitClosed {
+        lane_label: String,
+        cwd: PathBuf,
+        channel: Option<String>,
+        target_pane_id: PaneId,
+        commands: Vec<Vec<String>>,
+        skipped: Vec<ResumeSkip>,
+        live_labels: Vec<String>,
+        preflight_kinds: Vec<AgentKind>,
+    },
+    RestoreClosed {
+        lane_label: String,
+        cwd: PathBuf,
+        plan: LaneRestorePlan,
+    },
+}
+
+impl LaneResumeAction {
+    /// Provider kinds callers validate before any mux or durable allocation.
+    pub fn agent_kinds_needing_preflight(&self) -> &[AgentKind] {
+        match self {
+            Self::SplitClosed {
+                preflight_kinds, ..
+            } => preflight_kinds,
+            Self::RestoreClosed { plan, .. } => &plan.preflight_kinds,
+            Self::List { .. } | Self::Focus { .. } => &[],
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedLane {
+    display: String,
+    path: PathBuf,
+    channel: Option<String>,
+    worktree_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum LaneCandidateKey {
+    Pane(PaneId),
+    Session(AgentKind, AgentSessionId),
+}
+
 /// Why a candidate agent was not resumed — surfaced in the start report so a
 /// skipped agent stays visible rather than silently lost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,6 +404,519 @@ pub fn discovered_agent_state(
         last_activity: observation.last_activity,
         registered_at: Some(observation.created_at),
     }
+}
+
+/// Resolve, qualify, and plan one place-first lane resume request.
+pub fn plan_lane_resume(
+    request: LaneResumeRequest<'_>,
+    path_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
+    mut discover_sessions: impl FnMut(&Path) -> Vec<LocalSessionObservation>,
+    restore_config: impl FnOnce() -> Result<LaneRestoreConfig, LaneResumeError>,
+) -> Result<LaneResumeAction, LaneResumeError> {
+    if matches!(request.selector, LaneResumeSelector::List) {
+        let mut lanes = lane_summaries(request.agents, request.project_root, &liveness);
+        let durable_paths = lanes
+            .iter()
+            .map(|summary| summary.path.clone())
+            .collect::<HashSet<_>>();
+        for worktree in request
+            .worktrees
+            .iter()
+            .filter(|worktree| !durable_paths.contains(&worktree.path))
+        {
+            let (resume, _) = concurrent_session_set(discover_sessions(&worktree.path));
+            let Some(freshest) = resume.iter().map(|session| session.last_activity).max() else {
+                continue;
+            };
+            lanes.push(LaneSummary {
+                path: worktree.path.clone(),
+                label: format!("#{}", worktree.name),
+                members: resume.len(),
+                live: 0,
+                freshest,
+            });
+        }
+        sort_lane_summaries(&mut lanes);
+        return Ok(LaneResumeAction::List { lanes });
+    }
+
+    let lane = resolve_lane(&request)?;
+    if !path_exists(&lane.path) {
+        return Err(LaneResumeError::Removed {
+            scope: lane.display,
+            worktree: lane.worktree_name,
+        });
+    }
+    let candidates = current_lane_candidates(request.agents, &lane);
+    let (live, closed): (Vec<_>, Vec<_>) = candidates
+        .iter()
+        .cloned()
+        .partition(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }));
+
+    if candidates.is_empty() || (live.is_empty() && !closed.iter().any(&session_backed)) {
+        return plan_discovered_lane(&request, &lane, discover_sessions(&lane.path), path_exists);
+    }
+    if closed.is_empty() {
+        let agent = live.first().ok_or(LaneResumeError::LiveNoFocus)?;
+        let pane = agent.pane.as_ref().ok_or(LaneResumeError::LiveNoPane)?;
+        return Ok(LaneResumeAction::Focus {
+            lane_label: lane.display,
+            pane_id: pane.pane_id.clone(),
+        });
+    }
+    if !closed.iter().any(&session_backed) {
+        return Err(LaneResumeError::Nothing {
+            scope: lane.display,
+        });
+    }
+    if !live.is_empty() {
+        return plan_live_lane_split(
+            &request,
+            lane,
+            candidates,
+            live,
+            closed,
+            path_exists,
+            session_backed,
+        );
+    }
+    plan_closed_lane(
+        &request,
+        lane,
+        closed,
+        path_exists,
+        session_backed,
+        restore_config()?,
+    )
+}
+
+fn resolve_lane(request: &LaneResumeRequest<'_>) -> Result<ResolvedLane, LaneResumeError> {
+    match &request.selector {
+        LaneResumeSelector::List => unreachable!("list returns before lane resolution"),
+        LaneResumeSelector::PullRequest(number) => resolve_pr_lane(*number, request.worktrees),
+        LaneResumeSelector::Scope(scope) => {
+            resolve_scope_lane(scope, request.agents, request.worktrees)
+        }
+        LaneResumeSelector::Current => resolve_current_lane(
+            request.current_root,
+            request.project_root,
+            request.agents,
+            request.worktrees,
+        ),
+    }
+}
+
+fn resolve_pr_lane(
+    number: u64,
+    worktrees: &[LaneWorktree],
+) -> Result<ResolvedLane, LaneResumeError> {
+    let fallback = format!("pr-{number}");
+    let worktree = worktrees
+        .iter()
+        .find(|worktree| worktree.from_pr == Some(number))
+        .or_else(|| worktrees.iter().find(|worktree| worktree.name == fallback))
+        .ok_or(LaneResumeError::PrNotLocal { number })?;
+    Ok(lane_from_worktree(worktree))
+}
+
+fn resolve_scope_lane(
+    raw_scope: &str,
+    agents: &[AgentState],
+    worktrees: &[LaneWorktree],
+) -> Result<ResolvedLane, LaneResumeError> {
+    let scope = raw_scope.strip_prefix('#').unwrap_or(raw_scope);
+    if let Some(agent) = agents
+        .iter()
+        .filter(|agent| root_session(agent))
+        .filter(|agent| crate::harness::target::agent_in_worktree(agent, scope))
+        .min_by(lane_newest_cmp)
+    {
+        let path = normalized_agent_worktree(agent).ok_or_else(|| LaneResumeError::Unknown {
+            scope: raw_scope.to_owned(),
+        })?;
+        let channel = crate::harness::target::agent_channel(agent);
+        let worktree_name = worktrees
+            .iter()
+            .find(|worktree| worktree.path == path)
+            .map(|worktree| worktree.name.clone())
+            .unwrap_or_else(|| path_label(&path));
+        return Ok(ResolvedLane {
+            display: raw_scope.to_owned(),
+            path,
+            channel,
+            worktree_name,
+        });
+    }
+    if let Some(worktree) = worktrees
+        .iter()
+        .find(|worktree| worktree_matches_scope(worktree, scope))
+    {
+        let mut lane = lane_from_worktree(worktree);
+        lane.display = raw_scope.to_owned();
+        return Ok(lane);
+    }
+    Err(LaneResumeError::Unknown {
+        scope: raw_scope.to_owned(),
+    })
+}
+
+fn resolve_current_lane(
+    current_root: &Path,
+    project_root: &Path,
+    agents: &[AgentState],
+    worktrees: &[LaneWorktree],
+) -> Result<ResolvedLane, LaneResumeError> {
+    let current = crate::worktree::normalize_path_lexical(current_root);
+    if current == crate::worktree::normalize_path_lexical(project_root) {
+        return Err(LaneResumeError::Unknown {
+            scope: path_label(&current),
+        });
+    }
+    if let Some(worktree) = worktrees.iter().find(|worktree| worktree.path == current) {
+        return Ok(lane_from_worktree(worktree));
+    }
+    let agent = agents
+        .iter()
+        .filter(|agent| root_session(agent))
+        .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(current.as_path()))
+        .min_by(lane_newest_cmp)
+        .ok_or_else(|| LaneResumeError::Unknown {
+            scope: path_label(&current),
+        })?;
+    let channel = crate::harness::target::agent_channel(agent);
+    Ok(ResolvedLane {
+        display: channel
+            .as_deref()
+            .map_or_else(|| path_label(&current), |channel| format!("#{channel}")),
+        path: current.clone(),
+        channel,
+        worktree_name: path_label(&current),
+    })
+}
+
+fn lane_from_worktree(worktree: &LaneWorktree) -> ResolvedLane {
+    ResolvedLane {
+        display: worktree.name.clone(),
+        path: worktree.path.clone(),
+        channel: None,
+        worktree_name: worktree.name.clone(),
+    }
+}
+
+fn worktree_matches_scope(worktree: &LaneWorktree, scope: &str) -> bool {
+    worktree.name == scope
+        || worktree.branch.as_deref() == Some(scope)
+        || worktree.path == Path::new(scope)
+        || worktree.path.file_name().is_some_and(|name| name == scope)
+}
+
+fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<AgentState> {
+    let mut candidates = agents
+        .iter()
+        .filter(|agent| root_session(agent))
+        .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(lane.path.as_path()))
+        .filter(|agent| {
+            lane.channel.as_deref().is_none_or(|channel| {
+                crate::harness::target::agent_channel(agent).as_deref() == Some(channel)
+            })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| lane_newest_cmp(&left, &right));
+    let mut seen = HashSet::<LaneCandidateKey>::new();
+    candidates.retain(|agent| {
+        let key = agent.pane.as_ref().map_or_else(
+            || LaneCandidateKey::Session(agent.kind.clone(), agent.agent_id.clone()),
+            |pane| LaneCandidateKey::Pane(pane.pane_id.clone()),
+        );
+        seen.insert(key)
+    });
+    candidates
+}
+
+fn root_session(agent: &AgentState) -> bool {
+    agent.parent_agent_id.is_none()
+        && !agent.agent_id.is_empty()
+        && agent
+            .worktree_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty())
+}
+
+fn lane_newest_cmp(left: &&AgentState, right: &&AgentState) -> std::cmp::Ordering {
+    right
+        .last_activity
+        .cmp(&left.last_activity)
+        .then_with(|| left.agent_id.cmp(&right.agent_id))
+}
+
+fn plan_discovered_lane(
+    request: &LaneResumeRequest<'_>,
+    lane: &ResolvedLane,
+    observations: Vec<LocalSessionObservation>,
+    path_exists: impl Fn(&Path) -> bool,
+) -> Result<LaneResumeAction, LaneResumeError> {
+    if observations.is_empty() {
+        return Err(LaneResumeError::Nothing {
+            scope: lane.display.clone(),
+        });
+    }
+    let (resume, discovery_skipped) = concurrent_session_set(observations);
+    let states = resume
+        .iter()
+        .map(|observation| discovered_agent_state(observation, lane.channel.as_deref()))
+        .collect::<Vec<_>>();
+    let flat = plan_resume(
+        &states,
+        &BTreeSet::new(),
+        request.max,
+        Some(request.project_root),
+        path_exists,
+        |_| true,
+        request.rimz_bin,
+    );
+    if flat.tabs.is_empty() {
+        return Err(LaneResumeError::Nothing {
+            scope: lane.display.clone(),
+        });
+    }
+    let preflight_kinds = states.iter().map(|agent| agent.kind.clone()).collect();
+    Ok(LaneResumeAction::RestoreClosed {
+        lane_label: lane.display.clone(),
+        cwd: lane.path.clone(),
+        plan: LaneRestorePlan {
+            teams: TeamsConfig::default(),
+            team: Vec::new(),
+            flat,
+            discovery_skipped,
+            preflight_kinds,
+        },
+    })
+}
+
+fn plan_live_lane_split(
+    request: &LaneResumeRequest<'_>,
+    lane: ResolvedLane,
+    candidates: Vec<AgentState>,
+    live: Vec<AgentState>,
+    closed: Vec<AgentState>,
+    path_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+) -> Result<LaneResumeAction, LaneResumeError> {
+    let flat = plan_resume(
+        &closed,
+        &BTreeSet::new(),
+        request.max,
+        Some(request.project_root),
+        path_exists,
+        &session_backed,
+        request.rimz_bin,
+    );
+    let commands = flat
+        .tabs
+        .iter()
+        .flat_map(|tab| &tab.layout.columns)
+        .flat_map(|column| &column.panes)
+        .map(|pane| pane.argv.clone())
+        .collect::<Vec<_>>();
+    if commands.is_empty() {
+        return Err(LaneResumeError::Nothing {
+            scope: lane.display,
+        });
+    }
+    let target_pane_id = live
+        .first()
+        .ok_or(LaneResumeError::LiveNoFocus)?
+        .pane
+        .as_ref()
+        .ok_or(LaneResumeError::LiveNoPane)?
+        .pane_id
+        .clone();
+    let peers = candidates.iter().collect::<Vec<_>>();
+    let live_labels = live
+        .iter()
+        .map(|agent| crate::harness::target::agent_handle(agent, &peers, true))
+        .collect();
+    let preflight_kinds = closed
+        .iter()
+        .filter(|agent| supports_agent_resume(agent) && session_backed(agent))
+        .map(|agent| agent.kind.clone())
+        .collect();
+    let channel = lane.channel.clone().or_else(|| {
+        closed
+            .first()
+            .and_then(crate::harness::target::agent_channel)
+    });
+    Ok(LaneResumeAction::SplitClosed {
+        lane_label: lane.display,
+        cwd: lane.path,
+        channel,
+        target_pane_id,
+        commands,
+        skipped: flat.skipped,
+        live_labels,
+        preflight_kinds,
+    })
+}
+
+fn plan_closed_lane(
+    request: &LaneResumeRequest<'_>,
+    lane: ResolvedLane,
+    closed: Vec<AgentState>,
+    path_exists: impl Fn(&Path) -> bool,
+    session_backed: impl Fn(&AgentState) -> bool,
+    restore: LaneRestoreConfig,
+) -> Result<LaneResumeAction, LaneResumeError> {
+    let (team, flat_agents) = split_team_and_flat(
+        &closed,
+        &restore.teams,
+        &restore.profiles,
+        &restore.commands,
+        Some(request.project_root),
+        &path_exists,
+        &session_backed,
+    );
+    let team_panes = team
+        .iter()
+        .map(|planned| planned.cohort.seeds.len())
+        .sum::<usize>();
+    let flat = plan_resume(
+        &flat_agents,
+        &BTreeSet::new(),
+        request.max.saturating_sub(team_panes),
+        Some(request.project_root),
+        path_exists,
+        &session_backed,
+        request.rimz_bin,
+    );
+    if team.is_empty() && flat.tabs.is_empty() {
+        return Err(LaneResumeError::Nothing {
+            scope: lane.display,
+        });
+    }
+    let mut preflight_kinds = team
+        .iter()
+        .flat_map(|planned| planned.layout.agent_kinds())
+        .map(AgentKind::new_unchecked)
+        .collect::<Vec<_>>();
+    preflight_kinds.extend(
+        flat_agents
+            .iter()
+            .filter(|agent| supports_agent_resume(agent) && session_backed(agent))
+            .map(|agent| agent.kind.clone()),
+    );
+    Ok(LaneResumeAction::RestoreClosed {
+        lane_label: lane.display,
+        cwd: lane.path,
+        plan: LaneRestorePlan {
+            teams: restore.teams,
+            team,
+            flat,
+            discovery_skipped: Vec::new(),
+            preflight_kinds,
+        },
+    })
+}
+
+fn lane_summaries(
+    agents: &[AgentState],
+    project_root: &Path,
+    liveness: impl Fn(&AgentState) -> AgentLiveness,
+) -> Vec<LaneSummary> {
+    let mut groups = BTreeMap::<(PathBuf, Option<String>), Vec<AgentState>>::new();
+    let root = crate::worktree::normalize_path_lexical(project_root);
+    for agent in agents.iter().filter(|agent| root_session(agent)) {
+        let Some(path) = normalized_agent_worktree(agent) else {
+            continue;
+        };
+        let channel = crate::harness::target::agent_channel(agent).filter(|_| {
+            path != root
+                || agent
+                    .channel
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+        });
+        groups
+            .entry((path, channel))
+            .or_default()
+            .push(agent.clone());
+    }
+    let mut summaries = groups
+        .into_iter()
+        .filter_map(|((path, channel), agents)| {
+            let lane = ResolvedLane {
+                display: String::new(),
+                worktree_name: path_label(&path),
+                path,
+                channel,
+            };
+            let candidates = current_lane_candidates(&agents, &lane);
+            let freshest = candidates.first()?.last_activity;
+            let live = candidates
+                .iter()
+                .filter(|agent| matches!(liveness(agent), AgentLiveness::Live { .. }))
+                .count();
+            Some(LaneSummary {
+                path: lane.path.clone(),
+                label: lane
+                    .channel
+                    .clone()
+                    .or_else(|| {
+                        candidates
+                            .first()
+                            .and_then(crate::harness::target::agent_channel)
+                    })
+                    .map_or_else(
+                        || format!("#{}", path_label(&lane.path)),
+                        |value| format!("#{value}"),
+                    ),
+                members: candidates.len(),
+                live,
+                freshest,
+            })
+        })
+        .collect::<Vec<_>>();
+    sort_lane_summaries(&mut summaries);
+    summaries
+}
+
+fn sort_lane_summaries(summaries: &mut [LaneSummary]) {
+    summaries.sort_by(|left, right| {
+        right
+            .freshest
+            .cmp(&left.freshest)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+}
+
+fn path_label(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Allocate fresh team members and return complete tabs for one lane restore.
+pub fn materialize_lane_restore(
+    store: &Store,
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    plan: LaneRestorePlan,
+) -> anyhow::Result<Vec<ResumeTab>> {
+    let mut tabs = Vec::with_capacity(plan.team.len() + plan.flat.tabs.len());
+    for planned in &plan.team {
+        tabs.push(materialize_team_restore_tab(
+            store,
+            workspace_id,
+            session_name,
+            &plan.teams,
+            planned,
+        )?);
+    }
+    tabs.extend(plan.flat.tabs);
+    Ok(tabs)
 }
 
 /// Allocate fresh team members and compile one planned team restore tab.

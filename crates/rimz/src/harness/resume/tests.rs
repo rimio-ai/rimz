@@ -1214,3 +1214,369 @@ fn team_restore_ignores_group_whose_team_no_longer_resolves() {
 
     assert!(tabs.is_empty());
 }
+
+fn lane_worktree(name: &str, branch: &str, from_pr: Option<u64>) -> LaneWorktree {
+    LaneWorktree {
+        name: name.to_owned(),
+        path: PathBuf::from(format!("/repo-worktrees/{name}")),
+        branch: Some(branch.to_owned()),
+        from_pr,
+    }
+}
+
+fn lane_request<'a>(
+    selector: LaneResumeSelector,
+    agents: &'a [AgentState],
+    worktrees: &'a [LaneWorktree],
+    max: usize,
+) -> LaneResumeRequest<'a> {
+    LaneResumeRequest {
+        selector,
+        agents,
+        worktrees,
+        current_root: Path::new("/repo"),
+        project_root: Path::new("/repo"),
+        max,
+        rimz_bin: Path::new("/bin/rimz"),
+    }
+}
+
+fn empty_lane_restore() -> Result<LaneRestoreConfig, LaneResumeError> {
+    Ok(LaneRestoreConfig {
+        teams: TeamsConfig::default(),
+        profiles: ProfilesConfig::default(),
+        commands: CommandsConfig::default(),
+    })
+}
+
+#[test]
+fn lane_scope_prefers_agent_over_colliding_worktree_name() {
+    let mut durable = agent("codex", "durable", "/other/agent-lane", None, 1);
+    durable.channel = Some("docs".to_owned());
+    let agents = [durable];
+    let worktrees = [lane_worktree("docs", "feat/docs", None)];
+    let error = plan_lane_resume(
+        lane_request(
+            LaneResumeSelector::Scope("docs".to_owned()),
+            &agents,
+            &worktrees,
+            128,
+        ),
+        |_| false,
+        |_| true,
+        |_| AgentLiveness::Live { pid: 7 },
+        |_| Vec::new(),
+        empty_lane_restore,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        LaneResumeError::Removed {
+            scope: "docs".to_owned(),
+            worktree: "agent-lane".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn lane_scope_matches_branch_full_path_and_file_name() {
+    let worktrees = [LaneWorktree {
+        name: "review".to_owned(),
+        path: PathBuf::from("/repo-worktrees/docs"),
+        branch: Some("feat/docs".to_owned()),
+        from_pr: None,
+    }];
+    for scope in ["review", "feat/docs", "/repo-worktrees/docs", "docs"] {
+        let error = plan_lane_resume(
+            lane_request(
+                LaneResumeSelector::Scope(scope.to_owned()),
+                &[],
+                &worktrees,
+                128,
+            ),
+            |_| false,
+            |_| true,
+            dead,
+            |_| Vec::new(),
+            empty_lane_restore,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            LaneResumeError::Removed { ref worktree, .. } if worktree == "review"
+        ));
+    }
+}
+
+#[test]
+fn lane_pr_prefers_marker_before_legacy_name() {
+    let worktrees = [
+        lane_worktree("pr-42", "legacy", None),
+        lane_worktree("review", "pull/42", Some(42)),
+    ];
+    let error = plan_lane_resume(
+        lane_request(LaneResumeSelector::PullRequest(42), &[], &worktrees, 128),
+        |_| false,
+        |_| true,
+        dead,
+        |_| Vec::new(),
+        empty_lane_restore,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        LaneResumeError::Removed { worktree, .. } if worktree == "review"
+    ));
+}
+
+#[test]
+fn lane_focus_uses_freshest_live_member_after_pane_dedupe() {
+    let older = agent_on_pane("codex", "older", "/lane", None, 20, "shared");
+    let newer = agent_on_pane("codex", "newer", "/lane", None, 2, "shared");
+    let other = agent_on_pane("claude", "other", "/lane", None, 5, "other");
+    let agents = [older, other, newer];
+    let action = plan_lane_resume(
+        LaneResumeRequest {
+            current_root: Path::new("/lane"),
+            ..lane_request(LaneResumeSelector::Current, &agents, &[], 128)
+        },
+        |_| true,
+        |_| true,
+        |_| AgentLiveness::Live { pid: 7 },
+        |_| Vec::new(),
+        || panic!("focus must not load restore config"),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        action,
+        LaneResumeAction::Focus { pane_id, .. }
+            if pane_id == PaneId::from_parts(MuxName::Zellij, "shared")
+    ));
+}
+
+#[test]
+fn lane_partial_resume_targets_live_pane_and_only_seeds_closed_members() {
+    let live = agent_on_pane("claude", "live", "/lane", None, 1, "live-pane");
+    let closed = agent_on_pane("codex", "closed", "/lane", None, 2, "closed-pane");
+    let agents = [live, closed];
+    let action = plan_lane_resume(
+        LaneResumeRequest {
+            current_root: Path::new("/lane"),
+            ..lane_request(LaneResumeSelector::Current, &agents, &[], 128)
+        },
+        |_| true,
+        |_| true,
+        |agent| {
+            if agent.agent_id.as_str() == "live" {
+                AgentLiveness::Live { pid: 7 }
+            } else {
+                AgentLiveness::Dead
+            }
+        },
+        |_| Vec::new(),
+        || panic!("partial resume must not load restore config"),
+    )
+    .unwrap();
+
+    let LaneResumeAction::SplitClosed {
+        target_pane_id,
+        commands,
+        live_labels,
+        ..
+    } = action
+    else {
+        panic!("expected partial split");
+    };
+    assert_eq!(
+        target_pane_id,
+        PaneId::from_parts(MuxName::Zellij, "live-pane")
+    );
+    assert_eq!(commands.len(), 1);
+    assert!(commands[0].iter().any(|arg| arg == "closed"));
+    assert_eq!(live_labels.len(), 1);
+}
+
+#[test]
+fn lane_rejects_provisional_or_unbacked_conversations() {
+    let provisional = agent("codex", "launch_pending", "/lane", None, 1);
+    let agents = [provisional];
+    let provisional_error = plan_lane_resume(
+        LaneResumeRequest {
+            current_root: Path::new("/lane"),
+            ..lane_request(LaneResumeSelector::Current, &agents, &[], 128)
+        },
+        |_| true,
+        |_| true,
+        dead,
+        |_| Vec::new(),
+        empty_lane_restore,
+    )
+    .unwrap_err();
+    assert_eq!(
+        provisional_error,
+        LaneResumeError::Nothing {
+            scope: "#lane".to_owned()
+        }
+    );
+
+    let durable = [agent("codex", "durable", "/lane", None, 1)];
+    let no_conversation = plan_lane_resume(
+        LaneResumeRequest {
+            current_root: Path::new("/lane"),
+            ..lane_request(LaneResumeSelector::Current, &durable, &[], 128)
+        },
+        |_| true,
+        |_| false,
+        dead,
+        |_| Vec::new(),
+        empty_lane_restore,
+    )
+    .unwrap_err();
+    assert_eq!(
+        no_conversation,
+        LaneResumeError::Nothing {
+            scope: "#lane".to_owned()
+        }
+    );
+}
+
+#[test]
+fn lane_listing_groups_deduped_members_and_sorts_freshest_first() {
+    let agents = [
+        agent_on_pane("codex", "old", "/docs", None, 30, "docs"),
+        agent_on_pane("codex", "new", "/docs", None, 10, "docs"),
+        agent_on_pane("claude", "api", "/api", None, 2, "api"),
+    ];
+    let action = plan_lane_resume(
+        lane_request(LaneResumeSelector::List, &agents, &[], 128),
+        |_| true,
+        |_| true,
+        |agent| {
+            if agent.agent_id.as_str() == "api" {
+                AgentLiveness::Live { pid: 7 }
+            } else {
+                AgentLiveness::Dead
+            }
+        },
+        |_| Vec::new(),
+        || panic!("listing must not load restore config"),
+    )
+    .unwrap();
+
+    let LaneResumeAction::List { lanes } = action else {
+        panic!("expected listing");
+    };
+    assert_eq!(lanes.len(), 2);
+    assert_eq!(lanes[0].label, "#api");
+    assert_eq!(lanes[0].live, 1);
+    assert_eq!(lanes[1].members, 1);
+}
+
+#[test]
+fn lane_all_closed_counts_team_panes_before_flat_capacity() {
+    let (teams, profiles, commands) = team_configs();
+    let planner = team_agent("claude", "planner", "planner", "/lane", 1);
+    let coder = team_agent("codex", "coder", "coder", "/lane", 2);
+    let flat = agent("codex", "flat", "/lane", None, 3);
+    let agents = [planner, coder, flat];
+    let action = plan_lane_resume(
+        LaneResumeRequest {
+            current_root: Path::new("/lane"),
+            ..lane_request(LaneResumeSelector::Current, &agents, &[], 2)
+        },
+        |_| true,
+        |_| true,
+        dead,
+        |_| Vec::new(),
+        || {
+            Ok(LaneRestoreConfig {
+                teams,
+                profiles,
+                commands,
+            })
+        },
+    )
+    .unwrap();
+
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected closed restore");
+    };
+    assert_eq!(plan.team.len(), 1);
+    assert!(plan.flat.tabs.is_empty());
+    assert!(
+        plan.flat
+            .skipped
+            .iter()
+            .any(|skip| { skip.label == "codex:lane" && skip.reason == ResumeSkipReason::OverCap })
+    );
+}
+
+#[test]
+fn lane_all_closed_restores_team_and_flat_remainder() {
+    let (teams, profiles, commands) = team_configs();
+    let agents = [
+        team_agent("claude", "planner", "planner", "/lane", 1),
+        team_agent("codex", "coder", "coder", "/lane", 2),
+        agent("codex", "flat", "/lane", None, 3),
+    ];
+    let action = plan_lane_resume(
+        LaneResumeRequest {
+            current_root: Path::new("/lane"),
+            ..lane_request(LaneResumeSelector::Current, &agents, &[], 3)
+        },
+        |_| true,
+        |_| true,
+        dead,
+        |_| Vec::new(),
+        || {
+            Ok(LaneRestoreConfig {
+                teams,
+                profiles,
+                commands,
+            })
+        },
+    )
+    .unwrap();
+
+    let LaneResumeAction::RestoreClosed { plan, .. } = action else {
+        panic!("expected closed restore");
+    };
+    assert_eq!(plan.team.len(), 1);
+    assert_eq!(plan.flat.tabs.len(), 1);
+    assert_eq!(plan.flat.tabs[0].pane_count(), 1);
+}
+
+#[test]
+fn lane_listing_discovers_only_worktrees_without_durable_members() {
+    let durable = [agent("codex", "docs", "/repo-worktrees/docs", None, 5)];
+    let worktrees = [
+        lane_worktree("docs", "feat/docs", None),
+        lane_worktree("native", "feat/native", None),
+    ];
+    let action = plan_lane_resume(
+        lane_request(LaneResumeSelector::List, &durable, &worktrees, 128),
+        |_| true,
+        |_| true,
+        dead,
+        |path| {
+            assert_eq!(path, Path::new("/repo-worktrees/native"));
+            vec![local_session(
+                "claude",
+                "native",
+                "2025-01-04T09:00:00Z",
+                "2025-01-04T10:00:00Z",
+            )]
+        },
+        || panic!("listing must not load restore config"),
+    )
+    .unwrap();
+
+    let LaneResumeAction::List { lanes } = action else {
+        panic!("expected listing");
+    };
+    assert_eq!(lanes.len(), 2);
+    assert!(lanes.iter().any(|lane| lane.label == "#native"));
+}
