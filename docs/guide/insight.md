@@ -120,7 +120,7 @@ A few knobs, all plain TOML ([configuration](./configuration.md)):
 
 - `[sidebar] spend_window` picks the cockpit window (`session`, `24h`, `today`), and `timezone` sets the `today` cutoff and the displayed times.
 - `[theme.display] max_provider_blocks` and `provider_list` choose how many provider blocks the dashboard shows and in what order. A token-only provider ranks by spend like any other.
-- `[accounts.usage_limit_usd]` sets a display ceiling per API-key provider, so its `api` row reads `$used/$limit` instead of `∞`. It tunes the bar only; the provider still enforces the real limit.
+- `[accounts.usage_limit_usd]` sets a display ceiling per API-key provider, changing its `api` row from `$used` to `$used/$limit`. It tunes the bar only; the provider still enforces the real limit.
 
 ## See also
 
