@@ -374,12 +374,23 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
     context.effort = None;
     context.agent_version = Some("0.19.10".to_owned());
     context.rate_limits = None;
+    context.cost = Some(AgentCost {
+        total_cost_usd: Some(0.0153),
+        coverage: crate::agents::CostCoverage::Session,
+        ..Default::default()
+    });
     context.tokens = Some(AgentTokenUsage {
         context_window_size: Some(1_000_000),
         used_percentage: Some(4),
         remaining_percentage: Some(96),
         current_usage: None,
-        session_usage: None,
+        session_usage: Some(AgentSessionUsage {
+            input_tokens: Some(12_000),
+            output_tokens: Some(1_500),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(7_000),
+            thinking_tokens: Some(500),
+        }),
     });
     qwen.context = Some(context);
 
@@ -399,16 +410,27 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
     assert!(first.contains("DeepSeek V4 Pro · 1m"), "{first}");
     assert!(first.contains("3.9%"), "{first}");
     assert!(first.contains("▤ 38k · ◌ 38k ↘ 71 ↗ 85"), "{first}");
+    assert!(first.contains("$0.02"), "{first}");
+    assert!(!first.contains("◇ 14k"), "{first}");
     assert!(!first.contains("[DeepSeek]"), "{first}");
     assert!(!first.contains("↘ 38k"), "{first}");
     assert!(!first.contains('◍'), "{first}");
 
-    qwen.total_tokens = Some(38_827);
-    qwen.fresh_input_tokens = Some(79);
-    qwen.output_tokens = Some(92);
+    qwen.context_pct = None;
+    qwen.cache_read_input_tokens = None;
+    qwen.fresh_input_tokens = None;
+    qwen.output_tokens = None;
+    let tokens = qwen
+        .context
+        .as_mut()
+        .and_then(|context| context.tokens.as_mut())
+        .unwrap();
+    tokens.used_percentage = None;
+    tokens.remaining_percentage = None;
     let second = render(qwen);
-    assert!(second.contains("3.9%"), "{second}");
-    assert!(second.contains("▤ 38k · ◌ 38k ↘ 79 ↗ 92"), "{second}");
+    assert!(second.contains("◇ 14k ↘ 12k ↗ 2k ◌ 7k"), "{second}");
+    assert!(!second.contains('%'), "{second}");
+    assert!(!second.contains('▤'), "{second}");
     assert_ne!(first, second);
 }
 

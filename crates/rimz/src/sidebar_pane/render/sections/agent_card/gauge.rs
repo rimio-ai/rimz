@@ -342,10 +342,11 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// fleet-store / subagent vocabulary. When current-window composition is
 /// unavailable but the provider exposes cumulative session counters, the line
 /// instead uses that shared `◇ ↘ ↗ ◌` grammar without implying occupancy. The
-/// rich statusline blob is preferred;
-/// the row-level [`SidebarRow::call_split`] stands in when the blob carries no
-/// split. Falls
-/// back to the bare `▤` rollup total when neither source has a split (Claude
+/// rich statusline blob is preferred; the row-level
+/// [`SidebarRow::call_split`] stands in when the blob carries no split. The
+/// exact latest-call `▤` composition wins over cumulative `◇` session totals,
+/// which are the honest fallback when the hook/transcript split is absent.
+/// Falls back to the bare `▤` rollup total when no categorized source exists (Claude
 /// before the first API call and right after `/compact`), so the line shows
 /// *something* for every agent. The age rides the right edge only once it
 /// crosses five minutes
@@ -393,6 +394,18 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Opt
             output,
             tokens_int,
         ));
+    } else if let Some(split) = row.call_split() {
+        // The row-level split — the lifecycle rail's per-call composition.
+        left.extend(context_breakdown_spans(
+            theme,
+            severity,
+            split.filled(),
+            split.cache_read,
+            split.cache_write,
+            split.fresh_input,
+            split.output,
+            tokens_int,
+        ));
     } else if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.session_usage.as_ref())
@@ -406,18 +419,6 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Opt
             tokens_int,
             TokenDetail::Full,
             &TokenColumns::default(),
-        ));
-    } else if let Some(split) = row.call_split() {
-        // The row-level split — the lifecycle rail's per-call composition.
-        left.extend(context_breakdown_spans(
-            theme,
-            severity,
-            split.filled(),
-            split.cache_read,
-            split.cache_write,
-            split.fresh_input,
-            split.output,
-            tokens_int,
         ));
     } else {
         let total = agent(row).and_then(|agent| agent.total_tokens)?;
