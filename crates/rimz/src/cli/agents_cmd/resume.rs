@@ -572,7 +572,6 @@ fn resume_closed_lane(
     for planned in &team {
         tabs.push(build_team_restore_tab(
             store,
-            &workspace.workspace_id,
             &workspace.session_name,
             &launch.teams,
             planned,

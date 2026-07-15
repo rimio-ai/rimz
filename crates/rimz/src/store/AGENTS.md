@@ -4,7 +4,7 @@ Local contract for `crates/rimz/src/store/` — durable workspace state. Extends
 
 ## Write path
 
-- Every mutator lives under [`writer.rs`](./writer.rs): the façade owns the `commit` primitive for lock → store-write → event-append, and `writer/` owns debounce, publish, reset, and queue branches. The wakeup, group-fdatasync, and snapshot-publish tail runs once off-lock. Reads on the `Store` handle are lock-free.
+- Every mutator lives under [`writer.rs`](./writer.rs): the façade owns the `commit` primitive for lock → store-write → event-append, and `writer/` owns debounce, lifecycle intent suppression and auto-rotation policy, publish, reset, and queue branches. The wakeup, group-fdatasync, and snapshot-publish tail runs once off-lock. Reads on the `Store` handle are lock-free.
 - Cross-process serialization is the workspace lock's job: every writer is a short-lived CLI process serialized through `workspace.lock`; there is no in-process actor.
 - The helpers in [`atomic.rs`](./atomic.rs) cover every durable write — `write_temp_then_rename` for whole files, `append_record_bytes` (one `write()`, no fsync) for the event log; appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync. Every fsync syscall lives in `atomic.rs` (CI grep). No module hand-rolls its own atomic dance; the event-log frame encoding lives beside its decoder in [`event_log/frame.rs`](./event_log/frame.rs).
 - The message queue ([`writer/queue.rs`](./writer/queue.rs)) owns one live `messages.jsonl` file, records terminal message text in the sibling `history.jsonl`, and records terminal outcomes in the event log; shared age pruning lives in [`atomic.rs`](./atomic.rs).

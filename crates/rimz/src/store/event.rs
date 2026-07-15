@@ -481,9 +481,9 @@ impl EventEnvelope {
         }
     }
 
-    /// Convenience constructor for an `agent.lifecycle` event. The CLI hook
-    /// path calls this after a lifecycle hook fires, so the sidebar's agent
-    /// rollup sees the status and enrichment update without each adapter
+    /// Convenience constructor for an `agent.lifecycle` event. Store lifecycle
+    /// intent handling calls this after a hook observation, so the sidebar's
+    /// agent rollup sees the status and enrichment update without each adapter
     /// touching the store.
     pub fn agent_lifecycle(
         workspace_id: WorkspaceId,

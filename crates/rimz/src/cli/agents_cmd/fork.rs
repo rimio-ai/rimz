@@ -101,22 +101,17 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         run_id: None,
         prompt: None,
     };
-    let launches = store.append_agent_launches_allocating(
+    let launch_batch = store.begin_agent_launch_batch(
         &[request],
-        &AgentLaunchAppend {
-            workspace_id: workspace.workspace_id.clone(),
+        AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: seed.cwd.clone(),
             worktree_name: None,
             channel: channel.clone(),
             description: None,
-            state: rimz::store::event::AgentLaunchState::Starting,
-            pane_id: None,
         },
     )?;
-    let launch = launches
-        .first()
-        .context("agent fork produced no launch identity")?;
+    let launch = launch_batch.single_identity()?;
     let permission_args = launch
         .launch
         .mode
@@ -202,19 +197,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         }
     };
     if let Err(err) = open_result {
-        let _ = store.append_agent_launch_states(
-            &launches,
-            &AgentLaunchAppend {
-                workspace_id: workspace.workspace_id.clone(),
-                session_name: workspace.session_name.clone(),
-                cwd: seed.cwd.clone(),
-                worktree_name: None,
-                channel: channel.clone(),
-                description: None,
-                state: rimz::store::event::AgentLaunchState::Failed,
-                pane_id: None,
-            },
-        );
+        let _ = store.fail_agent_launch_batch(&launch_batch);
         return Err(err).context(what);
     }
     report_fork(&seed, &source_name, &launch.name);

@@ -363,7 +363,7 @@ fn materialize_recovery(
         let Some(store) = store else {
             continue;
         };
-        match materialize_team_restore_tab(store, &paths.workspace_id, session_name, teams, team) {
+        match materialize_team_restore_tab(store, session_name, teams, team) {
             Ok(tab) => tabs.push(MaterializedTab {
                 freshest: Some(team.freshest),
                 tab,

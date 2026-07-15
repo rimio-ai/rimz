@@ -1,12 +1,8 @@
-use super::lifecycle::append_lifecycle_event;
 use super::lifecycle::fill_root_launch_identity;
 use super::lifecycle::handle_lifecycle_hook;
 use super::proctree::matches_agent_kind;
 use rimz::agents::AgentLifecycleObservation;
-use rimz::agents::AgentStatus;
-use rimz::agents::lifecycle::{
-    LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase,
-};
+use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::ids::AgentSessionId;
 use rimz::ids::{MuxName, PaneId};
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
@@ -42,20 +38,6 @@ fn pane(raw: &str, command: &str, cwd: &str, focused: bool) -> PaneRef {
 
 fn candidate(raw: &str, focused: bool) -> PaneRef {
     pane(raw, "codex", "/repo/main", focused)
-}
-
-fn transition(kind: TransitionKind, compaction_closed: bool) -> Transition {
-    Transition {
-        next: LifecycleState {
-            status: AgentStatus::Running,
-            phase: TurnPhase::Reasoning,
-            compacting: false,
-        },
-        kind,
-        compaction_closed,
-        waiting_cleared: false,
-        opened_turn: false,
-    }
 }
 
 fn root_observation() -> AgentLifecycleObservation {
@@ -135,60 +117,6 @@ fn agent_kind_matches_known_launch_shapes() {
             "{comm}/{source}"
         );
     }
-}
-
-#[test]
-fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
-    let proof_of_work = LifecycleSignal::ToolUsed {
-        mutates: false,
-        edits: false,
-    };
-    let mutating_tool = LifecycleSignal::ToolUsed {
-        mutates: true,
-        edits: false,
-    };
-
-    assert!(
-        append_lifecycle_event(&mutating_tool, None),
-        "post-tool progress is durable even when transition inspection is unavailable"
-    );
-    assert!(
-        !append_lifecycle_event(&proof_of_work, None),
-        "tool proof-of-work drops when the prior rollup cannot be inspected"
-    );
-    assert!(
-        !append_lifecycle_event(
-            &proof_of_work,
-            Some(transition(TransitionKind::Normal, false))
-        ),
-        "tool proof-of-work does not fill the durable log during normal running turns"
-    );
-    assert!(
-        append_lifecycle_event(
-            &proof_of_work,
-            Some(transition(
-                TransitionKind::Reconciled {
-                    from: AgentStatus::Idle,
-                    reason: "tool used outside a running turn",
-                },
-                false,
-            )),
-        ),
-        "tool proof-of-work is durable when it reconciles a stale resting row"
-    );
-    assert!(
-        append_lifecycle_event(
-            &proof_of_work,
-            Some(transition(TransitionKind::Normal, true))
-        ),
-        "tool proof-of-work is durable when it closes an open compaction bracket"
-    );
-    let mut clears_waiting = transition(TransitionKind::Normal, false);
-    clears_waiting.waiting_cleared = true;
-    assert!(
-        append_lifecycle_event(&proof_of_work, Some(clears_waiting)),
-        "tool proof-of-work is durable when it clears waiting"
-    );
 }
 
 #[test]

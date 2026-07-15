@@ -5,8 +5,8 @@
 
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
 use rimz::ids::{AgentKind, AgentSessionId};
-use rimz::store::event::{AgentLaunchState, EventKind};
-use rimz::store::{AgentLaunchAppend, AgentLaunchName, AgentLaunchRequest, snapshot};
+use rimz::store::event::EventKind;
+use rimz::store::{AgentLaunchName, AgentLaunchRequest, AgentLaunchScope, snapshot};
 use rimz::{EventEnvelope, RuntimeScope};
 use serde_json::json;
 
@@ -188,23 +188,20 @@ fn launch_allocation_reuses_name_after_stale_rollup_converges() {
         run_id: None,
         prompt: Some("boot".to_owned()),
     };
-    let append = AgentLaunchAppend {
-        workspace_id: h.workspace_id.clone(),
+    let scope = AgentLaunchScope {
         session_name: "rimz-test".to_owned(),
         cwd: h.store.paths().root.clone(),
         worktree_name: Some("main".to_owned()),
         channel: None,
         description: None,
-        state: AgentLaunchState::Bound,
-        pane_id: None,
     };
-    let identities = h
+    let batch = h
         .store
-        .append_agent_launches_allocating(&[request], &append)
+        .begin_agent_launch_batch(&[request], scope)
         .expect("append launch");
 
-    assert_eq!(identities.len(), 1);
-    let launched = &identities[0];
+    assert_eq!(batch.identities().len(), 1);
+    let launched = &batch.identities()[0];
     assert_eq!(
         launched.name, "ghost-pet",
         "durably reaped ghosts no longer reserve names in the audit rollup"

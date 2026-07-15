@@ -171,7 +171,7 @@ fn open_attempt_pane(
     room: &rimz::room::RoomContext,
     args: &AgentsArgs,
     run_id: &rimz::RunId,
-    launch_identity: &LaunchIdentity,
+    launch_batch: &AgentLaunchBatch,
     pane: &PaneCmd,
 ) -> Result<()> {
     let target = own_pane_id(room.mux_name());
@@ -238,19 +238,7 @@ fn open_attempt_pane(
     };
     if let Err(err) = open_result {
         let _ = rimz::harness::run::fail(prepared.store.paths(), run_id);
-        let _ = prepared.store.append_agent_launch_states(
-            std::slice::from_ref(launch_identity),
-            &AgentLaunchAppend {
-                workspace_id: prepared.workspace.workspace_id.clone(),
-                session_name: prepared.workspace.session_name.clone(),
-                cwd: prepared.launch.cwd.clone(),
-                worktree_name: prepared.launch.worktree_name.clone(),
-                channel: prepared.room_channel.clone(),
-                description: None,
-                state: rimz::store::event::AgentLaunchState::Failed,
-                pane_id: None,
-            },
-        );
+        let _ = prepared.store.fail_agent_launch_batch(launch_batch);
         return Err(err).context("opening run pane");
     }
     Ok(())
@@ -384,22 +372,17 @@ fn execute_attempt(
         }
         request.run_id = Some(run_id.clone());
     }
-    let mut launch_identities = prepared.store.append_agent_launches_allocating(
+    let launch_batch = prepared.store.begin_agent_launch_batch(
         &launch_requests,
-        &AgentLaunchAppend {
-            workspace_id: prepared.workspace.workspace_id.clone(),
+        AgentLaunchScope {
             session_name: prepared.workspace.session_name.clone(),
             cwd: prepared.launch.cwd.clone(),
             worktree_name: prepared.launch.worktree_name.clone(),
             channel: prepared.room_channel.clone(),
             description: args.description.clone(),
-            state: rimz::store::event::AgentLaunchState::Starting,
-            pane_id: None,
         },
     )?;
-    let launch_identity = launch_identities
-        .pop()
-        .ok_or_else(|| anyhow::anyhow!("--print requires one agent cell"))?;
+    let launch_identity = launch_batch.single_identity()?;
     record.agent_name = Some(launch_identity.name.clone());
     let pane = supervised::run_pane_cmd(supervised::RunPaneCmdArgs {
         adapter: prepared.adapter,
@@ -437,7 +420,7 @@ fn execute_attempt(
         .as_ref()
         .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
     rimz::harness::run::create(prepared.store.paths(), &record).context("recording run")?;
-    open_attempt_pane(prepared, room, args, &run_id, &launch_identity, &pane)?;
+    open_attempt_pane(prepared, room, args, &run_id, &launch_batch, &pane)?;
     if args.bg {
         #[expect(clippy::print_stdout, reason = "command result is the agent name")]
         {

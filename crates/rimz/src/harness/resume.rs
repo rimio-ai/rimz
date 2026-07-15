@@ -25,10 +25,9 @@ use crate::harness::plan::{
     LayoutPaneParams, cohort_cells, fresh_resume_launch_requests, layout_panes_with_names,
 };
 use crate::harness::spec::LayoutSpec;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::mux::ResumeTab;
-use crate::store::AgentLaunchAppend;
-use crate::store::event::AgentLaunchState;
+use crate::store::AgentLaunchScope;
 use crate::store::runtime::AgentLiveness;
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
@@ -265,7 +264,6 @@ pub fn discovered_agent_state(
 /// Allocate fresh team members and compile one planned team restore tab.
 pub fn materialize_team_restore_tab(
     store: &Store,
-    workspace_id: &WorkspaceId,
     session_name: &str,
     teams: &TeamsConfig,
     planned: &PlannedTeamTab,
@@ -280,22 +278,19 @@ pub fn materialize_team_restore_tab(
         team_roles,
         planned.channel.as_deref(),
     )?;
-    let identities = if launch_requests.is_empty() {
-        Vec::new()
+    let batch = if launch_requests.is_empty() {
+        None
     } else {
-        store.append_agent_launches_allocating(
+        Some(store.begin_agent_launch_batch(
             &launch_requests,
-            &AgentLaunchAppend {
-                workspace_id: workspace_id.clone(),
+            AgentLaunchScope {
                 session_name: session_name.to_owned(),
                 cwd: planned.cwd.clone(),
                 worktree_name: None,
                 channel: planned.channel.clone(),
                 description: None,
-                state: AgentLaunchState::Starting,
-                pane_id: None,
             },
-        )?
+        )?)
     };
     let layout = layout_panes_with_names(
         &planned.layout,
@@ -309,7 +304,7 @@ pub fn materialize_team_restore_tab(
             channel: planned.channel.as_deref(),
             resume_seeds: Some(&planned.cohort.seeds),
         },
-        &identities,
+        batch.as_ref().map_or(&[], |batch| batch.identities()),
     )
     .context("building team restore layout")?;
     Ok(ResumeTab {

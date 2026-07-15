@@ -67,21 +67,23 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
             .is_some();
     let session_present = rimz::harness::resume::resume_session_present(&agent);
     let fresh_reason = fresh_reason(resume_support, session_present);
-    let fresh_identity = if fresh_reason.is_some() {
+    let fresh_batch = if fresh_reason.is_some() {
         Some(append_fresh_launch(
             &store, &workspace, &agent, &cwd, cell, mode,
         )?)
     } else {
         None
     };
-    let identity_name = fresh_identity
+    let fresh_identity = fresh_batch
         .as_ref()
-        .map_or(agent.name.as_deref(), |identity| {
-            Some(identity.name.as_str())
-        });
+        .map(AgentLaunchBatch::single_identity)
+        .transpose()?;
+    let identity_name = fresh_identity.map_or(agent.name.as_deref(), |identity| {
+        Some(identity.name.as_str())
+    });
     let invocation = rimz::harness::launch::ExecInvocation {
         kind: agent.kind.as_str(),
-        action: match fresh_identity.as_ref() {
+        action: match fresh_identity {
             Some(_) => rimz::harness::launch::ExecAction::Launch {
                 prompt: None,
                 extra_args: &extra_args,
@@ -98,11 +100,8 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         identity: rimz::harness::launch::ExecIdentity {
             name: identity_name,
             name_explicit: fresh_identity
-                .as_ref()
                 .map_or(agent.name_explicit, |identity| identity.name_explicit),
-            launch_id: fresh_identity
-                .as_ref()
-                .map(|identity| identity.agent_id.as_str()),
+            launch_id: fresh_identity.map(|identity| identity.agent_id.as_str()),
             profile: agent.profile.as_deref(),
             mode,
             role: agent.role.as_deref(),
@@ -132,7 +131,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .focus_pane(&old_pane, Some(&workspace.session_name))
         .context("focusing the agent pane for restart")
     {
-        mark_fresh_failed(&store, &workspace, fresh_identity.as_ref(), &cwd);
+        mark_fresh_failed(&store, &workspace, fresh_identity, &cwd);
         return Err(err);
     }
     if let Err(err) = backend
@@ -150,7 +149,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         })
         .context("opening the replacement agent pane")
     {
-        mark_fresh_failed(&store, &workspace, fresh_identity.as_ref(), &cwd);
+        mark_fresh_failed(&store, &workspace, fresh_identity, &cwd);
         return Err(err);
     }
     backend
@@ -158,7 +157,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .context("closing the replaced agent pane")?;
 
     let mut out = crate::cli::render::out();
-    if let (Some(identity), Some(reason)) = (fresh_identity.as_ref(), fresh_reason) {
+    if let (Some(identity), Some(reason)) = (fresh_identity, fresh_reason) {
         writeln!(
             out,
             "restarted fresh as @{} — {}",
@@ -281,7 +280,7 @@ fn append_fresh_launch(
     cwd: &Path,
     cell: Cell,
     mode: Option<PermissionMode>,
-) -> Result<LaunchIdentity> {
+) -> Result<AgentLaunchBatch> {
     let layout = LayoutSpec::single(cell);
     let mut requests = rimz::harness::plan::launch_identity_requests(
         &layout,
@@ -305,22 +304,18 @@ fn append_fresh_launch(
     request.launch.launch_group = agent.launch_group.clone();
     request.launch.launch_ordinal = agent.launch_ordinal;
     request.launch.channel = agent.channel.clone();
-    let mut identities = store.append_agent_launches_allocating(
+    let batch = store.begin_agent_launch_batch(
         &requests,
-        &AgentLaunchAppend {
-            workspace_id: workspace.workspace_id.clone(),
+        AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: cwd.to_path_buf(),
             worktree_name: agent.worktree_branch.clone(),
             channel: agent.channel.clone(),
             description: None,
-            state: rimz::store::event::AgentLaunchState::Starting,
-            pane_id: None,
         },
     )?;
-    identities
-        .pop()
-        .context("restart fresh launch allocated no identity")
+    batch.single_identity()?;
+    Ok(batch)
 }
 
 fn mark_fresh_failed(
@@ -332,19 +327,7 @@ fn mark_fresh_failed(
     let Some(identity) = identity else {
         return;
     };
-    let _ = store.append_agent_launch_states(
-        std::slice::from_ref(identity),
-        &AgentLaunchAppend {
-            workspace_id: workspace.workspace_id.clone(),
-            session_name: workspace.session_name.clone(),
-            cwd: cwd.to_path_buf(),
-            worktree_name: None,
-            channel: identity.launch.channel.clone(),
-            description: None,
-            state: rimz::store::event::AgentLaunchState::Failed,
-            pane_id: None,
-        },
-    );
+    let _ = store.fail_agent_launch(identity, &workspace.session_name, cwd);
 }
 
 #[cfg(test)]

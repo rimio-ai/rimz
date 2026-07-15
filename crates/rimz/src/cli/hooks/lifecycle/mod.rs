@@ -1,7 +1,5 @@
 use super::*;
 
-use std::borrow::Cow;
-
 #[cfg(test)]
 use rimz::agents::AgentState;
 
@@ -9,7 +7,6 @@ mod context;
 mod delivery;
 mod identity;
 mod observe;
-mod rotate;
 mod transcript;
 
 use context::*;
@@ -18,14 +15,9 @@ use identity::{
     agent_identity_env, env_run_id, validate_agent_name_env, validate_non_empty_identity_env,
 };
 use observe::record_lifecycle_observation;
-use rotate::*;
 use transcript::*;
 
 pub(super) use identity::fill_root_launch_identity;
-#[cfg(test)]
-pub(super) use observe::append_lifecycle_event;
-#[cfg(test)]
-use observe::event_lifecycle_observation;
 
 pub(crate) fn handle_lifecycle_hook(
     workspace: &ResolvedWorkspace,
@@ -159,8 +151,8 @@ pub(crate) fn handle_lifecycle_hook(
             }
         }
         spawn_queue_delivery_if_checkpoint(workspace, store, agent, recorded);
-        if recorded.appended_lifecycle {
-            spawn_auto_rotation_if_due(workspace, store);
+        if recorded.rotation_due {
+            spawn_auto_rotation(workspace);
         }
     }
     Ok(())
@@ -178,8 +170,19 @@ fn user_input_state_root(_store: &Store) -> Option<&std::path::Path> {
 struct RecordedLifecycle {
     model_hint: Option<String>,
     observation: AgentLifecycleObservation,
-    appended_lifecycle: bool,
+    rotation_due: bool,
     waiting_cleared: bool,
+}
+
+fn spawn_auto_rotation(workspace: &ResolvedWorkspace) {
+    spawn_refresh_detached(&rimz::agents::RefreshSpawn {
+        args: vec![
+            "--root".to_owned(),
+            workspace.project_root.display().to_string(),
+            "workspace".to_owned(),
+            "rotate-events".to_owned(),
+        ],
+    });
 }
 
 struct AgentContextHook<'a> {
@@ -394,74 +397,9 @@ mod tests {
         RecordedLifecycle {
             model_hint: None,
             observation,
-            appended_lifecycle: false,
+            rotation_due: false,
             waiting_cleared: false,
         }
-    }
-
-    #[test]
-    fn lifecycle_event_observation_trims_carry_forward_fields_after_identity() {
-        let mut observation = AgentLifecycleObservation::new(
-            Some(rimz::ids::AgentSessionId::from("sess-1")),
-            LifecycleSignal::Registered,
-        );
-        observation.transcript_path = Some("/tmp/transcript.jsonl".to_owned());
-        observation.worktree_path = Some("/tmp/project".to_owned());
-        observation.worktree_branch = Some("feature".to_owned());
-        observation.launch.role = Some("coder".to_owned());
-        observation.launch.team = Some("forge".to_owned());
-        observation.launch.channel = Some("event-log".to_owned());
-        observation.launch.profile = Some("claude-coder".to_owned());
-        observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%1"));
-
-        let identity = event_lifecycle_observation(&observation);
-        assert_eq!(
-            identity.transcript_path.as_deref(),
-            Some("/tmp/transcript.jsonl")
-        );
-        assert_eq!(identity.worktree_path.as_deref(), Some("/tmp/project"));
-        assert_eq!(identity.worktree_branch.as_deref(), Some("feature"));
-        assert_eq!(identity.pane_id.as_ref().map(PaneId::raw), Some("%1"));
-
-        observation.signal = LifecycleSignal::TurnStarted;
-        let trimmed = event_lifecycle_observation(&observation);
-        assert!(trimmed.transcript_path.is_none());
-        assert!(trimmed.worktree_path.is_none());
-        assert!(trimmed.worktree_branch.is_none());
-        assert!(trimmed.launch.role.is_none());
-        assert!(trimmed.launch.team.is_none());
-        assert!(trimmed.launch.channel.is_none());
-        assert!(trimmed.launch.profile.is_none());
-        assert_eq!(trimmed.pane_id.as_ref().map(PaneId::raw), Some("%1"));
-        assert_eq!(
-            observation.transcript_path.as_deref(),
-            Some("/tmp/transcript.jsonl"),
-            "downstream run-record/context paths keep the full observation"
-        );
-
-        observation.signal = LifecycleSignal::TurnEnded {
-            errored: false,
-            parked_on_background: false,
-        };
-        let turn_end = event_lifecycle_observation(&observation);
-        assert_eq!(
-            turn_end.transcript_path.as_deref(),
-            Some("/tmp/transcript.jsonl"),
-            "a provider can first publish its authoritative path at turn end"
-        );
-        assert!(turn_end.worktree_path.is_none());
-    }
-
-    #[test]
-    fn auto_rotation_decision_respects_threshold_and_debounce() {
-        let threshold = crate::cli::workspace::DEFAULT_EVENT_LOG_ROTATE_BYTES;
-        assert!(!auto_rotation_size_due(threshold - 1));
-        assert!(auto_rotation_size_due(threshold));
-        assert!(auto_rotation_stamp_due(None));
-        assert!(!auto_rotation_stamp_due(Some(
-            AUTO_ROTATE_DEBOUNCE - std::time::Duration::from_secs(1)
-        )));
-        assert!(auto_rotation_stamp_due(Some(AUTO_ROTATE_DEBOUNCE)));
     }
 
     #[test]
@@ -502,7 +440,7 @@ mod tests {
             &RecordedLifecycle {
                 model_hint: None,
                 observation: compact_observation,
-                appended_lifecycle: false,
+                rotation_due: false,
                 waiting_cleared: false,
             },
             "session",
@@ -535,7 +473,7 @@ mod tests {
             &RecordedLifecycle {
                 model_hint: None,
                 observation: real_observation,
-                appended_lifecycle: false,
+                rotation_due: false,
                 waiting_cleared: false,
             },
             "session",

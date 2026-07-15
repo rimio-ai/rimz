@@ -16,11 +16,11 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use super::{GlobalFlags, open_store};
-use rimz::EventEnvelope;
 use rimz::Store;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
 use rimz::agents::{AgentAdapter, AgentHookClass, AgentLifecycleObservation, adapter_by_kind};
 use rimz::ids::{MuxName, PaneId};
+use rimz::store::{AgentLifecycleIntent, AgentLifecycleOutcome};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
 mod binding;

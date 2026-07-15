@@ -162,17 +162,14 @@ pub(super) fn launch_layout(
         room_channel.as_deref(),
         prompt.zip(prompt_agent_index),
     )?;
-    let launch_identities = store.append_agent_launches_allocating(
+    let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,
-        &AgentLaunchAppend {
-            workspace_id: workspace.workspace_id.clone(),
+        AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
             channel: room_channel.clone(),
             description: args.description.clone(),
-            state: rimz::store::event::AgentLaunchState::Starting,
-            pane_id: None,
         },
     )?;
     let worktree_name = launch.worktree_name.clone();
@@ -201,7 +198,7 @@ pub(super) fn launch_layout(
             channel: room_channel.as_deref(),
             resume_seeds: None,
         },
-        &launch_identities,
+        launch_batch.identities(),
     )?;
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
@@ -259,19 +256,7 @@ pub(super) fn launch_layout(
         }
     };
     if let Err(err) = open_result {
-        let _ = store.append_agent_launch_states(
-            &launch_identities,
-            &AgentLaunchAppend {
-                workspace_id: workspace.workspace_id.clone(),
-                session_name: workspace.session_name.clone(),
-                cwd: cwd.clone(),
-                worktree_name: worktree_name.clone(),
-                channel: room_channel.clone(),
-                description: None,
-                state: rimz::store::event::AgentLaunchState::Failed,
-                pane_id: None,
-            },
-        );
+        let _ = store.fail_agent_launch_batch(&launch_batch);
         return Err(err).context(what);
     }
     Ok(())
@@ -366,17 +351,14 @@ fn launch_resume_layout(
             .map(|team| team.roles.as_slice()),
         channel.as_deref(),
     )?;
-    let launch_identities = store.append_agent_launches_allocating(
+    let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,
-        &AgentLaunchAppend {
-            workspace_id: workspace.workspace_id.clone(),
+        AgentLaunchScope {
             session_name: workspace.session_name.clone(),
             cwd: cwd.clone(),
             worktree_name: None,
             channel: channel.clone(),
             description: None,
-            state: rimz::store::event::AgentLaunchState::Starting,
-            pane_id: None,
         },
     )?;
 
@@ -397,7 +379,7 @@ fn launch_resume_layout(
             channel: channel.as_deref(),
             resume_seeds: Some(&plan.seeds),
         },
-        &launch_identities,
+        launch_batch.identities(),
     )?;
     let direction = rimz::mux::detect_terminal_size()
         .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
@@ -446,19 +428,7 @@ fn launch_resume_layout(
         }
     };
     if let Err(err) = open_result {
-        let _ = store.append_agent_launch_states(
-            &launch_identities,
-            &AgentLaunchAppend {
-                workspace_id: workspace.workspace_id.clone(),
-                session_name: workspace.session_name.clone(),
-                cwd: cwd.clone(),
-                worktree_name: None,
-                channel: channel.clone(),
-                description: None,
-                state: rimz::store::event::AgentLaunchState::Failed,
-                pane_id: None,
-            },
-        );
+        let _ = store.fail_agent_launch_batch(&launch_batch);
         return Err(err).context(what);
     }
     report_cohort_resume(&plan);

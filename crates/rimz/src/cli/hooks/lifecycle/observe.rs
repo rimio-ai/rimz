@@ -76,72 +76,34 @@ pub(super) fn record_lifecycle_observation(
                 "closed compaction bracket on a non-compaction signal",
             );
         }
-        // `ToolUsed { false, false }` is proof-of-work from non-blocking
-        // PreToolUse and non-mutating PostToolUse, including an answered
-        // blocking ask. This gate keeps it out of the durable log unless a
-        // fresh snapshot shows it clearing waiting, reconciling a resting row,
-        // or closing a compaction bracket. If transition read fails, the signal
-        // drops and the state change replays on the next durable lifecycle
-        // signal.
         let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
-        let append_lifecycle = append_lifecycle_event(&observation.signal, transition);
-        let appended_lifecycle = if append_lifecycle {
-            let event_observation = event_lifecycle_observation(&observation);
-            let envelope = EventEnvelope::agent_lifecycle(
-                workspace.workspace_id.clone(),
-                &workspace.session_name,
-                agent.descriptor().kind,
-                event_name,
-                &event_observation,
-            );
-            match store.append_event(&envelope) {
-                Ok(()) => true,
-                Err(err) => {
-                    warn!(
-                        agent = agent.descriptor().kind,
-                        event = %event_name,
-                        error = %err,
-                        "lifecycle: failed to record the agent.lifecycle event",
-                    );
-                    false
-                }
+        let rotation_due = match store.append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+            event_name,
+            observation: &observation,
+            transition,
+        }) {
+            Ok(AgentLifecycleOutcome::RotationDue) => true,
+            Ok(AgentLifecycleOutcome::Suppressed | AgentLifecycleOutcome::Appended) => false,
+            Err(err) => {
+                warn!(
+                    agent = agent.descriptor().kind,
+                    event = %event_name,
+                    error = %err,
+                    "lifecycle: failed to record the agent.lifecycle event",
+                );
+                false
             }
-        } else {
-            false
         };
         return Some(RecordedLifecycle {
             model_hint,
             observation,
-            appended_lifecycle,
+            rotation_due,
             waiting_cleared,
         });
     }
     None
-}
-
-pub(super) fn event_lifecycle_observation(
-    observation: &AgentLifecycleObservation,
-) -> Cow<'_, AgentLifecycleObservation> {
-    if observation.signal.establishes_identity() {
-        return Cow::Borrowed(observation);
-    }
-    let mut trimmed = observation.clone();
-    // High-cadence progress events rely on the reducer's carry-forward
-    // projection for per-session constants. A cold first-seen progress event
-    // can miss this enrichment until the next identity-establishing event; the
-    // sidebar already treats these fields as optional.
-    if !matches!(observation.signal, LifecycleSignal::TurnEnded { .. }) {
-        trimmed.transcript_path = None;
-    }
-    trimmed.worktree_path = None;
-    trimmed.worktree_branch = None;
-    trimmed.launch.role = None;
-    trimmed.launch.team = None;
-    trimmed.launch.channel = None;
-    trimmed.launch.profile = None;
-    // Lazy adapters can first recover their pane binding on TurnStarted, so the
-    // reducer needs every event pane stamp that focus recovery supplies.
-    Cow::Owned(trimmed)
 }
 
 /// Fold this observation's signal onto the prior rollup state through the shared
@@ -230,26 +192,4 @@ pub(super) fn log_lifecycle_transition(
         TransitionKind::Normal => {}
     }
     Some(transition)
-}
-
-pub(super) fn proof_of_work_tool(signal: &LifecycleSignal) -> bool {
-    matches!(
-        signal,
-        LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false
-        }
-    )
-}
-
-pub(in crate::cli::hooks) fn append_lifecycle_event(
-    signal: &LifecycleSignal,
-    transition: Option<agent_lifecycle::Transition>,
-) -> bool {
-    !proof_of_work_tool(signal)
-        || transition.is_some_and(|transition| {
-            transition.compaction_closed
-                || transition.waiting_cleared
-                || matches!(transition.kind, TransitionKind::Reconciled { .. })
-        })
 }

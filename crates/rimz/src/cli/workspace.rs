@@ -13,8 +13,6 @@ use rimz::store::event_log::RotationOutcome;
 use rimz::workspace::WorkspaceResolver;
 use rimz::{RuntimePaths, StatePaths, Store};
 
-const MIB: u64 = 1024 * 1024;
-pub(crate) const DEFAULT_EVENT_LOG_ROTATE_BYTES: u64 = 64 * MIB;
 const DEFAULT_EVENT_LOG_ARCHIVE_RETENTION: &str = rimz::store::event_log::DEFAULT_RETENTION_ARG;
 
 #[derive(Debug, Args)]
@@ -42,7 +40,7 @@ enum WorkspaceSubcmd {
 #[derive(Debug, Args)]
 pub struct RotateEventsArgs {
     /// Rotate only if the active log is at least this big. Accepts `64MiB`, `512KB`.
-    #[arg(long, default_value_t = DEFAULT_EVENT_LOG_ROTATE_BYTES, value_parser = parse_byte_size)]
+    #[arg(long, default_value_t = rimz::store::DEFAULT_EVENT_LOG_ROTATE_BYTES, value_parser = parse_byte_size)]
     max_bytes: u64,
     /// Remove archives older than this duration.
     #[arg(long, default_value = DEFAULT_EVENT_LOG_ARCHIVE_RETENTION, value_parser = parse_retention_duration)]
@@ -274,7 +272,7 @@ mod tests {
     #[test]
     fn default_rotation_threshold_matches_the_human_size() {
         assert_eq!(
-            DEFAULT_EVENT_LOG_ROTATE_BYTES,
+            rimz::store::DEFAULT_EVENT_LOG_ROTATE_BYTES,
             parse_byte_size("64MiB").unwrap()
         );
     }

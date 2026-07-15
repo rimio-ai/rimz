@@ -30,7 +30,7 @@ fn recorded(signal: LifecycleSignal) -> RecordedLifecycle {
             Some(rimz::ids::AgentSessionId::from("sess-1")),
             signal,
         ),
-        appended_lifecycle: false,
+        rotation_due: false,
         waiting_cleared: false,
     }
 }

@@ -14,7 +14,7 @@
 //!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   session_death.rs shared store-provable session death rules
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
-//!   writer/         debounce, publish, queue, reap, reset
+//!   writer/         debounce, lifecycle policy, publish, queue, reap, reset
 //!   gc.rs           maintenance façade
 //!   gc/             runtime collection and dead-workspace pruning
 //!   snapshot/       reduced snapshot rebuild
@@ -60,8 +60,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::agents::LaunchParams;
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
-use crate::store::event::{AgentLaunchState, EventEnvelope};
+use crate::ids::{AgentKind, AgentSessionId, RunId, WorkspaceId};
+use crate::store::event::EventEnvelope;
 
 pub use crate::store::paths::{RuntimePaths, StatePaths};
 pub use crate::store::runtime::{RuntimeProjection, RuntimeScope};
@@ -73,7 +73,10 @@ pub use crate::store::snapshot::{
     WorktreePrState, WorktreeTrunkSync, actionable_unread_count, lead_unread_row, triage_key,
 };
 pub use crate::store::workspace_record::WorkspaceRecord;
-pub use crate::store::writer::{EditOutcome, MessageEdit};
+pub use crate::store::writer::{
+    AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_LOG_ROTATE_BYTES, EditOutcome,
+    MessageEdit,
+};
 
 /// Terminal audit-only message outcome for a target that never resolved to a
 /// durable receiver card.
@@ -176,15 +179,34 @@ pub struct AgentLaunchIdentity {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentLaunchAppend {
-    pub workspace_id: WorkspaceId,
+pub struct AgentLaunchScope {
     pub session_name: String,
     pub cwd: PathBuf,
     pub worktree_name: Option<String>,
     pub channel: Option<String>,
     pub description: Option<String>,
-    pub state: AgentLaunchState,
-    pub pane_id: Option<PaneId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchBatch {
+    identities: Vec<AgentLaunchIdentity>,
+    scope: AgentLaunchScope,
+}
+
+impl AgentLaunchBatch {
+    pub fn identities(&self) -> &[AgentLaunchIdentity] {
+        &self.identities
+    }
+
+    pub fn single_identity(&self) -> Result<&AgentLaunchIdentity> {
+        match self.identities.as_slice() {
+            [identity] => Ok(identity),
+            identities => Err(StoreErr::AgentLaunchIdentity(format!(
+                "expected one agent launch identity, got {}",
+                identities.len()
+            ))),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

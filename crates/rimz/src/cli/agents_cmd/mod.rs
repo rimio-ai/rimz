@@ -48,7 +48,9 @@ use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
 use rimz::room::{RoomContext, RoomSizing};
-use rimz::store::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
+use rimz::store::{
+    AgentLaunchBatch, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AgentLaunchScope,
+};
 use rimz::workspace::WorkspaceResolver;
 
 use auto_continue::{AutoContinueArgs, run_auto_continue};

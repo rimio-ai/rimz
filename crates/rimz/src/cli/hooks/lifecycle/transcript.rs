@@ -2,6 +2,8 @@
 
 use super::*;
 
+use std::borrow::Cow;
+
 #[cfg(test)]
 mod tests;
 

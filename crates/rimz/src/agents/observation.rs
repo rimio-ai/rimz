@@ -75,8 +75,8 @@ pub struct LaunchParams {
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
 /// event carries plus the enrichment it reports. Returned by
 /// [`AgentAdapter::observe_lifecycle`](super::AgentAdapter::observe_lifecycle)
-/// so the CLI layer can record an `agent.lifecycle` event without each adapter
-/// touching the store. The status is *derived* from the signal through
+/// so the Store can record an `agent.lifecycle` event without each adapter
+/// touching durable state. The status is *derived* from the signal through
 /// [`step`](super::lifecycle::step), never decided by the adapter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentLifecycleObservation {

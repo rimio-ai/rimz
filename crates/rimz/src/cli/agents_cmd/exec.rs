@@ -514,19 +514,7 @@ fn record_own_launch_pane(workspace: &rimz::ResolvedWorkspace, identity: &Launch
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
     match open_store(workspace).and_then(|store| {
-        store.append_agent_launch_states(
-            std::slice::from_ref(identity),
-            &AgentLaunchAppend {
-                workspace_id: workspace.workspace_id.clone(),
-                session_name: workspace.session_name.clone(),
-                cwd: cwd.clone(),
-                worktree_name: None,
-                channel: identity.launch.channel.clone(),
-                description: None,
-                state: rimz::store::event::AgentLaunchState::Bound,
-                pane_id: Some(pane_id.clone()),
-            },
-        )?;
+        store.bind_agent_launch(identity, &workspace.session_name, &cwd, &pane_id)?;
         Ok(())
     }) {
         Ok(()) => {}
@@ -542,19 +530,7 @@ fn record_own_launch_pane(workspace: &rimz::ResolvedWorkspace, identity: &Launch
 fn record_launch_failed(workspace: &rimz::ResolvedWorkspace, identity: &LaunchIdentity) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| workspace.worktree_root.clone());
     if let Err(err) = open_store(workspace).and_then(|store| {
-        store.append_agent_launch_states(
-            std::slice::from_ref(identity),
-            &AgentLaunchAppend {
-                workspace_id: workspace.workspace_id.clone(),
-                session_name: workspace.session_name.clone(),
-                cwd: cwd.clone(),
-                worktree_name: None,
-                channel: identity.launch.channel.clone(),
-                description: None,
-                state: rimz::store::event::AgentLaunchState::Failed,
-                pane_id: None,
-            },
-        )?;
+        store.fail_agent_launch(identity, &workspace.session_name, &cwd)?;
         Ok(())
     }) {
         tracing::debug!(

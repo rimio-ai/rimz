@@ -11,21 +11,23 @@ use std::time::Duration;
 #[cfg(test)]
 use crate::agents::LaunchParams;
 use crate::pane::RuntimeOwnerKind;
-use crate::store::event::{AgentLaunchPayload, EventEnvelope};
+use crate::store::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use crate::workspace::ResolvedWorkspace;
 
 use super::{
-    AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest,
+    AgentLaunchBatch, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AgentLaunchScope,
     EventLogRotationOutcome, Result, StatePaths, Store, StoreErr, WorkspaceRewriteOutcome,
     event_log, lock, message_store, runtime, snapshot, workspace_record,
 };
 
 mod debounce;
+mod lifecycle;
 mod publish;
 mod queue;
 mod reap;
 mod reset;
 
+pub use lifecycle::{AgentLifecycleIntent, AgentLifecycleOutcome, DEFAULT_EVENT_LOG_ROTATE_BYTES};
 pub use queue::{EditOutcome, MessageEdit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,41 +258,149 @@ impl Store {
     /// Allocate final agent card identities from the durable agent fold and
     /// append their launch events under the same workspace lock.
     #[must_use = "durability barrier; check the result"]
-    pub fn append_agent_launches_allocating(
+    pub fn begin_agent_launch_batch(
         &self,
         requests: &[AgentLaunchRequest],
-        append: &AgentLaunchAppend,
-    ) -> Result<Vec<AgentLaunchIdentity>> {
+        scope: AgentLaunchScope,
+    ) -> Result<AgentLaunchBatch> {
         self.commit(PublishPolicy::Skip, |txn| {
             let (_cache, base_agents, _resume_outcomes) = snapshot::catch_up_rollup(txn.paths)?;
             let identities = allocate_agent_launch_identities(requests, &base_agents)?;
             let events = identities
                 .iter()
-                .map(|identity| agent_launch_event(append, identity))
+                .map(|identity| {
+                    self.agent_launch_event(
+                        identity,
+                        AgentLaunchState::Starting,
+                        &scope.session_name,
+                        &scope.cwd,
+                        scope.worktree_name.as_deref(),
+                        scope.channel.as_deref(),
+                        scope.description.as_deref(),
+                        None,
+                    )
+                })
                 .collect::<Vec<_>>();
             for event in &events {
                 txn.append(event)?;
             }
-            Ok(identities)
+            Ok(AgentLaunchBatch { identities, scope })
         })
     }
 
-    /// Append follow-up state for identities allocated by
-    /// [`Self::append_agent_launches_allocating`]. Each identity commits in
-    /// slice order so partial-failure and wake behavior match separate launch
-    /// transitions.
+    /// Mark every identity in a same-process launch batch failed. Each identity
+    /// commits in slice order so partial-failure and wake behavior match the
+    /// original launch transitions.
     #[must_use = "durability barrier; check the result"]
-    pub fn append_agent_launch_states(
-        &self,
-        identities: &[AgentLaunchIdentity],
-        append: &AgentLaunchAppend,
-    ) -> Result<()> {
-        for identity in identities {
+    pub fn fail_agent_launch_batch(&self, batch: &AgentLaunchBatch) -> Result<()> {
+        for identity in &batch.identities {
             self.commit(PublishPolicy::Skip, |txn| {
-                txn.append(&agent_launch_event(append, identity))
+                txn.append(&self.agent_launch_event(
+                    identity,
+                    AgentLaunchState::Failed,
+                    &batch.scope.session_name,
+                    &batch.scope.cwd,
+                    batch.scope.worktree_name.as_deref(),
+                    batch.scope.channel.as_deref(),
+                    None,
+                    None,
+                ))
             })?;
         }
         Ok(())
+    }
+
+    /// Bind one provisional launch to the pane observed by its wrapper.
+    #[must_use = "durability barrier; check the result"]
+    pub fn bind_agent_launch(
+        &self,
+        identity: &AgentLaunchIdentity,
+        session_name: &str,
+        cwd: &Path,
+        pane_id: &crate::ids::PaneId,
+    ) -> Result<()> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            txn.append(&self.agent_launch_event(
+                identity,
+                AgentLaunchState::Bound,
+                session_name,
+                cwd,
+                None,
+                None,
+                None,
+                Some(pane_id),
+            ))
+        })
+    }
+
+    /// Mark one provisional launch failed across a wrapper or restart process
+    /// boundary, retaining only evidence available in that process.
+    #[must_use = "durability barrier; check the result"]
+    pub fn fail_agent_launch(
+        &self,
+        identity: &AgentLaunchIdentity,
+        session_name: &str,
+        cwd: &Path,
+    ) -> Result<()> {
+        self.commit(PublishPolicy::Skip, |txn| {
+            txn.append(&self.agent_launch_event(
+                identity,
+                AgentLaunchState::Failed,
+                session_name,
+                cwd,
+                None,
+                None,
+                None,
+                None,
+            ))
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn agent_launch_event(
+        &self,
+        identity: &AgentLaunchIdentity,
+        state: AgentLaunchState,
+        session_name: &str,
+        cwd: &Path,
+        worktree_name: Option<&str>,
+        scope_channel: Option<&str>,
+        description: Option<&str>,
+        pane_id: Option<&crate::ids::PaneId>,
+    ) -> EventEnvelope {
+        let runtime_owner = pane_id.map(|_| {
+            runtime::current_process_owner(RuntimeOwnerKind::Agent, identity.agent_id.as_str())
+        });
+        let mut launch = identity.launch.clone();
+        launch.channel = launch
+            .channel
+            .or_else(|| scope_channel.map(ToOwned::to_owned));
+        EventEnvelope::agent_launched(
+            self.inner.paths.workspace_id.clone(),
+            session_name,
+            &identity.kind,
+            AgentLaunchPayload {
+                agent_id: identity.agent_id.clone(),
+                agent_name: identity.name.clone(),
+                agent_name_explicit: identity.name_explicit,
+                launch,
+                state,
+                run_id: identity.run_id.clone(),
+                pane_id: pane_id.cloned(),
+                runtime_owner,
+                worktree_path: Some(cwd.to_string_lossy().into_owned()),
+                worktree_branch: worktree_name.map(ToOwned::to_owned),
+                prompt: identity
+                    .prompt
+                    .as_deref()
+                    .filter(|prompt| !prompt.trim().is_empty())
+                    .map(ToOwned::to_owned),
+                description: description
+                    .map(str::trim)
+                    .filter(|description| !description.is_empty())
+                    .map(ToOwned::to_owned),
+            },
+        )
     }
 
     /// Rotate the active event log when it exceeds `min_bytes`, preserving
@@ -505,530 +615,5 @@ fn mint_available_agent_name(taken: &BTreeSet<String>, session_ids: &[&str]) -> 
     }
 }
 
-fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity) -> EventEnvelope {
-    let runtime_owner = append.pane_id.as_ref().map(|_| {
-        runtime::current_process_owner(RuntimeOwnerKind::Agent, identity.agent_id.as_str())
-    });
-    let mut launch = identity.launch.clone();
-    launch.channel = launch.channel.or_else(|| append.channel.clone());
-    EventEnvelope::agent_launched(
-        append.workspace_id.clone(),
-        append.session_name.clone(),
-        &identity.kind,
-        AgentLaunchPayload {
-            agent_id: identity.agent_id.clone(),
-            agent_name: identity.name.clone(),
-            agent_name_explicit: identity.name_explicit,
-            launch,
-            state: append.state,
-            run_id: identity.run_id.clone(),
-            pane_id: append.pane_id.clone(),
-            runtime_owner,
-            worktree_path: Some(append.cwd.to_string_lossy().into_owned()),
-            worktree_branch: append.worktree_name.clone(),
-            prompt: identity
-                .prompt
-                .as_deref()
-                .filter(|prompt| !prompt.trim().is_empty())
-                .map(ToOwned::to_owned),
-            description: append
-                .description
-                .as_deref()
-                .map(str::trim)
-                .filter(|description| !description.is_empty())
-                .map(ToOwned::to_owned),
-        },
-    )
-}
-
 #[cfg(test)]
-mod tests {
-    use std::cell::Cell;
-
-    use serde_json::json;
-
-    use super::*;
-    use crate::agents::AgentState;
-    use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
-    use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
-    use crate::store::event::MessageEventMethod;
-    use crate::store::paths::{RuntimePaths, StatePaths};
-    use crate::workspace::WorkspaceResolver;
-
-    #[test]
-    fn launch_event_builder_preserves_follow_up_evidence_and_metadata() {
-        let workspace_id = WorkspaceId::from_project_root(Path::new("/repo"));
-        let run_id = crate::ids::RunId::new();
-        let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%7");
-        let identity = AgentLaunchIdentity {
-            kind: AgentKind::new_unchecked("codex"),
-            agent_id: AgentSessionId::from("launch_follow_up"),
-            name: "writer".to_owned(),
-            name_explicit: true,
-            launch: LaunchParams {
-                profile: Some("codex-coder".to_owned()),
-                mode: Some(crate::harness::run::PermissionMode::Yolo),
-                role: Some("coder".to_owned()),
-                model: Some("gpt-5.6-sol".to_owned()),
-                effort: Some("xhigh".to_owned()),
-                budget: Some("$2.00/day".to_owned()),
-                team: Some("forge".to_owned()),
-                launch_group: Some("launch_group_1".to_owned()),
-                launch_ordinal: Some(1),
-                channel: Some("identity-channel".to_owned()),
-                kind_ordinal: Some(2),
-            },
-            run_id: Some(run_id.clone()),
-            prompt: Some("  ".to_owned()),
-        };
-        let append = AgentLaunchAppend {
-            workspace_id: workspace_id.clone(),
-            session_name: "rimz-test".to_owned(),
-            cwd: PathBuf::from("/repo-worktrees/auth"),
-            worktree_name: Some("auth".to_owned()),
-            channel: Some("fallback-channel".to_owned()),
-            description: Some("  ".to_owned()),
-            state: crate::store::event::AgentLaunchState::Bound,
-            pane_id: Some(pane_id.clone()),
-        };
-
-        let event = agent_launch_event(&append, &identity);
-        let crate::store::event::EventKind::AgentLaunch(payload) = event.kind() else {
-            panic!("agent launch event")
-        };
-        assert_eq!(event.workspace_id, workspace_id);
-        assert_eq!(event.session_name, "rimz-test");
-        assert_eq!(payload.agent_id, identity.agent_id);
-        assert_eq!(payload.agent_name, "writer");
-        assert!(payload.agent_name_explicit);
-        assert_eq!(payload.launch, identity.launch);
-        assert_eq!(payload.launch.channel.as_deref(), Some("identity-channel"));
-        assert_eq!(payload.state, crate::store::event::AgentLaunchState::Bound);
-        assert_eq!(payload.run_id, Some(run_id));
-        assert_eq!(payload.pane_id, Some(pane_id));
-        assert_eq!(
-            payload
-                .runtime_owner
-                .as_ref()
-                .map(|owner| owner.subject_id.as_str()),
-            Some("launch_follow_up")
-        );
-        assert_eq!(
-            payload.worktree_path.as_deref(),
-            Some("/repo-worktrees/auth")
-        );
-        assert_eq!(payload.worktree_branch.as_deref(), Some("auth"));
-        assert_eq!(payload.prompt, None);
-        assert_eq!(payload.description, None);
-
-        let mut fallback_identity = identity;
-        fallback_identity.launch.channel = None;
-        let fallback = agent_launch_event(&append, &fallback_identity);
-        let crate::store::event::EventKind::AgentLaunch(payload) = fallback.kind() else {
-            panic!("fallback launch event")
-        };
-        assert_eq!(payload.launch.channel.as_deref(), Some("fallback-channel"));
-    }
-
-    #[test]
-    fn launch_state_appends_preserve_allocated_identity_and_fold_state() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
-        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
-        let store = Store::open(paths, runtime).expect("open store");
-        let request = AgentLaunchRequest {
-            kind: AgentKind::new_unchecked("claude"),
-            agent_id: AgentSessionId::from("launch_state_flow"),
-            name: AgentLaunchName::Explicit("planner".to_owned()),
-            launch: LaunchParams {
-                profile: Some("claude-planner".to_owned()),
-                role: Some("planner".to_owned()),
-                team: Some("forge".to_owned()),
-                launch_group: Some("launch_group_1".to_owned()),
-                launch_ordinal: Some(3),
-                channel: Some("auth".to_owned()),
-                model: Some("sonnet".to_owned()),
-                effort: Some("high".to_owned()),
-                ..LaunchParams::default()
-            },
-            run_id: None,
-            prompt: None,
-        };
-        let append = |state, pane_id| AgentLaunchAppend {
-            workspace_id: workspace_id.clone(),
-            session_name: "rimz-test".to_owned(),
-            cwd: dir.path().to_path_buf(),
-            worktree_name: Some("auth".to_owned()),
-            channel: Some("fallback".to_owned()),
-            description: None,
-            state,
-            pane_id,
-        };
-        let identities = store
-            .append_agent_launches_allocating(
-                &[request],
-                &append(crate::store::event::AgentLaunchState::Starting, None),
-            )
-            .expect("allocate launch");
-        let pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_4");
-        store
-            .append_agent_launch_states(
-                &identities,
-                &append(
-                    crate::store::event::AgentLaunchState::Bound,
-                    Some(pane_id.clone()),
-                ),
-            )
-            .expect("bind launch");
-        store
-            .append_agent_launch_states(
-                &identities,
-                &append(crate::store::event::AgentLaunchState::Failed, None),
-            )
-            .expect("fail launch");
-
-        let projection = store
-            .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
-            .expect("project launches");
-        let [agent] = projection.agents.as_slice() else {
-            panic!("one launch")
-        };
-        assert_eq!(agent.agent_id, identities[0].agent_id);
-        assert_eq!(agent.name.as_deref(), Some("planner"));
-        assert!(agent.name_explicit);
-        assert_eq!(agent.profile.as_deref(), Some("claude-planner"));
-        assert_eq!(agent.role.as_deref(), Some("planner"));
-        assert_eq!(agent.team.as_deref(), Some("forge"));
-        assert_eq!(agent.launch_group.as_deref(), Some("launch_group_1"));
-        assert_eq!(agent.launch_ordinal, Some(3));
-        assert_eq!(agent.channel.as_deref(), Some("auth"));
-        assert_eq!(agent.model.as_deref(), Some("sonnet"));
-        assert_eq!(agent.effort.as_deref(), Some("high"));
-        assert_eq!(agent.status, crate::agents::AgentStatus::Failed);
-        assert_eq!(
-            agent.pane.as_ref().map(|pane| &pane.pane_id),
-            Some(&pane_id)
-        );
-    }
-
-    #[test]
-    fn record_workspace_preserves_existing_room_bin() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let project = dir.path().join("project");
-        std::fs::create_dir_all(&project).expect("project dir");
-        let workspace = WorkspaceResolver::resolve(&project, None).expect("workspace");
-        let paths = StatePaths::under(workspace.workspace_id.clone(), dir.path()).expect("state");
-        let runtime =
-            RuntimePaths::under(workspace.workspace_id.clone(), dir.path()).expect("runtime");
-        let store = Store::open(paths.clone(), runtime).expect("open store");
-        let owner = dir.path().join("bin").join("rimz");
-
-        store
-            .record_room_bin(&workspace, owner.clone())
-            .expect("record owner bin");
-        store
-            .record_workspace(&workspace)
-            .expect("generic rerecord preserves owner bin");
-
-        let record = workspace_record::read(&paths.workspace_record).expect("read record");
-        assert_eq!(record.rimz_bin.as_deref(), Some(owner.as_path()));
-    }
-
-    #[test]
-    fn rotate_event_log_writes_carryover_before_archiving_active_log() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
-        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
-        let store = Store::open(paths.clone(), runtime).expect("open store");
-        let mut message = MessageRecord::new(
-            workspace_id.clone(),
-            &agent_state("claude", "sess-resume", Some("lucid-atlas")),
-            "continue".to_owned(),
-            true,
-            DeliveryGate::Resume,
-        );
-        message.status = MessageStatus::Delivered;
-        event_log::append(
-            &paths.events_log,
-            &EventEnvelope::message_event(
-                &message,
-                "rimz-test",
-                MessageEventMethod::Delivered,
-                None,
-            ),
-        )
-        .expect("seed resume event");
-
-        let rotate_called = Cell::new(false);
-        store
-            .rotate_event_log_with(1, None, |events_log, archive_dir, min_bytes| {
-                rotate_called.set(true);
-                assert!(
-                    paths.agents_carryover.exists(),
-                    "rotation must persist carryover before archiving the only active-log copy"
-                );
-                let carryover =
-                    snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
-                assert_eq!(
-                    carryover.resume_outcomes.len(),
-                    1,
-                    "rotation carryover must include terminal resume outcomes"
-                );
-                event_log::rotate(events_log, archive_dir, min_bytes)
-            })
-            .expect("rotate event log");
-
-        assert!(rotate_called.get(), "test rotate hook should run");
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn rotation_carryover_keeps_recent_dead_runtime_owner_agents() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
-        let runtime_paths =
-            RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
-        let store = Store::open(paths.clone(), runtime_paths).expect("open store");
-        let kind = AgentKind::new_unchecked("claude");
-        let launch = |agent_id: &str, name: &str, pid| {
-            EventEnvelope::agent_launched(
-                workspace_id.clone(),
-                "rimz-test",
-                &kind,
-                AgentLaunchPayload {
-                    agent_id: AgentSessionId::from(agent_id),
-                    agent_name: name.to_owned(),
-                    agent_name_explicit: false,
-                    launch: LaunchParams::default(),
-                    state: crate::store::event::AgentLaunchState::Bound,
-                    run_id: None,
-                    pane_id: None,
-                    runtime_owner: Some(runtime::process_owner(
-                        RuntimeOwnerKind::Agent,
-                        agent_id,
-                        pid,
-                    )),
-                    worktree_path: Some(dir.path().to_string_lossy().into_owned()),
-                    worktree_branch: Some("main".to_owned()),
-                    prompt: Some("boot".to_owned()),
-                    description: None,
-                },
-            )
-        };
-        event_log::append(
-            &paths.events_log,
-            &launch("sess-live", "lucid-atlas", std::process::id()),
-        )
-        .expect("append live launch");
-        event_log::append(
-            &paths.events_log,
-            &launch("sess-dead", "solid-lumen", u32::MAX),
-        )
-        .expect("append dead launch");
-
-        store.rotate_event_log(1, None).expect("rotate event log");
-
-        let carryover = snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
-        let ids: Vec<&str> = carryover
-            .agents
-            .iter()
-            .map(|agent| agent.agent_id.as_str())
-            .collect();
-        assert!(
-            ids.contains(&"sess-live"),
-            "live-owner agent must survive rotation carryover: {ids:?}"
-        );
-        assert!(
-            ids.contains(&"sess-dead"),
-            "recent dead-owner identity must survive rotation carryover: {ids:?}"
-        );
-    }
-
-    #[test]
-    fn prune_carryover_drops_old_agents_without_live_owner() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
-        let runtime = RuntimePaths::under(workspace_id, dir.path()).expect("runtime paths");
-        let store = Store::open(paths.clone(), runtime).expect("open store");
-        let mut old = agent_state("claude", "old", Some("lucid-atlas"));
-        old.last_seen = jiff::Timestamp::now() - Duration::from_secs(30 * 86_400);
-        old.last_activity = old.last_seen;
-        let fresh = agent_state("claude", "fresh", Some("solid-lumen"));
-        snapshot::write_carryover(
-            &paths.agents_carryover,
-            &snapshot::EventCarryover {
-                agents: vec![old, fresh],
-                agent_identity: Default::default(),
-                resume_outcomes: Vec::new(),
-            },
-        )
-        .expect("write carryover");
-
-        let removed = store
-            .prune_carryover(Duration::from_secs(14 * 86_400))
-            .expect("prune carryover");
-
-        assert_eq!(removed, 1);
-        let carryover = snapshot::read_carryover(&paths.agents_carryover).expect("read carryover");
-        let ids: Vec<&str> = carryover
-            .agents
-            .iter()
-            .map(|agent| agent.agent_id.as_str())
-            .collect();
-        assert_eq!(ids, vec!["fresh"]);
-    }
-
-    #[test]
-    fn rotation_carryover_drops_consumed_launch_tombstones() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let workspace_id = WorkspaceId::from_project_root(dir.path());
-        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
-        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
-        let store = Store::open(paths.clone(), runtime).expect("open store");
-        let kind = AgentKind::new_unchecked("claude");
-        event_log::append(
-            &paths.events_log,
-            &EventEnvelope::agent_launched(
-                workspace_id.clone(),
-                "rimz-test",
-                &kind,
-                AgentLaunchPayload {
-                    agent_id: AgentSessionId::from("launch_a"),
-                    agent_name: "lucid-atlas".to_owned(),
-                    agent_name_explicit: false,
-                    launch: LaunchParams::default(),
-                    state: crate::store::event::AgentLaunchState::Bound,
-                    run_id: None,
-                    pane_id: None,
-                    runtime_owner: None,
-                    worktree_path: Some(dir.path().to_string_lossy().into_owned()),
-                    worktree_branch: Some("main".to_owned()),
-                    prompt: Some("boot".to_owned()),
-                    description: None,
-                },
-            ),
-        )
-        .expect("append launch");
-        event_log::append(
-            &paths.events_log,
-            &EventEnvelope::new(
-                workspace_id,
-                "rimz-test",
-                "claude",
-                "agent-hook",
-                "agent.lifecycle",
-                json!({
-                    "agent_id": "real-session",
-                    "agent_name": "lucid-atlas",
-                    "signal": { "signal": "registered" },
-                }),
-            ),
-        )
-        .expect("append lifecycle");
-
-        store.rotate_event_log(1, None).expect("rotate event log");
-
-        let carryover = std::fs::read_to_string(&paths.agents_carryover).expect("read carryover");
-        assert!(carryover.contains("real-session"));
-        assert!(
-            !carryover.contains("consumed_launches"),
-            "launch replay tombstones are active-log state and must not grow across rotations"
-        );
-    }
-
-    #[test]
-    fn launch_identity_allocation_rejects_explicit_live_name_or_session_prefix() {
-        let agents = vec![
-            agent_state("claude", "sess-live-alpha", Some("lucid-atlas")),
-            agent_state("claude", "prefix-session", Some("solid-lumen")),
-        ];
-        let duplicate = AgentLaunchRequest {
-            kind: AgentKind::new_unchecked("claude"),
-            agent_id: AgentSessionId::from("launch_a"),
-            name: AgentLaunchName::Explicit("lucid-atlas".to_owned()),
-            launch: LaunchParams::default(),
-            run_id: None,
-            prompt: None,
-        };
-        let prefix = AgentLaunchRequest {
-            kind: AgentKind::new_unchecked("claude"),
-            agent_id: AgentSessionId::from("launch_b"),
-            name: AgentLaunchName::Explicit("prefix".to_owned()),
-            launch: LaunchParams::default(),
-            run_id: None,
-            prompt: None,
-        };
-
-        assert!(allocate_agent_launch_identities(&[duplicate], &agents).is_err());
-        assert!(allocate_agent_launch_identities(&[prefix], &agents).is_err());
-    }
-
-    #[test]
-    fn soft_launch_name_falls_back_when_it_collides() {
-        let agents = vec![agent_state(
-            "claude",
-            "sess-live-alpha",
-            Some("lucid-atlas"),
-        )];
-        let request = AgentLaunchRequest {
-            kind: AgentKind::new_unchecked("claude"),
-            agent_id: AgentSessionId::from("launch_a"),
-            name: AgentLaunchName::Soft("lucid-atlas".to_owned()),
-            launch: LaunchParams::default(),
-            run_id: None,
-            prompt: None,
-        };
-
-        let identities = allocate_agent_launch_identities(&[request], &agents).unwrap();
-
-        assert_eq!(identities.len(), 1);
-        assert_ne!(identities[0].name, "lucid-atlas");
-        assert!(valid_agent_launch_name(&identities[0].name));
-    }
-
-    #[test]
-    fn launch_identity_tracks_explicit_name_provenance() {
-        let agents = Vec::new();
-        let requests = [
-            launch_request(
-                "launch_explicit",
-                AgentLaunchName::Explicit("writer".to_owned()),
-            ),
-            launch_request("launch_soft", AgentLaunchName::Soft("docs".to_owned())),
-            launch_request("launch_mint", AgentLaunchName::Mint),
-        ];
-
-        let identities = allocate_agent_launch_identities(&requests, &agents).unwrap();
-
-        assert_eq!(identities[0].name, "writer");
-        assert!(identities[0].name_explicit);
-        assert_eq!(identities[1].name, "docs");
-        assert!(!identities[1].name_explicit);
-        assert!(valid_agent_launch_name(&identities[2].name));
-        assert!(!identities[2].name_explicit);
-    }
-
-    fn launch_request(id: &str, name: AgentLaunchName) -> AgentLaunchRequest {
-        AgentLaunchRequest {
-            kind: AgentKind::new_unchecked("claude"),
-            agent_id: AgentSessionId::from(id),
-            name,
-            launch: LaunchParams::default(),
-            run_id: None,
-            prompt: None,
-        }
-    }
-
-    fn agent_state(kind: &str, id: &str, name: Option<&str>) -> AgentState {
-        let now = jiff::Timestamp::now();
-        AgentState {
-            name: name.map(ToOwned::to_owned),
-            kind_ordinal: Some(1),
-            ..crate::testkit::agent_state(kind, id, now)
-        }
-    }
-}
+mod tests;

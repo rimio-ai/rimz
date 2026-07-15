@@ -20,7 +20,7 @@ An adapter is the *single* place an agent protocol is normalized. It owns `class
 - **Plugin manifests derive claims.** The declared canonical event list, capabilities, and probes generate both descriptor matrices. Keep hook installation self-managed and neutral output empty; probes stay bounded, read-only, and off the store import graph.
 - **Read upstream JSONC without rewriting it.** Read-only probes of user-editable upstream JSON files parse through [`jsonc.rs`](./jsonc.rs); install flows that rewrite a file keep strict parsing so comments are never silently discarded.
 
-- **Adapters never touch the store.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) owns every store write, calling the adapter for classification, neutral rendering, and normalized run output.
+- **Adapters never touch the store.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) calls the adapter for classification, neutral rendering, and normalized run output, then submits lifecycle write intent to Store.
 - **Emit only the normalized outputs downstream consumes** — an `AgentLifecycleObservation`, a blocking-ask classification, and a supervised-run final assistant message. A native event name or payload field reached for outside this module is a mapping that belongs *in* an adapter.
 
 ## Hook discipline
