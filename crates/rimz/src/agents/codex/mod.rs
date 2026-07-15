@@ -927,7 +927,7 @@ impl CodexLifecycleParts {
         let child = self.child()?;
         child
             .is_distinct()
-            .then(|| child.identity.agent_id.as_deref())
+            .then_some(child.identity.agent_id.as_deref())
             .flatten()
     }
 
