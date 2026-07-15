@@ -645,16 +645,15 @@ pub fn explain(
     let compacting = agent.is_some_and(|agent| agent.is_compacting(now));
     let open =
         agent.is_some_and(|agent| gate_open_for_agent(message.gate, agent, message.force, now));
-    let resume_recovered =
-        match (message.gate, agent, open) {
-            (DeliveryGate::Resume, Some(agent), true) => {
-                let runtime = RuntimePaths::for_workspace(message.workspace_id.clone()).ok();
-                Some(runtime.as_ref().is_some_and(|runtime| {
-                    crate::agents::resume_gate_recovered(runtime, agent, now)
-                }))
-            }
-            _ => None,
-        };
+    let resume_recovered = match (message.gate, agent, open) {
+        (DeliveryGate::Resume, Some(agent), true) => {
+            let runtime = RuntimePaths::for_workspace(message.workspace_id.clone()).ok();
+            Some(runtime.as_ref().is_some_and(|runtime| {
+                crate::harness::auto_continue::resume_gate_recovered(runtime, agent, now)
+            }))
+        }
+        _ => None,
+    };
     let waiting = !message.force && agent.is_some_and(crate::agents::AgentState::is_awaiting_input);
     let pane = agent.and_then(|agent| {
         snapshot.agent_panes.iter().find(|pane| {

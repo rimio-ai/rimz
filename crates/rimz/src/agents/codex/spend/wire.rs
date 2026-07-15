@@ -3,9 +3,10 @@
 //! Session and headless log variants, timestamp forms, and token-count aliases normalize here so the parser can stay structural and state-focused.
 
 use std::borrow::Cow;
-use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
+
+use crate::agents::transcript_fs::deserialize_optional_object_lossy;
 
 // ── Public output type ────────────────────────────────────────────────────────
 
@@ -289,65 +290,6 @@ impl<'de> Deserialize<'de> for CodexRawUsage {
 }
 
 // ── Serde helpers ─────────────────────────────────────────────────────────────
-
-/// Deserialize `Option<T>` where the field may carry a non-object value.
-///
-/// JSON fields that are expected to be objects sometimes carry `null`, `true`,
-/// an integer, or a string in Codex log variants.  This deserializer maps all
-/// non-object values to `None` rather than returning an error, matching the
-/// ccusage `deserialize_optional_object_lossy` pattern.
-fn deserialize_optional_object_lossy<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    struct Visitor<T>(PhantomData<T>);
-
-    impl<'de, T: serde::Deserialize<'de>> serde::de::Visitor<'de> for Visitor<T> {
-        type Value = Option<T>;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("an optional object")
-        }
-
-        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-        fn visit_seq<A: serde::de::SeqAccess<'de>>(
-            self,
-            mut seq: A,
-        ) -> Result<Self::Value, A::Error> {
-            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
-            Ok(None)
-        }
-        fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
-            deserialize_optional_object_lossy(d)
-        }
-        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-            T::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(Some)
-        }
-    }
-
-    deserializer.deserialize_any(Visitor(PhantomData))
-}
 
 /// Deserialize `Option<u64>` where the field may carry a string, negative
 /// number, or float.  Non-u64 values become `None`.

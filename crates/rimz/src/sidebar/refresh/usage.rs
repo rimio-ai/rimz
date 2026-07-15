@@ -38,7 +38,9 @@ fn refresh_account_usage_with(
         let Some(adapter) = crate::agents::find_adapter(kind) else {
             continue;
         };
-        let identity = scheduling_identity(runtime, kind, adapter);
+        let Some(identity) = scheduling_identity(runtime, kind, adapter) else {
+            continue;
+        };
         let Some(claim_id) = claim_provider_account_usage(runtime, kind, identity) else {
             continue;
         };
@@ -52,30 +54,24 @@ fn scheduling_identity(
     runtime: &RuntimePaths,
     kind: &str,
     adapter: &dyn crate::agents::AgentAdapter,
-) -> AccountUsageIdentity {
+) -> Option<AccountUsageIdentity> {
+    let mut identity = adapter.account_usage_identity()?;
     let cached_hint = cached_account_usage_hint(runtime, kind);
     if let Some((scope, Some(credentials_stamp))) = cached_hint.as_ref() {
-        return AccountUsageIdentity {
-            scope: scope.clone(),
-            credentials_stamp: Some(*credentials_stamp),
-            account_key: None,
-        };
-    }
-    let mut identity = adapter.account_usage_identity();
-    if let Some((scope, stamp)) = cached_hint {
+        identity.scope = scope.clone();
+        identity.credentials_stamp = Some(*credentials_stamp);
+    } else if let Some((scope, stamp)) = cached_hint {
         identity.scope = scope;
         identity.credentials_stamp = identity.credentials_stamp.or(stamp);
     }
-    // ponytail: Antigravity is the only direct source without a cheap owner
-    // preflight; add a typed unknown-owner state if another provider needs it.
-    if kind == "antigravity" && identity.account_key.is_none() {
+    if identity.account_key.is_none() {
         identity.account_key = super::credits::read_credits_cache(&runtime.shared_credits_path())
             .entries
             .get(kind)
             .filter(|entry| entry.scope == identity.scope)
             .and_then(|entry| entry.account_key.clone());
     }
-    identity
+    Some(identity)
 }
 
 /// Run one producer-created claim. The helper validates the nonce before any
@@ -146,7 +142,9 @@ pub fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_wind
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return false;
     };
-    let identity = scheduling_identity(runtime, kind, adapter);
+    let Some(identity) = scheduling_identity(runtime, kind, adapter) else {
+        return false;
+    };
     let Some(claim_id) = claim_provider_account_usage(runtime, kind, identity) else {
         return false;
     };
@@ -305,7 +303,8 @@ mod tests {
 
     use jiff::Timestamp;
 
-    use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, read_rate_limits_cache};
+    use crate::agents::account::read_rate_limits_cache;
+    use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow};
     use crate::ids::WorkspaceId;
     use crate::sidebar::refresh::accounts::{AccountsCache, ProviderRecord};
     use crate::sidebar::refresh::credits::{CreditsCache, ProviderCreditsEntry};
@@ -474,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_completed_probe_waits_for_the_account_usage_ttl() {
+    fn unknown_owner_source_reuses_same_scope_owner_until_ttl() {
         let (_dir, runtime) = owned_usage_runtime("owner-a");
         assert!(complete_direct_account_usage(
             &runtime,
@@ -488,11 +487,31 @@ mod tests {
         ));
 
         let adapter = crate::agents::find_adapter("antigravity").unwrap();
-        let identity = scheduling_identity(&runtime, "antigravity", adapter);
+        let identity = scheduling_identity(&runtime, "antigravity", adapter).unwrap();
         assert_eq!(identity.account_key.as_deref(), Some("owner-a"));
         assert_eq!(
             claim_provider_account_usage(&runtime, "antigravity", identity),
             None
+        );
+    }
+
+    #[test]
+    fn metered_adapter_without_usage_source_creates_no_claim_or_helper() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let snapshot = snapshot_with_panels(workspace, vec![provider_panel("copilot", Vec::new())]);
+        let mut spawn_attempts = 0;
+        refresh_account_usage_with(&snapshot, &runtime, |_, _, _, _| {
+            spawn_attempts += 1;
+            true
+        });
+        assert_eq!(spawn_attempts, 0);
+        assert!(
+            !super::super::credits::read_credits_cache(&runtime.shared_credits_path())
+                .entries
+                .contains_key("copilot")
         );
     }
 

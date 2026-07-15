@@ -72,6 +72,26 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     extra_bin_dirs: &[],
     activity_events: &[],
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("kiro-cli"),
+        fixed_args: &["chat", "--v3"],
+        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        resume: Some(super::SessionCommand {
+            before_id: &["kiro-cli", "chat", "--v3", "--resume-id"],
+            after_id: &[],
+        }),
+        fork: None,
+        permission: super::LaunchPermissionArgs::EMPTY,
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: Some("/compact"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
+            effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+        },
+    },
 };
 
 const KIRO_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -200,16 +220,6 @@ impl AgentAdapter for KiroAdapter {
         Ok(None)
     }
 
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "kiro-cli".to_owned(),
-            "chat".to_owned(),
-            "--v3".to_owned(),
-            "--resume-id".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
     fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<crate::ids::AgentSessionId> {
         session::resumed_session_id(cmdline)
     }
@@ -245,42 +255,10 @@ impl AgentAdapter for KiroAdapter {
             return None;
         }
         Some(LocalContextRefresh {
-            model_id: None,
-            model_display_name: None,
-            effort: None,
-            tokens: None,
-            cost: None,
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
             transcript_path: Some(path.to_string_lossy().into_owned()),
             transcript_stat: Some(stat),
+            ..LocalContextRefresh::default()
         })
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compact")
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        let flag = match field {
-            super::PresetField::Model => "--model",
-            super::PresetField::Effort => "--effort",
-            super::PresetField::SystemPromptFile | super::PresetField::AppendSystemPromptFile => {
-                return None;
-            }
-        };
-        Some(super::PresetArgMatcher::Flag(vec![flag.to_owned()]))
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        // Profile flags belong to `chat`; putting them after the root-level
-        // `--v3` shortcut makes clap reject them before chat starts.
-        let mut args = vec!["chat".to_owned(), "--v3".to_owned()];
-        args.extend(extra_args.iter().cloned());
-        Some(super::positional_prompt_argv("kiro-cli", &args, prompt))
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {

@@ -71,6 +71,26 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     extra_bin_dirs: &[],
     activity_events: &["session_start", "agent_start", "tool_result", "agent_end"],
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("amp"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::None,
+        resume: Some(super::SessionCommand {
+            before_id: &["amp", "threads", "continue"],
+            after_id: &[],
+        }),
+        fork: None,
+        permission: super::LaunchPermissionArgs::EMPTY,
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: None,
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--mode"])),
+            effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+        },
+    },
 };
 
 const AMP_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -344,20 +364,14 @@ impl AgentAdapter for AmpAdapter {
         let cost_usd = entries.iter().map(|entry| entry.cost_usd).sum::<f64>();
         Some(LocalContextRefresh {
             model_id,
-            model_display_name: None,
-            effort: None,
             tokens,
             cost: (cost_usd > 0.0).then_some(AgentCost {
                 total_cost_usd: Some(cost_usd),
                 ..AgentCost::default()
             }),
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
-            native_permission_wait: None,
-            turn_interrupted: None,
             transcript_path: Some(path.to_string_lossy().into_owned()),
             transcript_stat: Some(stat),
+            ..LocalContextRefresh::default()
         })
     }
 
@@ -414,26 +428,6 @@ impl AgentAdapter for AmpAdapter {
             .flatten()
             .as_deref()
             .and_then(non_empty_trimmed)
-    }
-
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "amp".to_owned(),
-            "threads".to_owned(),
-            "continue".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        let flag = match field {
-            super::PresetField::Model => "--mode",
-            super::PresetField::Effort => "--effort",
-            super::PresetField::SystemPromptFile | super::PresetField::AppendSystemPromptFile => {
-                return None;
-            }
-        };
-        Some(super::PresetArgMatcher::Flag(vec![flag.to_owned()]))
     }
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {

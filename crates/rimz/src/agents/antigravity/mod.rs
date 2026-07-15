@@ -25,9 +25,10 @@ use super::descriptor::{
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalSessionObservation,
-    PresetArgMatcher, PresetField, Result, TranscriptMessage,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalSessionObservation, Result,
+    TranscriptMessage,
 };
+#[cfg(test)]
 use crate::harness::run::PermissionMode;
 
 pub const SUPPORTED_VERSION: &str = "1.1.2";
@@ -109,6 +110,26 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     extra_bin_dirs: &[".local/bin"],
     activity_events: INSTALLED_EVENT_LABELS,
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("agy"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::Flag("--prompt-interactive"),
+        resume: None,
+        fork: None,
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &["--mode", "accept-edits"],
+            yolo: &["--dangerously-skip-permissions"],
+            plan: &["--mode", "plan"],
+        },
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: None,
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
+            ..super::PresetMatchers::EMPTY
+        },
+    },
 };
 
 const ANTIGRAVITY_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -221,6 +242,10 @@ impl AgentAdapter for AntigravityAdapter {
 
     fn probe_account_usage(&self) -> super::AccountUsageProbe {
         local_api::probe_account_usage()
+    }
+
+    fn account_usage_identity(&self) -> Option<super::AccountUsageIdentity> {
+        Some(super::AccountUsageIdentity::default())
     }
 
     fn probe_version(&self) -> Option<String> {
@@ -368,28 +393,6 @@ impl AgentAdapter for AntigravityAdapter {
                 session_id.to_owned(),
             ]
         })
-    }
-
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        match mode {
-            PermissionMode::Ask => Vec::new(),
-            PermissionMode::Auto => vec!["--mode".to_owned(), "accept-edits".to_owned()],
-            PermissionMode::Plan => vec!["--mode".to_owned(), "plan".to_owned()],
-            PermissionMode::Yolo => vec!["--dangerously-skip-permissions".to_owned()],
-        }
-    }
-
-    fn preset_arg_matcher(&self, field: PresetField) -> Option<PresetArgMatcher> {
-        (field == PresetField::Model).then(|| PresetArgMatcher::Flag(vec!["--model".to_owned()]))
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        let mut argv = vec!["agy".to_owned()];
-        argv.extend(extra_args.iter().cloned());
-        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
-            argv.extend(["--prompt-interactive".to_owned(), prompt.to_owned()]);
-        }
-        Some(argv)
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {

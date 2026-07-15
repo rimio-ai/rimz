@@ -131,9 +131,9 @@ fn limit_marker_terminal_row_parks_until_budget_resets() {
             session.paused_turn_error(10, marker_label)
         };
 
-        let snapshot = room_with_agent_panes_and_budgets(
+        let snapshot = room_with_agent_panes_and_capacities(
             vec![session],
-            account_budget("codex", budget_windows),
+            provider_capacity("codex", budget_windows),
         );
         let row = row(&snapshot, "codex-stop-error");
         assert_eq!(row.status(), Some(expected_status), "{label}");
@@ -150,9 +150,9 @@ fn legacy_session_limit_marker_parks_while_budget_is_spent() {
         .limits(vec![window(100, 3_600)])
         .turn_error(10, "You've hit your session limit · resets 10:50am (UTC)");
 
-    let snapshot = room_with_agent_panes_and_budgets(
+    let snapshot = room_with_agent_panes_and_capacities(
         vec![session],
-        account_budget("claude", vec![window(100, 3_600)]),
+        provider_capacity("claude", vec![window(100, 3_600)]),
     );
     let row = row(&snapshot, "session-limited");
     assert_eq!(

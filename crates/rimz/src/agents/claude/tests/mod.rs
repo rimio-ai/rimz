@@ -38,6 +38,10 @@ fn claude_commands_and_permission_args_match_run_posture() {
         ])
     );
     assert_eq!(
+        ClaudeAdapter.launch_command(&[], Some("")),
+        Some(vec!["claude".to_owned()])
+    );
+    assert_eq!(
         ClaudeAdapter.launch_command(
             &["--permission-mode".to_owned(), "plan".to_owned()],
             Some("review this")
@@ -64,6 +68,15 @@ fn claude_commands_and_permission_args_match_run_posture() {
         ClaudeAdapter.permission_args(PermissionMode::Yolo),
         vec!["--dangerously-skip-permissions"]
     );
+    assert_eq!(
+        ClaudeAdapter.ping_args(),
+        Some(
+            ["--model", "sonnet", "--effort", "low"]
+                .map(ToOwned::to_owned)
+                .to_vec()
+        )
+    );
+    assert_eq!(ClaudeAdapter.compact_command(), Some("/compact"));
 }
 
 #[test]

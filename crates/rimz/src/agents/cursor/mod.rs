@@ -29,6 +29,7 @@ use super::{
     HookInstallReport, HookUninstallReport, LocallyPricedTurnCost, PriceBook, Result,
     classify_agent_hook, locate_binary, sanitize_user_prompt,
 };
+#[cfg(test)]
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
 
@@ -77,6 +78,26 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "stop",
     ],
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("agent"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        resume: None,
+        fork: None,
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &["--auto-review"],
+            yolo: &["--force", "--sandbox", "disabled"],
+            plan: &["--mode=plan"],
+        },
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: Some("/summarize"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
+            ..super::PresetMatchers::EMPTY
+        },
+    },
 };
 
 const CURSOR_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -453,33 +474,16 @@ impl AgentAdapter for CursorAdapter {
         Some(vec![bin, "--resume".to_owned(), session_id.to_owned()])
     }
 
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        match mode {
-            PermissionMode::Ask => Vec::new(),
-            PermissionMode::Plan => vec!["--mode=plan".to_owned()],
-            PermissionMode::Auto => vec!["--auto-review".to_owned()],
-            PermissionMode::Yolo => vec![
-                "--force".to_owned(),
-                "--sandbox".to_owned(),
-                "disabled".to_owned(),
-            ],
-        }
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/summarize")
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        (field == super::PresetField::Model)
-            .then(|| super::PresetArgMatcher::Flag(vec!["--model".to_owned()]))
-    }
-
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         let bin = locate_binary(self.descriptor())
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|| "agent".to_owned());
-        Some(super::positional_prompt_argv(&bin, extra_args, prompt))
+        let mut argv = self
+            .descriptor()
+            .launch
+            .launch_command(extra_args, prompt)?;
+        argv[0] = bin;
+        Some(argv)
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {

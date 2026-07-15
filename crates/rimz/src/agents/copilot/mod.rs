@@ -33,6 +33,7 @@ use super::{
     LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin,
     TranscriptMessage, TurnErrorClass, classify_agent_hook, sanitize_user_prompt,
 };
+#[cfg(test)]
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
 use crate::transcript::AskQuestion;
@@ -81,6 +82,31 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "agentStop",
     ],
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("copilot"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::Flag("--interactive"),
+        resume: Some(super::SessionCommand {
+            before_id: &["copilot", "--resume"],
+            after_id: &[],
+        }),
+        fork: None,
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &["--autopilot"],
+            yolo: &["--allow-all"],
+            plan: &["--plan"],
+        },
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: Some("/compact"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
+            effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+        },
+    },
 };
 
 const COPILOT_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -507,48 +533,6 @@ impl AgentAdapter for CopilotAdapter {
             return Some(path);
         }
         paths::session_transcript_path(session_id)
-    }
-
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "copilot".to_owned(),
-            "--resume".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compact")
-    }
-
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        match mode {
-            PermissionMode::Ask => Vec::new(),
-            PermissionMode::Plan => vec!["--plan".to_owned()],
-            PermissionMode::Auto => vec!["--autopilot".to_owned()],
-            PermissionMode::Yolo => vec!["--allow-all".to_owned()],
-        }
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        let flag = match field {
-            super::PresetField::Model => "--model",
-            super::PresetField::Effort => "--effort",
-            super::PresetField::SystemPromptFile | super::PresetField::AppendSystemPromptFile => {
-                return None;
-            }
-        };
-        Some(super::PresetArgMatcher::Flag(vec![flag.to_owned()]))
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        let mut argv = std::iter::once("copilot".to_owned())
-            .chain(extra_args.iter().cloned())
-            .collect::<Vec<_>>();
-        if let Some(prompt) = prompt.filter(|prompt| !prompt.is_empty()) {
-            argv.extend(["--interactive".to_owned(), prompt.to_owned()]);
-        }
-        Some(argv)
     }
 
     fn launch_env(&self) -> Vec<(&'static str, &'static str)> {

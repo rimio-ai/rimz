@@ -265,7 +265,7 @@ pub(super) fn supplement_realtime_cost(
     let Some(path) = agent.session_transcript(context_agent_id, prior_path) else {
         return;
     };
-    let Some(stat) = local_transcript_stat(&path) else {
+    let Some(stat) = rimz::agents::TranscriptStat::from_path(&path) else {
         return;
     };
     if !partial
@@ -309,8 +309,7 @@ pub(super) fn supplement_realtime_cost(
         plan_proposed: prior.and_then(|record| record.context.plan_proposed),
         native_permission_wait: prior.and_then(|record| record.context.native_permission_wait),
         turn_interrupted: prior.and_then(|record| record.context.turn_interrupted),
-        transcript_path: None,
-        transcript_stat: None,
+        ..rimz::agents::LocalContextRefresh::default()
     });
     refresh.cost = Some(cost);
     refresh.transcript_path = Some(path.to_string_lossy().into_owned());
@@ -337,18 +336,6 @@ pub(super) fn prior_total_cost(
     prior
         .and_then(|record| record.context.cost.as_ref())
         .and_then(|cost| cost.total_cost_usd)
-}
-
-pub(super) fn local_transcript_stat(path: &Path) -> Option<rimz::agents::TranscriptStat> {
-    let meta = std::fs::metadata(path).ok()?;
-    let modified = meta.modified().ok()?;
-    let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
-    Some(rimz::agents::TranscriptStat {
-        mtime_secs: since_epoch.as_secs().try_into().unwrap_or(i64::MAX),
-        mtime_nanos: since_epoch.subsec_nanos(),
-        len: meta.len(),
-        companion: None,
-    })
 }
 
 pub(super) const OBSERVED_CONTEXT_KEYS: &[&str] = &[

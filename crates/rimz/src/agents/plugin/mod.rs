@@ -25,7 +25,8 @@ use super::LaunchPreset;
 use super::account::AccountProbe;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
-    LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
+    LaunchPermissionArgs, LaunchSpec, LifecycleCoverage, PlanLabel, PresetMatchers, PromptStyle,
+    RealtimeUsageChannel, RemoteControlCapability, StaticPresetMatcher, ThreadKey,
     ToolClassification,
 };
 use super::lifecycle::LifecycleSignal;
@@ -33,10 +34,11 @@ use super::observation::{payload_context_pct, payload_total_tokens};
 use super::spending::{SpendCursor, SpendParse};
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
-    PresetArgMatcher, PresetField, PriceBook, Result, RootIdentity, SubagentIdentity,
-    positional_prompt_argv, resolve_root_identity, resolve_subagent_identity,
+    PriceBook, Result, RootIdentity, SubagentIdentity, resolve_root_identity,
+    resolve_subagent_identity,
 };
-use crate::harness::run::PermissionMode;
+#[cfg(test)]
+use super::{PresetArgMatcher, PresetField};
 use crate::transcript::AskQuestion;
 
 pub use check::{
@@ -348,16 +350,12 @@ impl AgentAdapter for PluginAdapter {
         probes::account_usage(self.descriptor.kind, self.plugin_dir, argv)
     }
 
-    fn account_usage_identity(&self) -> super::AccountUsageIdentity {
-        super::AccountUsageIdentity {
-            account_key: self
-                .manifest
-                .probes
-                .account
-                .as_deref()
-                .and_then(|argv| probes::account_key(self.descriptor.kind, self.plugin_dir, argv)),
-            ..Default::default()
-        }
+    fn account_usage_identity(&self) -> Option<super::AccountUsageIdentity> {
+        self.manifest
+            .probes
+            .account
+            .as_ref()
+            .map(|_| super::AccountUsageIdentity::default())
     }
 
     fn probe_version(&self) -> Option<String> {
@@ -365,40 +363,12 @@ impl AgentAdapter for PluginAdapter {
         probes::version(self.descriptor.kind, self.plugin_dir, argv)
     }
 
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        let Some(launch) = &self.manifest.launch else {
-            return Vec::new();
-        };
-        match mode {
-            PermissionMode::Ask => launch.permission_args.ask.clone(),
-            PermissionMode::Auto => launch.permission_args.auto.clone(),
-            PermissionMode::Yolo => launch.permission_args.yolo.clone(),
-            PermissionMode::Plan => launch.permission_args.plan.clone(),
-        }
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        self.manifest.launch.as_ref()?.compact_command.as_deref()
-    }
-
-    fn preset_arg_matcher(&self, field: PresetField) -> Option<PresetArgMatcher> {
-        let launch = self.manifest.launch.as_ref()?;
-        let flag = match field {
-            PresetField::Model => launch.model_flag.as_ref(),
-            PresetField::Effort => launch.effort_flag.as_ref(),
-            PresetField::SystemPromptFile | PresetField::AppendSystemPromptFile => None,
-        }?;
-        Some(PresetArgMatcher::Flag(vec![flag.clone()]))
-    }
-
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        let launch = self.manifest.launch.as_ref()?;
-        let mut args = launch.args.clone();
-        args.extend_from_slice(extra_args);
-        let bin = probes::resolve_executable(self.plugin_dir, &launch.bin)
+        let mut argv = self.descriptor.launch.launch_command(extra_args, prompt)?;
+        argv[0] = probes::resolve_executable(self.plugin_dir, &argv[0])
             .to_string_lossy()
             .into_owned();
-        Some(positional_prompt_argv(&bin, &args, prompt))
+        Some(argv)
     }
 
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
@@ -449,6 +419,41 @@ fn build_descriptor(
         })
         .map(|event| leak_string(event.clone()))
         .collect();
+    let launch = manifest
+        .launch
+        .as_ref()
+        .map_or(LaunchSpec::EMPTY, |launch| {
+            let flag = |value: &Option<String>| {
+                value.as_ref().map(|flag| {
+                    StaticPresetMatcher::Flag(leak_slice(vec![leak_string(flag.clone())]))
+                })
+            };
+            LaunchSpec {
+                program: Some(leak_string(launch.bin.clone())),
+                fixed_args: leak_strings(&launch.args),
+                prompt: PromptStyle::PositionalAfterDoubleDash,
+                resume: None,
+                fork: None,
+                permission: LaunchPermissionArgs {
+                    ask: leak_strings(&launch.permission_args.ask),
+                    auto: leak_strings(&launch.permission_args.auto),
+                    yolo: leak_strings(&launch.permission_args.yolo),
+                    plan: leak_strings(&launch.permission_args.plan),
+                },
+                ping_args: None,
+                max_turn_flag: None,
+                compact_command: launch
+                    .compact_command
+                    .as_ref()
+                    .map(|command| leak_string(command.clone())),
+                presets: PresetMatchers {
+                    model: flag(&launch.model_flag),
+                    effort: flag(&launch.effort_flag),
+                    system_prompt_file: None,
+                    append_system_prompt_file: None,
+                },
+            }
+        });
     AgentDescriptor {
         kind: leak_string(manifest.kind.clone()),
         display_name: leak_string(manifest.display_name.clone()),
@@ -494,6 +499,7 @@ fn build_descriptor(
             Some(TranscriptThreadKey::SessionDir) => ThreadKey::SessionDir,
             Some(TranscriptThreadKey::PerFile) | None => ThreadKey::PerFile,
         },
+        launch,
     }
 }
 
@@ -780,6 +786,31 @@ setup-doc = "README.md"
         build_adapter(manifest, dir)
     }
 
+    fn account_adapter(marker: &Path) -> &'static PluginAdapter {
+        let root = TempDir::new().unwrap();
+        let root = root.keep();
+        let dir = root.join("accountbot");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("README.md"), "setup").unwrap();
+        let manifest = PluginManifest::parse(
+            &dir.join("agent.toml"),
+            &format!(
+                r#"protocol = 1
+kind = "accountbot"
+display-name = "Account Bot"
+process-names = ["accountbot"]
+emits = ["session_start"]
+setup-doc = "README.md"
+[probes]
+account = ["sh", "-c", "touch {}; printf '{{}}'"]
+"#,
+                marker.display()
+            ),
+        )
+        .unwrap();
+        build_adapter(manifest, dir)
+    }
+
     fn payload(event: &str) -> Value {
         json!({
             "protocol": 1,
@@ -895,6 +926,18 @@ setup-doc = "README.md"
                 .concern_coverage(IntegrationConcern::RichContext),
             ConcernCoverage::Unsupported { .. }
         ));
+    }
+
+    #[test]
+    fn account_usage_support_discovery_does_not_execute_probe() {
+        let root = TempDir::new().unwrap();
+        let marker = root.path().join("probe-ran");
+        let adapter = account_adapter(&marker);
+        assert_eq!(
+            adapter.account_usage_identity(),
+            Some(super::super::AccountUsageIdentity::default())
+        );
+        assert!(!marker.exists());
     }
 
     #[test]

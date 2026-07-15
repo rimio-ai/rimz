@@ -1,7 +1,6 @@
 use super::*;
 
 mod api_errors;
-mod auto_continue;
 mod compaction;
 mod native_permission;
 mod stall;

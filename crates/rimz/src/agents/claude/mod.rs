@@ -69,7 +69,6 @@ use super::{
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
-use crate::harness::run::PermissionMode;
 use crate::transcript::{AskAnswer, AskQuestion};
 
 /// Everything `const` about Claude Code, in one place. See
@@ -132,6 +131,36 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // A Claude session spreads across `<session_id>/chat.jsonl` plus
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
     thread_key: ThreadKey::SessionDir,
+    launch: super::LaunchSpec {
+        program: Some("claude"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        resume: Some(super::SessionCommand {
+            before_id: &["claude", "--resume"],
+            after_id: &[],
+        }),
+        fork: Some(super::SessionCommand {
+            before_id: &["claude", "--resume"],
+            after_id: &["--fork-session"],
+        }),
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &["--permission-mode", "auto"],
+            yolo: &["--dangerously-skip-permissions"],
+            plan: &["--permission-mode", "plan"],
+        },
+        ping_args: Some(&["--model", "sonnet", "--effort", "low"]),
+        max_turn_flag: Some("--max-turns"),
+        compact_command: Some("/compact"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
+            effort: Some(super::StaticPresetMatcher::Flag(&["--effort"])),
+            system_prompt_file: Some(super::StaticPresetMatcher::Flag(&["--system-prompt-file"])),
+            append_system_prompt_file: Some(super::StaticPresetMatcher::Flag(&[
+                "--append-system-prompt-file",
+            ])),
+        },
+    },
 };
 
 const CLAUDE_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -421,67 +450,6 @@ impl ClaudeAdapter {
 impl AgentAdapter for ClaudeAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &CLAUDE_DESCRIPTOR
-    }
-
-    /// `claude --resume <id>` launches straight into the prior session,
-    /// restoring its conversation and firing `SessionStart` with
-    /// `source: "resume"`. The cwd is set by the launching pane, not the argv.
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "claude".to_owned(),
-            "--resume".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "claude".to_owned(),
-            "--resume".to_owned(),
-            session_id.to_owned(),
-            "--fork-session".to_owned(),
-        ])
-    }
-
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        match mode {
-            PermissionMode::Auto => vec!["--permission-mode".to_owned(), "auto".to_owned()],
-            PermissionMode::Ask => Vec::new(),
-            PermissionMode::Yolo => vec!["--dangerously-skip-permissions".to_owned()],
-            PermissionMode::Plan => vec!["--permission-mode".to_owned(), "plan".to_owned()],
-        }
-    }
-
-    fn ping_args(&self) -> Option<Vec<String>> {
-        // Pin Sonnet so window primers do not inherit a flagship account default.
-        Some(vec![
-            "--model".to_owned(),
-            "sonnet".to_owned(),
-            "--effort".to_owned(),
-            "low".to_owned(),
-        ])
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compact")
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        let flag = match field {
-            super::PresetField::Model => "--model",
-            super::PresetField::Effort => "--effort",
-            super::PresetField::SystemPromptFile => "--system-prompt-file",
-            super::PresetField::AppendSystemPromptFile => "--append-system-prompt-file",
-        };
-        Some(super::PresetArgMatcher::Flag(vec![flag.to_owned()]))
-    }
-
-    fn max_turns_args(&self, limit: u32) -> Option<Vec<String>> {
-        Some(vec!["--max-turns".to_owned(), limit.to_string()])
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        Some(super::positional_prompt_argv("claude", extra_args, prompt))
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
@@ -780,8 +748,8 @@ impl AgentAdapter for ClaudeAdapter {
         oauth_usage::probe_usage(None)
     }
 
-    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
-        oauth_usage::account_usage_identity()
+    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
+        Some(oauth_usage::account_usage_identity())
     }
 
     fn remote_control_status(

@@ -171,10 +171,6 @@ pub(super) fn account_usage(kind: &str, plugin_dir: &Path, argv: &[String]) -> A
     }
 }
 
-pub(super) fn account_key(kind: &str, plugin_dir: &Path, argv: &[String]) -> Option<String> {
-    account_response(kind, plugin_dir, argv)?.account_id
-}
-
 pub(super) fn version(kind: &str, plugin_dir: &Path, argv: &[String]) -> Option<String> {
     let output = run_json::<Value>(kind, "version", plugin_dir, argv, None)?;
     String::from_utf8(output)

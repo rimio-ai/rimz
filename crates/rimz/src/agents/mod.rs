@@ -66,7 +66,8 @@ use crate::harness::run::PermissionMode;
 use crate::mux::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
-pub use account::AccountUsageIdentity;
+pub(crate) use account::WindowSurplus;
+pub use account::{AccountUsageIdentity, ProviderCapacity};
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostCoverage, ProviderAccountScope,
@@ -76,7 +77,8 @@ pub(crate) use credits::HttpErrKind;
 pub use credits::{AccountUsageProbe, AccountUsageSnapshot, ExtraCredits, ResetCredits};
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
-    PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey, ToolClassification,
+    LaunchPermissionArgs, LaunchSpec, PlanLabel, PresetMatchers, PromptStyle, RealtimeUsageChannel,
+    RemoteControlCapability, SessionCommand, StaticPresetMatcher, ThreadKey, ToolClassification,
     program_names_kind,
 };
 pub use emblems::{emblem_lines, fallback_emblem};
@@ -101,7 +103,6 @@ pub use registry::{
     resumed_session_id_for_root, resumed_session_id_from_cmdline,
 };
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
-pub(crate) use state::WindowSurplus;
 pub use state::{
     ATTENTION_AGE_CEILING_SECS, AgentSignal, AgentState, AgentStatus, COMPACTING_WINDOW_SECS,
     ContextSeverity, DEFAULT_ARCHIVE_AFTER_SECS, DEFAULT_INACTIVE_AFTER_SECS,
@@ -109,13 +110,7 @@ pub use state::{
     is_turn_dead, is_turn_interrupted, looks_like_control_text, single_line_description,
     usable_description,
 };
-pub(crate) use state::{
-    AccountBudget, ResumeArm, account_budgets_from_caches, display_turn_error,
-    effective_turn_error_class, longest_window_reset_at, longest_window_running,
-    longest_window_surplus, rate_limit_window_kinds, read_rate_limits_cache, resume_gate_recovered,
-    resume_park, shortest_window_running,
-};
-pub use state::{PendingRefill, RateLimitCacheEntry, RateLimitsCache};
+pub(crate) use state::{display_turn_error, effective_turn_error_class};
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
 pub use transcript_fs::read_transcript_lines;
 pub(crate) use transcript_fs::read_transcript_tail;
@@ -555,7 +550,7 @@ pub struct LocalContextRefreshCtx<'a> {
 /// Display-only context derived from a local transcript, rollout, or telemetry read. The
 /// adapter owns the provider mapping; the CLI owns merging and writing the
 /// sidecar.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalContextRefresh {
     pub model_id: Option<String>,
     pub model_display_name: Option<String>,
@@ -653,21 +648,64 @@ pub enum AnswerPlanErr {
     Invalid(String),
 }
 
-/// Assemble a fresh-launch argv with the startup prompt protected as the
-/// agent's positional argument. The `--` terminator keeps a trailing variadic
-/// or optional-value profile flag from consuming the prompt.
-pub(crate) fn positional_prompt_argv(
-    bin: &str,
-    extra_args: &[String],
-    prompt: Option<&str>,
-) -> Vec<String> {
-    let mut argv = vec![bin.to_owned()];
-    argv.extend(extra_args.iter().cloned());
-    if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
-        argv.push("--".to_owned());
-        argv.push(prompt.to_owned());
+impl SessionCommand {
+    fn render(self, session_id: &str) -> Vec<String> {
+        self.before_id
+            .iter()
+            .copied()
+            .chain(std::iter::once(session_id))
+            .chain(self.after_id.iter().copied())
+            .map(ToOwned::to_owned)
+            .collect()
     }
-    argv
+}
+
+impl LaunchSpec {
+    fn permission_args(self, mode: PermissionMode) -> Vec<String> {
+        let args = match mode {
+            PermissionMode::Ask => self.permission.ask,
+            PermissionMode::Auto => self.permission.auto,
+            PermissionMode::Yolo => self.permission.yolo,
+            PermissionMode::Plan => self.permission.plan,
+        };
+        args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    fn preset_arg_matcher(self, field: PresetField) -> Option<PresetArgMatcher> {
+        let matcher = match field {
+            PresetField::Model => self.presets.model,
+            PresetField::Effort => self.presets.effort,
+            PresetField::SystemPromptFile => self.presets.system_prompt_file,
+            PresetField::AppendSystemPromptFile => self.presets.append_system_prompt_file,
+        }?;
+        Some(match matcher {
+            StaticPresetMatcher::Flag(flags) => {
+                PresetArgMatcher::Flag(flags.iter().map(|flag| (*flag).to_owned()).collect())
+            }
+            StaticPresetMatcher::ConfigKey { flags, key } => PresetArgMatcher::ConfigKey {
+                flags: flags.iter().map(|flag| (*flag).to_owned()).collect(),
+                key: key.to_owned(),
+            },
+        })
+    }
+
+    fn launch_command(self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
+        let mut argv = vec![self.program?.to_owned()];
+        argv.extend(self.fixed_args.iter().map(|arg| (*arg).to_owned()));
+        argv.extend(extra_args.iter().cloned());
+        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
+            match self.prompt {
+                PromptStyle::None => {}
+                PromptStyle::PositionalAfterDoubleDash => {
+                    argv.extend(["--".to_owned(), prompt.to_owned()]);
+                }
+                PromptStyle::Flag(flag) => {
+                    argv.extend([flag.to_owned(), prompt.to_owned()]);
+                }
+            }
+        }
+        Some(argv)
+    }
 }
 
 pub trait AgentAdapter: Send + Sync {
@@ -771,7 +809,7 @@ pub trait AgentAdapter: Send + Sync {
     /// [`AgentContext`]. The transport is the adapter's business: Claude parses
     /// the statusline JSON it is handed on stdin. Returns `None` when the
     /// adapter has no payload-driven rich-context source (Codex — it ingests
-    /// out-of-band via the app-server, see [`codex::refresh_context`], not from
+    /// out-of-band via the app-server, see [`codex::refresh_app_server_enrichment`], not from
     /// a payload) or the payload is unusable. `source` is the ingest `--source`
     /// tag, stamped onto the record so downstream knows the provenance.
     /// Display-only enrichment — it never reaches the event log or a decision.
@@ -1041,9 +1079,11 @@ pub trait AgentAdapter: Send + Sync {
         AccountUsageProbe::Unsupported
     }
 
-    /// Scheduling fallback for sources without a cached credential-file stamp.
-    fn account_usage_identity(&self) -> AccountUsageIdentity {
-        AccountUsageIdentity::default()
+    /// Cheap scheduling identity for a direct account-usage source. `None`
+    /// means this adapter has no source, so the producer creates no claim or
+    /// helper. `Some` may still carry an unknown account owner.
+    fn account_usage_identity(&self) -> Option<AccountUsageIdentity> {
+        None
     }
 
     /// Probe the provider's own realtime account channel while idle.
@@ -1129,7 +1169,10 @@ pub trait AgentAdapter: Send + Sync {
     /// Default `None` keeps the contract "implement nothing else" for an agent
     /// that cannot resume yet.
     fn resume_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        None
+        self.descriptor()
+            .launch
+            .resume
+            .map(|command| command.render(_session_id))
     }
 
     /// The argv that forks a prior session of this agent by `session_id`:
@@ -1138,27 +1181,36 @@ pub trait AgentAdapter: Send + Sync {
     /// `cwd` (the source agent's worktree). `None` when the agent has no native
     /// fork CLI, so `rimz agents fork` refuses with the reason.
     fn fork_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        None
+        self.descriptor()
+            .launch
+            .fork
+            .map(|command| command.render(_session_id))
     }
 
     /// Extra launch argv for a supervised agent permission posture. The
     /// adapter owns provider-specific CLI flags; the CLI only chooses
     /// the posture.
     fn permission_args(&self, _mode: PermissionMode) -> Vec<String> {
-        Vec::new()
+        self.descriptor().launch.permission_args(_mode)
     }
 
     /// Extra launch argv for the built-in `-ping` virtual profile: lowest
     /// effort setting plus the word `"ping"` as the initial prompt. Returns
     /// `None` when the adapter does not support ping.
     fn ping_args(&self) -> Option<Vec<String>> {
-        None
+        self.descriptor()
+            .launch
+            .ping_args
+            .map(|args| args.iter().map(|arg| (*arg).to_owned()).collect())
     }
 
     /// Extra launch argv for a supervised print-mode agentic-turn cap. Returns
     /// `None` when the agent exposes no native turn limit.
     fn max_turns_args(&self, _limit: u32) -> Option<Vec<String>> {
-        None
+        self.descriptor()
+            .launch
+            .max_turn_flag
+            .map(|flag| vec![flag.to_owned(), _limit.to_string()])
     }
 
     /// The interactive slash command that triggers a manual context compaction
@@ -1167,7 +1219,7 @@ pub trait AgentAdapter: Send + Sync {
     /// treat pasted text as literal content and would not run a pasted command.
     /// `None` when the agent exposes no such command.
     fn compact_command(&self) -> Option<&'static str> {
-        None
+        self.descriptor().launch.compact_command
     }
 
     /// Render typed launch profile presets into provider-native argv.
@@ -1231,8 +1283,8 @@ pub trait AgentAdapter: Send + Sync {
     }
 
     /// Describe the provider-native argv spelling rendered for a preset field.
-    fn preset_arg_matcher(&self, _field: PresetField) -> Option<PresetArgMatcher> {
-        None
+    fn preset_arg_matcher(&self, field: PresetField) -> Option<PresetArgMatcher> {
+        self.descriptor().launch.preset_arg_matcher(field)
     }
 
     /// The argv that launches a fresh interactive session of this agent in the
@@ -1240,8 +1292,8 @@ pub trait AgentAdapter: Send + Sync {
     /// tab layout; `prompt`, when present, is passed as the agent's positional
     /// startup prompt after a `--` terminator. An agent with no launch CLI
     /// returns `None`.
-    fn launch_command(&self, _extra_args: &[String], _prompt: Option<&str>) -> Option<Vec<String>> {
-        None
+    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
+        self.descriptor().launch.launch_command(extra_args, prompt)
     }
 
     /// Env vars pinned onto every spawn of this agent — the launch contract

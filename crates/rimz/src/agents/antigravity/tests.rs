@@ -1537,7 +1537,7 @@ mod local_account_api {
         );
         assert_eq!(
             AntigravityAdapter.account_usage_identity(),
-            crate::agents::AccountUsageIdentity::default()
+            Some(crate::agents::AccountUsageIdentity::default())
         );
         assert_eq!(AntigravityAdapter.probe_version(), None);
     }

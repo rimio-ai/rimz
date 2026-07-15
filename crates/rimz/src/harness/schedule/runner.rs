@@ -15,8 +15,8 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{
-    HookPreflightErr, TurnLifecycleNeed, WindowSurplus, find_adapter, longest_window_reset_at,
-    longest_window_running, longest_window_surplus, preflight_hooks, shortest_window_running,
+    HookPreflightErr, ProviderCapacity, TurnLifecycleNeed, WindowSurplus, find_adapter,
+    preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry};
 use crate::harness::run::PermissionMode;
@@ -663,14 +663,18 @@ pub fn tail_output(bytes: &[u8], cap: usize) -> String {
 /// the entry's workspace is resolved only to reach this user's runtime root.
 pub fn window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
     let runtime = entry_runtime(entry)?;
-    Ok(shortest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
+    Ok(ProviderCapacity::read(&runtime, kind)
+        .and_then(|capacity| capacity.shortest_window_running(Timestamp::now()))
+        == Some(true))
 }
 
 /// Whether `entry`'s provider already has its longest budget window counting
 /// down, read from the shared account-scoped cache.
 pub fn reset_window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
     let runtime = entry_runtime(entry)?;
-    Ok(longest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
+    Ok(ProviderCapacity::read(&runtime, kind)
+        .and_then(|capacity| capacity.longest_window_running(Timestamp::now()))
+        == Some(true))
 }
 
 /// Decide whether a task's provider-window surplus gate keeps this fire closed.
@@ -682,7 +686,8 @@ pub fn surplus_gate(entry: &TaskEntry, kind: &str, now: Timestamp) -> Result<Opt
     Ok(surplus_gate_in(
         entry,
         kind,
-        longest_window_surplus(&runtime, kind, now),
+        ProviderCapacity::read(&runtime, kind)
+            .and_then(|capacity| capacity.longest_window_surplus(now)),
     ))
 }
 
@@ -769,7 +774,8 @@ fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
 /// Raw reset stamp for `entry`'s provider longest budget window.
 pub fn window_reset_at(entry: &TaskEntry, kind: &str) -> Result<Option<Timestamp>> {
     let runtime = entry_runtime(entry)?;
-    Ok(longest_window_reset_at(&runtime, kind))
+    Ok(ProviderCapacity::read(&runtime, kind)
+        .and_then(|capacity| capacity.longest_window_reset_at()))
 }
 
 fn entry_runtime(entry: &TaskEntry) -> Result<RuntimePaths> {

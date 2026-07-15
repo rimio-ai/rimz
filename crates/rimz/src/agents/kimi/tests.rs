@@ -154,6 +154,22 @@ fn prompt_parts_flags_tools_and_resume_match_kimi_code() {
             "stream-json"
         ]
     );
+    assert_eq!(
+        KimiAdapter.launch_command(&["--yolo".to_owned()], Some("")),
+        Some(vec!["kimi".to_owned()])
+    );
+    assert_eq!(KimiAdapter.ping_args(), Some(Vec::new()));
+    assert_eq!(KimiAdapter.compact_command(), Some("/compact"));
+    assert_eq!(
+        KimiAdapter.render_preset(&crate::agents::LaunchPreset {
+            effort: Some("high".to_owned()),
+            ..Default::default()
+        }),
+        Err(crate::agents::PresetErr::UnsupportedField {
+            agent: "kimi",
+            field: "effort",
+        })
+    );
 
     let write = KimiAdapter
         .observe_lifecycle(

@@ -120,6 +120,29 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "tool_execution_end",
     ],
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("pi"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        resume: Some(super::SessionCommand {
+            before_id: &["pi", "--session"],
+            after_id: &[],
+        }),
+        fork: Some(super::SessionCommand {
+            before_id: &["pi", "--fork"],
+            after_id: &[],
+        }),
+        permission: super::LaunchPermissionArgs::EMPTY,
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: Some("/compact"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
+            effort: Some(super::StaticPresetMatcher::Flag(&["--thinking"])),
+            system_prompt_file: None,
+            append_system_prompt_file: None,
+        },
+    },
 };
 
 const PI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -515,44 +538,6 @@ impl AgentAdapter for PiAdapter {
         spend::parse_pi_spend(path, resume, prices)
     }
 
-    /// `pi --session <id>` resolves the session (a partial UUID suffices) and
-    /// restores it interactively; the launching pane sets the cwd. The
-    /// extension re-fires `session_start` with `reason: "resume"`.
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "pi".to_owned(),
-            "--session".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "pi".to_owned(),
-            "--fork".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compact")
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        let flag = match field {
-            super::PresetField::Model => "--model",
-            super::PresetField::Effort => "--thinking",
-            super::PresetField::SystemPromptFile | super::PresetField::AppendSystemPromptFile => {
-                return None;
-            }
-        };
-        Some(super::PresetArgMatcher::Flag(vec![flag.to_owned()]))
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        Some(super::positional_prompt_argv("pi", extra_args, prompt))
-    }
-
     fn managed_source(&self) -> Option<&'static ManagedSource> {
         Some(&PI_MANAGED_SOURCE)
     }
@@ -565,8 +550,8 @@ impl AgentAdapter for PiAdapter {
         account::probe_usage()
     }
 
-    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
-        account::account_usage_identity()
+    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
+        Some(account::account_usage_identity())
     }
 }
 

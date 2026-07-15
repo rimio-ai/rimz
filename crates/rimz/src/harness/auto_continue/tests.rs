@@ -1,7 +1,8 @@
 use super::*;
-use crate::agents::RateLimitsCache;
+use crate::agents::account::RateLimitsCache;
 use crate::agents::{
-    AgentContext, AgentRateLimits, AgentTurnError, RateLimitWindow, TurnErrorClass,
+    AgentContext, AgentRateLimits, AgentTurnError, ProviderCapacity, RateLimitWindow,
+    TurnErrorClass,
 };
 use crate::ids::{AgentSessionId, MuxName, WorkspaceId};
 
@@ -87,7 +88,7 @@ fn write_recovered_window(runtime: &RuntimePaths) {
             refreshed_at_ms: 0,
             entries: [(
                 "claude".to_owned(),
-                crate::agents::RateLimitCacheEntry {
+                crate::agents::account::RateLimitCacheEntry {
                     limits: AgentRateLimits {
                         windows: vec![window(20, 9_000)],
                     },
@@ -147,6 +148,60 @@ fn parked_agent(activity: i64, error_at: i64, class: TurnErrorClass, label: &str
         observed_at: ts(error_at),
     });
     agent
+}
+
+#[test]
+fn provider_limit_parks_arm_from_capacity_and_overload_arms_without_it() {
+    let capacity = ProviderCapacity::from_windows(vec![
+        window(100, 5_000),
+        RateLimitWindow {
+            duration_mins: Some(7 * 24 * 60),
+            ..window(100, 9_000)
+        },
+    ]);
+    for class in [
+        TurnErrorClass::PausedRateLimit,
+        TurnErrorClass::PausedSpendLimit,
+    ] {
+        assert_eq!(
+            resume_park(
+                &parked_agent(1_000, 1_010, class, "provider limit"),
+                Some(&capacity),
+                ts(2_000),
+            ),
+            Some(ResumeArm::RateLimit {
+                deadline: ts(9_000)
+            })
+        );
+    }
+    assert_eq!(
+        resume_park(
+            &parked_agent(1_000, 1_010, TurnErrorClass::PausedOverloaded, "overloaded",),
+            None,
+            ts(2_000),
+        ),
+        Some(ResumeArm::Overloaded {
+            overloaded_at: ts(1_010)
+        })
+    );
+}
+
+#[test]
+fn provider_limit_does_not_arm_without_spent_future_reset() {
+    let agent = parked_agent(
+        1_000,
+        1_010,
+        TurnErrorClass::PausedRateLimit,
+        "provider limit",
+    );
+    assert_eq!(resume_park(&agent, None, ts(2_000)), None);
+    for capacity in [
+        ProviderCapacity::from_windows(vec![window(99, 5_000)]),
+        ProviderCapacity::from_windows(vec![window(100, 1_500)]),
+        ProviderCapacity::default(),
+    ] {
+        assert_eq!(resume_park(&agent, Some(&capacity), ts(2_000)), None);
+    }
 }
 
 fn live_pane() -> PaneAgent {

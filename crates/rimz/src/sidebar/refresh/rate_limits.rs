@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
-use crate::agents::context::RateLimitWindowKey;
-use crate::agents::{
-    AgentRateLimits, PendingRefill, ProviderAccountScope, RateLimitCacheEntry, RateLimitWindow,
-    RateLimitsCache, read_rate_limits_cache,
+use crate::agents::account::{
+    PendingRefill, RateLimitCacheEntry, RateLimitsCache, read_rate_limits_cache,
 };
+use crate::agents::context::RateLimitWindowKey;
+use crate::agents::{AgentRateLimits, ProviderAccountScope, RateLimitWindow};
 use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot};
 

@@ -42,6 +42,7 @@ use super::{
     SessionOrigin, SubagentIdentity, TurnErrorClass, non_empty_trimmed, optional_payload_string,
     resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
+#[cfg(test)]
 use crate::harness::run::PermissionMode;
 use crate::transcript::AskQuestion;
 
@@ -104,6 +105,32 @@ static QWEN_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "SubagentStop",
     ],
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("qwen"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::Flag("-i"),
+        resume: Some(super::SessionCommand {
+            before_id: &["qwen", "--resume"],
+            after_id: &[],
+        }),
+        fork: Some(super::SessionCommand {
+            before_id: &["qwen", "--resume"],
+            after_id: &["--fork-session"],
+        }),
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &["--approval-mode", "auto-edit"],
+            yolo: &["--approval-mode", "yolo"],
+            plan: &["--approval-mode", "plan"],
+        },
+        ping_args: None,
+        max_turn_flag: Some("--max-session-turns"),
+        compact_command: Some("/compress"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model"])),
+            ..super::PresetMatchers::EMPTY
+        },
+    },
 };
 
 const QWEN_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -577,13 +604,13 @@ impl AgentAdapter for QwenAdapter {
             }
         }
     }
-    fn account_usage_identity(&self) -> super::AccountUsageIdentity {
-        match selection::resolve() {
+    fn account_usage_identity(&self) -> Option<super::AccountUsageIdentity> {
+        Some(match selection::resolve() {
             selection::SelectionState::Found(selection) => selection.account_usage_identity(),
             selection::SelectionState::LoggedOut | selection::SelectionState::Unavailable => {
                 super::AccountUsageIdentity::default()
             }
-        }
+        })
     }
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::all_jsonl_files()
@@ -595,45 +622,6 @@ impl AgentAdapter for QwenAdapter {
         prices: &PriceBook,
     ) -> super::spending::SpendParse {
         spend::parse_qwen_spend(path, resume, prices)
-    }
-
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec!["qwen".into(), "--resume".into(), session_id.into()])
-    }
-    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "qwen".into(),
-            "--resume".into(),
-            session_id.into(),
-            "--fork-session".into(),
-        ])
-    }
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        let value = match mode {
-            PermissionMode::Plan => "plan",
-            PermissionMode::Ask => return Vec::new(),
-            PermissionMode::Auto => "auto-edit",
-            PermissionMode::Yolo => "yolo",
-        };
-        vec!["--approval-mode".into(), value.into()]
-    }
-    fn max_turns_args(&self, limit: u32) -> Option<Vec<String>> {
-        Some(vec!["--max-session-turns".into(), limit.to_string()])
-    }
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compress")
-    }
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        let mut argv = vec!["qwen".to_owned()];
-        argv.extend(extra_args.iter().cloned());
-        if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
-            argv.extend(["-i".to_owned(), prompt.to_owned()]);
-        }
-        Some(argv)
-    }
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        (field == super::PresetField::Model)
-            .then(|| super::PresetArgMatcher::Flag(vec!["--model".to_owned()]))
     }
 }
 

@@ -59,22 +59,15 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
             .as_ref()
             .and_then(|usage| usage.model_id.clone())
             .or_else(|| ctx.model_hint.map(ToOwned::to_owned)),
-        model_display_name: None,
-        effort: None,
         tokens: usage
             .and_then(|usage| usage.current_usage)
             .map(|current_usage| AgentTokenUsage {
                 current_usage: Some(current_usage),
                 ..AgentTokenUsage::default()
             }),
-        cost: None,
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
+        ..LocalContextRefresh::default()
     })
 }
 

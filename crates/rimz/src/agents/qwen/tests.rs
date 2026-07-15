@@ -45,10 +45,28 @@ fn launch_and_permission_argv_match_qwen_cli() {
         ])
     );
     assert_eq!(
+        adapter.launch_command(&[], Some("")),
+        Some(vec!["qwen".to_owned()])
+    );
+    assert_eq!(
         adapter.permission_args(PermissionMode::Auto),
         ["--approval-mode", "auto-edit"]
     );
+    assert_eq!(
+        adapter.max_turns_args(7),
+        Some(vec!["--max-session-turns".to_owned(), "7".to_owned()])
+    );
     assert_eq!(adapter.compact_command(), Some("/compress"));
+    assert_eq!(
+        adapter.render_preset(&crate::agents::LaunchPreset {
+            effort: Some("high".to_owned()),
+            ..Default::default()
+        }),
+        Err(crate::agents::PresetErr::UnsupportedField {
+            agent: "qwen",
+            field: "effort",
+        })
+    );
 }
 
 #[test]

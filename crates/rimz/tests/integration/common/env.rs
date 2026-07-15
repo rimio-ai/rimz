@@ -508,7 +508,7 @@ impl Env {
         .expect("publish accounts cache");
     }
 
-    pub fn publish_rate_limits(&self, cache: &rimz::agents::RateLimitsCache) {
+    pub fn publish_rate_limits(&self, cache: &rimz::agents::account::RateLimitsCache) {
         rimz::store::atomic::write_temp_then_rename_cache(
             &self.runtime_paths().shared_rate_limits_path(),
             cache,

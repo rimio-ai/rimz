@@ -13,11 +13,11 @@ use jiff::Timestamp;
 use super::row::SidebarRow;
 use super::view::SidebarSnapshot;
 use crate::agents::lifecycle;
-use crate::agents::{AccountBudget, AgentState, AgentStatus};
 use crate::agents::{
     AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentTurnError, RateLimitWindow,
     TurnErrorClass,
 };
+use crate::agents::{AgentState, AgentStatus, ProviderCapacity};
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::pane::PaneRef;
 use crate::store::event::EventEnvelope;
@@ -51,12 +51,12 @@ pub(super) fn room(agents: Vec<AgentState>) -> SidebarSnapshot {
 /// synthetic live pane. Tests that assert row projection, ranking, caps, or
 /// display status use this instead of the frameless [`room`] constructor.
 pub(super) fn room_with_agent_panes(agents: Vec<AgentState>) -> SidebarSnapshot {
-    room_with_agent_panes_and_budgets(agents, std::collections::BTreeMap::new())
+    room_with_agent_panes_and_capacities(agents, std::collections::BTreeMap::new())
 }
 
-pub(super) fn room_with_agent_panes_and_budgets(
+pub(super) fn room_with_agent_panes_and_capacities(
     mut agents: Vec<AgentState>,
-    account_budgets: std::collections::BTreeMap<AgentKind, AccountBudget>,
+    provider_capacities: std::collections::BTreeMap<AgentKind, ProviderCapacity>,
 ) -> SidebarSnapshot {
     let mut panes = Vec::new();
     for (idx, agent) in agents.iter_mut().enumerate() {
@@ -87,16 +87,19 @@ pub(super) fn room_with_agent_panes_and_budgets(
         panes.push(pane);
     }
     SidebarSnapshot::build_with_agents(workspace(), agents, epoch())
-        .with_live_panes_and_account_budgets(panes, None, &account_budgets)
+        .with_live_panes_and_provider_capacities(panes, None, &provider_capacities)
 }
 
-pub(super) fn account_budget(
+pub(super) fn provider_capacity(
     kind: &str,
     windows: Vec<RateLimitWindow>,
-) -> std::collections::BTreeMap<AgentKind, AccountBudget> {
-    let mut budgets = std::collections::BTreeMap::new();
-    budgets.insert(AgentKind::new_unchecked(kind), AccountBudget { windows });
-    budgets
+) -> std::collections::BTreeMap<AgentKind, ProviderCapacity> {
+    let mut capacities = std::collections::BTreeMap::new();
+    capacities.insert(
+        AgentKind::new_unchecked(kind),
+        ProviderCapacity::from_windows(windows),
+    );
+    capacities
 }
 
 /// Every projected row across every worktree group, in render order.

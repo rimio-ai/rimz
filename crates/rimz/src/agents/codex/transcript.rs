@@ -18,9 +18,8 @@ use crate::agents::context::{
     AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass,
 };
 use crate::agents::pricing::{self, PriceBook};
-use crate::agents::state::AccountBudget;
 use crate::agents::{
-    LocalContextRefresh, SessionOrigin, TranscriptStat, optional_payload_string,
+    LocalContextRefresh, ProviderCapacity, SessionOrigin, TranscriptStat, optional_payload_string,
     read_transcript_tail,
 };
 
@@ -62,17 +61,16 @@ pub fn refresh_transcript_context(
     let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint, &prices);
     Some(LocalContextRefresh {
         model_id,
-        model_display_name: None,
         effort: usage.effort,
         tokens,
         cost,
         turn_error,
         turn_complete,
         plan_proposed,
-        native_permission_wait: None,
         turn_interrupted,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
+        ..LocalContextRefresh::default()
     })
 }
 
@@ -643,19 +641,19 @@ pub fn refine_turn_death_from_frame(error: &mut AgentTurnError, frame: &str) {
 }
 
 /// Infer a generic messageless Codex turn death from the fused account budget
-/// when pane text cannot prove it. [`AccountBudget::latest_spent_window_reset`]
+/// when pane text cannot prove it. [`ProviderCapacity::latest_spent_window_reset`]
 /// is the same clock `resume_park` arms against, so the inferred pause class and
 /// auto-resume deadline cannot disagree.
 pub(crate) fn infer_turn_death_from_spent_window(
     error: &mut AgentTurnError,
-    budget: Option<&AccountBudget>,
+    capacity: Option<&ProviderCapacity>,
     now: Timestamp,
 ) {
     if !turn_death_needs_pane_confirmation(error) {
         return;
     }
-    if budget
-        .and_then(|budget| budget.latest_spent_window_reset(now))
+    if capacity
+        .and_then(|capacity| capacity.latest_spent_window_reset(now))
         .is_some()
     {
         error.class = TurnErrorClass::PausedRateLimit;

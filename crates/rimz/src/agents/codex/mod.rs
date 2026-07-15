@@ -21,7 +21,7 @@
 //! for a replacement.
 //! Metadata Claude gets from its statusline (rate-limit windows, model display
 //! name, thread preview/name, version) comes from the app-server read-only
-//! methods via [`refresh_app_server_context`], spawned out-of-band by `rimz codex
+//! methods via [`refresh_app_server_enrichment`], spawned out-of-band by `rimz codex
 //! refresh-context`.
 
 pub(crate) mod account;
@@ -56,8 +56,7 @@ use self::payloads::{
 };
 pub(crate) use self::process::is_codex_cli_cmdline;
 pub use self::process::{
-    codex_daemon_pids, codex_resumed_session_id_for_root, codex_resumed_session_id_from_cmdline,
-    pid_is_codex_daemon,
+    codex_daemon_pids, codex_resumed_session_id_from_cmdline, pid_is_codex_daemon,
 };
 pub(crate) use self::transcript::infer_turn_death_from_spent_window;
 use self::transcript::{
@@ -97,7 +96,6 @@ use super::{
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
     stop_payload_errored,
 };
-use crate::harness::run::PermissionMode;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 /// Per-hook timeout written into the Codex config (seconds). Hooks write a
@@ -206,6 +204,45 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     ],
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("codex"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        resume: Some(super::SessionCommand {
+            before_id: &["codex", "resume"],
+            after_id: &[],
+        }),
+        fork: Some(super::SessionCommand {
+            before_id: &["codex", "fork"],
+            after_id: &[],
+        }),
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &[
+                "--ask-for-approval",
+                "never",
+                "--sandbox",
+                "workspace-write",
+            ],
+            yolo: &["--dangerously-bypass-approvals-and-sandbox"],
+            plan: &[],
+        },
+        ping_args: Some(&["-c", "model_reasoning_effort=low"]),
+        max_turn_flag: None,
+        compact_command: Some("/compact"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
+            effort: Some(super::StaticPresetMatcher::ConfigKey {
+                flags: &["-c", "--config"],
+                key: "model_reasoning_effort",
+            }),
+            system_prompt_file: Some(super::StaticPresetMatcher::ConfigKey {
+                flags: &["-c", "--config"],
+                key: "model_instructions_file",
+            }),
+            append_system_prompt_file: None,
+        },
+    },
 };
 
 const CODEX_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -430,74 +467,8 @@ impl AgentAdapter for CodexAdapter {
     }
 
     /// `codex resume <id>` resolves the UUID to its rollout file and restores
-    /// the session interactively, firing `SessionStart` with
-    /// `source: "resume"`. `resume` is a top-level command (the non-interactive
-    /// form is `codex exec resume <id>`); the launching pane sets the cwd.
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "codex".to_owned(),
-            "resume".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
     fn resumed_session_id_from_cmdline(&self, cmdline: &str) -> Option<crate::ids::AgentSessionId> {
         codex_resumed_session_id_from_cmdline(cmdline)
-    }
-
-    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "codex".to_owned(),
-            "fork".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        match mode {
-            PermissionMode::Yolo => vec!["--dangerously-bypass-approvals-and-sandbox".to_owned()],
-            PermissionMode::Auto => vec![
-                "--ask-for-approval".to_owned(),
-                "never".to_owned(),
-                "--sandbox".to_owned(),
-                "workspace-write".to_owned(),
-            ],
-            PermissionMode::Ask => Vec::new(),
-            PermissionMode::Plan => Vec::new(),
-        }
-    }
-
-    fn ping_args(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "-c".to_owned(),
-            "model_reasoning_effort=low".to_owned(),
-        ])
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compact")
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        match field {
-            super::PresetField::Model => Some(super::PresetArgMatcher::Flag(vec![
-                "--model".to_owned(),
-                "-m".to_owned(),
-            ])),
-            super::PresetField::Effort => Some(super::PresetArgMatcher::ConfigKey {
-                flags: vec!["-c".to_owned(), "--config".to_owned()],
-                key: "model_reasoning_effort".to_owned(),
-            }),
-            super::PresetField::SystemPromptFile => Some(super::PresetArgMatcher::ConfigKey {
-                flags: vec!["-c".to_owned(), "--config".to_owned()],
-                key: "model_instructions_file".to_owned(),
-            }),
-            super::PresetField::AppendSystemPromptFile => None,
-        }
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        Some(super::positional_prompt_argv("codex", extra_args, prompt))
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
@@ -732,8 +703,8 @@ impl AgentAdapter for CodexAdapter {
         oauth_usage::probe_usage()
     }
 
-    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
-        oauth_usage::account_usage_identity()
+    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
+        Some(oauth_usage::account_usage_identity())
     }
 
     /// Codex has no statusline, so app-server-owned metadata (rate-limit
@@ -1105,15 +1076,6 @@ fn codex_task(payload: &Value, subagent: Option<CodexSubagent<'_>>) -> Option<St
 /// and version.
 /// Transcript-derived tokens and cost are refreshed separately from the local
 /// rollout tail, so an unreachable app-server never suppresses them.
-pub fn refresh_app_server_context(
-    session_id: Option<&str>,
-    model_hint: Option<&str>,
-    broker_socket: Option<&Path>,
-) -> Option<AgentContext> {
-    refresh_app_server_enrichment(session_id, model_hint, broker_socket)
-        .map(|enrichment| enrichment.context)
-}
-
 pub struct AppServerEnrichment {
     pub context: AgentContext,
     pub extra_credits: Option<ExtraCredits>,
@@ -1132,17 +1094,6 @@ pub fn refresh_app_server_enrichment(
         extra_credits: observation.extra_credits,
         reset_credits: observation.reset_credits,
     })
-}
-
-/// Backwards-compatible name for the app-server-only context read. New callers
-/// use [`refresh_app_server_context`] and [`refresh_transcript_context`] so local
-/// transcript data is independent from app-server availability.
-pub fn refresh_context(
-    session_id: Option<&str>,
-    model_hint: Option<&str>,
-    broker_socket: Option<&Path>,
-) -> Option<AgentContext> {
-    refresh_app_server_context(session_id, model_hint, broker_socket)
 }
 
 /// The thread ids the per-user Codex app-server daemon currently holds in memory,

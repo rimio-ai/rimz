@@ -38,6 +38,7 @@ use super::{
     RefreshTrigger, Result, SessionOrigin, TranscriptMessage, TranscriptPage, TranscriptPosition,
     optional_payload_string, read_transcript_lines, sanitize_user_prompt,
 };
+#[cfg(test)]
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
 
@@ -81,6 +82,34 @@ static DROID_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     extra_bin_dirs: &[],
     activity_events: &["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"],
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("droid"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        resume: Some(super::SessionCommand {
+            before_id: &["droid", "--resume"],
+            after_id: &[],
+        }),
+        fork: Some(super::SessionCommand {
+            before_id: &["droid", "--fork"],
+            after_id: &[],
+        }),
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &["--auto", "medium"],
+            yolo: &[],
+            plan: &["--use-spec"],
+        },
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: Some("/compact"),
+        presets: super::PresetMatchers {
+            append_system_prompt_file: Some(super::StaticPresetMatcher::Flag(&[
+                "--append-system-prompt-file",
+            ])),
+            ..super::PresetMatchers::EMPTY
+        },
+    },
 };
 
 const DROID_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -446,13 +475,10 @@ impl AgentAdapter for DroidAdapter {
             effort: refresh.telemetry.reasoning_effort,
             tokens,
             cost,
-            turn_error: None,
-            turn_complete: None,
-            plan_proposed: None,
             native_permission_wait: refresh.telemetry.native_permission_wait,
-            turn_interrupted: None,
             transcript_path: Some(refresh.transcript_path.to_string_lossy().into_owned()),
             transcript_stat: Some(refresh.stat),
+            ..LocalContextRefresh::default()
         })
     }
 
@@ -469,47 +495,6 @@ impl AgentAdapter for DroidAdapter {
         prices: &super::PriceBook,
     ) -> super::spending::SpendParse {
         spend::parse(path, prices)
-    }
-
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "droid".to_owned(),
-            "--resume".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "droid".to_owned(),
-            "--fork".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        match mode {
-            PermissionMode::Auto => vec!["--auto".to_owned(), "medium".to_owned()],
-            PermissionMode::Plan => vec!["--use-spec".to_owned()],
-            // Stock interactive mode keeps Droid's configured autonomy and
-            // native permission UI. The CLI exposes no interactive equivalent
-            // of exec's unsafe bypass, so an empty yolo posture remains
-            // unsupported in the shared layout parser.
-            PermissionMode::Ask | PermissionMode::Yolo => Vec::new(),
-        }
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compact")
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        (field == super::PresetField::AppendSystemPromptFile)
-            .then(|| super::PresetArgMatcher::Flag(vec!["--append-system-prompt-file".to_owned()]))
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        Some(super::positional_prompt_argv("droid", extra_args, prompt))
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {

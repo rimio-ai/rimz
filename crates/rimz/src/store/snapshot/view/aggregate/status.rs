@@ -4,8 +4,8 @@ use jiff::Timestamp;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
-    AccountBudget, AgentContext, AgentState, AgentStatus, AgentTurnError, TurnErrorClass,
-    display_turn_error, effective_turn_error_class, rate_limit_window_kinds,
+    AgentContext, AgentState, AgentStatus, AgentTurnError, ProviderCapacity, TurnErrorClass,
+    display_turn_error, effective_turn_error_class,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
@@ -63,12 +63,12 @@ impl Settled {
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
     agents: &[AgentState],
-    account_budgets: &BTreeMap<AgentKind, AccountBudget>,
+    provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
     exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     now: Timestamp,
     stalled_after_secs: u32,
 ) {
-    let rate_limit_kinds = rate_limit_window_kinds(account_budgets, now);
+    let rate_limit_kinds = rate_limit_window_kinds(provider_capacities, now);
     for row in rows.iter_mut() {
         let row_id = row.id.clone();
         let row_name = row.name.clone();
@@ -152,6 +152,40 @@ pub(super) fn project_display_status(
             agent.phase = TurnPhase::Idle;
         }
     }
+}
+
+#[derive(Default)]
+struct RateLimitKindSummary {
+    spent: BTreeSet<AgentKind>,
+    reset: BTreeSet<AgentKind>,
+}
+
+fn rate_limit_window_kinds(
+    provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
+    now: Timestamp,
+) -> RateLimitKindSummary {
+    let mut summary = RateLimitKindSummary::default();
+    for (kind, capacity) in provider_capacities {
+        let mut has_spent = false;
+        let mut has_reset = false;
+        for window in capacity.projected_windows(now) {
+            if !window.is_spent() {
+                continue;
+            }
+            if window.resets_at.is_none_or(|reset| reset > now) {
+                has_spent = true;
+            } else {
+                has_reset = true;
+            }
+        }
+        if has_spent {
+            summary.spent.insert(kind.clone());
+        }
+        if has_reset {
+            summary.reset.insert(kind.clone());
+        }
+    }
+    summary
 }
 
 fn resolve_waiting(

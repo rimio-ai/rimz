@@ -94,10 +94,10 @@ fn displayed_status_precedence_ladder_holds() {
         if rung.with_live_child {
             agents.push(child_state("root", "child-1", AgentStatus::Running, 5));
         }
-        let snapshot = room(agents).with_live_panes_and_account_budgets(
+        let snapshot = room(agents).with_live_panes_and_provider_capacities(
             vec![pane("%1", "node", "/repo/main")],
             None,
-            &account_budget("claude", rung.budget_windows),
+            &provider_capacity("claude", rung.budget_windows),
         );
         let row = row(&snapshot, "root");
         assert_eq!(

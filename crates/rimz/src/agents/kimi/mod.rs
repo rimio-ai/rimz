@@ -27,6 +27,7 @@ use super::{
     RefreshTrigger, Result, TranscriptStat, TurnErrorClass, classify_agent_hook, non_empty_trimmed,
     sanitize_user_prompt,
 };
+#[cfg(test)]
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
 use crate::transcript::{AskOption, AskQuestion};
@@ -121,6 +122,29 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "Notification",
     ],
     thread_key: ThreadKey::SessionDir,
+    launch: super::LaunchSpec {
+        program: Some("kimi"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::None,
+        resume: Some(super::SessionCommand {
+            before_id: &["kimi", "--session"],
+            after_id: &[],
+        }),
+        fork: None,
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &["--auto"],
+            yolo: &["--yolo"],
+            plan: &["--plan"],
+        },
+        ping_args: Some(&[]),
+        max_turn_flag: None,
+        compact_command: Some("/compact"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
+            ..super::PresetMatchers::EMPTY
+        },
+    },
 };
 
 const KIMI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -226,7 +250,7 @@ impl AgentAdapter for KimiAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
-        let parsed = payloads::parse(event_name, payload);
+        let parsed = payloads::parse(payload);
         let ask = match event_name {
             "PermissionRequest" => Some(
                 self.descriptor()
@@ -235,7 +259,7 @@ impl AgentAdapter for KimiAdapter {
             ),
             "PreToolUse"
                 if parsed.tool_name.as_deref() == Some("AskUserQuestion")
-                    && !parsed.question_background =>
+                    && !parsed.question_background() =>
             {
                 Some(super::AskKind::Question)
             }
@@ -384,7 +408,7 @@ impl AgentAdapter for KimiAdapter {
         if event_name != "PreToolUse" {
             return None;
         }
-        let parsed = payloads::parse(event_name, payload);
+        let parsed = payloads::parse(payload);
         if parsed.tool_name.as_deref() != Some("AskUserQuestion") {
             return None;
         }
@@ -393,7 +417,7 @@ impl AgentAdapter for KimiAdapter {
 
     fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
         if event_name == "PermissionRequest" {
-            let parsed = payloads::parse(event_name, payload);
+            let parsed = payloads::parse(payload);
             return parsed.action.and_then(|action| non_empty_trimmed(&action));
         }
         self.ask_question_detail(event_name, payload)
@@ -406,18 +430,23 @@ impl AgentAdapter for KimiAdapter {
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        let parsed = payloads::parse(event_name, payload);
+        let parsed = payloads::parse(payload);
         let signal = match event_name {
             "SessionStart" => LifecycleSignal::Registered,
             "UserPromptSubmit" => LifecycleSignal::TurnStarted,
             "PreToolUse"
                 if parsed.tool_name.as_deref() == Some("AskUserQuestion")
-                    && !parsed.question_background =>
+                    && !parsed.question_background() =>
             {
                 LifecycleSignal::AwaitingInput {
                     kind: super::AskKind::Question,
                     ask_id: None,
-                    detail: self.ask_detail(event_name, payload),
+                    detail: parsed
+                        .tool_input
+                        .as_ref()
+                        .and_then(parse_questions)
+                        .and_then(|questions| questions.into_iter().next())
+                        .map(|question| question.question),
                 }
             }
             "PermissionRequest" => LifecycleSignal::AwaitingInput {
@@ -426,7 +455,7 @@ impl AgentAdapter for KimiAdapter {
                     .blocking_tool_kind(parsed.tool_name.as_deref())
                     .unwrap_or(super::AskKind::Permission),
                 ask_id: None,
-                detail: self.ask_detail(event_name, payload),
+                detail: parsed.action.as_deref().and_then(non_empty_trimmed),
             },
             "PermissionResult" => LifecycleSignal::ToolUsed {
                 mutates: false,
@@ -460,7 +489,6 @@ impl AgentAdapter for KimiAdapter {
             _ => return None,
         };
         let agent_id = parsed
-            .common
             .session_id
             .clone()
             .map(AgentSessionId::from)
@@ -475,10 +503,10 @@ impl AgentAdapter for KimiAdapter {
         observation.task = sanitize_user_prompt(parsed.prompt.as_deref());
         observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         if event_name == "SessionStart"
-            && let Some(session_id) = parsed.common.session_id.as_deref()
+            && let Some(session_id) = parsed.session_id.as_deref()
         {
             observation.transcript_path =
-                wire::wire_path(session_id, parsed.common.cwd.as_deref().map(Path::new))
+                wire::wire_path(session_id, parsed.cwd.as_deref().map(Path::new))
                     .map(|path| path.to_string_lossy().into_owned());
         }
         Some(observation)
@@ -492,7 +520,7 @@ impl AgentAdapter for KimiAdapter {
         if event_name != "StopFailure" {
             return None;
         }
-        let parsed = payloads::parse(event_name, payload);
+        let parsed = payloads::parse(payload);
         let label = parsed
             .error_message
             .or(parsed.error_type)
@@ -514,10 +542,10 @@ impl AgentAdapter for KimiAdapter {
         if !matches!(event_name, "Stop" | "StopFailure") {
             return None;
         }
-        let parsed = payloads::parse(event_name, payload);
+        let parsed = payloads::parse(payload);
         let path = wire::wire_path(
-            parsed.common.session_id.as_deref()?,
-            parsed.common.cwd.as_deref().map(Path::new),
+            parsed.session_id.as_deref()?,
+            parsed.cwd.as_deref().map(Path::new),
         )?;
         let lines = std::fs::read_to_string(path).ok()?;
         transcript::latest_assistant(&lines)
@@ -525,28 +553,6 @@ impl AgentAdapter for KimiAdapter {
 
     fn parse_transcript_messages(&self, lines: &str) -> Vec<super::TranscriptMessage> {
         transcript::parse_messages(lines)
-    }
-
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        match mode {
-            PermissionMode::Ask => Vec::new(),
-            PermissionMode::Auto => vec!["--auto".to_owned()],
-            PermissionMode::Yolo => vec!["--yolo".to_owned()],
-            PermissionMode::Plan => vec!["--plan".to_owned()],
-        }
-    }
-
-    fn ping_args(&self) -> Option<Vec<String>> {
-        Some(Vec::new())
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compact")
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        (field == super::PresetField::Model)
-            .then(|| super::PresetArgMatcher::Flag(vec!["--model".to_owned(), "-m".to_owned()]))
     }
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
@@ -568,14 +574,6 @@ impl AgentAdapter for KimiAdapter {
             ]);
         }
         Some(argv)
-    }
-
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "kimi".to_owned(),
-            "--session".to_owned(),
-            session_id.to_owned(),
-        ])
     }
 
     fn local_context_refresh(
@@ -634,11 +632,11 @@ impl AgentAdapter for KimiAdapter {
         oauth_usage::probe()
     }
 
-    fn account_usage_identity(&self) -> super::AccountUsageIdentity {
-        super::AccountUsageIdentity {
+    fn account_usage_identity(&self) -> Option<super::AccountUsageIdentity> {
+        Some(super::AccountUsageIdentity {
             credentials_stamp: oauth_usage::credentials_stamp(),
             ..Default::default()
-        }
+        })
     }
 }
 
@@ -757,17 +755,12 @@ fn refresh_wire_path(
     let cost = super::spending::session_cost_usd(&KimiAdapter, session_id, path, &prices);
     Some(LocalContextRefresh {
         model_id,
-        model_display_name: None,
         effort: attribution.thinking_effort,
         tokens,
         cost,
-        turn_error: None,
-        turn_complete: None,
-        plan_proposed: None,
-        native_permission_wait: None,
-        turn_interrupted: None,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
+        ..LocalContextRefresh::default()
     })
 }
 

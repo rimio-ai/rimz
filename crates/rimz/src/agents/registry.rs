@@ -181,7 +181,17 @@ mod tests {
     }
 
     #[test]
-    fn resume_dispatch_walks_one_child_and_rejects_branches() {
+    fn resume_dispatch_walks_single_child_chains_and_rejects_branches() {
+        let session = "sess_11111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            resumed_session_id_for_root_with(
+                1,
+                &|pid| (pid == 1).then(|| format!("kiro-cli-chat --resume-id={session}")),
+                &|_| Vec::new(),
+            )
+            .as_deref(),
+            Some(session)
+        );
         assert_eq!(
             resumed_session_id_for_root_with(
                 1,
@@ -197,6 +207,26 @@ mod tests {
             )
             .as_deref(),
             Some("sess_11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(
+            resumed_session_id_for_root_with(
+                1,
+                &|pid| match pid {
+                    1 => Some("zsh".to_owned()),
+                    2 => Some("chezmoi cd".to_owned()),
+                    3 => Some("/bin/zsh".to_owned()),
+                    4 => Some(format!("kiro-cli-chat --resume-id={session}")),
+                    _ => None,
+                },
+                &|pid| match pid {
+                    1 => vec![2],
+                    2 => vec![3],
+                    3 => vec![4],
+                    _ => Vec::new(),
+                },
+            )
+            .as_deref(),
+            Some(session)
         );
         assert!(
             resumed_session_id_for_root_with(1, &|_| Some("zsh".to_owned()), &|pid| (pid == 1)

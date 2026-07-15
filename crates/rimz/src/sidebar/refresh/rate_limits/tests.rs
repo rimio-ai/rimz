@@ -25,7 +25,7 @@ fn kind_wide_cache(
             let pending = pending.remove(&kind).unwrap_or_default();
             (
                 kind,
-                crate::agents::RateLimitCacheEntry {
+                RateLimitCacheEntry {
                     scope: Default::default(),
                     limits,
                     pending,
@@ -36,7 +36,7 @@ fn kind_wide_cache(
     entries.extend(pending.into_iter().map(|(kind, pending)| {
         (
             kind,
-            crate::agents::RateLimitCacheEntry {
+            RateLimitCacheEntry {
                 pending,
                 ..Default::default()
             },
@@ -301,7 +301,7 @@ fn scoped_windows_render_only_for_the_matching_provider_region() {
         &RateLimitsCache {
             entries: BTreeMap::from([(
                 "qwen".to_owned(),
-                crate::agents::RateLimitCacheEntry {
+                RateLimitCacheEntry {
                     scope: international.clone(),
                     limits: AgentRateLimits {
                         windows: vec![
@@ -1452,7 +1452,7 @@ fn fuse_mid_range_best_effort_drop_holds_most_drained() {
 
 // ── shortest_window_running: the window-priming ping guard ───────────────────
 
-use crate::agents::{longest_window_reset_at, longest_window_running, shortest_window_running};
+use crate::agents::ProviderCapacity;
 
 /// Seed `claude`'s windows into a fresh shared cache and report the ping guard's
 /// verdict for `now`.
@@ -1474,12 +1474,14 @@ fn runtime_with_windows(windows: Vec<RateLimitWindow>) -> (tempfile::TempDir, Ru
 
 fn running_verdict(windows: Vec<RateLimitWindow>, now: Timestamp) -> Option<bool> {
     let (_dir, runtime) = runtime_with_windows(windows);
-    shortest_window_running(&runtime, "claude", now)
+    ProviderCapacity::read(&runtime, "claude")
+        .and_then(|capacity| capacity.shortest_window_running(now))
 }
 
 fn longest_verdict(windows: Vec<RateLimitWindow>, now: Timestamp) -> Option<bool> {
     let (_dir, runtime) = runtime_with_windows(windows);
-    longest_window_running(&runtime, "claude", now)
+    ProviderCapacity::read(&runtime, "claude")
+        .and_then(|capacity| capacity.longest_window_running(now))
 }
 
 #[test]
@@ -1604,7 +1606,8 @@ fn longest_window_reset_at_reads_the_raw_longest_stamp() {
     ]);
 
     assert_eq!(
-        longest_window_reset_at(&runtime, "claude"),
+        ProviderCapacity::read(&runtime, "claude")
+            .and_then(|capacity| capacity.longest_window_reset_at()),
         Some(passed),
         "the reset occurrence uses the raw cache stamp, not projection"
     );
@@ -1614,7 +1617,8 @@ fn longest_window_reset_at_reads_the_raw_longest_stamp() {
         rl_window_mins(80, None, 7 * 24 * 60),
     ]);
     assert_eq!(
-        longest_window_reset_at(&runtime, "claude"),
+        ProviderCapacity::read(&runtime, "claude")
+            .and_then(|capacity| capacity.longest_window_reset_at()),
         None,
         "an undated longest window has no reset occurrence"
     );
@@ -1624,7 +1628,8 @@ fn longest_window_reset_at_reads_the_raw_longest_stamp() {
     let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     assert_eq!(
-        longest_window_reset_at(&runtime, "claude"),
+        ProviderCapacity::read(&runtime, "claude")
+            .and_then(|capacity| capacity.longest_window_reset_at()),
         None,
         "a cold cache has no reset occurrence"
     );

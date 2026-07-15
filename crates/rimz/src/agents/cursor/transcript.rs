@@ -50,17 +50,12 @@ pub(super) fn refresh(ctx: &LocalContextRefreshCtx<'_>) -> Option<LocalContextRe
     let markers = turn_markers_at(&path, stat)?;
     Some(LocalContextRefresh {
         model_id: ctx.model_hint.map(ToOwned::to_owned),
-        model_display_name: None,
-        effort: None,
-        tokens: None,
-        cost: None,
         turn_error: markers.turn_error,
         turn_complete: markers.turn_complete,
-        plan_proposed: None,
-        native_permission_wait: None,
         turn_interrupted: markers.turn_interrupted,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
+        ..LocalContextRefresh::default()
     })
 }
 

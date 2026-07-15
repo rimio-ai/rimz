@@ -39,6 +39,7 @@ use super::{
     RefreshSpawn, RefreshTrigger, Result, SubagentIdentity, classify_agent_hook,
     resolve_subagent_identity, sanitize_user_prompt,
 };
+#[cfg(test)]
 use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
@@ -89,6 +90,32 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "SubagentStop",
     ],
     thread_key: ThreadKey::PerFile,
+    launch: super::LaunchSpec {
+        program: Some("opencode"),
+        fixed_args: &[],
+        prompt: super::PromptStyle::PositionalAfterDoubleDash,
+        resume: Some(super::SessionCommand {
+            before_id: &["opencode", "--session"],
+            after_id: &[],
+        }),
+        fork: Some(super::SessionCommand {
+            before_id: &["opencode", "--session"],
+            after_id: &["--fork"],
+        }),
+        permission: super::LaunchPermissionArgs {
+            ask: &[],
+            auto: &[],
+            yolo: &["--auto"],
+            plan: &["--agent", "plan"],
+        },
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: Some("/compact"),
+        presets: super::PresetMatchers {
+            model: Some(super::StaticPresetMatcher::Flag(&["--model", "-m"])),
+            ..super::PresetMatchers::EMPTY
+        },
+    },
 };
 
 const OPENCODE_COVERAGE: IntegrationCoverage = IntegrationCoverage {
@@ -647,46 +674,6 @@ impl AgentAdapter for OpencodeAdapter {
         spend::parse_opencode_spend(path, resume, prices)
     }
 
-    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
-        match mode {
-            PermissionMode::Ask | PermissionMode::Auto => Vec::new(),
-            PermissionMode::Plan => vec!["--agent".to_owned(), "plan".to_owned()],
-            PermissionMode::Yolo => vec!["--auto".to_owned()],
-        }
-    }
-
-    fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "opencode".to_owned(),
-            "--session".to_owned(),
-            session_id.to_owned(),
-        ])
-    }
-
-    fn fork_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
-        Some(vec![
-            "opencode".to_owned(),
-            "--session".to_owned(),
-            session_id.to_owned(),
-            "--fork".to_owned(),
-        ])
-    }
-
-    fn compact_command(&self) -> Option<&'static str> {
-        Some("/compact")
-    }
-
-    fn preset_arg_matcher(&self, field: super::PresetField) -> Option<super::PresetArgMatcher> {
-        (field == super::PresetField::Model)
-            .then(|| super::PresetArgMatcher::Flag(vec!["--model".to_owned(), "-m".to_owned()]))
-    }
-
-    fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
-        Some(super::positional_prompt_argv(
-            "opencode", extra_args, prompt,
-        ))
-    }
-
     fn managed_source(&self) -> Option<&'static ManagedSource> {
         Some(&OPENCODE_MANAGED_SOURCE)
     }
@@ -699,8 +686,8 @@ impl AgentAdapter for OpencodeAdapter {
         account::probe_usage()
     }
 
-    fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
-        account::account_usage_identity()
+    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
+        Some(account::account_usage_identity())
     }
 }
 

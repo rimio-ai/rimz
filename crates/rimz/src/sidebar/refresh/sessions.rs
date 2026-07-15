@@ -15,7 +15,7 @@ use crate::agents::{
     AgentTurnError, LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn,
     RefreshTrigger,
 };
-use crate::ids::{AgentKind, PaneId};
+use crate::ids::PaneId;
 use crate::sidebar::timing::{
     SESSION_PROBE_MARKER_PREFIX, SESSION_PROBE_MARKER_TTL, SESSION_REFRESH_INTERVAL,
 };
@@ -288,9 +288,8 @@ pub fn confirm_codex_turn_death_from_pane(
     }
     if crate::agents::codex::turn_death_needs_pane_confirmation(error) {
         let now = Timestamp::now();
-        let budgets = crate::agents::account_budgets_from_caches(runtime, now);
-        let kind = AgentKind::new_unchecked("codex");
-        crate::agents::codex::infer_turn_death_from_spent_window(error, budgets.get(&kind), now);
+        let capacity = crate::agents::ProviderCapacity::read(runtime, "codex");
+        crate::agents::codex::infer_turn_death_from_spent_window(error, capacity.as_ref(), now);
     }
 }
 
@@ -695,10 +694,10 @@ mod tests {
         let reset = now
             .checked_add(jiff::SignedDuration::from_secs(60 * 60))
             .unwrap();
-        let cache = crate::agents::RateLimitsCache {
+        let cache = crate::agents::account::RateLimitsCache {
             entries: BTreeMap::from([(
                 "codex".to_owned(),
-                crate::agents::RateLimitCacheEntry {
+                crate::agents::account::RateLimitCacheEntry {
                     limits: crate::agents::AgentRateLimits {
                         windows: vec![crate::agents::RateLimitWindow {
                             used_percentage: Some(100),

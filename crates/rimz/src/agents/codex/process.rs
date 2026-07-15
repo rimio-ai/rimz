@@ -7,10 +7,6 @@ use crate::daemon_view::{APP_SERVER_MARKER, COMMAND_MARKER};
 use crate::ids::AgentSessionId;
 
 const CODEX_BINARY_MARKER: &str = "codex";
-// Same shallow single-child walk as `proc::pane_probe`: direct CLI, shell, and
-// wrapper chains are expected; deeper trees abstain instead of guessing.
-#[cfg(test)]
-const CODEX_PROCESS_DESCENT_DEPTH: usize = 8;
 
 /// PIDs of the per-user Codex app-server daemon — the process a remote-control
 /// Codex session records as its hook owner (`$PPID`). A daemon-mode session's
@@ -46,38 +42,6 @@ pub fn pid_is_codex_daemon(pid: u32) -> bool {
 fn is_codex_daemon_cmdline(cmdline: &str) -> bool {
     let on_daemon_surface = cmdline.contains(APP_SERVER_MARKER) || cmdline.contains(COMMAND_MARKER);
     on_daemon_surface && cmdline.contains(CODEX_BINARY_MARKER)
-}
-
-/// Session id from the in-pane Codex CLI behind a pane's bound root process.
-/// The root is the CLI itself when the pane runs it directly; shell-hosted and
-/// wrapper-hosted CLIs are accepted only along a single-child chain. Multiple
-/// children abstain so a shell doing other work cannot donate the wrong resumed
-/// session id.
-pub fn codex_resumed_session_id_for_root(root_pid: u32) -> Option<AgentSessionId> {
-    crate::agents::registry::resumed_session_id_for_root(root_pid)
-}
-
-#[cfg(test)]
-fn codex_resumed_session_id_for_root_with(
-    root_pid: u32,
-    cmdline: &dyn Fn(u32) -> Option<String>,
-    children: &dyn Fn(u32) -> Vec<u32>,
-) -> Option<AgentSessionId> {
-    let mut pid = root_pid;
-    for _ in 0..=CODEX_PROCESS_DESCENT_DEPTH {
-        if let Some(resumed) = cmdline(pid)
-            .as_deref()
-            .and_then(codex_resumed_session_id_from_cmdline)
-        {
-            return Some(resumed);
-        }
-        let children = children(pid);
-        let [child] = children.as_slice() else {
-            return None;
-        };
-        pid = *child;
-    }
-    None
 }
 
 /// Session id from a resumed Codex CLI command (`codex resume <session-id>`).
@@ -185,64 +149,6 @@ mod tests {
         );
         assert_eq!(
             codex_resumed_session_id_from_cmdline("codex app-server resume sess"),
-            None
-        );
-    }
-
-    #[test]
-    fn codex_resume_root_yields_session_id_from_root_or_single_child_chain() {
-        assert_eq!(
-            codex_resumed_session_id_for_root_with(
-                200,
-                &|pid| (pid == 200).then_some("codex resume root-sess".to_owned()),
-                &|_| Vec::new(),
-            )
-            .as_deref(),
-            Some("root-sess")
-        );
-        assert_eq!(
-            codex_resumed_session_id_for_root_with(
-                200,
-                &|pid| match pid {
-                    200 => Some("zsh".to_owned()),
-                    300 => Some("codex resume child-sess".to_owned()),
-                    _ => None,
-                },
-                &|pid| (pid == 200).then_some(vec![300]).unwrap_or_default(),
-            )
-            .as_deref(),
-            Some("child-sess")
-        );
-        assert_eq!(
-            codex_resumed_session_id_for_root_with(
-                200,
-                &|pid| match pid {
-                    200 => Some("zsh".to_owned()),
-                    300 => Some("chezmoi cd".to_owned()),
-                    400 => Some("/bin/zsh".to_owned()),
-                    500 => Some("codex resume nested-sess".to_owned()),
-                    _ => None,
-                },
-                &|pid| match pid {
-                    200 => vec![300],
-                    300 => vec![400],
-                    400 => vec![500],
-                    _ => Vec::new(),
-                },
-            )
-            .as_deref(),
-            Some("nested-sess")
-        );
-        assert_eq!(
-            codex_resumed_session_id_for_root_with(
-                200,
-                &|pid| match pid {
-                    300 => Some("codex resume child-a".to_owned()),
-                    301 => Some("codex resume child-b".to_owned()),
-                    _ => Some("zsh".to_owned()),
-                },
-                &|pid| (pid == 200).then_some(vec![300, 301]).unwrap_or_default(),
-            ),
             None
         );
     }

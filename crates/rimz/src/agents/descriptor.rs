@@ -11,6 +11,92 @@ use serde_json::Value;
 
 use super::lifecycle::{AskKind, LifecycleSignalKind};
 
+/// Static launch shapes shared by built-in and process-plugin adapters.
+#[derive(Clone, Copy, Debug)]
+pub struct LaunchSpec {
+    pub program: Option<&'static str>,
+    pub fixed_args: &'static [&'static str],
+    pub prompt: PromptStyle,
+    pub resume: Option<SessionCommand>,
+    pub fork: Option<SessionCommand>,
+    pub permission: LaunchPermissionArgs,
+    pub ping_args: Option<&'static [&'static str]>,
+    pub max_turn_flag: Option<&'static str>,
+    pub compact_command: Option<&'static str>,
+    pub presets: PresetMatchers,
+}
+
+impl LaunchSpec {
+    pub const EMPTY: Self = Self {
+        program: None,
+        fixed_args: &[],
+        prompt: PromptStyle::None,
+        resume: None,
+        fork: None,
+        permission: LaunchPermissionArgs::EMPTY,
+        ping_args: None,
+        max_turn_flag: None,
+        compact_command: None,
+        presets: PresetMatchers::EMPTY,
+    };
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SessionCommand {
+    pub before_id: &'static [&'static str],
+    pub after_id: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum PromptStyle {
+    None,
+    PositionalAfterDoubleDash,
+    Flag(&'static str),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LaunchPermissionArgs {
+    pub ask: &'static [&'static str],
+    pub auto: &'static [&'static str],
+    pub yolo: &'static [&'static str],
+    pub plan: &'static [&'static str],
+}
+
+impl LaunchPermissionArgs {
+    pub const EMPTY: Self = Self {
+        ask: &[],
+        auto: &[],
+        yolo: &[],
+        plan: &[],
+    };
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PresetMatchers {
+    pub model: Option<StaticPresetMatcher>,
+    pub effort: Option<StaticPresetMatcher>,
+    pub system_prompt_file: Option<StaticPresetMatcher>,
+    pub append_system_prompt_file: Option<StaticPresetMatcher>,
+}
+
+impl PresetMatchers {
+    pub const EMPTY: Self = Self {
+        model: None,
+        effort: None,
+        system_prompt_file: None,
+        append_system_prompt_file: None,
+    };
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum StaticPresetMatcher {
+    Flag(&'static [&'static str]),
+    ConfigKey {
+        flags: &'static [&'static str],
+        key: &'static str,
+    },
+}
+
 /// Static identity, branding, capabilities, and classification tables for one
 /// agent. See the module doc for the descriptor-vs-trait split.
 #[derive(Debug)]
@@ -79,6 +165,8 @@ pub struct AgentDescriptor {
     /// How this agent's transcript files map to billing threads, for the
     /// spending session count.
     pub thread_key: ThreadKey,
+    /// Static process launch contract rendered by [`AgentAdapter`](super::AgentAdapter).
+    pub launch: LaunchSpec,
 }
 
 /// Architecture tokens that open a Rust target triple, so a release binary

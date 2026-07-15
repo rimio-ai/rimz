@@ -9,7 +9,7 @@
 //! surviving the wait:
 //!
 //! - **Arm.** Each frame an agent is parked on a resumable certificate
-//!   ([`crate::agents::resume_park`]), the producer writes a durable [`ParkRecord`]
+//!   ([`resume_park`]), the producer writes a durable [`ParkRecord`]
 //!   capturing the park class and the agent's frozen `last_activity`. A
 //!   rate-limit record captures the latest spent-window reset deadline; a
 //!   backoff record carries the turn-error marker time and retry state.
@@ -23,7 +23,7 @@
 //!   control exhaustion, while helper spawns only pace retries.
 //!
 //! This module owns only the durable record, the pane join, and the spawn — the
-//! arm decision is the pure, unit-tested [`crate::agents::resume_park`].
+//! arm decision is the pure, unit-tested [`resume_park`].
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -35,8 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::RuntimePaths;
 use crate::SidebarSnapshot;
 use crate::agents::{
-    AccountBudget, AgentState, ResumeArm, TurnErrorClass, display_turn_error,
-    effective_turn_error_class, resume_park,
+    AgentState, ProviderCapacity, TurnErrorClass, display_turn_error, effective_turn_error_class,
 };
 #[cfg(not(test))]
 use crate::child_process::detached_rimz_command;
@@ -94,6 +93,70 @@ enum ParkKind {
     },
 }
 
+/// How a parked root agent's turn may resume.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ResumeArm {
+    RateLimit { deadline: Timestamp },
+    Overloaded { overloaded_at: Timestamp },
+}
+
+/// Pure provider-park decision from normalized agent state and account capacity.
+pub(crate) fn resume_park(
+    agent: &AgentState,
+    capacity: Option<&ProviderCapacity>,
+    now: Timestamp,
+) -> Option<ResumeArm> {
+    if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
+        return None;
+    }
+    let error = display_turn_error(
+        agent.status,
+        agent.context.as_ref(),
+        agent.last_activity,
+        agent.turn_started_at,
+    )?;
+    match effective_turn_error_class(error) {
+        TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedSpendLimit => {
+            let deadline = capacity?.latest_spent_window_reset(now)?;
+            Some(ResumeArm::RateLimit { deadline })
+        }
+        TurnErrorClass::PausedOverloaded => Some(ResumeArm::Overloaded {
+            overloaded_at: error.at,
+        }),
+        TurnErrorClass::Unknown | TurnErrorClass::Failed => None,
+    }
+}
+
+/// Whether a hidden resume-gated message may enter a paused agent now.
+pub(crate) fn resume_gate_recovered(
+    runtime: &RuntimePaths,
+    agent: &AgentState,
+    now: Timestamp,
+) -> bool {
+    if agent.effective_status() != crate::agents::AgentStatus::Paused {
+        return false;
+    }
+    if let Some(park) = agent.budget_park.as_ref() {
+        return park.resets_at.is_some_and(|resets_at| now >= resets_at);
+    }
+    let capacity = ProviderCapacity::read(runtime, agent.kind.as_str());
+    match resume_park(agent, capacity.as_ref(), now) {
+        Some(ResumeArm::Overloaded { .. }) => true,
+        Some(ResumeArm::RateLimit { .. }) => false,
+        None => display_turn_error(
+            agent.status,
+            agent.context.as_ref(),
+            agent.last_activity,
+            agent.turn_started_at,
+        )
+        .map(effective_turn_error_class)
+        .is_some_and(|class| {
+            class.is_limit()
+                && capacity.is_some_and(|capacity| capacity.subscription_budget_available(now))
+        }),
+    }
+}
+
 /// Arm or fire each park when live auto-continue is enabled. Best-effort: an
 /// empty nudge text or an agent with no live pane waits without consuming a
 /// retry; a spawned helper paces the next attempt even if it dies before
@@ -111,7 +174,7 @@ pub(crate) fn resume_parked(
     }
     let text = config.auto_continue_text.trim();
     let now = snapshot.now;
-    let account_budgets = crate::agents::account_budgets_from_caches(runtime, now);
+    let provider_capacities = ProviderCapacity::read_all(runtime);
     let ctx = FireContext {
         snapshot,
         runtime,
@@ -133,8 +196,8 @@ pub(crate) fn resume_parked(
             continue;
         }
         clear_budget_park(runtime, &agent.kind, &agent.agent_id);
-        let budget = account_budgets.get(&agent.kind);
-        match resume_park(agent, budget, now) {
+        let capacity = provider_capacities.get(&agent.kind);
+        match resume_park(agent, capacity, now) {
             Some(ResumeArm::RateLimit { deadline }) => {
                 arm_park(&path, ParkKind::RateLimit { deadline }, agent.last_activity);
                 fire_if_due(agent, &path, ctx);
@@ -153,7 +216,7 @@ pub(crate) fn resume_parked(
                 // chance to fire the persisted due record on the recovery
                 // frame; clear only stale records whose marker already moved on.
                 if limit_marker_active(agent) {
-                    if read_park(&path).is_none() && budget_recovered(budget, now) {
+                    if read_park(&path).is_none() && capacity_recovered(capacity, now) {
                         arm_park(
                             &path,
                             ParkKind::RateLimit { deadline: now },
@@ -161,7 +224,7 @@ pub(crate) fn resume_parked(
                         );
                     }
                     fire_if_due(agent, &path, ctx);
-                } else if budget_recovered(budget, now) {
+                } else if capacity_recovered(capacity, now) {
                     remove_park(&path);
                 } else {
                     fire_if_due(agent, &path, ctx);
@@ -204,8 +267,8 @@ pub(crate) fn exhausted_parks(
     exhausted
 }
 
-fn budget_recovered(budget: Option<&AccountBudget>, now: Timestamp) -> bool {
-    budget.is_some_and(|budget| budget.subscription_budget_available(now))
+fn capacity_recovered(capacity: Option<&ProviderCapacity>, now: Timestamp) -> bool {
+    capacity.is_some_and(|capacity| capacity.subscription_budget_available(now))
 }
 
 fn limit_marker_active(agent: &AgentState) -> bool {

@@ -6,11 +6,7 @@ use serde_json::Value;
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct AmpHookPayload {
     pub session_id: Option<String>,
-    #[allow(dead_code, reason = "parsed to pin the plugin envelope")]
-    pub cwd: Option<String>,
     pub prompt: Option<String>,
-    #[allow(dead_code, reason = "parsed to pin the plugin envelope")]
-    pub tool_name: Option<String>,
     pub files_modified: Option<bool>,
     pub status: Option<String>,
     pub model: Option<String>,

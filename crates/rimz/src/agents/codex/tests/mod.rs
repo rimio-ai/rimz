@@ -39,6 +39,10 @@ fn codex_commands_and_permission_args_match_run_posture() {
         ])
     );
     assert_eq!(
+        CodexAdapter.launch_command(&[], Some("")),
+        Some(vec!["codex".to_owned()])
+    );
+    assert_eq!(
         CodexAdapter.launch_command(
             &[
                 "--model".to_owned(),
@@ -73,6 +77,14 @@ fn codex_commands_and_permission_args_match_run_posture() {
         CodexAdapter.permission_args(PermissionMode::Yolo),
         vec!["--dangerously-bypass-approvals-and-sandbox"]
     );
+    assert_eq!(
+        CodexAdapter.ping_args(),
+        Some(vec![
+            "-c".to_owned(),
+            "model_reasoning_effort=low".to_owned()
+        ])
+    );
+    assert_eq!(CodexAdapter.compact_command(), Some("/compact"));
 }
 
 #[test]

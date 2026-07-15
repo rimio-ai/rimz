@@ -839,13 +839,13 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
     let past_reset = now
         .checked_sub(jiff::SignedDuration::from_secs(60))
         .unwrap();
-    let budget = |used_percentage, resets_at| crate::agents::AccountBudget {
-        windows: vec![crate::agents::RateLimitWindow {
+    let capacity = |used_percentage, resets_at| {
+        crate::agents::ProviderCapacity::from_windows(vec![crate::agents::RateLimitWindow {
             used_percentage,
             resets_at,
             duration_mins: Some(300),
             ..Default::default()
-        }],
+        }])
     };
     let generic = || crate::agents::AgentTurnError {
         class: crate::agents::TurnErrorClass::Unknown,
@@ -853,7 +853,7 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
         label: Some("turn ended with no final message".to_owned()),
     };
 
-    let spent = budget(Some(100), Some(future_reset));
+    let spent = capacity(Some(100), Some(future_reset));
     let mut error = generic();
     infer_turn_death_from_spent_window(&mut error, Some(&spent), now);
     assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
@@ -862,13 +862,13 @@ fn infer_turn_death_from_spent_window_parks_only_generic_marker() {
         Some("usage limit inferred (rate-limit window spent)")
     );
 
-    for budget in [
-        budget(Some(99), Some(future_reset)),
-        budget(Some(100), Some(past_reset)),
-        budget(None, Some(future_reset)),
+    for capacity in [
+        capacity(Some(99), Some(future_reset)),
+        capacity(Some(100), Some(past_reset)),
+        capacity(None, Some(future_reset)),
     ] {
         let mut error = generic();
-        infer_turn_death_from_spent_window(&mut error, Some(&budget), now);
+        infer_turn_death_from_spent_window(&mut error, Some(&capacity), now);
         assert_eq!(error, generic());
     }
 

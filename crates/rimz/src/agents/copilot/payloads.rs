@@ -5,17 +5,15 @@ use serde_json::Value;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // Sparse event variants share this one typed wire shape.
 pub(crate) struct CopilotHookPayload {
     #[serde(alias = "session_id")]
     pub session_id: Option<String>,
     #[serde(alias = "transcript_path")]
     pub transcript_path: Option<String>,
-    pub cwd: Option<String>,
     pub timestamp: Option<Value>,
-    pub prompt: Option<String>,
     #[serde(alias = "initial_prompt")]
     pub initial_prompt: Option<String>,
+    pub prompt: Option<String>,
     #[serde(alias = "tool_name")]
     pub tool_name: Option<String>,
     #[serde(
@@ -26,24 +24,14 @@ pub(crate) struct CopilotHookPayload {
     )]
     pub tool_args: Option<Value>,
     pub source: Option<String>,
-    #[serde(alias = "stop_reason")]
-    pub stop_reason: Option<String>,
-    pub trigger: Option<String>,
-    pub reason: Option<String>,
     pub recoverable: Option<bool>,
     pub error: Option<CopilotHookError>,
-    #[serde(alias = "error_context")]
-    pub error_context: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum CopilotHookError {
-    Detail {
-        message: Option<String>,
-        #[allow(dead_code)] // Retained for forward-compatible error classification.
-        name: Option<String>,
-    },
+    Detail { message: Option<String> },
     Message(String),
 }
 
@@ -91,9 +79,7 @@ mod tests {
         }));
         assert_eq!(native.session_id.as_deref(), Some("native"));
         assert_eq!(native.tool_name.as_deref(), Some("edit"));
-        assert_eq!(native.initial_prompt.as_deref(), Some("native prompt"));
         assert_eq!(native.transcript_path.as_deref(), Some("/tmp/events.jsonl"));
-        assert_eq!(native.error_context.as_deref(), Some("model_call"));
 
         let compatible = parse_payload(&json!({
             "session_id": "compatible",
@@ -109,7 +95,6 @@ mod tests {
             Some("/tmp/compatible/events.jsonl")
         );
         assert_eq!(compatible.tool_args, Some(json!({ "command": "true" })));
-        assert_eq!(compatible.error_context.as_deref(), Some("tool_execution"));
         assert!(parse_payload(&json!(null)).session_id.is_none());
     }
 

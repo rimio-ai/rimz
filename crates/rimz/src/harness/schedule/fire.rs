@@ -13,7 +13,7 @@ use jiff::{Timestamp, Zoned};
 use super::pauses::PauseEntry;
 use super::{catalog::TaskCatalog, pauses};
 use crate::RuntimePaths;
-use crate::agents::longest_window_reset_at;
+use crate::agents::ProviderCapacity;
 use crate::config::TaskEntry;
 use crate::harness::schedule;
 use crate::ids::WorkspaceId;
@@ -144,7 +144,9 @@ fn reset_occurrences(
                 .agent
                 .as_deref()
                 .and_then(crate::harness::spec::ping_kind)?;
-            longest_window_reset_at(runtime, kind).map(|reset| (name.clone(), reset))
+            ProviderCapacity::read(runtime, kind)
+                .and_then(|capacity| capacity.longest_window_reset_at())
+                .map(|reset| (name.clone(), reset))
         })
         .collect()
 }

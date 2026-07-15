@@ -414,7 +414,7 @@ pub fn enrich(
         exclude_pane: exclude,
     });
 
-    let account_budgets = crate::agents::account_budgets_from_caches(runtime, snapshot.now);
+    let provider_capacities = crate::agents::ProviderCapacity::read_all(runtime);
     let resume_messages = read_auto_continue_resume_messages(
         messages_dir,
         &machine_config.resume,
@@ -462,7 +462,7 @@ pub fn enrich(
             admitted_panes,
             &lazy_pairings,
             Some(&unread_row_ids),
-            &account_budgets,
+            &provider_capacities,
             &exhausted_resumes,
         );
         snapshot = next_snapshot;

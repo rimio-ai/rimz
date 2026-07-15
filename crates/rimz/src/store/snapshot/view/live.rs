@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::agent_activity::AgentActivity;
-use crate::agents::{AccountBudget, AgentState, LocalSessionObservation};
+use crate::agents::{AgentState, LocalSessionObservation, ProviderCapacity};
 use crate::diag::record::DiagEvent;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
@@ -129,14 +129,14 @@ impl SidebarSnapshot {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_live_panes_and_account_budgets(
+    pub(crate) fn with_live_panes_and_provider_capacities(
         mut self,
         panes: Vec<PaneRef>,
         exclude: Option<&PaneId>,
-        account_budgets: &BTreeMap<AgentKind, AccountBudget>,
+        provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
     ) -> Self {
         let panes = Self::card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None, None, account_budgets, &BTreeSet::new());
+        self.fold_admitted_live_panes(&panes, None, None, provider_capacities, &BTreeSet::new());
         self
     }
 
@@ -152,14 +152,14 @@ impl SidebarSnapshot {
         panes: Vec<PaneRef>,
         lazy_pairings: &LazyAgentPairingResult,
         unread_row_ids: Option<&BTreeSet<String>>,
-        account_budgets: &BTreeMap<AgentKind, AccountBudget>,
+        provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
         exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> (Self, Vec<DiagEvent>) {
         let diagnostics = self.fold_admitted_live_panes(
             &panes,
             Some(lazy_pairings),
             unread_row_ids,
-            account_budgets,
+            provider_capacities,
             exhausted_resumes,
         );
         (self, diagnostics)
@@ -170,7 +170,7 @@ impl SidebarSnapshot {
         panes: &[PaneRef],
         lazy_pairings: Option<&LazyAgentPairingResult>,
         unread_row_ids: Option<&BTreeSet<String>>,
-        account_budgets: &BTreeMap<AgentKind, AccountBudget>,
+        provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
         exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     ) -> Vec<DiagEvent> {
         let mut projection = rows_from_panes(
@@ -192,7 +192,7 @@ impl SidebarSnapshot {
             projection.rows,
             AgentProjection {
                 agents: &self.agents,
-                account_budgets,
+                provider_capacities,
                 exhausted_resumes,
             },
             GroupRoots {

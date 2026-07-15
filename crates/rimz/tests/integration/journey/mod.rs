@@ -239,7 +239,7 @@ impl<'a> RoomHarness<'a> {
         self.env.publish_accounts(accounts);
     }
 
-    pub fn publish_rate_limits(&self, cache: &rimz::agents::RateLimitsCache) {
+    pub fn publish_rate_limits(&self, cache: &rimz::agents::account::RateLimitsCache) {
         self.env.publish_rate_limits(cache);
     }
 

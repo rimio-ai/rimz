@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use jiff::{SignedDuration, Timestamp};
-use rimz::agents::RateLimitsCache;
+use rimz::agents::account::RateLimitsCache;
 use rimz::agents::context::WindowSource;
 use rimz::agents::{AgentAccount, AgentRateLimits, RateLimitWindow};
 use rimz::ids::MuxName;
@@ -175,7 +175,7 @@ fn rate_cache(used: u8, resets_at: Timestamp) -> RateLimitsCache {
         refreshed_at_ms: unix_now_ms(),
         entries: BTreeMap::from([(
             "claude".to_owned(),
-            rimz::agents::RateLimitCacheEntry {
+            rimz::agents::account::RateLimitCacheEntry {
                 limits: windows(used, resets_at),
                 ..Default::default()
             },

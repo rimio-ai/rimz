@@ -12,10 +12,7 @@ fn account_usage_surface_is_unsupported() {
         CopilotAdapter.probe_account_usage(),
         crate::agents::AccountUsageProbe::Unsupported
     );
-    assert_eq!(
-        CopilotAdapter.account_usage_identity(),
-        crate::agents::AccountUsageIdentity::default()
-    );
+    assert_eq!(CopilotAdapter.account_usage_identity(), None);
 }
 
 #[test]
