@@ -16,10 +16,45 @@ use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
 mod status;
 mod subagents;
 
-#[cfg(not(test))]
-use subagents::attach_sub_agents;
 #[cfg(test)]
 pub(in crate::store::snapshot) use subagents::{attach_sub_agents, sub_agent_from_state};
+
+type AgentKey = (AgentKind, AgentSessionId);
+
+struct AgentProjectionIndex<'a> {
+    roots: BTreeMap<AgentKey, &'a AgentState>,
+    children: BTreeMap<AgentKey, Vec<&'a AgentState>>,
+}
+
+impl<'a> AgentProjectionIndex<'a> {
+    fn new(agents: &'a [AgentState]) -> Self {
+        let mut roots = BTreeMap::new();
+        let mut children: BTreeMap<AgentKey, Vec<&AgentState>> = BTreeMap::new();
+        for agent in agents {
+            if let Some(parent_id) = &agent.parent_agent_id {
+                children
+                    .entry((agent.kind.clone(), parent_id.clone()))
+                    .or_default()
+                    .push(agent);
+            } else {
+                roots
+                    .entry((agent.kind.clone(), agent.agent_id.clone()))
+                    .or_insert(agent);
+            }
+        }
+        Self { roots, children }
+    }
+
+    fn root(&self, key: &AgentKey) -> Option<&'a AgentState> {
+        self.roots.get(key).copied()
+    }
+
+    fn children(&self) -> impl Iterator<Item = (&AgentKey, &[&'a AgentState])> {
+        self.children
+            .iter()
+            .map(|(key, children)| (key, children.as_slice()))
+    }
+}
 
 /// The per-machine attention timing windows the row fold reads, bundled so the
 /// fold entry point stays under the argument cap and the two knobs travel
@@ -65,10 +100,11 @@ pub(super) fn build_worktree_groups_from_rows(
     now: Timestamp,
     windows: AttentionWindows,
 ) -> Vec<SidebarWorktreeGroup> {
+    let agent_index = AgentProjectionIndex::new(agent_projection.agents);
     // Nest each subagent under its parent root row before grouping. This is the
     // one chokepoint every live (`rows_from_panes`) card flows through, so
     // nesting behaves identically for process, agent, and attention rows.
-    attach_sub_agents(&mut rows, agent_projection.agents, now);
+    subagents::attach_sub_agents_indexed(&mut rows, &agent_index, now);
     // A delegating parent's work is its children's, so their activity advances
     // the parent row's displayed clock before the stall check reads it.
     subagents::fold_child_activity_onto_parents(&mut rows);
@@ -76,7 +112,7 @@ pub(super) fn build_worktree_groups_from_rows(
     // the full agent set is in hand.
     status::project_display_status(
         &mut rows,
-        agent_projection.agents,
+        &agent_index,
         agent_projection.provider_capacities,
         agent_projection.exhausted_resumes,
         now,

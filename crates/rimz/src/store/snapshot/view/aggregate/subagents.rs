@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 use tracing::debug;
 
@@ -7,94 +9,129 @@ use crate::store::snapshot::row::{SidebarRow, SidebarSubAgent};
 use super::super::layout::cmp_start_asc;
 use crate::store::session_death::GHOST_SESSION_TTL_SECS;
 
+use super::{AgentKey, AgentProjectionIndex};
+
 /// Nest each subagent under its parent root row. A subagent is a reduced
 /// `AgentState` carrying `parent_agent_id`; it is paneless, so it built no row
 /// of its own (`rows_from_panes` binds only stamped panes).
-pub(in crate::store::snapshot) fn attach_sub_agents(
+pub(super) fn attach_sub_agents_indexed(
     rows: &mut [SidebarRow],
-    agents: &[AgentState],
+    index: &AgentProjectionIndex<'_>,
     now: Timestamp,
 ) {
-    let parent_turn_start = |kind: &str, id: &str| -> Option<Timestamp> {
-        agents
+    let row_by_parent = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.as_agent().is_some())
+        .map(|(row_index, row)| {
+            (
+                (
+                    crate::ids::AgentKind::new_unchecked(row.name.clone()),
+                    crate::ids::AgentSessionId::from(row.id.as_str()),
+                ),
+                row_index,
+            )
+        })
+        .collect::<BTreeMap<AgentKey, usize>>();
+
+    for (parent_key, children) in index.children() {
+        let parent_turn_started_at = index
+            .root(parent_key)
+            .and_then(|parent| parent.turn_started_at);
+        let visible = children
             .iter()
-            .find(|a| a.kind == kind && a.agent_id == id)
-            .and_then(|a| a.turn_started_at)
-    };
-    let idle_secs = |child: &AgentState| now.duration_since(child.last_activity).as_secs();
-    for child in agents.iter().filter(|a| a.parent_agent_id.is_some()) {
-        let Some(parent_id) = child.parent_agent_id.as_deref() else {
-            continue;
-        };
-        let parent_turn_started_at = parent_turn_start(&child.kind, parent_id);
-        let parent_has_turn_boundary = parent_turn_started_at.is_some();
-        let superseded =
-            parent_turn_started_at.is_some_and(|started| started > child.last_activity);
-        // Projection diagnostics stay at debug: persisted state deterministically
-        // re-folds per frame per renderer, so warn would repeatedly reach Sentry.
-        // Durable reaping belongs to store/writer/reap.rs.
-        let keep = if child.status == AgentStatus::Running {
-            if superseded {
+            .copied()
+            .filter(|child| child_is_visible(child, parent_turn_started_at, now))
+            .collect::<Vec<_>>();
+        let Some(row_index) = row_by_parent.get(parent_key).copied() else {
+            for child in visible {
+                let parent_id = child.parent_agent_id.as_deref().unwrap_or_default();
+                // Transient projection state: the child was observed before its
+                // parent's row materialized within this fold. Keep it locally
+                // diagnosable without escalating an expected race.
                 debug!(
                     target: "rimz::agent::lifecycle",
                     kind = %child.kind,
                     parent = parent_id,
                     child = %child.agent_id,
-                    "running subagent superseded by a newer parent turn — reaped",
+                    "subagent names a parent with no row — orphan, not rendered",
                 );
-                false
-            } else if idle_secs(child) >= GHOST_SESSION_TTL_SECS {
-                debug!(
-                    target: "rimz::agent::lifecycle",
-                    kind = %child.kind,
-                    parent = parent_id,
-                    child = %child.agent_id,
-                    "subagent stuck running with no Stop past the ghost TTL — reaped",
-                );
-                false
-            } else {
-                true
             }
-        } else {
-            // Finished: turn-scoped — kept until the parent's next turn
-            // supersedes it. The ghost TTL is the backstop for a parent that
-            // never recorded a turn boundary.
-            !superseded && (parent_has_turn_boundary || idle_secs(child) < GHOST_SESSION_TTL_SECS)
-        };
-        if !keep {
             continue;
+        };
+        let mut newest_by_id = BTreeMap::<&str, &AgentState>::new();
+        for child in visible {
+            newest_by_id
+                .entry(child.agent_id.as_str())
+                .and_modify(|current| {
+                    if child.last_activity > current.last_activity {
+                        *current = child;
+                    }
+                })
+                .or_insert(child);
         }
-        let parent = rows
-            .iter_mut()
-            .filter(|row| row.name == child.kind && row.id == parent_id)
-            .find_map(SidebarRow::as_agent_mut);
-        if let Some(parent) = parent {
-            parent.sub_agents.push(sub_agent_from_state(child, now));
-        } else {
-            // Transient projection state: the child was observed before its
-            // parent's row materialized within this fold. Keep it locally
-            // diagnosable without escalating an expected race.
+        // `row_by_parent` includes only rows whose card is an agent.
+        let parent = rows[row_index]
+            .as_agent_mut()
+            .expect("row index contains only agent rows");
+        parent.sub_agents.extend(
+            newest_by_id
+                .into_values()
+                .map(|child| sub_agent_from_state(child, now)),
+        );
+    }
+    for agent in rows.iter_mut().filter_map(SidebarRow::as_agent_mut) {
+        agent.sub_agents.sort_by(|a, b| {
+            cmp_start_asc(a.registered_at, b.registered_at).then_with(|| a.id.cmp(&b.id))
+        });
+    }
+}
+
+fn child_is_visible(
+    child: &AgentState,
+    parent_turn_started_at: Option<Timestamp>,
+    now: Timestamp,
+) -> bool {
+    let parent_id = child.parent_agent_id.as_deref().unwrap_or_default();
+    let superseded = parent_turn_started_at.is_some_and(|started| started > child.last_activity);
+    if child.status == AgentStatus::Running {
+        if superseded {
+            // Projection diagnostics stay at debug because persisted state
+            // deterministically re-folds once per frame.
             debug!(
                 target: "rimz::agent::lifecycle",
                 kind = %child.kind,
                 parent = parent_id,
                 child = %child.agent_id,
-                "subagent names a parent with no row — orphan, not rendered",
+                "running subagent superseded by a newer parent turn — reaped",
             );
+            return false;
         }
-    }
-    for agent in rows.iter_mut().filter_map(SidebarRow::as_agent_mut) {
-        if agent.sub_agents.is_empty() {
-            continue;
+        if now.duration_since(child.last_activity).as_secs() >= GHOST_SESSION_TTL_SECS {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                kind = %child.kind,
+                parent = parent_id,
+                child = %child.agent_id,
+                "subagent stuck running with no Stop past the ghost TTL — reaped",
+            );
+            return false;
         }
-        agent
-            .sub_agents
-            .sort_by(|a, b| a.id.cmp(&b.id).then(b.last_activity.cmp(&a.last_activity)));
-        agent.sub_agents.dedup_by(|a, b| a.id == b.id);
-        agent.sub_agents.sort_by(|a, b| {
-            cmp_start_asc(a.registered_at, b.registered_at).then_with(|| a.id.cmp(&b.id))
-        });
+        return true;
     }
+    !superseded
+        && (parent_turn_started_at.is_some()
+            || now.duration_since(child.last_activity).as_secs() < GHOST_SESSION_TTL_SECS)
+}
+
+#[cfg(test)]
+pub(in crate::store::snapshot) fn attach_sub_agents(
+    rows: &mut [SidebarRow],
+    agents: &[AgentState],
+    now: Timestamp,
+) {
+    let index = AgentProjectionIndex::new(agents);
+    attach_sub_agents_indexed(rows, &index, now);
 }
 
 /// Advance each parent row's *displayed* `last_activity` to its freshest

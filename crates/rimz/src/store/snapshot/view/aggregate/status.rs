@@ -10,6 +10,8 @@ use crate::agents::{
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::store::snapshot::row::SidebarRow;
 
+use super::{AgentKey, AgentProjectionIndex};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WaitingResolution {
     NotWaiting,
@@ -62,7 +64,7 @@ impl Settled {
 /// budget windows.
 pub(super) fn project_display_status(
     rows: &mut [SidebarRow],
-    agents: &[AgentState],
+    index: &AgentProjectionIndex<'_>,
     provider_capacities: &BTreeMap<AgentKind, ProviderCapacity>,
     exhausted_resumes: &BTreeSet<(AgentKind, AgentSessionId)>,
     now: Timestamp,
@@ -73,9 +75,11 @@ pub(super) fn project_display_status(
         let row_id = row.id.clone();
         let row_name = row.name.clone();
         let last_activity = row.last_activity;
-        let source_agent = agents.iter().find(|state| {
-            state.parent_agent_id.is_none() && state.kind == row_name && state.agent_id == row_id
-        });
+        let key: AgentKey = (
+            AgentKind::new_unchecked(row_name.clone()),
+            AgentSessionId::from(row_id.as_str()),
+        );
+        let source_agent = index.root(&key);
         let turn_started_at = source_agent.and_then(|state| state.turn_started_at);
         let Some(agent) = row.as_agent_mut() else {
             continue;
