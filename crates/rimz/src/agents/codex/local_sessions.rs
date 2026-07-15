@@ -212,8 +212,7 @@ fn observation(path: PathBuf, workspaces: &HashSet<&Path>) -> Option<LocalSessio
         return None;
     }
     let payload = meta.payload?;
-    let workspace = Path::new(payload.cwd.as_deref()?);
-    workspaces.contains(workspace).then_some(())?;
+    let workspace = *workspaces.get(Path::new(payload.cwd.as_deref()?))?;
     let session_id = payload
         .id
         .as_deref()
@@ -424,7 +423,7 @@ mod tests {
         write_rollout(
             &active,
             first,
-            "/workspace/first",
+            "/workspace/first/.",
             "2025-01-01T00:00:00Z",
             1_735_689_600,
         );
@@ -463,6 +462,10 @@ mod tests {
                 (second, Path::new("/workspace/second")),
                 (first, Path::new("/workspace/first")),
             ]
+        );
+        assert_eq!(
+            observations[1].workspace.as_os_str().as_encoded_bytes(),
+            b"/workspace/first"
         );
     }
 
