@@ -309,12 +309,12 @@ fn run_web_prep(
             )
         })?;
     let mut stdout = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        if let Err(err) = pipe.read_to_end(&mut stdout) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(err).with_context(|| format!("{label}: reading remote prep stdout"));
-        }
+    if let Some(mut pipe) = child.stdout.take()
+        && let Err(err) = pipe.read_to_end(&mut stdout)
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(err).with_context(|| format!("{label}: reading remote prep stdout"));
     }
     let status = child
         .wait()
