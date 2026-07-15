@@ -62,21 +62,22 @@ impl Store {
             intent.event_name,
             &observation,
         );
-        self.commit(PublishPolicy::Skip, |txn| txn.append(&envelope))?;
-
-        let Ok(metadata) = std::fs::metadata(&self.inner.paths.events_log) else {
-            return Ok(AgentLifecycleOutcome::Appended);
-        };
-        let stamp = self.inner.paths.locks_dir.join(AUTO_ROTATE_STAMP);
-        if !auto_rotation_due_at(
-            metadata.len(),
-            rotation_threshold,
-            debounce::stamp_age(&stamp),
-        ) {
-            return Ok(AgentLifecycleOutcome::Appended);
-        }
-        debounce::touch_stamp(&stamp);
-        Ok(AgentLifecycleOutcome::RotationDue)
+        self.commit(PublishPolicy::Skip, |txn| {
+            txn.append(&envelope)?;
+            let Ok(metadata) = std::fs::metadata(&txn.paths.events_log) else {
+                return Ok(AgentLifecycleOutcome::Appended);
+            };
+            let stamp = txn.paths.locks_dir.join(AUTO_ROTATE_STAMP);
+            if !auto_rotation_due_at(
+                metadata.len(),
+                rotation_threshold,
+                debounce::stamp_age(&stamp),
+            ) {
+                return Ok(AgentLifecycleOutcome::Appended);
+            }
+            debounce::touch_stamp(&stamp);
+            Ok(AgentLifecycleOutcome::RotationDue)
+        })
     }
 }
 
@@ -349,6 +350,8 @@ mod tests {
     #[test]
     fn rotation_due_touches_stamp_and_fresh_stamp_debounces() {
         let (_dir, store) = test_store();
+        let second = Store::open(store.paths().clone(), store.runtime_paths().clone())
+            .expect("second store handle");
         let registered = observation(LifecycleSignal::Registered);
         let intent = || AgentLifecycleIntent {
             session_name: "rimz-test",
@@ -359,7 +362,7 @@ mod tests {
         };
 
         assert_eq!(
-            store
+            second
                 .append_agent_lifecycle_with_threshold(intent(), 0)
                 .expect("rotation due"),
             AgentLifecycleOutcome::RotationDue
