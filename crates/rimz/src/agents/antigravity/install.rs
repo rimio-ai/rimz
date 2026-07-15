@@ -13,8 +13,8 @@ use serde_json::{Map, Value, json};
 use crate::agents::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
     HookUninstallReport, Result, StatusLineChange, agent_config_path, read_optional_file,
+    settings_json::{self, PendingWrite},
 };
-use crate::store::atomic;
 
 use super::{
     HOOK_TIMEOUT_SECS, INSTALLED_EVENT_LABELS, POST_TOOL_EDIT_MATCHER, POST_TOOL_MUTATING_MATCHER,
@@ -44,19 +44,21 @@ pub(super) fn settings_path() -> Result<PathBuf> {
 }
 
 pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookInstallReport> {
-    let hooks_existed = hooks_path.exists();
-    let settings_original = read_optional_file(AGENT, settings_path)?;
+    let hooks_original = settings_json::read_optional_bytes(AGENT, hooks_path)?;
+    let settings_original = settings_json::read_optional_bytes(AGENT, settings_path)?;
+    let hooks_existed = hooks_original.is_some();
     let settings_existed = settings_original.is_some();
     let hooks = hook_candidate(hooks_path)?;
     let settings = statusline_candidate(settings_path)?.0;
-    write_json(settings_path, &settings)?;
-    if let Err(error) = write_json(hooks_path, &hooks) {
-        // Keep a failed two-file install from silently leaving only the
-        // statusline command active. Best-effort restoration uses the same
-        // atomic writer; the original install error remains the diagnosis.
-        let _ = restore_file(settings_path, settings_original.as_deref());
-        return Err(error);
-    }
+    let settings_candidate = settings_json::render_json(AGENT, &settings)?;
+    let hooks_candidate = settings_json::render_json(AGENT, &hooks)?;
+    settings_json::commit_pair(
+        AGENT,
+        PendingWrite::required(settings_path, &settings_candidate),
+        PendingWrite::required(hooks_path, &hooks_candidate),
+        settings_original.as_deref(),
+        hooks_original.as_deref(),
+    )?;
     Ok(HookInstallReport {
         agent: AGENT,
         files: vec![
@@ -73,21 +75,6 @@ pub(super) fn install(hooks_path: &Path, settings_path: &Path) -> Result<HookIns
     })
 }
 
-fn restore_file(path: &Path, original: Option<&str>) -> Result<()> {
-    match original {
-        Some(original) => atomic::write_bytes_atomically(path, original.as_bytes())?,
-        None if path.exists() => {
-            std::fs::remove_file(path).map_err(|source| AgentErr::InstallIo {
-                agent: AGENT,
-                path: path.to_path_buf(),
-                source,
-            })?;
-        }
-        None => {}
-    }
-    Ok(())
-}
-
 pub(super) fn preview(hooks_path: &Path, settings_path: &Path) -> Result<HookInstallPreview> {
     let hooks_original = read_optional_file(AGENT, hooks_path)?;
     let settings_original = read_optional_file(AGENT, settings_path)?;
@@ -100,13 +87,13 @@ pub(super) fn preview(hooks_path: &Path, settings_path: &Path) -> Result<HookIns
                 path: hooks_path.to_path_buf(),
                 existed: hooks_original.is_some(),
                 original: hooks_original,
-                candidate: render_json(&hooks)?,
+                candidate: settings_json::render_json(AGENT, &hooks)?,
             },
             HookInstallFilePreview {
                 path: settings_path.to_path_buf(),
                 existed: settings_original.is_some(),
                 original: settings_original,
-                candidate: render_json(&settings)?,
+                candidate: settings_json::render_json(AGENT, &settings)?,
             },
         ],
         planned_events: installed_event_names(),
@@ -120,10 +107,10 @@ pub(super) fn uninstall(hooks_path: &Path, settings_path: &Path) -> Result<HookU
     let settings_existed = settings_path.exists();
     let mut removed_events = Vec::new();
     if existed {
-        let mut root = read_json_object(hooks_path)?;
+        let mut root = settings_json::read_json_object(AGENT, hooks_path)?;
         if strip_owned_hooks(&mut root) {
             removed_events = installed_event_names();
-            write_json(hooks_path, &root)?;
+            settings_json::write_json(AGENT, hooks_path, &root)?;
         }
     }
     uninstall_statusline_file(settings_path)?;
@@ -144,7 +131,7 @@ pub(super) fn uninstall(hooks_path: &Path, settings_path: &Path) -> Result<HookU
 }
 
 pub(super) fn installed(hooks_path: &Path, settings_path: &Path) -> bool {
-    let Ok(root) = read_json_object(hooks_path) else {
+    let Ok(root) = settings_json::read_json_object(AGENT, hooks_path) else {
         return false;
     };
     let Some(rimz) = root.get(RIMZ_HOOK_NAME).and_then(Value::as_object) else {
@@ -165,12 +152,13 @@ pub(super) fn installed(hooks_path: &Path, settings_path: &Path) -> bool {
 }
 
 pub(super) fn managed(hooks_path: &Path, settings_path: &Path) -> bool {
-    read_json_object(hooks_path).is_ok_and(|root| value_has_owned_hook(&Value::Object(root)))
+    settings_json::read_json_object(AGENT, hooks_path)
+        .is_ok_and(|root| value_has_owned_hook(&Value::Object(root)))
         || statusline_managed_at(settings_path)
 }
 
 pub(super) fn wrapped_statusline_command(settings_path: &Path) -> Option<String> {
-    let root = read_json_object(settings_path).ok()?;
+    let root = settings_json::read_json_object(AGENT, settings_path).ok()?;
     let statusline = root.get(STATUS_LINE_KEY)?.as_object()?;
     statusline
         .get("command")
@@ -193,7 +181,7 @@ fn installed_event_names() -> Vec<String> {
 }
 
 fn hook_candidate(path: &Path) -> Result<Map<String, Value>> {
-    let mut root = read_json_object(path)?;
+    let mut root = settings_json::read_json_object(AGENT, path)?;
     strip_owned_hooks(&mut root);
     if root.contains_key(RIMZ_HOOK_NAME) {
         return Err(AgentErr::Install {
@@ -330,7 +318,7 @@ fn strip_owned_hooks(root: &mut Map<String, Value>) -> bool {
 }
 
 fn statusline_candidate(path: &Path) -> Result<(Map<String, Value>, StatusLineChange)> {
-    let mut root = read_json_object(path)?;
+    let mut root = settings_json::read_json_object(AGENT, path)?;
     let existing = root.remove(STATUS_LINE_KEY);
     let (original, change) = match existing {
         Some(Value::Object(mut object))
@@ -358,7 +346,7 @@ fn statusline_candidate(path: &Path) -> Result<(Map<String, Value>, StatusLineCh
                 reason: format!(
                     "expected `{STATUS_LINE_KEY}` in {} to be a JSON object; found {}",
                     path.display(),
-                    json_type_name(&other)
+                    settings_json::json_type_name(&other)
                 ),
             });
         }
@@ -385,7 +373,7 @@ fn statusline_candidate(path: &Path) -> Result<(Map<String, Value>, StatusLineCh
 }
 
 fn statusline_managed_at(path: &Path) -> bool {
-    read_json_object(path).is_ok_and(|root| {
+    settings_json::read_json_object(AGENT, path).is_ok_and(|root| {
         root.get(STATUS_LINE_KEY)
             .and_then(Value::as_object)
             .and_then(|statusline| statusline.get("command"))
@@ -398,7 +386,7 @@ fn uninstall_statusline_file(path: &Path) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let mut root = read_json_object(path)?;
+    let mut root = settings_json::read_json_object(AGENT, path)?;
     let Some(Value::Object(mut statusline)) = root.remove(STATUS_LINE_KEY) else {
         return Ok(());
     };
@@ -413,61 +401,5 @@ fn uninstall_statusline_file(path: &Path) -> Result<()> {
     if let Some(original) = statusline.remove(RIMZ_WRAPPED_KEY) {
         root.insert(STATUS_LINE_KEY.to_owned(), original);
     }
-    write_json(path, &root)
-}
-
-fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) if text.trim().is_empty() => Ok(Map::new()),
-        Ok(text) => {
-            let value: Value =
-                serde_json::from_str(&text).map_err(|source| AgentErr::InstallParse {
-                    agent: AGENT,
-                    path: path.to_path_buf(),
-                    source: Box::new(source),
-                })?;
-            match value {
-                Value::Object(root) => Ok(root),
-                other => Err(AgentErr::Install {
-                    agent: AGENT,
-                    reason: format!(
-                        "expected JSON object at the top level of {}; found {}",
-                        path.display(),
-                        json_type_name(&other)
-                    ),
-                }),
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
-        Err(source) => Err(AgentErr::InstallIo {
-            agent: AGENT,
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-fn render_json(root: &Map<String, Value>) -> Result<String> {
-    let mut rendered = serde_json::to_string_pretty(root).map_err(|source| AgentErr::Install {
-        agent: AGENT,
-        reason: format!("failed to render hook config: {source}"),
-    })?;
-    rendered.push('\n');
-    Ok(rendered)
-}
-
-fn write_json(path: &Path, root: &Map<String, Value>) -> Result<()> {
-    atomic::write_bytes_atomically(path, render_json(root)?.as_bytes())?;
-    Ok(())
-}
-
-fn json_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
+    settings_json::write_json(AGENT, path, &root)
 }

@@ -4,10 +4,9 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use crate::store::atomic;
-
 use super::hook_types::HookRecord;
 use super::managed_statusline::{self, ManagedStatusLineSpec};
+use super::settings_json;
 use super::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
     HookUninstallReport, Result, read_optional_file,
@@ -152,45 +151,11 @@ impl ManagedJsonHookSpec {
     }
 
     pub fn read_json(&self, path: &Path) -> Result<Map<String, Value>> {
-        match std::fs::read_to_string(path) {
-            Ok(text) if text.trim().is_empty() => Ok(Map::new()),
-            Ok(text) => {
-                let value: Value =
-                    serde_json::from_str(&text).map_err(|source| AgentErr::InstallParse {
-                        agent: self.agent,
-                        path: path.to_path_buf(),
-                        source: Box::new(source),
-                    })?;
-                match value {
-                    Value::Object(root) => Ok(root),
-                    other => Err(AgentErr::Install {
-                        agent: self.agent,
-                        reason: format!(
-                            "expected JSON object at the top level of {}; found {}",
-                            path.display(),
-                            json_type_name(&other)
-                        ),
-                    }),
-                }
-            }
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
-            Err(source) => Err(AgentErr::InstallIo {
-                agent: self.agent,
-                path: path.to_path_buf(),
-                source,
-            }),
-        }
+        settings_json::read_json_object(self.agent, path)
     }
 
     pub fn render_json(&self, root: &Map<String, Value>) -> Result<String> {
-        let text =
-            serde_json::to_string_pretty(&Value::Object(root.clone())).map_err(|source| {
-                AgentErr::InstallSerialize {
-                    agent: self.agent,
-                    source: Box::new(source),
-                }
-            })?;
-        Ok(format!("{text}\n"))
+        settings_json::render_json(self.agent, root)
     }
 
     fn candidate(&self, path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
@@ -213,8 +178,7 @@ impl ManagedJsonHookSpec {
     }
 
     fn write_json(&self, path: &Path, root: &Map<String, Value>) -> Result<()> {
-        atomic::write_bytes_atomically(path, self.render_json(root)?.as_bytes())?;
-        Ok(())
+        settings_json::write_json(self.agent, path, root)
     }
 
     fn reject_async_blocking(&self, root: &Map<String, Value>) -> Result<()> {
@@ -417,15 +381,4 @@ fn is_marked(entry: &Map<String, Value>) -> bool {
         .get(RIMZ_MANAGED_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(false)
-}
-
-fn json_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
 }

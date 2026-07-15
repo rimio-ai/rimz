@@ -46,6 +46,7 @@ pub mod plugin;
 pub mod pricing;
 pub mod qwen;
 pub mod registry;
+pub(crate) mod settings_json;
 pub mod spending;
 pub mod state;
 #[cfg(test)]
