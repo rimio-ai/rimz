@@ -1,18 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use jiff::Timestamp;
 
 use crate::agents::AgentState;
 use crate::diag::record::DiagEvent;
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
+use crate::ids::AgentKind;
 use crate::pane::PaneRef;
 use crate::store::snapshot::panes::{
-    AgentPaneRow, LazyAgentPairingResult, agent_for_pane, agent_pane_for_pane,
-    compute_lazy_agent_pairings, stamped_agent_for_pane,
+    LazyAgentPairingResult, PaneBinder, PaneBindingDisposition, PaneBindingIndex,
+    compute_lazy_agent_pairings_with_index,
 };
-use crate::store::snapshot::process::{
-    pane_command_is_known, pane_worktree_path, row_from_process,
-};
+use crate::store::snapshot::process::row_from_process;
 use crate::store::snapshot::row::{PaneAgent, SidebarRow};
 
 use super::super::rows::row_from_agent;
@@ -62,107 +60,65 @@ pub(super) fn rows_from_panes(
     let mut rows = Vec::new();
     let mut agent_panes = Vec::new();
     let mut diagnostics = Vec::new();
-    let mut seen_panes = HashSet::new();
-    let mut bound_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
-    let mut bound_agent_panes: HashMap<(AgentKind, AgentSessionId), PaneId> = HashMap::new();
+    let index = PaneBindingIndex::new(agents);
     let computed_pairings;
     let lazy_pairings = if let Some(pairings) = lazy_agents.pairings {
         pairings
     } else {
-        computed_pairings = compute_lazy_agent_pairings(panes, agents);
+        computed_pairings = compute_lazy_agent_pairings_with_index(panes, &index);
         &computed_pairings
     };
+    let mut binder = PaneBinder::new(
+        index,
+        lazy_pairings,
+        lazy_agents.wired_kinds,
+        lazy_agents.default_models,
+        panes_produced_at_ms,
+        now,
+    );
 
     for pane in panes {
-        if !seen_panes.insert(pane.pane_id.clone()) {
-            diagnostics.push(DiagEvent::DuplicatePaneId {
-                pane_id: pane.pane_id.clone(),
-            });
-            continue;
-        }
-        if let Some(agent) = stamped_agent_for_pane(pane, agents) {
-            let key = (agent.kind.clone(), agent.agent_id.clone());
-            if let Some(bound_pane) = bound_agent_panes.get(&key) {
-                diagnostics.push(DiagEvent::RowConflict {
-                    agent_kind: agent.kind.clone(),
-                    agent_session_id: agent.agent_id.clone(),
-                    bound_pane: bound_pane.clone(),
-                    conflicting_pane: pane.pane_id.clone(),
-                });
-                continue;
+        match binder.resolve(pane) {
+            PaneBindingDisposition::Agent(agent) => {
+                agent_panes.push(push_agent_row(&mut rows, agent, pane, now));
             }
-        }
-        if let Some(agent) = agent_for_pane(pane, agents, &bound_agents) {
-            agent_panes.push(push_agent_row(
-                &mut rows,
-                &mut bound_agents,
-                &mut bound_agent_panes,
-                agent,
-                pane,
-                now,
-            ));
-        } else if let Some(bind) = agent_pane_for_pane(
-            pane,
-            agents,
-            lazy_pairings,
-            &bound_agents,
-            lazy_agents.wired_kinds,
-            lazy_agents.default_models,
-            now,
-        ) {
-            match bind {
-                AgentPaneRow::Agent(agent) => agent_panes.push(push_agent_row(
-                    &mut rows,
-                    &mut bound_agents,
-                    &mut bound_agent_panes,
-                    agent,
-                    pane,
-                    now,
-                )),
-                AgentPaneRow::Idle(row) => {
-                    let row = *row;
-                    // A wired pane carries only its kind and pane — no session,
-                    // pet name, or ordinal until a lifecycle hook binds one.
-                    agent_panes.push(PaneAgent {
-                        kind: AgentKind::new_unchecked(row.name.clone()),
-                        kind_ordinal: None,
-                        name: None,
-                        name_explicit: false,
-                        profile: None,
-                        role: None,
-                        channel: row.channel.clone(),
-                        agent_id: None,
-                        pane_id: pane.pane_id.clone(),
-                        pane_pid: pane.pane_pid,
-                        worktree_path: row.worktree_path.clone(),
-                        worktree_branch: row.worktree_branch.clone(),
-                    });
+            PaneBindingDisposition::Idle(row) => {
+                let row = *row;
+                agent_panes.push(pane_agent_from_idle(&row, pane));
+                if !pane.is_floating {
                     rows.push(row);
                 }
-                AgentPaneRow::SuppressedDuplicate { kind, agent_id } => {
-                    if let Some(bound_pane) =
-                        bound_agent_panes.get(&(kind.clone(), agent_id.clone()))
-                    {
-                        diagnostics.push(DiagEvent::RowConflict {
-                            agent_kind: kind,
-                            agent_session_id: agent_id,
-                            bound_pane: bound_pane.clone(),
-                            conflicting_pane: pane.pane_id.clone(),
-                        });
-                    }
+            }
+            PaneBindingDisposition::DuplicatePane => {
+                diagnostics.push(DiagEvent::DuplicatePaneId {
+                    pane_id: pane.pane_id.clone(),
+                });
+            }
+            PaneBindingDisposition::Conflict {
+                kind,
+                agent_id,
+                bound_pane,
+            } => {
+                diagnostics.push(DiagEvent::RowConflict {
+                    agent_kind: kind,
+                    agent_session_id: agent_id,
+                    bound_pane,
+                    conflicting_pane: pane.pane_id.clone(),
+                });
+            }
+            PaneBindingDisposition::Quarantined => {
+                diagnostics.push(DiagEvent::NewbornQuarantined {
+                    pane_id: pane.pane_id.clone(),
+                });
+            }
+            PaneBindingDisposition::Process => {
+                if !pane.is_floating {
+                    rows.push(row_from_process(pane, now));
                 }
             }
-        } else if newborn_unknown_cwd(pane, panes_produced_at_ms) {
-            diagnostics.push(DiagEvent::NewbornQuarantined {
-                pane_id: pane.pane_id.clone(),
-            });
-        } else if pane_command_is_known(pane) {
-            rows.push(row_from_process(pane, now));
+            PaneBindingDisposition::Ignored => {}
         }
     }
-    // Floating panes stay in `agent_panes` so `@codex` still reaches them, but
-    // they never render as sidebar room rows.
-    rows.retain(|row| !row.pane.as_ref().is_some_and(|pane| pane.is_floating));
 
     RowProjection {
         rows,
@@ -171,25 +127,41 @@ pub(super) fn rows_from_panes(
     }
 }
 
+fn pane_agent_from_idle(row: &SidebarRow, pane: &PaneRef) -> PaneAgent {
+    // A wired pane carries only its kind and pane — no session, pet name, or
+    // ordinal until a lifecycle hook binds one.
+    PaneAgent {
+        kind: AgentKind::new_unchecked(row.name.clone()),
+        kind_ordinal: None,
+        name: None,
+        name_explicit: false,
+        profile: None,
+        role: None,
+        channel: row.channel.clone(),
+        agent_id: None,
+        pane_id: pane.pane_id.clone(),
+        pane_pid: pane.pane_pid,
+        worktree_path: row.worktree_path.clone(),
+        worktree_branch: row.worktree_branch.clone(),
+    }
+}
+
 /// Push a bound agent's row and return the [`PaneAgent`] for `agent_panes`. The
 /// pane comes from the live frame, not the session's own (often unstamped for a
 /// daemon-routed agent) record — so resolution reaches the bound pane.
 fn push_agent_row(
     rows: &mut Vec<SidebarRow>,
-    bound: &mut BTreeSet<(AgentKind, AgentSessionId)>,
-    bound_panes: &mut HashMap<(AgentKind, AgentSessionId), PaneId>,
     agent: &AgentState,
     pane: &PaneRef,
     now: Timestamp,
 ) -> PaneAgent {
-    let key = (agent.kind.clone(), agent.agent_id.clone());
-    bound.insert(key.clone());
-    bound_panes.insert(key, pane.pane_id.clone());
     let worktree_path = agent.worktree_path.clone().or_else(|| pane.cwd.clone());
-    let mut row = row_from_agent(agent, now);
-    row.worktree_path = row.worktree_path.or_else(|| worktree_path.clone());
-    row.pane = Some(pane.clone());
-    rows.push(row);
+    if !pane.is_floating {
+        let mut row = row_from_agent(agent, now);
+        row.worktree_path = row.worktree_path.or_else(|| worktree_path.clone());
+        row.pane = Some(pane.clone());
+        rows.push(row);
+    }
     PaneAgent {
         kind: agent.kind.clone(),
         kind_ordinal: agent.kind_ordinal,
@@ -204,11 +176,4 @@ fn push_agent_row(
         worktree_path,
         worktree_branch: agent.worktree_branch.clone(),
     }
-}
-
-fn newborn_unknown_cwd(pane: &PaneRef, panes_produced_at_ms: Option<u64>) -> bool {
-    panes_produced_at_ms.is_some()
-        && pane.first_seen_at_ms == panes_produced_at_ms
-        && pane_worktree_path(pane).is_none()
-        && pane_command_is_known(pane)
 }

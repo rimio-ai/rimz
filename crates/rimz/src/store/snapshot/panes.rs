@@ -2,7 +2,7 @@
 //! projection, and the daemon-view predicates.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -12,10 +12,12 @@ use crate::agents::{AgentState, SamePaneSessionPolicy};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::{PaneRef, RuntimeOwnerKind};
 use crate::store::session_death::agent_owner_pid;
+use crate::store::snapshot::row::SidebarRow;
 
 mod lazy;
 
-pub(super) use lazy::{AgentPaneRow, agent_pane_for_pane, row_from_frame_pane};
+pub(super) use lazy::compute_lazy_agent_pairings_with_index;
+pub(super) use lazy::row_from_frame_pane;
 pub use lazy::{
     HookPaneRecoveryCandidate, HookPaneRecoveryContext, HookPaneRecoveryMethod,
     HookPaneRecoveryPhase, HookPaneRecoverySelection,
@@ -23,6 +25,216 @@ pub use lazy::{
 pub(crate) use lazy::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };
+
+type AgentKey = (AgentKind, AgentSessionId);
+
+pub(super) struct PaneBindingIndex<'a> {
+    agents: &'a [AgentState],
+    roots: BTreeMap<AgentKey, usize>,
+    stamped_by_pane: HashMap<PaneId, Vec<usize>>,
+    lazy_by_worktree: BTreeMap<(AgentKind, String), Vec<usize>>,
+}
+
+impl<'a> PaneBindingIndex<'a> {
+    pub(super) fn new(agents: &'a [AgentState]) -> Self {
+        let mut roots = BTreeMap::new();
+        let mut stamped_by_pane: HashMap<PaneId, Vec<usize>> = HashMap::new();
+        let mut lazy_by_worktree: BTreeMap<(AgentKind, String), Vec<usize>> = BTreeMap::new();
+        for (index, agent) in agents.iter().enumerate() {
+            if let Some(pane) = &agent.pane {
+                stamped_by_pane
+                    .entry(pane.pane_id.clone())
+                    .or_default()
+                    .push(index);
+            }
+            if agent.parent_agent_id.is_some() {
+                continue;
+            }
+            roots
+                .entry((agent.kind.clone(), agent.agent_id.clone()))
+                .or_insert(index);
+            if let Some(worktree) = agent.worktree_path.as_ref() {
+                lazy_by_worktree
+                    .entry((agent.kind.clone(), worktree.clone()))
+                    .or_default()
+                    .push(index);
+            }
+        }
+        Self {
+            agents,
+            roots,
+            stamped_by_pane,
+            lazy_by_worktree,
+        }
+    }
+
+    pub(super) fn agent(&self, index: usize) -> Option<&'a AgentState> {
+        self.agents.get(index)
+    }
+
+    pub(super) fn root_index(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> Option<usize> {
+        self.roots.get(&(kind.clone(), agent_id.clone())).copied()
+    }
+
+    pub(super) fn lazy_indices(&self, kind: &AgentKind, worktree: &str) -> &[usize] {
+        self.lazy_by_worktree
+            .get(&(kind.clone(), worktree.to_owned()))
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn stamped_agent(&self, pane: &PaneRef) -> Option<&'a AgentState> {
+        self.stamped_by_pane
+            .get(&pane.pane_id)?
+            .iter()
+            .filter_map(|index| self.agents.get(*index))
+            .filter(|agent| agent.parent_agent_id.is_none())
+            .filter(|agent| {
+                agent
+                    .pane
+                    .as_ref()
+                    .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
+            })
+            .min_by(|left, right| compare_same_pane_owners(left, right))
+    }
+
+    pub(super) fn live_foreign_owner(
+        &self,
+        evidence: PaneBindingEvidence<'_>,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+    ) -> Option<&'a AgentState> {
+        self.stamped_by_pane
+            .get(&evidence.pane.pane_id)?
+            .iter()
+            .filter_map(|index| self.agents.get(*index))
+            .filter(|agent| {
+                agent.kind == *kind
+                    && agent.agent_id != *agent_id
+                    && pane_start_allows_bind(agent.last_activity, evidence.pane)
+            })
+            .min_by(|left, right| {
+                registered_rank(left)
+                    .cmp(&registered_rank(right))
+                    .then_with(|| left.agent_id.cmp(&right.agent_id))
+            })
+    }
+}
+
+pub(super) enum PaneBindingDisposition<'a> {
+    Agent(&'a AgentState),
+    Idle(Box<SidebarRow>),
+    DuplicatePane,
+    Conflict {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        bound_pane: PaneId,
+    },
+    Quarantined,
+    Process,
+    Ignored,
+}
+
+pub(super) struct PaneBinder<'a> {
+    index: PaneBindingIndex<'a>,
+    pairings: &'a LazyAgentPairingResult,
+    bound_agents: BTreeSet<AgentKey>,
+    bound_agent_panes: HashMap<AgentKey, PaneId>,
+    seen_panes: HashSet<PaneId>,
+    wired_kinds: &'a [String],
+    default_models: &'a BTreeMap<String, String>,
+    panes_produced_at_ms: Option<u64>,
+    now: Timestamp,
+}
+
+impl<'a> PaneBinder<'a> {
+    pub(super) fn new(
+        index: PaneBindingIndex<'a>,
+        pairings: &'a LazyAgentPairingResult,
+        wired_kinds: &'a [String],
+        default_models: &'a BTreeMap<String, String>,
+        panes_produced_at_ms: Option<u64>,
+        now: Timestamp,
+    ) -> Self {
+        Self {
+            index,
+            pairings,
+            bound_agents: BTreeSet::new(),
+            bound_agent_panes: HashMap::new(),
+            seen_panes: HashSet::new(),
+            wired_kinds,
+            default_models,
+            panes_produced_at_ms,
+            now,
+        }
+    }
+
+    pub(super) fn resolve(&mut self, pane: &PaneRef) -> PaneBindingDisposition<'a> {
+        if !self.seen_panes.insert(pane.pane_id.clone()) {
+            return PaneBindingDisposition::DuplicatePane;
+        }
+        if let Some(agent) = self.index.stamped_agent(pane) {
+            return self.bind(agent, pane);
+        }
+        if let Some(bind) = lazy::agent_pane_for_pane(
+            pane,
+            self.index.agents,
+            self.pairings,
+            &self.bound_agents,
+            self.wired_kinds,
+            self.default_models,
+            self.now,
+        ) {
+            return match bind {
+                lazy::AgentPaneRow::Agent(agent) => self.bind(agent, pane),
+                lazy::AgentPaneRow::Idle(row) => PaneBindingDisposition::Idle(row),
+                lazy::AgentPaneRow::SuppressedDuplicate { kind, agent_id } => {
+                    self.conflict(kind, agent_id)
+                }
+            };
+        }
+        if newborn_unknown_cwd(pane, self.panes_produced_at_ms) {
+            PaneBindingDisposition::Quarantined
+        } else if super::process::pane_command_is_known(pane) {
+            PaneBindingDisposition::Process
+        } else {
+            PaneBindingDisposition::Ignored
+        }
+    }
+
+    fn bind(&mut self, agent: &'a AgentState, pane: &PaneRef) -> PaneBindingDisposition<'a> {
+        let key = (agent.kind.clone(), agent.agent_id.clone());
+        if let Some(bound_pane) = self.bound_agent_panes.get(&key) {
+            return PaneBindingDisposition::Conflict {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                bound_pane: bound_pane.clone(),
+            };
+        }
+        self.bound_agents.insert(key.clone());
+        self.bound_agent_panes.insert(key, pane.pane_id.clone());
+        PaneBindingDisposition::Agent(agent)
+    }
+
+    fn conflict(&self, kind: AgentKind, agent_id: AgentSessionId) -> PaneBindingDisposition<'a> {
+        self.bound_agent_panes
+            .get(&(kind.clone(), agent_id.clone()))
+            .map_or(PaneBindingDisposition::Ignored, |bound_pane| {
+                PaneBindingDisposition::Conflict {
+                    kind,
+                    agent_id,
+                    bound_pane: bound_pane.clone(),
+                }
+            })
+    }
+}
+
+fn newborn_unknown_cwd(pane: &PaneRef, panes_produced_at_ms: Option<u64>) -> bool {
+    panes_produced_at_ms.is_some()
+        && pane.first_seen_at_ms == panes_produced_at_ms
+        && pane_worktree_path(pane).is_none()
+        && super::process::pane_command_is_known(pane)
+}
 
 /// One sidebar's view of the panes sharing its tab/window. `None` on the
 /// snapshot means the count could not be determined (no `--exclude-pane-id`, or
@@ -120,47 +332,6 @@ pub(super) fn pane_binding_evidence(pane: &PaneRef) -> PaneBindingEvidence<'_> {
     }
 }
 
-/// Another session whose durable stamp still plausibly owns this process
-/// incarnation. Primary-owner ordering makes the diagnostic stable when a
-/// daemon has several co-resident sessions stamped on one pane.
-pub(super) fn live_foreign_pane_owner<'a>(
-    evidence: PaneBindingEvidence<'_>,
-    kind: &AgentKind,
-    agent_id: &AgentSessionId,
-    agents: &'a [AgentState],
-) -> Option<&'a AgentState> {
-    agents
-        .iter()
-        .filter(|agent| {
-            agent.kind == *kind
-                && agent.agent_id != *agent_id
-                && agent
-                    .pane
-                    .as_ref()
-                    .is_some_and(|known| known.pane_id == evidence.pane.pane_id)
-                && pane_start_allows_bind(agent.last_activity, evidence.pane)
-        })
-        .min_by(|a, b| {
-            registered_rank(a)
-                .cmp(&registered_rank(b))
-                .then_with(|| a.agent_id.cmp(&b.agent_id))
-        })
-}
-
-/// The agent that stamped this exact pane id, if one is still unbound. Non-lazy
-/// agents bind by stamped pane id alone — never by foreground command or cwd.
-/// Stamped lazy agents keep that pane while the producer sees their in-pane
-/// process alive under the pane root; a positively different agent command
-/// rejects the bind, and process absence demotes after the agent exits.
-pub(super) fn agent_for_pane<'a>(
-    pane: &PaneRef,
-    agents: &'a [AgentState],
-    bound: &BTreeSet<(AgentKind, AgentSessionId)>,
-) -> Option<&'a AgentState> {
-    stamped_agent_for_pane(pane, agents)
-        .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
-}
-
 /// The root agent stamped on this exact live pane id, regardless of whether
 /// another row already bound it. For lazy-registering kinds, the stamp survives
 /// non-agent child foregrounds only while the pane carries the hosted-process
@@ -170,27 +341,7 @@ pub fn stamped_agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
 ) -> Option<&'a AgentState> {
-    agents
-        .iter()
-        // Cheap pane match first: only agents stamped on this exact pane reach
-        // the root-agent filters, so the common miss costs no clones.
-        .filter(|agent| {
-            agent
-                .pane
-                .as_ref()
-                .is_some_and(|stamped| stamped_agent_matches_live_pane(agent, stamped, pane))
-        })
-        // A subagent runs in its parent's pane and is stamped with the parent's
-        // pane id; it nests under the parent via `attach_sub_agents` and must
-        // never win the pane as a top-level row. Panes bind root agents only.
-        .filter(|agent| agent.parent_agent_id.is_none())
-        // The descriptor decides whether the card stays on the pane's first
-        // session or follows the latest co-resident conversation. Safe because
-        // the process-start guard in
-        // `stamped_agent_matches_live_pane` has already evicted any
-        // older-instance residue: this only arbitrates between sessions
-        // genuinely sharing one live process.
-        .min_by(|left, right| compare_same_pane_owners(left, right))
+    PaneBindingIndex::new(agents).stamped_agent(pane)
 }
 
 fn compare_same_pane_owners(left: &AgentState, right: &AgentState) -> Ordering {

@@ -10,7 +10,8 @@ use crate::diag::record::DiagEvent;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::pane::PaneRef;
 use crate::store::snapshot::panes::{
-    LazyAgentPairingResult, pane_admits_card, row_from_frame_pane, stamped_agent_for_pane,
+    LazyAgentPairingResult, PaneBindingIndex, pane_admits_card, row_from_frame_pane,
+    stamped_agent_for_pane,
 };
 
 use super::SidebarSnapshot;
@@ -41,6 +42,7 @@ impl SidebarSnapshot {
         let mut used_panes = HashSet::new();
         let mut used_sessions = BTreeSet::new();
         let mut bindings = Vec::new();
+        let binding_index = PaneBindingIndex::new(&self.agents);
 
         for (observation_index, observation) in observations.iter().enumerate() {
             // A hook-bound session already carries stronger identity than a
@@ -49,7 +51,7 @@ impl SidebarSnapshot {
             // authority before command-line resume discovery, then leave the
             // fresh-cache path below for sessions that registered no hook.
             let stamped = panes.iter().find(|pane| {
-                stamped_agent_for_pane(pane, &self.agents).is_some_and(|agent| {
+                binding_index.stamped_agent(pane).is_some_and(|agent| {
                     agent.kind == observation.kind
                         && agent.agent_id == observation.session_id
                         && local_pane_matches(pane, observation)
@@ -76,6 +78,7 @@ impl SidebarSnapshot {
             used_sessions.insert(observation_index);
             bindings.push((observation_index, pane.clone()));
         }
+        drop(binding_index);
 
         let mut fresh = observations
             .iter()

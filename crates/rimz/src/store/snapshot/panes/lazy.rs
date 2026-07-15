@@ -4,10 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use jiff::Timestamp;
 use serde::Serialize;
 
-use super::{
-    PaneBindingEvidence, agent_for_pane, live_foreign_pane_owner, pane_binding_evidence,
-    pane_start_allows_bind,
-};
+use super::{PaneBindingEvidence, PaneBindingIndex, pane_binding_evidence, pane_start_allows_bind};
 use crate::agents::AgentDescriptor;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{AgentState, AgentStatus, SamePaneSessionPolicy, SessionOrigin};
@@ -135,6 +132,25 @@ pub struct HookPaneRecoveryContext<'a> {
     phase: HookPaneRecoveryPhase,
     registered_at: Option<Timestamp>,
     prior_agents: &'a [AgentState],
+    binding_index: PaneBindingIndex<'a>,
+}
+
+struct HookCandidate<'pane, 'agent> {
+    evidence: PaneBindingEvidence<'pane>,
+    record: HookPaneRecoveryCandidate,
+    occupied_by: Option<&'agent AgentState>,
+}
+
+struct HookCandidatePool {
+    indices: Vec<usize>,
+    candidate_count: usize,
+    occupied_sole: bool,
+}
+
+struct HookSelectionDecision {
+    pane_index: Option<usize>,
+    candidate_count: usize,
+    method: HookPaneRecoveryMethod,
 }
 
 impl<'a> HookPaneRecoveryContext<'a> {
@@ -156,6 +172,7 @@ impl<'a> HookPaneRecoveryContext<'a> {
             phase,
             registered_at,
             prior_agents,
+            binding_index: PaneBindingIndex::new(prior_agents),
         }
     }
 
@@ -171,118 +188,113 @@ impl<'a> HookPaneRecoveryContext<'a> {
         panes: &[PaneRef],
         client_focus: Option<&[PaneId]>,
     ) -> HookPaneRecoverySelection {
-        let evidence = panes.iter().map(pane_binding_evidence).collect::<Vec<_>>();
-        let mut candidate_records = evidence
+        let mut candidates = panes
             .iter()
-            .copied()
-            .map(|evidence| self.candidate_record(worktree_path, evidence))
+            .map(pane_binding_evidence)
+            .map(|evidence| self.candidate(worktree_path, evidence))
             .collect::<Vec<_>>();
-        let mut candidates = selectable_hook_candidates(&evidence, &candidate_records, false);
-        let mut occupied_sole_candidate = false;
-        let mut occupied_candidate_count = None;
-        if candidates.is_empty()
-            && self.phase == HookPaneRecoveryPhase::TurnStarted
-            && self.can_share_occupied_pane()
-        {
-            candidates =
-                selectable_focused_occupied_candidates(&evidence, &candidate_records, client_focus);
-            if self.follows_latest() {
-                candidates.retain(|candidate| {
-                    self.occupied_owner_is_resting(&candidate.pane.pane_id, &candidate_records)
-                });
-            }
-            if candidates.is_empty()
-                && (self.origin == Some(SessionOrigin::Fresh) || self.follows_latest())
-            {
-                candidates =
-                    self.selectable_resting_occupied_candidates(&evidence, &candidate_records);
-                occupied_sole_candidate = candidates.len() == 1;
-                if !occupied_sole_candidate {
-                    occupied_candidate_count = Some(candidates.len());
-                    candidates.clear();
-                }
-            }
-            allow_occupied_candidates(&mut candidate_records, &candidates);
+        let decision = self.select_candidate(&mut candidates, client_focus);
+        let pane = decision
+            .pane_index
+            .map(|index| candidates[index].evidence.pane.clone());
+        HookPaneRecoverySelection {
+            pane_id: pane.as_ref().map(|pane| pane.pane_id.clone()),
+            pane,
+            candidate_count: decision.candidate_count,
+            method: decision.method,
+            candidates: candidates
+                .into_iter()
+                .map(|candidate| candidate.record)
+                .collect(),
         }
-        let candidate_count = occupied_candidate_count.unwrap_or(candidates.len());
-        if candidates.is_empty() {
-            return HookPaneRecoverySelection {
-                pane: None,
-                pane_id: None,
-                candidate_count,
-                method: HookPaneRecoveryMethod::None,
-                candidates: candidate_records,
-            };
-        }
+    }
 
-        if candidates.len() == 1 {
-            let pane = candidates[0].pane;
-            return HookPaneRecoverySelection {
-                pane: Some(pane.clone()),
-                pane_id: Some(pane.pane_id.clone()),
-                candidate_count,
-                method: if occupied_sole_candidate {
+    fn select_candidate(
+        &self,
+        candidates: &mut [HookCandidate<'_, '_>],
+        client_focus: Option<&[PaneId]>,
+    ) -> HookSelectionDecision {
+        let mut pool = HookCandidatePool {
+            indices: selectable_candidate_indices(candidates, false),
+            candidate_count: 0,
+            occupied_sole: false,
+        };
+        if pool.indices.is_empty() {
+            pool = self.occupied_candidate_pool(candidates, client_focus);
+        }
+        if pool.candidate_count == 0 {
+            pool.candidate_count = pool.indices.len();
+        }
+        match pool.indices.as_slice() {
+            [] => HookSelectionDecision {
+                pane_index: None,
+                candidate_count: pool.candidate_count,
+                method: HookPaneRecoveryMethod::None,
+            },
+            [pane_index] => HookSelectionDecision {
+                pane_index: Some(*pane_index),
+                candidate_count: pool.candidate_count,
+                method: if pool.occupied_sole {
                     HookPaneRecoveryMethod::OccupiedSoleCandidate
                 } else {
                     HookPaneRecoveryMethod::SingleCandidate
                 },
-                candidates: candidate_records,
-            };
-        }
-
-        let (pane, method) = if let Some(client_focus) = client_focus {
-            let focused = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| {
-                    client_focus
-                        .iter()
-                        .any(|pane_id| pane_id == &candidate.pane.pane_id)
-                })
-                .collect::<Vec<_>>();
-            annotate_focus_rejections(
-                &mut candidate_records,
-                &candidates,
-                &focused,
-                HookPaneRecoveryRejectReason::NotInClientFocus,
-            );
-            let selected = unique_evidence(focused.iter().copied());
-            if selected.is_none() && focused.len() > 1 {
-                annotate_ambiguous(&mut candidate_records, &focused);
-            }
-            (selected, HookPaneRecoveryMethod::ClientFocus)
-        } else {
-            let focused = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| candidate.pane.is_focused)
-                .collect::<Vec<_>>();
-            annotate_focus_rejections(
-                &mut candidate_records,
-                &candidates,
-                &focused,
-                HookPaneRecoveryRejectReason::NotTabFocused,
-            );
-            let selected = unique_evidence(focused.iter().copied());
-            if selected.is_none() && focused.len() > 1 {
-                annotate_ambiguous(&mut candidate_records, &focused);
-            }
-            (selected, HookPaneRecoveryMethod::TabFocus)
-        };
-        HookPaneRecoverySelection {
-            pane: pane.map(|selected| selected.pane.clone()),
-            pane_id: pane.map(|selected| selected.pane.pane_id.clone()),
-            candidate_count,
-            method,
-            candidates: candidate_records,
+            },
+            _ => select_focused_candidate(candidates, &pool.indices, client_focus),
         }
     }
 
-    fn candidate_record(
+    fn occupied_candidate_pool(
+        &self,
+        candidates: &mut [HookCandidate<'_, '_>],
+        client_focus: Option<&[PaneId]>,
+    ) -> HookCandidatePool {
+        if self.phase != HookPaneRecoveryPhase::TurnStarted || !self.can_share_occupied_pane() {
+            return HookCandidatePool {
+                indices: Vec::new(),
+                candidate_count: 0,
+                occupied_sole: false,
+            };
+        }
+        let follows_latest = self.follows_latest();
+        let mut indices = selectable_candidate_indices(candidates, true)
+            .into_iter()
+            .filter(|index| pane_has_focus_evidence(candidates[*index].evidence.pane, client_focus))
+            .filter(|index| !follows_latest || occupied_owner_is_resting(&candidates[*index]))
+            .collect::<Vec<_>>();
+        let mut occupied_sole = false;
+        let mut candidate_count = 0;
+        if indices.is_empty() && (self.origin == Some(SessionOrigin::Fresh) || follows_latest) {
+            indices = selectable_candidate_indices(candidates, true)
+                .into_iter()
+                .filter(|index| {
+                    let candidate = &candidates[*index];
+                    occupied_owner_is_resting(candidate)
+                        && (follows_latest
+                            || candidate
+                                .occupied_by
+                                .is_some_and(|owner| owner.origin == Some(SessionOrigin::Fresh)))
+                })
+                .collect();
+            occupied_sole = indices.len() == 1;
+            if !occupied_sole {
+                candidate_count = indices.len();
+                indices.clear();
+            }
+        }
+        allow_occupied_candidates(candidates, &indices);
+        HookCandidatePool {
+            indices,
+            candidate_count,
+            occupied_sole,
+        }
+    }
+
+    fn candidate<'pane>(
         &self,
         worktree_path: &str,
-        evidence: PaneBindingEvidence<'_>,
-    ) -> HookPaneRecoveryCandidate {
+        evidence: PaneBindingEvidence<'pane>,
+    ) -> HookCandidate<'pane, 'a> {
         let mut reject_reasons = Vec::new();
         if evidence.raw_cwd != Some(worktree_path) {
             reject_reasons.push(HookPaneRecoveryRejectReason::CwdMismatch {
@@ -295,7 +307,8 @@ impl<'a> HookPaneRecoveryContext<'a> {
             });
         }
         let occupied_by_agent =
-            live_foreign_pane_owner(evidence, self.kind, self.agent_id, self.prior_agents);
+            self.binding_index
+                .live_foreign_owner(evidence, self.kind, self.agent_id);
         let occupied_by_agent_id = occupied_by_agent.map(|agent| agent.agent_id.to_string());
         if let Some(agent) = occupied_by_agent.filter(|agent| !agent.agent_id.is_provisional()) {
             tracing::debug!(
@@ -318,14 +331,18 @@ impl<'a> HookPaneRecoveryContext<'a> {
         }) {
             reject_reasons.push(HookPaneRecoveryRejectReason::StartedAfterSession);
         }
-        HookPaneRecoveryCandidate {
-            pane_id: evidence.pane.pane_id.clone(),
-            cwd: evidence.pane.cwd.clone(),
-            command: evidence.pane.command.clone(),
-            is_focused: evidence.pane.is_focused,
-            pane_process_start: evidence.process_start,
-            occupied_by_agent_id,
-            reject_reasons,
+        HookCandidate {
+            evidence,
+            occupied_by: occupied_by_agent,
+            record: HookPaneRecoveryCandidate {
+                pane_id: evidence.pane.pane_id.clone(),
+                cwd: evidence.pane.cwd.clone(),
+                command: evidence.pane.command.clone(),
+                is_focused: evidence.pane.is_focused,
+                pane_process_start: evidence.process_start,
+                occupied_by_agent_id,
+                reject_reasons,
+            },
         }
     }
 
@@ -343,47 +360,6 @@ impl<'a> HookPaneRecoveryContext<'a> {
         crate::agents::descriptor_by_kind(self.kind.as_str()).is_some_and(|descriptor| {
             descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
         })
-    }
-
-    fn occupied_owner_is_resting(
-        &self,
-        pane_id: &PaneId,
-        records: &[HookPaneRecoveryCandidate],
-    ) -> bool {
-        let Some(owner_id) = records
-            .iter()
-            .find(|record| &record.pane_id == pane_id)
-            .and_then(|record| record.occupied_by_agent_id.as_deref())
-        else {
-            return false;
-        };
-        self.prior_agents.iter().any(|owner| {
-            owner.kind == *self.kind
-                && owner.agent_id.as_str() == owner_id
-                && !matches!(owner.status, AgentStatus::Running | AgentStatus::Waiting)
-        })
-    }
-
-    fn selectable_resting_occupied_candidates<'b>(
-        &self,
-        evidence: &'b [PaneBindingEvidence<'b>],
-        records: &[HookPaneRecoveryCandidate],
-    ) -> Vec<PaneBindingEvidence<'b>> {
-        evidence
-            .iter()
-            .copied()
-            .zip(records.iter())
-            .filter_map(|(evidence, record)| {
-                let owner_id = record.occupied_by_agent_id.as_deref()?;
-                let owner = self.prior_agents.iter().find(|agent| {
-                    agent.kind == *self.kind && agent.agent_id.as_str() == owner_id
-                })?;
-                (hook_candidate_selectable(record, true)
-                    && !matches!(owner.status, AgentStatus::Running | AgentStatus::Waiting)
-                    && (self.follows_latest() || owner.origin == Some(SessionOrigin::Fresh)))
-                .then_some(evidence)
-            })
-            .collect()
     }
 }
 
@@ -430,40 +406,21 @@ pub enum HookPaneRecoveryRejectReason {
     Ambiguous { n: usize },
 }
 
-fn selectable_focused_occupied_candidates<'a>(
-    evidence: &'a [PaneBindingEvidence<'a>],
-    records: &[HookPaneRecoveryCandidate],
-    client_focus: Option<&[PaneId]>,
-) -> Vec<PaneBindingEvidence<'a>> {
-    evidence
-        .iter()
-        .copied()
-        .zip(records.iter())
-        .filter_map(|(evidence, record)| {
-            (hook_candidate_selectable(record, true)
-                && pane_has_focus_evidence(evidence.pane, client_focus))
-            .then_some(evidence)
-        })
-        .collect()
-}
-
 fn pane_has_focus_evidence(pane: &PaneRef, client_focus: Option<&[PaneId]>) -> bool {
     client_focus
         .map(|focused| focused.iter().any(|pane_id| pane_id == &pane.pane_id))
         .unwrap_or(pane.is_focused)
 }
 
-fn selectable_hook_candidates<'a>(
-    evidence: &'a [PaneBindingEvidence<'a>],
-    records: &[HookPaneRecoveryCandidate],
+fn selectable_candidate_indices(
+    candidates: &[HookCandidate<'_, '_>],
     allow_occupied: bool,
-) -> Vec<PaneBindingEvidence<'a>> {
-    evidence
+) -> Vec<usize> {
+    candidates
         .iter()
-        .copied()
-        .zip(records.iter())
-        .filter_map(|(evidence, record)| {
-            hook_candidate_selectable(record, allow_occupied).then_some(evidence)
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            hook_candidate_selectable(&candidate.record, allow_occupied).then_some(index)
         })
         .collect()
 }
@@ -477,67 +434,84 @@ fn hook_candidate_selectable(record: &HookPaneRecoveryCandidate, allow_occupied:
                 .all(|reason| matches!(reason, HookPaneRecoveryRejectReason::StampedToOther { .. }))
 }
 
-fn allow_occupied_candidates(
-    records: &mut [HookPaneRecoveryCandidate],
-    candidates: &[PaneBindingEvidence<'_>],
-) {
-    for candidate in candidates {
-        let Some(record) = records
-            .iter_mut()
-            .find(|record| record.pane_id == candidate.pane.pane_id)
-        else {
-            continue;
-        };
-        record.reject_reasons.retain(|reason| {
+fn allow_occupied_candidates(candidates: &mut [HookCandidate<'_, '_>], selected: &[usize]) {
+    for index in selected {
+        candidates[*index].record.reject_reasons.retain(|reason| {
             !matches!(reason, HookPaneRecoveryRejectReason::StampedToOther { .. })
         });
     }
 }
 
-fn annotate_focus_rejections(
-    records: &mut [HookPaneRecoveryCandidate],
-    candidates: &[PaneBindingEvidence<'_>],
-    focused: &[PaneBindingEvidence<'_>],
-    reason: HookPaneRecoveryRejectReason,
-) {
-    for candidate in candidates {
-        if focused
-            .iter()
-            .any(|focused| focused.pane.pane_id == candidate.pane.pane_id)
-        {
-            continue;
-        }
-        if let Some(record) = records
-            .iter_mut()
-            .find(|record| record.pane_id == candidate.pane.pane_id)
-        {
-            record.reject_reasons.push(reason.clone());
-        }
-    }
+fn occupied_owner_is_resting(candidate: &HookCandidate<'_, '_>) -> bool {
+    candidate
+        .occupied_by
+        .is_some_and(|owner| !matches!(owner.status, AgentStatus::Running | AgentStatus::Waiting))
 }
 
-fn annotate_ambiguous(
-    records: &mut [HookPaneRecoveryCandidate],
-    focused: &[PaneBindingEvidence<'_>],
-) {
-    for candidate in focused {
-        if let Some(record) = records
-            .iter_mut()
-            .find(|record| record.pane_id == candidate.pane.pane_id)
-        {
-            record
+fn select_focused_candidate(
+    candidates: &mut [HookCandidate<'_, '_>],
+    viable: &[usize],
+    client_focus: Option<&[PaneId]>,
+) -> HookSelectionDecision {
+    let (focused, reject_reason, method) = if let Some(client_focus) = client_focus {
+        (
+            viable
+                .iter()
+                .copied()
+                .filter(|index| {
+                    client_focus
+                        .iter()
+                        .any(|pane_id| pane_id == &candidates[*index].evidence.pane.pane_id)
+                })
+                .collect::<Vec<_>>(),
+            HookPaneRecoveryRejectReason::NotInClientFocus,
+            HookPaneRecoveryMethod::ClientFocus,
+        )
+    } else {
+        (
+            viable
+                .iter()
+                .copied()
+                .filter(|index| candidates[*index].evidence.pane.is_focused)
+                .collect::<Vec<_>>(),
+            HookPaneRecoveryRejectReason::NotTabFocused,
+            HookPaneRecoveryMethod::TabFocus,
+        )
+    };
+    for index in viable {
+        if !focused.contains(index) {
+            candidates[*index]
+                .record
+                .reject_reasons
+                .push(reject_reason.clone());
+        }
+    }
+    let pane_index = unique_candidate_index(candidates, &focused);
+    if pane_index.is_none() && focused.len() > 1 {
+        for index in &focused {
+            candidates[*index]
+                .record
                 .reject_reasons
                 .push(HookPaneRecoveryRejectReason::Ambiguous { n: focused.len() });
         }
     }
+    HookSelectionDecision {
+        pane_index,
+        candidate_count: viable.len(),
+        method,
+    }
 }
 
-fn unique_evidence<'a>(
-    mut panes: impl Iterator<Item = PaneBindingEvidence<'a>>,
-) -> Option<PaneBindingEvidence<'a>> {
-    let first = panes.next()?;
-    panes
-        .all(|pane| pane.pane.pane_id == first.pane.pane_id)
+fn unique_candidate_index(
+    candidates: &[HookCandidate<'_, '_>],
+    focused: &[usize],
+) -> Option<usize> {
+    let first = *focused.first()?;
+    focused
+        .iter()
+        .all(|index| {
+            candidates[*index].evidence.pane.pane_id == candidates[first].evidence.pane.pane_id
+        })
         .then_some(first)
 }
 
@@ -545,7 +519,15 @@ pub(crate) fn compute_lazy_agent_pairings(
     panes: &[PaneRef],
     agents: &[AgentState],
 ) -> LazyAgentPairingResult {
-    let (candidates, live_stamped_agents) = lazy_pane_candidates(panes, agents);
+    let index = PaneBindingIndex::new(agents);
+    compute_lazy_agent_pairings_with_index(panes, &index)
+}
+
+pub(in crate::store::snapshot) fn compute_lazy_agent_pairings_with_index(
+    panes: &[PaneRef],
+    index: &PaneBindingIndex<'_>,
+) -> LazyAgentPairingResult {
+    let (candidates, live_stamped_agents) = lazy_pane_candidates(panes, index);
     let live_panes: HashSet<&PaneId> = panes.iter().map(|pane| &pane.pane_id).collect();
 
     let mut pairings: HashMap<PaneId, usize> = HashMap::new();
@@ -555,16 +537,23 @@ pub(crate) fn compute_lazy_agent_pairings(
 
     pair_resumed_sessions(
         &candidates,
-        agents,
+        index,
         &live_stamped_agents,
         &mut pairings,
         &mut used_agents,
         &mut used_panes,
     );
 
-    let mut sessions = agents
+    let candidate_groups = candidates
         .iter()
-        .enumerate()
+        .map(|candidate| (AgentKind::new_unchecked(candidate.kind), candidate.cwd))
+        .collect::<BTreeSet<_>>();
+    let mut sessions = candidate_groups
+        .iter()
+        .flat_map(|(kind, cwd)| index.lazy_indices(kind, cwd).iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|agent_index| index.agent(agent_index).map(|agent| (agent_index, agent)))
         .filter(|(_, agent)| {
             let Some(stamped) = agent.pane.as_ref() else {
                 return true;
@@ -573,14 +562,7 @@ pub(crate) fn compute_lazy_agent_pairings(
                 && crate::agents::descriptor_by_kind(agent.kind.as_str())
                     .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
         })
-        .filter(|(_, agent)| agent.parent_agent_id.is_none())
         .filter(|(_, agent)| !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone())))
-        .filter(|(_, agent)| {
-            candidates.iter().any(|candidate| {
-                agent.kind == candidate.kind
-                    && agent.worktree_path.as_deref() == Some(candidate.cwd)
-            })
-        })
         .collect::<Vec<_>>();
     sessions.sort_by(|left, right| {
         right
@@ -641,16 +623,15 @@ pub(crate) fn compute_lazy_agent_pairings(
 
 fn lazy_pane_candidates<'a>(
     panes: &'a [PaneRef],
-    agents: &'a [AgentState],
+    index: &PaneBindingIndex<'_>,
 ) -> (
     Vec<LazyPaneCandidate<'a>>,
     BTreeSet<(AgentKind, AgentSessionId)>,
 ) {
-    let stamped_bound = BTreeSet::new();
     let mut live_stamped_agents = BTreeSet::new();
     let mut candidates = Vec::new();
     for pane in panes {
-        if let Some(agent) = agent_for_pane(pane, agents, &stamped_bound) {
+        if let Some(agent) = index.stamped_agent(pane) {
             live_stamped_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
             continue;
         }
@@ -681,7 +662,7 @@ fn lazy_pane_candidates<'a>(
 
 fn pair_resumed_sessions(
     candidates: &[LazyPaneCandidate<'_>],
-    agents: &[AgentState],
+    index: &PaneBindingIndex<'_>,
     live_stamped_agents: &BTreeSet<(AgentKind, AgentSessionId)>,
     pairings: &mut HashMap<PaneId, usize>,
     used_agents: &mut BTreeSet<(AgentKind, AgentSessionId)>,
@@ -692,7 +673,7 @@ fn pair_resumed_sessions(
             continue;
         };
         let Some((agent_index, agent)) = resumed_agent_for_candidate(
-            agents,
+            index,
             candidate,
             resumed,
             live_stamped_agents,
@@ -707,20 +688,19 @@ fn pair_resumed_sessions(
 }
 
 fn resumed_agent_for_candidate<'a>(
-    agents: &'a [AgentState],
+    index: &'a PaneBindingIndex<'a>,
     candidate: &LazyPaneCandidate<'_>,
     resumed: &AgentSessionId,
     live_stamped_agents: &BTreeSet<(AgentKind, AgentSessionId)>,
     used_agents: &BTreeSet<(AgentKind, AgentSessionId)>,
 ) -> Option<(usize, &'a AgentState)> {
-    agents.iter().enumerate().find(|(_, agent)| {
-        agent.parent_agent_id.is_none()
-            && agent.kind == candidate.kind
-            && agent.agent_id == *resumed
-            && agent.worktree_path.as_deref() == Some(candidate.cwd)
-            && !live_stamped_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-            && !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-    })
+    let kind = AgentKind::new_unchecked(candidate.kind);
+    let agent_index = index.root_index(&kind, resumed)?;
+    let agent = index.agent(agent_index)?;
+    (agent.worktree_path.as_deref() == Some(candidate.cwd)
+        && !live_stamped_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+        && !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+    .then_some((agent_index, agent))
 }
 
 #[derive(Clone, Copy)]
