@@ -29,7 +29,7 @@ The wrapper stays thin. Each step is plain Git plus a file copy, inspectable and
 
 ## Open a worktree
 
-`-w` (`--worktree`) puts the whole layout in a fresh RimZ-owned worktree. Pass a name to create or reuse a specific one, or a bare `-w` for a generated two-word name. The layout grammar (`,` `+` `/`) is the same one [Agents](./agents.md#compose-a-layout) covers; `-w` only decides where it lands.
+`-w` (`--worktree`) puts the whole layout in a fresh RimZ-owned worktree. Pass a name to create or reuse a specific one, or a bare `-w` for a generated two-word name. The layout grammar (`,` `+` `/`) is the same one [Agents](./fleet.md#compose-a-layout) covers; `-w` only decides where it lands.
 
 ```sh
 rimz agents claude,codex -w feat-a            # two agents in one isolated tree
@@ -132,7 +132,7 @@ rimz config set agents.worktree.base fresh                  # branch from origin
 
 ## See also
 
-- [Agents](./agents.md) — launch agents by name and compose the layout that lands in the worktree.
+- [Agents](./fleet.md) — launch agents by name and compose the layout that lands in the worktree.
 - [Teams](./teams.md) — a named team is the common unit to isolate on its own branch.
 - [Messaging](./messaging.md) — a worktree's name is its channel; reach agents there by handle.
 - [Worktree CLI reference](../reference/cli/worktree.md) — the complete `rimz worktree` and `rimz gc` surface.

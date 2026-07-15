@@ -23,7 +23,7 @@ A handle resolves through the shortest unique name for a running agent:
 - **`@swift-otter`** — a pet name or `@codex-2` ordinal, naming one specific instance when a kind isn't unique enough.
 - **`@all`** — every agent in the channel.
 
-Handles are assigned when an agent launches — how kinds, profiles, and team roles become handles is [the agents guide](./agents.md). The `@` sigil is required, so a stray word never broadcasts; a bare selector fails with a `did you mean @…?` hint. A raw pane id is the one exception that needs no sigil.
+Handles are assigned when an agent launches — how kinds, profiles, and team roles become handles is [the agents guide](./fleet.md). The `@` sigil is required, so a stray word never broadcasts; a bare selector fails with a `did you mean @…?` hint. A raw pane id is the one exception that needs no sigil.
 
 **Reach across channels with `#channel`.** `@codex` reaches the Codex in your current channel; `@codex#feat-a` reaches the one working the `feat-a` worktree from anywhere in the workspace. `#channel` is a suffix on the handle, and the flags `--channel <name>` and `--worktree <name>` are the same restriction in flag form.
 
@@ -212,7 +212,7 @@ An answer differs from a message. A waiting prompt owns the agent's input and ke
 
 ## See also
 
-- [Agents](./agents.md) — how handles and profiles come to be.
+- [Agents](./fleet.md) — how handles and profiles come to be.
 - [Teams](./teams.md) — how team roles become handles in a shared channel.
 - [Worktrees](./worktrees.md) — the isolated tree behind every worktree channel.
 - [The sidebar](./sidebar.md) — reading the channels and the messages they carry on screen.

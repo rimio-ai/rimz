@@ -54,7 +54,7 @@ An optional key left unset falls through to your own Zellij or tmux config. A ke
 
 Everything RimZ does inside the room reduces to multiplexer commands you could run by hand, which is worth knowing before you trust it with your fleet.
 
-An agent is a plain process in an ordinary pane. A layout spec is pane splits: `rimz agents claude,codex` asks the multiplexer to split two panes side by side, then launches a CLI in each, exactly the splits you would make yourself, in one command instead of several. The grammar (commas split columns, plus signs tile rows, slashes stack rows) is in [agents → compose a layout](./agents.md#compose-a-layout).
+An agent is a plain process in an ordinary pane. A layout spec is pane splits: `rimz agents claude,codex` asks the multiplexer to split two panes side by side, then launches a CLI in each, exactly the splits you would make yourself, in one command instead of several. The grammar (commas split columns, plus signs tile rows, slashes stack rows) is in [agents → compose a layout](./fleet.md#compose-a-layout).
 
 `rimz message @coder "rebase first"` types that text into the agent's pane through the multiplexer's own send primitive, the same bytes as if you typed them at the keyboard, and `rimz pane capture @coder` reads the pane's visible text the same way. The sidebar is one more pane. You could list, focus, and drive every pane in the room with `zellij action` or `tmux` directly, and RimZ uses exactly those primitives. How messages route and when they land is in [messaging](./messaging.md).
 

@@ -107,7 +107,7 @@ Every other document is a leaf from here, grouped by purpose: **guide** (use it)
 - [installation.md](./docs/guide/installation.md) — prerequisites and every install path: Homebrew, prebuilt binaries, Cargo, source.
 - [setup.md](./docs/guide/setup.md) — first-pass machine setup: config init, hooks, true color, pets, loop knobs, multiplexer essentials.
 - [multiplexer.md](./docs/guide/multiplexer.md) — Zellij and tmux baselines: recommended options, parity Alt chords, themed status bar, shipped under `examples/`.
-- [agents.md](./docs/guide/agents.md) — launching agents by name, permission-mode suffixes, profiles, and the layout grammar.
+- [fleet.md](./docs/guide/fleet.md) — launching agents by name, permission-mode suffixes, profiles, and the layout grammar.
 - [teams.md](./docs/guide/teams.md) — named teams: role handles, the `agents.toml` shape, relaunch and resume, and the sidebar's one-block treatment.
 - [worktrees.md](./docs/guide/worktrees.md) — RimZ-owned Git worktrees: isolating a layout or team for parallel work, seeded files, and supervised cleanup.
 - [messaging.md](./docs/guide/messaging.md) — addresses, park/steer/schedule delivery, smart compaction, agent-to-agent chat, and channels.

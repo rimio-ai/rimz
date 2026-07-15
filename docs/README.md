@@ -13,7 +13,7 @@ New here? Start with the [README](../README.md) for what RimZ is and why it exis
 ## Working with agents
 
 - [Sidebar](./guide/sidebar.md): read the zones, the agent cards and their lifecycle, and the process rows, and follow how RimZ decides which agent needs you.
-- [Agents](./guide/agents.md): run the stock CLIs in the room, shape an agent for one job with a profile, compose several into one layout, and read and drive the running fleet.
+- [Agents](./guide/fleet.md): run the stock CLIs in the room, shape an agent for one job with a profile, compose several into one layout, and read and drive the running fleet.
 - [Token Insight](./guide/insight.md): read what the fleet costs and how hard it is working, from the live cockpit to `rimz stats`, and how every figure is calculated.
 - [Budgets](./guide/budget.md): enforce dollar caps at four scopes, one agent, one loop task, a room's fleet, a provider login, and resume the work a cap parked.
 - [Remote](./guide/remote.md): attach to a room on another host over SSH with a self-healing link, kept alive across reboots, and answer agent asks from the providers' own mobile apps.

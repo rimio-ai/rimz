@@ -112,7 +112,7 @@ Key detail and the daemon-view placement live in [configuration → remote contr
 ## See also
 
 - [Web](./web.md) — open the same room in a browser, locally or tunnelled from a server.
-- [Agents](./agents.md) — what the room holds that you are reattaching to.
+- [Agents](./fleet.md) — what the room holds that you are reattaching to.
 - [The sidebar](./sidebar.md) — reading the link-health badge and the recovered column.
 - [Troubleshooting](./troubleshooting.md) — a link that will not connect, a room that will not start, resetting state.
 - [CLI reference](../reference/cli/remote.md) · [Configuration](./configuration.md) — the `remote` command surface and `remote.toml`.

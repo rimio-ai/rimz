@@ -118,7 +118,7 @@ The pane `-p` opens runs the stock CLI exactly as if you had launched it yoursel
 
 **You steer it mid-turn.** The run answers to a handle like any agent, so `rimz message --steer` injects new instructions into a turn a cron job started, and `rimz agents show` or `logs -f` reads its progress from any pane. A drifting unattended run is a one-line correction, not a kill-and-retry.
 
-**It works your harness.** `--worktree` isolates the run's changes on their own branch, a [profile](./agents.md#profiles-shape-an-agent-for-one-job) or `--model`/`--effort`/`--system-prompt-file` shapes the turn, [`rimz loop`](./loops.md) fires the same path on a clock, and the run messages your interactive agents — and is messaged by them — like any teammate.
+**It works your harness.** `--worktree` isolates the run's changes on their own branch, a [profile](./fleet.md#profiles-shape-an-agent-for-one-job) or `--model`/`--effort`/`--system-prompt-file` shapes the turn, [`rimz loop`](./loops.md) fires the same path on a clock, and the run messages your interactive agents — and is messaged by them — like any teammate.
 
 Permissions are a per-run choice, rendered through the agent's own flags: `-p` defaults to the provider's auto-accept mode for routine actions, `--ask` keeps every native prompt (each one routes to you as a waiting row), and `--yolo` passes the provider's bypass flag. The tradeoffs are [Loops → the permission posture for unattended runs](./loops.md#the-permission-posture-for-unattended-runs) and [security.md](./security.md).
 
@@ -209,7 +209,7 @@ Supervised runs need installed and trusted hooks, because hooks are the completi
 - [Loops and schedules](./loops.md) — put these runs on a clock: schedules, watchdogs, and self-waking agents.
 - [Notifications](./notifications.md) — the push routes and handlers that reach you when a run needs an answer.
 - [Messaging](./messaging.md) — the `--steer` / `--on done` delivery model wrappers lean on.
-- [Agents](./agents.md) — the profile, handle, and layout vocabulary these examples use.
+- [Agents](./fleet.md) — the profile, handle, and layout vocabulary these examples use.
 - [Worktrees](./worktrees.md) — the isolated branches behind `--worktree` runs.
 - [Agent control CLI](../reference/cli/agents.md#supervised-runs--p) — every flag on `-p`, `wait`, `show`, `stop`, and `pane`.
 - [harness.md → Supervised runs](../internals/harness/harness.md#supervised-runs) — run records, the wakeup socket, streaming, and pane cleanup.

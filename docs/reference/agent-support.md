@@ -110,7 +110,7 @@ A machine-tier process-plugin path lets a third-party agent reach the same adapt
 
 ## See also
 
-- [Agents](../guide/agents.md) — launching agents and profiles across every supported kind.
+- [Agents](../guide/fleet.md) — launching agents and profiles across every supported kind.
 - [Teams](../guide/teams.md) — pairing models by role across supported kinds.
 - [Messaging](../guide/messaging.md) — steering and queuing agents by handle.
 - [Token insight](../guide/insight.md) — where the `live$` and `spend` figures surface, and how each is calculated.

@@ -1,6 +1,6 @@
 # Teams
 
-A team launches several agents as one unit, each in a named role with its own context window, model, and instructions, cooperating over messages in a shared channel. Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./agents.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
+A team launches several agents as one unit, each in a named role with its own context window, model, and instructions, cooperating over messages in a shared channel. Define the roles once in `agents.toml`, then launch the whole set with one name; each member answers to its own role handle. For a one-off pairing, put [roles directly in the layout spec](./fleet.md#compose-a-layout) with `cell:role`; a role set earns a named team when it recurs. You compose the roles the way the work splits — the shipped `forge` team, one split that works really well, pairs a planner, a coder, and a reviewer on one feature.
 
 ```sh
 rimz agents forge -w feat-complex         # planner, coder, reviewer on one feature
@@ -99,7 +99,7 @@ The room treats a team as a single line of work: the sidebar keeps its members a
 
 ## See also
 
-- [Agents](./agents.md) — launch agents by name and compose the layout a team fills.
+- [Agents](./fleet.md) — launch agents by name and compose the layout a team fills.
 - [Worktrees](./worktrees.md) — isolate a team on its own branch for parallel work.
 - [Messaging](./messaging.md) — reach a role by handle: park, steer, schedule, and channels.
 - [Examples → forge](../../examples/README.md) — the shipped forge fragment: install, prerequisites, and try-before-install.

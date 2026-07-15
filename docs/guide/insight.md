@@ -92,7 +92,7 @@ The window is yours to set with `[sidebar] spend_window` ([configuration](./conf
 - `24h`: a trailing twenty-four hours.
 - `today`: since calendar midnight in your configured `timezone`.
 
-To read one agent's cost instead of the room's, [`rimz agents show`](./agents.md#manage-a-running-room) prints that session's token split and dollar total.
+To read one agent's cost instead of the room's, [`rimz agents show`](./fleet.md#manage-a-running-room) prints that session's token split and dollar total.
 
 ## How the numbers are calculated
 
@@ -126,7 +126,7 @@ A few knobs, all plain TOML ([configuration](./configuration.md)):
 
 - [The sidebar](./sidebar.md): reading the cockpit and dashboard for attention, not just for spend.
 - [Budgets](./budget.md): turn the spend read into an enforced cap, per agent, task, room, or login.
-- [Agents](./agents.md#manage-a-running-room): one agent's token split and cost with `rimz agents show`.
+- [Agents](./fleet.md#manage-a-running-room): one agent's token split and cost with `rimz agents show`.
 - [Loops](./loops.md#built-in-recovery): auto-continue when a budget window empties mid-turn.
 - [Configuration](./configuration.md#sidebar-rendering): the spend window, timezone, and provider-display knobs.
 - [The sidebar on screen](../interface/sidebar.md#zone-3--the-provider-dashboard): every bar, tone, and glyph drawn exactly.
