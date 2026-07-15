@@ -416,15 +416,8 @@ pub(in crate::sidebar_pane::render) fn context_gauge_spans(
     };
     if filled == 0 || weight == 0 || survivors.len() <= 1 {
         // No split to draw: the whole filled run uses the current health tone.
-        let color = if weight == 0 {
-            theme.heat_tone(amount)
-        } else {
-            survivors
-                .last()
-                .map(|(index, _)| segments[*index].1)
-                .unwrap_or_else(|| theme.heat_tone(amount))
-        };
-        let mut spans = filled_run_spans(theme, theme.heat_tone(amount), filled);
+        let color = theme.heat_tone(amount);
+        let mut spans = filled_run_spans(theme, color, filled);
         if trailing_half {
             spans.push(Span::styled(
                 bar_half.clone(),

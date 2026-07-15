@@ -418,16 +418,52 @@ fn context_gauge_drops_subscale_accents_and_seals_segmented_tail() {
 
     let flat = context_gauge_spans(
         &theme,
-        0.0,
+        2.0 / 3.0,
         &[(90_000, read), (0, write), (2, input)],
         f64::EPSILON,
         30,
     );
     assert_eq!(text(&flat), format!("╸{}", "─".repeat(29)));
-    assert_eq!(flat[0].style.fg, Some(read));
+    assert_eq!(flat[0].style.fg, Some(theme.heat_tone(2.0 / 3.0)));
     assert!(
         flat.iter().all(|span| span.style.fg != Some(input)),
         "the flat tail ignores a dropped segment's color"
+    );
+}
+
+#[test]
+fn context_gauge_collapsed_split_keeps_half_tail_in_health_tone() {
+    let theme = Theme::fixed(false);
+    let amount = 2.0 / 3.0;
+    let health = theme.heat_tone(amount);
+    let read = theme.component(Component::CacheRead);
+    let input = theme.component(Component::Input);
+    assert_ne!(health, read, "the fixture must expose a cache-read tail");
+    assert_ne!(health, input, "the fixture must expose an input tail");
+
+    let spans = context_gauge_spans(
+        &theme,
+        amount,
+        &[
+            (202_000, read),
+            (0, theme.component(Component::CacheWrite)),
+            (994, input),
+        ],
+        78.56,
+        30,
+    );
+
+    assert_eq!(
+        text(&spans),
+        format!("{}╸{}", "━".repeat(23), "─".repeat(6))
+    );
+    assert_eq!(spans[0].style.fg, Some(health));
+    assert_eq!(spans[1].style.fg, Some(health));
+    assert!(
+        spans
+            .iter()
+            .all(|span| span.style.fg != Some(read) && span.style.fg != Some(input)),
+        "collapsed component colors fold into the flat health run"
     );
 }
 
