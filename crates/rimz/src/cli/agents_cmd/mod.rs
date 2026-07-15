@@ -1,4 +1,4 @@
-//! `rimz agents` — launcher sugar plus the hidden supervised exec wrapper.
+//! `rimz agents` — command parsing and agent-operation boundaries.
 
 mod auto_continue;
 mod budget;
@@ -7,7 +7,7 @@ mod check;
 mod exec;
 mod fork;
 mod history;
-mod launch;
+pub(in crate::cli) mod launch;
 mod list;
 mod logs;
 mod reconcile;
@@ -19,7 +19,6 @@ mod resume;
 mod runs_lookup;
 mod show;
 mod stop;
-mod supervised;
 mod top;
 mod wait;
 
@@ -35,6 +34,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 
 use super::GlobalFlags;
+use crate::cli::supervised;
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
@@ -70,13 +70,10 @@ use register::{RegisterArgs, run_register};
 use restart::restart_agent;
 use resume::resume_lane;
 use show::{focus_agent, show_agent};
-#[cfg(test)]
-use stop::run_stop_should_cancel;
 use stop::stop_agent;
-pub(crate) use stop::stop_run;
+use supervised::run::run_print;
 #[cfg(test)]
-use supervised::run::{RunPlacement, run_placement, validate_supervised_output};
-use supervised::run::{run_print, run_supervised};
+use supervised::run::{RunPlacement, run_placement};
 use top::{TopArgs, run_top};
 use wait::wait_agent;
 
@@ -193,7 +190,7 @@ pub struct AgentsArgs {
     #[arg(long, requires = "print")]
     stdin: bool,
     /// Wait cap for `--print` or `wait`.
-    #[arg(long, value_parser = crate::cli::agents_cmd::supervised::parse_timeout, requires = "print")]
+    #[arg(long, value_parser = crate::cli::supervised::parse_timeout, requires = "print")]
     timeout: Option<Duration>,
     /// Leave the supervised agent pane open after completion.
     #[arg(long, requires = "print")]
@@ -356,7 +353,7 @@ enum AgentsSubcmd {
         #[arg(long, conflicts_with = "stream")]
         any: bool,
         /// Stop waiting after this duration.
-        #[arg(long, value_parser = crate::cli::agents_cmd::supervised::parse_timeout)]
+        #[arg(long, value_parser = crate::cli::supervised::parse_timeout)]
         timeout: Option<Duration>,
         /// Tail the transcript while waiting.
         #[arg(long)]
@@ -564,7 +561,8 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     if args.print {
-        return match run_print(args, globals) {
+        let (request, presentation) = into_supervised_request(args)?;
+        return match run_print(request, presentation, globals) {
             Ok(Some(record)) => std::process::exit(record.status.exit_code()),
             Ok(None) => Ok(()),
             Err(err) => exit_print_usage_error(err),
@@ -576,6 +574,114 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         );
     }
     launch_layout(args, globals, true)
+}
+
+fn into_supervised_request(
+    args: AgentsArgs,
+) -> Result<(
+    rimz::harness::run::SupervisedRunRequest,
+    supervised::SupervisedPresentation,
+)> {
+    if args.json {
+        bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
+    }
+    let output_format = args.output_format.unwrap_or_default();
+    validate_supervised_output(&args, output_format)?;
+    let prompt = resolve_print_prompt(&args, args.input_format.unwrap_or_default())?;
+    let permission_mode = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
+    let system_prompt_file =
+        resolve_launch_prompt_file(args.system_prompt_file.as_deref(), "--system-prompt-file")?;
+    let append_system_prompt_file = resolve_launch_prompt_file(
+        args.append_system_prompt_file.as_deref(),
+        "--append-system-prompt-file",
+    )?;
+    let request = rimz::harness::run::SupervisedRunRequest {
+        spec: args.spec.context("supervised run requires an agent spec")?,
+        prompt,
+        description: args.description,
+        worktree: args.worktree,
+        from_pr: args.from_pr,
+        channel: args.channel,
+        name: args.name,
+        background: args.bg,
+        force_new_tab: args.new_tab,
+        permission_mode,
+        model: args.model,
+        system_prompt_file,
+        append_system_prompt_file,
+        effort: args.effort,
+        budget: args.budget,
+        max_turns: args.max_turns,
+        timeout: args.timeout,
+        keep: args.keep,
+        retries: args.retries.unwrap_or(0),
+        verify: args.verify,
+        max_attempts: args.max_attempts,
+        loop_zone: args.loop_zone,
+        loop_task: args.loop_task,
+        passthrough: args.passthrough,
+    };
+    Ok((
+        request,
+        supervised::SupervisedPresentation {
+            output_format,
+            stream_text: args.stream_text,
+        },
+    ))
+}
+
+fn validate_supervised_output(args: &AgentsArgs, output_format: OutputFormat) -> Result<()> {
+    if args.bg && output_format == OutputFormat::StreamJson {
+        bail!("--output-format stream-json cannot be combined with --bg");
+    }
+    if args.retries.unwrap_or(0) > 0 && output_format == OutputFormat::StreamJson {
+        bail!("--retries cannot be combined with --output-format stream-json; choose text or json");
+    }
+    if args.verify.is_some() && output_format == OutputFormat::StreamJson {
+        bail!("--verify cannot be combined with --output-format stream-json; choose text or json");
+    }
+    if args.max_attempts == Some(0) {
+        bail!("--max-attempts must be at least 1");
+    }
+    if args.max_attempts.is_some() && args.verify.is_none() {
+        bail!("--max-attempts requires --verify");
+    }
+    Ok(())
+}
+
+fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<String> {
+    match input_format {
+        InputFormat::Text => {
+            let piped = if args.stdin {
+                crate::cli::send::read_stdin_prompt()?
+            } else {
+                crate::cli::send::warn_ignored_stdin();
+                None
+            };
+            crate::cli::send::combine_text_prompt(args.prompt.as_deref(), piped.as_deref())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "expected a prompt for `rimz agents <spec> -p` (positional PROMPT or `--stdin`)"
+                    )
+                })
+        }
+        InputFormat::StreamJson => {
+            if args.stdin {
+                bail!("--input-format stream-json already reads stdin; drop --stdin");
+            }
+            if args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+                bail!(
+                    "--input-format stream-json reads the prompt from stdin; drop the positional PROMPT"
+                );
+            }
+            let prompt = supervised::read_stream_json_prompt(std::io::stdin().lock())
+                .context("reading stream-json prompt from stdin")?;
+            if prompt.trim().is_empty() {
+                bail!("--input-format stream-json received no user message text on stdin");
+            }
+            Ok(prompt)
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -648,82 +754,10 @@ impl AgentsArgs {
             passthrough: Vec::new(),
         }
     }
-
-    /// A blocking supervised run for a scheduled loop task. It routes through
-    /// the same `-p` path as an interactive print run, while the loop handler
-    /// owns task validation, prompt-file reads, ping skipping, and one-shot
-    /// cleanup.
-    pub(crate) fn for_task(task: TaskRunArgs) -> Self {
-        Self {
-            command: None,
-            spec: Some(task.spec),
-            prompt: task.prompt,
-            description: None,
-            worktree: task.worktree,
-            channel: None,
-            from_pr: None,
-            resume: false,
-            name: None,
-            bg: false,
-            new_pane: false,
-            new_tab: false,
-            ask: matches!(task.mode, Some(PermissionMode::Ask)),
-            yolo: matches!(task.mode, Some(PermissionMode::Yolo)),
-            model: None,
-            system_prompt_file: task.system_prompt_file,
-            append_system_prompt_file: None,
-            effort: task.effort,
-            budget: task.budget,
-            print: true,
-            stdin: false,
-            timeout: task.timeout,
-            keep: task.keep,
-            json: false,
-            output_format: None,
-            stream_text: task.stream,
-            input_format: None,
-            max_turns: None,
-            retries: None,
-            verify: task.verify,
-            max_attempts: task.max_attempts,
-            loop_zone: task.loop_zone,
-            loop_task: task.loop_task,
-            passthrough: Vec::new(),
-        }
-    }
-}
-
-pub(crate) struct TaskRunArgs {
-    pub(crate) spec: String,
-    pub(crate) prompt: Option<String>,
-    pub(crate) worktree: Option<String>,
-    pub(crate) mode: Option<PermissionMode>,
-    pub(crate) effort: Option<String>,
-    pub(crate) budget: Option<rimz::harness::budget::BudgetSpec>,
-    pub(crate) system_prompt_file: Option<PathBuf>,
-    pub(crate) timeout: Option<Duration>,
-    pub(crate) keep: bool,
-    pub(crate) stream: bool,
-    pub(crate) verify: Option<String>,
-    pub(crate) max_attempts: Option<u32>,
-    pub(crate) loop_zone: bool,
-    pub(crate) loop_task: Option<String>,
 }
 
 fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {
     rimz::forge::parse(raw)
-}
-
-/// Drive one blocking scheduled loop task for `rimz loop run`, returning the
-/// stored run record so loop history can link to its transcript. Routes through
-/// the same supervised `-p` path an interactive `rimz agents <spec> -p` uses.
-/// `globals` carries the task's `root`, so the workspace resolves with no mux
-/// pin.
-pub(crate) fn run_blocking_task(
-    args: AgentsArgs,
-    globals: &GlobalFlags,
-) -> Result<Option<RunRecord>> {
-    run_supervised(args, globals)
 }
 
 /// Launch a missing agent for `message --create`. A *type* handle — a kind

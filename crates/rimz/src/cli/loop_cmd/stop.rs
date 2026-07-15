@@ -23,7 +23,7 @@ pub(super) fn stop(name: &str, globals: &GlobalFlags) -> Result<()> {
     if next_stop_action(&lock_state, run.is_some(), false, false) == StopAction::CancelRun
         && let Some(record) = &run
     {
-        crate::cli::agents_cmd::stop_run(&workspace, &store, globals, record)?;
+        crate::cli::supervised::stop_supervised_run(&workspace, &store, globals, record)?;
     }
 
     if wait_for_run_lock_release(name, &entry, STOP_GRACE)? {

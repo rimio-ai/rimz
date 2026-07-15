@@ -1,11 +1,38 @@
+//! Supervised and attached run streaming effects.
+
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use super::output::StreamSink;
 use rimz::agents::AgentAdapter;
 use rimz::agents::transcript::TranscriptCursor;
 use rimz::harness::run::RunRecord;
+use rimz::harness::run_wake::RunWaiter;
+
+pub(crate) fn stream_blocking_run(
+    waiter: &RunWaiter,
+    store: &rimz::Store,
+    adapter: &dyn AgentAdapter,
+    timeout: Option<Duration>,
+    output: (&mut TranscriptCursor, &mut StreamSink<'_>),
+) -> Result<RunRecord> {
+    let (cursor, sink) = output;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .build()
+        .context("creating run stream runtime")?;
+    runtime.block_on(async {
+        let mut observer =
+            |record: &RunRecord| emit_stream_updates(store, adapter, cursor, sink, record);
+        let record = waiter
+            .wait_terminal(store, timeout, Some(&mut observer))
+            .await?;
+        sink.end_status(record.status, record.last_message.as_deref())?;
+        Ok(record)
+    })
+}
 
 pub(crate) fn stream_attached_run(
     store: &rimz::Store,
@@ -51,7 +78,7 @@ fn next_attached_stream_sleep(deadline: Option<Instant>) -> Duration {
     }
 }
 
-pub(crate) fn emit_stream_updates(
+fn emit_stream_updates(
     store: &rimz::Store,
     adapter: &dyn AgentAdapter,
     cursor: &mut TranscriptCursor,

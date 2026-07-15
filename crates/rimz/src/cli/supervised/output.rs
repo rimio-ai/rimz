@@ -1,3 +1,5 @@
+//! Supervised-run text and JSON output.
+
 use std::io::Write;
 
 use anyhow::Result;

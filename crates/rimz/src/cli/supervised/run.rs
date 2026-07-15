@@ -1,13 +1,21 @@
-use super::super::*;
 use super::*;
+use crate::cli::agents_cmd::{OutputFormat, launch};
+use crate::cli::supervised;
 
 use crate::cli::render;
 use rimz::agents::transcript::TranscriptCursor;
-use rimz::harness::run_wake::{self, ExpectedRunFrame, SocketGuard};
-use std::io::IsTerminal as _;
+use rimz::harness::plan::launch_identity_requests;
+use rimz::harness::run::{PermissionMode, RunRecord, RunStatus, SupervisedRunRequest};
+use rimz::harness::run_wake::{self, ExpectedRunFrame};
+use rimz::harness::spec::{Cell, LayoutSpec};
+use rimz::ids::AgentKind;
+use rimz::mux::{LayoutColumn, LayoutPanes, SplitPaneOptions, TabOptions, own_pane_id};
+use rimz::store::{AgentLaunchBatch, AgentLaunchName, AgentLaunchScope};
+use std::io::{IsTerminal as _, Write as _};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::cli::agents_cmd) enum RunPlacement {
+pub(in crate::cli) enum RunPlacement {
     Split,
     LoopZone,
     Tab,
@@ -16,7 +24,7 @@ pub(in crate::cli::agents_cmd) enum RunPlacement {
 /// A supervised `-p` run hosts its agent pane in a split of the current tab so
 /// focus stays with the caller; it opens a new tab only when forced or when
 /// there is no ambient pane to split.
-pub(in crate::cli::agents_cmd) fn run_placement(
+pub(in crate::cli) fn run_placement(
     force_new_tab: bool,
     has_ambient_pane: bool,
     loop_zone: bool,
@@ -30,12 +38,13 @@ pub(in crate::cli::agents_cmd) fn run_placement(
     }
 }
 
-pub(in crate::cli::agents_cmd) fn run_print(
-    args: AgentsArgs,
+pub(in crate::cli) fn run_print(
+    request: SupervisedRunRequest,
+    presentation: SupervisedPresentation,
     globals: &GlobalFlags,
 ) -> Result<Option<RunRecord>> {
-    let output_format = args.output_format.unwrap_or_default();
-    let record = run_supervised(args, globals)?;
+    let output_format = presentation.output_format;
+    let record = run_supervised(request, presentation, globals)?;
     let Some(record_ref) = record.as_ref() else {
         return Ok(record);
     };
@@ -52,28 +61,6 @@ pub(in crate::cli::agents_cmd) fn run_print(
     Ok(record)
 }
 
-pub(in crate::cli::agents_cmd) fn validate_supervised_output(
-    args: &AgentsArgs,
-    output_format: OutputFormat,
-) -> Result<()> {
-    if args.bg && output_format == OutputFormat::StreamJson {
-        bail!("--output-format stream-json cannot be combined with --bg");
-    }
-    if args.retries.unwrap_or(0) > 0 && output_format == OutputFormat::StreamJson {
-        bail!("--retries cannot be combined with --output-format stream-json; choose text or json");
-    }
-    if args.verify.is_some() && output_format == OutputFormat::StreamJson {
-        bail!("--verify cannot be combined with --output-format stream-json; choose text or json");
-    }
-    if args.max_attempts == Some(0) {
-        bail!("--max-attempts must be at least 1");
-    }
-    if args.max_attempts.is_some() && args.verify.is_none() {
-        bail!("--max-attempts requires --verify");
-    }
-    Ok(())
-}
-
 struct PreparedRun {
     workspace: rimz::ResolvedWorkspace,
     machine_config: Arc<rimz::config::MachineConfig>,
@@ -86,81 +73,64 @@ struct PreparedRun {
     room_channel: Option<String>,
     prompt: String,
     output_format: OutputFormat,
+    stream_text: bool,
 }
 
-struct RunWaiter {
-    sock: std::os::unix::net::UnixDatagram,
-    expected: ExpectedRunFrame,
-    interrupt: Arc<AtomicBool>,
-    _socket_guard: SocketGuard,
+struct PresentationWaiter {
+    waiter: run_wake::RunWaiter,
     stream_cursor: Option<TranscriptCursor>,
 }
 
-impl RunWaiter {
+impl PresentationWaiter {
     /// Block until the run reaches a terminal record, streaming transcript
     /// output when the run was started with a stream cursor.
     fn await_terminal(
         &mut self,
         prepared: &PreparedRun,
         room: &rimz::room::RoomContext,
-        args: &AgentsArgs,
+        request: &SupervisedRunRequest,
     ) -> Result<RunRecord> {
         let record = if prepared.output_format == OutputFormat::StreamJson {
             let mut stdout = std::io::stdout().lock();
             let mut sink = supervised::output::StreamSink::ndjson(&mut stdout);
-            let record = run_wake::wait_until_terminal(
-                self.sock.try_clone().context("cloning run stream socket")?,
-                self.expected.clone(),
-                prepared.store.paths(),
-                args.timeout,
-                &self.interrupt,
-                |record| {
-                    supervised::stream::emit_stream_updates(
-                        &prepared.store,
-                        prepared.adapter,
-                        self.stream_cursor
-                            .as_mut()
-                            .context("stream run lost its transcript cursor")?,
-                        &mut sink,
-                        record,
-                    )
-                },
-            )?;
-            sink.end_status(record.status, record.last_message.as_deref())?;
-            record
-        } else if args.stream_text {
+            supervised::stream::stream_blocking_run(
+                &self.waiter,
+                &prepared.store,
+                prepared.adapter,
+                request.timeout,
+                (
+                    self.stream_cursor
+                        .as_mut()
+                        .context("stream run lost its transcript cursor")?,
+                    &mut sink,
+                ),
+            )?
+        } else if prepared.stream_text {
             let mut stdout = render::out();
             let mut gutter = render::GutterWriter::new(&mut stdout);
             let mut stderr = render::err();
             let mut sink = supervised::output::StreamSink::text(&mut gutter, &mut stderr);
-            let record = run_wake::wait_until_terminal(
-                self.sock.try_clone().context("cloning run stream socket")?,
-                self.expected.clone(),
-                prepared.store.paths(),
-                args.timeout,
-                &self.interrupt,
-                |record| {
-                    supervised::stream::emit_stream_updates(
-                        &prepared.store,
-                        prepared.adapter,
-                        self.stream_cursor
-                            .as_mut()
-                            .context("stream run lost its transcript cursor")?,
-                        &mut sink,
-                        record,
-                    )
-                },
-            )?;
-            sink.end_status(record.status, record.last_message.as_deref())?;
-            record
+            supervised::stream::stream_blocking_run(
+                &self.waiter,
+                &prepared.store,
+                prepared.adapter,
+                request.timeout,
+                (
+                    self.stream_cursor
+                        .as_mut()
+                        .context("stream run lost its transcript cursor")?,
+                    &mut sink,
+                ),
+            )?
         } else {
-            run_wake::wait_until_terminal(
-                self.sock.try_clone().context("cloning run wait socket")?,
-                self.expected.clone(),
-                prepared.store.paths(),
-                args.timeout,
-                &self.interrupt,
-                |_| Ok::<(), std::io::Error>(()),
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .enable_time()
+                .build()
+                .context("creating run wait runtime")?;
+            runtime.block_on(
+                self.waiter
+                    .wait_terminal(&prepared.store, request.timeout, None),
             )?
         };
         Ok(record_failure_tail_before_cleanup(
@@ -174,13 +144,13 @@ impl RunWaiter {
 
 struct BlockingAttempt {
     record: RunRecord,
-    waiter: RunWaiter,
+    waiter: PresentationWaiter,
 }
 
 fn open_attempt_pane(
     prepared: &PreparedRun,
     room: &rimz::room::RoomContext,
-    args: &AgentsArgs,
+    request: &SupervisedRunRequest,
     run_id: &rimz::RunId,
     launch_batch: &AgentLaunchBatch,
     pane: &PaneCmd,
@@ -208,45 +178,46 @@ fn open_attempt_pane(
             })
             .map_err(anyhow::Error::from)
     };
-    let open_result = match run_placement(args.new_tab, target.is_some(), args.loop_zone) {
-        RunPlacement::Split => room
-            .backend()
-            .split_pane(SplitPaneOptions {
-                session_name: None,
-                target_view_id: None,
-                target_pane_id: target,
-                cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
-                command: Some(pane.argv.clone()),
-                title: None,
-                env: rimz::room::pane_identity_env(
+    let open_result =
+        match run_placement(request.force_new_tab, target.is_some(), request.loop_zone) {
+            RunPlacement::Split => room
+                .backend()
+                .split_pane(SplitPaneOptions {
+                    session_name: None,
+                    target_view_id: None,
+                    target_pane_id: target,
+                    cwd: Some(prepared.launch.cwd.to_string_lossy().into_owned()),
+                    command: Some(pane.argv.clone()),
+                    title: None,
+                    env: rimz::room::pane_identity_env(
+                        &prepared.workspace,
+                        prepared.room_channel.as_deref(),
+                        request.worktree.is_none() && request.from_pr.is_none(),
+                    ),
+                    stacked: false,
+                    direction,
+                    focus: false,
+                })
+                .map_err(anyhow::Error::from),
+            RunPlacement::LoopZone => {
+                let env = rimz::room::pane_identity_env(
                     &prepared.workspace,
                     prepared.room_channel.as_deref(),
-                    args.worktree.is_none() && args.from_pr.is_none(),
-                ),
-                stacked: false,
-                direction,
-                focus: false,
-            })
-            .map_err(anyhow::Error::from),
-        RunPlacement::LoopZone => {
-            let env = rimz::room::pane_identity_env(
-                &prepared.workspace,
-                prepared.room_channel.as_deref(),
-                args.worktree.is_none() && args.from_pr.is_none(),
-            );
-            match supervised::pane::split_into_loop_zone(
-                room.backend(),
-                &prepared.workspace,
-                &prepared.launch.cwd,
-                env,
-                pane,
-            )? {
-                true => Ok(()),
-                false => tab(),
+                    request.worktree.is_none() && request.from_pr.is_none(),
+                );
+                match supervised::pane::split_into_loop_zone(
+                    room.backend(),
+                    &prepared.workspace,
+                    &prepared.launch.cwd,
+                    env,
+                    pane,
+                )? {
+                    true => Ok(()),
+                    false => tab(),
+                }
             }
-        }
-        RunPlacement::Tab => tab(),
-    };
+            RunPlacement::Tab => tab(),
+        };
     if let Err(err) = open_result {
         let _ = rimz::harness::run::fail(prepared.store.paths(), run_id);
         let _ = prepared.store.fail_agent_launch_batch(launch_batch);
@@ -255,53 +226,15 @@ fn open_attempt_pane(
     Ok(())
 }
 
-fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<PreparedRun> {
-    if args.json {
-        bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
-    }
-    let output_format = args.output_format.unwrap_or_default();
-    let input_format = args.input_format.unwrap_or_default();
-    validate_supervised_output(args, output_format)?;
-    let prompt = resolve_print_prompt(args, input_format)?;
+fn prepare_supervised(
+    request: &SupervisedRunRequest,
+    presentation: &SupervisedPresentation,
+    globals: &GlobalFlags,
+) -> Result<PreparedRun> {
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config();
-    let mode = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
-    let effective = rimz::config::effective::load(
-        &machine_config.agents,
-        &workspace.project_root,
-        &rimz::store::paths::config_home(),
-    )?;
-    let mut resolved = rimz::harness::plan::resolve_launch(
-        &effective,
-        &machine_config.agents.commands,
-        args.spec.as_deref(),
-    )?;
-    let preset = validate_resolved_launch_inputs(
-        args,
-        &effective,
-        &machine_config.agents.commands,
-        &resolved.layout,
-        false,
-    )?;
-    let warnings = rimz::harness::plan::finalize_launch_layout(
-        &mut resolved.layout,
-        LaunchFinalizeOptions {
-            permission_mode: Some(mode),
-            preset: &preset,
-            passthrough: &args.passthrough,
-            budget: args.budget,
-            max_turns: args.max_turns,
-        },
-    )
-    .inspect_err(|err| {
-        for warning in err.warnings() {
-            let _ = writeln!(std::io::stderr(), "{warning}");
-        }
-    })?;
-    for warning in &warnings {
-        writeln!(std::io::stderr(), "{warning}")?;
-    }
-    let layout = resolved.layout;
+    let mode = request.permission_mode;
+    let layout = launch::prepare_supervised_launch_layout(request, &workspace, &machine_config)?;
     let agent_cells = agent_cells(&layout);
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");
@@ -315,7 +248,7 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
     let launch_invocation = rimz::harness::launch::ExecInvocation {
         kind: agent_cell.kind,
         action: rimz::harness::launch::ExecAction::Launch {
-            prompt: Some(&prompt),
+            prompt: Some(&request.prompt),
             extra_args: &[],
         },
         run_id: None,
@@ -326,7 +259,7 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
             profile: agent_cell.profile,
             mode: agent_cell.mode,
             role: agent_cell.role,
-            channel: args.channel.as_deref(),
+            channel: request.channel.as_deref(),
             model: agent_cell.model,
             effort: agent_cell.effort,
             budget: agent_cell.budget,
@@ -344,12 +277,12 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
     let launch = rimz::worktree::resolve_launch_checkout(
         &workspace,
         &machine_config.agents.worktree,
-        args.worktree.as_deref(),
-        args.from_pr.as_ref(),
+        request.worktree.as_deref(),
+        request.from_pr.as_ref(),
     )?;
     let store = crate::cli::open_store(&workspace)?;
     let kind = AgentKind::new_unchecked(adapter.descriptor().kind);
-    if let Some(channel) = args.channel.as_deref() {
+    if let Some(channel) = request.channel.as_deref() {
         crate::cli::channel::ensure_named_channel_available(&workspace, channel)?;
         rimz::channel::register(store.paths(), channel)?;
     }
@@ -357,7 +290,7 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
         &workspace.project_root,
         &launch.cwd,
         None,
-        args.channel.as_deref(),
+        request.channel.as_deref(),
     );
     Ok(PreparedRun {
         workspace,
@@ -369,15 +302,16 @@ fn prepare_supervised(args: &AgentsArgs, globals: &GlobalFlags) -> Result<Prepar
         store,
         kind,
         room_channel,
-        prompt,
-        output_format,
+        prompt: request.prompt.clone(),
+        output_format: presentation.output_format,
+        stream_text: presentation.stream_text,
     })
 }
 
 fn execute_attempt(
     prepared: &PreparedRun,
     room: &rimz::room::RoomContext,
-    args: &AgentsArgs,
+    request: &SupervisedRunRequest,
     prompt: &str,
     retry_of: Option<&rimz::RunId>,
     attempt: u32,
@@ -394,11 +328,11 @@ fn execute_attempt(
     );
     record.budget = agent_cell.budget.map(ToOwned::to_owned);
     record.retry_of = retry_of.cloned();
-    record.loop_task.clone_from(&args.loop_task);
+    record.loop_task.clone_from(&request.loop_task);
     let run_id = record.run_id.clone();
     let mut launch_requests = launch_identity_requests(
         &prepared.layout,
-        args.name.as_deref(),
+        request.name.as_deref(),
         prepared.launch.generated_name(),
         None,
         None,
@@ -420,7 +354,7 @@ fn execute_attempt(
             cwd: prepared.launch.cwd.clone(),
             worktree_name: prepared.launch.worktree_name.clone(),
             channel: prepared.room_channel.clone(),
-            description: args.description.clone(),
+            description: request.description.clone(),
         },
     )?;
     let launch_identity = launch_batch.single_identity()?;
@@ -440,77 +374,65 @@ fn execute_attempt(
         launch_id: Some(&launch_identity.agent_id),
         cwd: &prepared.launch.cwd,
         prompt,
-        cleanup_worktree: (args.worktree.is_some() || args.from_pr.is_some()) && retries == 0,
+        cleanup_worktree: (request.worktree.is_some() || request.from_pr.is_some()) && retries == 0,
         permission_args: agent_cell.args,
-        self_cleanup_on_completion: args.bg && !args.keep,
+        self_cleanup_on_completion: request.background && !request.keep,
     })?;
-    let bound = if args.bg {
+    let waiter = if request.background {
         None
     } else {
+        let cancellation = supervised::install_run_interrupt_flag()?;
         Some(
-            run_wake::bind_run(prepared.store.runtime_paths(), &run_id)
-                .context("binding run socket")?,
+            run_wake::RunWaiter::bind(
+                prepared.store.runtime_paths(),
+                ExpectedRunFrame {
+                    workspace_id: prepared.workspace.workspace_id.clone(),
+                    run_id: run_id.clone(),
+                },
+                cancellation,
+            )
+            .context("binding run socket")?,
         )
     };
-    let interrupt = if args.bg {
-        None
-    } else {
-        Some(supervised::install_run_interrupt_flag()?)
-    };
-    let socket_guard = bound
-        .as_ref()
-        .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
     rimz::harness::run::create(prepared.store.paths(), &record).context("recording run")?;
-    open_attempt_pane(prepared, room, args, &run_id, &launch_batch, &pane)?;
-    if args.bg {
+    open_attempt_pane(prepared, room, request, &run_id, &launch_batch, &pane)?;
+    if request.background {
         #[expect(clippy::print_stdout, reason = "command result is the agent name")]
         {
             println!("{}", launch_identity.name);
         }
         return Ok(None);
     }
-    let Some((sock, _sock_path)) = bound else {
-        bail!("blocking run did not bind its completion socket");
+    let Some(waiter) = waiter else {
+        bail!("blocking run did not bind its completion waiter");
     };
-    let Some(interrupt) = interrupt else {
-        bail!("blocking run did not install its interrupt flag");
-    };
-    let Some(socket_guard) = socket_guard else {
-        bail!("blocking run did not guard its completion socket");
-    };
-    let mut waiter = RunWaiter {
-        sock,
-        expected: ExpectedRunFrame {
-            workspace_id: prepared.workspace.workspace_id.clone(),
-            run_id: run_id.clone(),
-        },
-        interrupt,
-        _socket_guard: socket_guard,
-        stream_cursor: (prepared.output_format == OutputFormat::StreamJson || args.stream_text)
+    let mut waiter = PresentationWaiter {
+        waiter,
+        stream_cursor: (prepared.output_format == OutputFormat::StreamJson || prepared.stream_text)
             .then(|| TranscriptCursor::new(true)),
     };
-    let record = waiter.await_terminal(prepared, room, args)?;
+    let record = waiter.await_terminal(prepared, room, request)?;
     Ok(Some(BlockingAttempt { record, waiter }))
 }
 
 fn verify_phase(
     prepared: &PreparedRun,
     room: &rimz::room::RoomContext,
-    args: &AgentsArgs,
+    request: &SupervisedRunRequest,
     blocking: BlockingAttempt,
-) -> Result<(RunRecord, Option<anyhow::Error>, RunWaiter)> {
+) -> Result<(RunRecord, Option<anyhow::Error>, PresentationWaiter)> {
     let BlockingAttempt {
         mut record,
         mut waiter,
     } = blocking;
-    let Some(cmd) = args.verify.as_deref() else {
+    let Some(cmd) = request.verify.as_deref() else {
         return Ok((record, None, waiter));
     };
     if record.status != RunStatus::Completed {
         return Ok((record, None, waiter));
     }
-    let max_attempts = args.max_attempts.unwrap_or(3);
-    let verify_timeout = args
+    let max_attempts = request.max_attempts.unwrap_or(3);
+    let verify_timeout = request
         .timeout
         .unwrap_or(rimz::harness::schedule::runner::CHECK_DEFAULT_TIMEOUT);
     let mut verify_attempt = 1;
@@ -543,7 +465,7 @@ fn verify_phase(
             timed_out: detail.timed_out,
             output,
         };
-        if waiter.interrupt.load(Ordering::SeqCst) {
+        if waiter.waiter.cancellation().is_requested() {
             let _reopened = rimz::harness::run::reopen_for_verify(
                 prepared.store.paths(),
                 &record.run_id,
@@ -587,7 +509,7 @@ fn verify_phase(
             verify_error = Some(err);
             break;
         }
-        record = waiter.await_terminal(prepared, room, args)?;
+        record = waiter.await_terminal(prepared, room, request)?;
         verify_attempt += 1;
     }
     Ok((record, verify_error, waiter))
@@ -612,11 +534,12 @@ fn close_attempt_pane(prepared: &PreparedRun, room: &rimz::room::RoomContext, re
     }
 }
 
-pub(in crate::cli::agents_cmd) fn run_supervised(
-    args: AgentsArgs,
+pub(in crate::cli) fn run_supervised(
+    request: SupervisedRunRequest,
+    presentation: SupervisedPresentation,
     globals: &GlobalFlags,
 ) -> Result<Option<RunRecord>> {
-    let prepared = prepare_supervised(&args, globals)?;
+    let prepared = prepare_supervised(&request, &presentation, globals)?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let mut room = rimz::room::RoomContext::from_resolved(
         &prepared.workspace,
@@ -645,8 +568,8 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
     if let Some(reset) = outcome.reset.as_ref() {
         render::room::print_automatic_reset(room.session_name(), reset)?;
     }
-    let retries = args.retries.unwrap_or(0);
-    let owns_worktree = args.worktree.is_some() || args.from_pr.is_some();
+    let retries = request.retries;
+    let owns_worktree = request.worktree.is_some() || request.from_pr.is_some();
     let base_prompt = prepared.prompt.clone();
     let mut prompt = prepared.prompt.clone();
     let mut retry_of = None;
@@ -664,7 +587,7 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
         let Some(blocking) = execute_attempt(
             &prepared,
             &room,
-            &args,
+            &request,
             &prompt,
             retry_of.as_ref(),
             attempt,
@@ -673,8 +596,8 @@ pub(in crate::cli::agents_cmd) fn run_supervised(
         else {
             return Ok(None);
         };
-        let (record, verify_error, waiter) = verify_phase(&prepared, &room, &args, blocking)?;
-        if !args.keep {
+        let (record, verify_error, waiter) = verify_phase(&prepared, &room, &request, blocking)?;
+        if !request.keep {
             close_attempt_pane(&prepared, &room, &record);
         }
         drop(waiter);
@@ -733,43 +656,6 @@ fn record_failure_tail_before_cleanup(
                 "could not record supervised run failure pane tail",
             );
             record
-        }
-    }
-}
-
-/// Resolve the supervised prompt from text input or, for `--input-format
-/// stream-json`, from stream-json user messages on stdin.
-fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<String> {
-    match input_format {
-        InputFormat::Text => {
-            let piped = if args.stdin {
-                crate::cli::send::read_stdin_prompt()?
-            } else {
-                crate::cli::send::warn_ignored_stdin();
-                None
-            };
-            crate::cli::send::combine_text_prompt(args.prompt.as_deref(), piped.as_deref())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "expected a prompt for `rimz agents <spec> -p` (positional PROMPT or `--stdin`)"
-                    )
-                })
-        }
-        InputFormat::StreamJson => {
-            if args.stdin {
-                bail!("--input-format stream-json already reads stdin; drop --stdin");
-            }
-            if args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()) {
-                bail!(
-                    "--input-format stream-json reads the prompt from stdin; drop the positional PROMPT"
-                );
-            }
-            let prompt = supervised::read_stream_json_prompt(std::io::stdin().lock())
-                .context("reading stream-json prompt from stdin")?;
-            if prompt.trim().is_empty() {
-                bail!("--input-format stream-json received no user message text on stdin");
-            }
-            Ok(prompt)
         }
     }
 }

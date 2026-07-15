@@ -846,21 +846,6 @@ mod pane_exec {
 mod runs {
     use super::*;
 
-    #[test]
-    fn run_stop_should_cancel_only_live_runs() {
-        for status in [RunStatus::Pending, RunStatus::Running] {
-            assert!(run_stop_should_cancel(&run_record_with_status(status)));
-        }
-        for status in [
-            RunStatus::Completed,
-            RunStatus::Canceled,
-            RunStatus::Failed,
-            RunStatus::TimedOut,
-        ] {
-            assert!(!run_stop_should_cancel(&run_record_with_status(status)));
-        }
-    }
-
     #[tokio::test(flavor = "current_thread")]
     async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
         let state = tempfile::tempdir().expect("state dir");
@@ -1261,92 +1246,6 @@ mod automation {
         assert!(!is_launchable_type("vim", &profiles));
         assert!(!is_launchable_type("swift-otter", &profiles));
     }
-
-    #[test]
-    fn for_task_builds_a_blocking_supervised_turn() {
-        let args = AgentsArgs::for_task(TaskRunArgs {
-            spec: "planner".to_owned(),
-            prompt: Some("fix auth".to_owned()),
-            worktree: Some("auth".to_owned()),
-            mode: Some(PermissionMode::Ask),
-            effort: Some("high".to_owned()),
-            budget: Some("5/day".parse().expect("budget")),
-            system_prompt_file: Some(PathBuf::from("/prompts/system.md")),
-            timeout: Some(Duration::from_secs(90)),
-            keep: true,
-            stream: true,
-            verify: Some("cargo xtask test auth".to_owned()),
-            max_attempts: Some(4),
-            loop_zone: false,
-            loop_task: Some("auth-fix".to_owned()),
-        });
-        assert_eq!(
-            (
-                args.spec.as_deref(),
-                args.prompt.as_deref(),
-                args.worktree.as_deref(),
-                args.ask,
-                args.effort.as_deref(),
-                args.budget.as_ref().map(ToString::to_string)
-            ),
-            (
-                Some("planner"),
-                Some("fix auth"),
-                Some("auth"),
-                true,
-                Some("high"),
-                Some("$5.00/day".to_owned())
-            )
-        );
-        assert_eq!(
-            (
-                args.system_prompt_file.as_deref(),
-                args.timeout,
-                args.keep,
-                args.stream_text,
-                args.verify.as_deref(),
-                args.max_attempts,
-                args.loop_task.as_deref(),
-                args.print,
-                args.bg,
-                args.passthrough.as_slice()
-            ),
-            (
-                Some(Path::new("/prompts/system.md")),
-                Some(Duration::from_secs(90)),
-                true,
-                true,
-                Some("cargo xtask test auth"),
-                Some(4),
-                Some("auth-fix"),
-                true,
-                false,
-                &[] as &[String]
-            )
-        );
-
-        let unscoped = AgentsArgs::for_task(TaskRunArgs {
-            spec: "codex".to_owned(),
-            prompt: Some("check status".to_owned()),
-            worktree: None,
-            mode: None,
-            effort: None,
-            budget: None,
-            system_prompt_file: None,
-            timeout: None,
-            keep: true,
-            stream: false,
-            verify: None,
-            max_attempts: None,
-            loop_zone: false,
-            loop_task: Some("status".to_owned()),
-        });
-        assert_eq!(unscoped.worktree, None);
-        assert!(
-            unscoped.keep,
-            "manual loop fire can keep the transient pane"
-        );
-    }
 }
 
 fn bare_exec_args() -> ExecArgs {
@@ -1374,18 +1273,6 @@ fn bare_exec_args() -> ExecArgs {
         prompt: None,
         extra_args: Vec::new(),
     }
-}
-
-fn run_record_with_status(status: RunStatus) -> RunRecord {
-    let mut record = RunRecord::new(
-        WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "summarize".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
-    record.status = status;
-    record
 }
 
 fn render_agents_text(

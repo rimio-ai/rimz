@@ -1,15 +1,14 @@
-//! Supervised one-shot run support used by `rimz agents -p` and wait/stop.
+//! Command-neutral supervised-run effects and presentation.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
 use crate::cli::GlobalFlags;
 use rimz::agents::{AgentAdapter, HookPreflightErr, TurnLifecycleNeed, preflight_hooks};
+use rimz::harness::run::{RunCancellation, RunRecord};
 use rimz::mux::PaneCmd;
 use rimz::workspace::WorkspaceResolver;
 
@@ -19,7 +18,21 @@ pub(super) mod run;
 pub(super) mod stream;
 pub(super) mod verify;
 
-static RUN_INTERRUPT_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+pub(in crate::cli) struct SupervisedPresentation {
+    pub(in crate::cli) output_format: crate::cli::agents_cmd::OutputFormat,
+    pub(in crate::cli) stream_text: bool,
+}
+
+impl SupervisedPresentation {
+    pub(in crate::cli) fn text(stream_text: bool) -> Self {
+        Self {
+            output_format: crate::cli::agents_cmd::OutputFormat::Text,
+            stream_text,
+        }
+    }
+}
+
+static RUN_INTERRUPT_SIGNAL_RECEIVED: OnceLock<RunCancellation> = OnceLock::new();
 static RUN_INTERRUPT_HANDLERS_INSTALLED: OnceLock<()> = OnceLock::new();
 
 #[cfg(test)]
@@ -27,7 +40,7 @@ use output::RunStreamEvent;
 #[cfg(test)]
 use pane::{ensure_sendable, latest_resolved_run_pane, resolve_run_pane_in_snapshot};
 #[cfg(test)]
-use stream::stream_attached_run;
+use stream::{stream_attached_run, stream_blocking_run};
 
 pub(super) fn resolve_run_workspace(globals: &GlobalFlags) -> Result<rimz::ResolvedWorkspace> {
     WorkspaceResolver::resolve_participant(".", globals.root.clone())
@@ -62,6 +75,30 @@ pub(super) fn preflight_program(
         .with_context(|| format!("checking `{program}` after shell startup"))?;
     if !resolves {
         bail!("finding `{program}` on PATH after shell startup");
+    }
+    Ok(())
+}
+
+/// Cancel a live supervised run, then reclaim its pane after the existing
+/// backend grace. Terminal `--keep` records remain terminal and only lose the
+/// pane.
+pub(crate) fn stop_supervised_run(
+    workspace: &rimz::ResolvedWorkspace,
+    store: &rimz::Store,
+    globals: &GlobalFlags,
+    run: &RunRecord,
+) -> Result<()> {
+    if !run.status.is_terminal() {
+        rimz::harness::run::cancel_and_wake(store, &run.run_id)?;
+    }
+    if let Ok(backend) = pane::backend_for_workspace_session(workspace, globals) {
+        pane::close_stopped_run_pane_after_grace(
+            backend.as_ref(),
+            store,
+            &workspace.session_name,
+            run,
+            pane::STOP_BACKSTOP_GRACE,
+        );
     }
     Ok(())
 }
@@ -118,22 +155,23 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     Ok(PaneCmd { argv })
 }
 
-pub(super) fn install_run_interrupt_flag() -> Result<Arc<AtomicBool>> {
+pub(super) fn install_run_interrupt_flag() -> Result<RunCancellation> {
     let flag = RUN_INTERRUPT_SIGNAL_RECEIVED
-        .get_or_init(|| Arc::new(AtomicBool::new(false)))
+        .get_or_init(RunCancellation::new)
         .clone();
-    flag.store(false, Ordering::SeqCst);
+    flag.reset();
     install_run_interrupt_handlers(flag.clone())?;
     Ok(flag)
 }
 
 #[cfg(unix)]
-fn install_run_interrupt_handlers(flag: Arc<AtomicBool>) -> Result<()> {
+fn install_run_interrupt_handlers(cancellation: RunCancellation) -> Result<()> {
     use signal_hook::consts::signal::SIGINT;
 
     if RUN_INTERRUPT_HANDLERS_INSTALLED.get().is_some() {
         return Ok(());
     }
+    let flag = cancellation.signal_flag();
     signal_hook::flag::register_conditional_shutdown(SIGINT, 130, flag.clone())?;
     signal_hook::flag::register(SIGINT, flag)?;
     let _ = RUN_INTERRUPT_HANDLERS_INSTALLED.set(());
@@ -141,7 +179,7 @@ fn install_run_interrupt_handlers(flag: Arc<AtomicBool>) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn install_run_interrupt_handlers(_flag: Arc<AtomicBool>) -> Result<()> {
+fn install_run_interrupt_handlers(_cancellation: RunCancellation) -> Result<()> {
     Ok(())
 }
 

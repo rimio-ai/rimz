@@ -36,6 +36,7 @@ mod sidebar;
 mod spinner;
 mod stats;
 mod statusline;
+pub(crate) mod supervised;
 mod transcript;
 mod trust;
 mod uninstall;

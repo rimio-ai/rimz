@@ -1,8 +1,10 @@
-//! Supervised interactive-agent runs.
+//! Supervised-run requests, records, transitions, and cancellation.
 
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -13,7 +15,7 @@ use crate::harness::schedule::runner::tail_output;
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
 use crate::store::lock::WorkspaceLock;
 use crate::store::run_store::{self, RunStoreErr};
-use crate::store::{SidebarSnapshot, StatePaths};
+use crate::store::{SidebarSnapshot, StatePaths, Store};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 /// The launched adapter kind (`claude`, `codex`, ...). Its presence marks the
@@ -55,6 +57,86 @@ pub const ENV_AGENT_BUDGET: &str = "RIMZ_AGENT_BUDGET";
 /// `rtk`. Read by xtask, never by rimz itself.
 pub const ENV_RTK: &str = "RIMZ_RTK";
 const FAILURE_TAIL_CAP: usize = 4 * 1024;
+
+/// Typed cancellation signal shared between CLI signal handlers and the
+/// supervised-run waiter.
+#[derive(Clone, Debug, Default)]
+pub struct RunCancellation {
+    requested: Arc<AtomicBool>,
+}
+
+/// Command-neutral input for one supervised turn.
+#[derive(Clone, Debug)]
+pub struct SupervisedRunRequest {
+    pub spec: String,
+    pub prompt: String,
+    pub description: Option<String>,
+    pub worktree: Option<String>,
+    pub from_pr: Option<crate::forge::PrTarget>,
+    pub channel: Option<String>,
+    pub name: Option<String>,
+    pub background: bool,
+    pub force_new_tab: bool,
+    pub permission_mode: PermissionMode,
+    pub model: Option<String>,
+    pub system_prompt_file: Option<PathBuf>,
+    pub append_system_prompt_file: Option<PathBuf>,
+    pub effort: Option<String>,
+    pub budget: Option<crate::harness::budget::BudgetSpec>,
+    pub max_turns: Option<u32>,
+    pub timeout: Option<std::time::Duration>,
+    pub keep: bool,
+    pub retries: u32,
+    pub verify: Option<String>,
+    pub max_attempts: Option<u32>,
+    pub loop_zone: bool,
+    pub loop_task: Option<String>,
+    pub passthrough: Vec<String>,
+}
+
+impl RunCancellation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn request(&self) {
+        self.requested.store(true, Ordering::SeqCst);
+    }
+
+    pub fn reset(&self) {
+        self.requested.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::SeqCst)
+    }
+
+    /// Shared flag registered by the CLI's OS signal effect.
+    pub fn signal_flag(&self) -> Arc<AtomicBool> {
+        self.requested.clone()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CancelRunErr {
+    #[error(transparent)]
+    Store(#[from] RunStoreErr),
+    #[error(transparent)]
+    Wake(#[from] crate::store::wakeup::WakeupErr),
+}
+
+/// Durably cancel a run and wake its waiter only for the newly-written
+/// terminal transition.
+pub fn cancel_and_wake(
+    store: &Store,
+    run_id: &RunId,
+) -> std::result::Result<RunRecord, CancelRunErr> {
+    let (record, wrote) = cancel(store.paths(), run_id)?;
+    if wrote {
+        crate::store::wakeup::wake_run(store.runtime_paths(), &record)?;
+    }
+    Ok(record)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

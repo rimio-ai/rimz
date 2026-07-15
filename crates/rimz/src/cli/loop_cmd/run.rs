@@ -497,27 +497,41 @@ fn execute_spawn_task(
         .clone()
         .or_else(|| is_ping.then(|| "low".to_owned()));
     let stream = execution.mode == LoopRunMode::Manual;
-    let args = crate::cli::agents_cmd::AgentsArgs::for_task(crate::cli::agents_cmd::TaskRunArgs {
+    let request = rimz::harness::run::SupervisedRunRequest {
         spec: spec.to_owned(),
-        prompt: Some(prompt),
+        prompt,
+        description: None,
         worktree: entry.worktree.clone(),
-        mode: task_mode,
+        from_pr: None,
+        channel: None,
+        name: None,
+        background: false,
+        force_new_tab: false,
+        permission_mode: task_mode.unwrap_or(rimz::harness::run::PermissionMode::Auto),
+        model: None,
+        system_prompt_file,
+        append_system_prompt_file: None,
         effort,
         budget: entry
             .budget
             .as_deref()
             .map(str::parse::<rimz::harness::budget::BudgetSpec>)
             .transpose()?,
-        system_prompt_file,
+        max_turns: None,
         timeout,
         keep: execution.keep,
-        stream,
+        retries: 0,
         verify: entry.verify.clone(),
         max_attempts: entry.max_attempts,
         loop_zone: execution.mode == LoopRunMode::Scheduled,
         loop_task: Some(name.to_owned()),
-    });
-    match crate::cli::agents_cmd::run_blocking_task(args, &run_globals) {
+        passthrough: Vec::new(),
+    };
+    match crate::cli::supervised::run::run_supervised(
+        request,
+        crate::cli::supervised::SupervisedPresentation::text(stream),
+        &run_globals,
+    ) {
         Ok(Some(record)) => Ok(RunOutcome::from_run_record(record, check_detail, stream)),
         Ok(None) => Ok(RunOutcome::completed(check_detail)),
         Err(err) => Err(err),

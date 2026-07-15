@@ -696,7 +696,10 @@ pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::
     })
 }
 
-fn resolve_launch_prompt_file(path: Option<&Path>, flag: &str) -> Result<Option<PathBuf>> {
+pub(super) fn resolve_launch_prompt_file(
+    path: Option<&Path>,
+    flag: &str,
+) -> Result<Option<PathBuf>> {
     let Some(path) = path else {
         return Ok(None);
     };
@@ -750,6 +753,57 @@ pub(super) fn validate_resolved_launch_inputs(
         bail!("--name requires a layout with exactly one agent cell");
     }
     launch_override_preset(args)
+}
+
+/// Resolve and finalize the one-cell layout for a command-neutral supervised request.
+pub(in crate::cli) fn prepare_supervised_launch_layout(
+    request: &rimz::harness::run::SupervisedRunRequest,
+    workspace: &rimz::ResolvedWorkspace,
+    machine_config: &rimz::config::MachineConfig,
+) -> Result<LayoutSpec> {
+    let effective = rimz::config::effective::load(
+        &machine_config.agents,
+        &workspace.project_root,
+        &rimz::store::paths::config_home(),
+    )?;
+    let mut resolved = rimz::harness::plan::resolve_launch(
+        &effective,
+        &machine_config.agents.commands,
+        Some(&request.spec),
+    )?;
+    reject_prompt_that_looks_like_spec(
+        Some(&request.spec),
+        Some(&request.prompt),
+        &effective.profiles,
+        &machine_config.agents.commands,
+        &effective.teams,
+    )?;
+    rimz::harness::plan::validate_profile_prompt_files(&resolved.layout)?;
+    let preset = rimz::agents::LaunchPreset {
+        model: request.model.clone(),
+        effort: request.effort.clone(),
+        system_prompt_file: request.system_prompt_file.clone(),
+        append_system_prompt_file: request.append_system_prompt_file.clone(),
+    };
+    let warnings = rimz::harness::plan::finalize_launch_layout(
+        &mut resolved.layout,
+        LaunchFinalizeOptions {
+            permission_mode: Some(request.permission_mode),
+            preset: &preset,
+            passthrough: &request.passthrough,
+            budget: request.budget,
+            max_turns: request.max_turns,
+        },
+    )
+    .inspect_err(|err| {
+        for warning in err.warnings() {
+            let _ = writeln!(std::io::stderr(), "{warning}");
+        }
+    })?;
+    for warning in warnings {
+        writeln!(std::io::stderr(), "{warning}")?;
+    }
+    Ok(resolved.layout)
 }
 
 #[cfg(test)]

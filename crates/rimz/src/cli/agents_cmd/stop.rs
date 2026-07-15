@@ -37,7 +37,7 @@ pub(super) fn stop_agent(reference: String, all: bool, globals: &GlobalFlags) ->
         crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel.as_deref());
     let live_agent = live_agent_result.as_ref().ok().copied();
     if let Some(run) = newest_run_by_ref(&store, &reference, live_agent)? {
-        stop_run(&workspace, &store, globals, &run)?;
+        supervised::stop_supervised_run(&workspace, &store, globals, &run)?;
         return Ok(());
     }
     let live_agent = live_agent_result.map_err(|err| stop_resolve_error(err, &reference))?;
@@ -64,42 +64,10 @@ fn stop_live_agent(
     agent: &AgentState,
 ) -> Result<()> {
     if let Some(run) = newest_run_for_agent(store, agent)? {
-        stop_run(workspace, store, globals, &run)
+        supervised::stop_supervised_run(workspace, store, globals, &run)
     } else {
         close_agent_pane(workspace, agent)
     }
-}
-
-pub(crate) fn stop_run(
-    workspace: &rimz::ResolvedWorkspace,
-    store: &rimz::Store,
-    globals: &GlobalFlags,
-    run: &RunRecord,
-) -> Result<()> {
-    if run_stop_should_cancel(run) {
-        let (record, wrote) = rimz::harness::run::cancel(store.paths(), &run.run_id)?;
-        if wrote {
-            rimz::store::wakeup::wake_run(store.runtime_paths(), &record)
-                .context("waking run waiter")?;
-        }
-    }
-    if let Ok(backend) = supervised::pane::backend_for_workspace_session(workspace, globals) {
-        supervised::pane::close_stopped_run_pane_after_grace(
-            backend.as_ref(),
-            store,
-            &workspace.session_name,
-            run,
-            supervised::pane::STOP_BACKSTOP_GRACE,
-        );
-    }
-    Ok(())
-}
-
-/// Whether `stop` must cancel a run's supervision before reclaiming its pane.
-/// Live runs are canceled so a blocking `-p` waiter wakes. Terminal runs, such
-/// as completed `--keep` agents, keep their record and only lose the pane.
-pub(super) fn run_stop_should_cancel(run: &RunRecord) -> bool {
-    !run.status.is_terminal()
 }
 
 fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> Result<()> {

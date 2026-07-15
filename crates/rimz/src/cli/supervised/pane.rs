@@ -1,3 +1,5 @@
+//! Supervised-run pane lookup and reclamation effects.
+
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
