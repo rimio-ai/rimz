@@ -8,8 +8,8 @@ rust-version.workspace = true
 description = "The control room for your coding agents: a realtime tmux/Zellij dashboard for fleets of Claude Code, Codex, and Pi agents."
 homepage = "https://github.com/rimio-ai/rimz"
 readme = "../../README.md"
-keywords = ["cli", "tui", "ai", "agents", "tmux"]
-categories = ["command-line-utilities", "development-tools"]
+keywords = ["cli", "tui", "agents", "tmux", "zellij"]
+categories = ["command-line-utilities", "development-tools", "artificial-intelligence"]
 # Integration tests live in one binary (`tests/integration/`), not flat
 # `tests/*.rs` targets — disable auto-discovery and declare it explicitly.
 autotests = false
