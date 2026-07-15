@@ -242,6 +242,86 @@ fn worktree_remove_archives_messages_for_removed_channel() {
 }
 
 #[test]
+fn worktree_remove_reports_archive_failure_after_removal() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    queue_channel_message(&env, "demo", "old work");
+    block_message_archive(&env);
+
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("archiving messages for removed worktree channel"));
+
+    assert!(!path.exists(), "removal completes before archive failure");
+}
+
+#[test]
+fn worktree_cleanup_downgrades_archive_failure_after_removal() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    queue_channel_message(&env, "demo", "old work");
+    block_message_archive(&env);
+
+    env.rimz()
+        .args([
+            "worktree",
+            "cleanup",
+            path.to_str().expect("utf-8 path"),
+            "--non-interactive",
+        ])
+        .assert()
+        .success();
+
+    assert!(!path.exists(), "cleanup survives archive failure");
+}
+
+#[test]
+fn worktree_gc_reports_archive_failure_after_removal() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    queue_channel_message(&env, "demo", "old work");
+    block_message_archive(&env);
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("removed: demo"))
+        .stdout(contains("message archive failed"));
+
+    assert!(
+        !path.exists(),
+        "gc removal completes before archive failure"
+    );
+}
+
+#[test]
 fn worktree_new_from_pr_fetches_github_style_ref() {
     if git_missing() {
         return;
@@ -626,10 +706,13 @@ fn worktree_new_symlinks_dirs_from_worktreelink_without_dirtying_checkout() {
     let marker = rimz::worktree::read_marker_for_worktree(&path)
         .expect("read marker")
         .expect("marker");
-    assert!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .safe_to_remove(),
+    assert_eq!(
+        rimz::worktree::removal_assessment(
+            &path,
+            rimz::worktree::status(&path, &marker).expect("status"),
+            &rimz::worktree::RemovalProtection::default(),
+        ),
+        rimz::worktree::RemovalAssessment::Removable,
         "the linked dir does not block cleanup"
     );
 }
@@ -1289,6 +1372,14 @@ fn queue_channel_message(env: &Env, channel: &str, text: &str) -> rimz::MessageI
         .queue_message(&message, "rimz-test")
         .expect("queue message");
     message_id
+}
+
+fn block_message_archive(env: &Env) {
+    let history = env
+        .state_path_for(&env.project_root)
+        .messages_dir
+        .join("history.jsonl");
+    std::fs::create_dir_all(history).expect("replace message history file with directory");
 }
 
 fn publish_pr_ref(env: &Env, remote_ref: &str) -> (String, String) {

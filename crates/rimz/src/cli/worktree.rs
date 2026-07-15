@@ -17,27 +17,7 @@ use rimz::mux::own_pane_id;
 use rimz::workspace::{ResolvedWorkspace, RootClass, WorkspaceResolver};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
-const WORKTREE_REMOVED_ARCHIVE_REASON: &str = "worktree removed";
-
-pub(super) struct RemovedWorktree {
-    pub(super) branch_deletion: rimz::worktree::BranchDeletion,
-    /// Archive outcome, surfaced so `worktree remove` can hard-fail while
-    /// cleanup and gc downgrade to a debug log.
-    pub(super) archive: Result<()>,
-}
-
-pub(super) fn remove_and_archive(
-    marker: &rimz::worktree::WorktreeMarker,
-    remove: impl FnOnce() -> Result<rimz::worktree::BranchDeletion>,
-    archive_channel: impl FnOnce(&str, &str) -> Result<()>,
-) -> Result<RemovedWorktree> {
-    let branch_deletion = remove()?;
-    let archive = archive_channel(&marker.name, WORKTREE_REMOVED_ARCHIVE_REASON);
-    Ok(RemovedWorktree {
-        branch_deletion,
-        archive,
-    })
-}
+pub(super) const WORKTREE_REMOVED_ARCHIVE_REASON: &str = "worktree removed";
 
 #[derive(Debug, Args)]
 pub struct WorktreeArgs {
@@ -268,33 +248,18 @@ fn remove_worktree(
     force: bool,
 ) -> Result<()> {
     let store = open_store(workspace)?;
-    let path = rimz::worktree::worktree_path(&workspace.project_root, config, &name)?;
-    let marker = rimz::worktree::read_marker_for_worktree(&path)?.ok_or_else(|| {
-        rimz::worktree::WorktreeErr::Unmarked {
-            name: name.clone(),
-            path: path.clone(),
-        }
-    })?;
-    let removed = remove_and_archive(
-        &marker,
-        || {
-            rimz::worktree::remove(&workspace.project_root, config, &name, force)
-                .map_err(Into::into)
-        },
-        |channel, reason| {
-            store
-                .archive_channel_messages(channel, reason, &workspace.session_name)
-                .map(|_| ())
-                .map_err(Into::into)
-        },
-    )?;
-    removed
-        .archive
+    let removed = rimz::worktree::remove(&workspace.project_root, config, &name, force)?;
+    store
+        .archive_channel_messages(
+            removed.worktree_name(),
+            WORKTREE_REMOVED_ARCHIVE_REASON,
+            &workspace.session_name,
+        )
         .context("archiving messages for removed worktree channel")?;
     #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
     {
         println!("removed {name}");
-        if removed.branch_deletion == rimz::worktree::BranchDeletion::KeptUnmerged {
+        if removed.branch_deletion() == rimz::worktree::BranchDeletion::KeptUnmerged {
             println!("  branch kept: work not proven merged into its base");
         }
     }
@@ -325,31 +290,32 @@ pub(super) fn cleanup_worktree(
     if !interactive {
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
-    let other_pane_inside = other_live_pane_inside(path, globals);
-    let roster_bound = roster_binds_worktree_from_store(path, &marker, globals);
-    match rimz::worktree::cleanup_decision(status, true, other_pane_inside || roster_bound) {
-        rimz::worktree::CleanupDecision::RemoveClean => {
-            let branch_deletion = remove_for_cleanup(path, &marker, globals, false)?;
+    let protection = cleanup_protection(path, &marker, globals);
+    match rimz::worktree::removal_assessment(path, status, &protection) {
+        rimz::worktree::RemovalAssessment::Removable => {
+            let removed = remove_for_cleanup(path, &marker, globals, false)?;
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: removed clean worktree {}",
                 path.display()
             );
-            report_kept_branch(branch_deletion, &marker);
+            report_kept_branch(&removed);
         }
-        rimz::worktree::CleanupDecision::PromptDirty => {
+        rimz::worktree::RemovalAssessment::Kept(
+            rimz::worktree::RemovalReason::Dirty | rimz::worktree::RemovalReason::NotLanded,
+        ) => {
             if interactive {
                 match dirty_choice(path)? {
                     DirtyChoice::Keep => {}
                     DirtyChoice::Remove => {
-                        let branch_deletion = remove_for_cleanup(path, &marker, globals, true)?;
-                        report_kept_branch(branch_deletion, &marker);
+                        let removed = remove_for_cleanup(path, &marker, globals, true)?;
+                        report_kept_branch(&removed);
                     }
                     DirtyChoice::Shell => exec_shell(path)?,
                 }
             }
         }
-        rimz::worktree::CleanupDecision::Skip => {}
+        rimz::worktree::RemovalAssessment::Kept(rimz::worktree::RemovalReason::InUse) => {}
     }
     Ok(())
 }
@@ -359,27 +325,60 @@ fn remove_for_cleanup(
     marker: &rimz::worktree::WorktreeMarker,
     globals: &GlobalFlags,
     force: bool,
-) -> Result<rimz::worktree::BranchDeletion> {
-    let removed = remove_and_archive(
-        marker,
-        || remove_after_leaving_worktree(path, marker, force),
-        |channel, reason| archive_removed_worktree_messages(marker, globals, channel, reason),
-    )?;
-    if let Err(err) = removed.archive {
+) -> Result<rimz::worktree::RemovalOutcome> {
+    let removed = remove_after_leaving_worktree(path, marker, force)?;
+    if let Err(err) =
+        archive_removed_worktree_messages(&removed, globals, WORKTREE_REMOVED_ARCHIVE_REASON)
+    {
         tracing::debug!(
-            branch = %marker.branch,
+            branch = %removed.branch(),
             error = %err,
             "could not archive messages for removed worktree",
         );
     }
-    Ok(removed.branch_deletion)
+    Ok(removed)
 }
 
-fn roster_binds_worktree_from_store(
+fn cleanup_protection(
     path: &Path,
     marker: &rimz::worktree::WorktreeMarker,
     globals: &GlobalFlags,
-) -> bool {
+) -> rimz::worktree::RemovalProtection {
+    let mut protection = rimz::worktree::RemovalProtection::default();
+    match rimz::mux::auto_detect_backend(globals.mux) {
+        Ok(mux) => match own_pane_id(mux) {
+            Some(own) => {
+                let workspace =
+                    WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
+                match rimz::mux::backend_for(mux).list_panes(rimz::mux::PaneListOptions {
+                    session_name: workspace
+                        .as_ref()
+                        .map(|workspace| workspace.session_name.clone()),
+                    workspace_id: workspace
+                        .as_ref()
+                        .map(|workspace| workspace.workspace_id.clone()),
+                    ..Default::default()
+                }) {
+                    Ok(listing) => protection.fold_panes(&listing.panes, Some(&own)),
+                    Err(err) => tracing::debug!(
+                        path = %path.display(),
+                        error = %err,
+                        "could not list panes while checking worktree cleanup guard",
+                    ),
+                }
+            }
+            None => tracing::debug!(
+                path = %path.display(),
+                "could not identify own pane while checking worktree cleanup guard",
+            ),
+        },
+        Err(err) => tracing::debug!(
+            path = %path.display(),
+            error = %err,
+            "could not detect mux while checking worktree cleanup guard",
+        ),
+    }
+
     let workspace = match WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone()) {
         Ok(workspace) => workspace,
         Err(err) => {
@@ -388,7 +387,7 @@ fn roster_binds_worktree_from_store(
                 error = %err,
                 "could not resolve workspace while checking worktree cleanup roster guard",
             );
-            return false;
+            return protection;
         }
     };
     let snapshot = match super::open_store(&workspace).and_then(|store| {
@@ -401,58 +400,19 @@ fn roster_binds_worktree_from_store(
                 error = %err,
                 "could not read agent roster while checking worktree cleanup guard",
             );
-            return false;
+            return protection;
         }
     };
     let own = rimz::mux::ambient_pane_id();
-    roster_binds_worktree(&snapshot.agents, own.as_ref(), path)
-}
-
-fn roster_binds_worktree(agents: &[AgentState], own: Option<&rimz::PaneId>, path: &Path) -> bool {
-    let target = rimz::worktree::normalize_path_lexical(path);
-    agent_pinned_paths(agents, own)
-        .iter()
-        .any(|path| rimz::worktree::path_inside(path, &target))
-}
-
-pub(super) fn agent_pinned_paths(
-    agents: &[AgentState],
-    own: Option<&rimz::PaneId>,
-) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for agent in agents.iter().filter(|agent| agent_is_not_own(agent, own)) {
-        match rimz::store::runtime::agent_liveness(agent) {
-            rimz::store::runtime::AgentLiveness::Dead => {}
-            rimz::store::runtime::AgentLiveness::Unknown => {
-                if let Some(path) = agent.worktree_path.as_deref() {
-                    paths.push(rimz::worktree::normalize_path_lexical(Path::new(path)));
-                }
-            }
-            rimz::store::runtime::AgentLiveness::Live { pid } => {
-                if let Some(path) = agent.worktree_path.as_deref() {
-                    paths.push(rimz::worktree::normalize_path_lexical(Path::new(path)));
-                }
-                if let Some(cwd) = rimz::proc::cwd(pid) {
-                    paths.push(rimz::worktree::normalize_path_lexical(&cwd));
-                }
-            }
-        }
-    }
-    paths
-}
-
-fn agent_is_not_own(agent: &AgentState, own: Option<&rimz::PaneId>) -> bool {
-    match (agent.pane.as_ref(), own) {
-        (Some(pane), Some(own)) => &pane.pane_id != own,
-        _ => true,
-    }
+    protection.fold_agents(&snapshot.agents, own.as_ref());
+    protection
 }
 
 fn remove_after_leaving_worktree(
     path: &Path,
     marker: &rimz::worktree::WorktreeMarker,
     force: bool,
-) -> Result<rimz::worktree::BranchDeletion> {
+) -> Result<rimz::worktree::RemovalOutcome> {
     std::env::set_current_dir(&marker.repo_root)
         .with_context(|| format!("leaving worktree before removing {}", path.display()))?;
     rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)
@@ -460,68 +420,24 @@ fn remove_after_leaving_worktree(
 }
 
 fn archive_removed_worktree_messages(
-    marker: &rimz::worktree::WorktreeMarker,
+    removed: &rimz::worktree::RemovalOutcome,
     globals: &GlobalFlags,
-    channel: &str,
     reason: &str,
 ) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone())?;
+    let workspace = WorkspaceResolver::resolve(removed.repo_root(), globals.root.clone())?;
     let store = open_store(&workspace)?;
-    store.archive_channel_messages(channel, reason, &workspace.session_name)?;
+    store.archive_channel_messages(removed.worktree_name(), reason, &workspace.session_name)?;
     Ok(())
 }
 
-fn report_kept_branch(
-    branch: rimz::worktree::BranchDeletion,
-    marker: &rimz::worktree::WorktreeMarker,
-) {
-    if branch == rimz::worktree::BranchDeletion::KeptUnmerged {
+fn report_kept_branch(removed: &rimz::worktree::RemovalOutcome) {
+    if removed.branch_deletion() == rimz::worktree::BranchDeletion::KeptUnmerged {
         let _ = writeln!(
             std::io::stderr().lock(),
             "rimz: kept branch {} because its work was not proven merged into its base",
-            marker.branch
+            removed.branch()
         );
     }
-}
-
-fn other_live_pane_inside(path: &Path, globals: &GlobalFlags) -> bool {
-    let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
-        return false;
-    };
-    let Some(own) = own_pane_id(mux) else {
-        return false;
-    };
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok();
-    let backend = rimz::mux::backend_for(mux);
-    let Ok(listing) = backend.list_panes(rimz::mux::PaneListOptions {
-        session_name: workspace
-            .as_ref()
-            .map(|workspace| workspace.session_name.clone()),
-        workspace_id: workspace
-            .as_ref()
-            .map(|workspace| workspace.workspace_id.clone()),
-        ..Default::default()
-    }) else {
-        return false;
-    };
-    let panes = listing.panes;
-    other_live_user_pane_inside(&panes, &own, path)
-}
-
-fn other_live_user_pane_inside<'a>(
-    panes: impl IntoIterator<Item = &'a rimz::pane::PaneRef>,
-    own: &rimz::PaneId,
-    path: &Path,
-) -> bool {
-    panes.into_iter().any(|pane| {
-        &pane.pane_id != own
-            && !pane.is_rimz_sidebar()
-            && pane
-                .cwd
-                .as_deref()
-                .map(Path::new)
-                .is_some_and(|cwd| rimz::worktree::path_inside(cwd, path))
-    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -574,185 +490,4 @@ fn exec_shell(path: &Path) -> Result<()> {
         bail!("shell exited with {status}");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rimz::{MuxName, PaneId};
-
-    #[test]
-    fn other_live_user_pane_inside_filters_sidebar_own_and_counts_user_panes() {
-        let worktree = Path::new("/repo-worktrees/demo");
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
-        let panes = vec![
-            pane("terminal_side", Some("rimz-sidebar"), Some(worktree)),
-            pane("terminal_outside", Some("zsh"), Some(Path::new("/repo"))),
-            pane("terminal_own", Some("codex"), Some(worktree)),
-        ];
-
-        assert!(
-            !other_live_user_pane_inside(&panes, &own, worktree),
-            "sidebar, outside pane, and own pane do not pin cleanup"
-        );
-
-        let shell_dir = worktree.join("src");
-        let agent = vec![pane("terminal_agent", Some("codex"), Some(worktree))];
-        let shell = vec![pane("terminal_shell", Some("zsh"), Some(&shell_dir))];
-
-        assert!(other_live_user_pane_inside(&agent, &own, worktree));
-        assert!(other_live_user_pane_inside(&shell, &own, worktree));
-    }
-
-    #[test]
-    fn roster_binds_worktree_filters_own_dead_and_other_worktrees() {
-        let worktree = Path::new("/repo-worktrees/demo");
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
-        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-
-        assert!(roster_binds_worktree(
-            &[agent(
-                "inflight",
-                Some("/repo/../repo-worktrees/demo"),
-                None,
-                now
-            )],
-            Some(&own),
-            worktree,
-        ));
-        assert!(roster_binds_worktree(
-            &[agent(
-                "other-pane",
-                Some("/repo-worktrees/demo/src"),
-                Some("terminal_other"),
-                now,
-            )],
-            Some(&own),
-            worktree,
-        ));
-        assert!(!roster_binds_worktree(
-            &[agent(
-                "own",
-                Some("/repo-worktrees/demo"),
-                Some("terminal_own"),
-                now,
-            )],
-            Some(&own),
-            worktree,
-        ));
-        assert!(roster_binds_worktree(
-            &[agent(
-                "idle-live-unknown",
-                Some("/repo-worktrees/demo"),
-                None,
-                now - Duration::from_secs(30),
-            )],
-            Some(&own),
-            worktree,
-        ));
-        #[cfg(target_os = "linux")]
-        {
-            let mut dead = agent("dead", Some("/repo-worktrees/demo"), None, now);
-            dead.runtime_owner = Some(rimz::RuntimeOwner::new(
-                rimz::RuntimeOwnerKind::Agent,
-                "dead",
-                u32::MAX,
-                None,
-            ));
-            assert!(!roster_binds_worktree(&[dead], Some(&own), worktree));
-        }
-        let mut live = agent("live", Some("/repo-worktrees/demo"), None, now);
-        live.runtime_owner = Some(rimz::store::runtime::current_process_owner(
-            rimz::RuntimeOwnerKind::Agent,
-            "live",
-        ));
-        assert!(roster_binds_worktree(&[live], Some(&own), worktree));
-        assert!(!roster_binds_worktree(
-            &[agent(
-                "other-worktree",
-                Some("/repo-worktrees/other"),
-                None,
-                now
-            )],
-            Some(&own),
-            worktree,
-        ));
-    }
-
-    #[test]
-    fn remove_and_archive_uses_worktree_name_as_channel() {
-        let marker = rimz::worktree::WorktreeMarker {
-            version: 3,
-            name: "demo".to_owned(),
-            branch: "scratch".to_owned(),
-            base_branch: Some("main".to_owned()),
-            from_pr: None,
-            base_ref: "base".to_owned(),
-            repo_root: PathBuf::from("/repo"),
-            worktree_path: PathBuf::from("/repo-worktrees/demo"),
-            created_at: jiff::Timestamp::from_second(1_700_000_000).unwrap(),
-        };
-        let mut archived = None;
-
-        let removed = remove_and_archive(
-            &marker,
-            || Ok(rimz::worktree::BranchDeletion::Deleted),
-            |channel, reason| {
-                archived = Some((channel.to_owned(), reason.to_owned()));
-                Ok(())
-            },
-        )
-        .expect("remove");
-
-        assert_eq!(
-            removed.branch_deletion,
-            rimz::worktree::BranchDeletion::Deleted
-        );
-        removed.archive.expect("archive");
-        assert_eq!(
-            archived,
-            Some((
-                "demo".to_owned(),
-                WORKTREE_REMOVED_ARCHIVE_REASON.to_owned()
-            ))
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn agent_pinned_paths_includes_realtime_process_cwd() {
-        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-        let mut live = agent("live", Some("/repo-worktrees/other"), None, now);
-        live.runtime_owner = Some(rimz::store::runtime::current_process_owner(
-            rimz::RuntimeOwnerKind::Agent,
-            "live",
-        ));
-
-        let current =
-            rimz::worktree::normalize_path_lexical(&std::env::current_dir().expect("current dir"));
-
-        assert!(agent_pinned_paths(&[live], None).contains(&current));
-    }
-
-    fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> rimz::pane::PaneRef {
-        rimz::pane::PaneRef {
-            command: command.map(ToOwned::to_owned),
-            cwd: cwd.map(|path| path.display().to_string()),
-            ..rimz::pane::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
-        }
-    }
-
-    fn agent(
-        id: &str,
-        worktree_path: Option<&str>,
-        raw_pane: Option<&str>,
-        last_seen: jiff::Timestamp,
-    ) -> AgentState {
-        AgentState {
-            name: Some(id.to_owned()),
-            pane: raw_pane.map(|raw| pane(raw, Some("codex"), None)),
-            worktree_path: worktree_path.map(ToOwned::to_owned),
-            ..rimz::testkit::agent_state("codex", id, last_seen)
-        }
-    }
 }

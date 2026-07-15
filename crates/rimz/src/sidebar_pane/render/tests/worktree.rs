@@ -295,7 +295,7 @@ fn render_pristine_worktree_pr_state_outranks_equal_marker() {
 }
 
 #[test]
-fn render_worktree_clear_safe_to_remove() {
+fn render_worktree_clear_removable() {
     // A content-landed worktree with a clean status whose trunk has moved on
     // collapses to `✓ <trunk>`: done, safe to remove. Behind picks the marker,
     // never paints a `⇣` of its own.

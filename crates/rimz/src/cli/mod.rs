@@ -759,15 +759,30 @@ mod tests {
             "ghost",
         ));
         let mut snapshot = rimz::SidebarSnapshot::build_with_agents(workspace_id, vec![ghost], now);
+        let mut protection = rimz::worktree::RemovalProtection::default();
+        protection.fold_agents(&snapshot.agents, None);
         assert_eq!(
-            super::worktree::agent_pinned_paths(&snapshot.agents, None),
-            vec![PathBuf::from(worktree_path)]
+            rimz::worktree::removal_assessment(
+                std::path::Path::new(worktree_path),
+                rimz::worktree::WorktreeStatus::default(),
+                &protection,
+            ),
+            rimz::worktree::RemovalAssessment::Kept(rimz::worktree::RemovalReason::InUse)
         );
 
         apply_cached_daemon_reap(&mut snapshot, &runtime, "rimz-test");
 
         assert!(snapshot.agents.is_empty());
-        assert!(super::worktree::agent_pinned_paths(&snapshot.agents, None).is_empty());
+        let mut protection = rimz::worktree::RemovalProtection::default();
+        protection.fold_agents(&snapshot.agents, None);
+        assert_eq!(
+            rimz::worktree::removal_assessment(
+                std::path::Path::new(worktree_path),
+                rimz::worktree::WorktreeStatus::default(),
+                &protection,
+            ),
+            rimz::worktree::RemovalAssessment::Removable
+        );
     }
 
     #[test]

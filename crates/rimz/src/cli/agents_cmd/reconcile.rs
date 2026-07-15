@@ -18,7 +18,7 @@ pub(super) enum Reconciled {
 pub(super) fn reconcile_action(
     present_members: bool,
     has_history: bool,
-    status: rimz::worktree::WorktreeStatus,
+    assessment: rimz::worktree::RemovalAssessment,
 ) -> ReconcileAction {
     if present_members {
         return ReconcileAction::Focus;
@@ -26,7 +26,7 @@ pub(super) fn reconcile_action(
     if !has_history {
         return ReconcileAction::FreshLaunch;
     }
-    if status.safe_to_remove() {
+    if assessment == rimz::worktree::RemovalAssessment::Removable {
         ReconcileAction::Recreate
     } else {
         ReconcileAction::Resume
@@ -64,9 +64,14 @@ pub(super) fn reconcile_cohort_launch(
     } else {
         rimz::worktree::status(&path, &marker)?
     };
+    let assessment = rimz::worktree::removal_assessment(
+        &path,
+        status,
+        &rimz::worktree::RemovalProtection::default(),
+    );
 
     let subject = cohort_subject(spec_display, team);
-    match reconcile_action(present_members, !members.is_empty(), status) {
+    match reconcile_action(present_members, !members.is_empty(), assessment) {
         ReconcileAction::FreshLaunch => Ok(Reconciled::Continue),
         ReconcileAction::Focus => {
             if let Some(member) = newest_present_member_with_pane(&members)
@@ -87,7 +92,7 @@ pub(super) fn reconcile_cohort_launch(
         }
         ReconcileAction::Resume => resume_or_done(name, spec_display, &subject, &path),
         ReconcileAction::Recreate => {
-            recreate_or_done(workspace, machine_config, store, name, &subject, marker)
+            recreate_or_done(workspace, machine_config, store, name, &subject)
         }
     }
 }
@@ -178,7 +183,6 @@ fn recreate_or_done(
     store: &rimz::Store,
     name: &str,
     subject: &str,
-    marker: rimz::worktree::WorktreeMarker,
 ) -> Result<Reconciled> {
     if !std::io::stdin().is_terminal() {
         writeln!(
@@ -193,26 +197,18 @@ fn recreate_or_done(
     )? {
         return Ok(Reconciled::Done);
     }
-    let removed = crate::cli::worktree::remove_and_archive(
-        &marker,
-        || {
-            rimz::worktree::remove(
-                &workspace.project_root,
-                &machine_config.agents.worktree,
-                name,
-                false,
-            )
-            .map_err(Into::into)
-        },
-        |channel, _reason| {
-            store
-                .archive_channel_messages(channel, "worktree recreated", &workspace.session_name)
-                .map(|_| ())
-                .map_err(Into::into)
-        },
+    let removed = rimz::worktree::remove(
+        &workspace.project_root,
+        &machine_config.agents.worktree,
+        name,
+        false,
     )?;
-    removed
-        .archive
+    store
+        .archive_channel_messages(
+            removed.worktree_name(),
+            "worktree recreated",
+            &workspace.session_name,
+        )
         .context("archiving messages for recreated worktree channel")?;
     Ok(Reconciled::Continue)
 }
@@ -223,24 +219,22 @@ mod tests {
 
     #[test]
     fn reconcile_action_table() {
-        let clean = rimz::worktree::WorktreeStatus::default();
-        let dirty = rimz::worktree::WorktreeStatus {
-            dirty: true,
-            landed: rimz::worktree::LandedVerdict::Landed,
-        };
-        let pending = rimz::worktree::WorktreeStatus {
-            dirty: false,
-            landed: rimz::worktree::LandedVerdict::Pending,
-        };
+        let removable = rimz::worktree::RemovalAssessment::Removable;
+        let dirty = rimz::worktree::RemovalAssessment::Kept(rimz::worktree::RemovalReason::Dirty);
+        let pending =
+            rimz::worktree::RemovalAssessment::Kept(rimz::worktree::RemovalReason::NotLanded);
 
-        assert_eq!(reconcile_action(true, false, clean), ReconcileAction::Focus);
+        assert_eq!(
+            reconcile_action(true, false, removable),
+            ReconcileAction::Focus
+        );
         assert_eq!(reconcile_action(true, true, dirty), ReconcileAction::Focus);
         assert_eq!(
             reconcile_action(false, false, dirty),
             ReconcileAction::FreshLaunch
         );
         assert_eq!(
-            reconcile_action(false, true, clean),
+            reconcile_action(false, true, removable),
             ReconcileAction::Recreate
         );
         assert_eq!(
