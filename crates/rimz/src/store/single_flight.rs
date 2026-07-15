@@ -110,8 +110,9 @@ pub(crate) fn coordinate<T>(
             Some(value) => Coordination::Shared(value),
             None => Coordination::Produce(ProducerGuard { file }),
         },
-        // A peer is producing: poll briefly for its write, then fall back to an
-        // uncached local produce rather than block on a wedged producer.
+        // A peer is producing: poll briefly for its write, then return a typed
+        // timeout. Legacy `coalesce` maps that timeout to its local fallback;
+        // cause-aware callers may serve stale truth instead.
         Err(std::fs::TryLockError::WouldBlock) => {
             for _ in 0..wait_steps {
                 std::thread::sleep(wait_step);
