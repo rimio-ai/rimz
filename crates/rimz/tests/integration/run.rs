@@ -49,6 +49,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
     env.install_agent_hooks("codex");
     trust_codex_hooks(&env);
     let agent_bin = write_failing_agent_shim(&env, "codex", 1);
+    let shell = write_fake_login_shell(&env, "rimz-test-sh", &[]);
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
@@ -75,6 +76,7 @@ fn fresh_background_supervised_run_uses_shared_room_birth() {
         .args([
             "--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg",
         ])
+        .env("SHELL", shell)
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
