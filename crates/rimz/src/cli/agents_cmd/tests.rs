@@ -606,6 +606,30 @@ mod launch_options {
     }
 
     #[test]
+    fn supervised_launch_normalizes_model_and_effort_overrides() {
+        let parsed = AgentsHarness::try_parse_from([
+            "rimz", "codex", "fix-it", "--model", " gpt-5 ", "--effort", " low ", "-p",
+        ])
+        .expect("parse supervised launch");
+        let (request, _) = into_supervised_request(parsed.args).expect("build supervised request");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = rimz::workspace::WorkspaceResolver::resolve(dir.path(), None)
+            .expect("resolve workspace");
+
+        let prepared = prepare_supervised_launch_layout(
+            &request,
+            &workspace,
+            &rimz::config::MachineConfig::default(),
+        )
+        .expect("prepare supervised launch");
+        let [Cell::Agent { model, effort, .. }] = prepared.columns[0].rows.as_slice() else {
+            panic!("one agent")
+        };
+        assert_eq!(model.as_deref(), Some("gpt-5"));
+        assert_eq!(effort.as_deref(), Some("low"));
+    }
+
+    #[test]
     fn prompt_file_flags_resolve_and_reject_bad_paths() {
         let dir = tempfile::tempdir().expect("temp dir");
         let prompt = dir.path().join("prompt.md");

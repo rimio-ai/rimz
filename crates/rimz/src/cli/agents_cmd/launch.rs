@@ -679,21 +679,18 @@ pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::
         "--append-system-prompt-file",
     )?;
     Ok(rimz::agents::LaunchPreset {
-        model: args
-            .model
-            .as_deref()
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
-            .map(ToOwned::to_owned),
-        effort: args
-            .effort
-            .as_deref()
-            .map(str::trim)
-            .filter(|effort| !effort.is_empty())
-            .map(ToOwned::to_owned),
+        model: normalized_preset_value(args.model.as_deref()),
+        effort: normalized_preset_value(args.effort.as_deref()),
         system_prompt_file,
         append_system_prompt_file,
     })
+}
+
+fn normalized_preset_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub(super) fn resolve_launch_prompt_file(
@@ -780,8 +777,8 @@ pub(in crate::cli) fn prepare_supervised_launch_layout(
     )?;
     rimz::harness::plan::validate_profile_prompt_files(&resolved.layout)?;
     let preset = rimz::agents::LaunchPreset {
-        model: request.model.clone(),
-        effort: request.effort.clone(),
+        model: normalized_preset_value(request.model.as_deref()),
+        effort: normalized_preset_value(request.effort.as_deref()),
         system_prompt_file: request.system_prompt_file.clone(),
         append_system_prompt_file: request.append_system_prompt_file.clone(),
     };
