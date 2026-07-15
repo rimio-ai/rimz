@@ -166,7 +166,7 @@ const QWEN_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "transcript tail/statusline",
     },
     realtime_cost: ConcernCoverage::Partial {
-        via: "priced transcript tokens",
+        via: "statusline model metrics and priced transcript tokens",
         gap: "multi-provider billing; sidechain branch pruning is not reconstructed; off-book models cost $0",
     },
     rich_context: ConcernCoverage::Wired { via: "statusline" },
@@ -429,6 +429,27 @@ impl AgentAdapter for QwenAdapter {
         })
     }
 
+    #[cfg(test)]
+    fn context_cost_fixture(&self) -> Option<super::ContextCostFixture> {
+        Some(super::ContextCostFixture {
+            payload: serde_json::json!({
+                "metrics": {
+                    "models": {
+                        "qwen3-coder-plus": {
+                            "tokens": {
+                                "prompt": 100,
+                                "completion": 20,
+                                "total": 120,
+                                "cached": 30,
+                                "thoughts": 5
+                            }
+                        }
+                    }
+                }
+            }),
+        })
+    }
+
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         Ok(None)
     }
@@ -523,6 +544,15 @@ impl AgentAdapter for QwenAdapter {
         serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
             .ok()
             .map(|value| value.into_context(source, Timestamp::now()))
+    }
+
+    fn context_cost(&self, payload: &Value, prices: &super::PriceBook) -> Option<super::AgentCost> {
+        if !payload.is_object() {
+            return None;
+        }
+        serde_json::from_value::<statusline::StatuslinePayload>(payload.clone())
+            .ok()?
+            .cost(prices)
     }
 
     fn observe_turn_error_from_hook(

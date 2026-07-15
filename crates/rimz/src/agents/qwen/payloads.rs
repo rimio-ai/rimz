@@ -140,19 +140,13 @@ impl TranscriptUsage {
     }
 
     pub fn output(&self) -> u64 {
-        let Some(prompt) = self.prompt_token_count else {
-            return 0;
-        };
-        if let Some(total) = self.total_token_count {
-            return total.saturating_sub(prompt);
-        }
-        let candidates = self.candidates_token_count.unwrap_or(0);
-        let thoughts = self.thoughts_token_count.unwrap_or(0);
-        if candidates > thoughts {
-            candidates
-        } else {
-            candidates.saturating_add(thoughts)
-        }
+        normalized_generated_output(
+            self.prompt_token_count,
+            self.candidates_token_count,
+            self.thoughts_token_count,
+            self.total_token_count,
+        )
+        .unwrap_or(0)
     }
 
     pub fn live_total(&self) -> Option<u64> {
@@ -161,6 +155,31 @@ impl TranscriptUsage {
                 .map(|prompt| prompt.saturating_add(self.output()))
         })
     }
+}
+
+/// Normalize Qwen's overlapping completion/thought counters into one generated
+/// output total. Prompt accounting is required because the preferred total is
+/// the provider's prompt-plus-output figure.
+pub(super) fn normalized_generated_output(
+    prompt: Option<u64>,
+    completion: Option<u64>,
+    thoughts: Option<u64>,
+    total: Option<u64>,
+) -> Option<u64> {
+    let prompt = prompt?;
+    if let Some(total) = total {
+        return Some(total.saturating_sub(prompt));
+    }
+    if completion.is_none() && thoughts.is_none() {
+        return None;
+    }
+    let completion = completion.unwrap_or(0);
+    let thoughts = thoughts.unwrap_or(0);
+    Some(if completion > thoughts {
+        completion
+    } else {
+        completion.saturating_add(thoughts)
+    })
 }
 
 #[derive(Debug, Default)]

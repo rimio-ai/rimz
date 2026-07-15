@@ -1585,6 +1585,17 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
             "current_usage": 38727
         },
         "metrics": {
+            "models": {
+                "qwen3-coder-plus": {
+                    "tokens": {
+                        "prompt": 10000,
+                        "completion": 2000,
+                        "total": 12000,
+                        "cached": 7000,
+                        "thoughts": 500
+                    }
+                }
+            },
             "files": {"total_lines_added": 17, "total_lines_removed": 4}
         },
         "vim": {"mode": "NORMAL"}
@@ -1615,7 +1626,19 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
     assert_eq!(tokens.context_window_size, Some(1_000_000));
     assert_eq!(tokens.used_percentage, Some(4));
     assert_eq!(tokens.current_usage, None);
+    assert_eq!(
+        tokens.session_usage,
+        Some(rimz::agents::AgentSessionUsage {
+            input_tokens: Some(3_000),
+            output_tokens: Some(1_500),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(7_000),
+            thinking_tokens: Some(500),
+        })
+    );
     let cost = context.context.cost.as_ref().unwrap();
+    assert!(cost.total_cost_usd.is_some_and(|usd| usd > 0.0));
+    assert_eq!(cost.coverage, rimz::agents::CostCoverage::Session);
     assert_eq!(cost.total_lines_added, Some(17));
     assert_eq!(cost.total_lines_removed, Some(4));
 
@@ -1655,6 +1678,27 @@ fn qwen_statusline_and_hook_fold_into_snapshot() {
     assert_eq!(agent["context"]["tokens"]["context_window_size"], 1_000_000);
     assert_eq!(agent["context"]["tokens"]["used_percentage"], 4);
     assert!(agent["context"]["tokens"]["current_usage"].is_null());
+    assert_eq!(
+        agent["context"]["tokens"]["session_usage"]["input_tokens"],
+        3_000
+    );
+    assert_eq!(
+        agent["context"]["tokens"]["session_usage"]["output_tokens"],
+        1_500
+    );
+    assert_eq!(
+        agent["context"]["tokens"]["session_usage"]["cache_read_input_tokens"],
+        7_000
+    );
+    assert_eq!(
+        agent["context"]["tokens"]["session_usage"]["thinking_tokens"],
+        500
+    );
+    assert!(
+        agent["context"]["cost"]["total_cost_usd"]
+            .as_f64()
+            .is_some_and(|usd| usd > 0.0)
+    );
     assert_eq!(agent["context"]["cost"]["total_lines_added"], 17);
     assert_eq!(agent["context"]["cost"]["total_lines_removed"], 4);
 }

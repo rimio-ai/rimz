@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::agents::transcript::TranscriptCursor;
-use crate::agents::{AgentHookClass, AskKind};
+use crate::agents::{AgentHookClass, AgentSessionUsage, AskKind, CostCoverage};
 
 const REWOUND_SESSION: &str = include_str!("tests/fixtures/rewound-session.jsonl");
 
@@ -250,12 +250,150 @@ fn transcript_tail_and_statusline_supply_context() {
     assert_eq!(tokens.remaining_percentage, Some(96));
     assert_eq!(tokens.current_usage, None);
     assert_eq!(
+        tokens.session_usage,
+        Some(AgentSessionUsage {
+            input_tokens: Some(20_000),
+            output_tokens: Some(3_000),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(10_000),
+            thinking_tokens: Some(2_000),
+        })
+    );
+    assert_eq!(
         context
             .cost
             .as_ref()
             .and_then(|cost| cost.total_lines_added),
         Some(12)
     );
+}
+
+#[test]
+fn statusline_aggregates_routed_usage_without_claiming_current_window_categories() {
+    let context = QwenAdapter
+        .observe_context(
+            "qwen",
+            &json!({
+                "context_window": {
+                    "context_window_size": 1_000_000,
+                    "used_percentage": 7.2
+                },
+                "metrics": {
+                    "models": {
+                        "model-a": {
+                            "tokens": {
+                                "prompt": "100",
+                                "completion": "50",
+                                "cached": "25",
+                                "thoughts": "20",
+                                "future_counter": 99
+                            }
+                        },
+                        "model-b": {
+                            "tokens": {
+                                "prompt": 200,
+                                "completion": 30,
+                                "cached": 50,
+                                "thoughts": 40
+                            }
+                        },
+                        "malformed-future-model": true
+                    }
+                }
+            }),
+        )
+        .unwrap();
+    let tokens = context.tokens.unwrap();
+    assert_eq!(tokens.context_window_size, Some(1_000_000));
+    assert_eq!(tokens.used_percentage, Some(7));
+    assert_eq!(tokens.current_usage, None);
+    assert_eq!(
+        tokens.session_usage,
+        Some(AgentSessionUsage {
+            input_tokens: Some(225),
+            output_tokens: Some(60),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(75),
+            thinking_tokens: Some(60),
+        })
+    );
+}
+
+#[test]
+fn statusline_usage_preserves_absence_and_saturates_aggregates() {
+    let absent = QwenAdapter
+        .observe_context(
+            "qwen",
+            &json!({
+                "context_window": {"context_window_size": 10_000},
+                "metrics": {
+                    "models": {
+                        "empty": {"tokens": {}},
+                        "unaccounted-output": {"tokens": {"completion": "50"}}
+                    }
+                }
+            }),
+        )
+        .unwrap();
+    let tokens = absent.tokens.unwrap();
+    assert_eq!(tokens.current_usage, None);
+    assert_eq!(tokens.session_usage, None);
+
+    let max = u64::MAX.to_string();
+    let saturated = QwenAdapter
+        .observe_context(
+            "qwen",
+            &json!({
+                "metrics": {
+                    "models": {
+                        "input-max": {"tokens": {"prompt": max.clone()}},
+                        "input-extra": {"tokens": {"prompt": 1}},
+                        "cache-max": {"tokens": {"prompt": max.clone(), "cached": max.clone()}},
+                        "cache-extra": {"tokens": {"prompt": 1, "cached": 1}},
+                        "output-max": {"tokens": {"prompt": 0, "total": max.clone()}},
+                        "output-extra": {"tokens": {"prompt": 0, "total": 1}},
+                        "thought-max": {"tokens": {"prompt": 0, "total": max.clone(), "thoughts": max}},
+                        "thought-extra": {"tokens": {"prompt": 0, "total": 1, "thoughts": 1}}
+                    }
+                }
+            }),
+        )
+        .unwrap();
+    let tokens = saturated.tokens.unwrap();
+    assert_eq!(tokens.current_usage, None);
+    assert_eq!(
+        tokens.session_usage,
+        Some(AgentSessionUsage {
+            input_tokens: Some(u64::MAX),
+            output_tokens: Some(u64::MAX),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(u64::MAX),
+            thinking_tokens: Some(u64::MAX),
+        })
+    );
+}
+
+#[test]
+fn statusline_cost_prices_each_routed_model_independently() {
+    let prices = PriceBook::from_litellm_json(
+        r#"{
+            "model-a": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002, "cache_read_input_token_cost": 0.0000001},
+            "model-b": {"input_cost_per_token": 0.00001, "output_cost_per_token": 0.00002, "cache_read_input_token_cost": 0.000001}
+        }"#,
+    );
+    let payload = json!({
+        "model": {"display_name": "model-a"},
+        "metrics": {
+            "models": {
+                "model-a": {"tokens": {"prompt": 100, "total": 120, "cached": 40}},
+                "model-b": {"tokens": {"prompt": 10, "total": 15, "cached": 2}},
+                "unknown": {"tokens": {"prompt": 1_000_000, "total": 2_000_000}}
+            }
+        }
+    });
+    let cost = QwenAdapter.context_cost(&payload, &prices).unwrap();
+    assert_eq!(cost.coverage, CostCoverage::Session);
+    assert!((cost.total_cost_usd.unwrap() - 0.000_286).abs() < 1e-15);
 }
 
 #[test]

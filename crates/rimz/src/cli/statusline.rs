@@ -29,7 +29,8 @@ use tracing::warn;
 use super::GlobalFlags;
 use rimz::RuntimePaths;
 use rimz::agents::{
-    AgentAdapter, AgentContext, PriceBook, StatusLineInvocation, adapter_by_kind, pricing,
+    AgentAdapter, AgentContext, AgentCost, PriceBook, StatusLineInvocation, adapter_by_kind,
+    pricing,
 };
 use rimz::workspace::WorkspaceResolver;
 
@@ -139,7 +140,9 @@ fn attach_context_cost(
     context: &mut AgentContext,
 ) {
     if let Some(cost) = agent.context_cost(payload, prices) {
-        context.cost = Some(cost);
+        let merged = context.cost.get_or_insert_with(AgentCost::default);
+        merged.total_cost_usd = cost.total_cost_usd;
+        merged.coverage = cost.coverage;
     }
 }
 
@@ -285,7 +288,7 @@ fn direct_argv(command: &str, home: Option<&std::ffi::OsStr>) -> Result<Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rimz::agents::{AgentCost, AntigravityAdapter};
+    use rimz::agents::{AntigravityAdapter, QwenAdapter};
     use serde_json::json;
 
     #[test]
@@ -338,6 +341,48 @@ mod tests {
             .unwrap();
         attach_context_cost(&AntigravityAdapter, &unknown, &prices, &mut context);
         assert!(context.cost.is_none());
+    }
+
+    #[test]
+    fn qwen_session_cost_merges_with_statusline_file_metrics() {
+        let prices = PriceBook::from_litellm_json(
+            r#"{"qwen-test-model":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000002,"cache_read_input_token_cost":0.0000001}}"#,
+        );
+        let priced = json!({
+            "metrics": {
+                "models": {
+                    "qwen-test-model": {
+                        "tokens": {
+                            "prompt": 100,
+                            "completion": 20,
+                            "total": 120,
+                            "cached": 40,
+                            "thoughts": 5
+                        }
+                    }
+                },
+                "files": {"total_lines_added": 12, "total_lines_removed": 3}
+            }
+        });
+        let mut context = QwenAdapter.observe_context("qwen", &priced).unwrap();
+        attach_context_cost(&QwenAdapter, &priced, &prices, &mut context);
+        let cost = context.cost.unwrap();
+        assert!((cost.total_cost_usd.unwrap() - 0.000_104).abs() < 1e-15);
+        assert_eq!(cost.coverage, rimz::agents::CostCoverage::Session);
+        assert_eq!(cost.total_lines_added, Some(12));
+        assert_eq!(cost.total_lines_removed, Some(3));
+
+        let unknown = json!({
+            "metrics": {
+                "models": {"unknown": {"tokens": {"prompt": 10}}},
+                "files": {"total_lines_added": 7}
+            }
+        });
+        let mut context = QwenAdapter.observe_context("qwen", &unknown).unwrap();
+        attach_context_cost(&QwenAdapter, &unknown, &prices, &mut context);
+        let cost = context.cost.unwrap();
+        assert_eq!(cost.total_cost_usd, None);
+        assert_eq!(cost.total_lines_added, Some(7));
     }
 
     #[test]
