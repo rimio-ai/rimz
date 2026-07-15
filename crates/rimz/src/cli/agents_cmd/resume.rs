@@ -156,12 +156,7 @@ pub(super) fn resume_lane(
         } => {
             report_discovery_skips(plan.discovery_skipped())?;
             report_resume_skips(plan.skipped())?;
-            let tabs = materialize_lane_restore(
-                &store,
-                &workspace.workspace_id,
-                &workspace.session_name,
-                plan,
-            )?;
+            let tabs = materialize_lane_restore(&store, &workspace.session_name, plan)?;
             let count = tabs.iter().map(ResumeTab::pane_count).sum::<usize>();
             for tab in tabs {
                 open_resume_tab(&workspace, &room, tab, bg)?;

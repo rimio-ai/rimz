@@ -901,7 +901,6 @@ fn path_label(path: &Path) -> String {
 /// Allocate fresh team members and return complete tabs for one lane restore.
 pub fn materialize_lane_restore(
     store: &Store,
-    workspace_id: &WorkspaceId,
     session_name: &str,
     plan: LaneRestorePlan,
 ) -> anyhow::Result<Vec<ResumeTab>> {
@@ -909,7 +908,6 @@ pub fn materialize_lane_restore(
     for planned in &plan.team {
         tabs.push(materialize_team_restore_tab(
             store,
-            workspace_id,
             session_name,
             &plan.teams,
             planned,
