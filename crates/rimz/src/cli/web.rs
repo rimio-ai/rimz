@@ -12,8 +12,7 @@ use crate::cli::room;
 use rimz::ids::MuxName;
 use rimz::mux::CommandSpec;
 use rimz::web::{
-    CredentialCommand, CredentialOutcome, WebCredential, WebEngine, WebOpenPayload,
-    WebStartOptions, WebWarning,
+    CredentialCommand, CredentialOutcome, WebCredential, WebEngine, WebStartOptions, WebWarning,
 };
 
 #[derive(Debug, Args)]
