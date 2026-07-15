@@ -83,7 +83,22 @@ pub(super) fn run_one(
         check_echo,
         started,
     )?;
-    let plan = match fire.prepare() {
+    let plan = fire.prepare();
+    if mode == LoopRunMode::Manual
+        && let Some(trip) = fire.take_check_trip()
+        && let Err(source) =
+            write_check_trip_line(&mut ui::out(), &entry, &trip.record, trip.duration_ms)
+    {
+        let err = source.into();
+        if matches!(
+            &plan,
+            Ok(rimz::harness::schedule::runner::TaskFirePlan::Done(_))
+        ) {
+            return Err(err);
+        }
+        return Err(record_task_error(&mut fire, name, &entry, err));
+    }
+    let plan = match plan {
         Ok(plan) => plan,
         Err(err) => {
             return Err(record_task_error(&mut fire, name, &entry, err));
@@ -92,14 +107,6 @@ pub(super) fn run_one(
     let finished = match plan {
         rimz::harness::schedule::runner::TaskFirePlan::Done(finished) => finished,
         rimz::harness::schedule::runner::TaskFirePlan::Spawn(prepared) => {
-            if mode == LoopRunMode::Manual
-                && let (Some(check), Some(duration_ms)) =
-                    (prepared.check.as_ref(), prepared.check_duration_ms)
-                && let Err(source) =
-                    write_check_trip_line(&mut ui::out(), &entry, check, duration_ms)
-            {
-                return Err(record_task_error(&mut fire, name, &entry, source.into()));
-            }
             let mut run_globals = globals.clone();
             run_globals.root = Some(prepared.root.clone());
             let effect = crate::cli::supervised::run::run_supervised(
@@ -113,14 +120,6 @@ pub(super) fn run_one(
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
         rimz::harness::schedule::runner::TaskFirePlan::Deliver(prepared) => {
-            if mode == LoopRunMode::Manual
-                && let (Some(check), Some(duration_ms)) =
-                    (prepared.check.as_ref(), prepared.check_duration_ms)
-                && let Err(source) =
-                    write_check_trip_line(&mut ui::out(), &entry, check, duration_ms)
-            {
-                return Err(record_task_error(&mut fire, name, &entry, source.into()));
-            }
             let effect = execute_prepared_delivery(prepared, globals);
             finish_task_effect(&mut fire, effect, name, &entry)?
         }

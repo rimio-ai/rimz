@@ -67,13 +67,18 @@ pub struct TaskFireFinished {
     pub notice: TaskFireNotice,
 }
 
+/// One fired guard check awaiting CLI presentation before its effect.
+#[derive(Clone, Debug)]
+pub struct CheckTrip {
+    pub record: CheckRecord,
+    pub duration_ms: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct PreparedSpawn {
     pub root: PathBuf,
     pub request: SupervisedRunRequest,
     pub stream: bool,
-    pub check: Option<CheckRecord>,
-    pub check_duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,8 +86,6 @@ pub struct PreparedDelivery {
     pub root: PathBuf,
     pub target: TaskTarget,
     pub prompt: String,
-    pub check: Option<CheckRecord>,
-    pub check_duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -115,7 +118,6 @@ struct FiredCheck {
     command: String,
     outcome: CheckOutcome,
     record: CheckRecord,
-    duration_ms: u64,
 }
 
 /// One loop fire from ordered gates through exactly one history transition.
@@ -129,6 +131,7 @@ pub struct TaskFire<'a> {
     now: Timestamp,
     config: Arc<MachineConfig>,
     check_echo: Option<CheckEcho>,
+    check_trip: Option<CheckTrip>,
     started: Instant,
     run_lock: Option<RunLockGuard>,
     pending: Option<PendingEffect>,
@@ -167,6 +170,7 @@ impl<'a> TaskFire<'a> {
             now,
             config,
             check_echo: Some(check_echo),
+            check_trip: None,
             started,
             run_lock: None,
             pending: None,
@@ -184,6 +188,10 @@ impl<'a> TaskFire<'a> {
 
     pub fn mode(&self) -> LoopRunMode {
         self.mode
+    }
+
+    pub fn take_check_trip(&mut self) -> Option<CheckTrip> {
+        self.check_trip.take()
     }
 
     pub fn prepare(&mut self) -> Result<TaskFirePlan> {
@@ -345,11 +353,16 @@ impl<'a> TaskFire<'a> {
             );
             return Ok(PreparedCheck::done(finished));
         }
+        if self.mode == LoopRunMode::Manual {
+            self.check_trip = Some(CheckTrip {
+                record: record.clone(),
+                duration_ms,
+            });
+        }
         Ok(PreparedCheck::fire(Some(FiredCheck {
             command,
             outcome,
             record,
-            duration_ms,
         })))
     }
 
@@ -427,7 +440,6 @@ impl<'a> TaskFire<'a> {
             self.catalog.consume_scheduled(&self.name)?;
         }
         let check = fired_check.as_ref().map(|check| check.record.clone());
-        let check_duration_ms = fired_check.as_ref().map(|check| check.duration_ms);
         let stream = self.mode == LoopRunMode::Manual;
         let request = SupervisedRunRequest {
             spec,
@@ -463,8 +475,6 @@ impl<'a> TaskFire<'a> {
             root: self.entry.resolved_root(),
             request,
             stream,
-            check,
-            check_duration_ms,
         }))
     }
 
@@ -489,7 +499,6 @@ impl<'a> TaskFire<'a> {
         if self.mode == LoopRunMode::Scheduled && catalog::is_ephemeral(&self.entry) {
             self.catalog.consume_scheduled(&self.name)?;
         }
-        let check_duration_ms = fired_check.as_ref().map(|check| check.duration_ms);
         self.pending = Some(PendingEffect::Deliver {
             target: target.clone(),
             check: check.clone(),
@@ -498,8 +507,6 @@ impl<'a> TaskFire<'a> {
             root: self.entry.resolved_root(),
             target,
             prompt,
-            check,
-            check_duration_ms,
         }))
     }
 

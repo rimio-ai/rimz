@@ -1297,6 +1297,32 @@ fn loop_run_error_records_and_show_displays_message() {
 }
 
 #[test]
+fn loop_fire_preserves_trip_line_before_preparation_error() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-loop-trip-error", "feature-loop");
+    write_loop_config(
+        &env,
+        &format!(
+            "[tasks.trip_error]\n\
+             wake = {{ kind = \"claude\", session = \"sess-loop-trip-error\", handle = \"@claude\" }}\n\
+             prompt-file = \"missing-prompt.txt\"\n\
+             check = \"false\"\n\
+             root = \"{}\"\n\
+             every = \"15m\"\n",
+            env.project_root.display()
+        ),
+    );
+
+    let (stdout, _stderr) = loop_fail(&env, &["loop", "fire", "trip_error"]);
+
+    assert!(
+        stdout.contains("✗ check failed (exit 1)") && stdout.contains("→ waking @claude"),
+        "manual trip line should precede a post-check preparation error: {stdout}"
+    );
+}
+
+#[test]
 fn loop_run_missing_machine_prompt_error_names_task() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -1659,6 +1685,7 @@ fn loop_fire_bind_dead_session_keeps_schedule() {
             "[tasks.dead]\n\
              wake = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
+             check = \"false\"\n\
              root = \"{}\"\n\
              at = \"07:00\"\n",
             env.project_root.display()
@@ -1668,7 +1695,9 @@ fn loop_fire_bind_dead_session_keeps_schedule() {
     let history_before = read_loop_run_records(&env).len();
     let stdout = loop_ok(&env, &["loop", "fire", "dead"]);
     assert!(
-        stdout.contains("○ @claude not alive — schedule left in place"),
+        stdout.contains("✗ check failed (exit 1)")
+            && stdout.contains("→ waking @claude")
+            && stdout.contains("○ @claude not alive — schedule left in place"),
         "dead target should be reported: {stdout}"
     );
     let config = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
