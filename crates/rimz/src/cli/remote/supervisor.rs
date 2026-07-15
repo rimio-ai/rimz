@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 
 use rimz::remote::link::{
-    LinkAck, LinkEvent, LinkMonitor, LinkProbe, blackout_after_from_env, control_check_spec,
-    probe_interval_from_env, probe_stream_spec, probe_timeout_from_env,
+    LinkAck, LinkEvent, LinkMonitor, LinkProbe, SessionLinkAction, SessionLinkState,
+    blackout_after_from_env, control_check_spec, probe_interval_from_env, probe_stream_spec,
+    probe_timeout_from_env,
 };
 use rimz::remote::reachability::{
     DIAL_TIMEOUT, DialGate, DialPlan, WaitVerdict, dial_interval_from_env, parse_dial_plan,
@@ -38,8 +39,9 @@ pub(super) fn supervise_remote(
     let target = plan.target();
     let host = target.host_display();
     let dial_plan = resolve_dial_plan(target.ssh_destination().as_str());
+    let zombie_interval = dial_plan.as_ref().and_then(|_| dial_interval_from_env());
+    let mut session_link = SessionLinkState::new(policy.gatetime, zombie_interval);
     let stop = AtomicBool::new(false);
-    let mut outage_active = false;
     let mut first_attempt = true;
     report_remote_connect(host, true);
     loop {
@@ -72,14 +74,11 @@ pub(super) fn supervise_remote(
         } else {
             attempt.plain()
         };
-        let restore_existing_outage_after_gatetime = outage_active;
         let outcome = run_ssh_session(
             &spec,
             host,
             &events_rx,
-            &mut outage_active,
-            policy.gatetime,
-            restore_existing_outage_after_gatetime,
+            &mut session_link,
             dial_plan.as_ref(),
         )?;
         probe.stop();
@@ -106,14 +105,8 @@ pub(super) fn supervise_remote(
                     delay.as_secs(),
                 );
                 drop(stderr);
-                if !outage_active {
-                    outage_active = true;
-                    emit_local_link_notification(
-                        rimz::sidebar::notify::NotificationKind::LinkLost,
-                        "Rimz: remote link lost",
-                        &format!("SSH to {host} dropped; reconnecting."),
-                        LocalLinkNotificationDelivery::TerminalAndCommand,
-                    );
+                if let Some(action) = session_link.transport_lost() {
+                    render_session_link_action(host, action);
                 }
                 if matches!(
                     wait_before_retry(dial_plan.as_ref(), delay, policy.backoff_cap, host, &stop,),
@@ -150,9 +143,7 @@ fn run_ssh_session(
     spec: &rimz::mux::CommandSpec,
     host: &str,
     events: &mpsc::Receiver<LinkEvent>,
-    outage_active: &mut bool,
-    gatetime: Duration,
-    restore_existing_outage_after_gatetime: bool,
+    link: &mut SessionLinkState,
     dial_plan: Option<&DialPlan>,
 ) -> Result<SessionOutcome> {
     let mut child = spec
@@ -160,121 +151,68 @@ fn run_ssh_session(
         .spawn()
         .with_context(|| format!("running `{}`", rimz::remote::display_ssh_command(spec)))?;
     let started = Instant::now();
-    let mut reported_established = false;
-    let mut transport_confirmed = false;
-    let mut zombie_watch = false;
-    let mut next_zombie_dial = Instant::now();
-    let dial_interval = dial_interval_from_env();
+    let mut update = link.begin_session();
     loop {
         if let Some(status) = child.try_wait().context("polling ssh session")? {
-            while let Ok(event) = events.try_recv() {
-                transport_confirmed |= matches!(event, LinkEvent::FirstAck);
-            }
+            let established = link.finish(started.elapsed(), events.try_iter());
             return Ok(SessionOutcome {
                 status,
-                established: session_established(transport_confirmed, started.elapsed(), gatetime),
+                established,
                 killed_zombie: false,
             });
         }
-        if !reported_established && started.elapsed() >= gatetime {
-            reported_established = true;
-            if restore_existing_outage_after_gatetime && *outage_active {
-                report_link_restored(host, outage_active);
-            }
-        }
-        let mut poll = ssh_session_poll_interval(started, gatetime, reported_established);
-        if zombie_watch && dial_plan.is_some() {
-            poll = poll.min(next_zombie_dial.saturating_duration_since(Instant::now()));
-        }
-        if let Some(event) = recv_link_event(events, poll) {
-            observe_session_link_event(
-                host,
-                event,
-                outage_active,
-                &mut transport_confirmed,
-                &mut zombie_watch,
-            );
-            while let Ok(event) = events.try_recv() {
-                observe_session_link_event(
-                    host,
-                    event,
-                    outage_active,
-                    &mut transport_confirmed,
-                    &mut zombie_watch,
-                );
-            }
-        }
-        let established = session_established(transport_confirmed, started.elapsed(), gatetime);
-        if zombie_watch
-            && established
-            && let (Some(plan), Some(interval)) = (dial_plan, dial_interval)
-            && Instant::now() >= next_zombie_dial
-        {
-            next_zombie_dial = Instant::now() + interval;
-            if dial(plan) {
-                // A reachable host plus an established, blacked-out probe
-                // proves this transport is a zombie. SIGKILL releases its tty
-                // immediately so the replacement ssh can own it.
-                match child.kill() {
-                    Ok(()) => {
-                        let status = child.wait().context("waiting for killed ssh session")?;
-                        return Ok(SessionOutcome {
-                            status,
-                            established: true,
-                            killed_zombie: true,
-                        });
-                    }
-                    Err(kill_err) => {
-                        if let Some(status) =
-                            child.try_wait().context("polling raced ssh session")?
-                        {
-                            return Ok(SessionOutcome {
-                                status,
-                                established,
-                                killed_zombie: false,
-                            });
-                        }
-                        return Err(kill_err).context("killing zombie ssh session");
-                    }
+        let elapsed = started.elapsed();
+        let poll = session_poll_interval(elapsed, update.next_deadline);
+        let event = recv_link_event(events, poll);
+        let elapsed = started.elapsed();
+        update = link.advance(elapsed, event.into_iter().chain(events.try_iter()));
+        for action in &update.actions {
+            if matches!(action, SessionLinkAction::VerifyZombie) {
+                if let Some(outcome) = verify_zombie(&mut child, dial_plan)? {
+                    return Ok(outcome);
                 }
+            } else {
+                render_session_link_action(host, *action);
             }
         }
     }
 }
 
-fn observe_session_link_event(
-    host: &str,
-    event: LinkEvent,
-    outage_active: &mut bool,
-    transport_confirmed: &mut bool,
-    zombie_watch: &mut bool,
-) {
-    match event {
-        LinkEvent::FirstAck => {
-            *transport_confirmed = true;
-            *zombie_watch = false;
-        }
-        LinkEvent::Blackout(_) => *zombie_watch = true,
-        LinkEvent::Recovered => *zombie_watch = false,
+fn verify_zombie(
+    child: &mut Child,
+    dial_plan: Option<&DialPlan>,
+) -> Result<Option<SessionOutcome>> {
+    let Some(plan) = dial_plan else {
+        return Ok(None);
+    };
+    if !dial(plan) {
+        return Ok(None);
     }
-    handle_link_event(host, event, outage_active);
+    // A reachable host plus an established, blacked-out probe proves this
+    // transport is a zombie. SIGKILL releases its tty before replacement.
+    match child.kill() {
+        Ok(()) => {
+            let status = child.wait().context("waiting for killed ssh session")?;
+            Ok(Some(SessionOutcome {
+                status,
+                established: true,
+                killed_zombie: true,
+            }))
+        }
+        Err(kill_err) => match child.try_wait().context("polling raced ssh session")? {
+            Some(status) => Ok(Some(SessionOutcome {
+                status,
+                established: true,
+                killed_zombie: false,
+            })),
+            None => Err(kill_err).context("killing zombie ssh session"),
+        },
+    }
 }
 
-fn ssh_session_poll_interval(
-    started: Instant,
-    gatetime: Duration,
-    reported_established: bool,
-) -> Duration {
+fn session_poll_interval(elapsed: Duration, next_deadline: Option<Duration>) -> Duration {
     let poll = Duration::from_millis(200);
-    if reported_established {
-        return poll;
-    }
-    let elapsed = started.elapsed();
-    if elapsed >= gatetime {
-        Duration::ZERO
-    } else {
-        poll.min(gatetime - elapsed)
-    }
+    next_deadline.map_or(poll, |deadline| poll.min(deadline.saturating_sub(elapsed)))
 }
 
 #[derive(Debug)]
@@ -386,12 +324,6 @@ pub(super) fn wait_before_retry(
     }
 }
 
-/// A finished ssh session counts as established once its SSH transport is
-/// confirmed up by the link probe, or it outlived the gatetime fallback.
-fn session_established(transport_confirmed: bool, lifetime: Duration, gatetime: Duration) -> bool {
-    transport_confirmed || lifetime >= gatetime
-}
-
 fn recv_link_event(events: &mpsc::Receiver<LinkEvent>, poll: Duration) -> Option<LinkEvent> {
     match events.recv_timeout(poll) {
         Ok(event) => Some(event),
@@ -403,15 +335,9 @@ fn recv_link_event(events: &mpsc::Receiver<LinkEvent>, poll: Duration) -> Option
     }
 }
 
-fn handle_link_event(host: &str, event: LinkEvent, outage_active: &mut bool) {
-    match event {
-        LinkEvent::FirstAck if *outage_active => report_link_restored(host, outage_active),
-        LinkEvent::FirstAck => {}
-        LinkEvent::Blackout(duration) => {
-            if *outage_active {
-                return;
-            }
-            *outage_active = true;
+fn render_session_link_action(host: &str, action: SessionLinkAction) {
+    match action {
+        SessionLinkAction::NotifyBlackout(duration) => {
             emit_local_link_notification(
                 rimz::sidebar::notify::NotificationKind::LinkLost,
                 "Rimz: remote link stalled",
@@ -422,21 +348,20 @@ fn handle_link_event(host: &str, event: LinkEvent, outage_active: &mut bool) {
                 LocalLinkNotificationDelivery::TerminalOnly,
             );
         }
-        LinkEvent::Recovered => report_link_restored(host, outage_active),
+        SessionLinkAction::NotifyTransportLoss => emit_local_link_notification(
+            rimz::sidebar::notify::NotificationKind::LinkLost,
+            "Rimz: remote link lost",
+            &format!("SSH to {host} dropped; reconnecting."),
+            LocalLinkNotificationDelivery::TerminalAndCommand,
+        ),
+        SessionLinkAction::Restore => emit_local_link_notification(
+            rimz::sidebar::notify::NotificationKind::LinkRestored,
+            "Rimz: remote link restored",
+            &format!("SSH to {host} is responsive again."),
+            LocalLinkNotificationDelivery::TerminalAndCommand,
+        ),
+        SessionLinkAction::VerifyZombie => {}
     }
-}
-
-fn report_link_restored(host: &str, outage_active: &mut bool) {
-    if !*outage_active {
-        return;
-    }
-    *outage_active = false;
-    emit_local_link_notification(
-        rimz::sidebar::notify::NotificationKind::LinkRestored,
-        "Rimz: remote link restored",
-        &format!("SSH to {host} is responsive again."),
-        LocalLinkNotificationDelivery::TerminalAndCommand,
-    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -648,14 +573,12 @@ enum ProbeStreamExit {
 struct ProbeChild {
     child: Child,
     stdin: ChildStdin,
-    reader: std::thread::JoinHandle<()>,
+    acknowledgements: mpsc::Receiver<u64>,
+    reader: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ProbeChild {
-    fn spawn(
-        target: &RemoteTarget,
-        control_path: &Path,
-    ) -> std::io::Result<(Self, mpsc::Receiver<u64>)> {
+    fn spawn(target: &RemoteTarget, control_path: &Path) -> std::io::Result<Self> {
         let mut child = probe_stream_spec(target, control_path)
             .to_command()
             .stdin(Stdio::piped())
@@ -686,21 +609,44 @@ impl ProbeChild {
                 }
             }
         });
-        Ok((
-            Self {
-                child,
-                stdin,
-                reader,
-            },
-            ack_rx,
-        ))
+        Ok(Self {
+            child,
+            stdin,
+            acknowledgements: ack_rx,
+            reader: Some(reader),
+        })
     }
 
-    fn shutdown(mut self) {
+    fn drain_acknowledgements(
+        &self,
+        monitor: &mut LinkMonitor,
+        events: &mpsc::Sender<LinkEvent>,
+    ) -> ProbeAckDrain {
+        let mut drain = ProbeAckDrain::default();
+        for seq in self.acknowledgements.try_iter() {
+            let outcome = monitor.record_ack(seq, rimz::sidebar::timing::unix_now_ms());
+            drain.acked |= outcome.accepted;
+            drain.reported_rtt_changed |= outcome.reported_rtt_changed;
+            for event in outcome.events {
+                let _ = events.send(event);
+            }
+        }
+        drain
+    }
+
+    fn shutdown(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = self.reader.join();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
     }
+}
+
+#[derive(Default)]
+struct ProbeAckDrain {
+    acked: bool,
+    reported_rtt_changed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -718,7 +664,7 @@ fn run_probe_stream(
     stop: &AtomicBool,
     monitor: &mut LinkMonitor,
 ) -> ProbeStreamExit {
-    let (mut child, ack_rx) = match ProbeChild::spawn(target, control_path) {
+    let mut child = match ProbeChild::spawn(target, control_path) {
         Ok(spawned) => spawned,
         Err(err) => {
             tracing::debug!(error = %err, "remote link probe stream spawn failed");
@@ -749,16 +695,9 @@ fn run_probe_stream(
             }
         }
 
-        let mut reported_rtt_changed = false;
-        while let Ok(seq) = ack_rx.try_recv() {
-            let outcome = monitor.record_ack(seq, rimz::sidebar::timing::unix_now_ms());
-            acked |= outcome.accepted;
-            reported_rtt_changed |= outcome.reported_rtt_changed;
-            for event in outcome.events {
-                let _ = events.send(event);
-            }
-        }
-        if reported_rtt_changed {
+        let drain = child.drain_acknowledgements(monitor, events);
+        acked |= drain.acked;
+        if drain.reported_rtt_changed {
             let probe = monitor.stats_refresh_probe(rimz::sidebar::timing::unix_now_ms());
             if write_link_probe(&mut child.stdin, &probe).is_err() {
                 break ProbeStreamStop::Ended;
@@ -783,13 +722,7 @@ fn run_probe_stream(
         ProbeStreamStop::Stopped => ProbeStreamExit::Stopped,
         ProbeStreamStop::VersionSkew => ProbeStreamExit::VersionSkew,
         ProbeStreamStop::Ended => {
-            while let Ok(seq) = ack_rx.try_recv() {
-                let outcome = monitor.record_ack(seq, rimz::sidebar::timing::unix_now_ms());
-                acked |= outcome.accepted;
-                for event in outcome.events {
-                    let _ = events.send(event);
-                }
-            }
+            acked |= child.drain_acknowledgements(monitor, events).acked;
             ProbeStreamExit::Ended { acked }
         }
     }

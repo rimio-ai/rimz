@@ -124,6 +124,188 @@ pub enum LinkEvent {
     Recovered,
 }
 
+/// Pure decisions for one foreground SSH session and its reconnect lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionLinkAction {
+    NotifyBlackout(Duration),
+    NotifyTransportLoss,
+    Restore,
+    VerifyZombie,
+}
+
+/// Effects and next elapsed-time deadline produced by one state advance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionLinkUpdate {
+    pub actions: Vec<SessionLinkAction>,
+    pub next_deadline: Option<Duration>,
+}
+
+/// Establishment, outage edges, and zombie eligibility for terminal SSH.
+///
+/// Elapsed time is supplied by the CLI so clocks, waits, process state, and
+/// reachability dials stay outside this module. Outage state spans reconnects;
+/// session-local state resets through [`Self::begin_session`].
+#[derive(Clone, Debug)]
+pub struct SessionLinkState {
+    gatetime: Duration,
+    zombie_interval: Option<Duration>,
+    established: bool,
+    transport_confirmed: bool,
+    gatetime_observed: bool,
+    zombie_watch: bool,
+    next_zombie_verification: Duration,
+    outage_active: bool,
+    restore_outage_at_gatetime: bool,
+}
+
+impl SessionLinkState {
+    pub fn new(gatetime: Duration, zombie_interval: Option<Duration>) -> Self {
+        Self {
+            gatetime,
+            zombie_interval,
+            established: false,
+            transport_confirmed: false,
+            gatetime_observed: false,
+            zombie_watch: false,
+            next_zombie_verification: Duration::ZERO,
+            outage_active: false,
+            restore_outage_at_gatetime: false,
+        }
+    }
+
+    pub fn begin_session(&mut self) -> SessionLinkUpdate {
+        self.established = false;
+        self.transport_confirmed = false;
+        self.gatetime_observed = false;
+        self.zombie_watch = false;
+        self.next_zombie_verification = Duration::ZERO;
+        self.restore_outage_at_gatetime = self.outage_active;
+        SessionLinkUpdate {
+            actions: Vec::new(),
+            next_deadline: Some(self.gatetime),
+        }
+    }
+
+    /// Advance once after the caller drains every currently queued link event.
+    pub fn advance(
+        &mut self,
+        elapsed: Duration,
+        events: impl IntoIterator<Item = LinkEvent>,
+    ) -> SessionLinkUpdate {
+        let mut actions = Vec::new();
+        self.observe_gatetime(elapsed, &mut actions);
+        for event in events {
+            self.observe_event(event, &mut actions);
+        }
+        self.schedule_zombie_verification(elapsed, &mut actions);
+        SessionLinkUpdate {
+            actions,
+            next_deadline: self.next_deadline(),
+        }
+    }
+
+    /// Settle an exited child without emitting queued notification edges.
+    /// Child exit has priority over link presentation in the supervisor.
+    pub fn finish(
+        &mut self,
+        elapsed: Duration,
+        events: impl IntoIterator<Item = LinkEvent>,
+    ) -> bool {
+        for event in events {
+            if matches!(event, LinkEvent::FirstAck) {
+                self.transport_confirmed = true;
+                self.established = true;
+            }
+        }
+        self.established |= elapsed >= self.gatetime;
+        self.established
+    }
+
+    /// Record a dropped transport, returning the notification edge once per
+    /// outage even when several reconnect attempts fail.
+    pub fn transport_lost(&mut self) -> Option<SessionLinkAction> {
+        if self.outage_active {
+            None
+        } else {
+            self.outage_active = true;
+            Some(SessionLinkAction::NotifyTransportLoss)
+        }
+    }
+
+    pub fn established(&self, elapsed: Duration) -> bool {
+        self.established || elapsed >= self.gatetime
+    }
+
+    fn observe_gatetime(&mut self, elapsed: Duration, actions: &mut Vec<SessionLinkAction>) {
+        if self.gatetime_observed || elapsed < self.gatetime {
+            return;
+        }
+        self.gatetime_observed = true;
+        self.established = true;
+        if self.restore_outage_at_gatetime {
+            self.restore(actions);
+        }
+    }
+
+    fn observe_event(&mut self, event: LinkEvent, actions: &mut Vec<SessionLinkAction>) {
+        match event {
+            LinkEvent::FirstAck => {
+                self.transport_confirmed = true;
+                self.established = true;
+                self.zombie_watch = false;
+                self.restore(actions);
+            }
+            LinkEvent::Blackout(duration) => {
+                self.zombie_watch = true;
+                if !self.outage_active {
+                    self.outage_active = true;
+                    actions.push(SessionLinkAction::NotifyBlackout(duration));
+                }
+            }
+            LinkEvent::Recovered => {
+                self.zombie_watch = false;
+                self.restore(actions);
+            }
+        }
+    }
+
+    fn restore(&mut self, actions: &mut Vec<SessionLinkAction>) {
+        if self.outage_active {
+            self.outage_active = false;
+            self.restore_outage_at_gatetime = false;
+            actions.push(SessionLinkAction::Restore);
+        }
+    }
+
+    fn schedule_zombie_verification(
+        &mut self,
+        elapsed: Duration,
+        actions: &mut Vec<SessionLinkAction>,
+    ) {
+        let Some(interval) = self.zombie_interval else {
+            return;
+        };
+        if self.zombie_watch
+            && self.established(elapsed)
+            && elapsed >= self.next_zombie_verification
+        {
+            self.next_zombie_verification = elapsed + interval;
+            actions.push(SessionLinkAction::VerifyZombie);
+        }
+    }
+
+    fn next_deadline(&self) -> Option<Duration> {
+        let gatetime = (!self.gatetime_observed).then_some(self.gatetime);
+        let zombie = (self.zombie_watch && self.zombie_interval.is_some() && self.established)
+            .then_some(self.next_zombie_verification);
+        match (gatetime, zombie) {
+            (Some(gatetime), Some(zombie)) => Some(gatetime.min(zombie)),
+            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+            (None, None) => None,
+        }
+    }
+}
+
 /// Overall tier is the worst of RTT and probe-miss rate.
 pub fn link_tier(rtt_ms: Option<u32>, miss_pct: u16) -> LinkTier {
     let rtt = match rtt_ms {
@@ -574,6 +756,122 @@ mod tests {
 
     fn target(input: &str) -> RemoteTarget {
         RemoteTarget::parse(input).unwrap()
+    }
+
+    #[test]
+    fn session_link_acknowledgement_establishes_before_gatetime() {
+        let mut state =
+            SessionLinkState::new(Duration::from_secs(30), Some(Duration::from_secs(5)));
+        state.begin_session();
+
+        let update = state.advance(Duration::from_secs(5), [LinkEvent::FirstAck]);
+
+        assert!(state.established(Duration::from_secs(5)));
+        assert!(update.actions.is_empty());
+        assert_eq!(update.next_deadline, Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn session_link_gatetime_fallback_restores_an_existing_outage() {
+        let mut state = SessionLinkState::new(Duration::from_secs(30), None);
+        assert_eq!(
+            state.transport_lost(),
+            Some(SessionLinkAction::NotifyTransportLoss)
+        );
+        state.begin_session();
+
+        let update = state.advance(Duration::from_secs(30), []);
+
+        assert!(state.established(Duration::from_secs(30)));
+        assert_eq!(update.actions, [SessionLinkAction::Restore]);
+        assert_eq!(update.next_deadline, None);
+    }
+
+    #[test]
+    fn session_link_blackout_and_recovery_emit_edges_once() {
+        let mut state =
+            SessionLinkState::new(Duration::from_secs(30), Some(Duration::from_secs(5)));
+        state.begin_session();
+        state.advance(Duration::from_secs(1), [LinkEvent::FirstAck]);
+
+        let blackout = state.advance(
+            Duration::from_secs(2),
+            [LinkEvent::Blackout(Duration::from_secs(8))],
+        );
+        assert_eq!(
+            blackout.actions,
+            [
+                SessionLinkAction::NotifyBlackout(Duration::from_secs(8)),
+                SessionLinkAction::VerifyZombie,
+            ]
+        );
+
+        let duplicate = state.advance(
+            Duration::from_secs(3),
+            [LinkEvent::Blackout(Duration::from_secs(9))],
+        );
+        assert!(duplicate.actions.is_empty());
+
+        let recovered = state.advance(Duration::from_secs(4), [LinkEvent::Recovered]);
+        assert_eq!(recovered.actions, [SessionLinkAction::Restore]);
+    }
+
+    #[test]
+    fn session_link_verifies_zombies_only_after_establishment() {
+        let mut state =
+            SessionLinkState::new(Duration::from_secs(30), Some(Duration::from_secs(5)));
+        state.begin_session();
+
+        let blackout = state.advance(
+            Duration::from_secs(2),
+            [LinkEvent::Blackout(Duration::from_secs(8))],
+        );
+        assert_eq!(
+            blackout.actions,
+            [SessionLinkAction::NotifyBlackout(Duration::from_secs(8))]
+        );
+
+        let established = state.advance(Duration::from_secs(30), []);
+        assert_eq!(
+            established.actions,
+            [SessionLinkAction::VerifyZombie],
+            "gatetime makes the already-blacked-out session eligible"
+        );
+    }
+
+    #[test]
+    fn session_link_restores_outage_on_next_session_ack() {
+        let mut state = SessionLinkState::new(Duration::from_secs(30), None);
+        state.begin_session();
+        state.advance(
+            Duration::from_secs(2),
+            [LinkEvent::Blackout(Duration::from_secs(8))],
+        );
+
+        state.begin_session();
+        let update = state.advance(Duration::from_secs(1), [LinkEvent::FirstAck]);
+
+        assert_eq!(update.actions, [SessionLinkAction::Restore]);
+    }
+
+    #[test]
+    fn session_link_child_exit_wins_while_zombie_verification_is_pending() {
+        let mut state =
+            SessionLinkState::new(Duration::from_secs(30), Some(Duration::from_secs(5)));
+        state.begin_session();
+        let update = state.advance(
+            Duration::from_secs(2),
+            [
+                LinkEvent::FirstAck,
+                LinkEvent::Blackout(Duration::from_secs(8)),
+            ],
+        );
+        assert!(update.actions.contains(&SessionLinkAction::VerifyZombie));
+
+        assert!(
+            state.finish(Duration::from_secs(2), []),
+            "an exited acknowledged child is settled instead of zombie-killed"
+        );
     }
 
     #[test]
