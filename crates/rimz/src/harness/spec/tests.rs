@@ -79,7 +79,7 @@ fn agent_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -
         .rows[0]
         .clone();
     match cell {
-        Cell::Agent { .. } => cell,
+        Cell::Agent(_) => cell,
         _ => panic!("agent cell"),
     }
 }
@@ -115,14 +115,14 @@ fn parses_inline_roles_on_agent_cells() {
 
     assert!(matches!(
         &spec.columns[0].rows[0],
-        Cell::Agent { kind, role, profile, .. }
+        Cell::Agent(AgentCell { kind, role, profile, .. })
             if kind.as_str() == "claude"
                 && role.as_deref() == Some("planner")
                 && profile.is_none()
     ));
     assert!(matches!(
         &spec.columns[1].rows[0],
-        Cell::Agent { kind, role, profile, .. }
+        Cell::Agent(AgentCell { kind, role, profile, .. })
             if kind.as_str() == "codex"
                 && role.as_deref() == Some("coder")
                 && profile.is_none()
@@ -138,7 +138,7 @@ fn inline_roles_compose_with_resolution_profiles_and_modes() {
         .expect("resolve single inline role");
     assert!(matches!(
         &single.columns[0].rows[0],
-        Cell::Agent { role, profile, .. }
+        Cell::Agent(AgentCell { role, profile, .. })
             if role.as_deref() == Some("planner") && profile.is_none()
     ));
 
@@ -146,7 +146,7 @@ fn inline_roles_compose_with_resolution_profiles_and_modes() {
         .expect("parse profiled inline role");
     assert!(matches!(
         &profile_role.columns[0].rows[0],
-        Cell::Agent { role, profile, .. }
+        Cell::Agent(AgentCell { role, profile, .. })
             if role.as_deref() == Some("lead") && profile.as_deref() == Some("planner")
     ));
 
@@ -154,7 +154,7 @@ fn inline_roles_compose_with_resolution_profiles_and_modes() {
         .expect("parse mode inline role");
     assert!(matches!(
         &mode_role.columns[0].rows[0],
-        Cell::Agent { mode, role, .. }
+        Cell::Agent(AgentCell { mode, role, .. })
             if *mode == Some(PermissionMode::Auto) && role.as_deref() == Some("coder")
     ));
 
@@ -162,7 +162,7 @@ fn inline_roles_compose_with_resolution_profiles_and_modes() {
         .expect("inline role is a pure label");
     assert!(matches!(
         &role_named_like_profile.columns[0].rows[0],
-        Cell::Agent { kind, role, profile, .. }
+        Cell::Agent(AgentCell { kind, role, profile, .. })
             if kind.as_str() == "codex"
                 && role.as_deref() == Some("planner")
                 && profile.is_none()
@@ -372,14 +372,14 @@ fn profile_mode_preset_and_extra_args_render_in_order_and_stamp_profile() {
         },
     )]);
 
-    let Cell::Agent {
+    let Cell::Agent(AgentCell {
         args,
         mode,
         profile,
         model,
         effort,
         ..
-    } = parse_layout_spec("codex-deep", &profiles, &no_commands())
+    }) = parse_layout_spec("codex-deep", &profiles, &no_commands())
         .expect("parse profile")
         .columns[0]
         .rows[0]
@@ -443,7 +443,9 @@ fn profile_prompt_files_render_and_inherit() {
         ),
     ]);
 
-    let Cell::Agent { args, profile, .. } = agent_cell("planner", &profiles, &no_commands()) else {
+    let Cell::Agent(AgentCell { args, profile, .. }) =
+        agent_cell("planner", &profiles, &no_commands())
+    else {
         unreachable!();
     };
     assert_eq!(profile.as_deref(), Some("planner"));
@@ -455,12 +457,12 @@ fn profile_prompt_files_render_and_inherit() {
         ]
     );
 
-    let Cell::Agent {
+    let Cell::Agent(AgentCell {
         args,
         append_system_prompt_file,
         profile,
         ..
-    } = agent_cell("append", &profiles, &no_commands())
+    }) = agent_cell("append", &profiles, &no_commands())
     else {
         unreachable!();
     };
@@ -477,11 +479,11 @@ fn profile_prompt_files_render_and_inherit() {
         ]
     );
 
-    let Cell::Agent {
+    let Cell::Agent(AgentCell {
         args,
         append_system_prompt_file,
         ..
-    } = agent_cell("child", &profiles, &no_commands())
+    }) = agent_cell("child", &profiles, &no_commands())
     else {
         unreachable!();
     };
@@ -642,12 +644,12 @@ fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
         .permission_args(PermissionMode::Plan);
     expected_plan.push("--append".to_owned());
     for (raw, expected_profile) in [("claude", "claude"), ("planner", "planner")] {
-        let Cell::Agent {
+        let Cell::Agent(AgentCell {
             args,
             mode,
             profile,
             ..
-        } = agent_cell(raw, &profiles, &no_commands())
+        }) = agent_cell(raw, &profiles, &no_commands())
         else {
             unreachable!();
         };
@@ -656,12 +658,12 @@ fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
         assert_eq!(args, expected_plan.clone(), "{raw}");
     }
 
-    let Cell::Agent {
+    let Cell::Agent(AgentCell {
         args,
         mode,
         profile,
         ..
-    } = agent_cell("claude-auto", &profiles, &no_commands())
+    }) = agent_cell("claude-auto", &profiles, &no_commands())
     else {
         unreachable!();
     };
@@ -675,12 +677,12 @@ fn kind_override_flows_into_children_and_virtual_cells_override_mode() {
     assert_eq!(mode, Some(PermissionMode::Auto));
     assert_eq!(args, expected_auto);
 
-    let Cell::Agent {
+    let Cell::Agent(AgentCell {
         args,
         mode,
         profile,
         ..
-    } = agent_cell("claude-ping", &profiles, &no_commands())
+    }) = agent_cell("claude-ping", &profiles, &no_commands())
     else {
         unreachable!();
     };
@@ -713,7 +715,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
 
     assert_eq!(
         spec.columns[0].rows[0],
-        Cell::Agent {
+        Cell::Agent(AgentCell {
             kind: AgentKind::new_unchecked("claude"),
             args: crate::agents::find_adapter("claude")
                 .expect("claude")
@@ -726,11 +728,11 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             model: None,
             effort: None,
             budget: None,
-        }
+        })
     );
     assert_eq!(
         spec.columns[1].rows[0],
-        Cell::Agent {
+        Cell::Agent(AgentCell {
             kind: AgentKind::new_unchecked("codex"),
             args: crate::agents::find_adapter("codex")
                 .expect("codex")
@@ -743,11 +745,11 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             model: None,
             effort: None,
             budget: None,
-        }
+        })
     );
     assert_eq!(
         spec.columns[1].rows[1],
-        Cell::Agent {
+        Cell::Agent(AgentCell {
             kind: AgentKind::new_unchecked("pi"),
             args: Vec::new(),
             mode: Some(PermissionMode::Ask),
@@ -758,7 +760,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             model: None,
             effort: None,
             budget: None,
-        }
+        })
     );
 
     assert_eq!(
@@ -766,7 +768,7 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             .expect("claude-ping")
             .columns[0]
             .rows[0],
-        Cell::Agent {
+        Cell::Agent(AgentCell {
             kind: AgentKind::new_unchecked("claude"),
             args: vec![
                 "--model".to_owned(),
@@ -782,13 +784,14 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             model: None,
             effort: None,
             budget: None,
-        }
+        })
     );
-    let Cell::Agent { args, .. } = parse_layout_spec("codex-ping", &no_profiles(), &no_commands())
-        .expect("codex-ping")
-        .columns[0]
-        .rows[0]
-        .clone()
+    let Cell::Agent(AgentCell { args, .. }) =
+        parse_layout_spec("codex-ping", &no_profiles(), &no_commands())
+            .expect("codex-ping")
+            .columns[0]
+            .rows[0]
+            .clone()
     else {
         unreachable!();
     };
@@ -827,11 +830,11 @@ fn opencode_virtual_modes_render_provider_flags() {
             vec!["--auto".to_owned()],
         ),
     ] {
-        let Cell::Agent {
+        let Cell::Agent(AgentCell {
             args,
             mode: actual_mode,
             ..
-        } = agent_cell(raw, &no_profiles(), &no_commands())
+        }) = agent_cell(raw, &no_profiles(), &no_commands())
         else {
             unreachable!();
         };
@@ -851,12 +854,12 @@ fn kind_override_does_not_make_unsupported_virtual_cells_valid() {
         },
     )]);
 
-    let Cell::Agent {
+    let Cell::Agent(AgentCell {
         args,
         mode,
         profile,
         ..
-    } = parse_layout_spec("pi-ask", &profiles, &no_commands())
+    }) = parse_layout_spec("pi-ask", &profiles, &no_commands())
         .expect("ask remains valid")
         .columns[0]
         .rows[0]
@@ -979,7 +982,7 @@ fn named_teams_resolve_roles_to_one_column_each() {
 
     assert_eq!(
         spec.columns[0].rows[0],
-        Cell::Agent {
+        Cell::Agent(AgentCell {
             kind: AgentKind::new_unchecked("claude"),
             args: vec!["--permission-mode".to_owned(), "plan".to_owned()],
             mode: None,
@@ -990,11 +993,11 @@ fn named_teams_resolve_roles_to_one_column_each() {
             model: None,
             effort: None,
             budget: None,
-        }
+        })
     );
     assert_eq!(
         spec.columns[1].rows[0],
-        Cell::Agent {
+        Cell::Agent(AgentCell {
             kind: AgentKind::new_unchecked("codex"),
             args: Vec::new(),
             mode: None,
@@ -1005,7 +1008,7 @@ fn named_teams_resolve_roles_to_one_column_each() {
             model: None,
             effort: None,
             budget: None,
-        }
+        })
     );
 }
 
@@ -1061,7 +1064,7 @@ fn team_role_overrides_profile_fields_and_args_replace() {
     )]));
 
     let spec = resolve_spec(Some("review"), &profiles, &no_commands(), &teams).expect("team");
-    let Cell::Agent {
+    let Cell::Agent(AgentCell {
         args,
         mode,
         system_prompt_file,
@@ -1070,7 +1073,7 @@ fn team_role_overrides_profile_fields_and_args_replace() {
         model,
         effort,
         ..
-    } = spec.columns[0].rows[0].clone()
+    }) = spec.columns[0].rows[0].clone()
     else {
         panic!("agent cell");
     };
@@ -1092,11 +1095,11 @@ fn team_role_overrides_profile_fields_and_args_replace() {
     assert!(args.contains(&"--role".to_owned()), "{args:?}");
     assert!(!args.contains(&"--base".to_owned()), "{args:?}");
 
-    let Cell::Agent {
+    let Cell::Agent(AgentCell {
         args,
         append_system_prompt_file,
         ..
-    } = spec.columns[1].rows[0].clone()
+    }) = spec.columns[1].rows[0].clone()
     else {
         panic!("agent cell");
     };
@@ -1148,7 +1151,7 @@ fn team_role_spec_resolves_one_role_with_team_identity() {
 
     assert_eq!(spec.columns.len(), 1);
     let [
-        Cell::Agent {
+        Cell::Agent(AgentCell {
             kind,
             mode,
             profile,
@@ -1156,7 +1159,7 @@ fn team_role_spec_resolves_one_role_with_team_identity() {
             model,
             effort,
             ..
-        },
+        }),
     ] = spec.columns[0].rows.as_slice()
     else {
         panic!("single agent role cell");
@@ -1172,7 +1175,7 @@ fn team_role_spec_resolves_one_role_with_team_identity() {
         .expect("dotted role");
     assert!(matches!(
         &dotted_role.columns[0].rows[0],
-        Cell::Agent { role, .. } if role.as_deref() == Some("sub.planner")
+        Cell::Agent(AgentCell { role, .. }) if role.as_deref() == Some("sub.planner")
     ));
 }
 
@@ -1210,7 +1213,7 @@ fn team_role_spec_reports_unknown_role_and_preserves_non_team_dot_specs() {
         resolve_spec(Some("notateam.planner"), &profile_spec, &no_commands(), &teams),
         Ok(LayoutSpec { columns }) if matches!(
             &columns[0].rows[0],
-            Cell::Agent { profile, .. } if profile.as_deref() == Some("notateam.planner")
+            Cell::Agent(AgentCell { profile, .. }) if profile.as_deref() == Some("notateam.planner")
         )
     ));
 }
@@ -1274,17 +1277,17 @@ fn team_layout_places_roles_first_and_allows_roleless_extras() {
     assert_eq!(spec.columns.len(), 2);
     assert!(matches!(
         &spec.columns[0].rows[0],
-        Cell::Agent { role, profile, .. }
+        Cell::Agent(AgentCell { role, profile, .. })
             if role.as_deref() == Some("planner") && profile.as_deref() == Some("planner-profile")
     ));
     assert!(matches!(
         &spec.columns[0].rows[1],
-        Cell::Agent { role, profile, .. }
+        Cell::Agent(AgentCell { role, profile, .. })
             if role.as_deref() == Some("reviewer") && profile.as_deref() == Some("reviewer-profile")
     ));
     assert!(matches!(
         &spec.columns[1].rows[0],
-        Cell::Agent { role, profile, .. }
+        Cell::Agent(AgentCell { role, profile, .. })
             if role.as_deref() == Some("coder") && profile.as_deref() == Some("coder-profile")
     ));
     assert_eq!(spec.columns[1].rows[1], Cell::shell());
@@ -1422,6 +1425,30 @@ fn team_validation_rejects_bad_role_names_duplicates_and_unknown_profiles() {
 }
 
 #[test]
+fn default_team_reports_structure_before_deferred_role_budget() {
+    let profiles = profiles([("planner", profile("claude"))]);
+    let mut budget_role = role("planner", "planner");
+    budget_role.budget = Some("not-a-budget".to_owned());
+    let mut teams = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team(vec![budget_role, role("bad role", "planner")]),
+    )]));
+
+    assert!(matches!(
+        validate_config(&profiles, &no_commands(), &teams),
+        Err(LayoutErr::InvalidRoleName { name, .. }) if name == "bad role"
+    ));
+
+    teams.0.get_mut("review").unwrap().roles[1].role = "coder".to_owned();
+    validate_config(&profiles, &no_commands(), &teams)
+        .expect("default-team config defers role budget normalization");
+    assert!(matches!(
+        resolve_spec(Some("review"), &profiles, &no_commands(), &teams),
+        Err(LayoutErr::InvalidProfile { profile, .. }) if profile == "planner"
+    ));
+}
+
+#[test]
 fn team_roles_accept_implicit_builtin_profiles() {
     let teams = TeamsConfig(BTreeMap::from([(
         "forge".to_owned(),
@@ -1433,14 +1460,14 @@ fn team_roles_accept_implicit_builtin_profiles() {
         .expect("built-in profiles resolve");
     assert!(matches!(
         &spec.columns[0].rows[0],
-        Cell::Agent { kind, profile, role, .. }
+        Cell::Agent(AgentCell { kind, profile, role, .. })
             if kind.as_str() == "claude"
                 && profile.as_deref() == Some("claude")
                 && role.as_deref() == Some("planner")
     ));
     assert!(matches!(
         &spec.columns[1].rows[0],
-        Cell::Agent { kind, profile, role, .. }
+        Cell::Agent(AgentCell { kind, profile, role, .. })
             if kind.as_str() == "codex"
                 && profile.as_deref() == Some("codex")
                 && role.as_deref() == Some("coder")

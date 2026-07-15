@@ -8,7 +8,7 @@ use rimz::harness::run::{
     PermissionMode, RunRecord, RunStatus, SupervisedRunOutcome, SupervisedRunRequest,
 };
 use rimz::harness::run_wake::{self, ExpectedRunFrame};
-use rimz::harness::spec::{Cell, LayoutSpec};
+use rimz::harness::spec::LayoutSpec;
 use rimz::ids::AgentKind;
 use rimz::mux::{LayoutColumn, LayoutPanes, SplitPaneOptions, TabOptions, own_pane_id};
 use rimz::store::{AgentLaunchBatch, AgentLaunchName, AgentLaunchScope};
@@ -294,7 +294,7 @@ fn prepare_supervised(
     let machine_config = crate::cli::machine_config();
     let mode = request.permission_mode;
     let layout = prepare_supervised_launch_layout(request, &workspace, &machine_config)?;
-    let agent_cells = agent_cells(&layout);
+    let agent_cells = layout.agent_cells().collect::<Vec<_>>();
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");
     }
@@ -302,10 +302,10 @@ fn prepare_supervised(
         bail!("--print requires a single-cell agent layout");
     }
     let agent_cell = agent_cells[0];
-    let adapter = rimz::agents::find_adapter(agent_cell.kind)
+    let adapter = rimz::agents::find_adapter(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     let launch_invocation = rimz::harness::launch::ExecInvocation {
-        kind: agent_cell.kind,
+        kind: agent_cell.kind.as_str(),
         action: rimz::harness::launch::ExecAction::Launch {
             prompt: Some(&request.prompt),
             extra_args: &[],
@@ -315,13 +315,13 @@ fn prepare_supervised(
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         identity: rimz::harness::launch::ExecIdentity {
-            profile: agent_cell.profile,
+            profile: agent_cell.profile.as_deref(),
             mode: agent_cell.mode,
-            role: agent_cell.role,
+            role: agent_cell.role.as_deref(),
             channel: request.channel.as_deref(),
-            model: agent_cell.model,
-            effort: agent_cell.effort,
-            budget: agent_cell.budget,
+            model: agent_cell.model.as_deref(),
+            effort: agent_cell.effort.as_deref(),
+            budget: agent_cell.budget.as_deref(),
             ..rimz::harness::launch::ExecIdentity::default()
         },
     };
@@ -376,7 +376,11 @@ fn execute_attempt(
     attempt: u32,
     retries: u32,
 ) -> Result<Option<BlockingAttempt>> {
-    let agent_cell = agent_cells(&prepared.layout)[0];
+    let agent_cell = prepared
+        .layout
+        .agent_cells()
+        .next()
+        .expect("prepared supervised layout has one agent cell");
     let permission_mode = agent_cell.mode.unwrap_or(prepared.mode);
     let mut record = RunRecord::new(
         prepared.workspace.workspace_id.clone(),
@@ -385,7 +389,7 @@ fn execute_attempt(
         prompt.to_owned(),
         prepared.launch.cwd.clone(),
     );
-    record.budget = agent_cell.budget.map(ToOwned::to_owned);
+    record.budget.clone_from(&agent_cell.budget);
     record.retry_of = retry_of.cloned();
     record.loop_task.clone_from(&request.loop_task);
     let run_id = record.run_id.clone();
@@ -423,18 +427,18 @@ fn execute_attempt(
         run_id: &run_id,
         agent_name: Some(&launch_identity.name),
         agent_name_explicit: launch_identity.name_explicit,
-        agent_profile: agent_cell.profile,
+        agent_profile: agent_cell.profile.as_deref(),
         agent_mode: agent_cell.mode,
-        agent_role: agent_cell.role,
+        agent_role: agent_cell.role.as_deref(),
         agent_channel: prepared.room_channel.as_deref(),
-        agent_model: agent_cell.model,
-        agent_effort: agent_cell.effort,
-        agent_budget: agent_cell.budget,
+        agent_model: agent_cell.model.as_deref(),
+        agent_effort: agent_cell.effort.as_deref(),
+        agent_budget: agent_cell.budget.as_deref(),
         launch_id: Some(&launch_identity.agent_id),
         cwd: &prepared.launch.cwd,
         prompt,
         cleanup_worktree: (request.worktree.is_some() || request.from_pr.is_some()) && retries == 0,
-        permission_args: agent_cell.args,
+        permission_args: &agent_cell.args,
         self_cleanup_on_completion: request.background && !request.keep,
     })?;
     let waiter = if request.background {
@@ -708,47 +712,6 @@ fn record_failure_tail_before_cleanup(
             record
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct AgentCell<'a> {
-    kind: &'a str,
-    args: &'a [String],
-    mode: Option<PermissionMode>,
-    profile: Option<&'a str>,
-    role: Option<&'a str>,
-    model: Option<&'a str>,
-    effort: Option<&'a str>,
-    budget: Option<&'a str>,
-}
-
-fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
-    layout
-        .agent_cells()
-        .filter_map(|cell| match cell {
-            Cell::Agent {
-                kind,
-                args,
-                mode,
-                profile,
-                role,
-                model,
-                effort,
-                budget,
-                ..
-            } => Some(AgentCell {
-                kind: kind.as_str(),
-                args: args.as_slice(),
-                mode: *mode,
-                profile: profile.as_deref(),
-                role: role.as_deref(),
-                model: model.as_deref(),
-                effort: effort.as_deref(),
-                budget: budget.as_deref(),
-            }),
-            Cell::Command { .. } => None,
-        })
-        .collect()
 }
 
 fn layout_cell_count(layout: &LayoutSpec) -> usize {

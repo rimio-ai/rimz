@@ -649,13 +649,13 @@ fn single_agent_cell(spec: &str, layout: &LayoutSpec) -> Result<ResolvedTaskSpec
         );
     }
     let cell = &layout.columns[0].rows[0];
-    let Cell::Agent { kind, .. } = cell else {
+    let Cell::Agent(cell) = cell else {
         anyhow::bail!(
             "loop task `{spec}` must resolve to one agent; command cells are not supported"
         );
     };
     Ok(ResolvedTaskSpec {
-        kind: kind.as_str().to_owned(),
+        kind: cell.kind.as_str().to_owned(),
     })
 }
 

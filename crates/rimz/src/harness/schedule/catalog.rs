@@ -13,7 +13,7 @@ use crate::trust::TrustState;
 use crate::workspace::WorkspaceResolver;
 
 pub fn is_ephemeral(entry: &TaskEntry) -> bool {
-    instances::is_ephemeral(entry)
+    (entry.every.is_none() && entry.cron.is_none()) || entry.deadline.is_some()
 }
 
 #[doc(hidden)]
@@ -144,7 +144,7 @@ impl TaskCatalog {
                     .display()
             );
         }
-        if instances::is_ephemeral(entry) {
+        if is_ephemeral(entry) {
             config_edit::remove(config_edit::TaskStore::Machine, name)?;
             instances::insert(name, entry)?;
         } else {
@@ -265,7 +265,7 @@ impl TaskCatalog {
 
 impl TaskSource {
     fn from_entry(entry: &TaskEntry) -> Self {
-        if instances::is_ephemeral(entry) {
+        if is_ephemeral(entry) {
             Self::Instance
         } else {
             Self::Config
@@ -448,5 +448,18 @@ mod tests {
             catalog.for_run("same").unwrap().entry.prompt.as_deref(),
             Some("project")
         );
+    }
+
+    #[test]
+    fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
+        let mut entry = task("wake");
+        assert!(!is_ephemeral(&entry));
+
+        entry.every = None;
+        assert!(is_ephemeral(&entry));
+
+        entry.every = Some("15m".to_owned());
+        entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
+        assert!(is_ephemeral(&entry));
     }
 }

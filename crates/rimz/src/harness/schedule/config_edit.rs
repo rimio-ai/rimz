@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{DocumentMut, Item, Table};
 
-use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
+use crate::config::{MachineConfig, TaskEntry};
 use crate::store::atomic::write_bytes_atomically;
 use crate::store::paths::agents_home;
 use crate::trust::TrustState;
@@ -69,7 +69,10 @@ pub fn set_entry(store: TaskStore<'_>, name: &str, entry: &TaskEntry) -> Result<
         .with_context(|| format!("parsing {}", path.display()))?;
     root_tasks_table(&mut doc)?.insert(
         name,
-        Item::Table(task_entry_table(entry, matches!(store, TaskStore::Machine))),
+        Item::Table(task_entry_table(
+            entry,
+            matches!(store, TaskStore::Machine),
+        )?),
     );
 
     let rendered = doc.to_string();
@@ -129,89 +132,23 @@ pub fn rename(store: TaskStore<'_>, name: &str, new_name: &str) -> Result<bool> 
     Ok(true)
 }
 
-fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Table {
-    let mut table = Table::new();
-    if let Some(agent) = &entry.agent {
-        table["agent"] = value(agent);
+fn task_entry_table(entry: &TaskEntry, include_root: bool) -> Result<Table> {
+    let mut table = toml_edit::ser::to_document(entry)
+        .context("serializing loop task")?
+        .into_table();
+    if !include_root {
+        table.remove("root");
     }
-    if let Some(target) = &entry.wake {
-        table["wake"] = Item::Table(task_target_table(target));
+    if let Some(wake) = table.remove("wake") {
+        table.insert(
+            "wake",
+            Item::Table(
+                wake.into_table()
+                    .map_err(|_| anyhow::anyhow!("serialized loop wake is not a table"))?,
+            ),
+        );
     }
-    if let Some(prompt) = &entry.prompt {
-        table["prompt"] = value(prompt);
-    }
-    if let Some(prompt_file) = &entry.prompt_file {
-        table["prompt-file"] = value(prompt_file.to_string_lossy().into_owned());
-    }
-    if let Some(check) = &entry.check {
-        table["check"] = value(check);
-    }
-    if let Some(verify) = &entry.verify {
-        table["verify"] = value(verify);
-    }
-    if let Some(max_attempts) = entry.max_attempts {
-        table["max-attempts"] = value(i64::from(max_attempts));
-    }
-    if let Some(max_strikes) = entry.max_strikes {
-        table["max-strikes"] = value(i64::from(max_strikes));
-    }
-    if let Some(on) = entry.on {
-        table["on"] = value(match on {
-            CheckOn::Fail => "fail",
-            CheckOn::Success => "success",
-        });
-    }
-    if include_root {
-        table["root"] = value(entry.root.to_string_lossy().into_owned());
-    }
-    if let Some(worktree) = &entry.worktree {
-        table["worktree"] = value(worktree);
-    }
-    if let Some(mode) = &entry.mode {
-        table["mode"] = value(mode);
-    }
-    if let Some(effort) = &entry.effort {
-        table["effort"] = value(effort);
-    }
-    if let Some(budget) = &entry.budget {
-        table["budget"] = value(budget);
-    }
-    if let Some(budget) = &entry.budget_per_day {
-        table["budget-per-day"] = value(budget);
-    }
-    if let Some(surplus) = &entry.surplus {
-        table["surplus"] = value(surplus);
-    }
-    if let Some(after) = &entry.surplus_after {
-        table["surplus-after"] = value(after);
-    }
-    if let Some(path) = &entry.system_prompt_file {
-        table["system-prompt-file"] = value(path.to_string_lossy().into_owned());
-    }
-    if let Some(timeout) = &entry.timeout {
-        table["timeout"] = value(timeout);
-    }
-    if let Some(at) = &entry.at {
-        table["at"] = value(at);
-    }
-    if let Some(every) = &entry.every {
-        table["every"] = value(every);
-    }
-    if let Some(cron) = &entry.cron {
-        table["cron"] = value(cron);
-    }
-    if let Some(deadline) = entry.deadline {
-        table["deadline"] = value(deadline.to_string());
-    }
-    table
-}
-
-fn task_target_table(target: &TaskTarget) -> Table {
-    let mut table = Table::new();
-    table["kind"] = value(target.kind.as_str());
-    table["session"] = value(target.session.as_str());
-    table["handle"] = value(target.handle.as_str());
-    table
+    Ok(table)
 }
 
 fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
@@ -228,19 +165,64 @@ fn root_tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{CheckOn, TaskTarget};
 
     #[test]
-    fn task_entry_table_persists_surplus_gate_fields() {
-        let table = task_entry_table(
-            &TaskEntry {
-                surplus: Some("1.5x".to_owned()),
-                surplus_after: Some("3d".to_owned()),
-                ..TaskEntry::default()
-            },
-            true,
+    fn task_entry_serialization_uses_canonical_schema_and_store_policy() {
+        let entry = TaskEntry {
+            agent: Some("claude".to_owned()),
+            wake: Some(TaskTarget {
+                kind: "claude".to_owned(),
+                session: "session-1".to_owned(),
+                handle: "@claude".to_owned(),
+            }),
+            prompt: Some("wake".to_owned()),
+            prompt_file: Some(PathBuf::from("prompts/wake.md")),
+            check: Some("cargo check".to_owned()),
+            verify: Some("cargo xtask gate".to_owned()),
+            max_attempts: Some(3),
+            max_strikes: Some(4),
+            on: Some(CheckOn::Success),
+            root: PathBuf::from("/repo"),
+            worktree: Some("task".to_owned()),
+            mode: Some("plan".to_owned()),
+            effort: Some("high".to_owned()),
+            budget: Some("$2".to_owned()),
+            budget_per_day: Some("$8".to_owned()),
+            surplus: Some("1.5x".to_owned()),
+            surplus_after: Some("3d".to_owned()),
+            system_prompt_file: Some(PathBuf::from("prompts/system.md")),
+            timeout: Some("20m".to_owned()),
+            at: Some("07:00".to_owned()),
+            every: Some("1h".to_owned()),
+            cron: Some("0 * * * *".to_owned()),
+            deadline: Some(jiff::Timestamp::UNIX_EPOCH),
+        };
+
+        let machine = task_entry_table(&entry, true).expect("serialize machine");
+        let mut doc = DocumentMut::new();
+        root_tasks_table(&mut doc)
+            .expect("tasks table")
+            .insert("full", Item::Table(machine.clone()));
+        let machine_text = doc.to_string();
+        assert!(machine.contains_key("root"));
+        assert!(machine.contains_key("prompt-file"));
+        assert!(machine.contains_key("max-attempts"));
+        assert!(machine.contains_key("budget-per-day"));
+        assert!(machine.contains_key("system-prompt-file"));
+        assert!(machine_text.contains("[tasks.full.wake]"));
+        assert_eq!(
+            toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(machine))
+                .expect("machine round trip"),
+            entry
         );
 
-        assert_eq!(table["surplus"].as_str(), Some("1.5x"));
-        assert_eq!(table["surplus-after"].as_str(), Some("3d"));
+        let project = task_entry_table(&entry, false).expect("serialize project");
+        assert!(!project.contains_key("root"));
+        let mut project_round =
+            toml_edit::de::from_document::<TaskEntry>(DocumentMut::from(project))
+                .expect("project round trip");
+        project_round.root = entry.root.clone();
+        assert_eq!(project_round, entry);
     }
 }

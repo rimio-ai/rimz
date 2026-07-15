@@ -39,19 +39,30 @@ impl LayoutSpec {
     }
 
     /// Every agent cell, in layout order (duplicates included).
-    pub fn agent_cells(&self) -> impl Iterator<Item = &Cell> {
+    pub fn agent_cells(&self) -> impl Iterator<Item = &AgentCell> {
         self.columns
             .iter()
             .flat_map(|column| column.rows.iter())
-            .filter(|cell| matches!(cell, Cell::Agent { .. }))
+            .filter_map(|cell| match cell {
+                Cell::Agent(agent) => Some(agent),
+                Cell::Command { .. } => None,
+            })
+    }
+
+    /// Every mutable agent cell, in layout order (duplicates included).
+    pub fn agent_cells_mut(&mut self) -> impl Iterator<Item = &mut AgentCell> {
+        self.columns
+            .iter_mut()
+            .flat_map(|column| column.rows.iter_mut())
+            .filter_map(|cell| match cell {
+                Cell::Agent(agent) => Some(agent),
+                Cell::Command { .. } => None,
+            })
     }
 
     /// Every agent cell's kind, in layout order (duplicates included).
     pub fn agent_kinds(&self) -> impl Iterator<Item = &str> {
-        self.agent_cells().filter_map(|cell| match cell {
-            Cell::Agent { kind, .. } => Some(kind.as_str()),
-            Cell::Command { .. } => None,
-        })
+        self.agent_cells().map(|cell| cell.kind.as_str())
     }
 
     pub fn first_agent_kind(&self) -> Option<&str> {
@@ -70,47 +81,35 @@ pub struct Column {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentCell {
+    pub kind: AgentKind,
+    pub args: Vec<String>,
+    pub mode: Option<PermissionMode>,
+    pub system_prompt_file: Option<PathBuf>,
+    /// The profile or role prompt file whose contents append to the adapter's
+    /// base system prompt. Launch pre-flight checks it before spawning the pane.
+    pub append_system_prompt_file: Option<PathBuf>,
+    /// Named profile identity stamped into launch events and wrapper env.
+    pub profile: Option<String>,
+    /// Named-team or inline role identity stamped into launch events and wrapper env.
+    pub role: Option<String>,
+    /// Launch model selected by profile, role, CLI override, or adapter default.
+    pub model: Option<String>,
+    /// Launch reasoning effort selected by profile, role, or CLI override.
+    pub effort: Option<String>,
+    /// Canonical dollar cap carried into the launched session.
+    pub budget: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Cell {
-    Agent {
-        kind: AgentKind,
-        args: Vec<String>,
-        mode: Option<PermissionMode>,
-        system_prompt_file: Option<PathBuf>,
-        /// The profile or role prompt file whose contents append to the
-        /// adapter's base system prompt. Launch pre-flight checks it before
-        /// spawning the pane.
-        append_system_prompt_file: Option<PathBuf>,
-        /// The `[agents.profiles]` name this cell launched as, when it came
-        /// from a named profile (`planner`) or a kind-default override
-        /// (`claude`, `claude-auto`, `claude-ping`). Stamped onto the launch
-        /// event so the agent answers to `@<profile>`; the wrapper also keeps
-        /// `RIMZ_AGENT_PROFILE` for sender attribution from that pane. `None`
-        /// for a bare built-in kind or virtual variant without an override.
-        profile: Option<String>,
-        /// The role this cell holds inside a named `[agents.teams]` launch or
-        /// an inline layout spec. It is stamped onto the launch event so the
-        /// agent answers to `@<role>`; the wrapper also keeps
-        /// `RIMZ_AGENT_ROLE` for sender attribution from that pane.
-        role: Option<String>,
-        /// The launch model selected by the profile, role, CLI override, or
-        /// adapter default.
-        /// The wrapper keeps `RIMZ_AGENT_MODEL` so lifecycle hooks can stamp
-        /// the card even when the agent reports the model only once.
-        model: Option<String>,
-        /// The launch reasoning effort selected by the profile, role, or CLI
-        /// override. The wrapper keeps `RIMZ_AGENT_EFFORT` for card identity.
-        effort: Option<String>,
-        /// Canonical dollar cap carried into the launched session.
-        budget: Option<String>,
-    },
-    Command {
-        argv: Vec<String>,
-    },
+    Agent(AgentCell),
+    Command { argv: Vec<String> },
 }
 
 impl Cell {
     pub fn agent(kind: AgentKind) -> Self {
-        Self::Agent {
+        Self::Agent(AgentCell {
             kind,
             args: Vec::new(),
             mode: None,
@@ -121,7 +120,7 @@ impl Cell {
             model: None,
             effort: None,
             budget: None,
-        }
+        })
     }
 
     pub fn shell() -> Self {
@@ -332,7 +331,14 @@ pub fn validate_config(
         }
     }
     for name in teams.0.keys() {
-        validate_team(name, teams, profiles, commands)?;
+        let team = teams
+            .0
+            .get(name)
+            .expect("team config key exists during validation");
+        let prepared = prepare_team(name, team, profiles)?;
+        if team.layout.is_some() {
+            compile_team(name, prepared, profiles, commands)?;
+        }
     }
     Ok(())
 }
@@ -401,29 +407,17 @@ pub fn resolve_team(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> Result<LayoutSpec> {
-    validate_team(name, teams, profiles, commands)?;
     let team = teams
         .0
         .get(name)
-        .expect("validated team name exists in teams config");
-    let role_cells = team_role_cells(name, team, profiles)?;
-    if let Some(layout) = team.layout.as_deref() {
-        return parse_team_layout(name, layout, &role_cells, profiles, commands);
-    }
-    let columns = team
-        .roles
-        .iter()
-        .map(|binding| Column {
-            rows: vec![
-                role_cells
-                    .get(&binding.role)
-                    .expect("validated role cell exists")
-                    .clone(),
-            ],
-            stacked: false,
-        })
-        .collect();
-    Ok(LayoutSpec { columns })
+        .expect("team resolution called with a known team name");
+    Ok(compile_team(
+        name,
+        prepare_team(name, team, profiles)?,
+        profiles,
+        commands,
+    )?
+    .layout)
 }
 
 /// Resolve the one agent cell that receives a trailing launch prompt.
@@ -442,9 +436,9 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
                     .iter()
                     .position(|cell| prompt_leader_token(cell) == Some(leader))
             } else {
-                agent_cells.iter().position(
-                    |cell| matches!(cell, Cell::Agent { role: Some(role), .. } if role == leader),
-                )
+                agent_cells
+                    .iter()
+                    .position(|cell| cell.role.as_deref() == Some(leader))
             };
             // Team validation proves a configured leader is present exactly once.
             return Ok(index.expect("validated team leader is placed in the resolved layout"));
@@ -453,15 +447,13 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
             // Team validation proves every declared role is placed exactly once.
             return Ok(agent_cells
                 .iter()
-                .position(|cell| {
-                    matches!(cell, Cell::Agent { role: Some(role), .. } if role == &first_role.role)
-                })
+                .position(|cell| cell.role.as_deref() == Some(first_role.role.as_str()))
                 .expect("validated first team role is placed in the resolved layout"));
         }
     }
 
     let first = agent_cells[0];
-    if matches!(first, Cell::Agent { role: Some(_), .. }) {
+    if first.role.is_some() {
         return Ok(0);
     }
     let token = prompt_leader_token(first).expect("agent cells have a profile or kind token");
@@ -477,11 +469,8 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
     Ok(0)
 }
 
-fn prompt_leader_token(cell: &Cell) -> Option<&str> {
-    match cell {
-        Cell::Agent { kind, profile, .. } => Some(profile.as_deref().unwrap_or(kind.as_str())),
-        Cell::Command { .. } => None,
-    }
+fn prompt_leader_token(cell: &AgentCell) -> Option<&str> {
+    Some(cell.profile.as_deref().unwrap_or(cell.kind.as_str()))
 }
 
 fn resolve_team_role(
@@ -491,63 +480,117 @@ fn resolve_team_role(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> Result<LayoutSpec> {
-    validate_team(team_name, teams, profiles, commands)?;
     let team = teams
         .0
         .get(team_name)
-        .expect("validated team name exists in teams config");
-    let Some(binding) = team.roles.iter().find(|binding| binding.role == role_name) else {
+        .expect("team role resolution called with a known team name");
+    let compiled = compile_team(
+        team_name,
+        prepare_team(team_name, team, profiles)?,
+        profiles,
+        commands,
+    )?;
+    let Some(cell) = compiled.roles.get(role_name) else {
         return Err(LayoutErr::UnknownRoleInTeam {
             team: team_name.to_owned(),
             role: role_name.to_owned(),
             valid_roles: valid_team_roles(team),
         });
     };
-    Ok(LayoutSpec::single(role_cell(team_name, binding, profiles)?))
+    Ok(LayoutSpec::single(Cell::Agent(cell.clone())))
 }
 
-fn team_role_cells(
+struct PreparedRole {
+    role: String,
+    profile: String,
+    resolved: ResolvedProfile,
+    args: Vec<String>,
+}
+
+struct PreparedTeam<'a> {
+    team: &'a Team,
+    roles: Vec<PreparedRole>,
+}
+
+struct CompiledTeam {
+    layout: LayoutSpec,
+    roles: BTreeMap<String, AgentCell>,
+}
+
+fn compile_team(
     team_name: &str,
-    team: &Team,
+    prepared: PreparedTeam<'_>,
     profiles: &ProfilesConfig,
-) -> Result<BTreeMap<String, Cell>> {
-    let mut cells = BTreeMap::new();
-    for binding in &team.roles {
-        cells.insert(
-            binding.role.clone(),
-            role_cell(team_name, binding, profiles)?,
+    commands: &CommandsConfig,
+) -> Result<CompiledTeam> {
+    let mut role_cells = BTreeMap::new();
+    for mut role in prepared.roles {
+        normalize_budget(&mut role.resolved.budget, &role.profile)?;
+        let cell = agent_cell_from(
+            &role.resolved,
+            role.args,
+            Some(role.profile),
+            Some(role.role.clone()),
+            role.resolved.mode,
         );
+        let Cell::Agent(cell) = cell else {
+            unreachable!("agent_cell_from always returns an agent cell");
+        };
+        role_cells.insert(role.role, cell);
     }
-    Ok(cells)
-}
-
-fn role_cell(team_name: &str, binding: &RoleBinding, profiles: &ProfilesConfig) -> Result<Cell> {
-    let mut resolved = resolve_profile(&binding.profile, profiles).map_err(|err| match err {
-        LayoutErr::UnknownProfileBase { profile, base } if profile == binding.profile => {
-            LayoutErr::UnknownRoleProfile {
-                team: team_name.to_owned(),
-                role: binding.role.clone(),
-                profile: base,
+    let layout = if let Some(raw) = prepared.team.layout.as_deref() {
+        compile_team_layout(team_name, raw, &role_cells, profiles, commands)?
+    } else {
+        LayoutSpec {
+            columns: prepared
+                .team
+                .roles
+                .iter()
+                .map(|binding| Column {
+                    rows: vec![Cell::Agent(
+                        role_cells
+                            .get(&binding.role)
+                            .expect("prepared role has a compiled cell")
+                            .clone(),
+                    )],
+                    stacked: false,
+                })
+                .collect(),
+        }
+    };
+    if let Some(leader) = prepared.team.leader.as_deref()
+        && prepared.team.roles.is_empty()
+    {
+        match layout
+            .agent_cells()
+            .filter(|cell| prompt_leader_token(cell) == Some(leader))
+            .count()
+        {
+            1 => {}
+            0 => {
+                return Err(LayoutErr::UnknownLeaderRole {
+                    team: team_name.to_owned(),
+                    leader: leader.to_owned(),
+                    valid_roles: valid_team_roles(prepared.team),
+                });
+            }
+            _ => {
+                return Err(LayoutErr::AmbiguousPromptLeader {
+                    token: leader.to_owned(),
+                });
             }
         }
-        other => other,
-    })?;
-    apply_role_overrides(&mut resolved, binding);
-    normalize_budget(&mut resolved.budget, &binding.profile)?;
-    let args = render_profile_args(&binding.profile, &resolved)?;
-    Ok(agent_cell_from(
-        &resolved,
-        args,
-        Some(binding.profile.clone()),
-        Some(binding.role.clone()),
-        resolved.mode,
-    ))
+    }
+    Ok(CompiledTeam {
+        layout,
+        roles: role_cells,
+    })
 }
 
-fn parse_team_layout(
+fn compile_team_layout(
     team_name: &str,
     raw: &str,
-    role_cells: &BTreeMap<String, Cell>,
+    role_cells: &BTreeMap<String, AgentCell>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
 ) -> Result<LayoutSpec> {
@@ -569,7 +612,7 @@ fn parse_team_layout(
                 *placements
                     .get_mut(cell_name)
                     .expect("placement map mirrors role cells") += 1;
-                rows.push(cell.clone());
+                rows.push(Cell::Agent(cell.clone()));
                 continue;
             }
             match parse_cell(cell_name, profiles, commands) {
@@ -790,16 +833,13 @@ fn parse_layout_spec_validated(
             }
             let mut cell = parse_cell(cell_name, profiles, commands)?;
             if let Some(role) = role {
-                let Cell::Agent {
-                    role: cell_role, ..
-                } = &mut cell
-                else {
+                let Cell::Agent(agent) = &mut cell else {
                     return Err(LayoutErr::RoleOnCommandCell {
                         cell: cell_name.to_owned(),
                         role: role.to_owned(),
                     });
                 };
-                *cell_role = Some(role.to_owned());
+                agent.role = Some(role.to_owned());
             }
             rows.push(cell);
         }
@@ -925,7 +965,7 @@ fn agent_cell_from(
     role: Option<String>,
     mode: Option<PermissionMode>,
 ) -> Cell {
-    Cell::Agent {
+    Cell::Agent(AgentCell {
         kind: resolved.kind.clone(),
         args,
         mode,
@@ -936,7 +976,7 @@ fn agent_cell_from(
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
         budget: resolved.budget.clone(),
-    }
+    })
 }
 
 fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<String>> {
@@ -1179,22 +1219,18 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
     Ok(())
 }
 
-fn validate_team(
+fn prepare_team<'a>(
     name: &str,
-    teams: &TeamsConfig,
+    team: &'a Team,
     profiles: &ProfilesConfig,
-    commands: &CommandsConfig,
-) -> Result<()> {
-    let team = teams
-        .0
-        .get(name)
-        .expect("team validation called with a known team name");
+) -> Result<PreparedTeam<'a>> {
     if team.roles.is_empty() && team.layout.is_none() {
         return Err(LayoutErr::EmptyTeam {
             team: name.to_owned(),
         });
     }
     let mut seen = BTreeSet::new();
+    let mut roles = Vec::with_capacity(team.roles.len());
     for binding in &team.roles {
         if invalid_role_name(&binding.role) {
             return Err(LayoutErr::InvalidRoleName {
@@ -1233,7 +1269,13 @@ fn validate_team(
         }
         let mut resolved = resolve_profile(&binding.profile, profiles)?;
         apply_role_overrides(&mut resolved, binding);
-        render_profile_args(&binding.profile, &resolved)?;
+        let args = render_profile_args(&binding.profile, &resolved)?;
+        roles.push(PreparedRole {
+            role: binding.role.clone(),
+            profile: binding.profile.clone(),
+            resolved,
+            args,
+        });
     }
     if let Some(leader) = team.leader.as_deref()
         && !team.roles.is_empty()
@@ -1245,43 +1287,7 @@ fn validate_team(
             valid_roles: valid_team_roles(team),
         });
     }
-    let parsed_layout = if let Some(layout) = team.layout.as_deref() {
-        let role_cells = team_role_cells(name, team, profiles)?;
-        Some(parse_team_layout(
-            name,
-            layout,
-            &role_cells,
-            profiles,
-            commands,
-        )?)
-    } else {
-        None
-    };
-    if let Some(leader) = team.leader.as_deref()
-        && team.roles.is_empty()
-        && let Some(layout) = parsed_layout.as_ref()
-    {
-        match layout
-            .agent_cells()
-            .filter(|cell| prompt_leader_token(cell) == Some(leader))
-            .count()
-        {
-            1 => {}
-            0 => {
-                return Err(LayoutErr::UnknownLeaderRole {
-                    team: name.to_owned(),
-                    leader: leader.to_owned(),
-                    valid_roles: valid_team_roles(team),
-                });
-            }
-            _ => {
-                return Err(LayoutErr::AmbiguousPromptLeader {
-                    token: leader.to_owned(),
-                });
-            }
-        }
-    }
-    Ok(())
+    Ok(PreparedTeam { team, roles })
 }
 
 fn invalid_role_name(name: &str) -> bool {

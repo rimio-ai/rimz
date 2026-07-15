@@ -19,9 +19,7 @@ use jiff::Timestamp;
 
 use crate::Store;
 use crate::agents::find_adapter;
-use crate::agents::{
-    AgentState, AgentStatus, LocalSessionObservation, LocalSessionProjection, TurnPhase,
-};
+use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
     LayoutPaneParams, cohort_cells, fresh_resume_launch_requests, layout_panes_with_names,
@@ -176,12 +174,6 @@ struct ResolvedLane {
     worktree_name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum LaneCandidateKey {
-    Pane(PaneId),
-    Session(AgentKind, AgentSessionId),
-}
-
 /// Why a candidate agent was not resumed — surfaced in the start report so a
 /// skipped agent stays visible rather than silently lost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -290,6 +282,75 @@ enum ResumeCandidateKey {
     Session(AgentKind, AgentSessionId),
 }
 
+#[derive(Clone, Debug)]
+struct ResumeCandidate {
+    kind: AgentKind,
+    session_id: AgentSessionId,
+    name: Option<String>,
+    name_explicit: bool,
+    profile: Option<String>,
+    role: Option<String>,
+    team: Option<String>,
+    launch_group: Option<String>,
+    launch_ordinal: Option<u32>,
+    channel: Option<String>,
+    cwd: PathBuf,
+    pane_id: Option<PaneId>,
+    last_activity: Timestamp,
+    conversation_present: bool,
+}
+
+impl ResumeCandidate {
+    fn from_agent(agent: &AgentState, conversation_present: impl FnOnce() -> bool) -> Option<Self> {
+        if !root_session(agent) {
+            return None;
+        }
+        Some(Self::from_agent_identity(agent, conversation_present()))
+    }
+
+    fn from_agent_identity(agent: &AgentState, conversation_present: bool) -> Self {
+        Self {
+            kind: agent.kind.clone(),
+            session_id: agent.agent_id.clone(),
+            name: agent.name.clone(),
+            name_explicit: agent.name_explicit,
+            profile: agent.profile.clone(),
+            role: agent.role.clone(),
+            team: agent.team.clone(),
+            launch_group: agent.launch_group.clone(),
+            launch_ordinal: agent.launch_ordinal,
+            channel: agent.channel.clone(),
+            cwd: agent_worktree(agent).unwrap_or_default(),
+            pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
+            last_activity: agent.last_activity,
+            conversation_present,
+        }
+    }
+
+    fn from_observation(observation: &LocalSessionObservation) -> Self {
+        Self {
+            kind: observation.kind.clone(),
+            session_id: observation.session_id.clone(),
+            name: None,
+            name_explicit: false,
+            profile: None,
+            role: None,
+            team: None,
+            launch_group: None,
+            launch_ordinal: None,
+            channel: None,
+            cwd: observation.workspace.clone(),
+            pane_id: None,
+            last_activity: observation.last_activity,
+            conversation_present: true,
+        }
+    }
+
+    fn key(&self) -> ResumeCandidateKey {
+        resume_candidate_key(&self.kind, &self.session_id, self.pane_id.as_ref())
+    }
+}
+
 impl ResumePlan {
     /// Whether there is nothing to seed — the birth is exactly the bare working
     /// room.
@@ -347,69 +408,6 @@ pub fn concurrent_session_set(
     resume.sort_by(newest_first);
     skipped.sort_by(newest_first);
     (resume, skipped)
-}
-
-/// Synthesize the minimal durable shape the existing flat resume planner reads.
-pub fn discovered_agent_state(
-    observation: &LocalSessionObservation,
-    channel: Option<&str>,
-) -> AgentState {
-    let (status, phase) = match &observation.projection {
-        LocalSessionProjection::IdentityOnly => (AgentStatus::Idle, TurnPhase::Idle),
-        LocalSessionProjection::Lifecycle(state) => (state.status, state.phase),
-    };
-    AgentState {
-        agent_id: observation.session_id.clone(),
-        kind: observation.kind.clone(),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        mode: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: channel
-            .filter(|channel| !channel.is_empty())
-            .map(ToOwned::to_owned),
-        status,
-        phase,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: Some(observation.workspace.to_string_lossy().into_owned()),
-        worktree_branch: None,
-        task: None,
-        prompt: None,
-        description: None,
-        transcript_path: Some(observation.transcript_path.to_string_lossy().into_owned()),
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        budget: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        budget_park: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        open_ask: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: observation.last_activity,
-        last_activity: observation.last_activity,
-        registered_at: Some(observation.created_at),
-    }
 }
 
 /// Resolve, qualify, and plan one place-first lane resume request.
@@ -537,7 +535,14 @@ fn resolve_scope_lane(
         .iter()
         .filter(|agent| root_session(agent))
         .filter(|agent| crate::harness::target::agent_in_worktree(agent, scope))
-        .min_by(lane_newest_cmp)
+        .min_by(|left, right| {
+            newest_cmp(
+                left.last_activity,
+                left.agent_id.as_str(),
+                right.last_activity,
+                right.agent_id.as_str(),
+            )
+        })
     {
         let path = normalized_agent_worktree(agent).ok_or_else(|| LaneResumeError::Unknown {
             scope: raw_scope.to_owned(),
@@ -587,7 +592,14 @@ fn resolve_current_lane(
         .iter()
         .filter(|agent| root_session(agent))
         .filter(|agent| normalized_agent_worktree(agent).as_deref() == Some(current.as_path()))
-        .min_by(lane_newest_cmp)
+        .min_by(|left, right| {
+            newest_cmp(
+                left.last_activity,
+                left.agent_id.as_str(),
+                right.last_activity,
+                right.agent_id.as_str(),
+            )
+        })
         .ok_or_else(|| LaneResumeError::Unknown {
             scope: path_label(&current),
         })?;
@@ -630,12 +642,20 @@ fn current_lane_candidates(agents: &[AgentState], lane: &ResolvedLane) -> Vec<Ag
         })
         .cloned()
         .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| lane_newest_cmp(&left, &right));
-    let mut seen = HashSet::<LaneCandidateKey>::new();
+    candidates.sort_by(|left, right| {
+        newest_cmp(
+            left.last_activity,
+            left.agent_id.as_str(),
+            right.last_activity,
+            right.agent_id.as_str(),
+        )
+    });
+    let mut seen = HashSet::<ResumeCandidateKey>::new();
     candidates.retain(|agent| {
-        let key = agent.pane.as_ref().map_or_else(
-            || LaneCandidateKey::Session(agent.kind.clone(), agent.agent_id.clone()),
-            |pane| LaneCandidateKey::Pane(pane.pane_id.clone()),
+        let key = resume_candidate_key(
+            &agent.kind,
+            &agent.agent_id,
+            agent.pane.as_ref().map(|pane| &pane.pane_id),
         );
         seen.insert(key)
     });
@@ -651,11 +671,15 @@ fn root_session(agent: &AgentState) -> bool {
             .is_some_and(|path| !path.is_empty())
 }
 
-fn lane_newest_cmp(left: &&AgentState, right: &&AgentState) -> std::cmp::Ordering {
-    right
-        .last_activity
-        .cmp(&left.last_activity)
-        .then_with(|| left.agent_id.cmp(&right.agent_id))
+fn resume_candidate_key(
+    kind: &AgentKind,
+    session_id: &AgentSessionId,
+    pane_id: Option<&PaneId>,
+) -> ResumeCandidateKey {
+    pane_id.map_or_else(
+        || ResumeCandidateKey::Session(kind.clone(), session_id.clone()),
+        |pane_id| ResumeCandidateKey::Pane(pane_id.clone()),
+    )
 }
 
 fn plan_discovered_lane(
@@ -670,17 +694,19 @@ fn plan_discovered_lane(
         });
     }
     let (resume, discovery_skipped) = concurrent_session_set(observations);
-    let states = resume
+    let candidates = resume
         .iter()
-        .map(|observation| discovered_agent_state(observation, lane.channel.as_deref()))
+        .map(ResumeCandidate::from_observation)
         .collect::<Vec<_>>();
-    let flat = plan_resume(
-        &states,
-        &BTreeSet::new(),
+    let preflight_kinds = candidates
+        .iter()
+        .map(|candidate| candidate.kind.clone())
+        .collect();
+    let flat = plan_resume_candidates(
+        candidates,
         request.max,
         Some(request.project_root),
         path_exists,
-        |_| true,
         request.rimz_bin,
     );
     if flat.tabs.is_empty() {
@@ -688,7 +714,6 @@ fn plan_discovered_lane(
             scope: lane.display.clone(),
         });
     }
-    let preflight_kinds = states.iter().map(|agent| agent.kind.clone()).collect();
     Ok(LaneResumeAction::RestoreClosed {
         lane_label: lane.display.clone(),
         cwd: lane.path.clone(),
@@ -1144,61 +1169,54 @@ pub fn plan_resume(
     session_backed: impl Fn(&AgentState) -> bool,
     rimz_bin: &Path,
 ) -> ResumePlan {
-    // Root agents that are still identified and not cleanly ended. Subagents
-    // ride their parent, so their lack of a pane never makes them standalone
-    // resume candidates.
-    let mut candidates: Vec<&AgentState> = agents
+    let candidates = agents
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .filter(|agent| !agent.agent_id.is_empty())
-        .filter(|agent| {
-            agent
-                .worktree_path
-                .as_deref()
-                .is_some_and(|path| !path.is_empty())
-        })
         .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+        .filter_map(|agent| ResumeCandidate::from_agent(agent, || session_backed(agent)))
         .collect();
+    plan_resume_candidates(candidates, max, project_root, worktree_exists, rimz_bin)
+}
 
-    // Most-recently-active first (deterministic on ties), so the newest session
-    // wins supersession, the lead pane is the focus target, and the cap keeps
-    // the freshest agents.
-    candidates.sort_by(|a, b| {
-        b.last_activity
-            .cmp(&a.last_activity)
-            .then_with(|| a.agent_id.cmp(&b.agent_id))
+fn plan_resume_candidates(
+    mut candidates: Vec<ResumeCandidate>,
+    max: usize,
+    project_root: Option<&Path>,
+    worktree_exists: impl Fn(&Path) -> bool,
+    rimz_bin: &Path,
+) -> ResumePlan {
+    candidates.sort_by(|left, right| {
+        newest_cmp(
+            left.last_activity,
+            left.session_id.as_str(),
+            right.last_activity,
+            right.session_id.as_str(),
+        )
     });
 
     let mut seen: HashSet<ResumeCandidateKey> = HashSet::new();
     let mut plan = ResumePlan::default();
     let mut tabs: Vec<PlannedResumeTab> = Vec::new();
-    for agent in candidates {
+    for candidate in candidates {
         // An older relaunch that re-used a pane is superseded by the newest
         // stamp. Rebirth-retired stamps fall back to provider session identity.
-        let key = agent.pane.as_ref().map_or_else(
-            || ResumeCandidateKey::Session(agent.kind.clone(), agent.agent_id.clone()),
-            |pane| ResumeCandidateKey::Pane(pane.pane_id.clone()),
-        );
-        if !seen.insert(key) {
+        if !seen.insert(candidate.key()) {
             continue;
         }
-        let worktree = agent.worktree_path.clone().unwrap_or_default();
-        let cwd = PathBuf::from(&worktree);
-        let channel = agent_room_channel(project_root, agent, &cwd);
-        let label = build_label(&agent.kind, channel.as_deref(), &cwd);
-        if !worktree_exists(&cwd) {
+        let channel = candidate_room_channel(project_root, &candidate);
+        let label = build_label(&candidate.kind, channel.as_deref(), &candidate.cwd);
+        if !worktree_exists(&candidate.cwd) {
             plan.tombstone
-                .push((agent.kind.clone(), agent.agent_id.clone()));
+                .push((candidate.kind.clone(), candidate.session_id.clone()));
             continue;
         }
-        if !supports_agent_resume(agent) {
+        if !supports_candidate_resume(&candidate) {
             plan.skipped.push(ResumeSkip {
                 label,
                 reason: ResumeSkipReason::NoResumeSupport,
             });
             continue;
         }
-        if !session_backed(agent) {
+        if !candidate.conversation_present {
             plan.skipped.push(ResumeSkip {
                 label,
                 reason: ResumeSkipReason::NoConversation,
@@ -1218,9 +1236,9 @@ pub fn plan_resume(
         // which replays the durable launch identity, applies trusted
         // `[[agents]]` env and the adapter's launch pins before spawning the
         // resume argv.
-        let command = resume_command(rimz_bin, agent, channel.as_deref());
-        let tab_label = channel_label(channel.as_deref(), &cwd);
-        let identity = resume_tab_identity(channel.as_deref(), &cwd);
+        let command = candidate_resume_command(rimz_bin, &candidate, channel.as_deref());
+        let tab_label = channel_label(channel.as_deref(), &candidate.cwd);
+        let identity = resume_tab_identity(channel.as_deref(), &candidate.cwd);
         if let Some(tab) = tabs.iter_mut().find(|tab| tab.identity == identity) {
             if let Some(column) = tab.tab.layout.columns.first_mut() {
                 column.panes.push(crate::mux::PaneCmd { argv: command });
@@ -1228,7 +1246,7 @@ pub fn plan_resume(
         } else {
             tabs.push(PlannedResumeTab {
                 identity,
-                tab: ResumeTab::flat(tab_label, cwd, vec![command]),
+                tab: ResumeTab::flat(tab_label, candidate.cwd, vec![command]),
             });
         }
     }
@@ -1237,19 +1255,18 @@ pub fn plan_resume(
     plan
 }
 
-fn agent_room_channel(
+fn candidate_room_channel(
     project_root: Option<&Path>,
-    agent: &AgentState,
-    cwd: &Path,
+    candidate: &ResumeCandidate,
 ) -> Option<String> {
     match project_root {
         Some(project_root) => crate::harness::target::resolve_room_channel(
             project_root,
-            cwd,
-            agent.team.as_deref(),
-            agent.channel.as_deref(),
+            &candidate.cwd,
+            candidate.team.as_deref(),
+            candidate.channel.as_deref(),
         ),
-        None => agent
+        None => candidate
             .channel
             .as_deref()
             .filter(|channel| !channel.is_empty())
@@ -1294,7 +1311,14 @@ pub fn plan_cohort_resume(
         .iter()
         .flatten()
         .copied()
-        .min_by(cohort_newest_cmp)
+        .min_by(|left, right| {
+            newest_cmp(
+                left.last_activity,
+                left.agent_id.as_str(),
+                right.last_activity,
+                right.agent_id.as_str(),
+            )
+        })
         .expect("matched_any guarantees one matched member");
     let cwd = agent_worktree(newest);
     let channel = newest
@@ -1379,7 +1403,14 @@ pub fn match_cohort<'a>(
     team: Option<&str>,
 ) -> Vec<Option<&'a AgentState>> {
     let mut candidates = candidates.to_vec();
-    candidates.sort_by(cohort_newest_cmp);
+    candidates.sort_by(|left, right| {
+        newest_cmp(
+            left.last_activity,
+            left.agent_id.as_str(),
+            right.last_activity,
+            right.agent_id.as_str(),
+        )
+    });
     match (team, cells.len()) {
         (Some(team), _) => match_team_cohort(&candidates, cells, team),
         (None, 1) => match_single_cohort(&candidates, &cells[0]),
@@ -1448,14 +1479,33 @@ fn match_inline_cohort<'a>(
         let newest_a = a
             .iter()
             .copied()
-            .min_by(cohort_newest_cmp)
+            .min_by(|left, right| {
+                newest_cmp(
+                    left.last_activity,
+                    left.agent_id.as_str(),
+                    right.last_activity,
+                    right.agent_id.as_str(),
+                )
+            })
             .expect("group is non-empty");
         let newest_b = b
             .iter()
             .copied()
-            .min_by(cohort_newest_cmp)
+            .min_by(|left, right| {
+                newest_cmp(
+                    left.last_activity,
+                    left.agent_id.as_str(),
+                    right.last_activity,
+                    right.agent_id.as_str(),
+                )
+            })
             .expect("group is non-empty");
-        cohort_newest_cmp(&newest_a, &newest_b)
+        newest_cmp(
+            newest_a.last_activity,
+            newest_a.agent_id.as_str(),
+            newest_b.last_activity,
+            newest_b.agent_id.as_str(),
+        )
     });
 
     for group in groups {
@@ -1544,6 +1594,17 @@ fn supports_agent_resume(agent: &AgentState) -> bool {
         .is_some_and(|adapter| adapter.resume_command(&agent.agent_id, &cwd).is_some())
 }
 
+fn supports_candidate_resume(candidate: &ResumeCandidate) -> bool {
+    if candidate.session_id.is_provisional() {
+        return false;
+    }
+    find_adapter(&candidate.kind).is_some_and(|adapter| {
+        adapter
+            .resume_command(&candidate.session_id, &candidate.cwd)
+            .is_some()
+    })
+}
+
 /// A resumed agent must have a conversation on disk. Claude and Codex stamp a
 /// `transcript_path` on their first `SessionStart` hook, before any prompt, so a
 /// never-answered session carries an id and a path to a file that was never
@@ -1558,12 +1619,6 @@ pub fn resume_session_present(agent: &AgentState) -> bool {
         Some(path) => std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0),
         None => true,
     }
-}
-
-fn cohort_newest_cmp(a: &&AgentState, b: &&AgentState) -> std::cmp::Ordering {
-    b.last_activity
-        .cmp(&a.last_activity)
-        .then_with(|| a.agent_id.cmp(&b.agent_id))
 }
 
 fn agent_worktree(agent: &AgentState) -> Option<PathBuf> {
@@ -1644,7 +1699,19 @@ fn unique_label(base: &str, used: &mut HashSet<String>) -> String {
 /// Wrapper argv for resuming one prior provider-native session with its durable
 /// Rimz launch identity and rebirth channel.
 pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>) -> Vec<String> {
-    let channel = agent
+    candidate_resume_command(
+        rimz_bin,
+        &ResumeCandidate::from_agent_identity(agent, true),
+        channel,
+    )
+}
+
+fn candidate_resume_command(
+    rimz_bin: &Path,
+    candidate: &ResumeCandidate,
+    channel: Option<&str>,
+) -> Vec<String> {
+    let channel = candidate
         .channel
         .as_deref()
         .filter(|channel| !channel.is_empty())
@@ -1652,9 +1719,9 @@ pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>
     crate::harness::launch::exec_argv(
         rimz_bin,
         &crate::harness::launch::ExecInvocation {
-            kind: agent.kind.as_str(),
+            kind: candidate.kind.as_str(),
             action: crate::harness::launch::ExecAction::Resume {
-                session_id: agent.agent_id.as_str(),
+                session_id: candidate.session_id.as_str(),
                 extra_args: &[],
             },
             run_id: None,
@@ -1662,14 +1729,14 @@ pub fn resume_command(rimz_bin: &Path, agent: &AgentState, channel: Option<&str>
             close_pane_on_exit: true,
             exit_on_run_completion: false,
             identity: crate::harness::launch::ExecIdentity {
-                name: agent.name.as_deref(),
-                name_explicit: agent.name_explicit,
-                profile: agent.profile.as_deref(),
+                name: candidate.name.as_deref(),
+                name_explicit: candidate.name_explicit,
+                profile: candidate.profile.as_deref(),
                 mode: None,
-                role: agent.role.as_deref(),
-                team: agent.team.as_deref(),
-                launch_group: agent.launch_group.as_deref(),
-                launch_ordinal: agent.launch_ordinal,
+                role: candidate.role.as_deref(),
+                team: candidate.team.as_deref(),
+                launch_group: candidate.launch_group.as_deref(),
+                launch_ordinal: candidate.launch_ordinal,
                 channel,
                 // Resume did not replay model/effort before the wrapper grammar
                 // moved here; keep argv behavior stable.

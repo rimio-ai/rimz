@@ -196,7 +196,7 @@ fn concurrent_session_set_handles_single_and_empty_inputs() {
 }
 
 #[test]
-fn discovered_state_is_paneless_and_keeps_resume_identity() {
+fn discovered_candidate_is_paneless_and_keeps_native_facts() {
     let observation = local_session(
         "claude",
         "only",
@@ -204,44 +204,15 @@ fn discovered_state_is_paneless_and_keeps_resume_identity() {
         "2025-01-01T10:00:00Z",
     );
 
-    let state = discovered_agent_state(&observation, Some("query-engine"));
+    let candidate = ResumeCandidate::from_observation(&observation);
 
-    assert_eq!(state.agent_id.as_str(), "only");
-    assert_eq!(state.channel.as_deref(), Some("query-engine"));
-    assert_eq!(state.worktree_path.as_deref(), Some("/code/query-engine"));
-    assert_eq!(
-        state.transcript_path.as_deref(),
-        Some("/provider/only.jsonl")
-    );
-    assert!(state.pane.is_none());
-    assert!(state.team.is_none());
-    assert!(state.role.is_none());
-    assert_eq!(state.status, AgentStatus::Idle);
-    assert_eq!(state.phase, crate::agents::TurnPhase::Idle);
-}
-
-#[test]
-fn discovered_state_uses_provider_lifecycle_when_available() {
-    let mut observation = local_session(
-        "kiro",
-        "only",
-        "2025-01-01T09:00:00Z",
-        "2025-01-01T10:00:00Z",
-    );
-    observation.projection =
-        crate::agents::LocalSessionProjection::Lifecycle(crate::agents::LocalSessionState {
-            status: AgentStatus::Waiting,
-            phase: crate::agents::TurnPhase::Idle,
-            latest_prompt: Some("pick one".to_owned()),
-            native_prompt_detail: None,
-            waiting_since: Some("2025-01-01T10:00:00Z".parse().unwrap()),
-            context_pct: Some(25),
-        });
-
-    let state = discovered_agent_state(&observation, None);
-
-    assert_eq!(state.status, AgentStatus::Waiting);
-    assert_eq!(state.phase, crate::agents::TurnPhase::Idle);
+    assert_eq!(candidate.session_id.as_str(), "only");
+    assert_eq!(candidate.cwd, PathBuf::from("/code/query-engine"));
+    assert!(candidate.pane_id.is_none());
+    assert!(candidate.channel.is_none());
+    assert!(candidate.team.is_none());
+    assert!(candidate.role.is_none());
+    assert!(candidate.conversation_present);
 }
 
 #[test]

@@ -43,18 +43,12 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
     let machine_config = crate::cli::machine_config();
     let mut cell = restart_cell(&agent, &workspace, &machine_config, adapter)?;
-    let Cell::Agent {
-        args: extra_args,
-        mode,
-        budget,
-        ..
-    } = &mut cell
-    else {
+    let Cell::Agent(agent_cell) = &mut cell else {
         bail!("restart profile did not resolve to an agent");
     };
-    let extra_args = std::mem::take(extra_args);
-    let mode = *mode;
-    let budget = budget.clone();
+    let extra_args = std::mem::take(&mut agent_cell.args);
+    let mode = agent_cell.mode;
+    let budget = agent_cell.budget.clone();
 
     // Fail at the entry point if this project's configured launch environment
     // is not trusted, before the old pane is touched.
@@ -221,23 +215,14 @@ fn restart_cell(
             Cell::agent(agent.kind.clone())
         }
     };
-    let Cell::Agent {
-        kind,
-        args,
-        mode,
-        profile,
-        role,
-        budget,
-        ..
-    } = &mut cell
-    else {
+    let Cell::Agent(agent_cell) = &mut cell else {
         bail!("restart profile did not resolve to an agent");
     };
-    if kind != &agent.kind {
+    if agent_cell.kind != agent.kind {
         bail!(
             "profile `{}` now resolves to {}, but the running agent is {}; launch it fresh to change providers",
             agent.profile.as_deref().unwrap_or("<unknown>"),
-            kind,
+            agent_cell.kind,
             agent.kind
         );
     }
@@ -245,13 +230,17 @@ fn restart_cell(
         .mode
         .map(|mode| adapter.permission_args(mode))
         .unwrap_or_default();
-    let (replayed_args, replayed_mode) =
-        replay_posture(std::mem::take(args), *mode, agent.mode, &permission_args);
-    *args = replayed_args;
-    *mode = replayed_mode;
-    *profile = agent.profile.clone();
-    *role = agent.role.clone();
-    *budget = agent.budget.clone();
+    let (replayed_args, replayed_mode) = replay_posture(
+        std::mem::take(&mut agent_cell.args),
+        agent_cell.mode,
+        agent.mode,
+        &permission_args,
+    );
+    agent_cell.args = replayed_args;
+    agent_cell.mode = replayed_mode;
+    agent_cell.profile.clone_from(&agent.profile);
+    agent_cell.role.clone_from(&agent.role);
+    agent_cell.budget.clone_from(&agent.budget);
     Ok(cell)
 }
 
@@ -270,7 +259,7 @@ fn resolve_restart_profile_cell(
     if cells.next().is_some() {
         bail!("restart profile `{profile}` produced more than one agent cell");
     }
-    Ok(cell)
+    Ok(Cell::Agent(cell))
 }
 
 fn replay_posture(
@@ -430,7 +419,7 @@ mod tests {
 
         let cell = resolve_restart_profile_cell("codex-plain", &launch, &machine.agents.commands)
             .expect("restart profile cell");
-        let Cell::Agent { args, model, .. } = cell else {
+        let Cell::Agent(rimz::harness::spec::AgentCell { args, model, .. }) = cell else {
             panic!("agent cell");
         };
 

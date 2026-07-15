@@ -889,6 +889,17 @@ fn loop_pause_accepts_untrusted_project_task_as_local_state() {
 #[test]
 fn loop_add_replaces_same_name_across_config_and_state() {
     let env = Env::new();
+    write_loop_config(
+        &env,
+        &format!(
+            "# keep unrelated task comment\n\
+             [tasks.keep]\n\
+             check = \"true\"\n\
+             root = \"{}\"\n\
+             every = \"1h\"\n",
+            env.project_root.display()
+        ),
+    );
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-loop-replace", "feature-loop");
 
@@ -952,6 +963,7 @@ fn loop_add_replaces_same_name_across_config_and_state() {
         loop_text.contains("[tasks.swap]"),
         "durable replacement should persist in loop.toml: {loop_text}"
     );
+    assert!(loop_text.contains("# keep unrelated task comment"));
 }
 
 #[test]

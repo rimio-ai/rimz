@@ -10,7 +10,7 @@ use crate::config::{LaunchPlacement, RoleBinding};
 use crate::harness::budget::BudgetSpec;
 use crate::harness::resume::{CohortCell, CohortResumePlan, CohortSeed};
 use crate::harness::run::PermissionMode;
-use crate::harness::spec::{Cell, LayoutSpec};
+use crate::harness::spec::{AgentCell, Cell, LayoutSpec};
 use crate::ids::{AgentSessionId, EventId};
 use crate::mux::{LayoutColumn, LayoutPanes, PaneCmd};
 use crate::store::{AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
@@ -80,22 +80,12 @@ pub fn resolve_launch(
 pub fn validate_profile_prompt_files(
     layout: &LayoutSpec,
 ) -> std::result::Result<(), ProfilePromptFileError> {
-    for cell in layout.columns.iter().flat_map(|column| &column.rows) {
-        let Cell::Agent {
-            profile,
-            role,
-            system_prompt_file,
-            append_system_prompt_file,
-            ..
-        } = cell
-        else {
-            continue;
-        };
+    for cell in layout.agent_cells() {
         for (field, path) in [
-            ("system-prompt-file", system_prompt_file.as_ref()),
+            ("system-prompt-file", cell.system_prompt_file.as_ref()),
             (
                 "append-system-prompt-file",
-                append_system_prompt_file.as_ref(),
+                cell.append_system_prompt_file.as_ref(),
             ),
         ] {
             let Some(path) = path else {
@@ -104,7 +94,7 @@ pub fn validate_profile_prompt_files(
             if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
                 continue;
             }
-            let origin = match (role.as_deref(), profile.as_deref()) {
+            let origin = match (cell.role.as_deref(), cell.profile.as_deref()) {
                 (Some(role), Some(profile)) => format!("role `{role}` profile `{profile}`"),
                 (Some(role), None) => format!("role `{role}`"),
                 (None, Some(profile)) => format!("profile `{profile}`"),
@@ -220,143 +210,16 @@ pub fn finalize_launch_layout(
     layout: &mut LayoutSpec,
     options: LaunchFinalizeOptions<'_>,
 ) -> std::result::Result<Vec<LaunchFinalizeWarning>, LaunchFinalizeError> {
-    for cell in layout
-        .columns
-        .iter_mut()
-        .flat_map(|column| &mut column.rows)
-    {
-        let Cell::Agent {
-            kind, args, mode, ..
-        } = cell
-        else {
-            continue;
-        };
-        if let Some(permission_mode) = options.permission_mode
-            && mode.is_none()
-            && let Some(adapter) = crate::agents::find_adapter(kind)
-        {
-            args.extend(adapter.permission_args(permission_mode));
-            *mode = Some(permission_mode);
-        }
-    }
-
-    if !options.preset.is_empty() {
-        for cell in layout
-            .columns
-            .iter_mut()
-            .flat_map(|column| &mut column.rows)
-        {
-            let Cell::Agent {
-                kind,
-                args,
-                model,
-                effort,
-                ..
-            } = cell
-            else {
-                continue;
-            };
-            let adapter = crate::agents::find_adapter(kind).ok_or_else(|| {
-                LaunchFinalizeError::UnknownAdapter {
-                    kind: kind.to_string(),
-                }
-            })?;
-            args.extend(
-                adapter
-                    .render_preset(options.preset)
-                    .map_err(unsupported_preset_error)?,
-            );
-            if let Some(preset_model) = options
-                .preset
-                .model
-                .as_ref()
-                .filter(|model| !model.is_empty())
-            {
-                *model = Some(preset_model.clone());
-            }
-            if let Some(preset_effort) = options
-                .preset
-                .effort
-                .as_ref()
-                .filter(|effort| !effort.is_empty())
-            {
-                *effort = Some(preset_effort.clone());
-            }
-        }
-    }
-
-    for cell in layout
-        .columns
-        .iter_mut()
-        .flat_map(|column| &mut column.rows)
-    {
-        if let Cell::Agent { args, .. } = cell {
-            args.extend(options.passthrough.iter().cloned());
-        }
-    }
-
-    if let Some(budget) = options.budget {
-        let canonical = budget.to_string();
-        for cell in layout
-            .columns
-            .iter_mut()
-            .flat_map(|column| &mut column.rows)
-        {
-            if let Cell::Agent {
-                budget: cell_budget,
-                ..
-            } = cell
-            {
-                *cell_budget = Some(canonical.clone());
-            }
-        }
-    }
-
-    let warnings = reconcile_preset_args(layout)?;
-
-    for cell in layout
-        .columns
-        .iter_mut()
-        .flat_map(|column| &mut column.rows)
-    {
-        let Cell::Agent {
-            kind, args, model, ..
-        } = cell
-        else {
-            continue;
-        };
-        if model.is_some() {
-            continue;
-        }
-        let Some(adapter) = crate::agents::find_adapter(kind) else {
-            continue;
-        };
-        let Some(default) = adapter.default_launch_model() else {
-            continue;
-        };
-        args.extend(
-            adapter
-                .render_preset(&crate::agents::LaunchPreset {
-                    model: Some(default.clone()),
-                    ..Default::default()
-                })
-                .map_err(unsupported_preset_error)?,
-        );
-        *model = Some(default);
+    let mut warnings = Vec::new();
+    for cell in layout.agent_cells_mut() {
+        finalize_agent_cell(cell, options, &mut warnings)?;
     }
 
     if let Some(limit) = options.max_turns {
-        for cell in layout
-            .columns
-            .iter_mut()
-            .flat_map(|column| &mut column.rows)
-        {
-            let Cell::Agent { kind, args, .. } = cell else {
-                continue;
-            };
-            let adapter = crate::agents::find_adapter(kind).ok_or_else(|| {
+        for cell in layout.agent_cells_mut() {
+            let adapter = crate::agents::find_adapter(&cell.kind).ok_or_else(|| {
                 LaunchFinalizeError::UnknownAdapter {
-                    kind: kind.to_string(),
+                    kind: cell.kind.to_string(),
                 }
             })?;
             let Some(turn_args) = adapter.max_turns_args(limit) else {
@@ -365,102 +228,147 @@ pub fn finalize_launch_layout(
                     warnings,
                 });
             };
-            args.extend(turn_args);
+            cell.args.extend(turn_args);
         }
     }
 
     Ok(warnings)
 }
 
-fn reconcile_preset_args(
-    layout: &mut LayoutSpec,
-) -> std::result::Result<Vec<LaunchFinalizeWarning>, LaunchFinalizeError> {
-    use crate::agents::PresetField;
-
-    let mut warnings = Vec::new();
-    for cell in layout
-        .columns
-        .iter_mut()
-        .flat_map(|column| &mut column.rows)
+fn finalize_agent_cell(
+    cell: &mut AgentCell,
+    options: LaunchFinalizeOptions<'_>,
+    warnings: &mut Vec<LaunchFinalizeWarning>,
+) -> std::result::Result<(), LaunchFinalizeError> {
+    let adapter = crate::agents::find_adapter(&cell.kind);
+    if let Some(permission_mode) = options.permission_mode
+        && cell.mode.is_none()
+        && let Some(adapter) = adapter
     {
-        let Cell::Agent {
-            kind,
-            args,
-            model,
-            effort,
-            system_prompt_file,
-            append_system_prompt_file,
-            profile,
-            ..
-        } = cell
-        else {
-            continue;
-        };
-        let Some(adapter) = crate::agents::find_adapter(kind) else {
-            continue;
-        };
-        let label = profile.as_deref().unwrap_or(kind.as_str()).to_owned();
-        let declared = [
-            (PresetField::Model, model.clone()),
-            (PresetField::Effort, effort.clone()),
-            (
-                PresetField::SystemPromptFile,
-                system_prompt_file
-                    .as_deref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-            ),
-            (
-                PresetField::AppendSystemPromptFile,
-                append_system_prompt_file
-                    .as_deref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-            ),
-        ];
-
-        for (field, value) in declared {
-            let Some(matcher) = adapter.preset_arg_matcher(field) else {
-                continue;
-            };
-            let occurrences = matcher.occurrences(args);
-            let Some(declared_value) = value else {
-                if field == PresetField::Model
-                    && let Some(winner) = occurrences.last()
-                {
-                    for occurrence in &occurrences[..occurrences.len() - 1] {
-                        if occurrence.value != winner.value {
-                            warnings.push(LaunchFinalizeWarning::LaterModelWins {
-                                profile: label.clone(),
-                                setting: matcher.display_setting(&occurrence.value),
-                                model: winner.value.clone(),
-                            });
-                        }
-                    }
-                    *model = Some(winner.value.clone());
-                    remove_occurrences(args, &occurrences[..occurrences.len() - 1]);
-                }
-                continue;
-            };
-            if occurrences.len() <= 1 {
-                continue;
-            }
-            for occurrence in &occurrences {
-                if occurrence.value != declared_value {
-                    warnings.push(LaunchFinalizeWarning::DeclaredFieldWins {
-                        profile: label.clone(),
-                        setting: matcher.display_setting(&occurrence.value),
-                        field: field.flag_name(),
-                        value: declared_value.clone(),
-                    });
-                }
-            }
-            let canonical = adapter
-                .render_preset(&field.launch_preset(declared_value))
-                .map_err(unsupported_preset_error)?;
-            remove_occurrences(args, &occurrences);
-            args.extend(canonical);
+        cell.args.extend(adapter.permission_args(permission_mode));
+        cell.mode = Some(permission_mode);
+    }
+    if !options.preset.is_empty() {
+        let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
+            kind: cell.kind.to_string(),
+        })?;
+        cell.args.extend(
+            adapter
+                .render_preset(options.preset)
+                .map_err(unsupported_preset_error)?,
+        );
+        if let Some(model) = options
+            .preset
+            .model
+            .as_ref()
+            .filter(|value| !value.is_empty())
+        {
+            cell.model = Some(model.clone());
+        }
+        if let Some(effort) = options
+            .preset
+            .effort
+            .as_ref()
+            .filter(|value| !value.is_empty())
+        {
+            cell.effort = Some(effort.clone());
         }
     }
-    Ok(warnings)
+    cell.args.extend(options.passthrough.iter().cloned());
+    if let Some(budget) = options.budget {
+        cell.budget = Some(budget.to_string());
+    }
+    if let Some(adapter) = adapter {
+        reconcile_preset_args(cell, adapter, warnings)?;
+        if cell.model.is_none()
+            && let Some(default) = adapter.default_launch_model()
+        {
+            cell.args.extend(
+                adapter
+                    .render_preset(&crate::agents::LaunchPreset {
+                        model: Some(default.clone()),
+                        ..Default::default()
+                    })
+                    .map_err(unsupported_preset_error)?,
+            );
+            cell.model = Some(default);
+        }
+    }
+    Ok(())
+}
+
+fn reconcile_preset_args(
+    cell: &mut AgentCell,
+    adapter: &dyn crate::agents::AgentAdapter,
+    warnings: &mut Vec<LaunchFinalizeWarning>,
+) -> std::result::Result<(), LaunchFinalizeError> {
+    use crate::agents::PresetField;
+
+    let label = cell
+        .profile
+        .as_deref()
+        .unwrap_or(cell.kind.as_str())
+        .to_owned();
+    let declared = [
+        (PresetField::Model, cell.model.clone()),
+        (PresetField::Effort, cell.effort.clone()),
+        (
+            PresetField::SystemPromptFile,
+            cell.system_prompt_file
+                .as_deref()
+                .map(|path| path.to_string_lossy().into_owned()),
+        ),
+        (
+            PresetField::AppendSystemPromptFile,
+            cell.append_system_prompt_file
+                .as_deref()
+                .map(|path| path.to_string_lossy().into_owned()),
+        ),
+    ];
+
+    for (field, value) in declared {
+        let Some(matcher) = adapter.preset_arg_matcher(field) else {
+            continue;
+        };
+        let occurrences = matcher.occurrences(&cell.args);
+        let Some(declared_value) = value else {
+            if field == PresetField::Model
+                && let Some(winner) = occurrences.last()
+            {
+                for occurrence in &occurrences[..occurrences.len() - 1] {
+                    if occurrence.value != winner.value {
+                        warnings.push(LaunchFinalizeWarning::LaterModelWins {
+                            profile: label.clone(),
+                            setting: matcher.display_setting(&occurrence.value),
+                            model: winner.value.clone(),
+                        });
+                    }
+                }
+                cell.model = Some(winner.value.clone());
+                remove_occurrences(&mut cell.args, &occurrences[..occurrences.len() - 1]);
+            }
+            continue;
+        };
+        if occurrences.len() <= 1 {
+            continue;
+        }
+        for occurrence in &occurrences {
+            if occurrence.value != declared_value {
+                warnings.push(LaunchFinalizeWarning::DeclaredFieldWins {
+                    profile: label.clone(),
+                    setting: matcher.display_setting(&occurrence.value),
+                    field: field.flag_name(),
+                    value: declared_value.clone(),
+                });
+            }
+        }
+        let canonical = adapter
+            .render_preset(&field.launch_preset(declared_value))
+            .map_err(unsupported_preset_error)?;
+        remove_occurrences(&mut cell.args, &occurrences);
+        cell.args.extend(canonical);
+    }
+    Ok(())
 }
 
 fn remove_occurrences(args: &mut Vec<String>, occurrences: &[crate::agents::PresetArgOccurrence]) {
@@ -481,12 +389,9 @@ fn unsupported_preset_error(err: crate::agents::PresetErr) -> LaunchFinalizeErro
 pub fn cohort_cells(layout: &LayoutSpec) -> Vec<CohortCell> {
     layout
         .agent_cells()
-        .filter_map(|cell| match cell {
-            Cell::Agent { kind, role, .. } => Some(CohortCell {
-                kind: kind.clone(),
-                role: role.clone(),
-            }),
-            Cell::Command { .. } => None,
+        .map(|cell| CohortCell {
+            kind: cell.kind.clone(),
+            role: cell.role.clone(),
         })
         .collect()
 }
@@ -598,26 +503,14 @@ pub fn launch_identity_requests(
     channel: Option<&str>,
     prompt: Option<(&str, usize)>,
 ) -> Result<Vec<AgentLaunchRequest>> {
-    let agent_cells: Vec<&Cell> = layout.agent_cells().collect();
+    let agent_cells: Vec<&AgentCell> = layout.agent_cells().collect();
     let agent_count = agent_cells.len();
     let inline_launch_group = (team.is_none() && agent_count >= 2).then(mint_launch_group);
     let mut requests = Vec::with_capacity(agent_cells.len());
     for (index, cell) in agent_cells.into_iter().enumerate() {
-        let Cell::Agent {
-            kind,
-            profile,
-            mode,
-            role,
-            model,
-            effort,
-            budget,
-            ..
-        } = cell
-        else {
-            continue;
-        };
         let launch_ordinal = match team {
-            Some(_) => role
+            Some(_) => cell
+                .role
                 .as_deref()
                 .and_then(|role| team_role_ordinal(team_roles, role)),
             None if inline_launch_group.is_some() => Some(index_to_launch_ordinal(index)),
@@ -637,16 +530,16 @@ pub fn launch_identity_requests(
             AgentLaunchName::Mint
         };
         requests.push(AgentLaunchRequest {
-            kind: kind.clone(),
+            kind: cell.kind.clone(),
             agent_id: mint_launch_id(),
             name,
             launch: crate::agents::LaunchParams {
-                profile: profile.clone(),
-                mode: *mode,
-                role: role.clone(),
-                model: model.clone(),
-                effort: effort.clone(),
-                budget: budget.clone(),
+                profile: cell.profile.clone(),
+                mode: cell.mode,
+                role: cell.role.clone(),
+                model: cell.model.clone(),
+                effort: cell.effort.clone(),
+                budget: cell.budget.clone(),
                 team: team.map(ToOwned::to_owned),
                 launch_group: inline_launch_group.clone(),
                 launch_ordinal,
@@ -700,9 +593,8 @@ pub fn layout_panes_with_names(
                 .rows
                 .iter()
                 .map(|cell| {
-                    let cell_agent_index =
-                        matches!(cell, Cell::Agent { .. }).then_some(agent_index);
-                    let (resume_seed, launch) = if matches!(cell, Cell::Agent { .. }) {
+                    let cell_agent_index = matches!(cell, Cell::Agent(_)).then_some(agent_index);
+                    let (resume_seed, launch) = if matches!(cell, Cell::Agent(_)) {
                         let resume_seed = params
                             .resume_seeds
                             .map(|seeds| {
@@ -783,17 +675,7 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
             vec![crate::harness::launch::user_shell_program()]
         }
         Cell::Command { argv } => argv.clone(),
-        Cell::Agent {
-            kind,
-            args,
-            mode,
-            profile,
-            role,
-            model,
-            effort,
-            budget,
-            ..
-        } => {
+        Cell::Agent(cell) => {
             if let Some(CohortSeed::Resume(agent)) = options.resume_seed {
                 return Ok(PaneCmd {
                     argv: crate::harness::resume::resume_command(
@@ -809,10 +691,10 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
             crate::harness::launch::exec_argv(
                 options.rimz_bin,
                 &crate::harness::launch::ExecInvocation {
-                    kind: kind.as_str(),
+                    kind: cell.kind.as_str(),
                     action: crate::harness::launch::ExecAction::Launch {
                         prompt: options.prompt,
-                        extra_args: args,
+                        extra_args: &cell.args,
                     },
                     run_id: None,
                     worktree_path: options.cleanup_worktree.then_some(options.cwd),
@@ -822,9 +704,9 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
                         name: options.launch.map(|launch| launch.name.as_str()),
                         name_explicit: options.launch.is_some_and(|launch| launch.name_explicit),
                         launch_id: options.launch.map(|launch| launch.agent_id.as_str()),
-                        profile: profile.as_deref(),
-                        mode: *mode,
-                        role: role.as_deref(),
+                        profile: cell.profile.as_deref(),
+                        mode: cell.mode,
+                        role: cell.role.as_deref(),
                         team: options.team,
                         launch_group: options
                             .launch
@@ -833,9 +715,9 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
                             .launch
                             .and_then(|launch| launch.launch.launch_ordinal),
                         channel: options.channel,
-                        model: model.as_deref(),
-                        effort: effort.as_deref(),
-                        budget: budget.as_deref(),
+                        model: cell.model.as_deref(),
+                        effort: cell.effort.as_deref(),
+                        budget: cell.budget.as_deref(),
                     },
                 },
             )

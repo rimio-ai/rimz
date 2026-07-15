@@ -23,10 +23,6 @@ pub(super) fn load() -> Tasks {
     load_from(&state_home())
 }
 
-pub(super) fn is_ephemeral(entry: &TaskEntry) -> bool {
-    (entry.every.is_none() && entry.cron.is_none()) || entry.deadline.is_some()
-}
-
 pub(super) fn insert(name: &str, entry: &TaskEntry) -> Result<()> {
     insert_into(&state_home(), name, entry)
 }
@@ -110,8 +106,11 @@ mod tests {
 
         insert_into(dir.path(), "wake", &entry).expect("insert");
         assert_eq!(
-            load_from(dir.path()).0.get("wake").map(is_ephemeral),
-            Some(true)
+            load_from(dir.path())
+                .0
+                .get("wake")
+                .map(|entry| entry.prompt.as_deref()),
+            Some(Some("wake"))
         );
 
         assert!(remove_from(dir.path(), "wake").expect("remove"));
@@ -134,20 +133,5 @@ mod tests {
             Some(Some("wake"))
         );
         assert!(!rename_from(dir.path(), "wake", "later").expect("rename absent"));
-    }
-
-    #[test]
-    fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
-        let mut entry = task();
-        entry.every = Some("15m".to_owned());
-        entry.deadline = None;
-        assert!(!is_ephemeral(&entry));
-
-        entry.every = None;
-        assert!(is_ephemeral(&entry));
-
-        entry.every = Some("15m".to_owned());
-        entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
-        assert!(is_ephemeral(&entry));
     }
 }

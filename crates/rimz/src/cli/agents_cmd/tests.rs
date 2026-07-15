@@ -609,7 +609,9 @@ mod launch_options {
             &rimz::config::MachineConfig::default(),
         )
         .expect("prepare supervised launch");
-        let [Cell::Agent { model, effort, .. }] = prepared.columns[0].rows.as_slice() else {
+        let [Cell::Agent(rimz::harness::spec::AgentCell { model, effort, .. })] =
+            prepared.columns[0].rows.as_slice()
+        else {
             panic!("one agent")
         };
         assert_eq!(model.as_deref(), Some("gpt-5"));

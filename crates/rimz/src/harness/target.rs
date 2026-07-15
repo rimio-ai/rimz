@@ -76,6 +76,18 @@ enum AgentSelector {
     NameOrSession(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectorTier {
+    All,
+    Role,
+    Kind,
+    KindOrdinal,
+    ExplicitName,
+    Profile,
+    Name,
+    SessionPrefix,
+}
+
 /// A parsed target: a precise pane, or an `@`-mention scoped to a channel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Target {
@@ -535,82 +547,80 @@ fn classify_selector(selector: &str) -> AgentSelector {
 }
 
 fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> Vec<C> {
-    let role_matches = |selector: &str| {
-        candidates
-            .iter()
-            .copied()
-            .filter(|candidate| candidate.role() == Some(selector))
-            .collect::<Vec<_>>()
-    };
+    let tier = winning_tier(selector, candidates);
+    let mut matches = candidates
+        .iter()
+        .copied()
+        .filter(|candidate| tier_matches(tier, selector, *candidate))
+        .collect::<Vec<_>>();
+    if let (SelectorTier::SessionPrefix, AgentSelector::NameOrSession(selector)) = (tier, selector)
+    {
+        matches = prefer_exact_session(selector, matches);
+    }
+    matches
+}
+
+fn winning_tier<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> SelectorTier {
     match selector {
-        AgentSelector::All => candidates.to_vec(),
+        AgentSelector::All => SelectorTier::All,
         AgentSelector::Kind(kind) => {
-            let by_role = role_matches(kind.as_str());
-            if !by_role.is_empty() {
-                return by_role;
+            if candidates
+                .iter()
+                .copied()
+                .any(|candidate| candidate.role() == Some(kind.as_str()))
+            {
+                SelectorTier::Role
+            } else {
+                SelectorTier::Kind
             }
+        }
+        AgentSelector::KindOrdinal(..) => SelectorTier::KindOrdinal,
+        AgentSelector::NameOrSession(_) => [
+            SelectorTier::Role,
+            SelectorTier::ExplicitName,
+            SelectorTier::Profile,
+            SelectorTier::Name,
+            SelectorTier::SessionPrefix,
+        ]
+        .into_iter()
+        .find(|tier| {
             candidates
                 .iter()
                 .copied()
-                .filter(|candidate| candidate.kind() == kind)
-                .collect()
+                .any(|candidate| tier_matches(*tier, selector, candidate))
+        })
+        .unwrap_or(SelectorTier::SessionPrefix),
+    }
+}
+
+fn tier_matches<'a, C: Candidate<'a>>(
+    tier: SelectorTier,
+    selector: &AgentSelector,
+    candidate: C,
+) -> bool {
+    match (tier, selector) {
+        (SelectorTier::All, AgentSelector::All) => true,
+        (SelectorTier::Role, AgentSelector::Kind(value))
+        | (SelectorTier::Role, AgentSelector::NameOrSession(value)) => {
+            candidate.role() == Some(value.as_str())
         }
-        // An ordinal, pet name, or session prefix names a bound session; a lazy
-        // pane carries none, so the `None` accessors drop it from those arms.
-        AgentSelector::KindOrdinal(kind, ordinal) => candidates
-            .iter()
-            .copied()
-            .filter(|candidate| {
-                candidate.kind() == kind && candidate.kind_ordinal() == Some(*ordinal)
-            })
-            .collect(),
-        AgentSelector::NameOrSession(selector) => {
-            // A role is the most specific team handle. A user-chosen explicit
-            // name is a unique instance handle and must resolve before a
-            // profile with the same text. A profile is a type handle: it can
-            // name several agents, and arity is decided downstream. Minted pet
-            // names stay below profile, then a session-id prefix.
-            let by_role = role_matches(selector.as_str());
-            if !by_role.is_empty() {
-                return by_role;
-            }
-            let by_explicit_name: Vec<C> = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| {
-                    candidate.name_explicit() && candidate.name() == Some(selector.as_str())
-                })
-                .collect();
-            if !by_explicit_name.is_empty() {
-                return by_explicit_name;
-            }
-            let by_profile: Vec<C> = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| candidate.profile() == Some(selector.as_str()))
-                .collect();
-            if !by_profile.is_empty() {
-                return by_profile;
-            }
-            let by_name: Vec<C> = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| candidate.name() == Some(selector.as_str()))
-                .collect();
-            if !by_name.is_empty() {
-                return by_name;
-            }
-            let by_prefix: Vec<C> = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| {
-                    candidate
-                        .session_id()
-                        .is_some_and(|id| id.starts_with(selector.as_str()))
-                })
-                .collect();
-            prefer_exact_session(selector, by_prefix)
+        (SelectorTier::Kind, AgentSelector::Kind(value)) => candidate.kind() == value,
+        (SelectorTier::KindOrdinal, AgentSelector::KindOrdinal(kind, ordinal)) => {
+            candidate.kind() == kind && candidate.kind_ordinal() == Some(*ordinal)
         }
+        (SelectorTier::ExplicitName, AgentSelector::NameOrSession(value)) => {
+            candidate.name_explicit() && candidate.name() == Some(value.as_str())
+        }
+        (SelectorTier::Profile, AgentSelector::NameOrSession(value)) => {
+            candidate.profile() == Some(value.as_str())
+        }
+        (SelectorTier::Name, AgentSelector::NameOrSession(value)) => {
+            candidate.name() == Some(value.as_str())
+        }
+        (SelectorTier::SessionPrefix, AgentSelector::NameOrSession(value)) => candidate
+            .session_id()
+            .is_some_and(|id| id.starts_with(value.as_str())),
+        _ => false,
     }
 }
 
@@ -891,70 +901,53 @@ pub fn sender_prefix(
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
     let channel = agent_channel(agent);
-    // The role is the most informative handle, so prefer it whenever it still
-    // names exactly this agent in scope. A shared role in one channel is not
-    // unique, so it falls through to the profile/kind/ordinal ladder.
-    if let Some(role) = agent.role.as_deref() {
-        let role_rivals = peers
-            .iter()
-            .filter(|peer| peer.role.as_deref() == Some(role))
-            .filter(|peer| !scoped || agent_channel(peer) == channel)
-            .count();
-        if role_rivals <= 1 {
-            return format!("@{role}");
-        }
-    }
-    // Launch allocation guarantees an explicit name is unique among live
-    // agents, so no rival count is needed here.
-    if agent.name_explicit
-        && let Some(name) = agent.name.as_deref()
-    {
-        return format!("@{name}");
-    }
-    // A unique profile is next. A shared profile (two `planner`s in one channel)
-    // is not unique, a profile named like a built-in kind resolves through the
-    // Kind selector, and a profile whose text a live explicit name claims would
-    // resolve to that named agent instead — all fall through to the
-    // kind/ordinal ladder so the rendered handle still round-trips.
-    if let Some(profile) = agent.profile.as_deref() {
-        let profile_rivals = peers
-            .iter()
-            .filter(|peer| peer.profile.as_deref() == Some(profile))
-            .filter(|peer| !scoped || agent_channel(peer) == channel)
-            .count();
-        let shadowed_by_name = peers
-            .iter()
-            .filter(|peer| !scoped || agent_channel(peer) == channel)
-            .any(|peer| peer.name_explicit && peer.name.as_deref() == Some(profile));
-        if profile_rivals <= 1 && !is_known_kind(profile) && !shadowed_by_name {
-            return format!("@{profile}");
-        }
-    }
-    // The same-kind agents this handle must out-name. With channel context only
-    // those sharing the channel compete; without it (an ungrouped channel-less
-    // handle), every same-kind agent does.
-    let rivals = peers
+    let scoped_peers = peers
         .iter()
-        .filter(|peer| peer.kind == agent.kind)
         .filter(|peer| !scoped || agent_channel(peer) == channel)
-        .count();
-    if rivals <= 1 {
-        return format!("@{}", agent.kind);
+        .copied()
+        .collect::<Vec<_>>();
+    // Restart renders from an unchanged snapshot clone. Canonicalize that
+    // clone first, then keep selector comparison pointer-exact below.
+    let target_peer = scoped_peers
+        .iter()
+        .copied()
+        .find(|peer| std::ptr::eq(*peer, agent))
+        .or_else(|| scoped_peers.iter().copied().find(|peer| *peer == agent));
+    let resolves = |text: &str| {
+        let selector = classify_selector(text);
+        let exact = exact_session_match(&selector, peers);
+        let matches = if exact.is_empty() {
+            select(&selector, &scoped_peers)
+        } else {
+            exact
+        };
+        matches.len() == 1
+            && matches.first().is_some_and(|matched| {
+                target_peer.is_some_and(|target| std::ptr::eq(*matched, target))
+            })
+    };
+    let ordinal = scoped
+        .then(|| {
+            agent
+                .kind_ordinal
+                .map(|ordinal| format!("{}-{ordinal}", agent.kind))
+        })
+        .flatten();
+    let candidates = [
+        agent.role.as_deref(),
+        agent.name.as_deref().filter(|_| agent.name_explicit),
+        agent.profile.as_deref(),
+        Some(agent.kind.as_str()),
+        ordinal.as_deref(),
+        agent.name.as_deref(),
+        Some(agent.agent_id.as_str()),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        if resolves(candidate) {
+            return format!("@{candidate}");
+        }
     }
-    // An ordinal is unique only within a channel, so it disambiguates only when
-    // the handle carries channel context.
-    if scoped && let Some(ordinal) = agent.kind_ordinal {
-        return format!("@{}-{ordinal}", agent.kind);
-    }
-    // Globally-unique fallbacks: the stable petname, else the session id.
-    match agent.name.as_deref() {
-        Some(name) => format!("@{name}"),
-        None => format!("@{}", agent.agent_id),
-    }
-}
-
-fn is_known_kind(name: &str) -> bool {
-    crate::agents::known_kinds().any(|kind| kind == name)
+    format!("@{}", agent.agent_id)
 }
 
 /// A deduplicated, quoted list of the channels a selector matches.
