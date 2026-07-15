@@ -336,8 +336,6 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
 #[test]
 fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     let env = Env::new();
-    env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-loop-state", "feature-loop");
     write_loop_config(
         &env,
         &format!(
@@ -376,23 +374,11 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
 
     loop_ok(
         &env,
-        &[
-            "loop",
-            "add",
-            "swap",
-            "--wake",
-            "@claude",
-            "--every",
-            "15m",
-            "--prompt",
-            "durable wake",
-        ],
+        &["loop", "add", "swap", "--check", "true", "--every", "15m"],
     );
     loop_ok(
         &env,
-        &[
-            "loop", "add", "swap", "--wake", "@claude", "--in", "5m", "--prompt", "one shot",
-        ],
+        &["loop", "add", "swap", "--check", "true", "--in", "5m"],
     );
     assert!(read_loop_instances(&env).0.contains_key("swap"));
     assert!(
@@ -403,17 +389,7 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     loop_ok(
         &env,
         &[
-            "loop",
-            "add",
-            "swap",
-            "--wake",
-            "@claude",
-            "--every",
-            "weekday",
-            "--at",
-            "07:00",
-            "--prompt",
-            "durable again",
+            "loop", "add", "swap", "--check", "true", "--every", "weekday", "--at", "07:00",
         ],
     );
     let text = std::fs::read_to_string(loop_config_path(&env)).expect("read loop config");
