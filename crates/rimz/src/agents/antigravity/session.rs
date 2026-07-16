@@ -96,6 +96,8 @@ struct InvokeSubagentResult {
     conversation_id: String,
     #[serde(rename = "logAbsoluteUri")]
     log_absolute_uri: String,
+    #[serde(rename = "workspaceUris")]
+    workspace_uris: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -253,9 +255,6 @@ pub(super) fn correlate_subagent_under(
             seen_ids.insert(result_id.to_owned()).then_some(())?;
             let log_path = file_uri_path(&result.log_absolute_uri)?;
             valid_transcript_under(home, &log_path, result_id).then_some(())?;
-            if result_id != child_id {
-                continue;
-            }
             let expected_workspace = match spec.workspace.as_deref().map(str::trim) {
                 None | Some("inherit") => parent_workspace.clone(),
                 Some(path) => {
@@ -264,6 +263,10 @@ pub(super) fn correlate_subagent_under(
                     fs::canonicalize(path).ok()?
                 }
             };
+            validate_result_workspaces(result.workspace_uris.as_deref(), &expected_workspace)?;
+            if result_id != child_id {
+                continue;
+            }
             (child_workspace == expected_workspace).then_some(())?;
             matched.push(CorrelatedSubagent {
                 type_name: spec.type_name.trim().to_owned(),
@@ -569,6 +572,19 @@ fn file_uri_path(uri: &str) -> Option<PathBuf> {
     let uri = Url::parse(uri.trim()).ok()?;
     (uri.scheme() == "file").then_some(())?;
     uri.to_file_path().ok()
+}
+
+fn validate_result_workspaces(uris: Option<&[String]>, expected: &Path) -> Option<()> {
+    let Some(uris) = uris else {
+        return Some(());
+    };
+    (!uris.is_empty()).then_some(())?;
+    uris.iter()
+        .map(|uri| file_uri_path(uri).and_then(|path| fs::canonicalize(path).ok()))
+        .collect::<Option<Vec<_>>>()?
+        .iter()
+        .any(|workspace| workspace == expected)
+        .then_some(())
 }
 
 fn normalize_user_content(value: Option<&str>) -> Option<String> {

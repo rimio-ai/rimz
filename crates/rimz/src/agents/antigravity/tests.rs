@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::path::Path;
 const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
-const CHILD_ALPHA: &str = "22222222-2222-4222-8222-222222222222";
-const CHILD_BETA: &str = "33333333-3333-4333-8333-333333333333";
+const CHILD_ALPHA: &str = "15b124d3-7753-412b-988b-88b2cd518cf8";
+const CHILD_BETA: &str = "c86b1a56-5c62-43b4-9055-102461a074ef";
 const NESTED_CHILD: &str = "44444444-4444-4444-8444-444444444444";
 const AT_09: &str = "2026-07-13T23:23:09Z";
 const AT_10: &str = "2026-07-13T23:23:10Z";
@@ -549,6 +549,14 @@ fn invoke_subagent_results_pair_ordered_child_metadata() {
         &workspace,
     )
     .unwrap();
+    let alpha_prompt = format!(
+        "Read the security policy in {}/SECURITY.md and provide a concise summary of the reporting process.",
+        workspace.display()
+    );
+    let beta_prompt = format!(
+        "Search {}/AGENTS.md for references to nextest and summarize the testing requirements related to it.",
+        workspace.display()
+    );
     assert_eq!(
         (
             alpha.type_name.as_str(),
@@ -556,9 +564,9 @@ fn invoke_subagent_results_pair_ordered_child_metadata() {
             alpha.prompt.as_str()
         ),
         (
-            "explore",
-            "Protocol researcher",
-            "Inspect the adapter parser."
+            "summary_agent",
+            "Security Document Summarizer",
+            alpha_prompt.as_str()
         )
     );
     assert_eq!(
@@ -567,11 +575,7 @@ fn invoke_subagent_results_pair_ordered_child_metadata() {
             beta.role.as_str(),
             beta.prompt.as_str()
         ),
-        (
-            "review",
-            "Lifecycle reviewer",
-            "Inspect the lifecycle reducer."
-        )
+        ("research", "Codebase Researcher", beta_prompt.as_str())
     );
 }
 
@@ -651,9 +655,13 @@ fn subagent_correlation_rejects_unsafe_identity_uri_and_workspace() {
     let remote_parent = write_subagent_fixture(dir.path(), SESSION_ID, &remote);
     assert!(correlate(&remote_parent, SESSION_ID, &workspace).is_none());
 
+    let remote_workspace = fixture.replace("__WORKSPACE_URI__", "https://example.invalid");
+    let remote_workspace_parent = write_subagent_fixture(dir.path(), SESSION_ID, &remote_workspace);
+    assert!(correlate(&remote_workspace_parent, SESSION_ID, &workspace).is_none());
+
     let relative_workspace = fixture.replacen(
-        "\"TypeName\":\"explore\"}",
-        "\"TypeName\":\"explore\",\"Workspace\":\"relative\"}",
+        "\"TypeName\":\"summary_agent\"}",
+        "\"TypeName\":\"summary_agent\",\"Workspace\":\"relative\"}",
         1,
     );
     let relative_parent = write_subagent_fixture(dir.path(), SESSION_ID, &relative_workspace);
@@ -1380,11 +1388,18 @@ fn write_transcript(home: &Path, session_id: &str) -> std::path::PathBuf {
 }
 fn write_subagent_fixture(home: &Path, session_id: &str, fixture: &str) -> std::path::PathBuf {
     let home_uri = url::Url::from_directory_path(home).unwrap().to_string();
+    let workspace = home.join("workspace");
+    let workspace_uri = url::Url::from_directory_path(&workspace)
+        .unwrap()
+        .to_string();
     write_transcript_named(
         home,
         session_id,
         "transcript_full.jsonl",
-        &fixture.replace("__HOME_URI__", home_uri.trim_end_matches('/')),
+        &fixture
+            .replace("__HOME_URI__", home_uri.trim_end_matches('/'))
+            .replace("__WORKSPACE__", &workspace.display().to_string())
+            .replace("__WORKSPACE_URI__", workspace_uri.trim_end_matches('/')),
     )
 }
 fn rewrite_subagent_result(fixture: &str, rewrite: impl FnOnce(&str) -> String) -> String {
