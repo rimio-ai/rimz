@@ -388,7 +388,7 @@ criteria = "safe-to-deploy"
 
 [[exemptions.filetime]]
 version = "0.2.29"
-criteria = "safe-to-run"
+criteria = "safe-to-deploy"
 
 [[exemptions.find-msvc-tools]]
 version = "0.1.9"
@@ -1184,6 +1184,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.sysinfo]]
 version = "0.39.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.tar]]
+version = "0.4.46"
 criteria = "safe-to-deploy"
 
 [[exemptions.termina]]

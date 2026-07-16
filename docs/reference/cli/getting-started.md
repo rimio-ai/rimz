@@ -1,6 +1,6 @@
 # Getting started CLI
 
-`rimz` opens one room for the project you are in and keeps it attachable. The room is a plain Zellij or tmux session with the sidebar added — your keybinds, layout, and scrollback stay yours — so leaving is a normal multiplexer detach and [`rimz reset`](./maintenance.md#reload-reset-gc-and-uninstall) is the escape hatch if one ever wedges. This page covers the commands that open, reach, and diagnose a local room: `start`, `attach`, `list`, `setup`, and `doctor`. Reaching a room on another host is [`rimz remote`](./remote.md); how RimZ picks the room from your directory is [the root model in ARCHITECTURE.md](../../../ARCHITECTURE.md).
+`rimz` opens one room for the project you are in and keeps it attachable. The room is a plain Zellij or tmux session with the sidebar added — your keybinds, layout, and scrollback stay yours — so leaving is a normal multiplexer detach and [`rimz reset`](./maintenance.md#update-reload-reset-gc-and-uninstall) is the escape hatch if one ever wedges. This page covers the commands that open, reach, and diagnose a local room: `start`, `attach`, `list`, `setup`, and `doctor`. Reaching a room on another host is [`rimz remote`](./remote.md); how RimZ picks the room from your directory is [the root model in ARCHITECTURE.md](../../../ARCHITECTURE.md).
 
 ```sh
 rimz setup                 # one-time: detect the machine, write config, choose hooks and appearance

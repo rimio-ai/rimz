@@ -4,13 +4,11 @@
 //! testable beside the remote attach and web builders.
 
 use crate::mux::CommandSpec;
+use crate::update::{DARWIN_AARCH64_ARCHIVE, DARWIN_X86_64_ARCHIVE, LINUX_X86_64_ARCHIVE};
 
 use super::{sh_quote, ssh_program};
 
 const RELEASE_BASE: &str = "https://github.com/rimio-ai/rimz/releases/latest/download/";
-const LINUX_X86_64_ARCHIVE: &str = "rimz-x86_64-unknown-linux-gnu.tar.gz";
-const DARWIN_AARCH64_ARCHIVE: &str = "rimz-aarch64-apple-darwin.tar.gz";
-const DARWIN_X86_64_ARCHIVE: &str = "rimz-x86_64-apple-darwin.tar.gz";
 
 pub fn setup_install_spec(destination: &str, host: &str) -> CommandSpec {
     CommandSpec::new(ssh_program())

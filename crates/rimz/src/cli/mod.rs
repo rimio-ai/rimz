@@ -40,6 +40,7 @@ pub(crate) mod supervised;
 mod transcript;
 mod trust;
 mod uninstall;
+mod update;
 mod web;
 mod workspace;
 mod worktree;
@@ -104,6 +105,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Uninstall(args)) => uninstall::run(args, &globals),
+        Some(Subcmd::Update(args)) => update::run(args, &globals),
         Some(Subcmd::Channel(args)) => channel::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
@@ -211,6 +213,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::ListThemes(_)) => ("list-themes", None, None),
         Some(Subcmd::Gc(_)) => ("gc", None, None),
         Some(Subcmd::Uninstall(_)) => ("uninstall", None, None),
+        Some(Subcmd::Update(_)) => ("update", None, None),
         Some(Subcmd::Channel(_)) => ("channel", None, None),
         Some(Subcmd::Worktree(_)) => ("worktree", None, None),
         Some(Subcmd::Agents(_)) => ("agents", None, None),
@@ -508,6 +511,8 @@ enum Subcmd {
     /// Removes hooks, rooms, and runtime footprint. Use --state, --config, or
     /// --all to purge durable state and config.
     Uninstall(uninstall::UninstallArgs),
+    /// Update RimZ to the latest release.
+    Update(update::UpdateArgs),
     /// Create, list, and remove named channels.
     Channel(channel::ChannelArgs),
     /// Create, list, and remove RimZ-owned git worktrees.

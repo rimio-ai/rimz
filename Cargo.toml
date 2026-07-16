@@ -39,6 +39,10 @@ dotenvy = "0.15"
 serde_ignored = "0.1"
 toml = "1"
 flate2 = "1"
+# Release archives are streamed through gzip and extracted in-process by
+# `rimz update`. `tar` supplies the mature archive parser and path handling;
+# default xattr support stays off because the updater extracts one executable.
+tar = { version = "0.4", default-features = false }
 # OpenCode stores usage and Cursor stores live chat roots in WAL SQLite
 # databases; adapters open both read-only. `bundled` keeps RimZ independent of
 # a system libsqlite3 at install time.

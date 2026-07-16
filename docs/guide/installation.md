@@ -74,6 +74,18 @@ rimz doctor
 
 `rimz doctor` reports the multiplexer it selected, its version and whether it clears the floor, hook status, and room health — the fastest read on whether a fresh machine is ready. From here, make the machine comfortable with [set up your machine](./setup.md).
 
+## Update
+
+Whichever install path you chose, update it from the same command:
+
+```sh
+rimz update
+```
+
+`rimz update` detects the current binary's install path. A Homebrew install runs `brew upgrade rimz`, and a Cargo install runs `cargo install --locked rimz`. Script and manually installed prebuilt binaries download the matching release archive, verify it against `SHA256SUMS`, extract only the RimZ binary, require its `--version` smoke test to pass, then atomically replace the current binary in place. When the binary changes, the new build runs `rimz reload` so live sidebars and held stats dashboards converge immediately.
+
+Pass `--version <TAG>` to install a standalone release such as `v0.3.1`, roll back to an older tag, or follow the rolling `latest-main` build. Cargo accepts numbered release tags and normalizes short tags such as `v0.3` to `0.3.0`; crates.io has no `latest-main` build. Homebrew owns its selected formula version, so pin a standalone install through the install script instead.
+
 ## Get a current Zellij or tmux
 
 A distribution's packaged tmux is usually behind (Debian 12 ships 3.3a, Debian 13 ships 3.5a), and most distributions do not package Zellij at all. When `tmux -V` or `zellij --version` reads below the floor, install a current build.
@@ -153,7 +165,7 @@ To work on RimZ itself (debug builds, tests, the gate stack), continue with [the
 
 ## Uninstall
 
-Run `rimz uninstall --all` from outside a RimZ room. It removes installed hooks, live rooms, runtime state, durable stores, per-machine config, and the installed binary; project-local `.rimz/` dirs and RimZ-owned worktrees stay in place for manual review. If you installed through Homebrew, also run `brew uninstall rimz`. Flags for partial removal are in the [maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall).
+Run `rimz uninstall --all` from outside a RimZ room. It removes installed hooks, live rooms, runtime state, durable stores, per-machine config, and the installed binary; project-local `.rimz/` dirs and RimZ-owned worktrees stay in place for manual review. If you installed through Homebrew, also run `brew uninstall rimz`. Flags for partial removal are in the [maintenance reference](../reference/cli/maintenance.md#update-reload-reset-gc-and-uninstall).
 
 ## Troubleshooting
 

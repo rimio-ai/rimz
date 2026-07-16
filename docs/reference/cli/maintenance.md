@@ -20,16 +20,19 @@ rimz workspace rotate-events [--max-bytes <SIZE>] [--archive-older-than <DURATIO
 
 `resolve` prints the resolved workspace as JSON and writes nothing; scripts use it to capture stable fields (`workspace_id`, `project_root`, `root_class`, `worktree_root`, `worktree_branch`, `session_name`, `mux_hint`) before invoking other tools. `migrate` moves a workspace store after its project root moves on disk, rewriting queued messages, events, and metadata to the new identity. `rotate-events` archives the active event log when it reaches `--max-bytes` (default `64MiB`) and starts a fresh log while preserving the agent carryover the sidebar and rebirth flow need; `--archive-older-than` prunes older archives and defaults to `14d`. The durability and rotation contract is in [store.md](../../internals/store.md).
 
-## Reload, reset, GC, and uninstall
+## Update, reload, reset, GC, and uninstall
 
 These repair or clean an installation without changing your configuration.
 
 ```sh
+rimz update [--version <TAG>]
 rimz reload
 rimz reset [--yes] [--no-start] [--hard] [PATH]
 rimz gc [--older-than <DURATION>] [--dry-run] [--json]
 rimz uninstall [--state] [--config] [--all] [--keep-binary] [--yes]
 ```
+
+`update` follows the current installation method: Homebrew delegates to `brew upgrade rimz`, Cargo delegates to `cargo install --locked rimz`, and script or manual prebuilt installs download, checksum, smoke-test, and atomically replace the current binary. `--version` selects a numbered release tag for Cargo or any release tag, including `latest-main`, for a standalone install; Homebrew keeps formula version selection. A changed binary automatically launches the new build's `reload` command. Unsupported prebuilt targets report the exact `cargo install --locked rimz` fallback, and a protected standalone destination reports the `sudo rimz update` retry.
 
 `reload` runs from anywhere and reconciles running sidebars onto the current RimZ build: it re-execs sidebars where possible, restarts those that cannot reload in place, closes duplicates and unresponsive ones, repairs geometry, restarts `rimz stats --refresh` dashboards, and leaves stopped sessions stopped. It touches sidebar processes only, not agents. Sidebar reload behavior is in [sidebar.md](../../internals/sidebar/sidebar.md).
 

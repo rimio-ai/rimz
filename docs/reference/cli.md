@@ -15,7 +15,7 @@ This page is the map: it indexes every command and collects the conventions that
 | **Lanes, worktrees, and schedules** | `channel`, `worktree`, `loop` | [Channels](./cli/channel.md) · [Worktrees](./cli/worktree.md) · [Loop](./cli/loop.md) |
 | **Hooks and trust** | `hooks`, `trust` | [Hooks and trust](./cli/hooks-trust.md) |
 | **Configure appearance and behavior** | `config`, `list-themes`, `list-pets` | [Config](./cli/config.md) |
-| **Maintain and recover** | `coverage`, `workspace`, `reload`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
+| **Maintain and recover** | `coverage`, `workspace`, `update`, `reload`, `reset`, `gc`, `uninstall`, `ping` | [Maintenance](./cli/maintenance.md) |
 
 The [configuration guide](../guide/configuration.md) owns the file model behind `rimz config`; the [config reference](./cli/config.md) covers the command mechanics.
 

@@ -257,7 +257,7 @@ Per-machine config lives under `~/.config/rimz/` (`config.toml`, `theme.toml`, `
 rimz uninstall            # hooks, rooms, runtime state, binaries; keeps stores and config
 ```
 
-`--state`, `--config`, and `--all` widen the removal to durable stores and per-machine config; the exact scope of each flag is in the [maintenance reference](../reference/cli/maintenance.md#reload-reset-gc-and-uninstall). Project-local `.rimz/` directories and RimZ-owned worktrees stay in place, because they can hold project config and unlanded work.
+`--state`, `--config`, and `--all` widen the removal to durable stores and per-machine config; the exact scope of each flag is in the [maintenance reference](../reference/cli/maintenance.md#update-reload-reset-gc-and-uninstall). Project-local `.rimz/` directories and RimZ-owned worktrees stay in place, because they can hold project config and unlanded work.
 
 ## Filing an issue
 
