@@ -239,9 +239,6 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(47),
             commits_ahead: Some(3),
             commits_behind: Some(1),
-            trunk_sync: None,
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -252,9 +249,6 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(3),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
     ]
@@ -528,8 +522,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_ahead: Some(3),
             commits_behind: Some(1),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -540,7 +532,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(430),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
@@ -553,9 +544,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(210),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -600,8 +588,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_ahead: Some(1),
             commits_behind: Some(0),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
     ]
@@ -966,9 +952,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(470),
             commits_ahead: Some(2),
             commits_behind: Some(0),
-            trunk_sync: None,
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -993,8 +976,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_ahead: Some(1),
             commits_behind: Some(1),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1005,7 +986,6 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(520),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
@@ -1313,7 +1293,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(520),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
@@ -1326,9 +1305,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(210),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1339,7 +1315,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(360),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
@@ -1353,8 +1328,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             commits_ahead: Some(2),
             commits_behind: Some(1),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1653,9 +1626,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(160),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1667,8 +1637,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_ahead: Some(1),
             commits_behind: Some(1),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1679,7 +1647,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             diff_removed: Some(140),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
             ..WorktreeGroupSpec::default()
@@ -1693,8 +1660,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_ahead: Some(1),
             commits_behind: Some(1),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
@@ -1720,8 +1685,6 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_behind: Some(0),
             clean: Some(true),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Pristine),
-            pr_state: None,
-            pr_number: None,
             ..WorktreeGroupSpec::default()
         },
     ]
