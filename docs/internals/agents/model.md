@@ -94,7 +94,7 @@ running ───── turn ended ─────┬── clean ────�
 
  parked     : a clean end with background work in flight stays running, phase ⋯ bg; a prompt wake resumes the same turn boundary
  subagents  : subagent started establishes the child row in running;
-              subagent stopped resolves it to success / failed
+              subagent stopped resolves it to success / failed, and that terminal verdict absorbs a reordered late start
  compacting : a transient head held over any status (the bracket below)
  waiting    : awaiting input enters from any status; the next turn, tool,
               or compaction close returns the row to running
@@ -112,9 +112,9 @@ The edges, precisely:
 | `turn_interrupted` | `running` / `waiting` → `idle` | the provider or user canceled the turn without success or failure |
 | `turn_ended`, clean with background work in flight | `running` → `running` | the main thread parked, the phase is `parked`; see below |
 | `awaiting_input` | any → `waiting` | a blocking prompt ([`AskKind`](../../../crates/rimz/src/agents/lifecycle.rs): permission, plan approval, or question) holds the row for a human; a repeat restamps it |
-| `subagent_started` | *(none)* → `running` | establishes the child row, keyed by the child's own id |
+| `subagent_started` | *(none)* → `running` | establishes the child row, keyed by the child's own id; a terminal `success` / `failed` child holds its verdict when a reordered start arrives late |
 | `subagent_stopped` | `running` → `success` / `failed` | the child's terminal verdict, kept through the parent's turn |
-| `tool_used` (mutating) | resting or *(none)* → `running`, reconciled; `waiting` → `running` | completed work proves a turn; attention rows hold; a tool on a waiting row is the answered-permission edge; the first file-editing tool moves the phase to `acting` |
+| `tool_used` (mutating) | resting or *(none)* → `running`, reconciled; `waiting` → `running` | completed work proves a turn; attention rows hold; a keyed ask clears only for a tool with the same native key, while either key being absent preserves the any-completion fallback; the first file-editing tool moves the phase to `acting` |
 | `compacting` | status and phase held | stamps the [compaction head](#the-compaction-bracket); a waiting row stays waiting |
 | `compaction_ended` | auto → `running` (phase carried) · manual → `idle` · trigger unknown → held · any close on `waiting` → `running` | closes and counts an open [bracket](#the-compaction-bracket) |
 | `ended` | removal | the reducer's tombstone path handles it upstream; reaching `step` it is an ignored no-op |
@@ -160,7 +160,7 @@ A compaction signal for a session the rollup has never seen folds to nothing. Co
 
 `snapshot.agents` (the rollup as `rimz sidebar snapshot` reports it) keeps the agent-owned truth. Read paths share a cheap [`effective_status`](../../../crates/rimz/src/agents/state.rs) projection, so a still-`running` turn with an active provider-park marker reads as `paused`, a hookless plan proposal reads as `waiting`, and a hookless completion or interruption reads as `success` or `idle`, in `rimz pane list` and message delivery; the sidebar row projection then adds budget-aware refinements on top. The refinements are one family with a pinned precedence, top rung wins:
 
-1. **A human-blocked `waiting` row stays first.** An open blocking prompt outranks every refinement below unless a newer turn-interruption marker proves Esc cancelled it; that row settles to `idle`. A `waiting` row that otherwise fails [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) (activity postdating the ask proves it was answered in the pane) projects back to `running` in the `reasoning` phase until a durable clear lands.
+1. **A human-blocked `waiting` row stays first.** An open blocking prompt outranks every refinement below unless a newer turn-interruption marker proves Esc cancelled it; that row settles to `idle`. A keyless `waiting` row that otherwise fails [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) (activity postdating the ask proves it was answered in the pane) projects back to `running` in the `reasoning` phase until a durable clear lands. A keyed ask instead holds through newer activity until its correlated durable clear because a parallel sibling tool also advances the heartbeat.
 2. **`paused`**: an agent whose latest turn stopped on a provider limit, a RimZ dollar cap, or a transient API error. No hook emits `paused`; RimZ derives it at projection, and it joins the cockpit tally just under the actionable attention states. The marker can refine a still-`running` row (the provider emitted no lifecycle end) or a same-turn `failed` row (the lifecycle recorded an errored end). Provider `rate_limit` and `spend_limit` certificates are per-agent while their budget decision is account-scoped. A launch `budget` instead reads the session's cumulative live cost and a per-session runtime ledger; crossing it sends Esc and stamps the row with spend against cap. `/day` ledgers rebase at the configured local day and arm auto-continue for that boundary, while absolute parks stay put until raised, cleared, or waived for one human-started turn. `overloaded` covers provider overload, serving capacity, 5xx-class failures, stalled streams, timeouts, and connection drops; it holds until a newer hook event self-clears it ([provider.md → Spent windows](./providers.md#spent-windows-and-paused-rows)).
 3. **Plan proposal**: a `running` Codex row whose completed planning turn rests on a rollout `Plan` item projects to `waiting`. The normal `Stop` hook records the durable plan ask; this marker is the missed-hook backstop that keeps the row and message-delivery gate safe without inventing an ask record from enrichment ([codex.md → Plan-approval marker](./codex.md#plan-approval-marker)). A newer prompt self-clears it.
 4. **Turn death**: a non-transient provider API error or unclassified turn-death marker escalates to `!` at once. For a still-`running` row the marker postdates `last_activity`, so the explicit death certificate beats both live-child activity and the stall window; for a terminal `failed` row the marker must fall inside the row's current turn, so an old marker never explains a fresh failure. Transient 5xx, stall, timeout, and connection errors park like overloads once the marker proves that class. The card quotes the upstream or derived error label, and any newer hook event self-clears it.
@@ -208,7 +208,7 @@ Presence comes from the live pane, with no exit event required: an agent renders
 
 - It keeps a busy agent's row animating.
 - It escalates a `running` agent silent past the configurable stall window (30 minutes by default) to the `!` attention state.
-- It recovers an answered ask: once `last_activity` passes `waiting_since`, [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) reads false, so an agent whose prompt was answered in its own UI returns to `running` without waiting for the next turn boundary.
+- It recovers an answered keyless ask: once `last_activity` passes `waiting_since`, [`is_awaiting_input`](../../../crates/rimz/src/agents/state.rs) reads false, so an agent whose prompt was answered in its own UI returns to `running` without waiting for the next turn boundary. Keyed asks wait for their durable correlated clear because unrelated parallel tools share the same heartbeat.
 
 Like every heartbeat it is latency, not truth: a missing file just leaves `last_activity` at the event-log timestamp.
 

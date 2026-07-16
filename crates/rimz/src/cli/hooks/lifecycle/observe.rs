@@ -145,11 +145,11 @@ pub(super) fn log_lifecycle_transition(
             return None;
         }
     };
-    let prev = snapshot
+    let prior = snapshot
         .agents
         .into_iter()
-        .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
-        .map(|agent| agent.lifecycle());
+        .find(|agent| agent.kind == kind && agent.agent_id == agent_id);
+    let prev = prior.as_ref().map(|agent| agent.lifecycle());
     if prev.is_none() && !observation.signal.establishes_identity() {
         // Create-on-miss: a non-start event for an agent with no prior rollup
         // entry usually materializes the session. Compaction signals are the
@@ -168,7 +168,14 @@ pub(super) fn log_lifecycle_transition(
             "non-start lifecycle event observed for an unseen session",
         );
     }
-    let transition = agent_lifecycle::step(prev.as_ref(), &observation.signal);
+    let transition = agent_lifecycle::step(
+        prev.as_ref(),
+        prior
+            .as_ref()
+            .and_then(|agent| agent.open_ask.as_ref())
+            .and_then(|ask| ask.native_key.as_deref()),
+        &observation.signal,
+    );
     match transition.kind {
         TransitionKind::Reconciled { from, reason } => warn!(
             target: "rimz::agent::lifecycle",

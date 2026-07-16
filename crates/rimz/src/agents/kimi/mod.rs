@@ -448,6 +448,7 @@ impl AgentAdapter for KimiAdapter {
                         .and_then(parse_questions)
                         .and_then(|questions| questions.into_iter().next())
                         .map(|question| question.question),
+                    native_key: None,
                 }
             }
             "PermissionRequest" => LifecycleSignal::AwaitingInput {
@@ -457,18 +458,22 @@ impl AgentAdapter for KimiAdapter {
                     .unwrap_or(super::AskKind::Permission),
                 ask_id: None,
                 detail: parsed.action.as_deref().and_then(non_empty_trimmed),
+                native_key: None,
             },
             "PermissionResult" => LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                native_key: None,
             },
             "PostToolUse" => LifecycleSignal::ToolUsed {
                 mutates: self.descriptor().tool_mutates(payload),
                 edits: self.descriptor().tool_edits_files(payload),
+                native_key: None,
             },
             "PostToolUseFailure" => LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                native_key: None,
             },
             "Stop" => LifecycleSignal::TurnEnded {
                 errored: false,

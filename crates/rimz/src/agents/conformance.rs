@@ -459,10 +459,12 @@ fn awaiting_input_projects_to_waiting() {
             };
             let transition = step(
                 Some(&prior),
+                None,
                 &LifecycleSignal::AwaitingInput {
                     kind: ask_kind,
                     ask_id: None,
                     detail: None,
+                    native_key: None,
                 },
             );
 

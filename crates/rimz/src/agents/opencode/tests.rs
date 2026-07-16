@@ -210,6 +210,7 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
             kind: AskKind::PlanApproval,
             ask_id: None,
             detail: None,
+            native_key: None,
         }
     );
     let error = OpencodeAdapter
@@ -251,6 +252,7 @@ fn opencode_observes_native_questions() {
             kind: AskKind::Question,
             ask_id: None,
             detail: Some("Which database?".to_owned()),
+            native_key: None,
         }
     );
 }
@@ -444,6 +446,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: true,
+                native_key: None,
             }),
         ),
         (
@@ -451,6 +454,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: false,
+                native_key: None,
             }),
         ),
         ("read", None),
@@ -475,6 +479,7 @@ fn opencode_tool_compaction_subagent_and_unknown_events_map_cleanly() {
             LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                native_key: None,
             },
             "{event}"
         );

@@ -210,6 +210,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: true,
+                native_key: None,
             }),
         ),
         (
@@ -217,6 +218,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: false,
+                native_key: None,
             }),
         ),
         (
@@ -224,6 +226,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                native_key: None,
             }),
         ),
         (
@@ -231,6 +234,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: false,
                 edits: false,
+                native_key: None,
             }),
         ),
     ] {
@@ -252,6 +256,7 @@ fn prompt_todo_and_tool_payloads_map_to_lifecycle_enrichment() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            native_key: None,
         }
     );
 }

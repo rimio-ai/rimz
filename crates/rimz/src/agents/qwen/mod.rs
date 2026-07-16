@@ -663,20 +663,24 @@ fn lifecycle_signal(
                     kind,
                     ask_id: None,
                     detail: None,
+                    native_key: None,
                 },
                 None => LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    native_key: None,
                 },
             },
         ),
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: descriptor.tool_mutates(payload),
             edits: descriptor.tool_edits_files(payload),
+            native_key: None,
         }),
         "PostToolUseFailure" => Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            native_key: None,
         }),
         "PermissionRequest" => descriptor
             .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref())
@@ -685,6 +689,7 @@ fn lifecycle_signal(
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,
+                native_key: None,
             }),
         "Stop" => {
             let stop = parse_stop(payload);

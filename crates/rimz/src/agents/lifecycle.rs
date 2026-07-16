@@ -130,6 +130,8 @@ pub enum LifecycleSignal {
         mutates: bool,
         #[serde(default)]
         edits: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_key: Option<String>,
     },
     /// The agent opened a native blocking prompt and is waiting for input in
     /// its own pane. Hook ingestion mints `ask_id`; adapters leave it absent.
@@ -139,6 +141,8 @@ pub enum LifecycleSignal {
         ask_id: Option<AskId>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_key: Option<String>,
     },
     /// The agent began compacting its context window (Claude `PreCompact`,
     /// Codex `PreCompact`). A transient head, not a status change.
@@ -288,7 +292,11 @@ pub struct Transition {
 
 /// Fold one [`LifecycleSignal`] onto the prior [`LifecycleState`]. Pure and
 /// total: any `(prev, signal)` pair returns a `Transition` and never panics.
-pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transition {
+pub fn step(
+    prev: Option<&LifecycleState>,
+    open_ask_key: Option<&str>,
+    signal: &LifecycleSignal,
+) -> Transition {
     let prior_status = prev.map(|p| p.status);
     let prior_phase = prev.map(|p| p.phase).unwrap_or_default();
     let was_compacting = prev.is_some_and(|p| p.compacting);
@@ -320,7 +328,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     // Compaction is the one signal that preserves the prior status; it is a
     // transient head, not a transition. Every other signal clears the head.
     let compacting = matches!(signal, LifecycleSignal::Compacting);
-    let status = map_status(signal, prior_status, &mut kind);
+    let status = map_status(signal, prior_status, open_ask_key, &mut kind);
     let phase = map_phase(signal, prior_phase, status);
     let compaction_closed = was_compacting && !compacting;
     let waiting_cleared =
@@ -363,26 +371,35 @@ fn opened_turn(
     {
         return false;
     }
-    matches!(
-        signal,
-        LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted
-    ) || (status == AgentStatus::Running
-        && prior_status != Some(AgentStatus::Running)
-        && matches!(
-            signal,
-            LifecycleSignal::ToolUsed { .. }
-                | LifecycleSignal::CompactionEnded { auto: Some(true) }
-        ))
+    matches!(signal, LifecycleSignal::TurnStarted)
+        || (matches!(signal, LifecycleSignal::SubagentStarted) && status == AgentStatus::Running)
+        || (status == AgentStatus::Running
+            && prior_status != Some(AgentStatus::Running)
+            && matches!(
+                signal,
+                LifecycleSignal::ToolUsed { .. }
+                    | LifecycleSignal::CompactionEnded { auto: Some(true) }
+            ))
 }
 
 fn map_status(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
+    open_ask_key: Option<&str>,
     kind: &mut TransitionKind,
 ) -> AgentStatus {
     match signal {
         LifecycleSignal::Registered => AgentStatus::Idle,
-        LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => AgentStatus::Running,
+        LifecycleSignal::TurnStarted => AgentStatus::Running,
+        LifecycleSignal::SubagentStarted => match prior_status {
+            Some(terminal @ (AgentStatus::Success | AgentStatus::Failed)) => {
+                *kind = TransitionKind::Ignored {
+                    reason: "subagent start after a terminal stop",
+                };
+                terminal
+            }
+            _ => AgentStatus::Running,
+        },
         LifecycleSignal::AwaitingInput { .. } => AgentStatus::Waiting,
         // A finished child resolves to a terminal verdict, so the parent's
         // expanded list reads `✓`/`!` instead of a resting `○`.
@@ -408,11 +425,21 @@ fn map_status(
             }
         }
         LifecycleSignal::TurnInterrupted => AgentStatus::Idle,
-        LifecycleSignal::ToolUsed { .. } => {
+        LifecycleSignal::ToolUsed { native_key, .. } => {
             // A completed tool proves the agent is working; if the rollup thinks
             // it is resting (or it is unknown), reconcile to running. Attention
             // states (anything not resting) are left alone.
             match prior_status {
+                Some(AgentStatus::Waiting)
+                    if open_ask_key.is_some()
+                        && native_key.as_deref().is_some()
+                        && open_ask_key != native_key.as_deref() =>
+                {
+                    *kind = TransitionKind::Ignored {
+                        reason: "sibling tool completed while a keyed ask is open",
+                    };
+                    AgentStatus::Waiting
+                }
                 Some(AgentStatus::Running | AgentStatus::Waiting) => AgentStatus::Running,
                 Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
                     *kind = TransitionKind::Reconciled {

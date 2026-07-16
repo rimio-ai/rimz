@@ -473,6 +473,7 @@ fn same_second_lifecycle_state_is_accepted_without_replacing_turn_start() {
         id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: Some("durable question".to_owned()),
+        native_key: None,
         since: ago(12),
     });
     let mut current = observation("conversation-a", 30, Some(10), Some(30));
@@ -509,6 +510,7 @@ fn exact_identity_only_codex_observation_preserves_hook_owned_wait() {
         id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: Some("Which database?".to_owned()),
+        native_key: None,
         since: waiting_since,
     });
     let open_ask = durable.open_ask.clone();
@@ -575,6 +577,7 @@ fn identity_only_session_adopts_launch_identity_as_idle() {
         id: crate::ids::AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: crate::agents::AskKind::Question,
         detail: None,
+        native_key: None,
         since: ago(5),
     });
     let pane = pane("%1", "codex", "/repo/main");

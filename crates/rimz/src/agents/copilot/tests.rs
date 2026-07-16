@@ -48,6 +48,7 @@ fn classifies_native_asks_and_lifecycle_events() {
             kind: AskKind::Permission,
             ask_id: None,
             detail: None,
+            native_key: None,
         })
     );
     assert_eq!(
@@ -61,6 +62,7 @@ fn classifies_native_asks_and_lifecycle_events() {
             kind: AskKind::Question,
             ask_id: None,
             detail: None,
+            native_key: None,
         })
     );
     assert_eq!(
@@ -70,6 +72,7 @@ fn classifies_native_asks_and_lifecycle_events() {
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            native_key: None,
         })
     );
 }
@@ -80,36 +83,36 @@ fn lifecycle_signals_drive_the_shared_state_machine() {
     assert_eq!(registered.signal, LifecycleSignal::Registered);
     assert_eq!(registered.worktree_path.as_deref(), Some("/tmp/work"));
     assert_eq!(registered.origin, None);
-    let mut state = step(None, &registered.signal).next;
+    let mut state = step(None, None, &registered.signal).next;
 
     let started = observation(
         "userPromptSubmitted",
         json!({"sessionId":"s","prompt":"  fix auth  "}),
     );
     assert_eq!(started.task.as_deref(), Some("fix auth"));
-    state = step(Some(&state), &started.signal).next;
+    state = step(Some(&state), None, &started.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Reasoning);
 
     let tool = observation("postToolUse", json!({"sessionId":"s","toolName":"edit"}));
-    state = step(Some(&state), &tool.signal).next;
+    state = step(Some(&state), None, &tool.signal).next;
     assert_eq!(state.phase, TurnPhase::Acting);
 
     let compacting = observation("preCompact", json!({"sessionId":"s","trigger":"auto"}));
-    state = step(Some(&state), &compacting.signal).next;
+    state = step(Some(&state), None, &compacting.signal).next;
     assert!(state.compacting);
-    state = step(Some(&state), &LifecycleSignal::TurnStarted).next;
+    state = step(Some(&state), None, &LifecycleSignal::TurnStarted).next;
     assert!(
         !state.compacting,
         "the next lifecycle edge closes the bracket"
     );
 
     let stopped = observation("agentStop", json!({"sessionId":"s"}));
-    state = step(Some(&state), &stopped.signal).next;
+    state = step(Some(&state), None, &stopped.signal).next;
     assert_eq!(state.status, AgentStatus::Success);
 
     let ended = observation("sessionEnd", json!({"sessionId":"s"}));
-    state = step(Some(&state), &ended.signal).next;
+    state = step(Some(&state), None, &ended.signal).next;
     assert_eq!(state.status, AgentStatus::Success);
 }
 
@@ -119,7 +122,7 @@ fn native_prompt_before_registration_keeps_the_turn_running() {
         "userPromptSubmitted",
         json!({"sessionId":"s","prompt":"start first"}),
     );
-    let mut state = step(None, &started.signal).next;
+    let mut state = step(None, None, &started.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
 
     let session_start = observation(
@@ -132,12 +135,13 @@ fn native_prompt_before_registration_keeps_the_turn_running() {
         session_start.prompt.is_none(),
         "the duplicate signal carries no prompt"
     );
-    state = step(Some(&state), &session_start.signal).next;
+    state = step(Some(&state), None, &session_start.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Reasoning);
 
     state = step(
         Some(&state),
+        None,
         &observation("agentStop", json!({"sessionId":"s"})).signal,
     )
     .next;
@@ -152,9 +156,11 @@ fn promptless_session_start_registers_idle() {
     ] {
         let session_start = observation("sessionStart", payload);
         assert_eq!(session_start.signal, LifecycleSignal::Registered);
-        let running = step(None, &LifecycleSignal::TurnStarted).next;
+        let running = step(None, None, &LifecycleSignal::TurnStarted).next;
         assert_eq!(
-            step(Some(&running), &session_start.signal).next.status,
+            step(Some(&running), None, &session_start.signal)
+                .next
+                .status,
             AgentStatus::Idle,
         );
     }
@@ -223,8 +229,11 @@ fn tool_mapping_uses_camel_case_names() {
                 &json!({"sessionId":"s","toolName":tool,"error":"tool failed"}),
             )
             .map(|observation| observation.signal);
-        let expected =
-            expected.map(|(mutates, edits)| LifecycleSignal::ToolUsed { mutates, edits });
+        let expected = expected.map(|(mutates, edits)| LifecycleSignal::ToolUsed {
+            mutates,
+            edits,
+            native_key: None,
+        });
         assert_eq!(signal, expected, "{tool}");
     }
 }

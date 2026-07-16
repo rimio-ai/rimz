@@ -63,6 +63,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: false,
                 edits: false,
+                native_key: None,
             }),
         ),
         (
@@ -71,6 +72,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: true,
                 edits: false,
+                native_key: None,
             }),
         ),
         (
@@ -79,6 +81,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: true,
                 edits: false,
+                native_key: None,
             }),
         ),
         (
@@ -87,6 +90,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: false,
                 edits: false,
+                native_key: None,
             }),
         ),
         (
@@ -95,6 +99,7 @@ fn observe_lifecycle_maps_each_event_to_its_signal() {
             Some(ToolUsed {
                 mutates: false,
                 edits: false,
+                native_key: None,
             }),
         ),
         (
@@ -162,6 +167,7 @@ fn stop_on_resting_plan_becomes_plan_approval_with_detail() {
             kind: AskKind::PlanApproval,
             ask_id: None,
             detail: None,
+            native_key: None,
         }
     );
     let questions = CodexAdapter
@@ -273,6 +279,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
             kind: AskKind::Permission,
             ask_id: None,
             detail: None,
+            native_key: None,
         }
     );
     assert_eq!(permission.task.as_deref(), Some("review"));
@@ -296,6 +303,7 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
             kind: AskKind::Question,
             ask_id: None,
             detail: None,
+            native_key: None,
         }
     );
     assert_eq!(question.task.as_deref(), Some("review"));

@@ -84,7 +84,8 @@ fn proof_of_work_tool(signal: &LifecycleSignal) -> bool {
         signal,
         LifecycleSignal::ToolUsed {
             mutates: false,
-            edits: false
+            edits: false,
+            ..
         }
     )
 }
@@ -176,10 +177,12 @@ mod tests {
         let proof = LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            native_key: None,
         };
         let mutating = LifecycleSignal::ToolUsed {
             mutates: true,
             edits: false,
+            native_key: None,
         };
 
         assert!(append_lifecycle_event(&mutating, None, false));
@@ -262,6 +265,7 @@ mod tests {
         let proof = observation(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            native_key: None,
         });
         let before = std::fs::metadata(&store.paths().events_log)
             .map(|meta| meta.len())

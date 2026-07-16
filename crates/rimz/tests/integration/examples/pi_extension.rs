@@ -105,6 +105,16 @@ const ctx = {{
 }};
 rimz(pi);
 
+await handlers.get("tool_call")({{
+  toolCallId: "ask-call",
+  toolName: "ask_user_question",
+  input: {{ questions: [{{ question: "Ship?" }}] }},
+}}, {{ ...ctx, hasUI: true }});
+handlers.get("tool_execution_end")({{
+  toolCallId: "sibling-call",
+  toolName: "bash",
+  isError: false,
+}}, ctx);
 handlers.get("turn_end")({{
   usage: {{
     input: 10,
@@ -169,13 +179,19 @@ const readPayloads = async () => {{
 let payloads = [];
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
-  if (payloads.length >= 11) break;
+  if (payloads.length >= 13) break;
   await new Promise((resolve) => setTimeout(resolve, 20));
 }}
-if (payloads.length < 11) {{
-  throw new Error(`expected 11 forwarded payloads, got ${{payloads.length}}`);
+if (payloads.length < 13) {{
+  throw new Error(`expected 13 forwarded payloads, got ${{payloads.length}}`);
 }}
 const byEvent = Object.fromEntries(payloads.map((payload) => [payload.hook_event_name, payload]));
+if (byEvent.tool_call?.tool_call_id !== "ask-call") {{
+  throw new Error(`tool_call lost correlation: ${{JSON.stringify(byEvent.tool_call)}}`);
+}}
+if (byEvent.tool_execution_end?.tool_call_id !== "sibling-call") {{
+  throw new Error(`tool_execution_end lost correlation: ${{JSON.stringify(byEvent.tool_execution_end)}}`);
+}}
 const boundary = byEvent[boundaryEvent];
 if (!boundary) {{
   throw new Error(`missing boundary ${{boundaryEvent}}: ${{JSON.stringify(payloads.map((p) => p.hook_event_name))}}`);

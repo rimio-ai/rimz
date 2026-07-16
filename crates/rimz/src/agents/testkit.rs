@@ -26,6 +26,7 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
             kind,
             ask_id: None,
             detail: None,
+            native_key: None,
         });
     }
     for auto in [None, Some(false), Some(true)] {
@@ -44,7 +45,11 @@ pub(crate) fn all_signals() -> Vec<LifecycleSignal> {
     }
     for mutates in [false, true] {
         for edits in [false, true] {
-            signals.push(LifecycleSignal::ToolUsed { mutates, edits });
+            signals.push(LifecycleSignal::ToolUsed {
+                mutates,
+                edits,
+                native_key: None,
+            });
         }
     }
     signals

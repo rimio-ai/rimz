@@ -326,6 +326,7 @@ impl AgentAdapter for CursorAdapter {
             "postToolUse" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: self.descriptor().tool_edits_files(payload),
+                native_key: None,
             },
             "stop" if parsed.stop_outcome() == payloads::StopOutcome::Aborted => {
                 LifecycleSignal::TurnInterrupted

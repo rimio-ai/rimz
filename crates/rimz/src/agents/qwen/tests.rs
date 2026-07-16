@@ -187,7 +187,8 @@ fn maps_lifecycle_context_background_and_subagents() {
         tool.signal,
         LifecycleSignal::ToolUsed {
             mutates: true,
-            edits: true
+            edits: true,
+            native_key: None,
         }
     );
     let parked = adapter.observe_lifecycle("Stop", &json!({"session_id":"s1","background_tasks":[{"status":"running"}],"context_usage":1.2,"context_limit":131072})).unwrap();

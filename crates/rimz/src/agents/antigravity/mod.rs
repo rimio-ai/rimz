@@ -453,7 +453,14 @@ fn observe_lifecycle_with_prompt_reader(
                 "PostToolUse:mutating" if !failed => (true, false),
                 _ => (false, false),
             };
-            (tool.common, LifecycleSignal::ToolUsed { mutates, edits })
+            (
+                tool.common,
+                LifecycleSignal::ToolUsed {
+                    mutates,
+                    edits,
+                    native_key: None,
+                },
+            )
         }
         "Stop" => {
             let stop = payloads::parse_stop(payload)?;

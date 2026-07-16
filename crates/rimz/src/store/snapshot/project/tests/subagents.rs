@@ -43,6 +43,42 @@ fn subagent_start_reduces_identity_that_survives_stop() {
 }
 
 #[test]
+fn terminal_subagent_stop_absorbs_a_reordered_start() {
+    let stop = raw_lifecycle_at(
+        "pi",
+        1,
+        serde_json::json!({
+            "event_name": "subagent_stopped",
+            "agent_id": "child-1",
+            "signal": { "signal": "subagent_stopped", "errored": true },
+            "parent_agent_id": "sess-root",
+            "task": "reviewer",
+        }),
+    );
+    let late_start = raw_lifecycle_at(
+        "pi",
+        2,
+        serde_json::json!({
+            "event_name": "subagent_started",
+            "agent_id": "child-1",
+            "signal": { "signal": "subagent_started" },
+            "parent_agent_id": "sess-root",
+            "task": "reviewer",
+        }),
+    );
+
+    let agents = reduce_agent_states(&[stop, late_start]);
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id == "child-1")
+        .expect("child row");
+    assert_eq!(child.status, AgentStatus::Failed);
+    assert_eq!(child.task.as_deref(), Some("reviewer"));
+    assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
+    assert_eq!(child.turn_started_at, None);
+}
+
+#[test]
 fn subagent_stop_without_start_keeps_parent_link_and_spares_the_parent() {
     // Claude can report a typed child only at `SubagentStop`. That Stop
     // still carries `parent_agent_id`; adopting it keeps the finished child

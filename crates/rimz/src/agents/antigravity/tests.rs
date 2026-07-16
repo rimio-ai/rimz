@@ -52,7 +52,11 @@ fn observer_neutral_hooks_leave_pre_tool_policy_untouched() {
 #[test]
 fn native_hooks_normalize_lifecycle() {
     let common = hook_payload();
-    let tool = |mutates, edits| LifecycleSignal::ToolUsed { mutates, edits };
+    let tool = |mutates, edits| LifecycleSignal::ToolUsed {
+        mutates,
+        edits,
+        native_key: None,
+    };
     let ended = |errored, parked_on_background| LifecycleSignal::TurnEnded {
         errored,
         parked_on_background,

@@ -125,6 +125,84 @@ fn asks_lists_and_shows_structured_question_json() {
 }
 
 #[test]
+fn pi_parallel_sibling_completion_keeps_the_keyed_ask_open() {
+    let env = Env::new();
+    let ask = serde_json::to_string(&json!({
+        "hook_event_name": "tool_call",
+        "session_id": "sess-pi-question",
+        "tool_call_id": "ask-call",
+        "tool_name": "ask_user_question",
+        "has_ui": true,
+        "tool_input": {
+            "questions": [{
+                "question": "Which route?",
+                "options": [
+                    { "label": "Safe", "description": "Stage it" },
+                    { "label": "Fast", "description": "Ship it" }
+                ]
+            }]
+        }
+    }))
+    .expect("pi ask payload");
+    let output = env.run_hook("pi", &ask);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sibling = serde_json::to_string(&json!({
+        "hook_event_name": "tool_execution_end",
+        "session_id": "sess-pi-question",
+        "tool_call_id": "sibling-call",
+        "tool_name": "bash"
+    }))
+    .expect("pi sibling payload");
+    let output = env.run_hook("pi", &sibling);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("list pi ask after sibling completion");
+    assert!(output.status.success());
+    let asks: serde_json::Value = serde_json::from_slice(&output.stdout).expect("asks json");
+    assert_eq!(asks.as_array().map(Vec::len), Some(1));
+    assert_eq!(asks[0]["questions"][0]["question"], "Which route?");
+
+    let matching = serde_json::to_string(&json!({
+        "hook_event_name": "tool_execution_end",
+        "session_id": "sess-pi-question",
+        "tool_call_id": "ask-call",
+        "tool_name": "ask_user_question",
+        "tool_details": { "answers": [{ "question": "Which route?", "answer": "Safe" }] }
+    }))
+    .expect("pi matching payload");
+    let output = env.run_hook("pi", &matching);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = env
+        .rimz()
+        .args(["asks", "--json"])
+        .bounded_output()
+        .expect("list pi asks after matching completion");
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        json!([])
+    );
+}
+
+#[test]
 fn asks_ignores_newer_transcript_question_with_a_different_id() {
     let env = Env::new();
     let hook = env.run_hook("claude", &question_payload());
@@ -366,6 +444,7 @@ fn read_open_ask_rejects_ineligible_state_before_external_reads() {
         id: AskId::parse("ask_0123456789abcdef").expect("ask id"),
         kind: AskKind::Question,
         detail: Some("Ignored question".to_owned()),
+        native_key: None,
         since: jiff::Timestamp::now(),
     });
     assert_eq!(

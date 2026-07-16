@@ -352,6 +352,7 @@ export default function rimz(pi) {
   });
   pi.on("tool_execution_end", (ev, ctx) =>
     feed("tool_execution_end", ctx, {
+      tool_call_id: ev?.toolCallId,
       tool_name: ev?.toolName,
       is_error: ev?.isError === true,
       tool_details: ev?.toolName === "ask_user_question" ? ev?.result?.details : undefined,
@@ -539,6 +540,7 @@ export default function rimz(pi) {
         child.stdin.end(
           JSON.stringify(
             envelope("tool_call", ctx, {
+              tool_call_id: ev?.toolCallId,
               tool_name: ev?.toolName,
               tool_input: ev?.input,
               has_ui: ctx?.hasUI === true,

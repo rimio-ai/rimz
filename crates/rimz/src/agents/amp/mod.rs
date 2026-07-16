@@ -293,6 +293,7 @@ impl AgentAdapter for AmpAdapter {
                 edits: parsed
                     .files_modified
                     .unwrap_or_else(|| self.descriptor().tool_edits_files(payload)),
+                native_key: None,
             },
             "agent_end" => LifecycleSignal::TurnEnded {
                 errored: parsed.status.as_deref() != Some("done"),
@@ -302,6 +303,7 @@ impl AgentAdapter for AmpAdapter {
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,
+                native_key: None,
             },
             _ => return None,
         };

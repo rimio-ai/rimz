@@ -125,3 +125,70 @@ fn open_ask_tracks_the_waiting_lifecycle_edge() {
     assert_eq!(replayed[0].status, AgentStatus::Waiting);
     assert!(replayed[0].open_ask.is_none());
 }
+
+#[test]
+fn keyed_open_ask_survives_a_parallel_sibling_completion() {
+    let start = raw_lifecycle_at(
+        "pi",
+        1,
+        serde_json::json!({
+            "agent_id": "sess-1",
+            "signal": { "signal": "registered" },
+        }),
+    );
+    let waiting = raw_lifecycle_at(
+        "pi",
+        2,
+        serde_json::json!({
+            "agent_id": "sess-1",
+            "signal": {
+                "signal": "awaiting_input",
+                "kind": "question",
+                "ask_id": "ask_0123456789abcdef",
+                "native_key": "ask-call"
+            },
+        }),
+    );
+    let sibling = raw_lifecycle_at(
+        "pi",
+        3,
+        serde_json::json!({
+            "agent_id": "sess-1",
+            "signal": {
+                "signal": "tool_used",
+                "mutates": true,
+                "edits": false,
+                "native_key": "sibling-call"
+            },
+        }),
+    );
+    let matching = raw_lifecycle_at(
+        "pi",
+        4,
+        serde_json::json!({
+            "agent_id": "sess-1",
+            "signal": {
+                "signal": "tool_used",
+                "mutates": false,
+                "edits": false,
+                "native_key": "ask-call"
+            },
+        }),
+    );
+
+    let open = reduce_agent_states(&[start.clone(), waiting.clone(), sibling]);
+    assert_eq!(open[0].status, AgentStatus::Waiting);
+    assert_eq!(open[0].waiting_since, Some(waiting.timestamp));
+    assert_eq!(
+        open[0]
+            .open_ask
+            .as_ref()
+            .and_then(|ask| ask.native_key.as_deref()),
+        Some("ask-call")
+    );
+
+    let closed = reduce_agent_states(&[start, waiting, matching]);
+    assert_eq!(closed[0].status, AgentStatus::Running);
+    assert!(closed[0].waiting_since.is_none());
+    assert!(closed[0].open_ask.is_none());
+}

@@ -336,6 +336,7 @@ impl AgentAdapter for DroidAdapter {
             "PostToolUse" => LifecycleSignal::ToolUsed {
                 mutates: self.descriptor().tool_mutates(payload),
                 edits: self.descriptor().tool_edits_files(payload),
+                native_key: None,
             },
             // Droid has no structured failure hook. Display status and the
             // stall window surface failures without guessing from silence.

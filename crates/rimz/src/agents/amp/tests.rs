@@ -78,7 +78,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
     assert_eq!(registered.launch.model.as_deref(), Some("high"));
     assert_eq!(registered.launch.effort.as_deref(), Some("xhigh"));
     assert_eq!(registered.origin, Some(SessionOrigin::Fresh));
-    let mut state = step(None, &registered.signal).next;
+    let mut state = step(None, None, &registered.signal).next;
     assert_eq!(state.status, AgentStatus::Idle);
 
     let started = AmpAdapter
@@ -89,7 +89,7 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
         .unwrap();
     assert_eq!(started.prompt.as_deref(), Some("fix auth"));
     assert_eq!(started.task.as_deref(), Some("fix auth"));
-    state = step(Some(&state), &started.signal).next;
+    state = step(Some(&state), None, &started.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Reasoning);
 
@@ -104,14 +104,14 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
             }),
         )
         .unwrap();
-    state = step(Some(&state), &tool.signal).next;
+    state = step(Some(&state), None, &tool.signal).next;
     assert_eq!(state.status, AgentStatus::Running);
     assert_eq!(state.phase, TurnPhase::Acting);
 
     let waiting = AmpAdapter
         .observe_lifecycle("permission_ask", &json!({ "session_id": "T-abc123" }))
         .unwrap();
-    state = step(Some(&state), &waiting.signal).next;
+    state = step(Some(&state), None, &waiting.signal).next;
     assert_eq!(state.status, AgentStatus::Waiting);
 
     for (status, expected) in [
@@ -125,7 +125,10 @@ fn lifecycle_events_map_through_the_shared_state_machine() {
                 &json!({ "session_id": "T-abc123", "status": status }),
             )
             .unwrap();
-        assert_eq!(step(Some(&state), &ended.signal).next.status, expected);
+        assert_eq!(
+            step(Some(&state), None, &ended.signal).next.status,
+            expected
+        );
     }
 }
 
@@ -153,6 +156,7 @@ fn files_modified_flag_precedes_static_tool_fallback() {
             LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits,
+                native_key: None,
             }
         );
     }

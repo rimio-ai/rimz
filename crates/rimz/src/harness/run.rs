@@ -945,6 +945,7 @@ mod tests {
             LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: true,
+                native_key: None,
             },
         );
         tool.transcript_path = Some("/tmp/second.jsonl".to_owned());
@@ -1001,6 +1002,7 @@ mod tests {
             LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: true,
+                native_key: None,
             },
         );
         tool.transcript_path = Some("/tmp/late.jsonl".to_owned());

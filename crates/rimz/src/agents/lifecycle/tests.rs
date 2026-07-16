@@ -14,6 +14,7 @@ fn tool(edits: bool) -> LifecycleSignal {
     LifecycleSignal::ToolUsed {
         mutates: true,
         edits,
+        native_key: None,
     }
 }
 
@@ -31,7 +32,7 @@ fn assert_next(
     signal: LifecycleSignal,
     expected: LifecycleState,
 ) -> Transition {
-    let transition = step(prev.as_ref(), &signal);
+    let transition = step(prev.as_ref(), None, &signal);
     assert_eq!(transition.next, expected, "{label}");
     transition
 }
@@ -149,10 +150,57 @@ fn parked_wake_and_answered_prompt_preserve_boundary_facts() {
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            native_key: None,
         },
         state(AgentStatus::Running, TurnPhase::Acting, false),
     );
     assert_eq!((answer.waiting_cleared, answer.opened_turn), (true, true));
+}
+
+#[test]
+fn keyed_wait_clears_only_for_the_matching_tool() {
+    let waiting = state(AgentStatus::Waiting, TurnPhase::Idle, false);
+    let tool = |native_key: Option<&str>| LifecycleSignal::ToolUsed {
+        mutates: true,
+        edits: false,
+        native_key: native_key.map(ToOwned::to_owned),
+    };
+
+    let sibling = step(
+        Some(&waiting),
+        Some("ask-call"),
+        &tool(Some("sibling-call")),
+    );
+    assert_eq!(
+        (
+            sibling.next,
+            sibling.kind,
+            sibling.waiting_cleared,
+            sibling.opened_turn,
+        ),
+        (
+            waiting,
+            TransitionKind::Ignored {
+                reason: "sibling tool completed while a keyed ask is open",
+            },
+            false,
+            false,
+        )
+    );
+
+    for (label, open_ask_key, signal) in [
+        (
+            "matching keyed tool",
+            Some("ask-call"),
+            tool(Some("ask-call")),
+        ),
+        ("keyless tool", Some("ask-call"), tool(None)),
+        ("keyless ask", None, tool(Some("sibling-call"))),
+    ] {
+        let transition = step(Some(&waiting), open_ask_key, &signal);
+        assert_eq!(transition.next.status, AgentStatus::Running, "{label}");
+        assert!(transition.waiting_cleared, "{label}");
+    }
 }
 
 #[test]
@@ -177,6 +225,24 @@ fn subagent_and_terminal_edges_follow_the_contract() {
             state(expected, TurnPhase::Idle, false),
         );
     }
+
+    for terminal in [AgentStatus::Success, AgentStatus::Failed] {
+        let prior = state(terminal, TurnPhase::Idle, false);
+        let late_start = step(Some(&prior), None, &LifecycleSignal::SubagentStarted);
+        assert_eq!(late_start.next, prior, "{terminal:?}");
+        assert_eq!(
+            late_start.kind,
+            TransitionKind::Ignored {
+                reason: "subagent start after a terminal stop",
+            },
+            "{terminal:?}",
+        );
+        assert!(!late_start.opened_turn, "{terminal:?}");
+    }
+
+    let running_start = step(Some(&reasoning), None, &LifecycleSignal::SubagentStarted);
+    assert_eq!(running_start.next, reasoning);
+    assert!(running_start.opened_turn);
     for (label, signal, reason) in [
         (
             "ended",
@@ -325,7 +391,7 @@ fn all_state_signal_pairs_preserve_machine_invariants() {
 
     for prev in states {
         for signal in &signals {
-            let transition = step(prev.as_ref(), signal);
+            let transition = step(prev.as_ref(), None, signal);
             if !matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost)
                 && transition.next.status != AgentStatus::Running
             {
@@ -355,6 +421,7 @@ fn lifecycle_wire_tags_and_legacy_defaults_are_stable() {
                 kind: AskKind::Question,
                 ask_id: None,
                 detail: None,
+                native_key: None,
             },
             "awaiting_input",
         ),

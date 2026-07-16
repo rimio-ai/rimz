@@ -21,6 +21,8 @@ pub struct OpenAsk {
     pub kind: AskKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_key: Option<String>,
     pub since: Timestamp,
 }
 
@@ -572,9 +574,11 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
     /// Timestamp of the native prompt that put this session in `Waiting`.
-    /// Activity after this instant proves the prompt was answered in the
+    /// Activity after this instant proves a keyless prompt was answered in the
     /// agent's own UI, so read paths project the row back to work even before
-    /// the next lifecycle boundary arrives.
+    /// the next lifecycle boundary arrives. Keyed prompts use their durable
+    /// completion edge instead because parallel sibling tools also touch the
+    /// activity heartbeat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_since: Option<Timestamp>,
     /// The prompt associated with `waiting_since`. Old lifecycle records have
@@ -892,14 +896,20 @@ impl AgentState {
     /// True when the row must reserve pane input for a native prompt. Durable
     /// `Waiting` uses its ask timestamp; provider-local input and rollout plan
     /// markers cover native dialogs without inventing a durable ask record.
-    /// Newer agent activity self-clears every derived form.
+    /// A keyed open ask waits for its durable completion edge because parallel
+    /// sibling tools also touch activity. Newer activity self-clears keyless
+    /// and derived asks.
     pub fn is_awaiting_input(&self) -> bool {
         is_native_permission_wait(self.status, self.context.as_ref(), self.last_activity)
             || is_plan_proposed(self.status, self.context.as_ref(), self.last_activity)
             || (self.status == AgentStatus::Waiting
-                && self
-                    .waiting_since
-                    .is_some_and(|waiting_since| self.last_activity <= waiting_since))
+                && (self
+                    .open_ask
+                    .as_ref()
+                    .is_some_and(|ask| ask.native_key.is_some())
+                    || self
+                        .waiting_since
+                        .is_some_and(|waiting_since| self.last_activity <= waiting_since)))
     }
 
     /// Provider API error currently explaining this row's displayed state. The

@@ -362,6 +362,7 @@ impl AgentAdapter for CopilotAdapter {
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,
+                native_key: None,
             },
             "preToolUse" => match self
                 .descriptor()
@@ -371,10 +372,12 @@ impl AgentAdapter for CopilotAdapter {
                     kind,
                     ask_id: None,
                     detail: None,
+                    native_key: None,
                 },
                 None => LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    native_key: None,
                 },
             },
             "postToolUse" | "postToolUseFailure"
@@ -389,6 +392,7 @@ impl AgentAdapter for CopilotAdapter {
                         .tool_name
                         .as_deref()
                         .is_some_and(|name| self.descriptor().tools.editing.contains(&name)),
+                    native_key: None,
                 }
             }
             "agentStop" => LifecycleSignal::TurnEnded {

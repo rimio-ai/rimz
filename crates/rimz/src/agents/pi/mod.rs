@@ -335,6 +335,7 @@ impl AgentAdapter for PiAdapter {
                 "tool_call",
                 json!({
                     "session_id": "sess-1",
+                    "tool_call_id": "ask-call",
                     "tool_name": "ask_user_question",
                     "tool_input": {
                         "questions": [{
@@ -426,13 +427,21 @@ impl AgentAdapter for PiAdapter {
             ),
             ClassificationSample::new(
                 "tool_execution_end",
-                json!({ "session_id": "sess-1", "tool_name": "bash" }),
+                json!({
+                    "session_id": "sess-1",
+                    "tool_call_id": "sibling-call",
+                    "tool_name": "bash"
+                }),
                 AgentHookClass::Lifecycle,
                 None,
             ),
             ClassificationSample::new(
                 "tool_execution_end",
-                json!({ "session_id": "sess-1", "tool_name": "ask_user_question" }),
+                json!({
+                    "session_id": "sess-1",
+                    "tool_call_id": "ask-call",
+                    "tool_name": "ask_user_question"
+                }),
                 AgentHookClass::Lifecycle,
                 None,
             ),
@@ -582,6 +591,7 @@ impl AgentAdapter for PiAdapter {
                 kind: blocking_kind?,
                 ask_id: None,
                 detail: None,
+                native_key: optional_payload_string(payload, &["tool_call_id"]),
             },
             // The questionnaire's completed tool boundary clears waiting for
             // answers, cancellation, validation failure, and headless no-UI.
@@ -589,6 +599,7 @@ impl AgentAdapter for PiAdapter {
                 LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    native_key: optional_payload_string(payload, &["tool_call_id"]),
                 }
             }
             // Only a *mutating* tool rides the lifecycle channel: it is proof
@@ -599,6 +610,7 @@ impl AgentAdapter for PiAdapter {
                 LifecycleSignal::ToolUsed {
                     mutates: true,
                     edits: self.descriptor().tool_edits_files(payload),
+                    native_key: optional_payload_string(payload, &["tool_call_id"]),
                 }
             }
             // A leading signal, like Claude's `PreCompact`.

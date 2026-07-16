@@ -423,11 +423,13 @@ impl AgentAdapter for OpencodeAdapter {
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: parsed.title.clone(),
+                native_key: None,
             },
             "question_ask" => LifecycleSignal::AwaitingInput {
                 kind: AskKind::Question,
                 ask_id: None,
                 detail: parsed.title.clone(),
+                native_key: None,
             },
             "chat_message" => LifecycleSignal::TurnStarted,
             "session_idle" if parsed.plan_proposed == Some(true) => {
@@ -435,6 +437,7 @@ impl AgentAdapter for OpencodeAdapter {
                     kind: AskKind::PlanApproval,
                     ask_id: None,
                     detail: None,
+                    native_key: None,
                 }
             }
             "session_idle" => LifecycleSignal::TurnEnded {
@@ -449,11 +452,13 @@ impl AgentAdapter for OpencodeAdapter {
                 LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    native_key: None,
                 }
             }
             "tool_after" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: self.descriptor().tool_edits_files(payload),
+                native_key: None,
             },
             "session_compacting" => LifecycleSignal::Compacting,
             "session_compacted" => LifecycleSignal::CompactionEnded { auto: None },

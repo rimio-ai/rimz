@@ -207,6 +207,7 @@ fn projected_ask_rows_notify_as_waiting() {
         id: AskId::parse("ask_0123456789abcdef").unwrap(),
         kind: AskKind::Question,
         detail: Some("Choose?".to_owned()),
+        native_key: None,
         since: agent.last_activity,
     });
     let next = snapshot_with(vec![agent]);

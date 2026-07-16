@@ -668,7 +668,13 @@ fn lifecycle_projection(
         compaction_closed,
         opened_turn,
         ..
-    } = lifecycle::step(prev_state.as_ref(), &signal);
+    } = lifecycle::step(
+        prev_state.as_ref(),
+        prior
+            .and_then(|p| p.open_ask.as_ref())
+            .and_then(|ask| ask.native_key.as_deref()),
+        &signal,
+    );
     let compacting_since = if next.compacting {
         Some(timestamp)
     } else {
@@ -708,10 +714,12 @@ fn lifecycle_projection(
             kind,
             ask_id: Some(id),
             detail,
+            native_key,
         } => Some(crate::agents::OpenAsk {
             id: id.clone(),
             kind: *kind,
             detail: detail.clone(),
+            native_key: native_key.clone(),
             since: timestamp,
         }),
         lifecycle::LifecycleSignal::AwaitingInput { ask_id: None, .. } => None,

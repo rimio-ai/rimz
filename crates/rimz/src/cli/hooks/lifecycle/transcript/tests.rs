@@ -118,6 +118,7 @@ fn conversation_entries_follow_confirmed_message_turn_causality() {
             kind: rimz::agents::AskKind::Question,
             ask_id: Some(rimz::ids::AskId::parse("ask_0123456789abcdef").unwrap()),
             detail: None,
+            native_key: None,
         }),
         &[],
     )

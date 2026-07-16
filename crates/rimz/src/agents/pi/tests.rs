@@ -801,6 +801,7 @@ fn normalized_context(payload: serde_json::Value) -> Option<AgentContext> {
 fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
     let ask_payload = json!({
         "session_id": "sess-1",
+        "tool_call_id": "ask-call",
         "tool_name": "ask_user_question",
         "tool_input": {
             "questions": [{
@@ -820,6 +821,7 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
             kind: AskKind::Question,
             ask_id: None,
             detail: None,
+            native_key: Some("ask-call".to_owned()),
         })
     );
     assert_eq!(
@@ -850,6 +852,7 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
                 "tool_execution_end",
                 &json!({
                     "session_id": "sess-1",
+                    "tool_call_id": "ask-call",
                     "tool_name": "ask_user_question",
                     "tool_details": { "answers": [], "cancelled": true }
                 }),
@@ -858,6 +861,7 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
         Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
+            native_key: Some("ask-call".to_owned()),
         })
     );
 }
@@ -936,6 +940,7 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: true,
+                native_key: Some("sibling-call".to_owned()),
             }),
         ),
         (
@@ -943,13 +948,18 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
             Some(LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: false,
+                native_key: Some("sibling-call".to_owned()),
             }),
         ),
         ("read", None),
     ] {
         let observed = PiAdapter.observe_lifecycle(
             "tool_execution_end",
-            &json!({ "session_id": "sess-1", "tool_name": tool_name }),
+            &json!({
+                "session_id": "sess-1",
+                "tool_call_id": "sibling-call",
+                "tool_name": tool_name
+            }),
         );
         assert_eq!(observed.map(|obs| obs.signal), expected, "{tool_name}");
     }
@@ -966,7 +976,7 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         )
         .expect("observation");
     assert_eq!(
-        step(Some(&running), &edit.signal).next.phase,
+        step(Some(&running), None, &edit.signal).next.phase,
         TurnPhase::Acting
     );
 

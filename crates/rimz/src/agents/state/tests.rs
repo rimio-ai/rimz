@@ -290,6 +290,29 @@ fn effective_status_projects_hookless_turn_settle_markers() {
 }
 
 #[test]
+fn keyed_wait_outranks_newer_activity_while_keyless_wait_self_clears() {
+    let waiting_since = Timestamp::from_second(1_000).unwrap();
+    let mut keyed = test_agent(AgentStatus::Waiting, 1_010);
+    keyed.waiting_since = Some(waiting_since);
+    keyed.open_ask = Some(OpenAsk {
+        id: AskId::parse("ask_0123456789abcdef").unwrap(),
+        kind: AskKind::Question,
+        detail: Some("Which route?".to_owned()),
+        native_key: Some("ask-call".to_owned()),
+        since: waiting_since,
+    });
+    assert!(keyed.is_awaiting_input());
+
+    keyed.waiting_since = None;
+    assert!(keyed.is_awaiting_input());
+    keyed.waiting_since = Some(waiting_since);
+
+    let mut keyless = keyed;
+    keyless.open_ask.as_mut().unwrap().native_key = None;
+    assert!(!keyless.is_awaiting_input());
+}
+
+#[test]
 fn displayed_turn_error_projects_active_running_marker() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     agent.context = Some(context_error(TurnErrorClass::PausedOverloaded, 1_010));

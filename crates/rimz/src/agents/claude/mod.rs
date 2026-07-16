@@ -873,10 +873,12 @@ fn map_claude_lifecycle_signal(
                 kind: AskKind::Permission,
                 ask_id: None,
                 detail: None,
+                native_key: None,
             }),
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: descriptor.tool_mutates(payload),
             edits: descriptor.tool_edits_files(payload),
+            native_key: None,
         }),
         "PreToolUse" => {
             match descriptor.blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()) {
@@ -884,10 +886,12 @@ fn map_claude_lifecycle_signal(
                     kind,
                     ask_id: None,
                     detail: None,
+                    native_key: None,
                 }),
                 None => Some(LifecycleSignal::ToolUsed {
                     mutates: false,
                     edits: false,
+                    native_key: None,
                 }),
             }
         }

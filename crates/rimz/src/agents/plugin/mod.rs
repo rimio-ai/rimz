@@ -200,12 +200,17 @@ impl AgentAdapter for PluginAdapter {
                     && tool_name
                         .as_deref()
                         .is_some_and(|name| self.descriptor.tools.editing.contains(&name));
-                LifecycleSignal::ToolUsed { mutates, edits }
+                LifecycleSignal::ToolUsed {
+                    mutates,
+                    edits,
+                    native_key: None,
+                }
             }
             CanonicalEvent::AwaitingInput { ask, .. } => LifecycleSignal::AwaitingInput {
                 kind: *ask,
                 ask_id: None,
                 detail: None,
+                native_key: None,
             },
             CanonicalEvent::CompactionStart => LifecycleSignal::Compacting,
             CanonicalEvent::CompactionEnd { trigger } => LifecycleSignal::CompactionEnded {

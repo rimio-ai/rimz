@@ -3131,6 +3131,7 @@ fn push_pending_agent_ask(env: &Env, session_id: &str) {
             kind: AskKind::Permission,
             ask_id: None,
             detail: None,
+            native_key: None,
         },
     );
     env.store()

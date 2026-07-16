@@ -31,7 +31,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         Some("/tmp/transcript.jsonl")
     );
     assert_eq!(
-        step(None, &registered.signal).next.status,
+        step(None, None, &registered.signal).next.status,
         AgentStatus::Idle
     );
 
@@ -43,7 +43,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
         .expect("prompt observation");
     assert_eq!(prompt.task.as_deref(), Some("fix auth"));
     assert_eq!(prompt.prompt.as_deref(), Some("fix auth"));
-    let running = step(None, &prompt.signal).next;
+    let running = step(None, None, &prompt.signal).next;
     assert_eq!(running.status, AgentStatus::Running);
     assert_eq!(running.phase, TurnPhase::Reasoning);
 
@@ -61,6 +61,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
             edits.map(|edits| LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits,
+                native_key: None,
             }),
             "{tool}",
         );
@@ -115,7 +116,7 @@ fn lifecycle_maps_identity_prompt_tools_outcomes_and_compaction() {
     assert_eq!(compacting.context_pct, Some(84));
     assert_eq!(compacting.context_window, Some(200_000));
     assert_eq!(compacting.total_tokens, None);
-    let transition = step(Some(&running), &compacting.signal);
+    let transition = step(Some(&running), None, &compacting.signal);
     assert!(transition.next.compacting);
     assert_eq!(transition.next.status, AgentStatus::Running);
 
