@@ -262,13 +262,6 @@ impl RenderedBlock {
         block
     }
 
-    #[cfg(test)]
-    pub(crate) fn offset_row_ordinals(&mut self, offset: usize) {
-        for ordinal in self.interactions.row_by_line.iter_mut().flatten() {
-            *ordinal += offset;
-        }
-    }
-
     fn assert_shape(&self) {
         debug_assert_eq!(self.lines.len(), self.interactions.row_by_line.len());
         debug_assert!(
