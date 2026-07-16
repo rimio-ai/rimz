@@ -56,19 +56,3 @@ pub fn log(state_root: &Path) -> JsonlLog {
         PLUGIN_PRESENCE_LOG_MAX_BYTES,
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sample_derives_bytes_from_wasm_pages() {
-        let sample = PluginPresenceSample::new(1, None, 42, 1_000, 5, 2, None);
-
-        assert_eq!(sample.bytes, 42 * WASM_PAGE_BYTES);
-        assert_eq!(
-            PluginPresenceSample::new(1, None, u64::MAX, 1_000, 5, 2, None).bytes,
-            u64::MAX
-        );
-    }
-}

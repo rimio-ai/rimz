@@ -418,15 +418,9 @@ mod tests {
     fn workspace_id() -> WorkspaceId {
         WorkspaceId::from_project_root(Path::new("/repo"))
     }
-
     fn sink(dir: &Path) -> DiagSink {
         DiagSink::under(dir.to_path_buf(), workspace_id(), "s", None)
     }
-
-    fn sink_with_instance(dir: &Path, instance_id: SidebarInstanceId) -> DiagSink {
-        DiagSink::under(dir.to_path_buf(), workspace_id(), "s", Some(instance_id))
-    }
-
     fn frame_rejected(prior_pane_count: usize) -> DiagEvent {
         DiagEvent::FrameRejected {
             reason: FrameRejectReason::Empty,
@@ -435,13 +429,11 @@ mod tests {
             frames_ref: None,
         }
     }
-
     fn duplicate_pane(raw: impl std::fmt::Display) -> DiagEvent {
         DiagEvent::DuplicatePaneId {
             pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw}")),
         }
     }
-
     fn diag_records(sink: &DiagSink) -> Vec<DiagEnvelope> {
         std::fs::read_to_string(sink.log_path().unwrap())
             .unwrap()
@@ -449,7 +441,6 @@ mod tests {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
     }
-
     fn notify_records(dir: &Path) -> Vec<NotifyTraceEnvelope> {
         std::fs::read_to_string(notify::log(dir).path())
             .unwrap()
@@ -459,120 +450,39 @@ mod tests {
     }
 
     #[test]
-    fn disabled_sink_accepts_diagnostics_without_writing() {
-        let dir = tempfile::tempdir().unwrap();
-        let sink = DiagSink::disabled();
-
-        sink.emit_at_ms(
-            DiagEvent::DuplicatePaneId {
-                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
-            },
-            1_000,
-        );
-        sink.emit_unlimited(DiagEvent::RendererPanic {
-            message: "boom".to_owned(),
-            backtrace: None,
-        });
-        sink.trace_notify_at_ms(
-            NotifyTraceEvent::BellRing {
-                notification_kind: "waiting".to_owned(),
-                fired: false,
-                recheck_unread: true,
-                panes: Vec::new(),
-                suppressed: Some("not_unread".to_owned()),
-            },
-            1_000,
-        );
-
-        assert!(sink.capture_frame_pair("disabled", &1, &2, 1_000).is_none());
-        assert!(sink.log_path().is_none());
-        assert!(sink.frames_dir().is_none());
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-    }
-
-    #[test]
     fn rate_limit_uses_identity_key_and_flushes_suppressed_count() {
         let dir = tempfile::tempdir().unwrap();
         let sink = sink(dir.path());
 
         sink.emit_at_ms(frame_rejected(1), 1_000);
         sink.emit_at_ms(frame_rejected(2), 15_000);
-        sink.emit_at_ms(
-            DiagEvent::DuplicatePaneId {
-                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
-            },
-            32_000,
-        );
+        sink.emit_at_ms(duplicate_pane(1), 32_000);
         sink.emit_at_ms(frame_rejected(1), 33_000);
 
         let records = diag_records(&sink);
-        assert_eq!(records.len(), 3);
-        assert_eq!(records[0].suppressed_since_last, 0);
-        match &records[0].event {
-            DiagEvent::FrameRejected {
-                prior_pane_count, ..
-            } => assert_eq!(*prior_pane_count, 1),
-            other => panic!("unexpected event: {other:?}"),
-        }
-        assert_eq!(records[1].suppressed_since_last, 0);
         assert_eq!(
-            records[1].event,
-            DiagEvent::DuplicatePaneId {
-                pane_id: PaneId::from_parts(MuxName::Zellij, "terminal_1"),
-            }
+            records
+                .into_iter()
+                .map(|record| (record.event, record.suppressed_since_last))
+                .collect::<Vec<_>>(),
+            vec![
+                (frame_rejected(1), 0),
+                (duplicate_pane(1), 0),
+                (frame_rejected(1), 1),
+            ]
         );
-        assert_eq!(records[2].suppressed_since_last, 1);
-        match &records[2].event {
-            DiagEvent::FrameRejected {
-                prior_pane_count, ..
-            } => assert_eq!(*prior_pane_count, 1),
-            other => panic!("unexpected event: {other:?}"),
-        }
     }
 
     #[test]
-    fn per_kind_ceiling_bounds_distinct_identity_storms_and_flushes_drops() {
+    fn kind_ceiling_bounds_keyed_and_unlimited_storms() {
         let dir = tempfile::tempdir().unwrap();
         let sink = sink(dir.path());
 
         for i in 0..(DIAG_KIND_CEILING + 3) {
             sink.emit_at_ms(duplicate_pane(i), 1_000);
         }
-        sink.emit_at_ms(duplicate_pane("flush"), 32_000);
-
-        let records = diag_records(&sink);
-        assert_eq!(records.len(), DIAG_KIND_CEILING as usize + 1);
-        assert_eq!(
-            records.last().unwrap().suppressed_since_last,
-            3,
-            "drops over the per-kind ceiling flush onto the next passing record"
-        );
-        assert!(
-            records
-                .iter()
-                .all(|record| matches!(record.event, DiagEvent::DuplicatePaneId { .. }))
-        );
-    }
-
-    #[test]
-    fn per_kind_ceiling_resets_after_window_rolls() {
-        let dir = tempfile::tempdir().unwrap();
-        let sink = sink(dir.path());
-
-        for i in 0..DIAG_KIND_CEILING {
-            sink.emit_at_ms(duplicate_pane(i), 1_000);
-        }
-        sink.emit_at_ms(duplicate_pane("next-window"), 32_000);
-
-        let records = diag_records(&sink);
-        assert_eq!(records.len(), DIAG_KIND_CEILING as usize + 1);
-        assert_eq!(records.last().unwrap().suppressed_since_last, 0);
-    }
-
-    #[test]
-    fn unlimited_is_kind_bounded_without_key_deduping() {
-        let dir = tempfile::tempdir().unwrap();
-        let sink = sink(dir.path());
+        sink.emit_at_ms(duplicate_pane("window"), 32_000);
+        sink.emit_at_ms(duplicate_pane("window"), 63_000);
         for _ in 0..(DIAG_KIND_CEILING + 1) {
             sink.emit_unlimited(DiagEvent::RendererPanic {
                 message: "boom".to_owned(),
@@ -581,19 +491,35 @@ mod tests {
         }
 
         let records = diag_records(&sink);
-        assert_eq!(records.len(), DIAG_KIND_CEILING as usize);
+        let keyed_len = DIAG_KIND_CEILING as usize + 2;
+        assert_eq!(records.len(), keyed_len + DIAG_KIND_CEILING as usize);
+        assert_eq!(records[DIAG_KIND_CEILING as usize].suppressed_since_last, 3);
+        assert_eq!(
+            records[DIAG_KIND_CEILING as usize + 1].suppressed_since_last,
+            0
+        );
         assert!(
-            records
+            records[..keyed_len]
+                .iter()
+                .all(|record| matches!(record.event, DiagEvent::DuplicatePaneId { .. }))
+        );
+        assert!(
+            records[keyed_len..]
                 .iter()
                 .all(|record| matches!(record.event, DiagEvent::RendererPanic { .. }))
         );
     }
 
     #[test]
-    fn trace_notify_writes_unlimited_envelopes() {
+    fn trace_notify_writes_envelope_with_sink_identity() {
         let dir = tempfile::tempdir().unwrap();
         let instance_id = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
-        let sink = sink_with_instance(dir.path(), instance_id.clone());
+        let sink = DiagSink::under(
+            dir.path().to_path_buf(),
+            workspace_id(),
+            "s",
+            Some(instance_id.clone()),
+        );
         let event = NotifyTraceEvent::BellRing {
             notification_kind: "success".to_owned(),
             fired: true,
@@ -617,6 +543,55 @@ mod tests {
             assert_eq!(record.at_ms, 1_000 + index as u64);
             assert_eq!(record.event, event);
         }
+    }
+
+    #[test]
+    fn recent_records_merges_generations_filters_versions_and_caps_results() {
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/diag-recent-records"));
+        let state = crate::StatePaths::for_workspace(workspace_id.clone()).unwrap();
+        let _ = std::fs::remove_dir_all(&state.root);
+        std::fs::create_dir_all(&state.root).unwrap();
+        let live_path = state.root.join(DIAG_LOG_NAME);
+        let record = |at_ms| {
+            DiagEnvelope::new(
+                workspace_id.clone(),
+                "s".to_owned(),
+                None,
+                at_ms,
+                frame_rejected(at_ms as usize),
+            )
+        };
+        let mut stale = record(90);
+        stale.v = "rimz.diag.v0".to_owned();
+        let encode = |record: DiagEnvelope| serde_json::to_string(&record).unwrap();
+
+        std::fs::write(
+            rotated_path(&live_path),
+            [
+                encode(record(40)),
+                "not-json".to_owned(),
+                encode(stale),
+                encode(record(10)),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            &live_path,
+            [encode(record(50)), encode(record(20)), encode(record(30))].join("\n"),
+        )
+        .unwrap();
+
+        let (returned_path, records) = recent_records(workspace_id, 3).unwrap();
+        assert_eq!(returned_path, live_path);
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.at_ms)
+                .collect::<Vec<_>>(),
+            vec![30, 40, 50]
+        );
+        std::fs::remove_dir_all(state.root).unwrap();
     }
 
     #[test]

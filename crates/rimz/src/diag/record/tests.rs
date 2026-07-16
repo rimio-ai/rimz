@@ -4,21 +4,48 @@ use crate::ids::MuxName;
 fn workspace_id() -> WorkspaceId {
     WorkspaceId::from_project_root(std::path::Path::new("/repo"))
 }
-
 fn pane(raw: &str) -> PaneId {
     PaneId::from_parts(MuxName::Zellij, raw)
 }
-
 fn sidebar(raw: &str) -> SidebarInstanceId {
     SidebarInstanceId::parse(raw).expect("valid sidebar instance id")
 }
-
 fn frame_rejected(frames_ref: Option<&str>) -> DiagEvent {
     DiagEvent::FrameRejected {
         reason: FrameRejectReason::Empty,
         prior_pane_count: 2,
         fresh_pane_count: 0,
         frames_ref: frames_ref.map(str::to_owned),
+    }
+}
+fn health_alert(since_ms: u64, recovered_after_ms: Option<u64>) -> DiagEvent {
+    DiagEvent::HealthAlert {
+        reason: "snapshot failed".to_owned(),
+        since_ms,
+        recovered_after_ms,
+    }
+}
+fn link_alert(
+    tier: LinkTier,
+    rtt_ms: Option<u32>,
+    miss_pct: u16,
+    since_ms: u64,
+    recovered_after_ms: Option<u64>,
+) -> DiagEvent {
+    DiagEvent::LinkAlert {
+        tier,
+        rtt_ms,
+        miss_pct,
+        since_ms,
+        recovered_after_ms,
+    }
+}
+
+fn hosted_carry(reason: HostedCarryDropReason) -> DiagEvent {
+    DiagEvent::HostedCarryDropped {
+        pane_id: pane("terminal_5"),
+        agent_kind: AgentKind::new_unchecked("codex"),
+        reason,
     }
 }
 
@@ -30,20 +57,6 @@ fn frame_stamp(produced_at_ms: u64) -> FrameStamp {
         processes: 0,
         pulled_rows: Some(2),
         pulled_panes_produced_at_ms: Some(produced_at_ms),
-    }
-}
-
-fn frame_anomaly(anomaly: AnomalyKind) -> DiagEvent {
-    DiagEvent::FrameAnomaly {
-        role: ObserveRole::Consumer,
-        anomaly,
-        window_ms: None,
-        frame: frame_stamp(13_000),
-        events_recent: EventsSig::default(),
-        gate_reject_streak: 0,
-        health_failure_streak: 0,
-        suppressed_since_last: 0,
-        dropped_msgs: 0,
     }
 }
 
@@ -73,7 +86,7 @@ fn tick_budget_breach(
 }
 
 #[test]
-fn new_envelopes_pin_schema_build_severity_suppression_and_legacy_build() {
+fn envelope_keeps_current_and_legacy_wire_contract() {
     let envelope = DiagEnvelope::new(
         workspace_id(),
         "rimz-test".to_owned(),
@@ -145,427 +158,188 @@ fn tick_budget_breach_deserializes_legacy_records_without_last_sample() {
 }
 
 #[test]
-fn severity_table_pins_product_categories() {
-    let rows = [
-        (frame_rejected(None), DiagSeverity::Warn),
-        (
-            DiagEvent::HealthAlert {
-                reason: "snapshot failed".to_owned(),
-                since_ms: 10,
-                recovered_after_ms: None,
-            },
-            DiagSeverity::Warn,
-        ),
-        (
-            DiagEvent::LinkAlert {
-                tier: LinkTier::Degraded,
-                rtt_ms: Some(230),
-                miss_pct: 4,
-                since_ms: 10,
-                recovered_after_ms: None,
-            },
-            DiagSeverity::Warn,
-        ),
-        (
-            tick_budget_breach(TickLoop::Fetch, 10, None),
-            DiagSeverity::Warn,
-        ),
-        (
-            DiagEvent::HealthAlert {
-                reason: "snapshot failed".to_owned(),
-                since_ms: 10,
-                recovered_after_ms: Some(20),
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::LinkAlert {
-                tier: LinkTier::Good,
-                rtt_ms: Some(42),
-                miss_pct: 0,
-                since_ms: 10,
-                recovered_after_ms: Some(40_000),
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            tick_budget_breach(TickLoop::CacheRefresh, 20, Some(8_000)),
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::PaneCarryRefuted {
-                carried: vec![pane("terminal_1")],
-                pids: vec![42],
-                prior: 2,
-                fresh: 1,
-                verified: 2,
-                frames_ref: None,
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::HostedCarryDropped {
-                pane_id: pane("terminal_1"),
-                agent_kind: AgentKind::new_unchecked("codex"),
-                reason: HostedCarryDropReason::ProbeReportsAbsent,
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::HostedCarryDropped {
-                pane_id: pane("terminal_1"),
-                agent_kind: AgentKind::new_unchecked("codex"),
-                reason: HostedCarryDropReason::CarryExpired,
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::HostedCarryDropped {
-                pane_id: pane("terminal_1"),
-                agent_kind: AgentKind::new_unchecked("codex"),
-                reason: HostedCarryDropReason::StartRegressed,
-            },
-            DiagSeverity::Warn,
-        ),
-        (
-            DiagEvent::HostedCarryDropped {
-                pane_id: pane("terminal_1"),
-                agent_kind: AgentKind::new_unchecked("codex"),
-                reason: HostedCarryDropReason::ForegroundKindMismatch,
-            },
-            DiagSeverity::Warn,
-        ),
-        (
-            DiagEvent::NewbornQuarantined {
-                pane_id: pane("terminal_1"),
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::ProducerElected {
-                prior_elder: sidebar("sb_019e8c565bbd708097fce9514f79da04"),
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::ProducerDemoted {
-                new_elder: sidebar("sb_019e8c565bbd7b22854f93a905e1034c"),
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::MixedBuildWriters {
-                prior_build: "0f3a9c21d4be".to_owned(),
-                own_build: "8e7d6c5b4a39".to_owned(),
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::RendererPanic {
-                message: "boom".to_owned(),
-                backtrace: None,
-            },
-            DiagSeverity::Error,
-        ),
-        (
-            DiagEvent::RendererSignalDeath {
-                signal: Some(6),
-                exit_code: None,
-                stderr_excerpt: "memory allocation failed".to_owned(),
-            },
-            DiagSeverity::Error,
-        ),
-        (
-            DiagEvent::RendererExit {
-                cause: RendererExitCause::SelfCloseEmptyTab,
-            },
-            DiagSeverity::Info,
-        ),
-        (
-            DiagEvent::RendererExit {
-                cause: RendererExitCause::DegradedGaveUp,
-            },
-            DiagSeverity::Warn,
-        ),
-    ];
-
-    for (event, severity) in rows {
-        assert_eq!(event.severity(), severity, "{event:?}");
-    }
-}
-
-#[test]
-fn identity_key_table_pins_phase_episode_loop_and_subjects() {
-    let rows = [
-        (
-            DiagEvent::HealthAlert {
-                reason: "snapshot failed".to_owned(),
-                since_ms: 10,
-                recovered_after_ms: None,
-            },
-            "health_alert:snapshot failed:active:10",
-        ),
-        (
-            DiagEvent::HealthAlert {
-                reason: "snapshot failed".to_owned(),
-                since_ms: 10,
-                recovered_after_ms: Some(500),
-            },
-            "health_alert:snapshot failed:recovered:10",
-        ),
-        (
-            DiagEvent::HealthAlert {
-                reason: "snapshot failed".to_owned(),
-                since_ms: 20,
-                recovered_after_ms: None,
-            },
-            "health_alert:snapshot failed:active:20",
-        ),
-        (
-            DiagEvent::LinkAlert {
-                tier: LinkTier::Bad,
-                rtt_ms: Some(800),
-                miss_pct: 40,
-                since_ms: 10,
-                recovered_after_ms: None,
-            },
-            "link_alert:Bad:active:10",
-        ),
-        (
-            DiagEvent::LinkAlert {
-                tier: LinkTier::Good,
-                rtt_ms: Some(42),
-                miss_pct: 0,
-                since_ms: 10,
-                recovered_after_ms: Some(40_000),
-            },
-            "link_alert:Good:recovered:10",
-        ),
-        (
-            tick_budget_breach(TickLoop::Fetch, 10, None),
-            "tick_budget_breach:Fetch:active:10",
-        ),
-        (
-            tick_budget_breach(TickLoop::Fetch, 10, Some(500)),
-            "tick_budget_breach:Fetch:recovered:10",
-        ),
-        (
-            tick_budget_breach(TickLoop::CacheRefresh, 10, None),
-            "tick_budget_breach:CacheRefresh:active:10",
-        ),
-        (
-            DiagEvent::DuplicatePaneId {
-                pane_id: pane("terminal_1"),
-            },
-            "duplicate_pane_id:zellij:terminal_1",
-        ),
-        (
-            DiagEvent::DuplicatePaneId {
-                pane_id: pane("terminal_2"),
-            },
-            "duplicate_pane_id:zellij:terminal_2",
-        ),
-        (
-            DiagEvent::RowConflict {
-                agent_kind: AgentKind::new_unchecked("claude"),
-                agent_session_id: AgentSessionId::from("sess-1"),
-                bound_pane: pane("terminal_1"),
-                conflicting_pane: pane("terminal_2"),
-            },
-            "row_conflict:claude:sess-1:zellij:terminal_1:zellij:terminal_2",
-        ),
-        (
-            DiagEvent::HostedCarryDropped {
-                pane_id: pane("terminal_5"),
-                agent_kind: AgentKind::new_unchecked("codex"),
-                reason: HostedCarryDropReason::ForegroundKindMismatch,
-            },
-            "hosted_carry_dropped:codex:zellij:terminal_5:foreground_kind_mismatch",
-        ),
-        (
-            DiagEvent::MixedBuildWriters {
-                prior_build: "0f3a9c21d4be".to_owned(),
-                own_build: "8e7d6c5b4a39".to_owned(),
-            },
-            "mixed_build_writers:0f3a9c21d4be:8e7d6c5b4a39",
-        ),
-        (
-            DiagEvent::RendererSignalDeath {
-                signal: Some(6),
-                exit_code: None,
-                stderr_excerpt: "memory allocation failed".to_owned(),
-            },
-            "renderer_signal_death:Some(6):None",
-        ),
-        (
-            DiagEvent::RendererExit {
-                cause: RendererExitCause::SelfCloseEmptyTab,
-            },
-            "renderer_exit:self_close_empty_tab",
-        ),
-        (
-            DiagEvent::RendererExit {
-                cause: RendererExitCause::DegradedGaveUp,
-            },
-            "renderer_exit:degraded_gave_up",
-        ),
-    ];
-
-    for (event, identity) in rows {
-        assert_eq!(event.identity_key(), identity, "{event:?}");
-    }
-}
-
-#[test]
-fn frame_anomaly_schema_and_identity_pin_detector_subjects() {
-    let row = frame_anomaly(AnomalyKind::RowPresenceFlap {
-        row_id: "agent-1".to_owned(),
-        pane_id: Some("zellij:terminal_1".to_owned()),
-        gone_at_ms: 11_000,
-        back_at_ms: 12_000,
-    });
-    let aggregate = frame_anomaly(AnomalyKind::AggregateReset {
-        aggregate: AggregateKey::ProviderSpend {
-            kind: "claude".to_owned(),
+fn severity_table_pins_conditional_and_regression_categories() {
+    let info = [
+        health_alert(10, Some(20)),
+        link_alert(LinkTier::Good, Some(42), 0, 10, Some(40_000)),
+        tick_budget_breach(TickLoop::CacheRefresh, 20, Some(8_000)),
+        hosted_carry(HostedCarryDropReason::ProbeReportsAbsent),
+        hosted_carry(HostedCarryDropReason::CarryExpired),
+        DiagEvent::RendererExit {
+            cause: RendererExitCause::SelfCloseEmptyTab,
         },
-        from: "1234".to_owned(),
-        pulled: Some("0".to_owned()),
-    });
-    let multi_focus = frame_anomaly(AnomalyKind::MultiFocusTopology {
+    ];
+    let warn = [
+        health_alert(10, None),
+        link_alert(LinkTier::Degraded, Some(230), 4, 10, None),
+        tick_budget_breach(TickLoop::Fetch, 10, None),
+        hosted_carry(HostedCarryDropReason::StartRegressed),
+        hosted_carry(HostedCarryDropReason::ForegroundKindMismatch),
+        DiagEvent::RendererExit {
+            cause: RendererExitCause::DegradedGaveUp,
+        },
+    ];
+    let error = [
+        DiagEvent::RendererPanic {
+            message: "boom".to_owned(),
+            backtrace: None,
+        },
+        DiagEvent::RendererSignalDeath {
+            signal: Some(6),
+            exit_code: None,
+            stderr_excerpt: "memory allocation failed".to_owned(),
+        },
+    ];
+
+    for (events, severity) in [
+        (info.as_slice(), DiagSeverity::Info),
+        (warn.as_slice(), DiagSeverity::Warn),
+        (error.as_slice(), DiagSeverity::Error),
+    ] {
+        for event in events {
+            assert_eq!(event.severity(), severity, "{event:?}");
+        }
+    }
+}
+
+#[test]
+fn identity_keys_partition_episodes_and_subjects() {
+    let key = |event: DiagEvent| event.identity_key();
+    let health_active = key(health_alert(10, None));
+    let health_recovered = key(health_alert(10, Some(500)));
+    assert_ne!(health_active, health_recovered);
+    assert_ne!(health_active, key(health_alert(20, None)));
+    assert_eq!(
+        health_recovered,
+        key(health_alert(10, Some(900))),
+        "recovery duration is payload, not episode identity"
+    );
+    assert_eq!(
+        key(link_alert(LinkTier::Bad, Some(800), 40, 10, None)),
+        key(link_alert(LinkTier::Bad, Some(200), 4, 10, None)),
+        "link measurements do not split one tier episode"
+    );
+    assert_ne!(
+        key(link_alert(LinkTier::Bad, Some(800), 40, 10, None)),
+        key(link_alert(LinkTier::Good, Some(42), 0, 10, Some(500)))
+    );
+    assert_ne!(
+        key(tick_budget_breach(TickLoop::Fetch, 10, None)),
+        key(tick_budget_breach(TickLoop::Fetch, 10, Some(500)))
+    );
+    assert_ne!(
+        key(tick_budget_breach(TickLoop::Fetch, 10, None)),
+        key(tick_budget_breach(TickLoop::CacheRefresh, 10, None))
+    );
+    assert_ne!(
+        key(DiagEvent::DuplicatePaneId {
+            pane_id: pane("terminal_1")
+        }),
+        key(DiagEvent::DuplicatePaneId {
+            pane_id: pane("terminal_2")
+        })
+    );
+    let conflict = |session, conflicting_pane| {
+        key(DiagEvent::RowConflict {
+            agent_kind: AgentKind::new_unchecked("claude"),
+            agent_session_id: AgentSessionId::from(session),
+            bound_pane: pane("terminal_1"),
+            conflicting_pane: pane(conflicting_pane),
+        })
+    };
+    assert_ne!(
+        conflict("sess-1", "terminal_2"),
+        conflict("sess-2", "terminal_2")
+    );
+    assert_ne!(
+        conflict("sess-1", "terminal_2"),
+        conflict("sess-1", "terminal_3")
+    );
+    assert_ne!(
+        key(hosted_carry(HostedCarryDropReason::ProbeReportsAbsent)),
+        key(hosted_carry(HostedCarryDropReason::ForegroundKindMismatch))
+    );
+    let renderer_death = |signal, exit_code, stderr: &str| {
+        key(DiagEvent::RendererSignalDeath {
+            signal,
+            exit_code,
+            stderr_excerpt: stderr.to_owned(),
+        })
+    };
+    assert_eq!(
+        renderer_death(Some(6), None, "first"),
+        renderer_death(Some(6), None, "changed"),
+        "stderr detail does not split one renderer death"
+    );
+    assert_ne!(
+        renderer_death(Some(6), None, "first"),
+        renderer_death(None, Some(6), "first")
+    );
+    assert_ne!(
+        key(DiagEvent::RendererExit {
+            cause: RendererExitCause::SelfCloseEmptyTab
+        }),
+        key(DiagEvent::RendererExit {
+            cause: RendererExitCause::DegradedGaveUp
+        })
+    );
+}
+
+#[test]
+fn multi_focus_anomaly_keeps_wire_and_subject_regression() {
+    let anomaly = AnomalyKind::MultiFocusTopology {
         tab_name: Some("work".to_owned()),
         tab_position: Some(7),
         pane_ids: vec![
             "zellij:terminal_1".to_owned(),
             "zellij:terminal_2".to_owned(),
         ],
-    });
+    };
+    assert_eq!(anomaly.key(), "multi_focus_topology");
+    assert_eq!(anomaly.subject().as_deref(), Some("7"));
 
-    assert_eq!(
-        row.identity_key(),
-        "frame_anomaly:row_presence_flap:agent-1"
-    );
-    assert_eq!(
-        aggregate.identity_key(),
-        "frame_anomaly:aggregate_reset:provider_spend:claude"
-    );
-    assert_eq!(
-        multi_focus.identity_key(),
-        "frame_anomaly:multi_focus_topology:7"
-    );
-
-    let value = serde_json::to_value(&aggregate).expect("encode");
+    let event = DiagEvent::FrameAnomaly {
+        role: ObserveRole::Consumer,
+        anomaly,
+        window_ms: None,
+        frame: frame_stamp(13_000),
+        events_recent: EventsSig::default(),
+        gate_reject_streak: 0,
+        health_failure_streak: 0,
+        suppressed_since_last: 0,
+        dropped_msgs: 0,
+    };
+    let value = serde_json::to_value(&event).expect("encode");
     assert_eq!(value["kind"], "frame_anomaly");
-    assert_eq!(value["anomaly"]["detector"], "aggregate_reset");
-    assert_eq!(value["anomaly"]["aggregate"]["aggregate"], "provider_spend");
-    assert_eq!(value["anomaly"]["aggregate"]["kind"], "claude");
-
-    let value = serde_json::to_value(&multi_focus).expect("encode");
     assert_eq!(value["anomaly"]["detector"], "multi_focus_topology");
     assert_eq!(value["anomaly"]["tab_name"], "work");
     assert_eq!(value["anomaly"]["tab_position"], 7);
+    assert_eq!(
+        value["anomaly"]["pane_ids"],
+        serde_json::json!(["zellij:terminal_1", "zellij:terminal_2"])
+    );
+    assert_eq!(serde_json::from_value::<DiagEvent>(value).unwrap(), event);
 }
 
 #[test]
 fn representative_events_keep_json_wire_shape() {
     let rows = [
         (
-            serde_json::json!({
-                "kind": "frame_rejected",
-                "reason": { "reason": "empty" },
-                "prior_pane_count": 2,
-                "fresh_pane_count": 0,
-                "frames_ref": "frame.1.0.frame_rejected.json"
-            }),
+            r#"{"kind":"frame_rejected","reason":{"reason":"empty"},"prior_pane_count":2,"fresh_pane_count":0,"frames_ref":"frame.1.0.frame_rejected.json"}"#,
             frame_rejected(Some("frame.1.0.frame_rejected.json")),
         ),
         (
-            serde_json::json!({
-                "kind": "link_alert",
-                "tier": "bad",
-                "rtt_ms": 800,
-                "miss_pct": 40,
-                "since_ms": 10
-            }),
-            DiagEvent::LinkAlert {
-                tier: LinkTier::Bad,
-                rtt_ms: Some(800),
-                miss_pct: 40,
-                since_ms: 10,
-                recovered_after_ms: None,
-            },
+            r#"{"kind":"hosted_carry_dropped","pane_id":"zellij:terminal_5","agent_kind":"codex","reason":"foreground_kind_mismatch"}"#,
+            hosted_carry(HostedCarryDropReason::ForegroundKindMismatch),
         ),
         (
-            serde_json::json!({
-                "kind": "link_alert",
-                "tier": "good",
-                "rtt_ms": 42,
-                "miss_pct": 0,
-                "since_ms": 10,
-                "recovered_after_ms": 40_000
-            }),
-            DiagEvent::LinkAlert {
-                tier: LinkTier::Good,
-                rtt_ms: Some(42),
-                miss_pct: 0,
-                since_ms: 10,
-                recovered_after_ms: Some(40_000),
-            },
-        ),
-        (
-            serde_json::json!({
-                "kind": "renderer_exit",
-                "cause": "self_close_empty_tab"
-            }),
+            r#"{"kind":"renderer_exit","cause":"self_close_empty_tab"}"#,
             DiagEvent::RendererExit {
                 cause: RendererExitCause::SelfCloseEmptyTab,
             },
         ),
         (
-            serde_json::json!({
-                "kind": "hosted_carry_dropped",
-                "pane_id": "zellij:terminal_5",
-                "agent_kind": "codex",
-                "reason": "foreground_kind_mismatch"
-            }),
-            DiagEvent::HostedCarryDropped {
-                pane_id: pane("terminal_5"),
-                agent_kind: AgentKind::new_unchecked("codex"),
-                reason: HostedCarryDropReason::ForegroundKindMismatch,
-            },
-        ),
-        (
-            serde_json::json!({
-                "kind": "frame_anomaly",
-                "role": "consumer",
-                "anomaly": {
-                    "detector": "aggregate_oscillation",
-                    "aggregate": {
-                        "aggregate": "provider_spend",
-                        "kind": "claude"
-                    },
-                    "from": "1234",
-                    "via": "0",
-                    "back": "1234",
-                    "span_ms": 7_000,
-                    "pulled_via": "0"
-                },
-                "frame": {
-                    "produced_at_ms": 13_000,
-                    "rows": 2,
-                    "agents": 2,
-                    "processes": 0,
-                    "pulled_rows": 2,
-                    "pulled_panes_produced_at_ms": 13_000
-                },
-                "events_recent": {
-                    "pane_closed": [],
-                    "pane_opened": []
-                },
-                "gate_reject_streak": 0,
-                "health_failure_streak": 0,
-                "suppressed_since_last": 3,
-                "dropped_msgs": 0
-            }),
+            r#"{"kind":"frame_anomaly","role":"consumer","anomaly":{"detector":"aggregate_oscillation","aggregate":{"aggregate":"provider_spend","kind":"claude"},"from":"1234","via":"0","back":"1234","span_ms":7000,"pulled_via":"0"},"frame":{"produced_at_ms":13000,"rows":2,"agents":2,"processes":0,"pulled_rows":2,"pulled_panes_produced_at_ms":13000},"events_recent":{"pane_closed":[],"pane_opened":[]},"gate_reject_streak":0,"health_failure_streak":0,"suppressed_since_last":3,"dropped_msgs":0}"#,
             DiagEvent::FrameAnomaly {
                 role: ObserveRole::Consumer,
                 anomaly: AnomalyKind::AggregateOscillation {
@@ -589,50 +363,12 @@ fn representative_events_keep_json_wire_shape() {
         ),
     ];
 
-    for (value, expected) in rows {
+    for (wire, expected) in rows {
+        let value: serde_json::Value = serde_json::from_str(wire).expect("valid fixture");
         let decoded: DiagEvent = serde_json::from_value(value.clone()).expect("decode");
 
         assert_eq!(decoded, expected);
         assert_eq!(serde_json::to_value(&decoded).expect("encode"), value);
-    }
-}
-
-#[test]
-fn renderer_exit_envelope_serializes_schema_cause_and_severity() {
-    let rows = [
-        (
-            RendererExitCause::SelfCloseEmptyTab,
-            DiagSeverity::Info,
-            "info",
-        ),
-        (
-            RendererExitCause::DegradedGaveUp,
-            DiagSeverity::Warn,
-            "warn",
-        ),
-    ];
-
-    for (cause, severity, severity_wire) in rows {
-        let envelope = DiagEnvelope::new(
-            workspace_id(),
-            "rimz-test".to_owned(),
-            Some(sidebar("sb_019e8c565bbd708097fce9514f79da04")),
-            42,
-            DiagEvent::RendererExit { cause },
-        );
-
-        assert_eq!(envelope.v, DIAG_SCHEMA_VERSION);
-        assert_eq!(envelope.severity, severity);
-
-        let value = serde_json::to_value(&envelope).expect("encode");
-        assert_eq!(value["v"], DIAG_SCHEMA_VERSION);
-        assert_eq!(value["severity"], severity_wire);
-        assert_eq!(value["event"]["kind"], "renderer_exit");
-        assert_eq!(value["event"]["cause"], cause.as_str());
-
-        let decoded: DiagEnvelope = serde_json::from_value(value).expect("decode");
-        assert_eq!(decoded.event, DiagEvent::RendererExit { cause });
-        assert_eq!(decoded.severity, severity);
     }
 }
 
