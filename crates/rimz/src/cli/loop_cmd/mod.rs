@@ -38,7 +38,7 @@ use rimz::harness::schedule::runner::{
 };
 use rimz::harness::schedule::{
     self, TaskAction,
-    catalog::{TaskCatalog, TaskSource},
+    catalog::{LoadedTask, TaskCatalog, TaskSource},
     pauses::{self, PauseEntry},
     strikes,
 };
@@ -300,22 +300,6 @@ fn project_root_for_globals(globals: &GlobalFlags) -> Option<PathBuf> {
 fn task_catalog(globals: &GlobalFlags) -> Result<TaskCatalog> {
     let project_root = project_root_for_globals(globals);
     TaskCatalog::load(project_root.as_deref())
-}
-
-pub(super) fn load_all_tasks(
-    globals: &GlobalFlags,
-) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
-    load_all_tasks_from_project_root(project_root_for_globals(globals).as_deref())
-}
-
-pub(super) fn load_all_tasks_from_project_root(
-    project_root: Option<&Path>,
-) -> Result<BTreeMap<String, (TaskEntry, TaskSource)>> {
-    Ok(TaskCatalog::load(project_root)?
-        .visible()
-        .iter()
-        .map(|(name, task)| (name.clone(), (task.entry.clone(), task.source)))
-        .collect())
 }
 
 fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<(TaskEntry, TaskSource)>> {

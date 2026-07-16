@@ -26,18 +26,20 @@ struct ObservedTaskGroup<'a> {
 }
 
 fn grouped_tasks<'a>(
-    tasks: &'a BTreeMap<String, (TaskEntry, TaskSource)>,
+    tasks: &'a BTreeMap<String, LoadedTask>,
     pauses: &BTreeMap<String, PauseEntry>,
     now_zoned: &jiff::Zoned,
     retain_overlaid_next: bool,
 ) -> Vec<ObservedTaskGroup<'a>> {
     let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &TaskEntry, TaskSource)>> =
         BTreeMap::new();
-    for (name, (entry, source)) in tasks {
+    for (name, task) in tasks {
+        let entry = &task.entry;
+        let source = task.source;
         entries_by_root
             .entry(entry.resolved_root())
             .or_default()
-            .push((name, entry, *source));
+            .push((name, entry, source));
     }
     entries_by_root
         .into_iter()
@@ -77,7 +79,8 @@ fn grouped_tasks<'a>(
 // ---- list -------------------------------------------------------------------
 
 pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
-    let tasks = load_all_tasks(globals)?;
+    let catalog = task_catalog(globals)?;
+    let tasks = catalog.visible();
     let pause_entries = pauses::load();
     let mut out = ui::out();
     if tasks.is_empty() {
@@ -248,13 +251,13 @@ fn repaint_watch(project_root: Option<&Path>, hold: bool) -> Result<()> {
 }
 
 fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: bool) -> Result<()> {
-    let tasks = load_all_tasks_from_project_root(project_root)?;
+    let catalog = TaskCatalog::load(project_root)?;
     let now = Timestamp::now();
     let pause_entries = pauses::load();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let context = ListRowContext { stats: &stats, now };
-    let groups = grouped_tasks(&tasks, &pause_entries, &now_zoned, true)
+    let groups = grouped_tasks(catalog.visible(), &pause_entries, &now_zoned, true)
         .into_iter()
         .map(|group| WatchGroup {
             root: group.root,
@@ -301,10 +304,88 @@ struct WatchRow {
     status_text: String,
 }
 
+#[derive(Clone, Copy)]
+enum WatchBand {
+    Running,
+    Failed,
+    Paused,
+    Ok,
+}
+
+impl WatchRow {
+    fn band(&self) -> WatchBand {
+        if self.state == RowState::Running {
+            WatchBand::Running
+        } else if self.failed {
+            WatchBand::Failed
+        } else if matches!(self.state, RowState::Paused | RowState::Blocked) {
+            WatchBand::Paused
+        } else {
+            WatchBand::Ok
+        }
+    }
+
+    fn rank_key(&self) -> (u8, Option<Timestamp>, &str) {
+        let rank = match self.band() {
+            WatchBand::Running => 0,
+            WatchBand::Failed => 1,
+            WatchBand::Ok => match self.state {
+                RowState::Due => 2,
+                RowState::Upcoming(_) => 3,
+                RowState::NeverRun => 5,
+                RowState::Running | RowState::Paused | RowState::Blocked => 0,
+            },
+            WatchBand::Paused => 4,
+        };
+        let next = match self.state {
+            RowState::Upcoming(next) => Some(next),
+            _ => None,
+        };
+        (rank, next, &self.name)
+    }
+
+    fn eligible_next(&self) -> Option<Timestamp> {
+        (!matches!(self.state, RowState::Paused | RowState::Blocked))
+            .then_some(self.next_ts)
+            .flatten()
+    }
+}
+
 struct WatchGroup {
     root: PathBuf,
     room_is_open: bool,
     rows: Vec<WatchRow>,
+}
+
+#[derive(Default)]
+struct WatchSummary<'a> {
+    total: usize,
+    running: usize,
+    failed: usize,
+    paused: usize,
+    ok: usize,
+    next: Option<(&'a WatchRow, Timestamp)>,
+}
+
+impl<'a> WatchSummary<'a> {
+    fn from_groups(groups: &'a [WatchGroup]) -> Self {
+        let mut summary = Self::default();
+        for row in groups.iter().flat_map(|group| &group.rows) {
+            summary.total += 1;
+            match row.band() {
+                WatchBand::Running => summary.running += 1,
+                WatchBand::Failed => summary.failed += 1,
+                WatchBand::Paused => summary.paused += 1,
+                WatchBand::Ok => summary.ok += 1,
+            }
+            if let Some(next) = row.eligible_next()
+                && summary.next.is_none_or(|(_, earliest)| next < earliest)
+            {
+                summary.next = Some((row, next));
+            }
+        }
+        summary
+    }
 }
 
 fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> WatchRow {
@@ -425,66 +506,34 @@ fn render_dashboard(
         return Ok(());
     }
 
-    for (group_index, group) in groups.iter().enumerate() {
+    for group in groups {
         if group.rows.is_empty() {
             continue;
         }
-        if remaining_rows == 1 {
-            write_more(out, remaining_tasks, cols)?;
-            break;
-        }
         let mut ranked = group.rows.iter().collect::<Vec<_>>();
-        ranked.sort_by_key(|row| watch_rank(row));
-        let later_lines = groups[group_index + 1..]
-            .iter()
-            .filter(|group| !group.rows.is_empty())
-            .map(|group| group.rows.len() + 2)
-            .sum::<usize>();
-        let all_fit = ranked.len() + 2 + later_lines <= remaining_rows;
-        if !all_fit && remaining_rows < 4 {
-            write_more(out, remaining_tasks, cols)?;
+        ranked.sort_by_key(|row| row.rank_key());
+        let full_section_rows = ranked.len() + 2;
+        if full_section_rows <= remaining_rows {
+            write_dashboard_heading(out, &group.root, group.room_is_open, cols)?;
+            render_watch_rows(out, &ranked, cols)?;
+            remaining_rows -= full_section_rows;
+            remaining_tasks -= ranked.len();
+            continue;
+        }
+        if remaining_rows < 4 {
+            if remaining_rows > 0 {
+                write_more(out, remaining_tasks, cols)?;
+            }
             break;
         }
         write_dashboard_heading(out, &group.root, group.room_is_open, cols)?;
-        remaining_rows -= 1;
-
-        let visible = if all_fit {
-            ranked.len()
-        } else {
-            ranked.len().min(remaining_rows.saturating_sub(2))
-        };
-        if visible > 0 {
-            render_watch_rows(out, &ranked[..visible], cols)?;
-            remaining_rows -= visible + 1;
-            remaining_tasks -= visible;
-        }
-        if !all_fit && visible < ranked.len() {
-            write_more(out, remaining_tasks, cols)?;
-            break;
-        }
+        let visible = remaining_rows - 3;
+        render_watch_rows(out, &ranked[..visible], cols)?;
+        remaining_tasks -= visible;
+        write_more(out, remaining_tasks, cols)?;
+        break;
     }
     Ok(())
-}
-
-fn watch_rank(row: &WatchRow) -> (u8, Option<Timestamp>, &str) {
-    let rank = if row.state == RowState::Running {
-        0
-    } else if row.failed {
-        1
-    } else {
-        match row.state {
-            RowState::Due => 2,
-            RowState::Upcoming(_) => 3,
-            RowState::Paused | RowState::Blocked => 4,
-            RowState::NeverRun => 5,
-            RowState::Running => 0,
-        }
-    };
-    let next = match row.state {
-        RowState::Upcoming(next) => Some(next),
-        _ => None,
-    };
-    (rank, next, &row.name)
 }
 
 fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> std::io::Result<()> {
@@ -529,31 +578,9 @@ fn write_watch_band(
     now: Timestamp,
     hold: bool,
 ) -> std::io::Result<()> {
-    let all = groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .collect::<Vec<_>>();
-    let total = all.len();
-    let running = all
-        .iter()
-        .filter(|row| row.state == RowState::Running)
-        .count();
-    let failed = all
-        .iter()
-        .filter(|row| row.state != RowState::Running && row.failed)
-        .count();
-    let paused = all
-        .iter()
-        .filter(|row| !row.failed && matches!(row.state, RowState::Paused | RowState::Blocked))
-        .count();
-    let ok = total.saturating_sub(running + failed + paused);
-    let next = all
-        .iter()
-        .filter(|row| !matches!(row.state, RowState::Paused | RowState::Blocked))
-        .filter_map(|row| row.next_ts.map(|next| (*row, next)))
-        .min_by_key(|(_, next)| *next);
+    let summary = WatchSummary::from_groups(groups);
 
-    let prefix = format!("loop · {total} tasks");
+    let prefix = format!("loop · {} tasks", summary.total);
     if prefix.width() > cols {
         writeln!(
             out,
@@ -564,23 +591,17 @@ fn write_watch_band(
     }
     let mut segments = vec![(prefix, ui::palette::ACCENT.bold())];
     let mut candidates = Vec::new();
-    for (count, label, style) in [
-        (running, "▸", ui::palette::ACCENT),
-        (failed, "✗", ui::palette::ALARM),
-        (paused, "○", ui::palette::MUTED),
-        (ok, "●", ui::palette::GOOD),
+    for (count, glyph, noun, style) in [
+        (summary.running, "▸", "running", ui::palette::ACCENT),
+        (summary.failed, "✗", "failed", ui::palette::ALARM),
+        (summary.paused, "○", "paused", ui::palette::MUTED),
+        (summary.ok, "●", "ok", ui::palette::GOOD),
     ] {
         if count > 0 {
-            let noun = match label {
-                "▸" => "running",
-                "✗" => "failed",
-                "○" => "paused",
-                _ => "ok",
-            };
-            candidates.push((format!("{label} {count} {noun}"), style));
+            candidates.push((format!("{glyph} {count} {noun}"), style));
         }
     }
-    if let Some((row, next)) = next {
+    if let Some((row, next)) = summary.next {
         candidates.push((
             format!("next: {} {}", row.name, ui::rel_until(next, now)),
             ui::palette::MUTED,
