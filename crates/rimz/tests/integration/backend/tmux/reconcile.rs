@@ -3,6 +3,109 @@
 use super::support::*;
 
 #[test]
+fn reconcile_without_client_or_probe_leaves_width_seed_alone() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-reconcile-no-width-basis";
+    server.ensure_with_shell(session);
+    assert_eq!(server.display(session, "#{window_width}"), "80");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = sidebar_opts(session, stub, None);
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    let sidebar = wait_for_sidebar_pane(&server, session, None);
+    let option_before = server.show_option(&["-t", session], "@rimz_sidebar_cols");
+    let width_before = server.display(sidebar.raw(), "#{pane_width}");
+    server.tmux(&["set-hook", "-u", "-t", session, "after-new-window"]);
+
+    server
+        .backend
+        .reconcile_sidebars(
+            &opts,
+            &rimz::mux::SidebarLiveness {
+                claimed_panes: [sidebar.clone()].into(),
+                ..Default::default()
+            },
+        )
+        .expect("reconcile_sidebars");
+
+    assert_eq!(
+        server.show_option(&["-t", session], "@rimz_sidebar_cols"),
+        option_before,
+        "reconcile without honest geometry must preserve the hook width seed",
+    );
+    assert_eq!(
+        server.display(sidebar.raw(), "#{pane_width}"),
+        width_before,
+        "reconcile without honest geometry must preserve live pane width",
+    );
+    assert!(
+        server.has_after_new_window_hook(session),
+        "structural reconcile still re-asserts the window hook",
+    );
+}
+
+#[test]
+fn reconcile_normalizes_detached_geometry_from_the_attach_probe() {
+    require_tmux!();
+    let server = TmuxServer::new();
+    let session = "rimz-reconcile-attach-probe";
+    server.ensure_with_shell(session);
+    server.tmux(&["new-window", "-d", "-t", session, "-n", "second", "sh"]);
+    assert!(
+        server
+            .stdout(&["list-windows", "-t", session, "-F", "#{window_width}"])
+            .lines()
+            .all(|width| width == "80"),
+        "the detached fixture should begin at tmux's fictional default width",
+    );
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let opts = sidebar_opts(session, stub, Some(212));
+    server
+        .backend
+        .open_sidebar(&opts, None)
+        .expect("open_sidebar");
+    let sidebar = wait_for_sidebar_pane(&server, session, None);
+
+    let report = server
+        .backend
+        .reconcile_sidebars(
+            &opts,
+            &rimz::mux::SidebarLiveness {
+                claimed_panes: [sidebar.clone()].into(),
+                ..Default::default()
+            },
+        )
+        .expect("reconcile_sidebars");
+
+    assert_eq!(report.recovered, 1, "the second window gains a sidebar");
+    assert_eq!(
+        server.show_option(&["-t", session], "default-size"),
+        "212x50",
+    );
+    let window_ids = server.stdout(&["list-windows", "-t", session, "-F", "#{window_id}"]);
+    for window_id in window_ids.lines() {
+        assert_eq!(server.display(window_id, "#{window_width}"), "212");
+        assert_ne!(
+            server.show_option(&["-w", "-t", window_id], "window-size"),
+            "manual",
+            "normalized windows must resume tracking attached clients",
+        );
+    }
+    assert_eq!(
+        server.show_option(&["-t", session], "@rimz_sidebar_cols"),
+        "53",
+    );
+    let sidebars = sidebar_pane_ids(&server, session, None);
+    assert_eq!(sidebars.len(), 2, "every window should carry one sidebar");
+    for sidebar in sidebars {
+        assert_eq!(server.display(sidebar.raw(), "#{pane_width}"), "53");
+    }
+}
+
+#[test]
 fn reconcile_repairs_sidebar_width_outside_the_shared_band() {
     require_tmux!();
     let server = TmuxServer::new();
@@ -207,6 +310,7 @@ fn reconcile_sidebars_redocks_sidebar_without_skewing_work_columns() {
     let (_stub_dir, stub) = sidebar_command_stub();
     let opts = SidebarPaneOptions {
         birth_size,
+        detected_view_size: Some((80, 24)),
         ..sidebar_opts(session, stub, Some(80))
     };
     let report = server

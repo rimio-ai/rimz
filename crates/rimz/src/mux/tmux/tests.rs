@@ -161,6 +161,7 @@ fn open_tab_rejects_an_empty_layout() {
         cwd: PathBuf::from("/tmp/rimz-empty"),
         width,
         birth_size: width.birth_size(Some(80)),
+        detected_view_size: None,
         width_override: None,
         rimz_bin: PathBuf::from("/bin/true"),
         replace_existing: false,

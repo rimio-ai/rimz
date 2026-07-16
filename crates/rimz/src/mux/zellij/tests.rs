@@ -79,6 +79,7 @@ impl TestRoom {
             cwd: self.project_root.path().to_path_buf(),
             width,
             birth_size: width.birth_size(Some(view_cols)),
+            detected_view_size: None,
             width_override: None,
             rimz_bin: "rimz".into(),
             replace_existing: false,

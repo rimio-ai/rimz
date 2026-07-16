@@ -280,6 +280,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/rimz-tmux-refresh"),
             width,
             birth_size: width.birth_size(None),
+            detected_view_size: None,
             width_override: None,
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,

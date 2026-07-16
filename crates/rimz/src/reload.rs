@@ -343,6 +343,7 @@ fn reconcile_live(
         // A reload can run from a terminal unrelated to the session's clients,
         // so the bare cap only seeds a pane whose view geometry is unavailable.
         birth_size: width.birth_size(None),
+        detected_view_size: None,
         width_override: crate::sidebar::width_override::load(runtime),
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,

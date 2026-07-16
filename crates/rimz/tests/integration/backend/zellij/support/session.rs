@@ -43,6 +43,7 @@ pub(in crate::backend::zellij) fn sidebar_opts(
         cwd: cwd.to_path_buf(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(Some(detected_cols)),
+        detected_view_size: None,
         width_override: None,
         rimz_bin: stub,
         replace_existing: false,

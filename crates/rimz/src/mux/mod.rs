@@ -329,6 +329,11 @@ pub struct SidebarPaneOptions {
     /// and hooks, resolved once per command by
     /// [`SidebarWidth::birth_size_with_override`].
     pub birth_size: BirthSize,
+    /// The launching terminal's probed `(cols, rows)`. tmux reconcile uses it
+    /// as the width basis when the session has no sized client, normalizing
+    /// detached geometry to it first. `None` when the launch had no tty or the
+    /// caller's terminal is unrelated to the session's clients (reload).
+    pub detected_view_size: Option<(u16, u16)>,
     /// Room-runtime width chosen from the sidebar. It applies verbatim to every
     /// view and outranks the live percentage/cap policy.
     pub width_override: Option<std::num::NonZeroU16>,

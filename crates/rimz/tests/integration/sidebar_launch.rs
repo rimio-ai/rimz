@@ -128,6 +128,7 @@ impl SidebarHarness {
             cwd: self.cwd.clone(),
             width,
             birth_size: width.birth_size(None),
+            detected_view_size: None,
             width_override: None,
             rimz_bin: PathBuf::from("rimz"),
             replace_existing: false,

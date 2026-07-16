@@ -96,6 +96,64 @@ impl TmuxBackend {
         String::from_utf8_lossy(&output.stdout).trim().parse().ok()
     }
 
+    /// Align a detached session's geometry with the attaching terminal: set
+    /// the session default-size, resize every window to it, and unpin the
+    /// `window-size manual` that resize-window sets so windows resume tracking
+    /// clients on attach. Best-effort; reconcile's width convergence follows it.
+    pub(super) fn normalize_detached_geometry(&self, session: &str, cols: u16, rows: u16) {
+        let output = match self
+            .cmd()
+            .args(["list-windows", "-t", session, "-F", "#{window_id}"])
+            .run()
+        {
+            Ok(output) => output,
+            Err(err) => {
+                tracing::warn!(
+                    session,
+                    tags.operation = "tmux.reconcile.list_windows",
+                    error = &err as &dyn std::error::Error,
+                    "sidebar reconcile: listing windows for detached geometry normalization failed",
+                );
+                return;
+            }
+        };
+        let mut commands = vec![vec![
+            "set-option".to_owned(),
+            "-t".to_owned(),
+            session.to_owned(),
+            "default-size".to_owned(),
+            format!("{cols}x{rows}"),
+        ]];
+        for window_id in String::from_utf8_lossy(&output.stdout).lines() {
+            commands.push(vec![
+                "resize-window".to_owned(),
+                "-x".to_owned(),
+                cols.to_string(),
+                "-y".to_owned(),
+                rows.to_string(),
+                "-t".to_owned(),
+                window_id.to_owned(),
+            ]);
+            commands.push(vec![
+                "set-window-option".to_owned(),
+                "-u".to_owned(),
+                "-t".to_owned(),
+                window_id.to_owned(),
+                "window-size".to_owned(),
+            ]);
+        }
+        if let Err(err) = self.batch(&commands) {
+            tracing::warn!(
+                session,
+                cols,
+                rows,
+                tags.operation = "tmux.reconcile.normalize_geometry",
+                error = &err as &dyn std::error::Error,
+                "sidebar reconcile: detached geometry normalization failed; continuing best-effort",
+            );
+        }
+    }
+
     /// Every pane's current width and containing-window width in `session`,
     /// collected with one tmux client invocation for sidebar reconciliation.
     pub(super) fn session_pane_geometries(&self, session: &str) -> Result<Vec<TmuxPaneGeometry>> {

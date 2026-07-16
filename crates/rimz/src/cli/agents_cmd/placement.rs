@@ -191,6 +191,7 @@ mod tests {
                 cwd: PathBuf::from("/work"),
                 width,
                 birth_size: width.birth_size(None),
+                detected_view_size: None,
                 width_override: None,
                 rimz_bin: PathBuf::from("/bin/rimz"),
                 replace_existing: false,

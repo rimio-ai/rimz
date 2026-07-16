@@ -298,6 +298,7 @@ impl RoomContext {
             birth_size: self
                 .width
                 .birth_size_with_override(detected_size.map(|(cols, _)| cols), width_override),
+            detected_view_size: detected_size,
             width_override,
             rimz_bin: self.rimz_bin.clone(),
             replace_existing: false,

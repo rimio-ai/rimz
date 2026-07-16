@@ -546,16 +546,22 @@ impl MuxBackend for TmuxBackend {
         opts: &SidebarPaneOptions,
         live: &SidebarLiveness,
     ) -> Result<SidebarRecovery> {
-        let hook_cols = self
-            .window_width(&opts.session_name)
-            .map(|view_cols| live_cols_u16(opts.width, opts.width_override, view_cols))
-            .unwrap_or(opts.birth_size.cols);
-        let mut hook_opts = opts.clone();
-        hook_opts.birth_size.cols = hook_cols;
-        if let Err(err) = self.batch(&[
-            sidebar_width_option_set_cmd(&opts.session_name, hook_cols),
-            after_new_window_hook_set_cmd(&hook_opts),
-        ]) {
+        let view_cols = match self.widest_client_size(&opts.session_name) {
+            Some((cols, _)) => Some(cols),
+            None => opts.detected_view_size.map(|(cols, rows)| {
+                self.normalize_detached_geometry(&opts.session_name, cols, rows);
+                u64::from(cols)
+            }),
+        };
+        let mut hook_commands = Vec::new();
+        if let Some(view_cols) = view_cols {
+            hook_commands.push(sidebar_width_option_set_cmd(
+                &opts.session_name,
+                live_cols_u16(opts.width, opts.width_override, view_cols),
+            ));
+        }
+        hook_commands.push(after_new_window_hook_set_cmd(opts));
+        if let Err(err) = self.batch(&hook_commands) {
             tracing::warn!(
                 session = %opts.session_name,
                 tags.operation = "tmux.reconcile.install_hook",
@@ -599,9 +605,11 @@ impl MuxBackend for TmuxBackend {
             &mut report,
             |window, _restart| {
                 let mut add_opts = opts.clone();
-                if let Some(view_cols) = self.window_width(window) {
+                if view_cols.is_some()
+                    && let Some(window_cols) = self.window_width(window)
+                {
                     add_opts.birth_size.cols =
-                        live_cols_u16(opts.width, opts.width_override, view_cols);
+                        live_cols_u16(opts.width, opts.width_override, window_cols);
                 }
                 match self.add_sidebar_to_window(&add_opts, window) {
                     Ok(()) => AddOutcome::Added,
@@ -627,7 +635,7 @@ impl MuxBackend for TmuxBackend {
                 (!plan.close.contains(pane)).then(|| pane.raw().to_owned())
             })
             .collect();
-        if !kept.is_empty() {
+        if view_cols.is_some() && !kept.is_empty() {
             match self.session_pane_geometries(&opts.session_name) {
                 Ok(geometries) => {
                     let sync = WidthSyncOptions {

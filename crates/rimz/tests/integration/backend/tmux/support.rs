@@ -42,6 +42,7 @@ pub(super) fn sidebar_opts(
         cwd: std::env::temp_dir(),
         width: SidebarWidth::default(),
         birth_size: SidebarWidth::default().birth_size(detected_cols),
+        detected_view_size: detected_cols.map(|cols| (cols, 50)),
         width_override: None,
         rimz_bin: stub,
         replace_existing: false,
