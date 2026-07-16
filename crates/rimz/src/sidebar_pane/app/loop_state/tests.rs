@@ -937,10 +937,10 @@ fn settled_native_width_adjustment_records_retargets_and_broadcasts() {
         None,
     )
     .expect("write heartbeat");
-    state.width_adjust_pending = Some(Instant::now());
-    state.width_control.set_suspended(true);
     let mut terminal = fixed_terminal();
     let (mut fetch, _request_rx) = fetch_dispatcher();
+    state.width_adjust_pending = Some(Instant::now());
+    state.width_control.set_suspended(true);
 
     state
         .on_resize(&config, &runtime, &mut fetch, &mut terminal, Instant::now())
