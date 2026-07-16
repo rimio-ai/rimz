@@ -164,7 +164,7 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         group.landed = entry.landed;
         group.trunk_sync = display_trunk
             .as_deref()
-            .and_then(|trunk| classify_trunk_sync(&entry, &branch_label, trunk));
+            .and_then(|trunk| classify_trunk_sync(entry, &branch_label, trunk));
     }
 }
 
