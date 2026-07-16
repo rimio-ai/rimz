@@ -13,23 +13,15 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
     let _input = TerminalModeGuard::enable(MouseCapture::Off, Screen::Main)?;
     let mut current: Option<Stats> = None;
     let mut active = Window::AllTime;
-    let mut walker = Some(SpendingWalker::new());
     loop {
         let (tx, rx) = mpsc::channel();
         let worker_paths = paths.clone();
-        let Some(worker_walker) = walker.take() else {
-            return Err(anyhow!("stats refresh walker unavailable"));
-        };
         thread::spawn(move || {
-            let event = refresh_event(worker_walker, |walker| {
-                load_or_refresh_stats(&worker_paths, None, walker)
-            });
+            let event = refresh_event(|| load_or_refresh_stats_via_service(&worker_paths, None));
             let _ = tx.send(event);
         });
         match hold_cycle(hold, &mut current, &rx, dollars, &glyphs, &mut active)? {
-            CycleExit::Refresh(next_walker) => {
-                walker = Some(*next_walker);
-            }
+            CycleExit::Refresh => {}
             CycleExit::Reload => {
                 if let Some(target) = rimz::reload::current_reexec_target() {
                     return Err(reexec(&target));
@@ -71,34 +63,24 @@ pub(super) fn consume_reload_flag(flag: &AtomicBool) -> bool {
 }
 
 pub(super) enum CycleExit {
-    Refresh(Box<SpendingWalker>),
+    Refresh,
     Reload,
     Quit,
 }
 
 pub(super) struct RefreshEvent {
     stats: Option<Result<Stats>>,
-    walker: SpendingWalker,
 }
 
-pub(super) fn refresh_event(
-    mut walker: SpendingWalker,
-    load: impl FnOnce(&mut SpendingWalker) -> Result<Stats>,
-) -> RefreshEvent {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load(&mut walker))) {
-        Ok(stats) => RefreshEvent {
-            stats: Some(stats),
-            walker,
-        },
+pub(super) fn refresh_event(load: impl FnOnce() -> Result<Stats>) -> RefreshEvent {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(load)) {
+        Ok(stats) => RefreshEvent { stats: Some(stats) },
         Err(payload) => {
             tracing::warn!(
                 panic = %panic_payload_message(payload.as_ref()),
                 "stats refresh panicked"
             );
-            RefreshEvent {
-                stats: None,
-                walker: SpendingWalker::new(),
-            }
+            RefreshEvent { stats: None }
         }
     }
 }
@@ -122,7 +104,7 @@ pub(super) fn hold_cycle(
     active: &mut Window,
 ) -> Result<CycleExit> {
     let deadline = Instant::now() + REFRESH_INTERVAL;
-    let mut returned_walker: Option<SpendingWalker> = None;
+    let mut refresh_finished = false;
     loop {
         if take_reload_request() {
             return Ok(CycleExit::Reload);
@@ -135,19 +117,17 @@ pub(super) fn hold_cycle(
                         repaint(stats, dollars, glyphs, *active)?;
                     }
                 }
-                returned_walker = Some(event.walker);
+                refresh_finished = true;
             }
             Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) if returned_walker.is_none() => {
-                return Ok(CycleExit::Refresh(Box::new(SpendingWalker::new())));
+            Err(mpsc::TryRecvError::Disconnected) if !refresh_finished => {
+                return Ok(CycleExit::Refresh);
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
         let now = Instant::now();
-        if now >= deadline
-            && let Some(walker) = returned_walker
-        {
-            return Ok(CycleExit::Refresh(Box::new(walker)));
+        if now >= deadline && refresh_finished {
+            return Ok(CycleExit::Refresh);
         }
         let timeout = if now >= deadline {
             REFRESH_POLL_TICK
@@ -277,8 +257,7 @@ pub(super) fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<Loade
         SPINNER_MIN_AGE,
     );
     let mut progress = |progress| spinner.set(progress_line(progress));
-    let mut walker = SpendingWalker::new();
-    let stats = load_or_refresh_stats(paths, Some(&mut progress), &mut walker)?;
+    let stats = load_direct_stats_with_progress(paths, &mut progress)?;
     Ok(LoadedStats {
         stats,
         header_printed: true,

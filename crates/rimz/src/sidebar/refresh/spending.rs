@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::agents::spending::{
-    ProviderSpendingCache, SESSION_GAP_SECS, SpendScope, SpendingCaches, WorkspaceSpendingCache,
-    compute_scoped_spending, discover_spending_files, read_provider_spending_cache, user_input,
+    ProviderSpendingCache, SESSION_GAP_SECS, SpendProgress, SpendScope, SpendingCaches,
+    WorkspaceSpendingCache, compute_scoped_spending, discover_spending_files,
+    read_provider_spending_cache, user_input,
 };
 use crate::sidebar::timing::SPENDING_STALE_GRACE;
 use crate::sidebar::timing::unix_now_ms;
@@ -41,47 +42,100 @@ const SPENDING_WAIT_STEPS: u32 = 15;
 /// ([`transcript_files`](crate::agents::AgentAdapter::transcript_files)) so each
 /// counts on the same footing, and the dashboard panel and fleet store read
 /// one provider's spend the same way regardless of which project it ran in.
+#[cfg(test)]
 pub(crate) fn compute_fleet_spending_with_walker(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
     spec: &crate::agents::spending::HeadlineSpec,
 ) -> crate::agents::spending::SpendingCaches {
+    let context = SpendingRequestContext {
+        project_root: snapshot.project_root.as_deref(),
+        worktree_roots: &snapshot.worktree_roots,
+        worktree_home: snapshot.worktree_home.as_deref(),
+        origin_overrides: codex_origin_overrides(snapshot),
+        allow_local_fallback: true,
+    };
+    compute_fleet_spending(walker, runtime, &context, spec, &mut |_| {})
+}
+
+/// Refresh through the elected account-global walker. A sidebar failure serves
+/// the latest compatible durable publications and retries on its next cache
+/// tick; it never constructs a process-local fallback walker.
+pub(crate) fn compute_fleet_spending_via_service(
+    runtime: &RuntimePaths,
+    snapshot: &SidebarSnapshot,
+    spec: &crate::agents::spending::HeadlineSpec,
+) -> SpendingCaches {
+    let request = crate::agents::spending::service::SpendingServiceRequest::workspace(
+        runtime.workspace_id.clone(),
+        snapshot.project_root.clone(),
+        snapshot.worktree_roots.clone(),
+        snapshot.worktree_home.clone(),
+        codex_origin_overrides(snapshot),
+        spec.clone(),
+        false,
+    );
+    match crate::agents::spending::service::request(runtime, request, |_| {}) {
+        Ok(caches) => caches,
+        Err(error) => {
+            tracing::debug!(error = %error, "spending service unavailable; serving publication");
+            consumer_spending_caches(runtime, snapshot)
+        }
+    }
+}
+
+pub(crate) fn serve_spending_service_request(
+    walker: &mut crate::agents::spending::SpendingWalker,
+    runtime: &RuntimePaths,
+    request: &crate::agents::spending::service::SpendingServiceRequest,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> SpendingCaches {
+    let context = SpendingRequestContext {
+        project_root: request.project_root.as_deref(),
+        worktree_roots: &request.worktree_roots,
+        worktree_home: request.worktree_home.as_deref(),
+        origin_overrides: request.origin_overrides.clone(),
+        allow_local_fallback: false,
+    };
+    compute_fleet_spending(walker, runtime, &context, &request.headline, progress)
+}
+
+struct SpendingRequestContext<'a> {
+    project_root: Option<&'a std::path::Path>,
+    worktree_roots: &'a [PathBuf],
+    worktree_home: Option<&'a std::path::Path>,
+    origin_overrides: HashMap<PathBuf, PathBuf>,
+    allow_local_fallback: bool,
+}
+
+fn compute_fleet_spending(
+    walker: &mut crate::agents::spending::SpendingWalker,
+    runtime: &RuntimePaths,
+    context: &SpendingRequestContext<'_>,
+    spec: &crate::agents::spending::HeadlineSpec,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> SpendingCaches {
     use crate::agents::spending::{SpendScope, read_provider_spending_cache};
 
     let now_ms = unix_now_ms();
     let scope = SpendScope::for_workspace(
-        snapshot.project_root.as_deref(),
-        &snapshot.worktree_roots,
-        snapshot.worktree_home.as_deref(),
+        context.project_root,
+        context.worktree_roots,
+        context.worktree_home,
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
     let provider_path = runtime.shared_provider_spending_path();
     // Fresh stamp: the published walk is young enough — serve it back with the
     // same single small read a consumer tab pays.
     let published = read_provider_spending_cache(&provider_path);
-    if published.is_fresh(now_ms) {
-        if let Some(workspace) = fresh_workspace_cache(runtime, scope_hash.as_deref(), now_ms) {
-            return crate::agents::spending::SpendingCaches {
-                provider: published,
-                workspace,
-            };
-        }
-        let files = discover_spending_files();
-        if let Some(workspace) = workspace_cache_from_shared_entries(
-            walker,
-            runtime,
-            &published,
-            &scope,
-            scope_hash.as_deref(),
-            &files,
-            spec,
-        ) {
-            return crate::agents::spending::SpendingCaches {
-                provider: published,
-                workspace,
-            };
-        }
+    if published.is_fresh(now_ms)
+        && let Some(workspace) = fresh_workspace_cache(runtime, scope_hash.as_deref(), now_ms)
+    {
+        return crate::agents::spending::SpendingCaches {
+            provider: published,
+            workspace,
+        };
     }
 
     let fresh = || {
@@ -108,7 +162,7 @@ pub(crate) fn compute_fleet_spending_with_walker(
             let provider = read_provider_spending_cache(&provider_path);
             let files = discover_spending_files();
             if provider.is_fresh(unix_now_ms())
-                && let Some(workspace) = workspace_cache_from_shared_entries(
+                && let Some(workspace) = workspace_cache_from_shared_entries_inner(
                     walker,
                     runtime,
                     &provider,
@@ -116,6 +170,8 @@ pub(crate) fn compute_fleet_spending_with_walker(
                     scope_hash.as_deref(),
                     &files,
                     spec,
+                    &context.origin_overrides,
+                    true,
                 )
             {
                 crate::agents::spending::SpendingCaches {
@@ -123,14 +179,22 @@ pub(crate) fn compute_fleet_spending_with_walker(
                     workspace,
                 }
             } else {
-                walk_fleet_spending(walker, runtime, snapshot, spec, true)
+                walk_fleet_spending_context(walker, runtime, context, spec, true, progress)
             }
         }
         crate::store::single_flight::Coalesced::ProduceLocal => {
+            if !context.allow_local_fallback {
+                return served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
+                    SpendingCaches {
+                        provider: current_provider_spending_cache(runtime),
+                        workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
+                    }
+                });
+            }
             let provider = read_provider_spending_cache(&provider_path);
             let files = discover_spending_files();
             if provider.is_fresh(unix_now_ms())
-                && let Some(workspace) = workspace_cache_from_shared_entries(
+                && let Some(workspace) = workspace_cache_from_shared_entries_inner(
                     walker,
                     runtime,
                     &provider,
@@ -138,6 +202,8 @@ pub(crate) fn compute_fleet_spending_with_walker(
                     scope_hash.as_deref(),
                     &files,
                     spec,
+                    &context.origin_overrides,
+                    false,
                 )
             {
                 crate::agents::spending::SpendingCaches {
@@ -145,8 +211,9 @@ pub(crate) fn compute_fleet_spending_with_walker(
                     workspace,
                 }
             } else {
-                served_within_grace(runtime, scope_hash.as_deref())
-                    .unwrap_or_else(|| walk_fleet_spending(walker, runtime, snapshot, spec, false))
+                served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
+                    walk_fleet_spending_context(walker, runtime, context, spec, false, progress)
+                })
             }
         }
     }
@@ -204,12 +271,13 @@ fn serve_prev_on_young_regression(
     }
 }
 
-fn walk_fleet_spending(
+fn walk_fleet_spending_context(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
-    snapshot: &SidebarSnapshot,
+    context: &SpendingRequestContext<'_>,
     spec: &crate::agents::spending::HeadlineSpec,
     publish: bool,
+    progress: &mut dyn FnMut(SpendProgress),
 ) -> crate::agents::spending::SpendingCaches {
     use crate::agents::pricing;
     use crate::agents::spending::{
@@ -221,9 +289,9 @@ fn walk_fleet_spending(
 
     let provider_path = runtime.shared_provider_spending_path();
     let scope = SpendScope::for_workspace(
-        snapshot.project_root.as_deref(),
-        &snapshot.worktree_roots,
-        snapshot.worktree_home.as_deref(),
+        context.project_root,
+        context.worktree_roots,
+        context.worktree_home,
     );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
     // Tag each file with its adapter at discovery — the source knows the kind,
@@ -302,13 +370,12 @@ fn walk_fleet_spending(
     } else {
         pricing::cached_book(&runtime.shared_pricing_cache_path())
     };
-    let origin_overrides = codex_origin_overrides(snapshot);
     let user_inputs = user_input::load();
     let req = WalkRequest {
         files: &files,
         prices: &prices,
         now_secs,
-        origin_overrides: &origin_overrides,
+        origin_overrides: &context.origin_overrides,
         user_inputs: &user_inputs,
         scope: Some(&scope),
         spec,
@@ -323,6 +390,7 @@ fn walk_fleet_spending(
             scope: Some(&scope),
             scope_hash: scope_hash.clone(),
             spec,
+            progress,
         };
         walker.walk(&cache_path, &req, &mut observer)
     } else {
@@ -379,6 +447,24 @@ fn walk_fleet_spending(
     }
 }
 
+#[cfg(test)]
+fn walk_fleet_spending(
+    walker: &mut crate::agents::spending::SpendingWalker,
+    runtime: &RuntimePaths,
+    snapshot: &SidebarSnapshot,
+    spec: &crate::agents::spending::HeadlineSpec,
+    publish: bool,
+) -> SpendingCaches {
+    let context = SpendingRequestContext {
+        project_root: snapshot.project_root.as_deref(),
+        worktree_roots: &snapshot.worktree_roots,
+        worktree_home: snapshot.worktree_home.as_deref(),
+        origin_overrides: codex_origin_overrides(snapshot),
+        allow_local_fallback: true,
+    };
+    walk_fleet_spending_context(walker, runtime, &context, spec, publish, &mut |_| {})
+}
+
 struct PublishingWalkObserver<'a> {
     runtime: &'a RuntimePaths,
     provider_path: PathBuf,
@@ -388,9 +474,14 @@ struct PublishingWalkObserver<'a> {
     scope: Option<&'a crate::agents::spending::SpendScope>,
     scope_hash: Option<String>,
     spec: &'a crate::agents::spending::HeadlineSpec,
+    progress: &'a mut dyn FnMut(SpendProgress),
 }
 
 impl crate::agents::spending::WalkObserver for PublishingWalkObserver<'_> {
+    fn on_file(&mut self, progress: SpendProgress) {
+        (self.progress)(progress);
+    }
+
     fn on_interval(&mut self, cache: &crate::agents::spending::SpendingDiskCache) {
         let result = crate::agents::spending::aggregate_walk_publish(
             self.files,
@@ -452,7 +543,11 @@ fn reconciled_workspace_cache(
     }
 }
 
-fn workspace_cache_from_shared_entries(
+#[allow(
+    clippy::too_many_arguments,
+    reason = "scope derivation keeps caller-validated paths, publication policy, and warm owner explicit"
+)]
+fn workspace_cache_from_shared_entries_inner(
     walker: &mut crate::agents::spending::SpendingWalker,
     runtime: &RuntimePaths,
     provider: &crate::agents::spending::ProviderSpendingCache,
@@ -460,11 +555,18 @@ fn workspace_cache_from_shared_entries(
     scope_hash: Option<&str>,
     files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
     spec: &crate::agents::spending::HeadlineSpec,
+    origin_overrides: &HashMap<PathBuf, PathBuf>,
+    publish: bool,
 ) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
     use crate::agents::spending::{unix_secs_now, write_workspace_spending_cache};
     let Some(scope_hash) = scope_hash else {
         return Some(Default::default());
     };
+    walker.apply_origin_overrides(
+        &runtime.shared_spending_cursor_path(),
+        origin_overrides,
+        publish,
+    );
     let user_inputs = user_input::load();
     let cached = walker.scoped_from_cache(
         &runtime.shared_spending_cursor_path(),
@@ -495,9 +597,34 @@ fn workspace_cache_from_shared_entries(
     if workspace.refreshed_at_ms != provider.refreshed_at_ms {
         return Some(workspace);
     }
-    write_workspace_spending_cache(&runtime.workspace_spending_path(scope_hash), &workspace);
-    prune_workspace_spending_siblings(runtime, scope_hash);
+    if publish {
+        write_workspace_spending_cache(&runtime.workspace_spending_path(scope_hash), &workspace);
+        prune_workspace_spending_siblings(runtime, scope_hash);
+    }
     Some(workspace)
+}
+
+#[cfg(test)]
+fn workspace_cache_from_shared_entries(
+    walker: &mut crate::agents::spending::SpendingWalker,
+    runtime: &RuntimePaths,
+    provider: &crate::agents::spending::ProviderSpendingCache,
+    scope: &crate::agents::spending::SpendScope,
+    scope_hash: Option<&str>,
+    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+    spec: &crate::agents::spending::HeadlineSpec,
+) -> Option<crate::agents::spending::WorkspaceSpendingCache> {
+    workspace_cache_from_shared_entries_inner(
+        walker,
+        runtime,
+        provider,
+        scope,
+        scope_hash,
+        files,
+        spec,
+        &HashMap::new(),
+        true,
+    )
 }
 
 fn prune_workspace_spending_siblings(runtime: &RuntimePaths, current_scope_hash: &str) {

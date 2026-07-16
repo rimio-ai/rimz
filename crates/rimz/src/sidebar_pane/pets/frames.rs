@@ -5,6 +5,8 @@ use std::io::{BufReader, Cursor};
 use super::catalog::{
     FRAME_COUNT, FRAME_HEIGHT, FRAME_WIDTH, SHEET_COLS, SHEET_HEIGHT, SHEET_WIDTH,
 };
+use super::{PetCellGrid, PetGridSize};
+use crate::config::CellAspect;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RgbaImage {
@@ -50,6 +52,20 @@ pub(crate) fn decode_sheet(bytes: &[u8]) -> Result<Vec<RgbaImage>, FrameErr> {
     validate_decoded_sheet(&sheet)?;
     Ok((0..FRAME_COUNT)
         .map(|index| slice_frame(&sheet, index))
+        .collect())
+}
+
+/// Decode one sheet into terminal-ready cell grids. The decoded RGBA frames
+/// stay local to this background preparation call and drop before the grids
+/// cross back to the renderer.
+pub(crate) fn prepare_cell_sheet(
+    bytes: &[u8],
+    size: PetGridSize,
+    aspect: CellAspect,
+) -> Result<Vec<PetCellGrid>, FrameErr> {
+    Ok(decode_sheet(bytes)?
+        .into_iter()
+        .map(|frame| super::cellart::render_frame(&frame, size.cols, size.rows, aspect))
         .collect())
 }
 
@@ -307,6 +323,39 @@ mod tests {
         assert_eq!(frames[0].width, FRAME_WIDTH);
         assert_eq!(frames[0].height, FRAME_HEIGHT);
         assert_eq!(frames[0].pixel(0, 0), [9, 8, 7, 6]);
+    }
+
+    #[test]
+    fn prepared_cell_sheet_matches_per_frame_renderer_for_all_frames() {
+        let mut data = Vec::with_capacity((SHEET_WIDTH * SHEET_HEIGHT * 4) as usize);
+        for y in 0..SHEET_HEIGHT {
+            for x in 0..SHEET_WIDTH {
+                data.extend_from_slice(&[
+                    x.wrapping_mul(17) as u8,
+                    y.wrapping_mul(29) as u8,
+                    x.wrapping_add(y) as u8,
+                    if (x + y) % 7 == 0 { 0 } else { 255 },
+                ]);
+            }
+        }
+        let bytes = encode_png(SHEET_WIDTH, SHEET_HEIGHT, &data);
+        let frames = decode_sheet(&bytes).unwrap();
+        let size = super::super::DASHBOARD_CELL_PET;
+
+        for aspect in [
+            CellAspect::NEUTRAL,
+            CellAspect::from_ratio(2.5).expect("valid aspect"),
+        ] {
+            let expected = frames
+                .iter()
+                .map(|frame| {
+                    super::super::cellart::render_frame(frame, size.cols, size.rows, aspect)
+                })
+                .collect::<Vec<_>>();
+            let prepared = prepare_cell_sheet(&bytes, size, aspect).unwrap();
+            assert_eq!(prepared.len(), FRAME_COUNT);
+            assert_eq!(prepared, expected);
+        }
     }
 
     #[test]

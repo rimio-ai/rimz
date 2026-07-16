@@ -81,7 +81,7 @@ pub enum SpendWindowMode {
 }
 
 /// Resolved headline spend-window settings threaded into aggregation.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeadlineSpec {
     pub mode: SpendWindowMode,
     pub timezone: Option<String>,

@@ -113,6 +113,16 @@ impl PixelPainter {
         writer.flush()
     }
 
+    /// Release compressed and resend bookkeeping when pets are disabled. Keep
+    /// only the tiny resident-id set so renderer teardown can still delete
+    /// images already installed in the terminal.
+    pub(crate) fn release_process_payload(&mut self) {
+        self.pet_id = None;
+        self.transmitted.clear();
+        self.png.clear();
+        self.last_resend_ms = None;
+    }
+
     fn delete_transmitted<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
         let sprite_indexes = std::mem::take(&mut self.resident);
         for sprite_index in sprite_indexes {

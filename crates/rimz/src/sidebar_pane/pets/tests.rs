@@ -53,17 +53,24 @@ fn render_tier_resolves_mode_caps_and_paintability() {
 
 #[test]
 fn disabled_config_clears_runtime_state() {
+    let (_sender, receiver) = mpsc::channel();
     let mut assets = PetAssets {
+        loaded: loaded_cell_assets(None).loaded,
+        loading: Some(LoadingPet {
+            id: "codex".to_owned(),
+            key: cell_key(),
+            receiver,
+        }),
         previous_action: Some(PetAction::Running),
         jump_started_phase: Some(1),
         previous_unread_rows: BTreeSet::from(["agent-1".to_owned()]),
         caption: Some("x".to_owned()),
         failed: Some(FailedPet {
             id: "codex".to_owned(),
+            key: cell_key(),
             caption: "pet unavailable".to_owned(),
             failed_at_phase: 0,
         }),
-        ..PetAssets::default()
     };
     assert!(
         assets
@@ -85,16 +92,19 @@ fn disabled_config_clears_runtime_state() {
     assert!(assets.previous_unread_rows.is_empty());
     assert_eq!(assets.caption, None);
     assert!(assets.failed.is_none());
+    assert!(assets.loaded.is_none());
+    assert!(assets.loading.is_none());
 }
 
 #[test]
 fn empty_pet_selector_rests_with_no_pet() {
-    let mut assets = loaded_assets(Some(PetAction::Running));
+    let mut assets = loaded_cell_assets(Some(PetAction::Running));
     assets.jump_started_phase = Some(3);
     assets.previous_unread_rows = BTreeSet::from(["agent-1".to_owned()]);
     assets.caption = Some("running".to_owned());
     assets.failed = Some(FailedPet {
         id: "codex".to_owned(),
+        key: cell_key(),
         caption: "pet unavailable".to_owned(),
         failed_at_phase: 0,
     });
@@ -197,6 +207,7 @@ fn failed_loader_settles_without_immediate_retry() {
         .expect("send failure");
     assets.loading = Some(LoadingPet {
         id: "codex".to_owned(),
+        key: cell_key(),
         receiver,
     });
     let config = PetsConfig {
@@ -268,7 +279,7 @@ fn jump_plays_once_per_trigger_then_settles() {
             model::TRACK_RUNNING,
         ),
     ] {
-        let mut assets = loaded_assets(Some(previous));
+        let mut assets = loaded_cell_assets(Some(previous));
 
         let view = assets
             .view(
@@ -299,7 +310,7 @@ fn jump_plays_once_per_trigger_then_settles() {
 
 #[test]
 fn static_mode_skips_transition_jump() {
-    let mut assets = loaded_assets(Some(PetAction::Running));
+    let mut assets = loaded_cell_assets(Some(PetAction::Running));
     let view = assets
         .view(
             &enabled_config(),
@@ -320,7 +331,7 @@ fn static_mode_skips_transition_jump() {
 
 #[test]
 fn pixel_view_resolves_sprite_without_cell_grid() {
-    let mut assets = loaded_assets(Some(PetAction::Running));
+    let mut assets = loaded_pixel_assets(Some(PetAction::Running));
     let config = enabled_config();
 
     let view = assets
@@ -351,60 +362,47 @@ fn pixel_view_resolves_sprite_without_cell_grid() {
             .pixel_frame(&pixel.pet_id, pixel.sprite_index)
             .is_some()
     );
-    assert!(assets.loaded.as_ref().expect("loaded").memo.is_empty());
+    assert!(matches!(
+        assets.loaded.as_ref().expect("loaded").asset,
+        LoadedPetAsset::Pixel(_)
+    ));
 }
 
 #[test]
-fn memoized_grids_are_evicted_on_size_or_aspect_change() {
-    let frame = RgbaImage {
-        width: 1,
-        height: 1,
-        data: vec![255, 0, 0, 255],
-    };
+fn prepared_grids_are_invalidated_on_size_or_aspect_change() {
+    let key = cell_key();
     let mut assets = PetAssets {
         loaded: Some(LoadedPet {
             id: "codex".to_owned(),
-            frames: vec![frame; catalog::FRAME_COUNT],
-            memo: HashMap::new(),
+            key,
+            asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
         }),
         ..PetAssets::default()
     };
 
-    assert!(
-        assets
-            .loaded_grid(
-                "codex",
-                0,
-                PetGridSize { cols: 12, rows: 6 },
-                CellAspect::NEUTRAL,
-            )
-            .is_some()
+    assert!(assets.loaded_grid("codex", key, 0).is_some());
+    assets.clear_mismatched_pet(
+        "codex",
+        Some(PreparationKey {
+            size: PetGridSize { cols: 13, rows: 6 },
+            ..key
+        }),
     );
-    assert_eq!(assets.loaded.as_ref().expect("loaded").memo.len(), 1);
+    assert!(assets.loaded.is_none());
 
-    assert!(
-        assets
-            .loaded_grid(
-                "codex",
-                0,
-                PetGridSize { cols: 13, rows: 6 },
-                CellAspect::NEUTRAL,
-            )
-            .is_some()
+    assets.loaded = Some(LoadedPet {
+        id: "codex".to_owned(),
+        key,
+        asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
+    });
+    assets.clear_mismatched_pet(
+        "codex",
+        Some(PreparationKey {
+            aspect: CellAspect::from_ratio(2.5).expect("valid aspect"),
+            ..key
+        }),
     );
-    let memo = &assets.loaded.as_ref().expect("loaded").memo;
-    assert_eq!(memo.len(), 1);
-    assert!(memo.keys().all(|key| key.cols == 13));
-
-    let changed = CellAspect::from_ratio(2.5).expect("valid aspect");
-    assert!(
-        assets
-            .loaded_grid("codex", 0, PetGridSize { cols: 13, rows: 6 }, changed)
-            .is_some()
-    );
-    let memo = &assets.loaded.as_ref().expect("loaded").memo;
-    assert_eq!(memo.len(), 1);
-    assert!(memo.keys().all(|key| key.aspect == changed));
+    assert!(assets.loaded.is_none());
 }
 
 #[test]
@@ -427,7 +425,27 @@ fn enabled_config() -> PetsConfig {
     }
 }
 
-fn loaded_assets(previous_action: Option<PetAction>) -> PetAssets {
+fn cell_key() -> PreparationKey {
+    PreparationKey {
+        tier: PetRenderTier::Cell,
+        size: DASHBOARD_CELL_PET,
+        aspect: CellAspect::NEUTRAL,
+    }
+}
+
+fn loaded_cell_assets(previous_action: Option<PetAction>) -> PetAssets {
+    PetAssets {
+        loaded: Some(LoadedPet {
+            id: "codex".to_owned(),
+            key: cell_key(),
+            asset: LoadedPetAsset::Cell(vec![vec![]; catalog::FRAME_COUNT]),
+        }),
+        previous_action,
+        ..PetAssets::default()
+    }
+}
+
+fn loaded_pixel_assets(previous_action: Option<PetAction>) -> PetAssets {
     let frame = RgbaImage {
         width: 1,
         height: 1,
@@ -436,8 +454,12 @@ fn loaded_assets(previous_action: Option<PetAction>) -> PetAssets {
     PetAssets {
         loaded: Some(LoadedPet {
             id: "codex".to_owned(),
-            frames: vec![frame; catalog::FRAME_COUNT],
-            memo: HashMap::new(),
+            key: PreparationKey {
+                tier: PetRenderTier::Pixel,
+                size: DASHBOARD_PIXEL_PET,
+                aspect: CellAspect::NEUTRAL,
+            },
+            asset: LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT]),
         }),
         previous_action,
         ..PetAssets::default()

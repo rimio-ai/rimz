@@ -170,12 +170,20 @@ fn fold_fixture() -> FoldFixture {
 }
 
 fn spending_fixture(warm: bool) -> SpendingFixture {
+    spending_fixture_scaled(SPENDING_FILES, SPENDING_ENTRIES_PER_FILE, warm)
+}
+
+fn spending_fixture_scaled(
+    files_count: usize,
+    entries_per_file: usize,
+    warm: bool,
+) -> SpendingFixture {
     let tempdir = TempDir::new().expect("tempdir");
     let cache_path = tempdir.path().join("spending.json");
     let mut cache = rimz::agents::spending::read_spending_cache(&cache_path);
     cache.files = HashMap::new();
     let mut files = Vec::new();
-    for file_index in 0..SPENDING_FILES {
+    for file_index in 0..files_count {
         let transcript = tempdir.path().join(format!("cached-{file_index}.jsonl"));
         std::fs::write(&transcript, b"").expect("transcript");
         let metadata = std::fs::metadata(&transcript).expect("metadata");
@@ -185,9 +193,9 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
-        let entries = (0..SPENDING_ENTRIES_PER_FILE)
+        let entries = (0..entries_per_file)
             .map(|offset| {
-                let index = file_index * SPENDING_ENTRIES_PER_FILE + offset;
+                let index = file_index * entries_per_file + offset;
                 rimz::agents::spending::CachedEntry {
                     ts_secs: SPENDING_NOW_SECS - 86_400
                         + u64::try_from(offset % 3_600).expect("offset fits u64"),
@@ -213,7 +221,7 @@ fn spending_fixture(warm: bool) -> SpendingFixture {
                 mtime_secs,
                 len: metadata.len(),
                 cursor: rimz::agents::spending::SpendCursor::default(),
-                origin_path: None,
+                origin_path: Some(tempdir.path().to_path_buf()),
                 entries,
                 unknown_models: BTreeMap::new(),
             },
@@ -319,6 +327,75 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
                 &fixture.cache_path,
                 &req,
                 &mut rimz::agents::spending::SilentWalk,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
+fn spending_live_scale_cold_hydrate(bencher: Bencher) {
+    bencher
+        .with_inputs(|| spending_fixture_scaled(6_000, 17, false))
+        .bench_local_values(|mut fixture| {
+            let origin_overrides = HashMap::new();
+            let user_inputs = Vec::new();
+            let spec = rimz::agents::spending::HeadlineSpec::default();
+            let req = rimz::agents::spending::WalkRequest {
+                files: &fixture.files,
+                prices: &fixture.prices,
+                now_secs: SPENDING_NOW_SECS,
+                origin_overrides: &origin_overrides,
+                user_inputs: &user_inputs,
+                scope: None,
+                spec: &spec,
+            };
+            divan::black_box(fixture.walker.walk(
+                &fixture.cache_path,
+                &req,
+                &mut rimz::agents::spending::SilentWalk,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
+fn spending_live_scale_warm_global_refresh(bencher: Bencher) {
+    bencher
+        .with_inputs(|| spending_fixture_scaled(6_000, 17, true))
+        .bench_local_values(|mut fixture| {
+            let origin_overrides = HashMap::new();
+            let user_inputs = Vec::new();
+            let spec = rimz::agents::spending::HeadlineSpec::default();
+            let req = rimz::agents::spending::WalkRequest {
+                files: &fixture.files,
+                prices: &fixture.prices,
+                now_secs: SPENDING_NOW_SECS,
+                origin_overrides: &origin_overrides,
+                user_inputs: &user_inputs,
+                scope: None,
+                spec: &spec,
+            };
+            divan::black_box(fixture.walker.walk(
+                &fixture.cache_path,
+                &req,
+                &mut rimz::agents::spending::SilentWalk,
+            ));
+        });
+}
+
+#[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
+fn spending_live_scale_additional_workspace_scope(bencher: Bencher) {
+    bencher
+        .with_inputs(|| spending_fixture_scaled(6_000, 17, true))
+        .bench_local_values(|mut fixture| {
+            let root = fixture._tempdir.path().to_path_buf();
+            let scope = rimz::agents::spending::SpendScope::from_roots(Some(&root), &[]);
+            let spec = rimz::agents::spending::HeadlineSpec::default();
+            divan::black_box(rimz::testkit::spending_scope_from_warm_walker(
+                &mut fixture.walker,
+                &fixture.cache_path,
+                &fixture.files,
+                &scope,
+                SPENDING_NOW_SECS,
+                &spec,
             ));
         });
 }

@@ -29,6 +29,7 @@ There is no RimZ daemon. Every durable write is a short-lived CLI or hook subpro
 terminal emulator
   mux session (Zellij or tmux)
     sidebar renderer (native pane, read-only on the store)
+      elected user-scoped spending service thread (disposable warm cache)
     shells, scripts, agents, CI helpers
                 │
                 │  per-instance sidebar socket   (typed wakeup events of record)
@@ -41,6 +42,8 @@ rimz CLI and hook subprocesses
                 ▼
 workspace store (a directory of flat files)
 ```
+
+The spending service is a private thread inside whichever existing long-lived RimZ process wins its user-scoped lifetime lock. Its versioned Unix socket coordinates clients, while `spending.json`, provider/workspace publications, and their atomic-write and downgrade guards remain truth. Process exit discards the service and the next client re-elects an owner, so this warm-cache optimization introduces no RimZ daemon.
 
 The CLI and hook subprocesses are the only writers of product truth. The sidebar reads the store read-only and writes its own runtime caches and read receipts; `rimz sidebar snapshot` is the one-shot inspection surface over the same pipeline. The per-instance sidebar socket is the wakeup channel of record — backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)). The producer/consumer split, push channels, and timing cadences are in [state.md](./docs/internals/sidebar/state.md).
 
@@ -82,6 +85,7 @@ user-global persistent   ~/.local/state/rimz/
 
 shared runtime      $XDG_RUNTIME_DIR/rimz/shared/
   accounts.lock · rate_limits.lock · credits.lock · spending.lock
+  spending-service.v<wire>.c<cache>.sock · matching owner lock
 ```
 
 The store tier is durable truth plus reboot-surviving producer caches, written with temp-file-plus-rename and a framed event log (the durability contract is [store.md](./docs/internals/store.md)). `live-roster.json` is the sidebar producer's last live root-agent set; rebirth recovery intersects it with the audit rollup before a new session starts. Shared persistent caches survive reboot so the dashboard and pace views open warm, while runtime tiers are disposable: locks, sockets, sidecars, and per-room best-effort caches that speed the next read and die with the session.

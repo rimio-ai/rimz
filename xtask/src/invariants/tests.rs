@@ -160,6 +160,29 @@ fn sidebar_enrich_stays_projection_only() {
 }
 
 #[test]
+fn long_lived_renderers_cannot_construct_spending_walkers() {
+    let root = temp_repo_root("spending-walker-ownership");
+    let sidebar = root.join("crates/rimz/src/sidebar_pane/app/cache_refresh.rs");
+    let held = root.join("crates/rimz/src/cli/stats/hold.rs");
+    let direct = root.join("crates/rimz/src/cli/stats/mod.rs");
+    for path in [&sidebar, &held, &direct] {
+        std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
+        std::fs::write(path, "fn f() { SpendingWalker::new(); }\n").expect("write source");
+    }
+
+    let err =
+        ensure_spending_walker_ownership(&root, &[sidebar.clone(), held.clone(), direct.clone()])
+            .unwrap_err();
+    assert!(err.to_string().contains("elected spending service"));
+    assert!(err.to_string().contains(&sidebar.display().to_string()));
+    assert!(err.to_string().contains(&held.display().to_string()));
+    assert!(!err.to_string().contains(&direct.display().to_string()));
+
+    ensure_spending_walker_ownership(&root, &[direct]).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn snapshot_projection_diagnostics_stay_debug_level() {
     let root = temp_repo_root("snapshot-projection-diagnostics");
     let bad = root.join("crates/rimz/src/store/snapshot/view/bad.rs");

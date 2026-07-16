@@ -242,6 +242,27 @@ impl RuntimePaths {
         Ok(paths)
     }
 
+    /// Resolve another workspace while preserving this instance's runtime and
+    /// persistent shared roots. The spending service uses this after validating
+    /// a typed workspace id instead of accepting caller-supplied output paths.
+    pub(crate) fn for_sibling_workspace(&self, workspace_id: WorkspaceId) -> Result<Self> {
+        let rimz_root = self
+            .root
+            .parent()
+            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
+                path: self.root.clone(),
+            })?;
+        let runtime_root = rimz_root
+            .parent()
+            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
+                path: self.root.clone(),
+            })?;
+        let mut paths = Self::validated_under(workspace_id, runtime_root)?;
+        paths.shared_root = self.shared_root.clone();
+        paths.persistent_shared_root = self.persistent_shared_root.clone();
+        Ok(paths)
+    }
+
     fn for_workspace_with_shared_root(
         workspace_id: WorkspaceId,
         runtime_root: &Path,
@@ -363,6 +384,29 @@ impl RuntimePaths {
 
     pub fn shared_spending_lock(&self) -> PathBuf {
         self.shared_root.join("spending.lock")
+    }
+
+    /// Socket and lifetime-owner lock for the warm account-global spending
+    /// walker. Both names discriminate the wire and durable cursor versions so
+    /// incompatible live builds elect independent owners.
+    pub fn shared_spending_service_socket_path(
+        &self,
+        protocol_version: u32,
+        cache_version: u32,
+    ) -> PathBuf {
+        self.shared_root.join(format!(
+            "spending-service.v{protocol_version}.c{cache_version}.sock"
+        ))
+    }
+
+    pub fn shared_spending_service_owner_lock(
+        &self,
+        protocol_version: u32,
+        cache_version: u32,
+    ) -> PathBuf {
+        self.shared_root.join(format!(
+            "spending-service.v{protocol_version}.c{cache_version}.lock"
+        ))
     }
 
     pub fn shared_spending_cursor_path(&self) -> PathBuf {
@@ -716,6 +760,31 @@ mod tests {
             first_paths.shared_pricing_cache_path(),
             second_paths.shared_pricing_cache_path()
         );
+    }
+
+    #[test]
+    fn spending_service_paths_are_user_shared_versioned_and_socket_safe() {
+        let root = Path::new("/tmp/rimz-service-path-test");
+        let first = RuntimePaths::under(
+            WorkspaceId::from_project_root(Path::new("/tmp/project-a")),
+            root,
+        )
+        .unwrap();
+        let second = RuntimePaths::under(
+            WorkspaceId::from_project_root(Path::new("/tmp/project-b")),
+            root,
+        )
+        .unwrap();
+
+        let socket = first.shared_spending_service_socket_path(1, 18);
+        assert_eq!(socket, second.shared_spending_service_socket_path(1, 18));
+        assert_eq!(
+            first.shared_spending_service_owner_lock(1, 18),
+            second.shared_spending_service_owner_lock(1, 18)
+        );
+        assert_ne!(socket, first.shared_spending_service_socket_path(2, 18));
+        assert_ne!(socket, first.shared_spending_service_socket_path(1, 19));
+        crate::sock::validate_socket_path(&socket).unwrap();
     }
 
     #[test]

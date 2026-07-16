@@ -95,7 +95,6 @@ mod tests {
     use jiff::Timestamp;
 
     use super::*;
-    use crate::agents::spending::SpendingWalker;
     use crate::ids::WorkspaceId;
     use crate::sidebar::test_support::root_agent;
     use crate::{RuntimeOwner, RuntimeOwnerKind, SidebarSnapshot};
@@ -191,7 +190,6 @@ mod tests {
             &messages,
             &runtime,
             &crate::config::MachineConfig::default(),
-            &mut SpendingWalker::new(),
         );
 
         assert_ne!(

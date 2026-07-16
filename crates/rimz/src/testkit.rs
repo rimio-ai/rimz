@@ -8,6 +8,20 @@ pub use crate::proc::testkit::spawn_count;
 pub use crate::store::atomic::testkit::fsync_count;
 pub use crate::store::event_log::testkit::{bytes_read, bytes_written};
 
+/// Benchmark one workspace derivation from an already-warm spending walker.
+pub fn spending_scope_from_warm_walker(
+    walker: &mut crate::agents::spending::SpendingWalker,
+    cache_path: &std::path::Path,
+    files: &[(&'static dyn crate::agents::AgentAdapter, std::path::PathBuf)],
+    scope: &crate::agents::spending::SpendScope,
+    now_secs: u64,
+    spec: &crate::agents::spending::HeadlineSpec,
+) -> crate::agents::spending::ScopedSpending {
+    walker
+        .scoped_from_cache(cache_path, files, &[], scope, now_secs, spec)
+        .scoped
+}
+
 /// Minimal idle [`crate::agents::AgentState`] for fixtures: identity + clocks, everything else absent.
 pub fn agent_state(kind: &str, agent_id: &str, at: jiff::Timestamp) -> crate::agents::AgentState {
     crate::agents::AgentState {

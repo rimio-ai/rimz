@@ -124,6 +124,9 @@ impl FramePainter {
                 unread_triggered,
             },
         );
+        if !snapshot.theme.pets.enabled {
+            self.painter.release_process_payload();
+        }
         let meter_enabled = self.caps.pixel_transport
             && self.caps.kitty_term
             && snapshot.theme.display.pixel == PixelMode::Auto;

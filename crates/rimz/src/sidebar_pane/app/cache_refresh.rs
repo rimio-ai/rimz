@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, error};
 
-use crate::agents::spending::SpendingWalker;
 use crate::diag::record::TickLoop;
 use crate::sidebar::ProducerElectionTracker;
 use crate::sidebar::consumer::RollupCursor;
@@ -38,7 +37,6 @@ fn refresh_loop(
 ) {
     crate::lane::set(crate::lane::WorkLane::CacheRefresh);
     let mut cursor = RollupCursor::new();
-    let mut spending_walker = SpendingWalker::new();
     let mut meter = TickMeter::new(TickLoop::CacheRefresh, tick_for(config.tick_seconds));
     let daemon_backend = crate::mux::backend_for(config.mux);
     let mut daemon_tracker = crate::daemon_view::DaemonRepairTracker::new(
@@ -61,10 +59,9 @@ fn refresh_loop(
             }
         };
         let tick = meter.begin();
-        let result = refresh_guarded(&mut cursor, &mut spending_walker, |cursor, walker| {
+        let result = refresh_guarded(&mut cursor, |cursor| {
             crate::sidebar::produce::refresh_producer_caches(
                 cursor,
-                walker,
                 &state,
                 &runtime,
                 &config.session_name,
@@ -93,13 +90,10 @@ fn fire_elder_timers(runtime: &RuntimePaths, now: &jiff::Zoned) {
 
 fn refresh_guarded(
     cursor: &mut RollupCursor,
-    spending_walker: &mut SpendingWalker,
-    refresh: impl FnOnce(&mut RollupCursor, &mut SpendingWalker) -> crate::sidebar::produce::Result<()>,
+    refresh: impl FnOnce(&mut RollupCursor) -> crate::sidebar::produce::Result<()>,
 ) -> std::result::Result<(), String> {
     let result = super::with_produce_panic_diagnostic_suppressed(|| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            refresh(cursor, spending_walker)
-        }))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| refresh(cursor)))
     });
     match result {
         Ok(Ok(())) => Ok(()),
@@ -110,7 +104,6 @@ fn refresh_guarded(
                 "sidebar spending cache refresh panicked"
             );
             *cursor = RollupCursor::new();
-            *spending_walker = SpendingWalker::new();
             Err(format!(
                 "sidebar cache refresh panicked: {}",
                 super::panic_payload_message(payload.as_ref(), "unknown panic payload")

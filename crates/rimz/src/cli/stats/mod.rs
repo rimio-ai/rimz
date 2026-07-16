@@ -283,6 +283,35 @@ fn load_or_refresh_stats(
     }
 }
 
+fn load_or_refresh_stats_via_service(
+    paths: &RuntimePaths,
+    mut progress: Option<&mut dyn FnMut(SpendProgress)>,
+) -> Result<Stats> {
+    let request = rimz::agents::spending::service::SpendingServiceRequest::global(
+        MachineConfig::load_lenient().headline_spec(),
+        progress.is_some(),
+    );
+    let caches = rimz::agents::spending::service::request(paths, request, |frame| {
+        if let Some(progress) = progress.as_deref_mut() {
+            progress(frame);
+        }
+    });
+    match caches {
+        Ok(caches) => Ok(Stats::from_provider(caches.provider)),
+        Err(error) => load_published_stats(paths).ok_or_else(|| error.into()),
+    }
+}
+
+/// Bounded one-shot fallback used by the cold stats spinner. Long-lived held
+/// refreshes use the elected service and therefore keep no local walker.
+fn load_direct_stats_with_progress(
+    paths: &RuntimePaths,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> Result<Stats> {
+    let mut walker = SpendingWalker::new();
+    load_or_refresh_stats(paths, Some(progress), &mut walker)
+}
+
 struct ProgressObserver<'a>(&'a mut dyn FnMut(SpendProgress));
 
 impl WalkObserver for ProgressObserver<'_> {

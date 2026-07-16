@@ -1,9 +1,10 @@
 //! JSONL-based spending aggregation over agent transcript history.
 //!
 //! Per-provider typed parsers live in each adapter's `spend.rs`; this module
-//! discovers transcript stores, refreshes the shared cursor cache through
-//! [`SpendingWalker`], aggregates account-global and workspace-scoped windows,
-//! and publishes stamped provider/workspace caches. Discovery and parsing
+//! discovers transcript stores, refreshes the shared cursor cache through the
+//! elected [`service`] owner of one warm [`SpendingWalker`], aggregates
+//! account-global and workspace-scoped windows, and publishes stamped
+//! provider/workspace caches. Discovery and parsing
 //! dispatch through the adapter ([`AgentAdapter::transcript_files`] /
 //! [`AgentAdapter::parse_spend`]): a dollar-logging provider (Claude's legacy
 //! `costUSD`, Pi) reads its figures verbatim, a token-only provider (Codex,
@@ -16,6 +17,7 @@ mod aggregate;
 mod cache;
 mod publish;
 mod refresh;
+pub mod service;
 mod time;
 pub mod user_input;
 
@@ -71,6 +73,7 @@ pub(crate) const WALK_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 const SPENDING_PERSIST_MIN_INTERVAL: u64 = 5 * 60;
 const SPENDING_PERSIST_PARSE_BYTES: u64 = 1 << 20;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SpendProgress {
     pub finished_files: usize,
     pub total_files: usize,
@@ -88,7 +91,7 @@ impl WalkObserver for SilentWalk {}
 
 /// Spending data published for one sidebar enrichment fold: account-global
 /// provider totals plus the room-local cockpit tally.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SpendingCaches {
     pub provider: ProviderSpendingCache,
     pub workspace: WorkspaceSpendingCache,
@@ -406,6 +409,36 @@ impl SpendingWalker {
                 day: aggregate.workspace_day,
                 day_cutoff_secs: aggregate.day_cutoff_secs,
             },
+        }
+    }
+
+    /// Apply trusted live transcript origins before a scope-only derivation.
+    /// A changed origin invalidates the compact location memo exactly once;
+    /// callers holding the shared spending lock may persist the corrected
+    /// cursor so a replacement service inherits it.
+    pub(crate) fn apply_origin_overrides(
+        &mut self,
+        cache_path: &Path,
+        origin_overrides: &HashMap<PathBuf, PathBuf>,
+        persist: bool,
+    ) {
+        let mut stats = WalkStats::default();
+        self.sync_from_disk(cache_path, &mut stats);
+        let mut changed = false;
+        for (transcript, origin) in origin_overrides {
+            let key = transcript.to_string_lossy();
+            if let Some(file) = self.cache.files.get_mut(key.as_ref()) {
+                changed |= aggregate::stamp_file_origin(file, origin);
+            }
+        }
+        if !changed {
+            return;
+        }
+        self.cache.mark_changed();
+        self.memo = None;
+        if persist && write_spending_cache(cache_path, &self.cache) {
+            self.cache.dirty = false;
+            self.cache_stamp = cache_stamp(cache_path);
         }
     }
 }

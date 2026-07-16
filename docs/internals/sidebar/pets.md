@@ -4,7 +4,7 @@
 
 Pets are renderer-local attention art for the provider dashboard. One animated companion follows the selected agent or process card, while the card rows stay stable and the bottom panel carries the extra motion.
 
-The renderer receives a `PetView`: one optional body, caption text, loading state, current action, and active animation track. The body is either cell art or pixel placement metadata. Network fetches, disk cache reads, WebP/PNG decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`; the on-screen placement contract lives with [the provider dashboard](../../interface/sidebar.md#zone-3--the-provider-dashboard).
+The renderer receives a `PetView`: one optional body, caption text, loading state, current action, and active animation track. The body is either cell art or pixel placement metadata. Network fetches, disk cache reads, WebP/PNG decode, frame slicing, animation selection, and cell-grid preparation stay in `src/sidebar_pane/pets/`; the on-screen placement contract lives with [the provider dashboard](../../interface/sidebar.md#zone-3--the-provider-dashboard).
 
 ## Module map
 
@@ -23,11 +23,11 @@ The renderer receives a `PetView`: one optional body, caption text, loading stat
 
 ## Data flow
 
-Each frame starts from `[theme.pets] pet`. `asset::resolve_pet_source` turns the selector into a built-in CDN asset, HTTPS URL, local sheet, or petdex install. `PetAssets` owns the load state: `loading` holds the background loader receiver, `loaded` holds decoded frames plus the memoized cell-art cache, and `failed` records an unavailable caption plus a retry cooldown.
+Each frame starts from `[theme.pets] pet`. `asset::resolve_pet_source` turns the selector into a built-in CDN asset, HTTPS URL, local sheet, or petdex install. `PetAssets` owns tier-specific load state: `loading` holds the background loader receiver, `loaded` holds either prepared cell grids or decoded pixel frames, and `failed` records an unavailable caption plus a retry cooldown.
 
-The loader path resolves bytes through `asset`, decodes and slices the WebP or PNG sheet through `frames`, and stores frames in `LoadedPet`. A failed fetched cache entry can be removed; local user sheets are read directly. A latched failed load retries after the cooldown so a transient miss heals without a per-frame fetch storm.
+The loader path resolves bytes through `asset` and decodes and slices the WebP or PNG sheet through `frames`. Cell tier renders all 72 grids on that background thread and drops the decoded RGBA sheet before publishing `LoadedPet`; pixel tier retains the frames for PNG transmission. A pet, tier, geometry, or aspect change invalidates and asynchronously rebuilds the prepared state. A failed fetched cache entry can be removed; local user sheets are read directly. A latched failed load retries after the cooldown so a transient miss heals without a per-frame fetch storm.
 
-The serve loop in `app.rs` projects the selected visible row into a `PetAction`, observes newly unread rows, resolves the effective render tier, passes the optional body tier and image-id base, and calls `PetAssets::view`. `PetAssets` chooses the track in `model`: action changes and newly unread rows play `jumping` once, then the steady action track takes over. The selected sprite becomes a single `PetView` body: either a memoized `PetCellGrid` through `cellart` or a `PetPixelView` carrying the placeholder size, sprite index, and image id.
+The serve loop in `app.rs` projects the selected visible row into a `PetAction`, observes newly unread rows, resolves the effective render tier, passes the optional body tier and image-id base, and calls `PetAssets::view`. `PetAssets` chooses the track in `model`: action changes and newly unread rows play `jumping` once, then the steady action track takes over. The selected sprite becomes a single `PetView` body: either the indexed prepared `PetCellGrid` or a `PetPixelView` carrying the placeholder size, sprite index, and image id. Disabled pets start no loader and immediately release loaded, pending, failed, action, caption, and unread state.
 
 Rendering consumes only the resulting `PetView`. Cell art is copied into the ratatui buffer. Pixel art writes kitty placeholder cells into the same buffer; the serve loop transmits the sprite image and virtual placement before the draw that first references the image id.
 
@@ -74,6 +74,8 @@ The converter aspect-fits each frame inside the fixed cell-art footprint at sext
 `[theme.pets] cell_aspect` overrides the probe, so the effective precedence is explicit config, pty pixel probe, then the neutral `13/6` fallback. This override supplies the missing fact under Zellij, which reports zero pty pixel dimensions; tmux 3.4 and newer can forward the terminal pixel dimensions.
 
 Cell art stays pane-local across tmux, Zellij, detached sessions, plain terminals, and color-depth modes. Under `NO_COLOR`, the body is suppressed and the caption path carries the pet state.
+
+Cell residency is the 72 compact terminal grids only. The background preparation output is byte/value-equivalent to calling the existing per-frame converter for the same grid size and `CellAspect`; RGBA remains a pixel-tier and one-shot-preview concern.
 
 ## Pixel tier
 

@@ -40,6 +40,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_hook_stdio(root, &files)?;
     ensure_sidebar_renderer_boundaries(root, &files)?;
     ensure_spend_parser_boundaries(root, &files)?;
+    ensure_spending_walker_ownership(root, &files)?;
     ensure_sidebar_library_boundaries(root, &files)?;
     ensure_sidebar_enrich_projection_only(root, &files)?;
     ensure_no_zellij_runtime_list_panes(root, &files)?;
@@ -59,6 +60,17 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_no_core_pane_auto_use(root, &files)?;
     ensure_inline_tests_stay_small(&files)?;
     Ok(())
+}
+
+fn ensure_spending_walker_ownership(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let sidebar_pane = root.join("crates/rimz/src/sidebar_pane");
+    let held_stats = root.join("crates/rimz/src/cli/stats/hold.rs");
+    ensure_no_match(
+        files,
+        concat!("SpendingWalker", "::new"),
+        |path| !path.starts_with(&sidebar_pane) && path != held_stats.as_path(),
+        "long-lived sidebar and held-stats code must use the elected spending service",
+    )
 }
 
 fn is_docs_or_xtask(root: &Path, path: &Path) -> bool {

@@ -278,7 +278,6 @@ pub fn produce_rollup_snapshot_with_refresh(
 /// time-driven refresh without re-running the full pane/enrich spine.
 pub fn refresh_producer_caches(
     cursor: &mut RollupCursor,
-    spending_walker: &mut crate::agents::spending::SpendingWalker,
     state: &StatePaths,
     runtime: &RuntimePaths,
     session: &str,
@@ -286,14 +285,7 @@ pub fn refresh_producer_caches(
 ) -> Result<()> {
     let base = read_published_snapshot(cursor, state, runtime, session, exclude)?;
     let config = crate::config::MachineConfig::load_lenient();
-    let _ = refresh_heavy_lanes(
-        &base,
-        &base.agents,
-        &state.messages_dir,
-        runtime,
-        &config,
-        spending_walker,
-    );
+    let _ = refresh_heavy_lanes(&base, &base.agents, &state.messages_dir, runtime, &config);
     Ok(())
 }
 
@@ -413,7 +405,6 @@ fn enrich_with_refresh(
         ProducerFold::Intermediate,
         &local_sessions,
     );
-    let mut walker = crate::agents::spending::SpendingWalker::new();
     // The intermediate fold applies the published daemon-reap cache. Probe from
     // the unreaped rollup so one-shot CLI refresh keeps the pre-split semantics:
     // a stale reap cache cannot hide the only daemon-mode Codex session that
@@ -424,7 +415,6 @@ fn enrich_with_refresh(
         opts.messages_dir,
         opts.runtime,
         &config,
-        &mut walker,
     );
     enrich_producing_with(
         snapshot,

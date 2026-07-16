@@ -10,7 +10,7 @@ use std::path::Path;
 
 use crate::agents::AgentAccount;
 use crate::agents::AgentState;
-use crate::agents::spending::{SpendingCaches, SpendingWalker};
+use crate::agents::spending::SpendingCaches;
 use crate::config::MachineConfig;
 use crate::{RuntimePaths, SidebarSnapshot};
 
@@ -69,7 +69,6 @@ pub fn refresh_heavy_lanes(
     state_messages_dir: &Path,
     runtime: &RuntimePaths,
     config: &MachineConfig,
-    walker: &mut SpendingWalker,
 ) -> RefreshedLanes {
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
@@ -79,12 +78,8 @@ pub fn refresh_heavy_lanes(
     );
 
     let accounts = produce_accounts(base, runtime);
-    let spending = spending::compute_fleet_spending_with_walker(
-        walker,
-        runtime,
-        base,
-        &config.headline_spec(),
-    );
+    let spending =
+        spending::compute_fleet_spending_via_service(runtime, base, &config.headline_spec());
     // Rate-limit persistence and same-pass usage scheduling use resolved
     // provider panels, not the bare rollup. Final folds merge the just-written
     // cache read-only.

@@ -14,7 +14,7 @@ use crate::sidebar::timing::{SPENDING_STALE_GRACE, SPENDING_TTL};
 use crate::store::single_flight::{Coalesced, coalesce};
 
 use jiff::Timestamp;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -399,6 +399,7 @@ fn publishing_walk_observer_checkpoints_workspace_live_baselines() {
     };
     let provider_path = runtime.shared_provider_spending_path();
     let user_inputs = Vec::new();
+    let mut progress = |_| {};
     let mut observer = super::PublishingWalkObserver {
         runtime: &runtime,
         provider_path,
@@ -408,6 +409,7 @@ fn publishing_walk_observer_checkpoints_workspace_live_baselines() {
         scope: Some(&scope),
         scope_hash: Some(scope_hash.clone()),
         spec: &spec,
+        progress: &mut progress,
     };
 
     crate::agents::spending::WalkObserver::on_interval(&mut observer, &raw);
@@ -601,7 +603,7 @@ fn workspace_cache_from_shared_entries_publishes_live_exclusions() {
 }
 
 #[test]
-fn producer_missing_scope_publishes_walked_baselines() {
+fn producer_missing_scope_applies_live_origin_before_reusing_warm_memo() {
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("repo");
     let runtime = RuntimePaths::under(WorkspaceId::from_project_root(&project), dir.path())
@@ -625,7 +627,7 @@ fn producer_missing_scope_publishes_walked_baselines() {
                 .as_secs(),
             len: 0,
             cursor: SpendCursor::default(),
-            origin_path: Some(project),
+            origin_path: None,
             entries: vec![CachedEntry {
                 ts_secs: now_secs,
                 cost_usd: 1.25,
@@ -661,7 +663,8 @@ fn producer_missing_scope_publishes_walked_baselines() {
         ..Default::default()
     };
     let mut walker = SpendingWalker::new();
-    let included = workspace_cache_from_shared_entries(
+    let origin_overrides = HashMap::from([(transcript.clone(), project.clone())]);
+    let included = super::workspace_cache_from_shared_entries_inner(
         &mut walker,
         &runtime,
         &provider,
@@ -669,12 +672,21 @@ fn producer_missing_scope_publishes_walked_baselines() {
         Some(&scope_hash),
         &files,
         &spec,
+        &origin_overrides,
+        true,
     )
     .expect("producer derives the missing scope");
 
     assert!((included.tally.headline.usd - 1.25).abs() < 1e-9);
     assert_eq!(included.live_baselines.len(), 1);
     assert_eq!(included.live_baselines.values().copied().sum::<f64>(), 1.25);
+    assert_eq!(
+        read_spending_cache(&runtime.shared_spending_cursor_path())
+            .files
+            .get(&transcript.to_string_lossy().into_owned())
+            .and_then(|entry| entry.origin_path.as_ref()),
+        Some(&project)
+    );
 
     let prices = crate::agents::pricing::PriceBook::default();
     let origin_overrides = std::collections::HashMap::new();

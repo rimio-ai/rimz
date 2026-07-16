@@ -13,7 +13,7 @@ mod painter;
 mod preview;
 mod voice;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
@@ -147,11 +147,13 @@ pub(crate) struct PetAssets {
 
 struct LoadingPet {
     id: String,
+    key: PreparationKey,
     receiver: Receiver<LoadResult>,
 }
 
 struct FailedPet {
     id: String,
+    key: PreparationKey,
     caption: String,
     failed_at_phase: u64,
 }
@@ -182,19 +184,23 @@ fn phase_elapsed(started_phase: u64, phase: u64, refresh_ms: u16) -> std::time::
 
 struct LoadedPet {
     id: String,
-    frames: Vec<RgbaImage>,
-    memo: HashMap<MemoKey, PetCellGrid>,
+    key: PreparationKey,
+    asset: LoadedPetAsset,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct MemoKey {
-    sprite_index: usize,
-    cols: u16,
-    rows: u16,
+struct PreparationKey {
+    tier: PetRenderTier,
+    size: PetGridSize,
     aspect: CellAspect,
 }
 
-type LoadResult = Result<Vec<RgbaImage>, String>;
+enum LoadedPetAsset {
+    Cell(Vec<PetCellGrid>),
+    Pixel(Vec<RgbaImage>),
+}
+
+type LoadResult = Result<LoadedPetAsset, String>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SelectedTrack {
@@ -231,8 +237,12 @@ impl PetAssets {
         Self {
             loaded: Some(LoadedPet {
                 id: pet_id.to_owned(),
-                frames: vec![frame; catalog::FRAME_COUNT],
-                memo: HashMap::new(),
+                key: PreparationKey {
+                    tier: PetRenderTier::Pixel,
+                    size: DASHBOARD_PIXEL_PET,
+                    aspect: CellAspect::NEUTRAL,
+                },
+                asset: LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT]),
             }),
             ..Self::default()
         }
@@ -296,31 +306,35 @@ impl PetAssets {
         let id = source.id();
         let id: &str = id.as_ref();
 
+        let preparation = body_tier.map(|tier| PreparationKey {
+            tier,
+            size: dashboard_pet_size(tier),
+            aspect: cell_aspect,
+        });
         self.poll_loader(phase);
-        self.clear_mismatched_pet(id);
-        if body_tier.is_some() {
-            self.ensure_loading(&source, phase, refresh_ms);
+        self.clear_mismatched_pet(id, preparation);
+        if let Some(key) = preparation {
+            self.ensure_loading(&source, key, phase, refresh_ms);
         }
         self.observe_action(action, config.voice, phase);
 
-        let loading = body_tier.is_some()
-            && self
-                .loading
+        let loading = preparation.is_some_and(|key| {
+            self.loading
                 .as_ref()
-                .is_some_and(|loading| loading.id == id);
+                .is_some_and(|loading| loading.id == id && loading.key == key)
+        });
         let unavailable_caption = self
             .failed
             .as_ref()
             .filter(|failed| failed.id == id)
             .map(|failed| failed.caption.clone());
-        let body = body_tier.and_then(|tier| {
-            let size = dashboard_pet_size(tier);
+        let body = preparation.and_then(|key| {
             let (sprite_index, track) = self.loaded_sprite(LoadedSpriteRequest {
                 pet_id: id,
                 previous_action,
                 frame,
             })?;
-            match tier {
+            match key.tier {
                 PetRenderTier::Pixel => {
                     active_track = track;
                     Some(PetBody::Pixel(PetPixelView {
@@ -330,16 +344,13 @@ impl PetAssets {
                             pixel_id_base,
                             sprite_index,
                         ),
-                        size,
+                        size: key.size,
                     }))
                 }
-                PetRenderTier::Cell => {
-                    self.loaded_grid(id, sprite_index, size, cell_aspect)
-                        .map(|grid| {
-                            active_track = track;
-                            PetBody::Cell(grid)
-                        })
-                }
+                PetRenderTier::Cell => self.loaded_grid(id, key, sprite_index).map(|grid| {
+                    active_track = track;
+                    PetBody::Cell(grid)
+                }),
             }
         });
         Some(PetView {
@@ -355,9 +366,13 @@ impl PetAssets {
 
     pub(crate) fn pixel_frame(&self, pet_id: &str, sprite_index: usize) -> Option<&RgbaImage> {
         let loaded = self.loaded.as_ref()?;
-        (loaded.id == pet_id)
-            .then(|| loaded.frames.get(sprite_index))
-            .flatten()
+        if loaded.id != pet_id {
+            return None;
+        }
+        match &loaded.asset {
+            LoadedPetAsset::Pixel(frames) => frames.get(sprite_index),
+            LoadedPetAsset::Cell(_) => None,
+        }
     }
 
     fn observe_action(&mut self, action: PetAction, voice: bool, seed: u64) {
@@ -383,14 +398,11 @@ impl PetAssets {
             Err(TryRecvError::Disconnected) => Err("pet loader stopped".to_owned()),
         };
         let id = loading.id.clone();
+        let key = loading.key;
         self.loading = None;
         match result {
-            Ok(frames) => {
-                self.loaded = Some(LoadedPet {
-                    id,
-                    frames,
-                    memo: HashMap::new(),
-                });
+            Ok(asset) => {
+                self.loaded = Some(LoadedPet { id, key, asset });
                 self.failed = None;
             }
             Err(err) => {
@@ -399,6 +411,7 @@ impl PetAssets {
                 self.jump_started_phase = None;
                 self.failed = Some(FailedPet {
                     id,
+                    key,
                     caption: "pet unavailable".to_owned(),
                     failed_at_phase: phase,
                 });
@@ -406,39 +419,46 @@ impl PetAssets {
         }
     }
 
-    fn clear_mismatched_pet(&mut self, pet_id: &str) {
+    fn clear_mismatched_pet(&mut self, pet_id: &str, key: Option<PreparationKey>) {
         if self
             .loaded
             .as_ref()
-            .is_some_and(|loaded| loaded.id != pet_id)
+            .is_some_and(|loaded| loaded.id != pet_id || key.is_some_and(|key| loaded.key != key))
         {
             self.loaded = None;
             self.jump_started_phase = None;
         }
-        if self
-            .loading
-            .as_ref()
-            .is_some_and(|loading| loading.id != pet_id)
-        {
+        if self.loading.as_ref().is_some_and(|loading| {
+            loading.id != pet_id || key.is_some_and(|key| loading.key != key)
+        }) {
             self.loading = None;
         }
         if self
             .failed
             .as_ref()
-            .is_some_and(|failed| failed.id != pet_id)
+            .is_some_and(|failed| failed.id != pet_id || key.is_some_and(|key| failed.key != key))
         {
             self.failed = None;
         }
     }
 
-    fn ensure_loading(&mut self, source: &PetSource, phase: u64, refresh_ms: u16) {
+    fn ensure_loading(
+        &mut self,
+        source: &PetSource,
+        key: PreparationKey,
+        phase: u64,
+        refresh_ms: u16,
+    ) {
         let id = source.id();
         let id: &str = id.as_ref();
-        if self.loaded.as_ref().is_some_and(|loaded| loaded.id == id)
+        if self
+            .loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.id == id && loaded.key == key)
             || self
                 .loading
                 .as_ref()
-                .is_some_and(|loading| loading.id == id)
+                .is_some_and(|loading| loading.id == id && loading.key == key)
         {
             return;
         }
@@ -446,6 +466,7 @@ impl PetAssets {
         // elapses, so a transient miss recovers without a per-frame retry storm.
         if let Some(failed) = self.failed.as_ref()
             && failed.id == id
+            && failed.key == key
             && !retry_due(failed.failed_at_phase, phase, refresh_ms)
         {
             return;
@@ -456,19 +477,21 @@ impl PetAssets {
         let spawned = thread::Builder::new()
             .name("rimz-pet-assets".to_owned())
             .spawn(move || {
-                let result = load_pet(source).map_err(|err| err.to_string());
+                let result = load_prepared_pet(source, key).map_err(|err| err.to_string());
                 let _ = sender.send(result);
             });
         match spawned {
             Ok(_) => {
                 self.loading = Some(LoadingPet {
                     id: id.to_owned(),
+                    key,
                     receiver,
                 });
             }
             Err(err) => {
                 self.failed = Some(FailedPet {
                     id: id.to_owned(),
+                    key,
                     caption: "pet unavailable".to_owned(),
                     failed_at_phase: phase,
                 });
@@ -478,32 +501,19 @@ impl PetAssets {
     }
 
     fn loaded_grid(
-        &mut self,
+        &self,
         pet_id: &str,
+        key: PreparationKey,
         sprite_index: usize,
-        size: PetGridSize,
-        aspect: CellAspect,
     ) -> Option<PetCellGrid> {
-        let loaded = self.loaded.as_mut()?;
-        if loaded.id != pet_id {
+        let loaded = self.loaded.as_ref()?;
+        if loaded.id != pet_id || loaded.key != key {
             return None;
         }
-        let key = MemoKey {
-            sprite_index,
-            cols: size.cols,
-            rows: size.rows,
-            aspect,
-        };
-        loaded.memo.retain(|memo_key, _| {
-            memo_key.cols == size.cols && memo_key.rows == size.rows && memo_key.aspect == aspect
-        });
-        if let Some(grid) = loaded.memo.get(&key) {
-            return Some(grid.clone());
+        match &loaded.asset {
+            LoadedPetAsset::Cell(grids) => grids.get(sprite_index).cloned(),
+            LoadedPetAsset::Pixel(_) => None,
         }
-        let frame = loaded.frames.get(sprite_index)?;
-        let grid = cellart::render_frame(frame, size.cols, size.rows, aspect);
-        loaded.memo.insert(key, grid.clone());
-        Some(grid)
     }
 
     fn loaded_sprite(&mut self, request: LoadedSpriteRequest<'_>) -> Option<(usize, &'static str)> {
@@ -534,6 +544,10 @@ impl PetAssets {
         if loaded.id != pet_id {
             return None;
         }
+        let frame_count = match &loaded.asset {
+            LoadedPetAsset::Cell(grids) => grids.len(),
+            LoadedPetAsset::Pixel(frames) => frames.len(),
+        };
         let sprite_index = model::animations()
             .get(track.name)
             .map(|animation| {
@@ -544,7 +558,7 @@ impl PetAssets {
                 }
             })
             .unwrap_or(0)
-            .min(loaded.frames.len().saturating_sub(1));
+            .min(frame_count.saturating_sub(1));
         Some((sprite_index, track.name))
     }
 
@@ -589,13 +603,37 @@ pub(crate) fn animation_frame(track: &str, refresh_ms: u16) -> std::time::Durati
     model::track_frame_duration(track, refresh_ms)
 }
 
+fn load_prepared_pet(
+    source: PetSource,
+    key: PreparationKey,
+) -> Result<LoadedPetAsset, asset::AssetErr> {
+    let resolved = asset::resolve_asset(&source)?;
+    let loaded = match key.tier {
+        PetRenderTier::Cell => frames::prepare_cell_sheet(&resolved.bytes, key.size, key.aspect)
+            .map(LoadedPetAsset::Cell),
+        PetRenderTier::Pixel => frames::decode_sheet(&resolved.bytes).map(LoadedPetAsset::Pixel),
+    };
+    match loaded {
+        Ok(asset) => Ok(asset),
+        Err(err) => {
+            // Evict only a cache entry on a decode miss; a user's local sheet
+            // is read-only to RimZ.
+            if let Some(path) = &resolved.evictable_cache {
+                let _ = asset::remove_cached_asset(path);
+            }
+            Err(asset::AssetErr::Decode(err))
+        }
+    }
+}
+
+/// Preview and pixel-only callers keep the decoded-frame path. Cell assets used
+/// by the live renderer go through [`load_prepared_pet`] and shed RGBA before
+/// crossing the loader channel.
 fn load_pet(source: PetSource) -> Result<Vec<RgbaImage>, asset::AssetErr> {
     let resolved = asset::resolve_asset(&source)?;
     match frames::decode_sheet(&resolved.bytes) {
         Ok(frames) => Ok(frames),
         Err(err) => {
-            // Evict only a cache entry on a decode miss; a user's local sheet
-            // is read-only to RimZ.
             if let Some(path) = &resolved.evictable_cache {
                 let _ = asset::remove_cached_asset(path);
             }
