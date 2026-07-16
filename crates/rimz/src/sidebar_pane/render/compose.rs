@@ -10,8 +10,8 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::chrome::{
-    alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule, repo_header_lines,
-    truth_notice_lines,
+    FooterParts, alert_lines, footer_lines, footer_parts, gate_notice_lines, hairline_rule,
+    repo_header_lines, truth_notice_lines,
 };
 use super::sections::{
     CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext, cockpit_spend_line,
@@ -294,7 +294,6 @@ enum BottomCorner {
 /// Selects alert-only, dashboard-folded, dashboard-with-totals, or bare-store
 /// chrome before rendering any lines.
 struct BottomPlan {
-    alert_active: bool,
     dashboard: Option<DashboardMode>,
     folded_footer: bool,
     corner: BottomCorner,
@@ -324,7 +323,6 @@ fn plan_bottom_chrome(
         BottomCorner::FleetStore
     };
     BottomPlan {
-        alert_active,
         dashboard,
         folded_footer,
         corner,
@@ -347,46 +345,21 @@ pub(super) fn build_bottom_chrome(
     let folded_footer = plan
         .folded_footer
         .then(|| footer_parts(snapshot, theme, inner));
-    if let Some(mode) = plan.dashboard {
-        // The pinned separator lifts the dashboard off the cards. It is part
-        // of bottom chrome, so the viewport reserves it before windowing.
-        bottom.push_inert(Line::from(""));
-        let active_tab = active_dashboard_tab(snapshot, ui);
-        let mut panel = dashboard_block(DashboardContext {
-            theme,
-            providers: &snapshot.providers,
-            active_provider: active_tab.as_deref(),
-            mode,
-            fleet_tally: snapshot.value_tally.as_ref(),
-            pet: ui.pet.as_ref(),
-            folded_footer: folded_footer.clone(),
-            width: inner,
-            zones: &snapshot.theme.display.budget_bar,
-            now: snapshot.now,
-        });
-        panel.map_lines(pad_chrome);
-        panel.translate_columns(1);
-        bottom.append(panel);
-    }
-    // The static `W:`/`M:` rows seal the main dashboard. The pet-enabled tall
-    // provider block owns those totals inside its `Total:` section.
-    if !plan.alert_active && !matches!(plan.corner, BottomCorner::None) {
-        let corner = match plan.corner {
-            BottomCorner::FleetTotal => {
-                fleet_total_lines(theme, snapshot.value_tally.as_ref(), inner)
-            }
-            BottomCorner::FleetStore => {
-                fleet_store_lines(theme, snapshot.value_tally.as_ref(), inner)
-            }
-            BottomCorner::None => Vec::new(),
-        };
-        if !corner.is_empty() {
-            if plan.dashboard.is_none() {
-                bottom.push_inert(pad_chrome(hairline_rule(theme, inner)));
-            }
-            append_inert_lines(&mut bottom, corner.into_iter().map(pad_chrome));
-        }
-    }
+    bottom.append(dashboard_chrome(
+        snapshot,
+        theme,
+        inner,
+        ui,
+        plan.dashboard,
+        folded_footer,
+    ));
+    bottom.append(bottom_corner_chrome(
+        snapshot,
+        theme,
+        inner,
+        plan.corner,
+        plan.dashboard.is_some(),
+    ));
     if plan.truth_notice
         && let Some(notice) = snapshot.truth_degraded.as_ref()
     {
@@ -429,6 +402,64 @@ pub(super) fn build_bottom_chrome(
         );
     }
     bottom
+}
+
+fn dashboard_chrome(
+    snapshot: &SidebarSnapshot,
+    theme: &Theme,
+    inner: usize,
+    ui: &UiState,
+    mode: Option<DashboardMode>,
+    folded_footer: Option<FooterParts>,
+) -> RenderedBlock {
+    let Some(mode) = mode else {
+        return RenderedBlock::default();
+    };
+    // The pinned separator lifts the dashboard off the cards. It is part of
+    // bottom chrome, so the viewport reserves it before windowing.
+    let mut block = RenderedBlock::default();
+    block.push_inert(Line::from(""));
+    let active_tab = active_dashboard_tab(snapshot, ui);
+    let mut panel = dashboard_block(DashboardContext {
+        theme,
+        providers: &snapshot.providers,
+        active_provider: active_tab.as_deref(),
+        mode,
+        fleet_tally: snapshot.value_tally.as_ref(),
+        pet: ui.pet.as_ref(),
+        folded_footer,
+        width: inner,
+        zones: &snapshot.theme.display.budget_bar,
+        now: snapshot.now,
+    });
+    panel.map_lines(pad_chrome);
+    panel.translate_columns(1);
+    block.append(panel);
+    block
+}
+
+fn bottom_corner_chrome(
+    snapshot: &SidebarSnapshot,
+    theme: &Theme,
+    inner: usize,
+    corner: BottomCorner,
+    dashboard_present: bool,
+) -> RenderedBlock {
+    // The static `W:`/`M:` rows seal the main dashboard. The pet-enabled tall
+    // provider block owns those totals inside its `Total:` section.
+    let lines = match corner {
+        BottomCorner::FleetTotal => fleet_total_lines(theme, snapshot.value_tally.as_ref(), inner),
+        BottomCorner::FleetStore => fleet_store_lines(theme, snapshot.value_tally.as_ref(), inner),
+        BottomCorner::None => return RenderedBlock::default(),
+    };
+    let mut block = RenderedBlock::default();
+    if !lines.is_empty() {
+        if !dashboard_present {
+            block.push_inert(pad_chrome(hairline_rule(theme, inner)));
+        }
+        append_inert_lines(&mut block, lines.into_iter().map(pad_chrome));
+    }
+    block
 }
 
 fn append_inert_lines(block: &mut RenderedBlock, lines: impl IntoIterator<Item = Line<'static>>) {

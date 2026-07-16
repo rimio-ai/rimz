@@ -705,32 +705,7 @@ fn provider_tab_rail(
     spans.push(fill(stub));
     col += stub;
 
-    let tab_cells = |panel: &SidebarProviderPanel| tab_label(&panel.kind).chars().count() + 4;
-    let active_index = providers.iter().position(|panel| panel.kind == active_kind);
-    let mut selected = vec![false; providers.len()];
-    let mut used = stub;
-    if let Some(index) = active_index {
-        let cells = tab_cells(&providers[index]);
-        if used < width {
-            selected[index] = true;
-            used = (used + cells).min(width);
-        }
-    }
-    for (index, panel) in providers.iter().enumerate() {
-        if Some(index) == active_index {
-            continue;
-        }
-        let cells = tab_cells(panel);
-        let gap = if selected.iter().any(|selected| *selected) {
-            RAIL_STUB
-        } else {
-            0
-        };
-        if used + gap + cells <= width {
-            selected[index] = true;
-            used += gap + cells;
-        }
-    }
+    let selected = selected_provider_tabs(providers, active_kind, width, stub);
 
     let mut rendered = 0;
     for (index, panel) in providers.iter().enumerate() {
@@ -747,32 +722,7 @@ fn provider_tab_rail(
             spans.push(fill(gap));
             col += gap;
         }
-        if active {
-            // The brand fill and bold are the pick; the reserved rail cells
-            // keep their `─` so a click moves color alone, never a glyph.
-            // When `NO_COLOR` drops the fill, the `┤ ├` caps paint into
-            // those cells instead as the pick's shape.
-            let brand = theme.brand_tone(panel);
-            let chip = theme.chip(brand, Modifier::BOLD);
-            let (left, right) = if chip.bg.is_none() {
-                (
-                    Span::styled(theme.glyph(GlyphRole::ChromeTabCapLeft).to_owned(), rail),
-                    Span::styled(theme.glyph(GlyphRole::ChromeTabCapRight).to_owned(), rail),
-                )
-            } else {
-                (fill(1), fill(1))
-            };
-            spans.push(left);
-            spans.push(Span::styled(format!(" {label} "), chip));
-            spans.push(right);
-        } else {
-            spans.push(fill(1));
-            spans.push(Span::styled(
-                format!(" {label} "),
-                theme.style(theme.brand_tone(panel), Modifier::empty()),
-            ));
-            spans.push(fill(1));
-        }
+        append_provider_tab_spans(&mut spans, theme, panel, &label, active);
         hits.push((
             col as u16..(col + cells).min(width) as u16,
             HitTarget::ProviderTab(panel.kind.clone()),
@@ -786,6 +736,69 @@ fn provider_tab_rail(
     let mut block = RenderedBlock::default();
     block.push_with_regions(Line::from(trim_spans_to_width(spans, width)), None, hits);
     block
+}
+
+fn selected_provider_tabs(
+    providers: &[SidebarProviderPanel],
+    active_kind: &str,
+    width: usize,
+    stub: usize,
+) -> Vec<bool> {
+    let tab_cells = |panel: &SidebarProviderPanel| tab_label(&panel.kind).chars().count() + 4;
+    let active_index = providers.iter().position(|panel| panel.kind == active_kind);
+    let mut selected = vec![false; providers.len()];
+    let mut used = stub;
+    if let Some(index) = active_index
+        && used < width
+    {
+        selected[index] = true;
+        used = (used + tab_cells(&providers[index])).min(width);
+    }
+    for (index, panel) in providers.iter().enumerate() {
+        if Some(index) == active_index {
+            continue;
+        }
+        let gap = RAIL_STUB * usize::from(selected.iter().any(|selected| *selected));
+        let cells = tab_cells(panel);
+        if used + gap + cells <= width {
+            selected[index] = true;
+            used += gap + cells;
+        }
+    }
+    selected
+}
+
+fn append_provider_tab_spans(
+    spans: &mut Vec<Span<'static>>,
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    label: &str,
+    active: bool,
+) {
+    let rail = theme.body();
+    let fill = || Span::styled(theme.glyph(GlyphRole::ChromeHairline).to_owned(), rail);
+    if !active {
+        spans.push(fill());
+        spans.push(Span::styled(
+            format!(" {label} "),
+            theme.style(theme.brand_tone(panel), Modifier::empty()),
+        ));
+        spans.push(fill());
+        return;
+    }
+    // Brand fill and bold are the pick. Under no-color, caps replace fill.
+    let chip = theme.chip(theme.brand_tone(panel), Modifier::BOLD);
+    let (left, right) = if chip.bg.is_none() {
+        (
+            Span::styled(theme.glyph(GlyphRole::ChromeTabCapLeft).to_owned(), rail),
+            Span::styled(theme.glyph(GlyphRole::ChromeTabCapRight).to_owned(), rail),
+        )
+    } else {
+        (fill(), fill())
+    };
+    spans.push(left);
+    spans.push(Span::styled(format!(" {label} "), chip));
+    spans.push(right);
 }
 
 /// Width of the tab rail's leading stub and inter-tab gaps.

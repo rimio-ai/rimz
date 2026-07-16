@@ -36,6 +36,15 @@ pub(in crate::sidebar_pane::render) struct WorktreeRenderContext<'render, 'snaps
     pub(in crate::sidebar_pane::render) meter_pixels: Option<&'render mut MeterPixels>,
 }
 
+enum WorktreeTail {
+    None,
+    More {
+        line: Line<'static>,
+        totals: Option<Line<'static>>,
+    },
+    Less(Line<'static>),
+}
+
 /// Compose one worktree group's lines and interaction geometry together.
 /// The row index captured for a row's lines matches `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
@@ -91,44 +100,57 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     for (this_row, row) in range.zip(visible_group.rows(roster).iter().copied()) {
         let selected = this_row == ctx.selected_index;
         let gutter = if selected { Gutter::Selected } else { lane };
-        let row_lines = row_lines(ctx, row, selected, gutter, meter_pixels.as_deref_mut());
-        for line in row_lines {
+        for line in row_lines(ctx, row, selected, gutter, meter_pixels.as_deref_mut()) {
             block.push_row(line, this_row);
         }
     }
-    let natural_hidden = visible_group.natural_hidden_count();
-    let hidden = visible_group.hidden_count();
-    if hidden > 0 && !visible_group.expanded() {
-        let toggle = if group.finished {
-            finished_roster_line(ctx, visible_group, roster)
-        } else {
-            Line::styled(format!("  +{hidden} more"), ctx.theme.muted())
-        };
-        block.push_target(
-            with_gutter(ctx.theme, toggle, lane, None, ctx.width),
-            HitTarget::ToggleGroup(group.key.clone()),
-        );
-        if group.finished
-            && let Some(totals) = finished_totals_line(ctx, group)
-        {
+    let target = HitTarget::ToggleGroup(group.key.clone());
+    match worktree_tail(ctx, roster, visible_group) {
+        WorktreeTail::More { line, totals } => {
             block.push_target(
-                with_gutter(ctx.theme, totals, lane, None, ctx.width),
-                HitTarget::ToggleGroup(group.key.clone()),
+                with_gutter(ctx.theme, line, lane, None, ctx.width),
+                target.clone(),
             );
+            if let Some(totals) = totals {
+                block.push_target(
+                    with_gutter(ctx.theme, totals, lane, None, ctx.width),
+                    target,
+                );
+            }
         }
-    } else if natural_hidden > 0 && visible_group.expanded() && !group.finished {
-        block.push_target(
-            with_gutter(
-                ctx.theme,
-                Line::styled("  − less", ctx.theme.muted()),
-                lane,
-                None,
-                ctx.width,
-            ),
-            HitTarget::ToggleGroup(group.key.clone()),
-        );
+        WorktreeTail::Less(line) => {
+            block.push_target(with_gutter(ctx.theme, line, lane, None, ctx.width), target)
+        }
+        WorktreeTail::None => {}
     }
     block
+}
+
+fn worktree_tail(
+    ctx: &RowCtx<'_>,
+    roster: &VisibleRoster<'_>,
+    visible_group: &VisibleGroup<'_>,
+) -> WorktreeTail {
+    let group = visible_group.source();
+    let hidden = visible_group.hidden_count();
+    if hidden > 0 && !visible_group.expanded() {
+        return WorktreeTail::More {
+            line: if group.finished {
+                finished_roster_line(ctx, visible_group, roster)
+            } else {
+                Line::styled(format!("  +{hidden} more"), ctx.theme.muted())
+            },
+            totals: group
+                .finished
+                .then(|| finished_totals_line(ctx, group))
+                .flatten(),
+        };
+    }
+    if visible_group.natural_hidden_count() > 0 && visible_group.expanded() && !group.finished {
+        WorktreeTail::Less(Line::styled("  − less", ctx.theme.muted()))
+    } else {
+        WorktreeTail::None
+    }
 }
 
 fn finished_roster_line(
