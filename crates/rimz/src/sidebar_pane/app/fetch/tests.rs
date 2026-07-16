@@ -771,7 +771,7 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     assert_eq!(rx.try_recv().unwrap().mode, FetchMode::ProducerFreshPanes);
     assert!(dispatcher.pending_refetch.is_none());
 
-    let (tx, _rx) = std::sync::mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::new(tx);
     dispatcher.request(FetchRequest::default(), false);
     dispatcher.request(FetchRequest::default(), true);
@@ -780,11 +780,13 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
 
     dispatcher.request(request, true);
 
-    let pending = dispatcher.take_pending().expect("pending refetch");
+    rx.try_recv().expect("initial request");
+    dispatcher.complete(true);
+    let pending = rx.try_recv().expect("pending refetch");
     assert_eq!(pending.mode, FetchMode::ProducerFreshPanes);
     assert_eq!(pending.min_pane_cache_ms, min_pane_cache_ms);
 
-    let (tx, _rx) = std::sync::mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::new(tx);
     dispatcher.request(FetchRequest::default(), false);
     dispatcher.request(FetchRequest::producer_fresh_panes(), true);
@@ -793,7 +795,9 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     dispatcher.request(request, true);
 
     assert!(dispatcher.in_flight);
-    let pending = dispatcher.take_pending().expect("pending refetch");
+    rx.try_recv().expect("initial request");
+    dispatcher.complete(true);
+    let pending = rx.try_recv().expect("pending refetch");
     assert_eq!(pending.mode, FetchMode::HardRefresh);
     assert!(pending.min_pane_cache_ms.is_some());
 
@@ -807,6 +811,47 @@ fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     assert!(request.force_fold);
     assert!(!request.published_frame_hint);
     assert!(request.min_pane_cache_ms.is_none());
+}
+
+#[test]
+fn fetch_dispatcher_merges_deferred_deadlines_and_absorbs_work() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut dispatcher = FetchDispatcher::new(tx);
+    let later = Instant::now() + Duration::from_secs(10);
+    let earlier = later - Duration::from_secs(3);
+
+    dispatcher.defer_until(FetchRequest::default(), later);
+    dispatcher.defer_until(FetchRequest::producer_fresh_panes(), earlier);
+
+    assert_eq!(dispatcher.next_deadline(), Some(earlier));
+    dispatcher.request(FetchRequest::default(), false);
+    let request = rx
+        .try_recv()
+        .expect("immediate request absorbs deferred work");
+    assert!(request.is_producer_fresh_panes());
+    assert!(dispatcher.next_deadline().is_none());
+}
+
+#[test]
+fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut dispatcher = FetchDispatcher::new(tx);
+    dispatcher.request(FetchRequest::default(), false);
+    rx.try_recv().expect("initial request");
+    let due = Instant::now() + Duration::from_secs(3);
+    dispatcher.defer_until(FetchRequest::producer_fresh_panes(), due);
+
+    dispatcher.fire_due(due);
+    assert!(
+        rx.try_recv().is_err(),
+        "follow-up remains coalesced in flight"
+    );
+    dispatcher.complete(true);
+    let follow_up = rx
+        .try_recv()
+        .expect("one follow-up dispatches on completion");
+    assert!(follow_up.is_producer_fresh_panes());
+    assert!(rx.try_recv().is_err(), "only one follow-up dispatches");
 }
 
 #[test]

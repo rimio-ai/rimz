@@ -122,7 +122,6 @@ pub(super) struct LoopState {
     last_pulled: SidebarSnapshot,
     own_pane: Option<PaneId>,
     last_known_elder: bool,
-    pending_fetch: Option<PendingFetch>,
     optimistic_watch_until: Option<Instant>,
     /// Deadline for the tab-view read sweep: armed when the own tab comes on
     /// screen, disarmed when it leaves. The sweep fires on the first fold at or
@@ -156,12 +155,6 @@ pub(super) struct LoopState {
     pub(super) exit_cause: Option<RendererExitCause>,
     pub(super) tab_emptied: bool,
     pub(super) reload_requested: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct PendingFetch {
-    due_at: Instant,
-    request: FetchRequest,
 }
 
 pub(super) fn handle_wakeup(
@@ -218,7 +211,6 @@ impl LoopState {
             current,
             own_pane,
             last_known_elder: true,
-            pending_fetch: None,
             optimistic_watch_until: None,
             tab_read_dwell_until: None,
             event_store: EventStore::default(),
@@ -276,14 +268,6 @@ impl LoopState {
             }
             timeout.max(FRAME_MIN_TIMEOUT)
         };
-        if let Some(pending) = self.pending_fetch {
-            timeout = timeout.min(
-                pending
-                    .due_at
-                    .saturating_duration_since(Instant::now())
-                    .max(FRAME_MIN_TIMEOUT),
-            );
-        }
         if let Some(until) = self
             .tab_read_dwell_until
             .filter(|_| self.current.own_view.is_some())
@@ -354,60 +338,6 @@ impl LoopState {
         self.watched() || self.last_known_elder
     }
 
-    fn request_or_defer_identity_free(
-        &mut self,
-        fetch: &mut FetchDispatcher,
-        request: FetchRequest,
-        defer_for: Duration,
-    ) {
-        if self.identity_free_fetch_immediate() {
-            self.request_now_merging_pending(fetch, request, true);
-        } else {
-            self.defer_fetch(request, Instant::now() + defer_for);
-        }
-    }
-
-    fn defer_fetch(&mut self, request: FetchRequest, due_at: Instant) {
-        if let Some(pending) = &mut self.pending_fetch {
-            pending.request.merge(request);
-            pending.due_at = pending.due_at.min(due_at);
-            return;
-        }
-        self.pending_fetch = Some(PendingFetch { due_at, request });
-    }
-
-    /// Dispatch an immediate fetch after absorbing any clamp-deferred request.
-    /// A fold that runs now covers the deferred nudge, so it never leaves a
-    /// redundant echo behind. Absorption also forces a follow-up when a cycle
-    /// is in flight; otherwise the dispatcher could drop the deferred work.
-    fn request_now_merging_pending(
-        &mut self,
-        fetch: &mut FetchDispatcher,
-        mut request: FetchRequest,
-        force_after: bool,
-    ) {
-        let absorbed = self.pending_fetch.take();
-        if let Some(pending) = absorbed {
-            request.merge(pending.request);
-        }
-        fetch.request(request, force_after || absorbed.is_some());
-    }
-
-    pub(super) fn clear_pending_fetch(&mut self) {
-        self.pending_fetch = None;
-    }
-
-    fn fire_due_pending_fetch(&mut self, fetch: &mut FetchDispatcher) {
-        let Some(pending) = self.pending_fetch else {
-            return;
-        };
-        if Instant::now() < pending.due_at {
-            return;
-        }
-        self.pending_fetch = None;
-        fetch.request(pending.request, true);
-    }
-
     pub(super) fn on_snapshot(
         &mut self,
         config: &ServeConfig,
@@ -422,14 +352,19 @@ impl LoopState {
             saw_final |= update.is_final();
             latest = Some(update);
         }
-        if saw_final {
-            fetch.mark_request_complete();
-        }
         let rejected = match latest {
             Some(update) => self.apply_latest_snapshot(config, update, anim_start, diag)?,
             None => false,
         };
-        self.finish_snapshot_requests(fetch, saw_final, rejected);
+        if saw_final {
+            fetch.complete(!self.should_exit);
+        }
+        // A held transient regression asks for one more read so the
+        // last-known-good cache heals to the next good frame. Single-flight
+        // bounds this to one extra run.
+        if !self.should_exit && saw_final && rejected {
+            fetch.request(FetchRequest::default(), false);
+        }
         Ok(())
     }
 
@@ -480,7 +415,7 @@ impl LoopState {
     }
 
     fn handle_reload(&mut self, config: &ServeConfig, fetch: &mut FetchDispatcher) -> LoopFlow {
-        self.clear_pending_fetch();
+        fetch.clear_deferred();
         if reload_or_refetch(&config.session_name, fetch) {
             self.reload_requested = true;
             return LoopFlow::Exit;
@@ -545,26 +480,6 @@ impl LoopState {
             // painting when alone, or release the hold and paint at the new
             // size when siblings remain.
             self.paint_hold.release();
-        }
-    }
-
-    fn finish_snapshot_requests(
-        &mut self,
-        fetch: &mut FetchDispatcher,
-        saw_final: bool,
-        rejected: bool,
-    ) {
-        if !self.should_exit
-            && saw_final
-            && let Some(request) = fetch.take_pending()
-        {
-            self.request_now_merging_pending(fetch, request, false);
-        }
-        // A held transient regression asks for one more read so the
-        // last-known-good cache heals to the next good frame. Single-flight
-        // bounds this to one extra run.
-        if !self.should_exit && saw_final && rejected {
-            self.request_now_merging_pending(fetch, FetchRequest::default(), false);
         }
     }
 
@@ -645,19 +560,17 @@ impl LoopState {
                 use crate::sidebar::events::PaneFramePublicationKind;
 
                 match publication {
-                    PaneFramePublicationKind::Presence => self.request_now_merging_pending(
-                        fetch,
+                    PaneFramePublicationKind::Presence => {
+                        fetch.request(FetchRequest::pane_frame_published(), true)
+                    }
+                    PaneFramePublicationKind::Topology => fetch.request_or_defer(
                         FetchRequest::pane_frame_published(),
-                        true,
-                    ),
-                    PaneFramePublicationKind::Topology => self.request_or_defer_identity_free(
-                        fetch,
-                        FetchRequest::pane_frame_published(),
+                        self.identity_free_fetch_immediate(),
                         crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
                     ),
-                    PaneFramePublicationKind::Metrics => self.request_or_defer_identity_free(
-                        fetch,
+                    PaneFramePublicationKind::Metrics => fetch.request_or_defer(
                         FetchRequest::pane_frame_published(),
+                        self.identity_free_fetch_immediate(),
                         crate::sidebar::timing::UNWATCHED_METRICS_FOLD_CLAMP,
                     ),
                 }
@@ -678,13 +591,13 @@ impl LoopState {
             // `PaneOpened` without a command: nothing to fuse, so refetch,
             // bypassing the pane cache when the event says topology moved.
             _ => {
-                self.request_or_defer_identity_free(
-                    fetch,
+                fetch.request_or_defer(
                     if requests_verification {
                         FetchRequest::producer_fresh_panes()
                     } else {
                         FetchRequest::default()
                     },
+                    self.identity_free_fetch_immediate(),
                     crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
                 );
             }
@@ -783,7 +696,7 @@ impl LoopState {
         self.event_store.append(event, sent_at_ms, now_ms);
         self.fold_fused_now(config, anim_start, diag)?;
         if !self.should_exit && (requests_verification || own_focused) {
-            self.request_now_merging_pending(fetch, FetchRequest::producer_fresh_panes(), true);
+            fetch.request(FetchRequest::producer_fresh_panes(), true);
         }
         if own_focused {
             self.optimistic_watch_until = Some(Instant::now() + FOCUS_RESUME_WATCH_WINDOW);
@@ -866,7 +779,7 @@ impl LoopState {
         // A resize is the mux telling us topology changed. Pull a fresh pane
         // list through the elected producer and require a cache produced after
         // this signal.
-        self.request_now_merging_pending(fetch, FetchRequest::producer_fresh_panes(), true);
+        fetch.request(FetchRequest::producer_fresh_panes(), true);
         Ok(())
     }
 
@@ -1095,7 +1008,7 @@ impl LoopState {
         wake_room(runtime);
         self.dirty = true;
         self.next_frame = Instant::now();
-        self.request_now_merging_pending(fetch, FetchRequest::default(), true);
+        fetch.request(FetchRequest::default(), true);
     }
 
     pub(super) fn run_maintenance(
@@ -1109,7 +1022,7 @@ impl LoopState {
         // path still drains the channel so startup cannot strand the
         // placeholder cockpit.
         self.on_snapshot(ctx.config, fetch, ctx.result_rx, ctx.anim_start, ctx.diag)?;
-        self.fire_due_pending_fetch(fetch);
+        fetch.fire_due(Instant::now());
 
         // Tab-view read dwell: once the user has stayed past the dwell, provoke
         // a fold so the normal clear path sweeps the unread siblings. The fold
@@ -1119,14 +1032,14 @@ impl LoopState {
             .filter(|_| self.current.own_view.is_some())
             .is_some_and(|until| Instant::now() >= until)
         {
-            self.request_now_merging_pending(fetch, FetchRequest::force_fold(), false);
+            fetch.request(FetchRequest::force_fold(), false);
         }
 
         // Data backstop: catch pane/git drift no store delta announced. It is
         // self-gated to the data tick; an armed clamp-deferred nudge merges
         // into this fold instead of waiting to echo it.
         if self.fetched_at.elapsed() >= ctx.tick {
-            self.request_now_merging_pending(fetch, FetchRequest::default(), false);
+            fetch.request(FetchRequest::default(), false);
         }
 
         // Heartbeat: fast in-process atomic write on the main thread so the
@@ -1154,7 +1067,7 @@ impl LoopState {
             } else {
                 FetchRequest::default()
             };
-            self.request_now_merging_pending(fetch, request, false);
+            fetch.request(request, false);
         }
         if self
             .ui
@@ -1162,7 +1075,7 @@ impl LoopState {
             .as_ref()
             .is_some_and(|hold| jiff::Timestamp::now().as_millisecond() >= hold.expires_ms)
         {
-            self.request_now_merging_pending(fetch, FetchRequest::default(), false);
+            fetch.request(FetchRequest::default(), false);
         }
         Ok(())
     }

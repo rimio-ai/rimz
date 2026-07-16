@@ -677,12 +677,17 @@ fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
         request_rx.try_recv().is_err(),
         "unwatched consumer defers the burst"
     );
-    let pending = state.pending_fetch.as_mut().expect("pending fetch");
     assert!(
-        pending.request.is_producer_fresh_panes(),
+        fetch
+            .deferred_request()
+            .expect("pending fetch")
+            .is_producer_fresh_panes(),
         "coalescing preserves the strongest freshness requirement"
     );
-    pending.due_at = Instant::now() - Duration::from_millis(1);
+    fetch.defer_until(
+        FetchRequest::default(),
+        Instant::now() - Duration::from_millis(1),
+    );
 
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
     let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
@@ -740,12 +745,15 @@ fn repeated_hidden_metrics_publications_fold_once_at_the_background_deadline() {
             .expect("defer metrics publication");
     }
     assert!(request_rx.try_recv().is_err());
-    let pending = state.pending_fetch.as_mut().expect("one deferred fetch");
+    let deadline = fetch.next_deadline().expect("one deferred fetch");
     assert!(
-        pending.due_at.saturating_duration_since(Instant::now())
+        deadline.saturating_duration_since(Instant::now())
             <= crate::sidebar::timing::UNWATCHED_METRICS_FOLD_CLAMP
     );
-    pending.due_at = Instant::now() - Duration::from_millis(1);
+    fetch.defer_until(
+        FetchRequest::default(),
+        Instant::now() - Duration::from_millis(1),
+    );
 
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
     let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
@@ -773,7 +781,7 @@ fn repeated_hidden_metrics_publications_fold_once_at_the_background_deadline() {
         "the metrics burst emits one fetch at its deadline"
     );
     assert!(request_rx.try_recv().is_err());
-    assert!(state.pending_fetch.is_none());
+    assert!(fetch.next_deadline().is_none());
 }
 
 #[test]
@@ -806,7 +814,7 @@ fn topology_and_store_publications_shorten_a_metrics_deadline() {
                 &crate::diag::DiagSink::disabled(),
             )
             .expect("defer metrics publication");
-        let metrics_due = state.pending_fetch.expect("metrics pending").due_at;
+        let metrics_due = fetch.next_deadline().expect("metrics pending");
 
         state
             .on_event(
@@ -818,8 +826,8 @@ fn topology_and_store_publications_shorten_a_metrics_deadline() {
                 &crate::diag::DiagSink::disabled(),
             )
             .expect("shorter publication");
-        let shortened = state.pending_fetch.expect("shortened pending fetch");
-        assert!(shortened.due_at < metrics_due);
+        let shortened = fetch.next_deadline().expect("shortened pending fetch");
+        assert!(shortened < metrics_due);
 
         state
             .on_event(
@@ -831,9 +839,13 @@ fn topology_and_store_publications_shorten_a_metrics_deadline() {
                 &crate::diag::DiagSink::disabled(),
             )
             .expect("stronger topology request");
-        let merged = state.pending_fetch.expect("merged pending fetch");
-        assert_eq!(merged.due_at, shortened.due_at);
-        assert!(merged.request.is_producer_fresh_panes());
+        assert_eq!(fetch.next_deadline(), Some(shortened));
+        assert!(
+            fetch
+                .deferred_request()
+                .expect("merged pending fetch")
+                .is_producer_fresh_panes()
+        );
         assert!(request_rx.try_recv().is_err());
     }
 }
@@ -874,7 +886,7 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
             .expect("immediate publication");
 
         assert!(request_rx.try_recv().is_ok());
-        assert!(state.pending_fetch.is_none());
+        assert!(fetch.next_deadline().is_none());
     }
 }
 
@@ -995,7 +1007,7 @@ fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
             &crate::diag::DiagSink::disabled(),
         )
         .expect("defer store delta");
-    assert!(state.pending_fetch.is_some());
+    assert!(fetch.next_deadline().is_some());
 
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
     let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
@@ -1022,35 +1034,10 @@ fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
         request_rx.try_recv().is_ok(),
         "watchdog dispatches one fetch"
     );
-    assert!(state.pending_fetch.is_none());
+    assert!(fetch.next_deadline().is_none());
     assert!(
         request_rx.try_recv().is_err(),
         "the deferred nudge merges into the watchdog fetch"
-    );
-}
-
-#[test]
-fn absorbed_deferred_fetch_forces_follow_up_while_in_flight() {
-    let ws = workspace();
-    let (_dir, mut state) = loop_state(&ws);
-    let (mut fetch, request_rx) = fetch_dispatcher();
-    fetch.request(FetchRequest::default(), false);
-    request_rx.try_recv().expect("initial in-flight fetch");
-    state.defer_fetch(
-        FetchRequest::producer_fresh_panes(),
-        Instant::now() + Duration::from_secs(3),
-    );
-
-    state.request_now_merging_pending(&mut fetch, FetchRequest::default(), false);
-
-    assert!(state.pending_fetch.is_none());
-    assert!(request_rx.try_recv().is_err(), "follow-up stays queued");
-    assert!(
-        fetch
-            .take_pending()
-            .expect("absorbed work forces a follow-up")
-            .is_producer_fresh_panes(),
-        "the queued follow-up preserves the deferred freshness requirement"
     );
 }
 
@@ -1089,7 +1076,7 @@ fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
             .expect("identity-free event");
 
         assert!(request_rx.try_recv().is_ok());
-        assert!(state.pending_fetch.is_none());
+        assert!(fetch.next_deadline().is_none());
     }
 }
 
@@ -1116,7 +1103,7 @@ fn focus_resume_flushes_pending_metrics_fetch() {
             &crate::diag::DiagSink::disabled(),
         )
         .expect("defer metrics publication");
-    assert!(state.pending_fetch.is_some());
+    assert!(fetch.next_deadline().is_some());
 
     state
         .on_event(
@@ -1135,7 +1122,7 @@ fn focus_resume_flushes_pending_metrics_fetch() {
         )
         .expect("focus resumes");
 
-    assert!(state.pending_fetch.is_none());
+    assert!(fetch.next_deadline().is_none());
     assert!(
         request_rx
             .try_recv()

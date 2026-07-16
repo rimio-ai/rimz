@@ -8,6 +8,23 @@ use crate::sidebar_pane::pets::{
 };
 use jiff::Timestamp;
 
+#[test]
+fn deferred_fetch_deadline_caps_event_loop_timeout() {
+    let now = Instant::now();
+    assert_eq!(
+        fetch_deadline_timeout(
+            Duration::from_secs(10),
+            Some(now + Duration::from_secs(3)),
+            now,
+        ),
+        Duration::from_secs(3),
+    );
+    assert_eq!(
+        fetch_deadline_timeout(Duration::from_secs(10), Some(now), now),
+        FRAME_MIN_TIMEOUT,
+    );
+}
+
 fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
     let ws = workspace();
     let sidebar = PaneId::from_parts(MuxName::Zellij, "terminal_10");

@@ -273,7 +273,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // subprocess on the render thread and a busy fetch never freezes the spin
     // or swallows a keypress.
     while !state.should_exit {
-        let (active, timeout) = state.frame_timing(tick, anim_start);
+        let (active, mut timeout) = state.frame_timing(tick, anim_start);
+        timeout = fetch_deadline_timeout(timeout, fetch.next_deadline(), Instant::now());
         socket.set_read_timeout(Some(timeout))?;
         match state.on_wakeup(
             &config,
@@ -327,6 +328,16 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         std::process::exit(crate::sidebar_pane::supervise::RELOAD_EXIT_CODE);
     }
     Ok(())
+}
+
+fn fetch_deadline_timeout(base: Duration, deadline: Option<Instant>, now: Instant) -> Duration {
+    deadline.map_or(base, |deadline| {
+        base.min(
+            deadline
+                .saturating_duration_since(now)
+                .max(FRAME_MIN_TIMEOUT),
+        )
+    })
 }
 
 fn install_panic_diagnostic_hook(diag: crate::diag::DiagSink) {
