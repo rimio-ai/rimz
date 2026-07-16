@@ -10,7 +10,7 @@ fn plugin_preserves_measured_usage_across_zero_only_updates() {
     let capability = std::process::Command::new("node")
         .args([
             "--experimental-strip-types",
-            "--input-type=module",
+            "--input-type=module-typescript",
             "--eval",
             "const value: number = 1;",
         ])
