@@ -6,6 +6,7 @@
 //! return the agent-native neutral no-op immediately. The agent's UI stays the
 //! answer surface.
 
+use std::ffi::OsStr;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -141,6 +142,8 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         raw_agent_pid
     };
     let daemon_owned = normalized_owner_pid.is_some_and(|pid| hook_owner_is_daemon(&source, pid));
+    let participant_start =
+        participant_start_path(&source, std::env::var_os("CURSOR_PROJECT_DIR").as_deref());
     let scan = |cwd: &Path| sibling_agent_pins(&source, cwd);
     // A daemon's environment is unattributable: it can carry a valid workspace
     // pin for the unrelated room that launched the shared daemon. Daemon-owned
@@ -148,12 +151,16 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     // sibling recovery when a daemon route cannot be classified.
     let workspace = if daemon_owned {
         WorkspaceResolver::resolve_daemon_participant_with_pin_recovery(
-            ".",
+            &participant_start,
             globals.root.clone(),
             &scan,
         )?
     } else {
-        WorkspaceResolver::resolve_participant_with_pin_recovery(".", globals.root.clone(), &scan)?
+        WorkspaceResolver::resolve_participant_with_pin_recovery(
+            &participant_start,
+            globals.root.clone(),
+            &scan,
+        )?
     };
     let store = open_store(&workspace)?;
     let mut buf = String::new();
@@ -214,6 +221,18 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         )?;
     }
     emit_neutral(agent, &event_name)
+}
+
+fn participant_start_path(source: &str, cursor_project_dir: Option<&OsStr>) -> PathBuf {
+    if source == "cursor"
+        && let Some(project_dir) = cursor_project_dir.filter(|value| !value.is_empty())
+    {
+        let path = PathBuf::from(project_dir);
+        if path.is_absolute() {
+            return path;
+        }
+    }
+    PathBuf::from(".")
 }
 
 fn emit_neutral(agent: &dyn AgentAdapter, event_name: &str) -> Result<()> {

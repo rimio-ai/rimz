@@ -658,6 +658,10 @@ criteria = "safe-to-deploy"
 version = "1.1.8"
 criteria = "safe-to-deploy"
 
+[[exemptions.md-5]]
+version = "0.11.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.memchr]]
 version = "2.8.2"
 criteria = "safe-to-deploy"
@@ -870,9 +874,17 @@ criteria = "safe-to-run"
 version = "0.11.9"
 criteria = "safe-to-run"
 
+[[exemptions.prost]]
+version = "0.14.4"
+criteria = "safe-to-deploy"
+
 [[exemptions.prost-derive]]
 version = "0.11.9"
 criteria = "safe-to-run"
+
+[[exemptions.prost-derive]]
+version = "0.14.4"
+criteria = "safe-to-deploy"
 
 [[exemptions.quick-error]]
 version = "2.0.1"

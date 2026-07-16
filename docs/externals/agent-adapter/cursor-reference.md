@@ -4,9 +4,9 @@
 
 This is the single home for the **Cursor CLI upstream protocol surface** relevant to RimZ — local hooks and their decision channel, conversation identity, context and subagent payloads, interactive and headless launch modes, stream JSON, ACP, authentication, configuration, permissions, and the documented local-state boundary. It is an implementation research record, not a claim that RimZ currently supports Cursor.
 
-Refresh baseline: the official Cursor documentation and CLI changelog available on **2026-07-10**, plus the installed **2026.07.09-a3815c0** build used to capture the command-statusline wire. Cursor auto-updates by default and identifies installed builds with `agent --version`; re-capture the exact supported binary when this record is refreshed because the public docs are rolling rather than versioned.
+Refresh baseline: the official Cursor documentation and CLI changelog available on **2026-07-10**, plus the installed **2026.07.09-a3815c0** build used to capture the command-statusline and generated subagent-hook wires. Cursor auto-updates by default and identifies installed builds with `agent --version`; re-capture the exact supported binary when this record is refreshed because the public docs are rolling rather than versioned.
 
-Coverage is **depth on surfaces an adapter should wire, breadth as an index**. Hook inputs and outputs are recorded in implementation detail because they are the strongest stock-UI seam. The `2026.07.09-a3815c0` transcript capture pins only file identity and terminal rows; assistant text, authentication JSON, local chat storage, historical cost accounting, and native permission prompts remain opaque where Cursor publishes no safe schema.
+Coverage is **depth on surfaces an adapter should wire, breadth as an index**. Hook inputs and outputs are recorded in implementation detail because they are the strongest stock-UI seam. The `2026.07.09-a3815c0` capture pins transcript terminal rows and the minimum committed local chat root needed to recognize an open synchronous `AskQuestion`; assistant text, authentication JSON, the rest of local chat storage, historical cost accounting, and native permission prompts remain opaque where Cursor publishes no safe schema.
 
 ## Upstream sources
 
@@ -50,7 +50,7 @@ Use **pane liveness** for presence and process exit, as with every standalone CL
 
 Use **headless `-p` mode** for supervised runs. Its `stream-json` transport has a published schema, stock process exit semantics, session IDs, complete tool brackets, and a terminal result. Use **ACP** only when a supervised integration needs structured permission, question, or plan-approval requests; ACP makes RimZ the client UI and is therefore the wrong primary seam for an ordinary interactive pane.
 
-The decisive limitation for a first adapter is **awaiting-user coverage**. Cursor's local hook catalog publishes no permission-request, question, plan-approval, or notification hook. Generic `preToolUse` is documented to fire before tools, but its payload says what the model wants to call, not whether Cursor's native permission UI is open. Returning `"ask"` is either unsupported or actively changes policy depending on the event. Do not infer `waiting` from a pre-tool event. ACP exposes the missing asks, but only when RimZ hosts the ACP client.
+Cursor officially ships the blocking `AskQuestion` tool, but its local hook catalog publishes no permission-request, question, plan-approval, or notification hook. Generic `preToolUse` does not fire for this client-interaction path and cannot certify that the native UI is open. The installed local chat root commits the synchronous pending tool call while the prompt is open, which supports a version-pinned pane-only wait without replacing Cursor's UI. ACP remains the structured request/reply surface only when RimZ hosts the client.
 
 The candidate transport matrix is:
 
@@ -62,11 +62,11 @@ The candidate transport matrix is:
 | turn completion, abort, error | `stop.status` | pane liveness if a process dies before `stop` |
 | session end | `sessionEnd` plus pane liveness | `sessionEnd` is fire-and-forget |
 | permission ask | none for stock local CLI | ACP `session/request_permission` only in hosted mode |
-| user question | none for stock local CLI | ACP `cursor/ask_question` only in hosted mode |
+| user question | local committed synchronous `AskQuestion` pending call | pane-only wait; ACP `cursor/ask_question` for hosted structured replies |
 | plan approval | none for stock local CLI | ACP `cursor/create_plan` only in hosted mode |
 | compaction start and live context | command `statusLine` payload; `preCompact` | no documented post-compaction hook |
-| subagent start | `subagentStart.subagent_id` | strong unique child identity |
-| subagent stop | `subagentStop` | published stop payload omits `subagent_id`; capture correlation before wiring |
+| subagent start | `subagentStart.subagent_id` + `parent_conversation_id` | exact child and parent identity in the installed schema |
+| subagent stop | `subagentStop.subagent_id` + `parent_conversation_id` | exact child and parent identity in the installed schema; rolling docs remain weaker |
 | model and effort | common hook `model_id` and `model_params` | `model` is the legacy slug |
 | transcript | common `transcript_path`, exact per-conversation JSONL | captured `turn_ended` tail only; assistant text is privacy-unsafe |
 | supervised streaming | `-p --output-format stream-json` | failures may end without a terminal JSON event |
@@ -92,7 +92,7 @@ Cursor exposes these interactive session operations:
 
 `agent ls`, `agent --resume`, and `/resume` can browse chats across workspaces in current releases. A resumed conversation may therefore report workspace roots different from the pane's launch cwd. Bind by the stamped pane/session relationship first and treat hook `workspace_roots` as context, not as the owner identity.
 
-The docs publish no parent-conversation field for `/fork`, no structured list output for `agent ls`, and no local chat-store schema. Capture all three before implementing session restoration or supersession from provider state.
+The docs publish no parent-conversation field for `/fork`, no structured list output for `agent ls`, and no stable public local chat-store schema. The version-pinned pending-call subset below supports transient Ask detection only; it does not establish session restoration or supersession semantics.
 
 ## Hooks
 
@@ -115,7 +115,7 @@ This compatibility path creates a RimZ collision to test explicitly: a machine w
 | Enterprise | macOS `/Library/Application Support/Cursor/hooks.json`; Linux/WSL `/etc/cursor/hooks.json`; Windows `C:\ProgramData\Cursor\hooks.json` | enterprise config directory | managed, highest priority |
 | Team | distributed from the Cursor dashboard | managed hooks directory | enterprise-only managed executable surface |
 | Project | `<project>/.cursor/hooks.json` | project root | runs in trusted workspaces; include in project trust |
-| User | `~/.cursor/hooks.json` | `~/.cursor/` | suitable for RimZ's machine-level install |
+| User | `~/.cursor/hooks.json` | `~/.cursor/` | use absolute `CURSOR_PROJECT_DIR` for participant/worktree resolution |
 
 Project hooks are committed executable configuration and run automatically in a trusted workspace. RimZ's trust hash must cover `.cursor/hooks.json`, hook commands and scripts, `.cursor/cli.json` permission policy, MCP commands, worktree setup commands, plugins, rules, and every other Cursor configuration field that can execute or load code.
 
@@ -137,6 +137,8 @@ The config schema version is `1`:
     "postToolUseFailure": [{ "command": "rimz hooks feed --source cursor" }],
     "afterAgentResponse": [{ "command": "rimz hooks feed --source cursor" }],
     "stop": [{ "command": "rimz hooks feed --source cursor" }],
+    "subagentStart": [{ "command": "rimz hooks feed --source cursor" }],
+    "subagentStop": [{ "command": "rimz hooks feed --source cursor" }],
     "sessionEnd": [{ "command": "rimz hooks feed --source cursor" }],
     "preCompact": [{ "command": "rimz hooks feed --source cursor" }]
   }
@@ -194,6 +196,8 @@ Every agent-session hook receives these base fields in addition to its event-spe
 
 Hook processes also receive `CURSOR_PROJECT_DIR`, `CURSOR_VERSION`, optional `CURSOR_USER_EMAIL`, optional `CURSOR_TRANSCRIPT_PATH`, `CURSOR_CODE_REMOTE="true"` in a remote workspace, and the Claude-compatibility alias `CLAUDE_PROJECT_DIR`. Environment returned by `sessionStart` becomes available to later hooks in that session.
 
+Installed user hooks launch with `~/.cursor` as their process cwd while `CURSOR_PROJECT_DIR` carries the absolute active project/worktree. Participant resolution uses that nonempty absolute provider value before the shared verified room pin and workspace resolver. `workspace_roots` remains payload context because it can describe multi-root or resumed state rather than the owner worktree.
+
 Do not persist `user_email`, prompts, tool inputs, tool outputs, file contents, thought text, or transcript contents merely because the wire exposes them. RimZ's privacy surface decides which content enters durable records.
 
 ### Events a first adapter should wire
@@ -209,7 +213,7 @@ Do not persist `user_email`, prompts, tool inputs, tool outputs, file contents, 
 | `sessionEnd` | a conversation ends | `session_id`, `reason`, `duration_ms`, `is_background_agent`, `final_status`, optional `error_message` | `Ended` tombstone |
 | `preCompact` | automatic or manual summarization begins | trigger and live context fields | `Compacting` plus `AgentContext` refresh |
 | `subagentStart` | before a Task subagent spawns | unique child ID, type, task, parent, call ID, model, parallel bit, optional branch | child `SubagentStarted` |
-| `subagentStop` | a subagent completes, errors, or aborts | type, status, task, description, summary, metrics, modified files, transcript path | candidate `SubagentStopped` after identity correlation is proven |
+| `subagentStop` | a subagent completes, errors, or aborts | child ID, parent ID, type, status, task, description, summary, metrics, modified files, transcript path | `SubagentStopped`; unknown status fails closed |
 
 `postToolUse` is the preferred heartbeat because it proves completed activity. `preToolUse` is useful for governance but touches no heartbeat: the tool may still be blocked or awaiting approval.
 
@@ -256,7 +260,7 @@ Cursor invokes the configured command as direct argv. Split shell-style quotes, 
 
 ### Subagents
 
-`subagentStart` provides enough identity for a proper child row:
+The rolling official example gives `subagentStart` enough identity for a proper child row:
 
 ```json
 {
@@ -271,9 +275,11 @@ Cursor invokes the configured command as direct argv. Split shell-style quotes, 
 }
 ```
 
-Use `subagent_id` as the child `agent_id`, `parent_conversation_id` as the parent, `subagent_type` as the durable child label, and `task` as the child task. `tool_call_id` is a useful correlation key but not child identity.
+Use `subagent_id` as the child `agent_id`, `parent_conversation_id` as the parent, `subagent_type` as the durable child name/role, and sanitized `task` as the child task. `tool_call_id` is a useful correlation key but not child identity.
 
-The published `subagentStop` shape omits `subagent_id`, `parent_conversation_id`, and `tool_call_id`. Its common `conversation_id` may name the parent or the child; the docs do not say. Do not correlate concurrent children by type or task text. Capture start and stop payloads for sequential and concurrent same-type children; wire stop only after one stable unique key or transcript-path join is proven.
+The installed `2026.07.09-a3815c0` generated `SubagentStartRequestQuery` contains `subagent_id`, `subagent_type`, `task`, `parent_conversation_id`, optional `tool_call_id`, optional `subagent_model`, `is_parallel_worker`, optional `git_branch`, and the common conversation/generation/model fields. Its generated `SubagentStopRequestQuery` contains `subagent_id`, `subagent_type`, `status`, `duration_ms`, optional `summary`, `parent_conversation_id`, message/tool counts, optional `error_message`, modified files, optional `git_branch`, the common conversation/generation/model fields, optional `task`, and optional `description`. The hook executor also derives `agent_transcript_path` on `subagentStop` from the exact `(subagent_id, parent_conversation_id)` pair.
+
+The rolling official stop example remains weaker and omits `subagent_id`, `parent_conversation_id`, and `tool_call_id`; the supported installed schema is the version-pinned implementation authority. Join both hooks only through their exact child and parent IDs. Do not correlate concurrent children by type, task text, order, common `conversation_id`, parent `transcript_path`, or files under `~/.cursor/subagents/`. Use `subagent_model` only at start, use stop-side `description` only when `task` is absent, and attach only stop-side `agent_transcript_path` to the child. Treat `completed` and `aborted` as clean closes and `error`, missing, or unknown statuses as errored closes.
 
 Cursor supports foreground and background subagents, parallel execution, preserved checkpoints across resume, and nested children within a depth limit. Background subagent files live under `~/.cursor/subagents/`, but the docs publish no file schema. Treat that directory as opaque until fixtures establish durability and identity.
 
@@ -351,7 +357,9 @@ The official hook catalog has no event corresponding to RimZ's `AskKind::Permiss
 
 `preToolUse` fires before a requested tool but cannot say whether the action was allowlisted, sandboxed, auto-reviewed, automatically denied, or presented in the native terminal UI. `beforeShellExecution` and `beforeMCPExecution` accept an `ask` output, but returning it would create a policy decision rather than observe Cursor's own decision. `beforeSubmitPrompt` observes the user's prompt, not an agent question.
 
-A stock-pane adapter therefore declares `native_ask_ui` only after a supported, captured waiting detector exists. Until then it must abstain from `AwaitingUser` instead of painting false `?` rows. Pane capture remains a rendering or explicit-user primitive and must not become the producer's truth source.
+A stock-pane adapter derives only the official `AskQuestion` interaction captured in the committed local root below. That detector sets transient pane-only `Waiting` truth and clears when the pending call disappears; it does not append a durable ask, scrape the pane, or install `preToolUse`. Permission and plan waits remain unsupported.
+
+The pending record does not certify the native TUI's current focus, question index, free-text mode, or partially selected options. RimZ therefore keeps `rimz asks` empty and `rimz answer` unsupported rather than sending arrow, Space, or Enter sequences that concurrent human input could redirect.
 
 ACP has first-class permission, question, and plan requests, described below. Those apply only to a RimZ-hosted ACP run and do not fill the stock interactive CLI hook gap.
 
@@ -371,7 +379,24 @@ The terminal subset also admits installed-writer statuses `aborted` and `error` 
 
 The same JSONL carries user, assistant, thinking, and tool records, but assistant `message.content[type=text]` blocks merge visible commentary and model thinking without a safe discriminator. RimZ never normalizes, pages, streams, persists, or uses those text blocks as final output. `afterAgentResponse.text` is the sole assistant-text authority.
 
-Cursor still publishes no transcript enablement, append/rotation/durability, cross-surface compatibility, child-identity, or local chat-history contract. Resumed, continued, cleared, forked, summarized, and concurrent-subagent behavior remains a capture target; terminal-tail support does not imply full native-history support.
+Cursor still publishes no transcript enablement, append/rotation/durability, cross-surface compatibility, or stable local chat-history contract. Resumed, continued, cleared, forked, and summarized behavior remains a capture target; terminal-tail and pending-Ask support do not imply full native-history support. Child lifecycle identity is pinned to the installed generated schema rather than inferred from transcript contents.
+
+### Version-pinned local Ask root
+
+Cursor CLI `2026.07.09-a3815c0` maps an exact normalized UTF-8 workspace to `~/.cursor/chats/<md5(workspace)>`. Each root conversation directory contains `meta.json` and `store.db`; subagent directories observed in the same bucket omit root metadata and carry `subagentInfo` in their store metadata. RimZ requires regular non-symlink files and safe single-component session IDs, validates `meta.json.schemaVersion == 1`, `hasConversation == true`, ordered millisecond timestamps, and exact normalized `cwd`, and examines only a fixed number of newest directories.
+
+The installed SQLite database uses `PRAGMA user_version = 1` and two tables:
+
+```sql
+CREATE TABLE blobs(id TEXT PRIMARY KEY, data BLOB);
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+```
+
+The writer uses WAL ordering. `meta.key = '0'` contains UTF-8 hex for JSON with `agentId`, `createdAt`, and a 64-lowercase-hex `latestRootBlobId`. The named `blobs.data` hashes to that ID with SHA-256. Readers open the database read-only with no busy wait, fetch only those two exact rows, bound every layer, and fail closed on missing WAL visibility or schema drift.
+
+The root blob is protobuf. Repeated string field `4` is `pending_tool_calls`; a minimal unknown-field-tolerant decoder is sufficient for this version. Each string is JSON for a pending assistant message. A synchronous native question is exactly one content item with `type = "tool-call"`, `toolName = "AskQuestion"`, a stable nonempty `toolCallId`, `args.runAsync != true`, at least one sanitized nonempty `questions[].prompt`, and `providerOptions.cursor.pendingToolCallStartedAtMs`. Multiple synchronous calls, async calls, malformed JSON, invalid timestamps, oversized values, hash mismatches, and unknown schema versions abstain from waiting.
+
+Cursor commits the pending root before or while the native prompt is visible and replaces it after resolution. `meta.json.updatedAtMs` is the local observation activity bound. The public `~/.cursor/projects/.../<conversation_id>.jsonl` remains the transcript identity; `store.db`, raw pending JSON, assistant/reasoning content, option labels, tool arguments, and provider blobs stay private to the parser.
 
 ## Headless `--print` mode
 
@@ -580,8 +605,8 @@ Before declaring Cursor supported:
 7. Capture empty `{}` output on every wired event and prove it preserves Cursor's native behavior under allowlist, sandbox, auto-review, unrestricted, Plan, and Ask modes.
 8. Build a tool-name corpus and pin the file-editing subset without treating arbitrary shell or MCP activity as an edit.
 9. Establish a compaction-close certificate or report compaction completion unsupported.
-10. Establish `subagentStop` identity for concurrent same-type children before emitting child stop observations.
-11. Confirm whether any supported local event exposes permission, question, or plan waits; otherwise declare awaiting-user unsupported and emit no false waiting state.
+10. Regress concurrent same-type children, reverse completion order, malformed or equal child/parent IDs, and missing or unknown stop statuses against the installed subagent schema.
+11. Re-capture the local pending `AskQuestion` root on every supported Cursor upgrade; keep permission and plan waits unsupported until an equally bounded certificate exists.
 12. Keep transcript parsing limited to the fixture-backed terminal subset until privacy-safe schemas for any additional records exist.
 13. Exercise `-p` text, JSON, stream JSON, partial streaming, non-zero exit, signal interruption, timeout, missing terminal result, stdin prompts, and resume.
 14. Exercise ACP initialization, auth, session new/load, streaming updates, permission replies, questions, plans, cancellation, and child task notifications if ACP backs supervised runs.
@@ -591,9 +616,9 @@ Before declaring Cursor supported:
 ## Known upstream gaps
 
 - Local hooks publish no dedicated native permission, user-question, plan-approval, or attention event.
+- The local chat-store schema is private and version-pinned; drift must remove the derived Ask wait rather than guess.
 - `preToolUse.permission = "ask"` is accepted by schema but not enforced, while specialized before-hooks use `ask`; the surfaces are not interchangeable.
 - There is no documented post-compaction event or continuous context query.
-- The published `subagentStop` payload omits the unique `subagent_id` provided at start.
 - The captured transcript terminal subset is unpublished upstream, and the enablement/durability contract remains undocumented.
 - Local CLI chat storage and fork lineage have no official schema.
 - Status/about JSON commands exist and one sanitized authenticated browser-login arm is captured, but unauthenticated, expired, API-key, service-account, proxy, and server-error semantics remain unverified.

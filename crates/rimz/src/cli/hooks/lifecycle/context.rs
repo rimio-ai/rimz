@@ -48,10 +48,10 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
             "lifecycle: failed to touch the agent activity heartbeat",
         );
     }
-    // Codex child rollout details travel on the durable child observation.
-    // Root-scoped sidecars and app-server refreshes would otherwise read the
-    // parent's context under `session_id` and contaminate both rows.
-    if agent.descriptor().kind == "codex" && parent_agent_id.is_some() {
+    // Child details travel on the durable child observation. Provider payloads
+    // can repeat root model/transcript fields, so root-scoped sidecars and
+    // detached refreshes stay out of every exact-ID child path.
+    if parent_agent_id.is_some() {
         return;
     }
     if let Some(context_agent_id) = payload_context_agent_id(payload) {

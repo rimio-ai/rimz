@@ -39,10 +39,13 @@ dotenvy = "0.15"
 serde_ignored = "0.1"
 toml = "1"
 flate2 = "1"
-# OpenCode stores usage in a WAL SQLite database; the adapter opens it
-# read-only for account-spend parsing. `bundled` keeps RimZ independent of a
-# system libsqlite3 at install time.
+# OpenCode stores usage and Cursor stores live chat roots in WAL SQLite
+# databases; adapters open both read-only. `bundled` keeps RimZ independent of
+# a system libsqlite3 at install time.
 rusqlite = { version = "0.40.1", features = ["bundled"] }
+# Cursor's version-pinned chat root is protobuf. The decoder reads only the one
+# repeated pending-call field instead of owning a wire parser.
+prost = "0.14"
 # Format-preserving TOML edits for `rimz config set`; keeps the generated
 # config template's comments intact while changing one key.
 toml_edit = { version = "0.25", features = ["serde"] }
@@ -156,6 +159,9 @@ notify = { version = "8", default-features = false, features = ["macos_kqueue"] 
 # Hashing
 foldhash = "0.2"
 sha2 = "0.11"
+# Cursor names each chat bucket with the MD5 of its exact workspace path.
+# RustCrypto supplies that provider wire primitive; it is not used for security.
+md5 = { package = "md-5", version = "0.11" }
 hex = "0.4"
 # Pet sprite sheets are WebP or PNG. `image-webp` is decode-only-capable, pure
 # Rust, and avoids libwebp C bindings for the built-in Codex CDN asset cache.

@@ -2019,6 +2019,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2773,7 +2783,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b82eaa1d779e9a4bc1c3217db8ffbeabaae1dca241bf70183242128d48681cd"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.11.9",
+]
+
+[[package]]
+name = "prost"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
+dependencies = [
+ "bytes",
+ "prost-derive 0.14.4",
 ]
 
 [[package]]
@@ -2787,6 +2807,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
+dependencies = [
+ "anyhow",
+ "itertools 0.14.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -3085,12 +3118,14 @@ dependencies = [
  "insta",
  "jiff",
  "kdl",
+ "md-5",
  "nix 0.31.3",
  "notify 8.2.0",
  "png",
  "portable-pty",
  "predicates",
  "proptest",
+ "prost 0.14.4",
  "ratatui",
  "rusqlite",
  "rustix 1.1.4",
@@ -5084,7 +5119,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117cdb1e488beee0a34aa11e108142b082b0c13a7fca165dc624a9ffb808db42"
 dependencies = [
  "clap 3.2.25",
- "prost",
+ "prost 0.11.9",
  "serde",
  "serde_json",
  "strum 0.27.2",
@@ -5123,7 +5158,7 @@ dependencies = [
  "nix 0.23.2",
  "notify 6.1.1",
  "percent-encoding",
- "prost",
+ "prost 0.11.9",
  "serde",
  "serde_json",
  "sha2 0.10.9",

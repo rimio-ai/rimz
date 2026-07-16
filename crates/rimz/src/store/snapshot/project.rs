@@ -190,8 +190,13 @@ fn reduce_lifecycle_event(
         return;
     };
     let key = (kind.clone(), agent_id.clone());
+    let event_is_child = non_empty_string(observation.parent_agent_id.as_deref()).is_some();
     let provisional_prior = if map.contains_key(&key) {
         release_stamped_provisional_for_existing(map, identity, &kind, &key, observation);
+        None
+    } else if event_is_child {
+        // Exact child IDs are authoritative. A child may share its type label
+        // and pane with siblings or its parent, so neither is an adoption key.
         None
     } else {
         adopt_provisional(map, identity, &kind, &key, observation)
@@ -306,6 +311,12 @@ fn release_stamped_provisional_for_existing(
     key: &(AgentKind, AgentSessionId),
     observation: &AgentLifecycleObservation,
 ) {
+    if map
+        .get(key)
+        .is_some_and(|state| state.parent_agent_id.is_some())
+    {
+        return;
+    }
     if map.get(key).is_none_or(|state| state.pane.is_some()) {
         return;
     }

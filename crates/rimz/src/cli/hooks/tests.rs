@@ -561,6 +561,30 @@ fn ambiguous_and_cyclic_antigravity_parent_candidates_stay_roots() {
 }
 
 #[test]
+fn cursor_participant_start_path_selects_only_a_nonempty_absolute_project_dir() {
+    use std::ffi::OsStr;
+
+    assert_eq!(
+        super::participant_start_path("cursor", Some(OsStr::new("/repo/worktree"))),
+        std::path::PathBuf::from("/repo/worktree"),
+    );
+    for value in [
+        None,
+        Some(OsStr::new("")),
+        Some(OsStr::new("relative/path")),
+    ] {
+        assert_eq!(
+            super::participant_start_path("cursor", value),
+            std::path::PathBuf::from("."),
+        );
+    }
+    assert_eq!(
+        super::participant_start_path("claude", Some(OsStr::new("/repo/worktree"))),
+        std::path::PathBuf::from("."),
+    );
+}
+
+#[test]
 fn recovered_binding_stamps_full_pane_and_reowns_to_in_pane_agent_process() {
     let mut observation = root_observation();
     let mut pane = candidate("terminal_30", true);

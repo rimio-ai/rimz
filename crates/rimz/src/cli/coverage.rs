@@ -436,18 +436,16 @@ mod tests {
         );
 
         let cursor = agent_cells(&matrix, "cursor");
-        assert_eq!(count(&cursor, MatrixCellState::Ok), 5);
-        assert_eq!(count(&cursor, MatrixCellState::Partial), 3);
-        assert_eq!(count(&cursor, MatrixCellState::Absent), 8);
+        assert_eq!(count(&cursor, MatrixCellState::Ok), 6);
+        assert_eq!(count(&cursor, MatrixCellState::Partial), 4);
+        assert_eq!(count(&cursor, MatrixCellState::Absent), 6);
         assert_eq!(
             agent_labels(&matrix, "cursor", MatrixCellState::Partial),
-            ["compact", "idle", "live$"]
+            ["ask", "compact", "idle", "live$"]
         );
         assert_eq!(
             agent_labels(&matrix, "cursor", MatrixCellState::Absent),
-            [
-                "perm", "plan", "ask", "answer", "sub", "bg", "spend", "remote"
-            ]
+            ["perm", "plan", "answer", "bg", "spend", "remote"]
         );
 
         let droid = agent_cells(&matrix, "droid");
@@ -565,7 +563,26 @@ mod tests {
                 MatrixCellState::Ok,      // pi
                 MatrixCellState::Ok,      // opencode
                 MatrixCellState::Partial, // antigravity
-                MatrixCellState::Absent,  // cursor
+                MatrixCellState::Ok,      // cursor
+                MatrixCellState::Absent,  // droid
+                MatrixCellState::Absent,  // kiro
+                MatrixCellState::Ok,      // qwen
+            ]
+        );
+
+        let subagent_stopped = row(&matrix, "subagent_stopped");
+        assert_eq!(
+            states(subagent_stopped),
+            [
+                MatrixCellState::Ok,      // claude
+                MatrixCellState::Ok,      // codex
+                MatrixCellState::Absent,  // amp
+                MatrixCellState::Absent,  // copilot
+                MatrixCellState::Partial, // kimi
+                MatrixCellState::Ok,      // pi
+                MatrixCellState::Ok,      // opencode
+                MatrixCellState::Partial, // antigravity
+                MatrixCellState::Ok,      // cursor
                 MatrixCellState::Absent,  // droid
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen

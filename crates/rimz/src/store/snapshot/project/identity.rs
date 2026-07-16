@@ -91,9 +91,14 @@ impl CardIdentityAllocator {
             consumed_launches: state.consumed_launches,
             ordinals: BTreeMap::new(),
         };
-        allocator.names.retain(|_, owner| map.contains_key(owner));
+        allocator.names.retain(|_, owner| {
+            map.get(owner)
+                .is_some_and(|state| state.parent_agent_id.is_none())
+        });
         for ((kind, agent_id), state) in map {
-            if let Some(name) = state.name.as_deref().filter(|name| usable_name(name)) {
+            if state.parent_agent_id.is_none()
+                && let Some(name) = state.name.as_deref().filter(|name| usable_name(name))
+            {
                 allocator
                     .names
                     .entry(name.to_owned())
@@ -197,7 +202,13 @@ impl CardIdentityAllocator {
         prior: Option<&AgentState>,
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
-        let name = self.assign_name(&key, observation, prior);
+        let child = observation.parent_agent_id.is_some()
+            || prior.is_some_and(|state| state.parent_agent_id.is_some());
+        let name = if child {
+            self.assign_child_name(observation.agent_name.as_deref(), prior, agent_id)
+        } else {
+            self.assign_name(&key, observation, prior)
+        };
         let name_explicit = observation.parent_agent_id.is_some()
             && observation.agent_name.as_deref() == Some(name.as_str())
             || prior
@@ -243,7 +254,11 @@ impl CardIdentityAllocator {
         prior: Option<&AgentState>,
     ) -> CardIdentity {
         let key = (kind.clone(), agent_id.clone());
-        let name = self.assign_name_candidate(&key, None, prior, agent_id);
+        let name = if prior.is_some_and(|state| state.parent_agent_id.is_some()) {
+            self.assign_child_name(None, prior, agent_id)
+        } else {
+            self.assign_name_candidate(&key, None, prior, agent_id)
+        };
         let name_explicit =
             prior
                 .and_then(|state| state.name.as_deref())
@@ -275,6 +290,27 @@ impl CardIdentityAllocator {
                     .filter(|name| usable_name(name))
             });
         self.assign_name_candidate(key, candidate, prior, &key.1)
+    }
+
+    fn assign_child_name(
+        &self,
+        candidate: Option<&str>,
+        prior: Option<&AgentState>,
+        fallback_id: &AgentSessionId,
+    ) -> String {
+        if let Some(name) = candidate.filter(|name| usable_name(name)) {
+            return name.to_owned();
+        }
+        if let Some(name) = prior
+            .and_then(|state| state.name.as_deref())
+            .filter(|name| usable_name(name))
+        {
+            return name.to_owned();
+        }
+        crate::harness::petname::mint_for_session(
+            fallback_id,
+            self.names.keys().map(String::as_str),
+        )
     }
 
     fn assign_name_candidate(

@@ -1,6 +1,118 @@
 use super::*;
 
 #[test]
+fn same_type_children_keep_repeated_labels_and_exact_ids_through_reverse_stops() {
+    let root = raw_lifecycle(
+        "cursor",
+        serde_json::json!({
+            "event_name": "sessionStart",
+            "agent_id": "root",
+            "agent_name": "generalPurpose",
+            "signal": { "signal": "registered" },
+        }),
+    );
+    let child = |id: &str| {
+        raw_lifecycle(
+            "cursor",
+            serde_json::json!({
+                "event_name": "subagentStart",
+                "agent_id": id,
+                "agent_name": "generalPurpose",
+                "parent_agent_id": "root",
+                "task": format!("task-{id}"),
+                "signal": { "signal": "subagent_started" },
+            }),
+        )
+    };
+    let stop = |id: &str, errored: bool| {
+        raw_lifecycle(
+            "cursor",
+            serde_json::json!({
+                "event_name": "subagentStop",
+                "agent_id": id,
+                "signal": { "signal": "subagent_stopped", "errored": errored },
+            }),
+        )
+    };
+
+    let events = [
+        root,
+        child("child-a"),
+        child("child-b"),
+        stop("child-b", true),
+        stop("child-a", false),
+    ];
+    let events = decode_events(&events);
+    let (agents, identity) = reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        AgentIdentityState::default(),
+        &events,
+    );
+    assert_eq!(agents.len(), 3);
+    let child_a = agents
+        .values()
+        .find(|agent| agent.agent_id == "child-a")
+        .expect("child-a");
+    let child_b = agents
+        .values()
+        .find(|agent| agent.agent_id == "child-b")
+        .expect("child-b");
+    assert_eq!(child_a.name.as_deref(), Some("generalPurpose"));
+    assert_eq!(child_b.name.as_deref(), Some("generalPurpose"));
+    assert_eq!(child_a.task.as_deref(), Some("task-child-a"));
+    assert_eq!(child_b.task.as_deref(), Some("task-child-b"));
+    assert_eq!(child_a.status, AgentStatus::Success);
+    assert_eq!(child_b.status, AgentStatus::Failed);
+    assert_eq!(
+        identity.names,
+        BTreeMap::from([(
+            "generalPurpose".to_owned(),
+            (
+                AgentKind::new_unchecked("cursor"),
+                AgentSessionId::from("root"),
+            ),
+        )]),
+        "child display labels stay out of the root handle registry",
+    );
+
+    let (_, replayed_identity) = reduce_agent_states_seeded_with_identity(agents, identity, &[]);
+    assert_eq!(replayed_identity.names.len(), 1);
+    assert_eq!(replayed_identity.names["generalPurpose"].1.as_str(), "root");
+}
+
+#[test]
+fn exact_child_cannot_adopt_a_same_pane_provisional_root() {
+    let pane = "tmux:%8";
+    let launch = raw_launch(
+        AgentLaunchState::Starting,
+        "launch_root",
+        "root-handle",
+        Some(pane),
+    );
+    let child = raw_lifecycle(
+        "claude",
+        serde_json::json!({
+            "event_name": "SubagentStart",
+            "agent_id": "child",
+            "agent_name": "root-handle",
+            "parent_agent_id": "parent",
+            "task": "Explore",
+            "pane_id": pane,
+            "signal": { "signal": "subagent_started" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[launch, child]);
+    assert!(agents.iter().any(|agent| agent.agent_id == "launch_root"));
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id == "child")
+        .expect("child");
+    assert_eq!(child.name.as_deref(), Some("root-handle"));
+    assert_eq!(child.parent_agent_id.as_deref(), Some("parent"));
+}
+
+#[test]
 fn subagent_start_reduces_identity_that_survives_stop() {
     let start = raw_lifecycle(
         "claude",

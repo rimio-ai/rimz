@@ -36,6 +36,22 @@ pub(super) struct CursorHookPayload {
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     pub conversation_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub subagent_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub parent_conversation_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub subagent_type: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub task: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub subagent_model: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub git_branch: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub agent_transcript_path: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     pub generation_id: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     pub model: Option<String>,

@@ -24,6 +24,9 @@ pub(super) fn record_lifecycle_observation(
         attach_agent_owner(agent.descriptor().kind, owner_pid, &mut observation);
         attach_agent_pane(&mut observation);
         correlate_subagent_observation(workspace, store, agent, &mut observation);
+        // Launch identity belongs to the pane's root session. A child stop can
+        // omit its optional label fields; filling those from the parent
+        // process environment would overwrite the child's carried identity.
         if observation.parent_agent_id.is_none() && observation.agent_name.is_none() {
             observation.agent_name = agent_identity_env(
                 &observation,

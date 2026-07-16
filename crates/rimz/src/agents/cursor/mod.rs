@@ -1,13 +1,14 @@
 //! Cursor CLI hook adapter.
 //!
-//! Cursor's native hooks expose session, turn, tool, exit, and compaction-open
-//! signals. They expose no local permission/question gate, machine-readable
-//! spend, or post-compaction event, so those gaps remain explicit in the
-//! descriptor rather than inferred from pane text.
+//! Cursor's native hooks expose session, turn, tool, child, exit, and
+//! compaction-open signals. A version-pinned local pending-call reader derives
+//! pane-only `AskQuestion` waits; permission, structured answers,
+//! machine-readable spend, and post-compaction events remain explicit gaps.
 
 mod account;
 mod install;
 mod payloads;
+mod session;
 mod statusline;
 mod transcript;
 
@@ -26,8 +27,9 @@ use super::descriptor::{
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LocallyPricedTurnCost, PriceBook, Result,
-    classify_agent_hook, locate_binary, sanitize_user_prompt,
+    HookInstallReport, HookUninstallReport, LocalSessionObservation, LocallyPricedTurnCost,
+    PriceBook, Result, SubagentIdentity, classify_agent_hook, locate_binary, non_empty_trimmed,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -49,10 +51,10 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         blocking: &[],
     },
     capabilities: Capabilities {
-        native_ask_ui: false,
+        native_ask_ui: true,
         transcript_tail_context: true,
         registers_lazily: false,
-        local_session_discovery: false,
+        local_session_discovery: true,
         daemon_hooked_sessions: false,
         same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
         realtime_usage: RealtimeUsageChannel {
@@ -77,6 +79,8 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "postToolUseFailure",
         "afterAgentResponse",
         "stop",
+        "subagentStart",
+        "subagentStop",
     ],
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
@@ -111,18 +115,19 @@ const CURSOR_COVERAGE: IntegrationCoverage = IntegrationCoverage {
     plan_approval: ConcernCoverage::Unsupported {
         reason: "no local plan-approval hook; ACP-only",
     },
-    user_question: ConcernCoverage::Unsupported {
-        reason: "no local question hook; ACP-only",
+    user_question: ConcernCoverage::Partial {
+        via: "version-pinned local pending AskQuestion projection",
+        gap: "pane-only wait; no durable RimZ ask or safe answer API",
     },
     answer: ConcernCoverage::Unsupported {
-        reason: "no observable local ask surface",
+        reason: "no safe native reply API; answer in Cursor's pane",
     },
     compaction: ConcernCoverage::Partial {
         via: "preCompact opens; the next lifecycle signal closes the bracket",
         gap: "no post-compaction event; landing status and phase held",
     },
-    subagents: ConcernCoverage::Unsupported {
-        reason: "subagentStop omits the child id supplied by subagentStart",
+    subagents: ConcernCoverage::Wired {
+        via: "subagentStart/subagentStop with exact child and parent ids",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking signal",
@@ -164,14 +169,15 @@ const CURSOR_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     tool_used: HookCoverage::Native {
         event: "postToolUse",
     },
-    awaiting_input: HookCoverage::Absent {
-        reason: "no local permission/question/plan hook; ACP-only",
+    awaiting_input: HookCoverage::Derived {
+        via: "validated local pending AskQuestion state",
+        gap: "no native hook; pane-only wait and answer surface",
     },
-    subagent_started: HookCoverage::Absent {
-        reason: "subagentStop has no child id",
+    subagent_started: HookCoverage::Native {
+        event: "subagentStart",
     },
-    subagent_stopped: HookCoverage::Absent {
-        reason: "subagentStop has no child id",
+    subagent_stopped: HookCoverage::Native {
+        event: "subagentStop",
     },
     compacting: HookCoverage::Native {
         event: "preCompact",
@@ -198,6 +204,8 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "stop",
     "sessionEnd",
     "preCompact",
+    "subagentStart",
+    "subagentStop",
 ];
 const WIRED_EVENTS: &[&str] = LIFECYCLE_EVENTS;
 pub(super) const RIMZ_HOOK_COMMAND: &str =
@@ -221,6 +229,18 @@ const STATUS_LINE: super::managed_statusline::ManagedStatusLineSpec =
 
 #[derive(Clone, Debug, Default)]
 pub struct CursorAdapter;
+
+#[cfg(feature = "testkit")]
+#[doc(hidden)]
+pub fn discover_local_sessions_under(
+    cursor_home: &Path,
+    workspaces: &[&Path],
+) -> Vec<LocalSessionObservation> {
+    workspaces
+        .iter()
+        .flat_map(|workspace| session::discover_under(cursor_home, workspace))
+        .collect()
+}
 
 impl AgentAdapter for CursorAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
@@ -288,6 +308,18 @@ impl AgentAdapter for CursorAdapter {
                 AgentHookClass::Lifecycle,
                 None,
             ),
+            ClassificationSample::new(
+                "subagentStart",
+                test_json!({ "subagent_id": "child-1", "parent_conversation_id": "c1", "subagent_type": "generalPurpose", "task": "inspect hooks", "cursor_version": "1.7" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "subagentStop",
+                test_json!({ "subagent_id": "child-1", "parent_conversation_id": "c1", "subagent_type": "generalPurpose", "status": "completed", "cursor_version": "1.7" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
         ]
     }
 
@@ -307,6 +339,11 @@ impl AgentAdapter for CursorAdapter {
         })
     }
 
+    #[cfg(test)]
+    fn local_session_fixture(&self) -> Option<LocalSessionObservation> {
+        Some(session::fixture_observation())
+    }
+
     fn render_neutral(&self, event_name: &str) -> Result<Option<Value>> {
         Ok(LIFECYCLE_EVENTS.contains(&event_name).then(|| json!({})))
     }
@@ -317,6 +354,9 @@ impl AgentAdapter for CursorAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         let parsed = payloads::parse_payload(payload);
+        if matches!(event_name, "subagentStart" | "subagentStop") {
+            return self.observe_subagent_lifecycle(event_name, payload, parsed);
+        }
         let turn_usage = (event_name == "stop")
             .then(|| parsed.turn_usage())
             .flatten();
@@ -469,6 +509,10 @@ impl AgentAdapter for CursorAdapter {
         transcript::resolve_transcript(session_id, None, prior_path)
     }
 
+    fn discover_local_sessions(&self, workspaces: &[&Path]) -> Vec<LocalSessionObservation> {
+        session::discover(workspaces)
+    }
+
     fn resume_command(&self, session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
         let bin = locate_binary(self.descriptor())
             .map(|path| path.to_string_lossy().into_owned())
@@ -532,6 +576,55 @@ impl AgentAdapter for CursorAdapter {
 
     fn status_line_invocation(&self) -> super::StatusLineInvocation {
         super::StatusLineInvocation::DirectArgv
+    }
+}
+
+impl CursorAdapter {
+    fn observe_subagent_lifecycle(
+        &self,
+        event_name: &str,
+        payload: &Value,
+        parsed: payloads::CursorHookPayload,
+    ) -> Option<AgentLifecycleObservation> {
+        let signal = match event_name {
+            "subagentStart" => LifecycleSignal::SubagentStarted,
+            "subagentStop" => LifecycleSignal::SubagentStopped {
+                errored: parsed.stop_outcome() == payloads::StopOutcome::Error,
+            },
+            _ => return None,
+        };
+        let (agent_id, parent_agent_id) = match resolve_subagent_identity(
+            self.descriptor().kind,
+            event_name,
+            parsed.subagent_id.as_deref(),
+            parsed.parent_conversation_id.as_deref(),
+            payload,
+        ) {
+            SubagentIdentity::Resolved {
+                agent_id,
+                parent_agent_id,
+            } => (agent_id, parent_agent_id),
+            SubagentIdentity::Quarantined => return None,
+        };
+
+        let mut observation = AgentLifecycleObservation::new(Some(agent_id), signal)
+            .with_worktree_from_payload(payload);
+        observation.parent_agent_id = Some(parent_agent_id);
+        let subagent_type = parsed.subagent_type.as_deref().and_then(non_empty_trimmed);
+        observation.agent_name = subagent_type.clone();
+        observation.launch.role = subagent_type;
+        observation.task = sanitize_user_prompt(parsed.task.as_deref()).or_else(|| {
+            (event_name == "subagentStop")
+                .then(|| sanitize_user_prompt(parsed.description.as_deref()))
+                .flatten()
+        });
+        observation.worktree_branch = parsed.git_branch;
+        if event_name == "subagentStart" {
+            observation.launch.model = parsed.subagent_model.map(statusline::normalize_model);
+        } else {
+            observation.transcript_path = parsed.agent_transcript_path;
+        }
+        Some(observation)
     }
 }
 

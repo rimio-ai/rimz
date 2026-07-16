@@ -340,6 +340,54 @@ fn hook_bound_antigravity_question_does_not_need_workspace_latest_authorization(
 }
 
 #[test]
+fn cursor_ask_is_exact_hook_bound_pane_truth_and_clears_transiently() {
+    let waiting_since = ago(10);
+    let pane = pane("%1", "agent", "/repo/main");
+    let mut durable = agent("cursor", "cursor-session", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    durable.transcript_path = Some("/cursor/public/cursor-session.jsonl".to_owned());
+    let mut local = observation("cursor-session", 20, Some(10), None);
+    local.kind = AgentKind::new_unchecked("cursor");
+    local.transcript_path = PathBuf::from("/cursor/public/cursor-session.jsonl");
+    let projected = lifecycle_state(&mut local);
+    projected.status = AgentStatus::Waiting;
+    projected.phase = TurnPhase::Idle;
+    projected.native_prompt_detail = Some("Which color?".to_owned());
+    projected.waiting_since = Some(waiting_since);
+
+    let waiting = room(vec![durable.clone()])
+        .with_local_sessions(std::slice::from_ref(&pane), vec![local.clone()])
+        .with_live_panes(vec![pane.clone()], None);
+    let agent = rollup_agent(&waiting, "cursor-session");
+    assert_eq!(agent.status, AgentStatus::Waiting);
+    assert_eq!(agent.task.as_deref(), Some("Which color?"));
+    assert_eq!(agent.waiting_since, Some(waiting_since));
+    assert!(agent.open_ask.is_none());
+    assert_eq!(
+        agent.transcript_path.as_deref(),
+        Some("/cursor/public/cursor-session.jsonl")
+    );
+
+    let unbound = room(Vec::new())
+        .with_local_sessions(std::slice::from_ref(&pane), vec![local])
+        .with_live_panes(vec![pane.clone()], None);
+    assert!(
+        unbound.agents.is_empty(),
+        "disk history cannot invent a card"
+    );
+
+    let cleared = room(vec![durable])
+        .with_local_sessions(std::slice::from_ref(&pane), Vec::new())
+        .with_live_panes(vec![pane], None);
+    assert_eq!(
+        rollup_agent(&cleared, "cursor-session").status,
+        AgentStatus::Running,
+        "a disappeared pending call restores durable hook lifecycle"
+    );
+}
+
+#[test]
 fn hook_bound_prompt_survives_bounded_local_observations_without_prompt_evidence() {
     for status in [AgentStatus::Running, AgentStatus::Success] {
         let pane = pane("%1", "agy", "/repo/main");

@@ -6,7 +6,11 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
+use md5::{Digest as _, Md5};
+use prost::Message;
+use rusqlite::Connection;
 use serde_json::{Value, json};
+use sha2::Sha256;
 
 use crate::common::{
     Env, claude_pre_tool_use_payload, codex_permission_payload, codex_pre_tool_use_payload,
@@ -389,6 +393,240 @@ fn cursor_lifecycle_hook_writes_state_and_returns_json_neutral() {
 }
 
 #[test]
+fn cursor_user_hook_uses_project_dir_for_pinned_worktree_attribution() {
+    let env = Env::new();
+    let cursor_cwd = env.home_root.join(".cursor");
+    std::fs::create_dir_all(&cursor_cwd).unwrap();
+    let payload = json!({
+        "hook_event_name": "sessionStart",
+        "conversation_id": "cursor-worktree-session",
+        "session_id": "cursor-worktree-session",
+        "cursor_version": "2026.07.09-a3815c0",
+        "workspace_roots": [cursor_cwd],
+    })
+    .to_string();
+    let mut command = env.hook_command("cursor");
+    command
+        .current_dir(&cursor_cwd)
+        .env("CURSOR_PROJECT_DIR", &env.project_root);
+    for (key, value) in rimz::workspace::pin_env(&env.workspace_id, &env.project_root) {
+        command.env(key, value);
+    }
+    let output = env
+        .spawn_payload(command, &payload)
+        .wait_with_output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "cursor stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
+    assert_eq!(
+        lifecycle_event_count(&env),
+        1,
+        "the verified pin routes the hook into the room store"
+    );
+
+    let snapshot = env.snapshot_json_with_panes(&[tmux_pane("%0", "agent", &env.project_root)]);
+    let agent = snapshot["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == "cursor-worktree-session")
+        .expect("Cursor agent");
+    assert_eq!(
+        agent["worktree_path"],
+        env.project_root.to_string_lossy().as_ref()
+    );
+    let groups = snapshot["worktree_groups"].as_array().unwrap();
+    assert!(
+        groups.iter().all(|group| group["key"] != "external"),
+        "Cursor belongs to its project/worktree group: {groups:?}"
+    );
+    assert!(groups.iter().any(|group| {
+        group["rows"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row["id"] == "cursor-worktree-session")
+        })
+    }));
+}
+
+#[test]
+fn cursor_ask_local_store_waits_in_pane_without_creating_a_structured_ask() {
+    #[derive(Clone, PartialEq, Message)]
+    struct CursorRoot {
+        #[prost(string, repeated, tag = "4")]
+        pending_tool_calls: Vec<String>,
+    }
+
+    let env = Env::new();
+    let session_id = "22222222-2222-4222-8222-222222222222";
+    let created_at_ms = Timestamp::now().as_millisecond() - 60_000;
+    let cursor_home = env.home_root.join(".cursor");
+    let bucket = cursor_home.join("chats").join(hex::encode(Md5::digest(
+        env.project_root.to_str().unwrap().as_bytes(),
+    )));
+    let session = bucket.join(session_id);
+    std::fs::create_dir_all(&session).unwrap();
+    std::fs::write(
+        session.join("meta.json"),
+        serde_json::to_vec(&json!({
+            "schemaVersion": 1,
+            "createdAtMs": created_at_ms,
+            "updatedAtMs": created_at_ms + 70_000,
+            "hasConversation": true,
+            "cwd": env.project_root,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let public_transcript = cursor_home
+        .join("projects/project/agent-transcripts")
+        .join(session_id)
+        .join(format!("{session_id}.jsonl"));
+    std::fs::create_dir_all(public_transcript.parent().unwrap()).unwrap();
+    std::fs::write(&public_transcript, "{\"type\":\"turn_started\"}\n").unwrap();
+
+    let connection = Connection::open(session.join("store.db")).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode = WAL;\
+             PRAGMA wal_autocheckpoint = 0;\
+             PRAGMA user_version = 1;\
+             CREATE TABLE blobs(id TEXT PRIMARY KEY, data BLOB);\
+             CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);",
+        )
+        .unwrap();
+    let publish_root = |connection: &Connection, pending: Vec<String>| {
+        let root = CursorRoot {
+            pending_tool_calls: pending,
+        }
+        .encode_to_vec();
+        let blob_id = hex::encode(Sha256::digest(&root));
+        let store_metadata = hex::encode(
+            serde_json::to_vec(&json!({
+                "agentId": session_id,
+                "createdAt": created_at_ms,
+                "latestRootBlobId": blob_id,
+            }))
+            .unwrap(),
+        );
+        connection.execute("DELETE FROM blobs", []).unwrap();
+        connection.execute("DELETE FROM meta", []).unwrap();
+        connection
+            .execute(
+                "INSERT INTO blobs(id, data) VALUES (?1, ?2)",
+                (&blob_id, &root),
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO meta(key, value) VALUES ('0', ?1)",
+                [store_metadata],
+            )
+            .unwrap();
+    };
+    publish_root(
+        &connection,
+        vec![
+            json!({
+                "role": "assistant",
+                "content": [{
+                    "type": "tool-call",
+                    "toolCallId": "ask-call",
+                    "toolName": "AskQuestion",
+                    "args": {
+                        "questions": [{
+                            "prompt": "  What color do you like most?  ",
+                            "options": [{"label": "PRIVATE_OPTION_SENTINEL"}]
+                        }]
+                    }
+                }],
+                "providerOptions": {
+                "cursor": {"pendingToolCallStartedAtMs": created_at_ms + 60_000}
+                }
+            })
+            .to_string(),
+        ],
+    );
+
+    for payload in [
+        json!({
+            "hook_event_name": "sessionStart",
+            "conversation_id": session_id,
+        }),
+        json!({
+            "hook_event_name": "beforeSubmitPrompt",
+            "conversation_id": session_id,
+            "prompt": "ask me",
+        }),
+    ] {
+        let mut command = env.hook_command("cursor");
+        command.env("TMUX_PANE", "%0");
+        let output = env
+            .spawn_payload(command, &payload.to_string())
+            .wait_with_output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "cursor stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
+    }
+    let pane = tmux_pane("%0", "agent", &env.project_root);
+    let discovered = rimz::agents::cursor::discover_local_sessions_under(
+        &cursor_home,
+        &[env.project_root.as_path()],
+    );
+    assert_eq!(discovered.len(), 1, "Cursor fixture must be discoverable");
+    let waiting = env.snapshot_json_with_panes(std::slice::from_ref(&pane));
+    let published_local_sessions =
+        std::fs::read_to_string(env.runtime_paths().local_sessions_path())
+            .unwrap_or_else(|error| format!("<unreadable: {error}>"));
+    let agent = waiting["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == session_id)
+        .expect("Cursor session");
+    assert_eq!(
+        agent["status"], "waiting",
+        "published local sessions: {published_local_sessions}"
+    );
+    assert_eq!(agent["task"], "What color do you like most?");
+    assert!(agent.get("open_ask").is_none_or(Value::is_null));
+    assert_eq!(
+        agent["transcript_path"],
+        public_transcript.to_string_lossy().as_ref()
+    );
+    assert!(!agent.to_string().contains("PRIVATE_OPTION_SENTINEL"));
+    let asks = env
+        .rimz()
+        .args(["asks", "--json"])
+        .output()
+        .expect("list asks");
+    assert!(asks.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&asks.stdout).unwrap(),
+        json!([])
+    );
+
+    publish_root(&connection, Vec::new());
+    drop(connection);
+    let cleared = env.snapshot_json_with_panes(&[pane]);
+    let agent = cleared["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == session_id)
+        .expect("Cursor session after Ask closes");
+    assert_eq!(agent["status"], "running");
+    assert_eq!(agent["task"], "ask me");
+}
+
+#[test]
 fn cursor_progress_hook_touches_activity_by_conversation_id() {
     let env = Env::new();
     let payload = serde_json::to_string(&json!({
@@ -411,6 +649,160 @@ fn cursor_progress_hook_touches_activity_by_conversation_id() {
     assert_eq!(touches.len(), 1, "progress hook writes one heartbeat");
     assert_eq!(touches[0].kind.as_str(), "cursor");
     assert_eq!(touches[0].agent_id.as_str(), "conv-cursor-progress");
+}
+
+#[test]
+fn cursor_concurrent_subagents_fold_independently_without_context_sidecars() {
+    let env = Env::new();
+    let run = |payload: Value| {
+        let event = payload["hook_event_name"]
+            .as_str()
+            .expect("hook event name")
+            .to_owned();
+        let output = env.run_hook("cursor", &serde_json::to_string(&payload).unwrap());
+        assert!(
+            output.status.success(),
+            "{event} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "{}\n");
+    };
+
+    run(json!({
+        "hook_event_name": "sessionStart",
+        "conversation_id": "cursor-parent",
+        "model_id": "parent-model",
+    }));
+    let mut context = rimz::store::agent_context::empty_context("cursor", Timestamp::now());
+    context.model_id = Some("parent-sidecar-model".to_owned());
+    let parent_context = rimz::store::agent_context::new_record("cursor", "cursor-parent", context);
+    rimz::store::agent_context::write_record(&env.runtime_paths(), &parent_context)
+        .expect("seed parent context");
+    let parent_context_path = env
+        .runtime_paths()
+        .agent_context_path("cursor", "cursor-parent");
+    let parent_context_before = std::fs::read(&parent_context_path).expect("parent context bytes");
+
+    for (id, task, model, branch) in [
+        ("cursor-child-a", "inspect hooks", "default", "feature/a"),
+        (
+            "cursor-child-b",
+            "review identity",
+            "cursor/small",
+            "feature/b",
+        ),
+    ] {
+        run(json!({
+            "hook_event_name": "subagentStart",
+            "conversation_id": "cursor-parent",
+            "subagent_id": id,
+            "parent_conversation_id": "cursor-parent",
+            "subagent_type": "generalPurpose",
+            "task": task,
+            "subagent_model": model,
+            "git_branch": branch,
+            "model_id": "parent-model",
+            "transcript_path": "/tmp/parent.jsonl",
+        }));
+    }
+
+    run(json!({
+        "hook_event_name": "subagentStop",
+        "conversation_id": "cursor-parent",
+        "subagent_id": "cursor-child-b",
+        "parent_conversation_id": "cursor-parent",
+        "status": "error",
+        "transcript_path": "/tmp/parent.jsonl",
+        "agent_transcript_path": "/tmp/cursor-child-b.jsonl",
+        "model_id": "parent-model",
+    }));
+    run(json!({
+        "hook_event_name": "subagentStop",
+        "conversation_id": "cursor-parent",
+        "subagent_id": "cursor-child-a",
+        "parent_conversation_id": "cursor-parent",
+        "status": "completed",
+        "transcript_path": "/tmp/parent.jsonl",
+        "agent_transcript_path": "/tmp/cursor-child-a.jsonl",
+        "model_id": "parent-model",
+    }));
+
+    let snapshot = env.snapshot_json_with_panes(&[tmux_pane("%0", "agent", &env.project_root)]);
+    let agents = snapshot["agents"].as_array().expect("agents");
+    assert_eq!(agents.len(), 3, "one parent and two children: {agents:?}");
+    for (id, task, model, branch, status, transcript) in [
+        (
+            "cursor-child-a",
+            "inspect hooks",
+            "auto",
+            "feature/a",
+            "success",
+            "/tmp/cursor-child-a.jsonl",
+        ),
+        (
+            "cursor-child-b",
+            "review identity",
+            "cursor/small",
+            "feature/b",
+            "failed",
+            "/tmp/cursor-child-b.jsonl",
+        ),
+    ] {
+        let child = agents
+            .iter()
+            .find(|agent| agent["agent_id"] == id)
+            .unwrap_or_else(|| panic!("child {id} missing: {agents:?}"));
+        assert_eq!(child["parent_agent_id"], "cursor-parent");
+        assert_eq!(child["name"], "generalPurpose");
+        assert_eq!(child["role"], "generalPurpose");
+        assert_eq!(child["task"], task);
+        assert_eq!(child["model"], model);
+        assert_eq!(child["worktree_branch"], branch);
+        assert_eq!(child["status"], status);
+        assert_eq!(child["transcript_path"], transcript);
+    }
+
+    let rows: Vec<&Value> = snapshot["worktree_groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .flat_map(|group| group["rows"].as_array().expect("rows"))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the parent is a top-level row: {rows:?}"
+    );
+    assert_eq!(rows[0]["id"], "cursor-parent");
+    assert_eq!(
+        rows[0]["sub_agents"]
+            .as_array()
+            .expect("nested children")
+            .len(),
+        2
+    );
+
+    let activity = rimz::agent_activity::read_all(&env.runtime_paths());
+    for id in ["cursor-child-a", "cursor-child-b"] {
+        assert!(
+            activity
+                .iter()
+                .any(|touch| touch.kind == "cursor" && touch.agent_id == id),
+            "missing child-keyed activity for {id}: {activity:?}",
+        );
+        assert!(
+            !env.runtime_paths()
+                .agent_context_path("cursor", id)
+                .exists(),
+            "child lifecycle must not create an agent-context sidecar",
+        );
+    }
+    assert!(env.subagent_contexts().is_empty());
+    assert_eq!(
+        std::fs::read(&parent_context_path).expect("parent context after child hooks"),
+        parent_context_before,
+        "child transcript/model fields must not mutate the parent sidecar",
+    );
 }
 
 #[test]
