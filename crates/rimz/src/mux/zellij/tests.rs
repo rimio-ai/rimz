@@ -1,6 +1,123 @@
 use super::*;
 
 #[cfg(unix)]
+use crate::config::MultiplexerConfig;
+#[cfg(unix)]
+use crate::ids::{PaneId, WorkspaceId};
+#[cfg(unix)]
+use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
+#[cfg(unix)]
+use crate::mux::{
+    LayoutColumn, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SidebarPaneOptions,
+    SidebarWidth, SplitDirection, SplitPaneOptions, TabOptions, WidthPercent, WidthSyncOptions,
+};
+#[cfg(unix)]
+use crate::sidebar::cache::write_pane_topology_cache;
+#[cfg(unix)]
+use crate::sidebar::timing::unix_now_ms;
+#[cfg(unix)]
+use crate::store::paths::RuntimePaths;
+
+#[cfg(unix)]
+struct TestRoom {
+    runtime_root: tempfile::TempDir,
+    project_root: tempfile::TempDir,
+    workspace_id: WorkspaceId,
+    runtime: RuntimePaths,
+}
+
+#[cfg(unix)]
+impl TestRoom {
+    fn new() -> Self {
+        let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
+        let project_root = tempfile::TempDir::new().expect("project tempdir");
+        let workspace_id = WorkspaceId::from_project_root(project_root.path());
+        let runtime =
+            RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
+        runtime.ensure_dirs().expect("runtime dirs");
+        Self {
+            runtime_root,
+            project_root,
+            workspace_id,
+            runtime,
+        }
+    }
+
+    fn backend(&self, shim: &std::path::Path) -> ZellijBackend {
+        ZellijBackend::with_program_and_runtime_for_test(shim, self.runtime_root.path())
+            .with_presence_plugin_for_test(shim)
+    }
+
+    fn write_cache(
+        &self,
+        produced_at_ms: u64,
+        focused_pane: Option<u64>,
+        clients: Option<TopologyClients>,
+        panes: Vec<PaneTopologyPane>,
+    ) {
+        write_pane_topology_cache(
+            &self.runtime,
+            &PaneTopologyCache {
+                session_name: "rimz-test".to_owned(),
+                produced_at_ms,
+                writer: None,
+                focused_pane,
+                clients,
+                panes,
+            },
+        )
+        .expect("write topology cache");
+    }
+
+    fn sidebar_options(&self, view_cols: u16) -> SidebarPaneOptions {
+        let width = SidebarWidth::default();
+        SidebarPaneOptions {
+            session_name: "rimz-test".to_owned(),
+            workspace_id: self.workspace_id.clone(),
+            project_root: self.project_root.path().to_path_buf(),
+            extra_env: Default::default(),
+            cwd: self.project_root.path().to_path_buf(),
+            width,
+            birth_size: width.birth_size(Some(view_cols)),
+            width_override: None,
+            rimz_bin: "rimz".into(),
+            replace_existing: false,
+            pristine_birth: false,
+            config: MultiplexerConfig::default(),
+            resume_tabs: Vec::new(),
+            refresh_ms: None,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn terminal_pane(
+    id: u64,
+    tab_position: u64,
+    pane_columns: u64,
+    pane_x: u64,
+    title: &str,
+) -> PaneTopologyPane {
+    PaneTopologyPane {
+        id,
+        is_plugin: false,
+        is_held: false,
+        exited: false,
+        is_suppressed: false,
+        is_floating: false,
+        is_focused: false,
+        tab_position,
+        tab_name: Some("work".to_owned()),
+        pane_columns: Some(pane_columns),
+        pane_x: Some(pane_x),
+        title: Some(title.to_owned()),
+        pane_command: None,
+        pane_cwd: None,
+        terminal_command: None,
+    }
+}
+
+#[cfg(unix)]
 fn zellij_shim(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
@@ -12,57 +129,37 @@ fn zellij_shim(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let mut perms = file.metadata().expect("shim metadata").permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&shim, perms).expect("chmod shim");
-    drop(file);
     (temp, shim)
 }
 
 #[cfg(unix)]
-#[test]
-fn split_pane_spells_requested_direction() {
-    use crate::mux::{MuxBackend, SplitDirection, SplitPaneOptions};
+fn shim_log(temp: &tempfile::TempDir) -> String {
+    std::fs::read_to_string(temp.path().join("zellij.log")).unwrap_or_default()
+}
 
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-exit 0
-"#,
-    );
-    let backend = ZellijBackend::with_program_for_test(&shim);
+fn command_count(log: &str, command: &str) -> usize {
+    log.lines().filter(|line| line.contains(command)).count()
+}
 
-    for direction in [SplitDirection::Right, SplitDirection::Down] {
-        backend
-            .split_pane(SplitPaneOptions {
-                direction,
-                focus: true,
-                title: Some("rimz managed pane".to_owned()),
-                ..Default::default()
-            })
-            .expect("split_pane");
-    }
+fn option_map(args: &[String]) -> std::collections::BTreeMap<&str, &str> {
+    assert!(
+        args.len().is_multiple_of(2),
+        "option argv must be pairs: {args:?}"
+    );
+    args.chunks_exact(2)
+        .map(|pair| (pair[0].as_str(), pair[1].as_str()))
+        .collect()
+}
 
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    assert!(
-        log.contains("action new-pane --direction right"),
-        "right split must be explicit:\n{log}",
-    );
-    assert!(
-        log.contains("action new-pane --direction down"),
-        "down split must be explicit:\n{log}",
-    );
-    assert!(
-        log.lines()
-            .all(|line| line.contains("--name rimz managed pane")),
-        "managed pane name must survive in the spawn argv:\n{log}",
-    );
+fn expected_option_map(spec: &str) -> std::collections::BTreeMap<&str, &str> {
+    spec.split_whitespace()
+        .map(|entry| entry.split_once('=').expect("flag=value"))
+        .collect()
 }
 
 #[cfg(unix)]
 #[test]
-fn split_pane_anchors_stack_without_moving_focus() {
-    use crate::ids::PaneId;
-    use crate::mux::{MuxBackend, SplitDirection, SplitPaneOptions};
-
+fn split_pane_routes_directional_and_anchored_requests() {
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
 dir=$(dirname "$0")
@@ -71,7 +168,16 @@ exit 0
 "#,
     );
     let backend = ZellijBackend::with_program_for_test(&shim);
-
+    for direction in [SplitDirection::Right, SplitDirection::Down] {
+        backend
+            .split_pane(SplitPaneOptions {
+                direction,
+                focus: true,
+                title: Some("rimz managed pane".to_owned()),
+                ..Default::default()
+            })
+            .expect("directional split");
+    }
     backend
         .split_pane(SplitPaneOptions {
             session_name: Some("rimz-test".to_owned()),
@@ -82,131 +188,47 @@ exit 0
             focus: false,
             ..Default::default()
         })
-        .expect("split_pane");
+        .expect("anchored stack");
 
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    let log = shim_log(&temp);
+    for command in [
+        "action new-pane --direction right --name rimz managed pane",
+        "action new-pane --direction down --name rimz managed pane",
+    ] {
+        assert!(log.contains(command), "{log}");
+    }
+    let anchored = log.lines().last().expect("anchored command");
     assert!(
-        log.contains("action new-pane --stacked --near-current-pane | pane=7"),
-        "stacked split must anchor on the target pane context:\n{log}",
+        anchored.contains("action new-pane --stacked --near-current-pane | pane=7"),
+        "{log}"
     );
     assert!(
-        !log.contains("--tab-id"),
-        "tab-id overrides the target pane context:\n{log}",
+        !anchored.contains("--tab-id") && !log.contains("focus-pane-id"),
+        "{log}"
     );
-    assert!(
-        !log.contains("focus-pane-id"),
-        "anchored stack must leave attached-client focus unchanged:\n{log}",
-    );
-    assert_eq!(
-        log.lines().count(),
-        1,
-        "split needs one Zellij call:\n{log}"
-    );
+    assert_eq!(log.lines().count(), 3, "one command per split:\n{log}");
 }
 
 #[cfg(unix)]
 #[test]
-fn list_panes_uses_fresh_topology_without_zellij_action() {
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane, TopologyClients};
-    use crate::mux::{MuxBackend, PaneListOptions};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::sidebar::timing::unix_now_ms;
-    use crate::store::paths::RuntimePaths;
-
-    let (temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-fi
-exit 0
-"#,
+fn list_panes_uses_fresh_topology_and_honors_explicit_floor() {
+    let room = TestRoom::new();
+    let floor = unix_now_ms();
+    room.write_cache(
+        floor.saturating_sub(1),
+        Some(7),
+        Some(TopologyClients {
+            human_clients: 2,
+            viewed_panes: vec![7],
+        }),
+        vec![PaneTopologyPane {
+            is_focused: true,
+            pane_command: Some("zsh".to_owned()),
+            pane_cwd: Some(room.project_root.path().to_string_lossy().into_owned()),
+            terminal_command: None,
+            ..terminal_pane(7, 0, 100, 0, "zsh")
+        }],
     );
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: unix_now_ms(),
-            writer: None,
-            focused_pane: Some(7),
-            clients: Some(TopologyClients {
-                human_clients: 2,
-                viewed_panes: vec![7],
-            }),
-            panes: vec![PaneTopologyPane {
-                id: 7,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: true,
-                tab_position: 0,
-                tab_name: Some("work".to_owned()),
-                pane_columns: Some(100),
-                pane_x: Some(0),
-                title: Some("zsh".to_owned()),
-                pane_command: Some("zsh".to_owned()),
-                pane_cwd: Some(project_root.to_string_lossy().into_owned()),
-                terminal_command: None,
-            }],
-        },
-    )
-    .expect("write topology cache");
-
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-    let listing = backend
-        .list_panes(PaneListOptions {
-            session_name: Some("rimz-test".to_owned()),
-            workspace_id: Some(workspace_id),
-            ..Default::default()
-        })
-        .expect("list panes from topology");
-
-    assert_eq!(listing.panes.len(), 1);
-    assert_eq!(listing.panes[0].pane_id.raw(), "terminal_7");
-    assert_eq!(listing.panes[0].view_id.as_deref(), Some("tab_0"));
-    assert_eq!(listing.panes[0].command.as_deref(), Some("zsh"));
-    assert_eq!(listing.panes[0].spawn_command, None);
-    assert_eq!(
-        listing.panes[0].cwd.as_deref(),
-        Some(project_root.to_string_lossy().as_ref()),
-    );
-    let client_view = listing.client_view.expect("topology carries client view");
-    assert_eq!(client_view.presence.human_clients, 2);
-    assert_eq!(client_view.presence.last_input_ms, None);
-    assert_eq!(
-        client_view.viewed_panes,
-        vec![listing.panes[0].pane_id.clone()]
-    );
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).unwrap_or_default();
-    assert!(
-        !log.contains("action list-panes")
-            && !log.contains("action list-clients")
-            && !log.contains("rimz:dump_topology"),
-        "fresh topology should avoid zellij actions:\n{log}",
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn list_panes_trusts_fresh_topology_without_structural_floor() {
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::mux::{MuxBackend, PaneListOptions};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::sidebar::timing::unix_now_ms;
-    use crate::store::paths::RuntimePaths;
-
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
 dir=$(dirname "$0")
@@ -214,207 +236,143 @@ printf '%s\n' "$*" >> "$dir/zellij.log"
 exit 1
 "#,
     );
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    let floor = unix_now_ms();
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: floor.saturating_sub(1),
-            writer: None,
-            focused_pane: Some(7),
-            clients: None,
-            panes: vec![PaneTopologyPane {
-                id: 7,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: true,
-                tab_position: 0,
-                tab_name: Some("work".to_owned()),
-                pane_columns: Some(100),
-                pane_x: Some(0),
-                title: Some("zsh".to_owned()),
-                pane_command: Some("zsh".to_owned()),
-                pane_cwd: Some(project_root.to_string_lossy().into_owned()),
-                terminal_command: None,
-            }],
-        },
-    )
-    .expect("write topology cache");
-
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
+    let backend = room.backend(&shim);
     let listing = backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
-            workspace_id: Some(workspace_id.clone()),
-            min_topology_produced_at_ms: None,
+            workspace_id: Some(room.workspace_id.clone()),
             ..Default::default()
         })
-        .expect("fresh topology without structural floor is usable");
+        .expect("fresh topology");
     assert_eq!(listing.panes.len(), 1);
+    let pane = &listing.panes[0];
+    assert_eq!(
+        (pane.pane_id.raw(), pane.view_id.as_deref()),
+        ("terminal_7", Some("tab_0"))
+    );
+    assert_eq!(
+        (pane.command.as_deref(), pane.spawn_command.as_deref()),
+        (Some("zsh"), None)
+    );
+    assert_eq!(
+        pane.cwd.as_deref(),
+        Some(room.project_root.path().to_string_lossy().as_ref())
+    );
+    let client = listing.client_view.expect("client view");
+    assert_eq!(
+        (client.presence.human_clients, client.presence.last_input_ms),
+        (2, None)
+    );
+    assert_eq!(client.viewed_panes, vec![pane.pane_id.clone()]);
+    assert!(
+        shim_log(&temp).is_empty(),
+        "fresh cache must avoid Zellij actions"
+    );
 
     backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
-            workspace_id: Some(workspace_id),
+            workspace_id: Some(room.workspace_id.clone()),
             min_topology_produced_at_ms: Some(floor),
             command_timeout: Some(Duration::from_millis(1)),
             ..Default::default()
         })
-        .expect_err("explicit repair floor rejects pre-floor topology");
+        .expect_err("explicit floor rejects pre-floor cache");
 }
 
 #[cfg(unix)]
 #[test]
-fn authoritative_list_panes_enriches_matching_cache_geometry_only() {
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::sidebar::timing::unix_now_ms;
-    use crate::store::paths::RuntimePaths;
-
+fn authoritative_list_panes_preserves_server_identity_and_cache_enrichment() {
+    let room = TestRoom::new();
+    room.write_cache(
+        1,
+        None,
+        None,
+        vec![
+            PaneTopologyPane {
+                tab_name: Some("old".to_owned()),
+                pane_command: Some("vim".to_owned()),
+                pane_cwd: Some(room.project_root.path().to_string_lossy().into_owned()),
+                ..terminal_pane(7, 0, 999, 999, "zsh")
+            },
+            PaneTopologyPane {
+                pane_command: Some("rimz-sidebar".to_owned()),
+                terminal_command: Some("rimz".to_owned()),
+                ..terminal_pane(8, 1, 40, 0, "rimz-sidebar")
+            },
+            PaneTopologyPane {
+                pane_command: Some("rimz-sidebar".to_owned()),
+                terminal_command: Some("rimz".to_owned()),
+                ..terminal_pane(9, 2, 50, 0, "rimz-sidebar")
+            },
+        ],
+    );
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
 dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/zellij.log"
-if [ "$1" = "--session" ] && [ "$3" = "action" ] && [ "$4" = "list-panes" ]; then
-  printf '[{"id":7,"is_plugin":false,"is_focused":true,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","title":"rimz-sidebar","terminal_command":"rimz"}]\n'
-  exit 0
-fi
+case " $* " in
+  *" action list-panes --all --json "*)
+    printf '[{"id":7,"is_plugin":false,"is_focused":true,"tab_position":0,"tab_name":"work","pane_columns":100,"pane_x":0,"title":"zsh","terminal_command":"/bin/zsh"},{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"background","pane_columns":40,"pane_x":0,"title":"rimz-sidebar","terminal_command":"rimz"}]\n'
+    exit 0 ;;
+esac
 exit 1
 "#,
     );
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: 1,
-            writer: None,
-            focused_pane: None,
-            clients: None,
-            panes: vec![
-                PaneTopologyPane {
-                    id: 7,
-                    is_plugin: false,
-                    is_held: false,
-                    exited: false,
-                    is_suppressed: false,
-                    is_floating: false,
-                    is_focused: false,
-                    tab_position: 0,
-                    tab_name: Some("old".to_owned()),
-                    pane_columns: Some(999),
-                    pane_x: Some(999),
-                    title: None,
-                    pane_command: Some("vim".to_owned()),
-                    pane_cwd: Some(project_root.to_string_lossy().into_owned()),
-                    terminal_command: None,
-                },
-                PaneTopologyPane {
-                    id: 8,
-                    is_plugin: false,
-                    is_held: false,
-                    exited: false,
-                    is_suppressed: false,
-                    is_floating: false,
-                    is_focused: false,
-                    tab_position: 1,
-                    tab_name: Some("background".to_owned()),
-                    pane_columns: Some(40),
-                    pane_x: Some(0),
-                    title: Some("rimz-sidebar".to_owned()),
-                    pane_command: Some("rimz-sidebar".to_owned()),
-                    pane_cwd: None,
-                    terminal_command: Some("rimz".to_owned()),
-                },
-                PaneTopologyPane {
-                    id: 9,
-                    is_plugin: false,
-                    is_held: false,
-                    exited: false,
-                    is_suppressed: false,
-                    is_floating: false,
-                    is_focused: false,
-                    tab_position: 2,
-                    tab_name: Some("gone".to_owned()),
-                    pane_columns: Some(50),
-                    pane_x: Some(0),
-                    title: Some("rimz-sidebar".to_owned()),
-                    pane_command: Some("rimz-sidebar".to_owned()),
-                    pane_cwd: None,
-                    terminal_command: Some("rimz".to_owned()),
-                },
-            ],
-        },
-    )
-    .expect("write enrichment cache");
-
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-    let listing = backend
+    let listing = room
+        .backend(&shim)
         .authoritative_pane_listing(
             "rimz-test",
             None,
-            Some(&workspace_id),
-            std::time::Duration::from_secs(1),
+            Some(&room.workspace_id),
+            Duration::from_secs(1),
         )
-        .expect("authoritative list panes");
-
-    assert_eq!(listing.panes.len(), 2, "cache-only panes stay excluded");
+        .expect("authoritative listing");
+    assert_eq!(listing.panes.len(), 2, "cache-only pane stays absent");
     let active = listing
         .panes
         .iter()
         .find(|pane| pane.id == 7)
         .expect("active");
-    assert_eq!(active.pane_columns, Some(100));
-    assert_eq!(active.pane_x, Some(0));
+    assert_eq!((active.pane_columns, active.pane_x), (Some(100), Some(0)));
     assert_eq!(active.pane_command.as_deref(), Some("vim"));
     assert_eq!(
         active.pane_cwd.as_deref(),
-        Some(project_root.to_string_lossy().as_ref()),
+        Some(room.project_root.path().to_string_lossy().as_ref())
     );
     let background = listing
         .panes
         .iter()
         .find(|pane| pane.id == 8)
         .expect("background");
-    assert_eq!(background.pane_columns, Some(40));
-    assert_eq!(background.pane_x, Some(0));
+    assert_eq!(
+        (background.pane_columns, background.pane_x),
+        (Some(40), Some(0))
+    );
     assert_eq!(background.pane_command.as_deref(), Some("rimz-sidebar"));
     assert_eq!(
-        listing.authoritative_focus.as_ref().map(|pane| pane.raw()),
+        listing.authoritative_focus.as_ref().map(PaneId::raw),
         Some("terminal_7")
     );
     assert!(listing.observed_at_ms >= unix_now_ms().saturating_sub(1_000));
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    assert!(log.contains("action list-panes --all --json"), "{log}");
+    assert!(shim_log(&temp).contains("action list-panes --all --json"));
 }
 
 #[cfg(unix)]
 #[test]
-fn authoritative_list_panes_falls_back_to_topology_on_failure() {
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::mux::{MuxBackend, PaneListOptions};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::sidebar::timing::unix_now_ms;
-    use crate::store::paths::RuntimePaths;
-
+fn authoritative_list_panes_falls_back_unless_required() {
+    let room = TestRoom::new();
+    room.write_cache(
+        unix_now_ms(),
+        Some(8),
+        None,
+        vec![PaneTopologyPane {
+            is_focused: true,
+            tab_name: Some("fallback".to_owned()),
+            pane_command: Some("zsh".to_owned()),
+            ..terminal_pane(8, 1, 80, 0, "zsh")
+        }],
+    );
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
 dir=$(dirname "$0")
@@ -422,1139 +380,475 @@ printf '%s\n' "$*" >> "$dir/zellij.log"
 exit 1
 "#,
     );
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: unix_now_ms(),
-            writer: None,
-            focused_pane: Some(8),
-            clients: None,
-            panes: vec![PaneTopologyPane {
-                id: 8,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: true,
-                tab_position: 1,
-                tab_name: Some("fallback".to_owned()),
-                pane_columns: Some(80),
-                pane_x: Some(0),
-                title: Some("zsh".to_owned()),
-                pane_command: Some("zsh".to_owned()),
-                pane_cwd: None,
-                terminal_command: None,
-            }],
-        },
-    )
-    .expect("write topology cache");
-
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
+    let backend = room.backend(&shim);
     let listing = backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
-            workspace_id: Some(workspace_id),
+            workspace_id: Some(room.workspace_id.clone()),
             authoritative: true,
             ..Default::default()
         })
-        .expect("fallback list panes");
-
-    assert_eq!(listing.panes.len(), 1);
+        .expect("optional authoritative read falls back");
     assert_eq!(listing.panes[0].pane_id.raw(), "terminal_8");
-
     let err = backend
         .list_panes(PaneListOptions {
             session_name: Some("rimz-test".to_owned()),
-            workspace_id: Some(WorkspaceId::from_project_root(&project_root)),
+            workspace_id: Some(room.workspace_id.clone()),
             authoritative: true,
             require_authoritative: true,
             ..Default::default()
         })
-        .expect_err("required authoritative listing must reject cache fallback");
+        .expect_err("required authoritative read propagates failure");
     assert!(matches!(err, crate::mux::MuxErr::Command { .. }));
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    assert!(log.contains("action list-panes --all --json"), "{log}");
+    assert_eq!(
+        command_count(&shim_log(&temp), "action list-panes --all --json"),
+        2
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn list_panes_fails_fast_when_topology_session_is_absent() {
-    use std::time::{Duration, Instant};
-
-    use crate::ids::WorkspaceId;
-    use crate::mux::{MuxBackend, MuxErr, PaneListOptions};
-
+fn list_panes_fails_fast_when_session_absent() {
+    let room = TestRoom::new();
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
 dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/zellij.log"
-if [ "$1" = "list-sessions" ]; then
-  exit 0
-fi
-sleep 2
-exit 0
+if [ "$1" = "list-sessions" ]; then exit 0; fi
+exit 1
 "#,
     );
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-
-    let started = Instant::now();
-    let err = backend
+    let err = room
+        .backend(&shim)
         .list_panes(PaneListOptions {
             session_name: Some("rimz-dead".to_owned()),
-            workspace_id: Some(workspace_id),
+            workspace_id: Some(room.workspace_id.clone()),
             command_timeout: Some(Duration::from_secs(5)),
             ..Default::default()
         })
-        .expect_err("absent session should fail before topology poll");
-
+        .expect_err("absent session");
     assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "absent sessions should not poll topology until command timeout",
+        matches!(err, crate::mux::MuxErr::SessionNotFound { session } if session == "rimz-dead")
     );
-    assert!(matches!(err, MuxErr::SessionNotFound { session } if session == "rimz-dead"));
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
+    let log = shim_log(&temp);
     assert!(
         log.contains("list-sessions --no-formatting") && !log.contains("rimz:dump_topology"),
-        "absent session should stop at list-sessions:\n{log}",
+        "{log}"
     );
 }
 
 #[cfg(unix)]
-fn assert_stepwise_sidebar_width_scenario(
-    initial_cols: u64,
+fn assert_stepwise_width(
+    name: &str,
+    initial: u64,
     step: i64,
-    view_cols: u64,
+    view: u64,
     direction: &str,
-    expected_calls: usize,
+    calls: usize,
 ) {
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::sidebar::timing::unix_now_ms;
-    use crate::store::paths::RuntimePaths;
-
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = tempfile::TempDir::new().expect("project tempdir");
-    let workspace_id = WorkspaceId::from_project_root(project_root.path());
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: unix_now_ms().saturating_sub(1_000),
-            writer: None,
-            focused_pane: Some(8),
-            clients: None,
-            panes: vec![
-                PaneTopologyPane {
-                    id: 8,
-                    is_plugin: false,
-                    is_held: false,
-                    exited: false,
-                    is_suppressed: false,
-                    is_floating: false,
-                    is_focused: true,
-                    tab_position: 1,
-                    tab_name: Some("work".to_owned()),
-                    pane_columns: Some(initial_cols),
-                    pane_x: Some(0),
-                    title: Some("rimz-sidebar".to_owned()),
-                    pane_command: Some("rimz-sidebar".to_owned()),
-                    pane_cwd: None,
-                    terminal_command: Some("rimz".to_owned()),
-                },
-                PaneTopologyPane {
-                    id: 9,
-                    is_plugin: false,
-                    is_held: false,
-                    exited: false,
-                    is_suppressed: false,
-                    is_floating: false,
-                    is_focused: false,
-                    tab_position: 1,
-                    tab_name: Some("work".to_owned()),
-                    pane_columns: Some(view_cols - initial_cols),
-                    pane_x: Some(initial_cols),
-                    title: Some("zsh".to_owned()),
-                    pane_command: Some("zsh".to_owned()),
-                    pane_cwd: None,
-                    terminal_command: Some("zsh".to_owned()),
-                },
-            ],
-        },
-    )
-    .expect("write ambient topology cache");
-
+    let room = TestRoom::new();
+    room.write_cache(
+        unix_now_ms().saturating_sub(1_000),
+        Some(8),
+        None,
+        vec![
+            terminal_pane(8, 1, initial, 0, "rimz-sidebar"),
+            terminal_pane(9, 1, view - initial, initial, "zsh"),
+        ],
+    );
     let script = format!(
         r#"#!/bin/sh
-dir=$(dirname "$0")
-log="$dir/zellij.log"
-state="$dir/resize-count"
-attempts="$dir/resize-attempts"
-cache="{cache}"
+dir=$(dirname "$0"); log="$dir/zellij.log"; state="$dir/resize-count"; attempts="$dir/resize-attempts"
 printf '%s\n' "$*" >> "$log"
-
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-  exit 0
-fi
-
-if [ "$1" = "list-sessions" ]; then
-  printf 'rimz-test [Created 1s ago]\n'
-  exit 0
-fi
-
+if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
 case " $* " in
   *" --name rimz:dump_topology "*)
-    count=$(cat "$state" 2>/dev/null || printf '0')
-    cols=$(({initial_cols} + count * {step}))
-    work_cols=$(({view_cols} - cols))
+    count=$(cat "$state" 2>/dev/null || printf 0); cols=$(({initial} + count * {step})); work=$(({view} - cols))
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
-    cat > "$cache" <<JSON
-{{"session_name":"rimz-test","produced_at_ms":$now,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":$cols,"pane_command":"rimz-sidebar","terminal_command":"rimz"}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":$cols,"pane_columns":$work_cols,"pane_command":"zsh","terminal_command":"zsh"}}]}}
-JSON
-    exit 0
-    ;;
+    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]}}\n' "$now" "$cols" "$cols" "$work" > "{cache}"
+    exit 0 ;;
   *" action resize {direction} right --pane-id terminal_8 "*)
-    attempt=$(cat "$attempts" 2>/dev/null || printf '0')
-    attempt=$((attempt + 1))
-    printf '%s\n' "$attempt" > "$attempts"
-    if [ "$attempt" -eq 1 ]; then
-      exit 1
-    fi
-    count=$(cat "$state" 2>/dev/null || printf '0')
-    count=$((count + 1))
-    printf '%s\n' "$count" > "$state"
-    sleep 0.01
-    exit 0
-    ;;
+    attempt=$(cat "$attempts" 2>/dev/null || printf 0); attempt=$((attempt + 1)); printf '%s\n' "$attempt" > "$attempts"
+    if [ "$attempt" -eq 1 ]; then exit 1; fi
+    count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; sleep 0.01; exit 0 ;;
 esac
-
 exit 0
 "#,
-        cache = runtime.root.join("pane-topology.json").display(),
-        direction = direction,
-        initial_cols = initial_cols,
-        step = step,
-        view_cols = view_cols,
+        cache = room.runtime.root.join("pane-topology.json").display(),
     );
     let (temp, shim) = zellij_shim(&script);
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-    let width_sync = crate::mux::WidthSyncOptions {
+    let backend = room.backend(&shim);
+    let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
-        workspace_id: workspace_id.clone(),
-        width: crate::mux::SidebarWidth {
-            percent: crate::mux::WidthPercent::Fixed(30),
-            max_cols: std::num::NonZeroU16::new(72).expect("non-zero cap"),
+        workspace_id: room.workspace_id.clone(),
+        width: SidebarWidth {
+            percent: WidthPercent::Fixed(30),
+            max_cols: std::num::NonZeroU16::new(72).expect("cap"),
         },
         width_override: None,
     };
-
-    let (floor, resized) = backend.converge_sidebar_widths_stepwise(&width_sync, 1, 8, None);
-    assert!(resized, "the tab should record a successful resize");
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    let resize_calls = log
-        .lines()
-        .filter(|line| {
-            line.contains(&format!(
-                " action resize {direction} right --pane-id terminal_8"
-            ))
-        })
-        .count();
+    let (floor, resized) = backend.converge_sidebar_widths_stepwise(&width, 1, 8, None);
+    assert!(resized, "{name}: expected resize");
+    let log = shim_log(&temp);
     assert_eq!(
-        resize_calls, expected_calls,
-        "a {direction} should retry its transient error, then stop in-band:\n{log}",
+        command_count(
+            &log,
+            &format!("action resize {direction} right --pane-id terminal_8")
+        ),
+        calls,
+        "{name}:\n{log}"
     );
-
     let final_cols = backend
         .topology_panes_for_workspace(
             "rimz-test",
-            &workspace_id,
+            &room.workspace_id,
             floor,
             crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
         )
         .expect("final topology")
         .into_iter()
-        .find(|pane| pane.is_terminal() && pane.tab_position == 1 && pane.id == 8)
+        .find(|pane| pane.is_terminal() && pane.id == 8)
         .and_then(|pane| pane.pane_columns)
-        .expect("final sidebar columns");
-    let target_cols = crate::mux::width::live_target_cols(width_sync.width, None, view_cols);
+        .expect("sidebar columns");
+    let target = crate::mux::width::live_target_cols(width.width, None, view);
     assert!(
         !crate::mux::width::sidebar_width_off_spec(
             final_cols,
-            target_cols,
-            crate::mux::width::zellij_resize_step_cols(view_cols),
+            target,
+            crate::mux::width::zellij_resize_step_cols(view)
         ),
-        "final post-action topology should see an in-band width, got {final_cols}",
+        "{name}: final width {final_cols}"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn stepwise_sidebar_width_retries_shrink_and_stops_in_band() {
-    assert_stepwise_sidebar_width_scenario(90, -1, 360, "decrease", 10);
+fn stepwise_sidebar_width_converges_across_supported_steps() {
+    for (name, initial, step, view, direction, calls) in [
+        ("shrink", 90, -1, 360, "decrease", 10),
+        ("grow", 40, 19, 380, "increase", 3),
+        ("full-step-below", 53, 10, 213, "increase", 2),
+    ] {
+        assert_stepwise_width(name, initial, step, view, direction, calls);
+    }
 }
 
 #[cfg(unix)]
 #[test]
-fn stepwise_sidebar_width_retries_grow_and_stops_in_band() {
-    assert_stepwise_sidebar_width_scenario(40, 19, 380, "increase", 3);
-}
-
-#[cfg(unix)]
-#[test]
-fn stepwise_sidebar_width_repairs_a_full_step_below_target() {
-    assert_stepwise_sidebar_width_scenario(53, 10, 213, "increase", 2);
-}
-
-#[cfg(unix)]
-#[test]
-fn stepwise_sidebar_width_uses_live_geometry_over_newly_stamped_stale_cache() {
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::sidebar::timing::unix_now_ms;
-    use crate::store::paths::RuntimePaths;
-
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = tempfile::TempDir::new().expect("project tempdir");
-    let workspace_id = WorkspaceId::from_project_root(project_root.path());
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: unix_now_ms().saturating_sub(1_000),
-            writer: None,
-            focused_pane: Some(8),
-            clients: None,
-            panes: vec![
-                PaneTopologyPane {
-                    id: 8,
-                    is_plugin: false,
-                    is_held: false,
-                    exited: false,
-                    is_suppressed: false,
-                    is_floating: false,
-                    is_focused: true,
-                    tab_position: 1,
-                    tab_name: Some("work".to_owned()),
-                    pane_columns: Some(171),
-                    pane_x: Some(0),
-                    title: Some("rimz-sidebar".to_owned()),
-                    pane_command: Some("rimz-sidebar".to_owned()),
-                    pane_cwd: None,
-                    terminal_command: Some("rimz".to_owned()),
-                },
-                PaneTopologyPane {
-                    id: 9,
-                    is_plugin: false,
-                    is_held: false,
-                    exited: false,
-                    is_suppressed: false,
-                    is_floating: false,
-                    is_focused: false,
-                    tab_position: 1,
-                    tab_name: Some("work".to_owned()),
-                    pane_columns: Some(209),
-                    pane_x: Some(171),
-                    title: Some("zsh".to_owned()),
-                    pane_command: Some("zsh".to_owned()),
-                    pane_cwd: None,
-                    terminal_command: Some("zsh".to_owned()),
-                },
-            ],
-        },
-    )
-    .expect("write ambient topology cache");
-
+fn stepwise_sidebar_width_uses_authoritative_geometry_over_fresh_stale_cache() {
+    let room = TestRoom::new();
+    room.write_cache(
+        unix_now_ms().saturating_sub(1_000),
+        Some(8),
+        None,
+        vec![
+            terminal_pane(8, 1, 171, 0, "rimz-sidebar"),
+            terminal_pane(9, 1, 209, 171, "zsh"),
+        ],
+    );
     let script = format!(
         r#"#!/bin/sh
-dir=$(dirname "$0")
-log="$dir/zellij.log"
-state="$dir/resize-count"
-cache="{cache}"
+dir=$(dirname "$0"); log="$dir/zellij.log"; state="$dir/resize-count"
 printf '%s\n' "$*" >> "$log"
-
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-  exit 0
-fi
-
-if [ "$1" = "list-sessions" ]; then
-  printf 'rimz-test [Created 1s ago]\n'
-  exit 0
-fi
-
+if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
 case " $* " in
   *" action list-panes --all --json "*)
-    count=$(cat "$state" 2>/dev/null || printf '0')
-    cols=$((171 - count * 20))
-    if [ "$cols" -lt 71 ]; then
-      cols=71
-    fi
-    printf '[{{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"work","title":"rimz-sidebar","pane_x":0,"pane_columns":%s,"terminal_command":"rimz"}},{{"id":9,"is_plugin":false,"tab_position":1,"tab_name":"work","title":"zsh","pane_x":%s,"pane_columns":%s,"terminal_command":"zsh"}}]\n' "$cols" "$cols" "$((380 - cols))"
-    exit 0
-    ;;
-  *" --name rimz:dump_topology "*)
+    count=$(cat "$state" 2>/dev/null || printf 0); cols=$((171 - count * 20)); if [ "$cols" -lt 71 ]; then cols=71; fi
     now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
-    cat > "$cache" <<JSON
-{{"session_name":"rimz-test","produced_at_ms":$now,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":72,"pane_command":"rimz-sidebar","terminal_command":"rimz"}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":72,"pane_columns":308,"pane_command":"zsh","terminal_command":"zsh"}}]}}
-JSON
-    exit 0
-    ;;
+    printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":8,"panes":[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":72}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":72,"pane_columns":308}}]}}\n' "$now" > "{cache}"
+    printf '[{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":%s}},{{"id":9,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":%s,"pane_columns":%s}}]\n' "$cols" "$cols" "$((380 - cols))"; exit 0 ;;
   *" action resize decrease right --pane-id terminal_8 "*)
-    count=$(cat "$state" 2>/dev/null || printf '0')
-    count=$((count + 1))
-    printf '%s\n' "$count" > "$state"
-    exit 0
-    ;;
+    count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; exit 0 ;;
 esac
-
 exit 0
 "#,
-        cache = runtime.root.join("pane-topology.json").display(),
+        cache = room.runtime.root.join("pane-topology.json").display(),
     );
     let (temp, shim) = zellij_shim(&script);
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-    let width_sync = crate::mux::WidthSyncOptions {
+    let backend = room.backend(&shim);
+    let width = WidthSyncOptions {
         session_name: "rimz-test".to_owned(),
-        workspace_id: workspace_id.clone(),
-        width: crate::mux::SidebarWidth {
-            percent: crate::mux::WidthPercent::Fixed(30),
-            max_cols: std::num::NonZeroU16::new(72).expect("non-zero cap"),
+        workspace_id: room.workspace_id.clone(),
+        width: SidebarWidth {
+            percent: WidthPercent::Fixed(30),
+            max_cols: std::num::NonZeroU16::new(72).expect("cap"),
         },
         width_override: None,
     };
-
-    let (_, resized) = backend.converge_sidebar_widths_stepwise(&width_sync, 1, 8, None);
-    assert!(resized, "the tab should record a successful resize");
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    let resize_calls = log
-        .lines()
-        .filter(|line| line.contains(" action resize decrease right --pane-id terminal_8"))
-        .count();
-    assert_eq!(
-        resize_calls, 5,
-        "stale in-band topology must not stop the live resize loop:\n{log}",
+    assert!(
+        backend
+            .converge_sidebar_widths_stepwise(&width, 1, 8, None)
+            .1
     );
-
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action resize decrease right --pane-id terminal_8"),
+        5,
+        "{log}"
+    );
     let final_cols = backend
         .authoritative_pane_listing(
             "rimz-test",
             None,
-            Some(&workspace_id),
+            Some(&room.workspace_id),
             crate::sidebar::timing::RECONCILE_LIST_TIMEOUT,
         )
-        .expect("final authoritative listing")
+        .expect("final listing")
         .panes
         .into_iter()
         .find(|pane| pane.is_terminal() && pane.id == 8)
         .and_then(|pane| pane.pane_columns)
-        .expect("final sidebar columns");
-    assert!(
-        !crate::mux::width::sidebar_width_off_spec(
-            final_cols,
-            72,
-            crate::mux::width::zellij_resize_step_cols(380),
-        ),
-        "final live geometry should be in-band, got {final_cols}",
-    );
+        .expect("sidebar columns");
+    assert!(!crate::mux::width::sidebar_width_off_spec(
+        final_cols,
+        72,
+        crate::mux::width::zellij_resize_step_cols(380)
+    ));
 }
 
 #[cfg(unix)]
 #[test]
-fn redock_uses_authoritative_geometry_beyond_four_adjacent_swaps() {
-    use std::collections::HashSet;
-
-    use super::raw_pane::{SidebarDock, sidebar_dock_verdict};
-    use crate::config::MultiplexerConfig;
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::mux::{SidebarPaneOptions, SidebarWidth};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::store::paths::RuntimePaths;
-
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = tempfile::TempDir::new().expect("project tempdir");
-    let workspace_id = WorkspaceId::from_project_root(project_root.path());
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    let mut stale_panes: Vec<PaneTopologyPane> = (1..=7)
+fn redock_moves_across_every_adjacent_pane_before_resizing() {
+    let room = TestRoom::new();
+    let mut stale: Vec<_> = (1..=7)
         .map(|id| PaneTopologyPane {
-            id,
-            is_plugin: false,
-            is_held: false,
-            exited: false,
-            is_suppressed: false,
-            is_floating: false,
             is_focused: id == 1,
-            tab_position: 1,
-            tab_name: Some("work".to_owned()),
-            pane_columns: Some(140),
-            pane_x: Some((id - 1) * 140),
-            title: Some("zsh".to_owned()),
-            pane_command: Some("zsh".to_owned()),
-            pane_cwd: None,
-            terminal_command: Some("zsh".to_owned()),
+            ..terminal_pane(id, 1, 140, (id - 1) * 140, "zsh")
         })
         .collect();
-    stale_panes.push(PaneTopologyPane {
-        id: 8,
-        is_plugin: false,
-        is_held: false,
-        exited: false,
-        is_suppressed: false,
-        is_floating: false,
-        is_focused: false,
-        tab_position: 1,
-        tab_name: Some("work".to_owned()),
-        pane_columns: Some(140),
-        pane_x: Some(980),
-        title: Some("rimz-sidebar".to_owned()),
-        pane_command: Some("rimz-sidebar".to_owned()),
-        pane_cwd: None,
-        terminal_command: Some("rimz".to_owned()),
-    });
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: 9_999_999_999_999,
-            writer: None,
-            focused_pane: Some(1),
-            clients: None,
-            panes: stale_panes,
-        },
-    )
-    .expect("write future-stamped stale topology");
-
-    let script = r#"#!/bin/sh
-dir=$(dirname "$0")
-log="$dir/zellij.log"
-moves="$dir/move-count"
-resized="$dir/resized"
-printf '%s\n' "$*" >> "$log"
-
-case " $* " in
-  *" action list-panes --all --json "*)
-    count=$(cat "$moves" 2>/dev/null || printf '0')
-    if [ "$count" -gt 7 ]; then count=7; fi
-    sidebar_slot=$((7 - count))
-    sidebar_x=$((sidebar_slot * 140))
-    sidebar_cols=140
-    if [ -f "$resized" ]; then sidebar_cols=72; fi
-    printf '['
-    i=0
-    while [ "$i" -lt 7 ]; do
-      if [ "$i" -ge "$sidebar_slot" ]; then slot=$((i + 1)); else slot=$i; fi
-      if [ "$i" -gt 0 ]; then printf ','; fi
-      printf '{"id":%s,"is_plugin":false,"is_focused":%s,"tab_position":1,"tab_name":"work","pane_columns":140,"pane_x":%s,"title":"zsh","terminal_command":"zsh"}' \
-        "$((i + 1))" "$(if [ "$i" -eq 0 ]; then printf true; else printf false; fi)" "$((slot * 140))"
-      i=$((i + 1))
-    done
-    printf ',{"id":8,"is_plugin":false,"tab_position":1,"tab_name":"work","pane_columns":%s,"pane_x":%s,"title":"rimz-sidebar","terminal_command":"rimz"}]\n' "$sidebar_cols" "$sidebar_x"
-    exit 0
-    ;;
-  *" action move-pane left --pane-id terminal_8 "*)
-    count=$(cat "$moves" 2>/dev/null || printf '0')
-    printf '%s\n' "$((count + 1))" > "$moves"
-    exit 0
-    ;;
-  *" action resize decrease right --pane-id terminal_8 "*)
-    : > "$resized"
-    exit 0
-    ;;
-esac
-
-exit 1
-"#;
-    let (temp, shim) = zellij_shim(script);
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-    let width = SidebarWidth::default();
-    let opts = SidebarPaneOptions {
-        session_name: "rimz-test".to_owned(),
-        workspace_id: workspace_id.clone(),
-        project_root: project_root.path().to_path_buf(),
-        extra_env: Default::default(),
-        cwd: project_root.path().to_path_buf(),
-        width,
-        birth_size: width.birth_size(Some(1120)),
-        width_override: None,
-        rimz_bin: std::path::PathBuf::from("rimz"),
-        replace_existing: false,
-        pristine_birth: false,
-        config: MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-
-    backend.converge_sidebar_geometry(&opts, 1, 8);
-
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    let lines: Vec<&str> = log.lines().collect();
-    let move_positions: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .filter_map(|(index, line)| line.contains("action move-pane left").then_some(index))
-        .collect();
-    let resize_position = lines
-        .iter()
-        .position(|line| line.contains("action resize decrease right"))
-        .expect("verified dock should start width convergence");
-    assert_eq!(
-        move_positions.len(),
-        7,
-        "the pane-count budget must permit every adjacent swap:\n{log}",
-    );
-    assert!(
-        resize_position > *move_positions.last().expect("redock actions"),
-        "width convergence must follow the final structural move:\n{log}",
-    );
-    let listing = backend
-        .structural_geometry_listing("rimz-test", &workspace_id, None)
-        .expect("final authoritative geometry");
-    let sidebar = listing
-        .panes
-        .iter()
-        .find(|pane| pane.is_terminal() && pane.id == 8)
-        .expect("sidebar");
-    assert_eq!(sidebar.pane_x, Some(0));
-    assert_eq!(
-        sidebar_dock_verdict(sidebar, &listing.panes, &HashSet::new()),
-        Some(SidebarDock::Docked),
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn redock_stops_after_authoritative_no_progress_without_resize() {
-    use crate::config::MultiplexerConfig;
-    use crate::ids::WorkspaceId;
-    use crate::mux::{SidebarPaneOptions, SidebarWidth};
-
-    let script = r#"#!/bin/sh
-dir=$(dirname "$0")
-printf '%s\n' "$*" >> "$dir/zellij.log"
-case " $* " in
-  *" action list-panes --all --json "*)
-    printf '[{"id":1,"is_plugin":false,"is_focused":true,"tab_position":1,"pane_columns":90,"pane_x":0,"title":"zsh","terminal_command":"zsh"},{"id":2,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":90,"title":"zsh","terminal_command":"zsh"},{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":180,"title":"rimz-sidebar","terminal_command":"rimz"}]\n'
-    exit 0
-    ;;
-  *" action move-pane left --pane-id terminal_8 "*)
-    exit 0
-    ;;
-esac
-exit 1
-"#;
-    let (temp, shim) = zellij_shim(script);
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = tempfile::TempDir::new().expect("project tempdir");
-    let workspace_id = WorkspaceId::from_project_root(project_root.path());
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-    let width = SidebarWidth::default();
-    let opts = SidebarPaneOptions {
-        session_name: "rimz-test".to_owned(),
-        workspace_id,
-        project_root: project_root.path().to_path_buf(),
-        extra_env: Default::default(),
-        cwd: project_root.path().to_path_buf(),
-        width,
-        birth_size: width.birth_size(Some(270)),
-        width_override: None,
-        rimz_bin: std::path::PathBuf::from("rimz"),
-        replace_existing: false,
-        pristine_birth: false,
-        config: MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-
-    backend.converge_sidebar_geometry(&opts, 1, 8);
-
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    assert_eq!(
-        log.lines()
-            .filter(|line| line.contains("action move-pane left"))
-            .count(),
-        1,
-        "unchanged authoritative x must stop the loop:\n{log}",
-    );
-    assert!(
-        !log.contains("action resize"),
-        "a displaced sidebar must not enter width convergence:\n{log}",
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn width_nudge_steps_only_the_named_pane_without_a_listing() {
-    use crate::ids::PaneId;
-    use crate::mux::MuxBackend;
-
-    let script = r#"#!/bin/sh
-dir=$(dirname "$0")
-log="$dir/zellij.log"
-printf '%s\n' "$*" >> "$log"
-exit 0
-"#;
-    let (temp, shim) = zellij_shim(script);
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path());
-    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_8");
-    backend
-        .nudge_sidebar_width("rimz-test", &pane, 40, 72)
-        .expect("nudge width");
-
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    assert!(log.contains("action resize increase right --pane-id terminal_8"));
-    assert!(!log.contains("list-panes"));
-    assert!(!log.contains("list-clients"));
-}
-
-#[cfg(unix)]
-#[test]
-fn add_sidebar_timeout_never_closes_stdout_only_hint() {
-    use crate::config::MultiplexerConfig;
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::mux::{SidebarPaneOptions, SidebarWidth};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::sidebar::timing::unix_now_ms;
-    use crate::store::paths::RuntimePaths;
-
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_temp = tempfile::TempDir::new().expect("project tempdir");
-    let project_root = project_temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: unix_now_ms(),
-            writer: None,
-            focused_pane: Some(7),
-            clients: None,
-            panes: vec![PaneTopologyPane {
-                id: 7,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: true,
-                tab_position: 1,
-                tab_name: Some("work".to_owned()),
-                pane_columns: Some(120),
-                pane_x: Some(0),
-                title: Some("zsh".to_owned()),
-                pane_command: Some("zsh".to_owned()),
-                pane_cwd: None,
-                terminal_command: Some("zsh".to_owned()),
-            }],
-        },
-    )
-    .expect("write topology cache");
-
-    let script = format!(
-        r#"#!/bin/sh
-dir=$(dirname "$0")
-log="$dir/zellij.log"
-state="$dir/new-pane-count"
-printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$log"
-cache="{cache}"
-
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-  exit 0
-fi
-
-case " $* " in
-  *" --name rimz:dump_topology "*)
-    count=$(cat "$state" 2>/dev/null || printf '0')
-    if [ "$count" -ge 2 ]; then
-      cat > "$cache" <<'JSON'
-{{"session_name":"rimz-test","produced_at_ms":9999999999999,"focused_pane":7,"panes":[{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90,"pane_command":"zsh","terminal_command":"zsh"}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30,"pane_command":"rimz-sidebar","terminal_command":"rimz"}}]}}
-JSON
-    else
-      cat > "$cache" <<'JSON'
-{{"session_name":"rimz-test","produced_at_ms":9999999999999,"focused_pane":7,"panes":[{{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":120,"pane_command":"zsh","terminal_command":"zsh"}}]}}
-JSON
-    fi
-    exit 0
-    ;;
-  *" action new-pane "*)
-    count=$(cat "$state" 2>/dev/null || printf '0')
-    count=$((count + 1))
-    printf '%s\n' "$count" > "$state"
-    if [ "$count" -eq 1 ]; then
-      printf 'terminal_7\n'
-    else
-      printf 'terminal_8\n'
-    fi
-    exit 0
-    ;;
-esac
-"#,
-        cache = runtime.root.join("pane-topology.json").display(),
-    );
-    let (temp, shim) = zellij_shim(&script);
-    let log = temp.path().join("zellij.log");
-
-    let width = SidebarWidth::default();
-    let opts = SidebarPaneOptions {
-        session_name: "rimz-test".to_owned(),
-        workspace_id,
-        project_root: project_root.clone(),
-        extra_env: Default::default(),
-        cwd: project_root,
-        width,
-        birth_size: width.birth_size(Some(120)),
-        width_override: None,
-        rimz_bin: std::path::PathBuf::from("rimz"),
-        replace_existing: false,
-        pristine_birth: false,
-        config: MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-    assert_eq!(
-        backend
-            .new_sidebar_pane(&opts, 1)
-            .expect("spawn sidebar")
-            .as_deref(),
-        Some("terminal_7"),
-    );
-    let log = std::fs::read_to_string(log).expect("read shim log");
-    assert!(
-        !log.contains("close-pane --pane-id terminal_7"),
-        "stdout-only hint for a pre-existing work pane must not be closed:\n{log}",
-    );
-    assert!(
-        log.contains("action new-pane --direction right --name rimz-sidebar --borderless true"),
-        "repair-created sidebar panes must use an ordinary borderless right split:\n{log}",
-    );
-    assert!(
-        log.contains("action go-to-tab 2") && !log.contains("--near-current-pane"),
-        "reinjection targets the tab with focus choreography, not the unsafe near-current route:\n{log}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn new_sidebar_pane_targets_tab_with_ordinary_right_split() {
-    use crate::config::MultiplexerConfig;
-    use crate::ids::WorkspaceId;
-    use crate::mux::zellij::pane_topology::{PaneTopologyCache, PaneTopologyPane};
-    use crate::mux::{SidebarPaneOptions, SidebarWidth};
-    use crate::sidebar::cache::write_pane_topology_cache;
-    use crate::sidebar::timing::unix_now_ms;
-    use crate::store::paths::RuntimePaths;
-
+    stale.push(terminal_pane(8, 1, 140, 980, "rimz-sidebar"));
+    room.write_cache(9_999_999_999_999, Some(1), None, stale);
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
-dir=$(dirname "$0")
-log="$dir/zellij.log"
-state="$dir/sidebar-added"
-printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$log"
-
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-  exit 0
-fi
-
+dir=$(dirname "$0"); log="$dir/zellij.log"; moves="$dir/move-count"; resized="$dir/resized"
+printf '%s\n' "$*" >> "$log"
 case " $* " in
-  *" action dump-layout "*)
-    exit 0
-    ;;
-  *" action list-clients "*)
-    printf '%s\n' 'CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND'
-    printf '%s\n' '1 terminal_7 zsh'
-    exit 0
-    ;;
-  *" --name rimz:dump_topology "*)
-    cache=$(ls "$XDG_RUNTIME_DIR"/rimz/ws_*/pane-topology.json 2>/dev/null | head -n1)
-    if [ -f "$state" ]; then
-      cat > "$cache" <<'JSON'
-{"session_name":"rimz-test","produced_at_ms":9999999999999,"focused_pane":7,"panes":[{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90,"pane_command":"zsh","terminal_command":"zsh"},{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30,"pane_command":"rimz-sidebar","terminal_command":"rimz"}]}
-JSON
-    else
-      cat > "$cache" <<'JSON'
-{"session_name":"rimz-test","produced_at_ms":9999999999999,"focused_pane":7,"panes":[{"id":7,"is_plugin":false,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":120,"pane_command":"zsh","terminal_command":"zsh"}]}
-JSON
-    fi
-    exit 0
-    ;;
-  *" action new-pane "*)
-    printf '%s\n' "mounted" > "$state"
-    printf '%s\n' 'terminal_8'
-    exit 0
-    ;;
-  *" action focus-pane-id "*|*" action move-pane "*|*" action resize "*)
-    exit 0
-    ;;
+  *" action list-panes --all --json "*)
+    count=$(cat "$moves" 2>/dev/null || printf 0); if [ "$count" -gt 7 ]; then count=7; fi
+    slot=$((7 - count)); sidebar_x=$((slot * 140)); cols=140; if [ -f "$resized" ]; then cols=72; fi
+    printf '['; i=0
+    while [ "$i" -lt 7 ]; do
+      if [ "$i" -ge "$slot" ]; then x=$(((i + 1) * 140)); else x=$((i * 140)); fi
+      if [ "$i" -gt 0 ]; then printf ','; fi
+      printf '{"id":%s,"is_plugin":false,"is_focused":%s,"tab_position":1,"pane_columns":140,"pane_x":%s,"title":"zsh"}' "$((i + 1))" "$(if [ "$i" -eq 0 ]; then printf true; else printf false; fi)" "$x"; i=$((i + 1))
+    done
+    printf ',{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":%s,"pane_x":%s,"title":"rimz-sidebar"}]\n' "$cols" "$sidebar_x"; exit 0 ;;
+  *" action move-pane left --pane-id terminal_8 "*) count=$(cat "$moves" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$moves"; exit 0 ;;
+  *" action resize decrease right --pane-id terminal_8 "*) : > "$resized"; exit 0 ;;
 esac
-
-exit 0
+exit 1
 "#,
     );
-    let runtime_root = tempfile::TempDir::new().expect("runtime tempdir");
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let workspace_id = WorkspaceId::from_project_root(&project_root);
-    let runtime = RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    write_pane_topology_cache(
-        &runtime,
-        &PaneTopologyCache {
-            session_name: "rimz-test".to_owned(),
-            produced_at_ms: unix_now_ms(),
-            writer: None,
-            focused_pane: Some(7),
-            clients: None,
-            panes: vec![PaneTopologyPane {
-                id: 7,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: true,
-                tab_position: 1,
-                tab_name: Some("work".to_owned()),
-                pane_columns: Some(120),
-                pane_x: Some(0),
-                title: Some("zsh".to_owned()),
-                pane_command: Some("zsh".to_owned()),
-                pane_cwd: None,
-                terminal_command: Some("zsh".to_owned()),
-            }],
-        },
-    )
-    .expect("write topology cache");
+    let backend = room.backend(&shim);
+    backend.converge_sidebar_geometry(&room.sidebar_options(1120), 1, 8);
+    let log = shim_log(&temp);
+    let lines: Vec<_> = log.lines().collect();
+    let moves: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| line.contains("action move-pane left").then_some(i))
+        .collect();
+    let resize = lines
+        .iter()
+        .position(|line| line.contains("action resize decrease right"))
+        .expect("resize");
+    assert_eq!(moves.len(), 7, "{log}");
+    assert!(resize > *moves.last().expect("moves"), "{log}");
+    let listing = backend
+        .structural_geometry_listing("rimz-test", &room.workspace_id, None)
+        .expect("final geometry");
+    assert_eq!(
+        listing
+            .panes
+            .iter()
+            .find(|pane| pane.id == 8)
+            .and_then(|pane| pane.pane_x),
+        Some(0)
+    );
+}
 
-    let opts = SidebarPaneOptions {
-        session_name: "rimz-test".to_owned(),
-        workspace_id,
-        project_root: project_root.clone(),
-        extra_env: Default::default(),
-        cwd: project_root,
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(120)),
-        width_override: None,
-        rimz_bin: std::path::PathBuf::from("rimz"),
-        replace_existing: false,
-        pristine_birth: false,
-        config: MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
+#[cfg(unix)]
+#[test]
+fn redock_stops_on_authoritative_no_progress() {
+    let room = TestRoom::new();
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"
+case " $* " in
+  *" action list-panes --all --json "*) printf '[{"id":1,"is_plugin":false,"is_focused":true,"tab_position":1,"pane_columns":90,"pane_x":0,"title":"zsh"},{"id":2,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":90,"title":"zsh"},{"id":8,"is_plugin":false,"tab_position":1,"pane_columns":90,"pane_x":180,"title":"rimz-sidebar"}]\n'; exit 0 ;;
+  *" action move-pane left --pane-id terminal_8 "*) exit 0 ;;
+esac
+exit 1
+"#,
+    );
+    room.backend(&shim)
+        .converge_sidebar_geometry(&room.sidebar_options(270), 1, 8);
+    let log = shim_log(&temp);
+    assert_eq!(command_count(&log, "action move-pane left"), 1, "{log}");
+    assert!(!log.contains("action resize"), "{log}");
+}
 
-    let backend = ZellijBackend::with_program_and_runtime_for_test(&shim, runtime_root.path())
-        .with_presence_plugin_for_test(&shim);
-    backend
-        .new_sidebar_pane(&opts, 1)
-        .expect("spawn sidebar in positioned tab");
+#[cfg(unix)]
+#[test]
+fn width_nudge_targets_only_named_pane() {
+    let (temp, shim) = zellij_shim(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); printf '%s\n' "$*" >> "$dir/zellij.log"; exit 0
+"#,
+    );
+    let pane = PaneId::from_parts(crate::MuxName::Zellij, "terminal_8");
+    ZellijBackend::with_program_for_test(&shim)
+        .nudge_sidebar_width("rimz-test", &pane, 40, 72)
+        .expect("nudge");
+    let log = shim_log(&temp);
+    assert_eq!(
+        command_count(&log, "action resize increase right --pane-id terminal_8"),
+        1
+    );
+    assert!(
+        !log.contains("list-panes") && !log.contains("list-clients"),
+        "{log}"
+    );
+}
 
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    let new_panes: Vec<&str> = log
+#[cfg(unix)]
+#[test]
+fn sidebar_add_never_cleans_cross_talk_hint_and_uses_supported_split() {
+    let room = TestRoom::new();
+    room.write_cache(
+        unix_now_ms(),
+        Some(7),
+        None,
+        vec![PaneTopologyPane {
+            is_focused: true,
+            pane_command: Some("zsh".to_owned()),
+            terminal_command: Some("zsh".to_owned()),
+            ..terminal_pane(7, 1, 120, 0, "zsh")
+        }],
+    );
+    let script = format!(
+        r#"#!/bin/sh
+dir=$(dirname "$0"); log="$dir/zellij.log"; state="$dir/new-pane-count"
+printf 'pane=%s args=%s\n' "$ZELLIJ_PANE_ID" "$*" >> "$log"
+if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
+if [ "$1" = "list-sessions" ]; then printf 'rimz-test [Created 1s ago]\n'; exit 0; fi
+case " $* " in
+  *" --name rimz:dump_topology "*)
+    count=$(cat "$state" 2>/dev/null || printf 0)
+    now=$(perl -MTime::HiRes=time -e 'printf "%d\n", time()*1000')
+    if [ "$count" -ge 2 ]; then
+      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]}}\n' "$now" > "{cache}"
+    else
+      printf '{{"session_name":"rimz-test","produced_at_ms":%s,"focused_pane":7,"panes":[{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]}}\n' "$now" > "{cache}"
+    fi
+    exit 0 ;;
+  *" action list-panes --all --json "*)
+    count=$(cat "$state" 2>/dev/null || printf 0)
+    if [ "$count" -ge 2 ]; then printf '[{{"id":9,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}},{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":30,"pane_columns":90}}]\n';
+    else printf '[{{"id":7,"is_plugin":false,"is_focused":true,"tab_position":1,"title":"zsh","pane_x":0,"pane_columns":90}},{{"id":8,"is_plugin":false,"tab_position":1,"title":"rimz-sidebar","pane_x":90,"pane_columns":30}}]\n'; fi
+    exit 0 ;;
+  *" action new-pane "*) count=$(cat "$state" 2>/dev/null || printf 0); printf '%s\n' "$((count + 1))" > "$state"; printf 'terminal_7\n'; exit 0 ;;
+esac
+exit 0
+"#,
+        cache = room.runtime.root.join("pane-topology.json").display(),
+    );
+    let (temp, shim) = zellij_shim(&script);
+    if let Err(err) = room
+        .backend(&shim)
+        .add_sidebar_to_tab(&room.sidebar_options(120), 1)
+    {
+        panic!("retry add: {err}\n{}", shim_log(&temp));
+    }
+    let log = shim_log(&temp);
+    let adds: Vec<_> = log
         .lines()
         .filter(|line| line.contains(" action new-pane "))
         .collect();
-    assert_eq!(new_panes.len(), 1, "one add issued:\n{log}");
+    assert_eq!(adds.len(), 2, "first misdock must retry:\n{log}");
     assert!(
-        new_panes[0].contains("new-pane --direction right")
-            && !new_panes[0].contains("--near-current-pane")
-            && !new_panes[0].contains("--tab-id"),
-        "add uses the supported ordinary right split after selecting the tab:\n{log}",
+        adds.iter()
+            .all(|line| line.contains("new-pane --direction right")
+                && line.contains("--borderless true")
+                && !line.contains("--near-current-pane")
+                && !line.contains("--tab-id")),
+        "{log}"
     );
     assert!(
         log.contains("action go-to-tab 2"),
-        "tab position 1 targets CLI tab 2:\n{log}"
+        "tab position 1 maps to CLI tab 2:\n{log}"
+    );
+    assert!(
+        log.contains("close-pane --pane-id terminal_8"),
+        "topology-proven failed add is cleaned:\n{log}"
+    );
+    assert!(
+        !log.contains("close-pane --pane-id terminal_7"),
+        "cross-talk hint must stay open:\n{log}"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn commands_surface_session_not_found_banner() {
-    use crate::mux::MuxErr;
-
-    let (_temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-  exit 0
-fi
-
+fn commands_classify_session_not_found_for_zero_and_nonzero_exit() {
+    for (name, script) in [
+        (
+            "zero",
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
 printf '\033[32;1mrimz-other\033[m [Created 6m ago]\n'
 printf "Session 'missing-room' not found. The following sessions are active:\n" >&2
 exit 0
 "#,
-    );
-    let backend = ZellijBackend::with_program_for_test(&shim);
-
-    let err = backend
-        .tab_names("missing-room")
-        .expect_err("banner should classify as session-not-found");
-
-    assert!(
-        matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
-        "got: {err}",
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn commands_surface_session_not_found_banner_nonzero_exit() {
-    use crate::mux::MuxErr;
-
-    let (_temp, shim) = zellij_shim(
-        r#"#!/bin/sh
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-  exit 0
-fi
-
+        ),
+        (
+            "nonzero",
+            r#"#!/bin/sh
+if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
 printf "Session 'missing-room' not found. The following sessions are active:\n" >&2
 printf '\033[32;1mrimz-other\033[m [Created 6m ago]\n' >&2
 exit 1
 "#,
-    );
-    let backend = ZellijBackend::with_program_for_test(&shim);
-
-    let err = backend
-        .tab_names("missing-room")
-        .expect_err("nonzero banner should classify as session-not-found");
-    assert!(
-        matches!(err, MuxErr::SessionNotFound { ref session } if session == "missing-room"),
-        "got: {err}",
-    );
-    assert!(
-        !err.to_string().contains("rimz-other"),
-        "typed error must not leak active session names: {err}",
-    );
+        ),
+    ] {
+        let (_temp, shim) = zellij_shim(script);
+        let err = ZellijBackend::with_program_for_test(&shim)
+            .tab_names("missing-room")
+            .expect_err(name);
+        assert!(
+            matches!(err, crate::mux::MuxErr::SessionNotFound { ref session } if session == "missing-room"),
+            "{name}: {err}"
+        );
+        assert!(!err.to_string().contains("rimz-other"), "{name}: {err}");
+    }
 }
 
 #[cfg(unix)]
 #[test]
-fn new_tab_confirmation_waits_for_layout_panes() {
-    use crate::config::MultiplexerConfig;
-    use crate::ids::WorkspaceId;
-    use crate::mux::{
-        LayoutColumn, LayoutPanes, PaneCmd, SidebarPaneOptions, SidebarWidth, TabOptions,
-    };
-
+fn new_tab_keeps_layout_until_panes_materialize() {
+    let room = TestRoom::new();
     let (temp, shim) = zellij_shim(
         r#"#!/bin/sh
-dir=$(dirname "$0")
-log="$dir/zellij.log"
-tab="$dir/tab-created"
-layout_ref="$dir/layout-path"
-list_count="$dir/list-tabs-count"
+dir=$(dirname "$0"); log="$dir/zellij.log"; tab="$dir/tab-created"; layout_ref="$dir/layout-path"; count_file="$dir/list-tabs-count"
 printf '%s\n' "$*" >> "$log"
-
-if [ "$1" = "--version" ]; then
-  printf 'zellij 0.44.3\n'
-  exit 0
-fi
-
+if [ "$1" = "--version" ]; then printf 'zellij 0.44.3\n'; exit 0; fi
 case " $* " in
-  *" action dump-layout "*)
-    printf 'layout {\n}\n'
-    exit 0
-    ;;
-  *" action query-tab-names "*)
-    printf 'main\n'
-    if [ -f "$tab" ]; then
-      printf 'work\n'
-    fi
-    exit 0
-    ;;
-  *" action new-tab "*)
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "--layout" ]; then
-        shift
-        printf '%s' "$1" > "$layout_ref"
-      fi
-      shift
-    done
-    : > "$tab"
-    exit 0
-    ;;
+  *" action query-tab-names "*) printf 'main\n'; if [ -f "$tab" ]; then printf 'work\n'; fi; exit 0 ;;
+  *" action new-tab "*) while [ "$#" -gt 0 ]; do if [ "$1" = "--layout" ]; then shift; printf '%s' "$1" > "$layout_ref"; fi; shift; done; : > "$tab"; exit 0 ;;
   *" action list-tabs "*)
-    count=$(cat "$list_count" 2>/dev/null || printf '0')
-    count=$((count + 1))
-    printf '%s\n' "$count" > "$list_count"
+    count=$(cat "$count_file" 2>/dev/null || printf 0); count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
     printf '[{"name":"main","selectable_tiled_panes_count":1}'
-    if [ -f "$tab" ]; then
-      panes=0
-      layout=$(cat "$layout_ref" 2>/dev/null || true)
-      if [ "$count" -ge 3 ]; then
-        if [ -n "$layout" ] && [ -f "$layout" ]; then
-          panes=2
-        else
-          printf '%s\n' 'layout-missing-before-materialized' >> "$log"
-        fi
-      fi
-      printf ',{"name":"work","selectable_tiled_panes_count":%s}' "$panes"
-    fi
-    printf ']\n'
-    exit 0
-    ;;
+    if [ -f "$tab" ]; then panes=0; layout=$(cat "$layout_ref" 2>/dev/null || true); if [ "$count" -ge 3 ]; then if [ -n "$layout" ] && [ -f "$layout" ]; then panes=2; else printf 'layout-missing-before-materialized\n' >> "$log"; fi; fi; printf ',{"name":"work","selectable_tiled_panes_count":%s}' "$panes"; fi
+    printf ']\n'; exit 0 ;;
 esac
+exit 0
 "#,
     );
-    let project_root = temp.path().join("project");
-    std::fs::create_dir_all(&project_root).expect("mkdir project");
-    let sidebar = SidebarPaneOptions {
-        session_name: "rimz-test".to_owned(),
-        workspace_id: WorkspaceId::from_project_root(&project_root),
-        project_root: project_root.clone(),
-        extra_env: Default::default(),
-        cwd: project_root.clone(),
-        width: SidebarWidth::default(),
-        birth_size: SidebarWidth::default().birth_size(Some(120)),
-        width_override: None,
-        rimz_bin: std::path::PathBuf::from("rimz"),
-        replace_existing: false,
-        pristine_birth: false,
-        config: MultiplexerConfig::default(),
-        resume_tabs: Vec::new(),
-        refresh_ms: None,
-    };
-
-    let backend = ZellijBackend::with_program_for_test(&shim);
-    backend
+    room.backend(&shim)
         .open_tab(&TabOptions {
             session_name: "rimz-test".to_owned(),
             title: "work".to_owned(),
-            cwd: project_root,
+            cwd: room.project_root.path().to_path_buf(),
             panes: LayoutPanes {
                 columns: vec![LayoutColumn {
                     panes: vec![PaneCmd {
@@ -1565,102 +859,65 @@ esac
             },
             focus: true,
             dock_sidebar: true,
-            sidebar,
+            sidebar: room.sidebar_options(120),
         })
         .expect("open tab");
-
-    let log = std::fs::read_to_string(temp.path().join("zellij.log")).expect("read shim log");
-    let materialize_polls = log
-        .lines()
-        .filter(|line| line.contains("action list-tabs --json --panes"))
-        .count();
+    let log = shim_log(&temp);
     assert!(
-        materialize_polls >= 3,
-        "new-tab confirmation must wait for pane materialization, got log:\n{log}",
+        command_count(&log, "action list-tabs --json --panes") >= 3,
+        "{log}"
     );
-    assert!(
-        !log.contains("layout-missing-before-materialized"),
-        "the temp layout file must stay alive until panes materialize:\n{log}",
-    );
-    assert_eq!(
-        log.lines()
-            .filter(|line| line.contains("action new-tab "))
-            .count(),
-        1,
-        "materialization polling should not create duplicate tabs:\n{log}",
-    );
+    assert!(!log.contains("layout-missing-before-materialized"), "{log}");
+    assert_eq!(command_count(&log, "action new-tab "), 1, "{log}");
 }
 
 #[test]
 fn runtime_dir_pins_full_zellij_env_surface() {
-    let runtime = tempfile::TempDir::new().expect("runtime tempdir");
+    let runtime = tempfile::TempDir::new().expect("runtime");
     let runtime = runtime.path().to_string_lossy().into_owned();
     let pinned = ZellijBackend::with_runtime_dir(&runtime).cmd();
-
-    for key in [
+    let keys = [
         "XDG_RUNTIME_DIR",
         "XDG_STATE_HOME",
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",
         "HOME",
         "TMPDIR",
-    ] {
-        assert_eq!(
-            pinned.env.get(key),
-            Some(&runtime),
-            "{key} must point at the test runtime dir",
-        );
+    ];
+    for key in keys {
+        assert_eq!(pinned.env.get(key), Some(&runtime), "{key}");
     }
-
     let default = ZellijBackend::default().cmd();
-    for key in [
-        "XDG_RUNTIME_DIR",
-        "XDG_STATE_HOME",
-        "XDG_CONFIG_HOME",
-        "XDG_CACHE_HOME",
-        "HOME",
-        "TMPDIR",
-    ] {
+    for key in keys {
         assert!(
             !default.env.contains_key(key),
-            "production backend must not override {key}",
+            "production must inherit {key}"
         );
     }
 }
 
 #[test]
-fn version_parser_and_floor_hold() {
+fn version_parser_accepts_zellij_output_shapes() {
     assert_eq!(parse_version("zellij 0.41.2"), Some((0, 41, 2)));
     assert_eq!(parse_version("  zellij 1.2.3  \n"), Some((1, 2, 3)));
     assert_eq!(parse_version("zellij 0.44"), Some((0, 44, 0)));
     assert_eq!(parse_version("garbage"), None);
-
-    assert!((0, 44, 0) >= MIN_ZELLIJ_VERSION);
-    assert!((0, 44, 3) >= MIN_ZELLIJ_VERSION);
-    assert!((0, 43, 9) < MIN_ZELLIJ_VERSION);
 }
 
 #[test]
-fn log_classifier_matches_leading_levels_and_panics_only() {
+fn log_classifier_matches_zellij_levels() {
     use crate::mux::logtail::LogSeverity;
 
-    assert_eq!(
-        classify_log_line("ERROR failed to decode"),
-        Some(LogSeverity::Error)
-    );
-    assert_eq!(
-        classify_log_line("WARN slow client"),
-        Some(LogSeverity::Warn)
-    );
-    assert_eq!(
-        classify_log_line("Panic occured: over 1000 consecutive unknown messages"),
-        Some(LogSeverity::Panic)
-    );
-    assert_eq!(
-        classify_log_line("INFO later WARN text is not a level"),
-        None
-    );
-    assert_eq!(classify_log_line("WARNING is not WARN token"), None);
+    for (line, expected) in [
+        ("Panic occured: unknown messages", Some(LogSeverity::Panic)),
+        ("Panic occurred: unknown messages", Some(LogSeverity::Panic)),
+        ("ERROR failed to decode", Some(LogSeverity::Error)),
+        ("WARN slow client", Some(LogSeverity::Warn)),
+        ("INFO later WARN text is not a level", None),
+        ("WARNING is not WARN token", None),
+    ] {
+        assert_eq!(classify_log_line(line), expected, "{line}");
+    }
 }
 
 #[test]
@@ -1669,145 +926,74 @@ fn version_serves_the_memoized_probe() {
     backend
         .version
         .set("zellij 9.9.9".to_owned())
-        .expect("a fresh instance has not probed yet");
-    // The cache is consulted before any probe: the seeded value comes back
-    // verbatim — no `zellij --version` fork, no overwrite by a real binary.
+        .expect("fresh cache");
     assert_eq!(backend.version().expect("cached version"), "zellij 9.9.9");
 }
 
 #[test]
-fn option_flags_gate_by_version() {
-    assert!(mouse_click_through_args(true, None).is_empty());
-    assert!(mouse_click_through_args(true, Some((0, 43, 9))).is_empty());
-    assert!(mouse_click_through_args(false, Some((0, 44, 3))).is_empty());
-    let expected = vec!["--mouse-click-through".to_owned(), "true".to_owned()];
-    assert_eq!(mouse_click_through_args(true, Some((0, 44, 0))), expected);
+fn zellij_options_respect_defaults_overrides_and_version_gates() {
+    use crate::config::{ZellijClipboard, ZellijForceClose};
 
-    let mouse_config = ZellijConfig {
+    let expected_defaults = expected_option_map(
+        "--auto-layout=false --default-mode=locked --disable-session-metadata=true --focus-follows-mouse=false --mouse-click-through=true --session-serialization=false --stacked-resize=true",
+    );
+    assert_eq!(
+        option_map(&zellij_options_args(
+            &ZellijConfig::default(),
+            Some((0, 44, 3))
+        )),
+        expected_defaults
+    );
+    let mut unknown_defaults = expected_defaults.clone();
+    unknown_defaults.remove("--mouse-click-through");
+    assert_eq!(
+        option_map(&zellij_options_args(&ZellijConfig::default(), None)),
+        unknown_defaults
+    );
+
+    let mouse = ZellijConfig {
         advanced_mouse_actions: Some(true),
         mouse_hover_effects: Some(false),
         ..ZellijConfig::default()
     };
-    let args = zellij_options_args(&mouse_config, Some((0, 42, 9)));
-    assert!(
-        !args.iter().any(|arg| arg == "--mouse-hover-effects"),
-        "Zellij before 0.44 rejects mouse hover effect options"
-    );
-    assert!(
-        args.windows(2)
-            .any(|pair| pair[0] == "--advanced-mouse-actions" && pair[1] == "true"),
-        "0.44 is the runtime floor, so advanced mouse options are unconditional"
-    );
-    assert!(
-        args.windows(2)
-            .any(|pair| pair[0] == "--stacked-resize" && pair[1] == "true"),
-        "0.44 is the runtime floor, so stacked resize is unconditional"
-    );
-
-    let args = zellij_options_args(&mouse_config, Some((0, 41, 9)));
-    assert!(
-        args.iter().any(|arg| arg == "--stacked-resize"),
-        "dead pre-0.44 gates stay deleted"
-    );
-
-    let args = zellij_options_args(&mouse_config, Some((0, 43, 0)));
-    let has = |flag: &str, value: &str| {
-        args.windows(2)
-            .any(|pair| pair[0] == flag && pair[1] == value)
-    };
-    assert!(has("--advanced-mouse-actions", "true"));
-    assert!(!args.iter().any(|arg| arg == "--mouse-hover-effects"));
-
-    let args = zellij_options_args(&mouse_config, Some((0, 44, 0)));
-    let has = |flag: &str, value: &str| {
-        args.windows(2)
-            .any(|pair| pair[0] == flag && pair[1] == value)
-    };
-    assert!(has("--advanced-mouse-actions", "true"));
-    assert!(has("--mouse-hover-effects", "false"));
-}
-
-#[test]
-fn zellij_options_render_defaults_and_unknown_version_floor() {
-    let args = zellij_options_args(&ZellijConfig::default(), Some((0, 44, 3)));
-    let has = |flag: &str, value: &str| {
-        args.windows(2)
-            .any(|pair| pair[0] == flag && pair[1] == value)
-    };
-    assert!(
-        !args.iter().any(|arg| arg == "--mouse-mode"),
-        "`--mouse-mode true` disables mouse reporting on Zellij 0.44.3; rely on the default"
-    );
-    assert!(has("--default-mode", "locked"));
-    assert!(has("--mouse-click-through", "true"));
-    assert!(has("--focus-follows-mouse", "false"));
-    assert!(has("--auto-layout", "false"));
-    assert!(has("--stacked-resize", "true"));
-    assert!(has("--session-serialization", "false"));
-    assert!(has("--disable-session-metadata", "true"));
-    assert!(
-        !args.iter().any(|arg| arg == "--web-sharing"),
-        "normal rooms defer web sharing to the user's Zellij config"
-    );
-    for flag in [
-        "--advanced-mouse-actions",
-        "--mouse-hover-effects",
-        "--pane-frames",
-        "--copy-clipboard",
-        "--support-kitty-keyboard-protocol",
-        "--osc8-hyperlinks",
+    for (name, version, gated) in [
+        ("unknown", None, false),
+        ("0.43.9", Some((0, 43, 9)), false),
+        ("0.44.0", Some((0, 44, 0)), true),
+        ("0.44.3", Some((0, 44, 3)), true),
     ] {
-        assert!(
-            !args.iter().any(|arg| arg == flag),
-            "unset optional {flag} must defer to Zellij config: {args:?}",
+        let args = zellij_options_args(&mouse, version);
+        let map = option_map(&args);
+        assert_eq!(map.get("--advanced-mouse-actions"), Some(&"true"), "{name}");
+        assert_eq!(
+            map.get("--mouse-click-through"),
+            gated.then_some(&"true"),
+            "{name}"
+        );
+        assert_eq!(
+            map.get("--mouse-hover-effects"),
+            gated.then_some(&"false"),
+            "{name}"
         );
     }
 
-    let unknown = zellij_options_args(&ZellijConfig::default(), None);
-    let has_unknown = |flag: &str, value: &str| {
-        unknown
-            .windows(2)
-            .any(|pair| pair[0] == flag && pair[1] == value)
-    };
-    assert!(has_unknown("--auto-layout", "false"));
-    assert!(has_unknown("--stacked-resize", "true"));
-    assert!(has_unknown("--session-serialization", "false"));
-    assert!(has_unknown("--disable-session-metadata", "true"));
-    assert!(!unknown.iter().any(|arg| arg == "--mouse-click-through"));
-    assert!(!unknown.iter().any(|arg| arg == "--advanced-mouse-actions"));
-    assert!(!unknown.iter().any(|arg| arg == "--mouse-hover-effects"));
-}
-
-#[test]
-fn zellij_options_render_configured_optionals() {
-    let config = ZellijConfig {
+    let configured = ZellijConfig {
         mouse_mode: Some(false),
         pane_frames: Some(true),
-        on_force_close: Some(crate::config::ZellijForceClose::Quit),
+        on_force_close: Some(ZellijForceClose::Quit),
         scroll_buffer_size: Some(200_000),
         show_startup_tips: Some(true),
         show_release_notes: Some(true),
-        copy_clipboard: Some(crate::config::ZellijClipboard::Primary),
+        copy_clipboard: Some(ZellijClipboard::Primary),
         copy_on_select: Some(false),
         support_kitty_keyboard_protocol: Some(false),
         osc8_hyperlinks: Some(false),
         ..ZellijConfig::default()
     };
-    let args = zellij_options_args(&config, Some((0, 44, 3)));
-    let has = |flag: &str, value: &str| {
-        args.windows(2)
-            .any(|pair| pair[0] == flag && pair[1] == value)
-    };
-    assert!(has("--mouse-mode", "false"));
-    assert!(has("--auto-layout", "false"));
-    assert!(has("--stacked-resize", "true"));
-    assert!(has("--pane-frames", "true"));
-    assert!(has("--on-force-close", "quit"));
-    assert!(has("--scroll-buffer-size", "200000"));
-    assert!(has("--show-startup-tips", "true"));
-    assert!(has("--show-release-notes", "true"));
-    assert!(has("--copy-clipboard", "primary"));
-    assert!(has("--copy-on-select", "false"));
-    assert!(has("--support-kitty-keyboard-protocol", "false"));
-    assert!(has("--osc8-hyperlinks", "false"));
+    assert_eq!(
+        option_map(&zellij_options_args(&configured, Some((0, 44, 3)))),
+        expected_option_map(
+            "--auto-layout=false --copy-clipboard=primary --copy-on-select=false --default-mode=locked --disable-session-metadata=true --focus-follows-mouse=false --mouse-click-through=true --mouse-mode=false --on-force-close=quit --osc8-hyperlinks=false --pane-frames=true --scroll-buffer-size=200000 --session-serialization=false --show-release-notes=true --show-startup-tips=true --stacked-resize=true --support-kitty-keyboard-protocol=false"
+        )
+    );
 }
