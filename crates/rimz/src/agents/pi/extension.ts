@@ -28,6 +28,8 @@ const versionAtLeast = (version, floor) => {
   return true;
 };
 const hasAgentSettled = versionAtLeast(PI_VERSION, [0, 80, 4]);
+const PARENT_SESSION_ENV = "RIMZ_PI_PARENT_SESSION";
+const PRIMARY_SESSION = Symbol.for("rimz.pi.primary-session");
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const roundMaybe = (value) =>
@@ -36,20 +38,6 @@ const numberMaybe = (value) =>
   value == null || !Number.isFinite(Number(value)) ? undefined : Number(value);
 
 const sessionId = (ctx) => ctx?.sessionManager?.getSessionId?.();
-const tintinwebRecord = (id) => {
-  try {
-    return globalThis[Symbol.for("pi-subagents:manager")]?.getRecord?.(id);
-  } catch {
-    return undefined;
-  }
-};
-const tintinwebSessionId = (id) => {
-  try {
-    return tintinwebRecord(id)?.session?.sessionManager?.getSessionId?.();
-  } catch {
-    return undefined;
-  }
-};
 
 const visibleAssistantText = (message) => {
   const content = message?.content;
@@ -103,12 +91,10 @@ export default function rimz(pi) {
   const verdictBySession = new Map();
   const nameBySession = new Map();
   const messagePushBySession = new Map();
-  const runAgents = new Map();
-  const runLabels = new Map();
-  const tintinwebChildren = new Map();
-  let lastSessionId;
+  let isPrimary = false;
+  let childParentId;
+  let childStopFed = false;
   let latestWindows = [];
-  const busUnsubscribers = [];
 
   const recordUsage = (id, usage) => {
     if (!id || usage == null) return;
@@ -200,7 +186,14 @@ export default function rimz(pi) {
   const envelope = (event, ctx, fields) => {
     const usage = ctx?.getContextUsage?.();
     const id = sessionId(ctx);
-    if (id) lastSessionId = id;
+    if (id) {
+      if (isPrimary && globalThis[PRIMARY_SESSION]?.id !== id) {
+        globalThis[PRIMARY_SESSION] = { id };
+      }
+      if (isPrimary && process.env[PARENT_SESSION_ENV] !== id) {
+        process.env[PARENT_SESSION_ENV] = id;
+      }
+    }
     return {
       hook_event_name: event,
       session_id: id,
@@ -259,33 +252,29 @@ export default function rimz(pi) {
     typeof value === "string" && value.trim() ? value.trim() : undefined;
   const label = (...candidates) => candidates.map(text).find(Boolean)?.slice(0, 80);
 
-  const feedTintinwebStart = (childId, state, key) => {
-    if (state.startedFed || tintinwebChildren.get(childId) !== state) return;
-    if (state.timer) clearTimeout(state.timer);
-    state.timer = undefined;
-    state.key = key;
-    state.startedFed = true;
-    feedSubagent("subagent_started", state.parentId, undefined, {
-      subagent_id: key,
-      subagent_label: state.label,
-      subagent_source: "tintinweb-subagents",
+  const childLabel = (ctx) =>
+    label(nameBySession.get(sessionId(ctx)), process.env.PI_SUBAGENT_CHILD_AGENT);
+  const feedChildStart = (ctx) => {
+    const id = sessionId(ctx);
+    if (!childParentId || !id) return;
+    feedSubagent("subagent_started", childParentId, ctx?.sessionManager?.getCwd?.() ?? ctx?.cwd, {
+      subagent_id: id,
+      subagent_label: childLabel(ctx),
+      subagent_source: "pi-session",
     });
   };
-
-  const resolveTintinwebStart = (childId, state, attempt = 0) => {
-    if (state.startedFed || tintinwebChildren.get(childId) !== state) return;
-    const key = text(tintinwebSessionId(childId));
-    if (key || attempt >= 50) {
-      feedTintinwebStart(childId, state, key ?? childId);
-      return;
-    }
-    state.timer = setTimeout(() => resolveTintinwebStart(childId, state, attempt + 1), 100);
+  const feedChildStop = (ctx, verdict) => {
+    const id = sessionId(ctx);
+    if (!childParentId || childStopFed || !id) return;
+    childStopFed = true;
+    feedSubagent("subagent_stopped", childParentId, ctx?.sessionManager?.getCwd?.() ?? ctx?.cwd, {
+      subagent_id: id,
+      subagent_label: childLabel(ctx),
+      subagent_source: "pi-session",
+      errored: verdict?.stop_reason === "error" || verdict?.stop_reason === "aborted" ||
+        text(verdict?.error_message) != null,
+    });
   };
-
-  const nicobailonRunErrored = (data, results) =>
-    data?.state === "paused"
-      ? false
-      : data?.success === false || results.some((result) => result?.status === "failed");
 
   const messageSignature = (ctx) => {
     const id = sessionId(ctx);
@@ -329,10 +318,26 @@ export default function rimz(pi) {
 
   pi.on("session_start", (ev, ctx) => {
     hydrateSession(ctx);
+    const id = sessionId(ctx);
+    const parentId = text(globalThis[PRIMARY_SESSION]?.id) ??
+      text(process.env[PARENT_SESSION_ENV]);
+    if (!isPrimary && id && parentId && parentId !== id && !childParentId) {
+      childParentId = parentId;
+      feedChildStart(ctx);
+    }
+    if (id && (isPrimary || !globalThis[PRIMARY_SESSION] || globalThis[PRIMARY_SESSION]?.id === id)) {
+      globalThis[PRIMARY_SESSION] = { id };
+      process.env[PARENT_SESSION_ENV] = id;
+      isPrimary = true;
+    }
     feed("session_start", ctx, { reason: ev?.reason });
   });
   pi.on("before_agent_start", (ev, ctx) => {
     verdictBySession.delete(sessionId(ctx));
+    if (childParentId && childStopFed) {
+      childStopFed = false;
+      feedChildStart(ctx);
+    }
     feed("before_agent_start", ctx, { prompt: ev?.prompt });
   });
   pi.on("agent_end", (ev, ctx) => {
@@ -358,12 +363,15 @@ export default function rimz(pi) {
       // its historical agent_end boundary while new releases wait for the
       // native final-idle signal.
       feed("agent_settled", ctx, fields);
+      feedChildStop(ctx, fields);
       verdictBySession.delete(sessionId(ctx));
     }
   });
   pi.on("agent_settled", (_ev, ctx) => {
     const id = sessionId(ctx);
-    feed("agent_settled", ctx, verdictBySession.get(id) ?? {});
+    const verdict = verdictBySession.get(id) ?? {};
+    feed("agent_settled", ctx, verdict);
+    feedChildStop(ctx, verdict);
     verdictBySession.delete(id);
   });
   pi.on("turn_end", (ev, ctx) => {
@@ -414,23 +422,13 @@ export default function rimz(pi) {
     }),
   );
   pi.on("session_shutdown", (ev, ctx) => {
-    for (const unsubscribe of busUnsubscribers.splice(0)) {
-      try {
-        unsubscribe();
-      } catch {
-        // Cleanup is best-effort; shutdown must continue.
-      }
-    }
-    for (const state of tintinwebChildren.values()) {
-      if (state.timer) clearTimeout(state.timer);
-    }
-    tintinwebChildren.clear();
-    // A /reload tears down and re-registers the SAME session id; both
-    // children are fire-and-forget, so an end signal racing the re-register
-    // could hide the fresh row. Skip the end signal — the reloaded
+    // A /reload tears down and re-registers the SAME session id. The feeds are
+    // fire-and-forget, so an end signal racing the re-register could hide the
+    // fresh row. Skip the end signal — the reloaded
     // extension's session_start re-registers in place. quit/new/resume/fork
     // genuinely end this session.
     if (ev?.reason === "reload") return;
+    feedChildStop(ctx, verdictBySession.get(sessionId(ctx)) ?? {});
     const id = sessionId(ctx);
     usageBySession.delete(id);
     costBySession.delete(id);
@@ -442,121 +440,6 @@ export default function rimz(pi) {
     latestWindows = [];
     feed("session_shutdown", ctx, { reason: ev?.reason });
   });
-
-  busUnsubscribers.push(pi.events.on("subagent:async-started", (data) => {
-    const runId = text(data?.id);
-    const parentId = lastSessionId ?? text(data?.sessionId);
-    if (!runId || !parentId) return;
-    if (data?.mode === "parallel") {
-      const agents = Array.isArray(data?.agents) ? data.agents : [];
-      runAgents.set(runId, agents.length);
-      runLabels.delete(runId);
-      agents.forEach((agent, index) => {
-        const agentLabel = label(agent, "subagent");
-        feedSubagent("subagent_started", parentId, data?.cwd, {
-          subagent_id: `${runId}#${index}`,
-          subagent_label: agentLabel,
-          subagent_source: "pi-subagents",
-        });
-      });
-      return;
-    }
-
-    runAgents.delete(runId);
-    const chain = Array.isArray(data?.chain) ? data.chain.map((item) => label(item)).filter(Boolean) : [];
-    const runLabel = label(data?.mode === "chain" ? chain.join(" → ") : undefined, data?.agent);
-    if (!runLabel) return;
-    runLabels.set(runId, runLabel);
-    feedSubagent("subagent_started", parentId, data?.cwd, {
-      subagent_id: runId,
-      subagent_label: runLabel,
-      subagent_source: "pi-subagents",
-    });
-  }));
-
-  busUnsubscribers.push(pi.events.on("subagent:async-complete", (data) => {
-    const runId = text(data?.runId) ?? text(data?.id);
-    const parentId = lastSessionId ?? text(data?.sessionId);
-    if (!runId || !parentId) return;
-    const results = Array.isArray(data?.results) ? data.results : [];
-    const runErrored = nicobailonRunErrored(data, results);
-    if (data?.mode === "parallel") {
-      const byIndex = new Map();
-      results.forEach((result, fallbackIndex) => {
-        const value = result?.index;
-        const index = value == null ? fallbackIndex : Number(value);
-        if (Number.isInteger(index) && index >= 0) byIndex.set(index, result);
-      });
-      const rememberedCount = runAgents.get(runId);
-      const indexes = rememberedCount == null
-        ? [...byIndex.keys()].sort((left, right) => left - right)
-        : Array.from({ length: rememberedCount }, (_, index) => index);
-      indexes.forEach((index) => {
-        const result = byIndex.get(index);
-        feedSubagent("subagent_stopped", parentId, data?.cwd, {
-          subagent_id: `${runId}#${index}`,
-          subagent_label: label(result?.agent, data?.agents?.[index], data?.agent, "subagent"),
-          subagent_source: "pi-subagents",
-          errored: data?.state === "paused" ? false : result ? result.status === "failed" : runErrored,
-        });
-      });
-      runAgents.delete(runId);
-      runLabels.delete(runId);
-      return;
-    }
-
-    const chain = Array.isArray(data?.chain) ? data.chain.map((item) => label(item)).filter(Boolean) : [];
-    feedSubagent("subagent_stopped", parentId, data?.cwd, {
-      subagent_id: runId,
-      subagent_label: label(runLabels.get(runId), data?.mode === "chain" ? chain.join(" → ") : undefined, data?.agent, results[0]?.agent, "subagent"),
-      subagent_source: "pi-subagents",
-      errored: runErrored,
-    });
-    runAgents.delete(runId);
-    runLabels.delete(runId);
-  }));
-
-  busUnsubscribers.push(pi.events.on("subagents:started", (data) => {
-    const childId = text(data?.id);
-    const childLabel = label(
-      [label(data?.type), label(data?.description)].filter(Boolean).join(": "),
-    );
-    if (!childId || !childLabel || !lastSessionId) return;
-    const previous = tintinwebChildren.get(childId);
-    if (previous?.timer) clearTimeout(previous.timer);
-    const state = {
-      parentId: lastSessionId,
-      label: childLabel,
-      startedFed: false,
-    };
-    tintinwebChildren.set(childId, state);
-    resolveTintinwebStart(childId, state);
-  }));
-
-  for (const event of ["subagents:completed", "subagents:failed"]) {
-    busUnsubscribers.push(pi.events.on(event, (data) => {
-      const childId = text(data?.id);
-      const state = tintinwebChildren.get(childId);
-      const childLabel = state?.label ?? label(
-        [label(data?.type), label(data?.description)].filter(Boolean).join(": "),
-      );
-      const parentId = state?.parentId ?? lastSessionId;
-      if (!childId || !childLabel || !parentId) return;
-      const key = state?.key ?? text(tintinwebSessionId(childId)) ?? childId;
-      if (state && !state.startedFed) feedTintinwebStart(childId, state, key);
-      const totalTokens = numberMaybe(data?.tokens?.total);
-      feedSubagent("subagent_stopped", parentId, undefined, {
-        subagent_id: key,
-        subagent_label: childLabel,
-        subagent_source: "tintinweb-subagents",
-        errored: event === "subagents:failed",
-        ...(key === childId && totalTokens != null
-          ? { total_tokens: Math.max(0, Math.round(totalTokens)) }
-          : {}),
-      });
-      tintinwebChildren.delete(childId);
-    }));
-  }
 
   // The blocking pre-tool gate. Pi awaits this handler, so rimz returns the
   // neutral no-op immediately. The ask_user_question tool is classified as a

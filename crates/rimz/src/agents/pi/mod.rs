@@ -24,12 +24,10 @@
 //! handler pi awaits. The `@juicesharp/rpiv-ask-user-question` extension draws
 //! the `ask_user_question` questionnaire in pi's pane; RimZ records that one
 //! blocking tool as a native question and returns neutral so pi can open its
-//! UI. The managed extension also normalizes async child runs from the
-//! `pi-subagents` and `@tintinweb/pi-subagents` event buses into shared child
-//! lifecycle rows. Tintinweb children use their in-process Pi session id when
-//! its manager registry resolves it, so their own model, effort, context, and
-//! usage envelopes enrich the same nested row; its bus id remains the fallback
-//! key. Background tasks stay declared off.
+//! UI. Managed extension instances also identify child Pi sessions through
+//! RimZ-owned process-lineage markers and feed lifecycle rows keyed by the
+//! child's own session id, so its model, effort, context, and usage envelopes
+//! enrich the nested row. Background tasks stay declared off.
 
 pub(crate) mod account;
 mod ask;
@@ -172,7 +170,7 @@ const PI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "session_before_compact/session_compact",
     },
     subagents: ConcernCoverage::Wired {
-        via: "native subagent_started/subagent_stopped bus events, with tintinweb children joined to their in-process pi session envelopes by session id",
+        via: "child pi sessions self-identify through RimZ process-lineage markers and feed lifecycle keyed by their own session id",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
@@ -367,7 +365,7 @@ impl AgentAdapter for PiAdapter {
                     "cwd": "/work/project",
                     "subagent_id": "run-1#0",
                     "subagent_label": "scout",
-                    "subagent_source": "pi-subagents"
+                    "subagent_source": "pi-session"
                 }),
                 AgentHookClass::Lifecycle,
                 None,
@@ -379,7 +377,7 @@ impl AgentAdapter for PiAdapter {
                     "cwd": "/work/project",
                     "subagent_id": "run-1#0",
                     "subagent_label": "scout",
-                    "subagent_source": "pi-subagents",
+                    "subagent_source": "pi-session",
                     "errored": true,
                     "total_tokens": 1200
                 }),

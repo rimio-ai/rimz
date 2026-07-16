@@ -323,7 +323,7 @@ fn pi_bridge_payload(parent_id: &str, child_id: &str) -> serde_json::Value {
         "cwd": "/tmp/hooks-test",
         "subagent_id": child_id,
         "subagent_label": "general-purpose: inspect the bridge",
-        "subagent_source": "tintinweb-subagents",
+        "subagent_source": "pi-session",
     })
 }
 

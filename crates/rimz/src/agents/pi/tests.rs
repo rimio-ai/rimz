@@ -876,7 +876,7 @@ fn pi_observes_normalized_subagent_lifecycle() {
                 "cwd": "/work/project",
                 "subagent_id": "run-7#1",
                 "subagent_label": " reviewer ",
-                "subagent_source": "pi-subagents"
+                "subagent_source": "pi-session"
             }),
         )
         .expect("started observation");
@@ -895,7 +895,7 @@ fn pi_observes_normalized_subagent_lifecycle() {
                 "cwd": "/work/project",
                 "subagent_id": "run-7#1",
                 "subagent_label": "reviewer",
-                "subagent_source": "tintinweb-subagents",
+                "subagent_source": "pi-session",
                 "errored": true,
                 "total_tokens": 1234
             }),
@@ -1132,17 +1132,15 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains("compaction_reason"));
     assert!(EXTENSION_SOURCE.contains("compaction_will_retry"));
     assert!(EXTENSION_SOURCE.contains("has_ui: ctx?.hasUI === true"));
-    assert!(EXTENSION_SOURCE.contains("lastSessionId ?? text(data?.sessionId)"));
-    assert!(EXTENSION_SOURCE.contains(r#"Symbol.for("pi-subagents:manager")"#));
-    assert!(EXTENSION_SOURCE.contains("getRecord?.(id)"));
-    assert!(EXTENSION_SOURCE.contains("getSessionId?.()"));
-    assert!(
-        EXTENSION_SOURCE.contains("state?.key ?? text(tintinwebSessionId(childId)) ?? childId")
-    );
-    assert!(EXTENSION_SOURCE.contains("feedTintinwebStart(childId, state, key)"));
-    assert!(EXTENSION_SOURCE.contains("key === childId && totalTokens != null"));
-    assert!(EXTENSION_SOURCE.contains("busUnsubscribers.splice(0)"));
-    assert!(EXTENSION_SOURCE.contains("unsubscribe();"));
+    assert!(EXTENSION_SOURCE.contains(r#"const PARENT_SESSION_ENV = "RIMZ_PI_PARENT_SESSION""#));
+    assert!(EXTENSION_SOURCE.contains(r#"Symbol.for("rimz.pi.primary-session")"#));
+    assert!(EXTENSION_SOURCE.contains("!isPrimary && id && parentId && parentId !== id"));
+    assert!(EXTENSION_SOURCE.contains("process.env.PI_SUBAGENT_CHILD_AGENT"));
+    assert!(EXTENSION_SOURCE.contains("feedChildStart(ctx)"));
+    assert!(EXTENSION_SOURCE.contains("feedChildStop(ctx, verdict)"));
+    assert!(EXTENSION_SOURCE.contains(r#"subagent_source: "pi-session""#));
+    assert!(!EXTENSION_SOURCE.contains("pi.events.on"));
+    assert!(!EXTENSION_SOURCE.contains("pi-subagents:manager"));
     assert!(EXTENSION_SOURCE.contains("tool_details:"));
     assert!(EXTENSION_SOURCE.contains("ev?.result?.details"));
     assert!(
@@ -1157,19 +1155,6 @@ fn extension_source_wires_every_event() {
             _ => EXTENSION_SOURCE.contains(&format!("pi.on(\"{event}\"")),
         };
         assert!(registered, "extension registers {event}",);
-    }
-    for event in [
-        "subagent:async-started",
-        "subagent:async-complete",
-        "subagents:started",
-        "subagents:completed",
-        "subagents:failed",
-    ] {
-        assert!(
-            EXTENSION_SOURCE.contains(&format!("pi.events.on(\"{event}\""))
-                || EXTENSION_SOURCE.contains(&format!("\"{event}\"")),
-            "extension subscribes to {event}",
-        );
     }
     assert!(EXTENSION_SOURCE.contains("block: true"));
     assert!(EXTENSION_SOURCE.contains(r#"ev?.reason === "reload""#));
