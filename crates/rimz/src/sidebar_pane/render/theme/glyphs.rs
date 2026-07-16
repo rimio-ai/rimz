@@ -139,6 +139,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::WorktreePrOpen => "⊙",
         GlyphRole::WorktreePrClosed => "✕",
         GlyphRole::WorktreeReconciling => "⟳",
+        GlyphRole::WorktreeExpand => "▸",
         GlyphRole::WorktreeDotted => "┄",
         GlyphRole::ChannelHash => "#",
         GlyphRole::CardSubagents => "⧉",
@@ -246,6 +247,7 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         GlyphRole::WorktreeAhead
         | GlyphRole::WorktreeBehind
         | GlyphRole::WorktreeTrunkEqual
+        | GlyphRole::WorktreeExpand
         | GlyphRole::WorktreeDotted => return None,
         // agent card.
         GlyphRole::CardSubagents => "\u{ed50}", // nf-fa-gitter
@@ -342,6 +344,7 @@ mod tests {
             GlyphRole::WorktreeAhead,
             GlyphRole::WorktreeBehind,
             GlyphRole::WorktreeTrunkEqual,
+            GlyphRole::WorktreeExpand,
             GlyphRole::WorktreeDotted,
             GlyphRole::CardParkedBg,
             GlyphRole::ChromeAlert,
@@ -416,6 +419,12 @@ mod tests {
     fn channel_hash_has_unicode_and_nerd_font_glyphs() {
         assert_eq!(unicode_glyph(GlyphRole::ChannelHash), "#");
         assert_eq!(nerd_font_glyph(GlyphRole::ChannelHash), Some("\u{f292}"));
+    }
+
+    #[test]
+    fn worktree_expand_keeps_its_unicode_chevron_in_both_sets() {
+        assert_eq!(unicode_glyph(GlyphRole::WorktreeExpand), "▸");
+        assert_eq!(nerd_font_glyph(GlyphRole::WorktreeExpand), None);
     }
 
     #[test]

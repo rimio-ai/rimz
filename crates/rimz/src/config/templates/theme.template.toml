@@ -196,6 +196,7 @@
 ## pr_open = "⊙"
 ## pr_closed = "✕"
 ## reconciling = "⟳"
+## expand = "▸"
 ## dotted = "┄"
 
 [theme.glyphs.unicode.card]
@@ -296,6 +297,7 @@
 ## pr_open = ""
 ## pr_closed = ""
 ## reconciling = ""
+## expand = "▸"
 ## dotted = "┄"
 
 [theme.glyphs.nerd_font.card]

@@ -1,8 +1,8 @@
 //! Worktree group composition: the bold pod header with its linked-PR identity
 //! and right-pinned git story, the dim `external` divider, and the row roster
 //! with its parallel hit-test map entries. Finished pods collapse hidden agents
-//! into a status-and-soft-brand-name receipt with the accepted work's cost
-//! pinned right.
+//! into a two-line receipt: an expandable team/member roster, then the accepted
+//! work's token, time, and cost totals.
 
 use std::collections::HashSet;
 
@@ -15,9 +15,12 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::fmt::dollars2;
+use crate::sidebar_pane::render::fmt::{
+    activity_short, age_secs, dollars2, elapsed_label, tokens_int,
+};
 use crate::sidebar_pane::render::labels::{
-    branch_delta_spans, diff_spans, status_glyph, status_rest_style, trunk_glyph_spans,
+    TokenColumns, TokenDetail, activity_age_style, branch_delta_spans, diff_spans, elapsed_glyph,
+    status_glyph, status_rest_style, token_breakdown_spans, token_total_glyph, trunk_glyph_spans,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -25,18 +28,19 @@ use crate::sidebar_pane::render::{HitRegion, HitTarget};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
 use super::agent_card::{brand_tone, row_lines, session_cost_usd};
-use super::{Gutter, RowCtx, content_width, with_gutter};
+use super::{Gutter, RowCtx, content_width, pin_right, with_gutter};
 
 /// Compose one worktree group's lines, appending to `lines`, and tag each
 /// content line in the parallel `map` with the visible row index it belongs to
-/// (or `None` for the group header and more/less toggle line). `map` stays
+/// (or `None` for the group header and toggle/receipt lines). `map` stays
 /// exactly as long as `lines`, so the hit-test can look a screen line up to a
 /// row with no separate geometry. The row index captured for a row's lines is
 /// the value *before* `row_index` advances, matching `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
 /// expansion, and make-up filters. The caller skips a group the filter empties;
-/// a finished pod the collapse empties still renders its header and toggle. The
-/// more/less line is filter-suppressed because a narrowed body is already uncapped.
+/// a finished pod the collapse empties still renders its header and two-line
+/// receipt when totals exist. The live more/less line is filter-suppressed
+/// because a narrowed body is already uncapped.
 pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     ctx: &RowCtx<'_>,
     roster: &VisibleRoster<'_>,
@@ -102,7 +106,17 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         };
         lines.push(with_gutter(ctx.theme, toggle, lane, None, ctx.width));
         map.push(None);
-    } else if natural_hidden > 0 && visible_group.expanded() {
+        if group.finished
+            && let Some(totals) = finished_totals_line(ctx, group)
+        {
+            more_hits.push(HitRegion::whole_line(
+                lines.len(),
+                HitTarget::ToggleGroup(group.key.clone()),
+            ));
+            lines.push(with_gutter(ctx.theme, totals, lane, None, ctx.width));
+            map.push(None);
+        }
+    } else if natural_hidden > 0 && visible_group.expanded() && !group.finished {
         more_hits.push(HitRegion::whole_line(
             lines.len(),
             HitTarget::ToggleGroup(group.key.clone()),
@@ -140,16 +154,24 @@ fn finished_roster_line(
         .collect::<Vec<_>>();
     let process_count = hidden_rows.len().saturating_sub(members.len());
 
-    let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
-    let cost_span = (cost >= 0.005)
-        .then(|| Span::styled(dollars2(cost), ctx.theme.money_style(Modifier::empty())));
-    let cost_width = cost_span.as_ref().map(Span::width).unwrap_or_default();
-    let budget = content_width(ctx.width)
-        .saturating_sub(2)
-        .saturating_sub(cost_width + usize::from(cost_span.is_some()));
-
-    let mut spans = vec![Span::raw("  ")];
-    let mut roster_width = 0;
+    let team = finished_team(group);
+    let mut spans = vec![
+        Span::raw("  "),
+        Span::styled(
+            ctx.theme.glyph(GlyphRole::WorktreeExpand).to_owned(),
+            ctx.theme.muted(),
+        ),
+        Span::raw(" "),
+    ];
+    if let Some(team) = team {
+        spans.push(Span::styled(
+            team.to_owned(),
+            ctx.theme.muted().add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("  "));
+    }
+    let budget = content_width(ctx.width);
+    let mut roster_width = spans_width(&spans);
     let mut placed = 0;
     for (row, status) in &members {
         let glyph = status_glyph(ctx.theme, *status);
@@ -189,14 +211,117 @@ fn finished_roster_line(
         }
     }
 
-    if let Some(cost_span) = cost_span {
-        let padding = content_width(ctx.width)
-            .saturating_sub(spans_width(&spans) + cost_width)
-            .max(1);
-        spans.push(Span::raw(" ".repeat(padding)));
-        spans.push(cost_span);
-    }
     Line::from(spans)
+}
+
+fn finished_team(group: &SidebarWorktreeGroup) -> Option<&str> {
+    let mut agents = group.rows.iter().filter_map(|row| row.as_agent());
+    let team = agents
+        .next()?
+        .team
+        .as_deref()
+        .filter(|team| !team.is_empty())?;
+    agents
+        .all(|agent| agent.team.as_deref() == Some(team))
+        .then_some(team)
+}
+
+fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Option<Line<'static>> {
+    let agents = group
+        .rows
+        .iter()
+        .filter_map(|row| row.as_agent().map(|agent| (row, agent)))
+        .collect::<Vec<_>>();
+    let max_last_activity = agents.iter().map(|(row, _)| row.last_activity).max()?;
+    let (total, input, output, cache_read) = agents.iter().fold(
+        (0_u64, 0_u64, 0_u64, 0_u64),
+        |(total, input, output, cache_read), (_, agent)| {
+            (
+                total.saturating_add(agent.total_tokens.unwrap_or(0)),
+                input.saturating_add(agent.fresh_input_tokens.unwrap_or(0)),
+                output.saturating_add(agent.output_tokens.unwrap_or(0)),
+                cache_read.saturating_add(agent.cache_read_input_tokens.unwrap_or(0)),
+            )
+        },
+    );
+
+    let duration = agents
+        .iter()
+        .filter_map(|(_, agent)| agent.registered_at)
+        .min()
+        .map(|registered_at| {
+            let seconds = max_last_activity
+                .duration_since(registered_at)
+                .as_secs()
+                .max(0);
+            vec![Span::styled(elapsed_label(seconds), ctx.theme.muted())]
+        });
+    let ago = activity_short(max_last_activity, ctx.now).map(|label| {
+        let seconds = age_secs(max_last_activity, ctx.now);
+        vec![Span::styled(
+            format!("{} {label}", elapsed_glyph(ctx.theme, seconds)),
+            activity_age_style(ctx.theme, seconds),
+        )]
+    });
+    let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
+    let cost = (cost >= 0.005).then(|| {
+        vec![Span::styled(
+            dollars2(cost),
+            ctx.theme.money_style(Modifier::empty()),
+        )]
+    });
+    let mut right = Vec::new();
+    for cluster in [duration, ago, cost].into_iter().flatten() {
+        if !right.is_empty() {
+            right.push(Span::raw("  "));
+        }
+        right.extend(cluster);
+    }
+    if total == 0 && right.is_empty() {
+        return None;
+    }
+
+    let width = content_width(ctx.width);
+    let left_budget = width
+        .saturating_sub(spans_width(&right) + usize::from(!right.is_empty()))
+        .saturating_sub(2);
+    let mut left = vec![Span::raw("  ")];
+    if total > 0 {
+        let full = token_breakdown_spans(
+            ctx.theme,
+            total,
+            input,
+            output,
+            cache_read,
+            tokens_int,
+            TokenDetail::Full,
+            &TokenColumns::default(),
+        );
+        let summary = token_breakdown_spans(
+            ctx.theme,
+            total,
+            input,
+            output,
+            cache_read,
+            tokens_int,
+            TokenDetail::Summary,
+            &TokenColumns::default(),
+        );
+        if spans_width(&full) <= left_budget {
+            left.extend(full);
+        } else if spans_width(&summary) <= left_budget {
+            left.extend(summary);
+        } else {
+            left.extend([
+                Span::styled(
+                    token_total_glyph(ctx.theme),
+                    ctx.theme.styled(Component::TokenTotal, Modifier::empty()),
+                ),
+                Span::styled(format!(" {}", tokens_int(total)), ctx.theme.body()),
+            ]);
+        }
+    }
+    Some(pin_right(left, right, width))
 }
 
 #[cfg(test)]

@@ -300,8 +300,9 @@ pub struct AgentCard {
     /// spend attribution, and subagent nesting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
-    /// The launch team copied from the rollup. Rendering does not use it yet;
-    /// row sorting treats it as the cohort key ahead of `launch_group`.
+    /// The launch team copied from the rollup. Row sorting treats it as the
+    /// cohort key ahead of `launch_group`; a finished pod receipt leads with
+    /// the name when every stamped member shares it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     /// Inline multi-agent launch cohort copied from the rollup.

@@ -99,6 +99,7 @@ glyph_roles! {
         WorktreePrOpen => "pr_open",
         WorktreePrClosed => "pr_closed",
         WorktreeReconciling => "reconciling",
+        WorktreeExpand => "expand",
         WorktreeDotted => "dotted",
         ChannelHash => "channel_hash",
     }
