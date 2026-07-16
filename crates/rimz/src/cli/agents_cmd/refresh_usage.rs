@@ -24,7 +24,7 @@ use crate::cli::GlobalFlags;
 #[derive(Debug, Args)]
 pub(super) struct RefreshUsageArgs {
     /// The provider kind whose account usage is refreshed (`claude`, `codex`,
-    /// `kimi`, `pi`, `opencode`, `qwen`).
+    /// `copilot`, `antigravity`, `kimi`, `pi`, `opencode`, `qwen`).
     #[arg(long)]
     kind: String,
     /// Workspace whose runtime cache the account usage is written into.
