@@ -2,6 +2,132 @@ use super::*;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
+fn copilot_panel() -> crate::SidebarProviderPanel {
+    let descriptor = crate::agents::descriptor_by_kind("copilot").expect("copilot descriptor");
+    let emblem = crate::agents::emblem_for("copilot");
+    let mut panel = provider_panel(
+        "copilot",
+        descriptor.display_name,
+        descriptor.brand.color,
+        false,
+        false,
+        None,
+    );
+    panel.art = emblem.lines;
+    panel.art_tints = emblem.tints;
+    panel
+}
+
+#[test]
+fn copilot_crest_rides_tabbed_header_without_growing_the_block() {
+    let theme = Theme::fixed(false);
+    let copilot = copilot_panel();
+    let claude = provider_panel("claude", "Claude", 173, false, false, None);
+    let (copilot_lines, _) = provider_panel_lines(
+        &theme,
+        &[copilot],
+        None,
+        true,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let (claude_lines, _) = provider_panel_lines(
+        &theme,
+        &[claude],
+        None,
+        true,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let texts = line_texts(&copilot_lines);
+    let header = texts
+        .iter()
+        .find(|line| line.contains("v2.1.158"))
+        .expect("tabbed provider header");
+
+    assert!(header.contains("╭─╮╭─╮"), "{header}");
+    assert_eq!(copilot_lines.len(), claude_lines.len());
+}
+
+#[test]
+fn copilot_crest_uses_wide_stacked_spacer() {
+    let theme = Theme::fixed(false);
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[copilot_panel()],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let texts = line_texts(&lines);
+    let crest = texts
+        .iter()
+        .position(|line| line.contains("╭─╮╭─╮"))
+        .expect("copilot crest");
+
+    assert!(
+        texts[crest + 1].starts_with("╰─╯╰─╯"),
+        "{}",
+        texts.join("\n")
+    );
+}
+
+#[test]
+fn copilot_art_spans_use_catalog_tints_over_the_brand_tone() {
+    let theme = Theme::fixed(false);
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[copilot_panel()],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let art_spans = lines
+        .iter()
+        .flat_map(|line| &line.spans)
+        .collect::<Vec<_>>();
+    let goggle = art_spans
+        .iter()
+        .find(|span| span.content.contains("╭─╮╭─╮"))
+        .expect("goggle span");
+    let eyes = art_spans
+        .iter()
+        .find(|span| span.content.as_ref() == "▘▝")
+        .expect("eye span");
+    let head = art_spans
+        .iter()
+        .find(|span| span.content.contains('█'))
+        .expect("head span");
+
+    assert_eq!(goggle.style.fg, Some(Color::Indexed(33)));
+    assert_eq!(eyes.style.fg, Some(Color::Indexed(84)));
+    assert_eq!(head.style.fg, Some(Color::Indexed(140)));
+}
+
+#[test]
+fn copilot_art_stays_out_of_narrow_headers() {
+    let theme = Theme::fixed(false);
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[copilot_panel()],
+        None,
+        true,
+        33,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+
+    assert!(!rendered.contains("╭─╮╭─╮"), "{rendered}");
+    assert!(!rendered.contains("╰─╯╰─╯"), "{rendered}");
+}
+
 /// The pinned per-provider dashboard, tabbed: the tab rail names every account
 /// (the active tab a brand-filled chip set into the top hairline), and only the
 /// active provider's block paints — here the selection-derived Claude tab, a metered block (the

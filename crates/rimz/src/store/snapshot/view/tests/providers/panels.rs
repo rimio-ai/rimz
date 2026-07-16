@@ -137,6 +137,45 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
 }
 
 #[test]
+fn copilot_catalog_tints_survive_color_overrides_but_not_art_overrides() {
+    let panel_for = |mut snapshot: SidebarSnapshot| {
+        snapshot =
+            snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+        snapshot
+            .providers
+            .into_iter()
+            .next()
+            .expect("copilot panel")
+    };
+    let room_with_copilot = || room(vec![agent("copilot", "gh-1", AgentStatus::Idle, 10)]);
+
+    let panel = panel_for(room_with_copilot());
+    assert!(!panel.art_tints.is_empty());
+
+    let mut color_override = room_with_copilot();
+    color_override.theme.providers.insert(
+        "copilot".to_owned(),
+        crate::config::ThemeProviderStyle {
+            color: Some(crate::config::ThemeColor::Indexed(99)),
+            ..Default::default()
+        },
+    );
+    assert!(!panel_for(color_override).art_tints.is_empty());
+
+    let mut art_override = room_with_copilot();
+    art_override.theme.providers.insert(
+        "copilot".to_owned(),
+        crate::config::ThemeProviderStyle {
+            ascii_art: Some("custom\nart".to_owned()),
+            ..Default::default()
+        },
+    );
+    let panel = panel_for(art_override);
+    assert_eq!(panel.art, ["custom", "art"]);
+    assert!(panel.art_tints.is_empty());
+}
+
+#[test]
 fn provider_list_filters_and_orders_dashboard_panels() {
     for case in [
         (

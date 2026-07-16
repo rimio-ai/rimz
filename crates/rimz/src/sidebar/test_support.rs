@@ -66,6 +66,7 @@ pub(crate) fn provider_panel(
         account_scope: Default::default(),
         product_name: kind.to_owned(),
         art: Vec::new(),
+        art_tints: Vec::new(),
         color: 0,
         color_rgb: None,
         color_role: None,

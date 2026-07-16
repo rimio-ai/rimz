@@ -83,7 +83,7 @@ pub use descriptor::{
     RemoteControlCapability, SamePaneSessionPolicy, SessionCommand, StaticPresetMatcher, ThreadKey,
     ToolClassification, program_names_kind,
 };
-pub use emblems::{emblem_lines, fallback_emblem};
+pub use emblems::{Emblem, EmblemTint, emblem_for};
 pub(crate) use identity::{
     RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };

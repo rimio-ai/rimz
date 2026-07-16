@@ -141,6 +141,7 @@ fn provider(kind: &str) -> crate::SidebarProviderPanel {
         account_scope: Default::default(),
         product_name: kind.to_owned(),
         art: Vec::new(),
+        art_tints: Vec::new(),
         color: 7,
         color_rgb: None,
         color_role: None,

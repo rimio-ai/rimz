@@ -134,11 +134,14 @@ impl SidebarSnapshot {
                 .and_then(|style| style.product_name.clone())
                 .filter(|name| !name.is_empty())
                 .unwrap_or(defaults.product_name);
-            let art = style
+            let art_override = style
                 .and_then(|style| style.ascii_art.as_deref())
                 .filter(|art| !art.is_empty())
-                .map(|art| art.lines().map(ToOwned::to_owned).collect())
-                .unwrap_or(defaults.art);
+                .map(|art| art.lines().map(ToOwned::to_owned).collect());
+            let (art, art_tints) = match art_override {
+                Some(art) => (art, Vec::new()),
+                None => (defaults.art, defaults.art_tints),
+            };
             let (color, color_rgb, color_role) = match style.and_then(|style| style.color) {
                 Some(ThemeColor::Role(role)) => (defaults.color, None, Some(role)),
                 Some(color @ ThemeColor::Indexed(_)) => (color.indexed(), None, None),
@@ -169,6 +172,7 @@ impl SidebarSnapshot {
                     account_scope,
                     product_name,
                     art,
+                    art_tints,
                     color,
                     color_rgb,
                     color_role,
@@ -402,32 +406,26 @@ pub(crate) fn sort_windows(windows: &mut [RateLimitWindow]) {
 struct ProviderStyleDefaults {
     product_name: String,
     art: Vec<String>,
+    art_tints: Vec<crate::agents::EmblemTint>,
     color: u8,
     color_rgb: Option<(u8, u8, u8)>,
 }
 
 fn default_provider_style(kind: &str) -> ProviderStyleDefaults {
+    let emblem = crate::agents::emblem_for(kind);
     if let Some(descriptor) = crate::agents::descriptor_by_kind(kind) {
         return ProviderStyleDefaults {
             product_name: descriptor.display_name.to_owned(),
-            art: descriptor
-                .brand
-                .emblem
-                .map(|emblem| {
-                    emblem
-                        .trim_matches('\n')
-                        .lines()
-                        .map(ToOwned::to_owned)
-                        .collect()
-                })
-                .unwrap_or_else(|| crate::agents::emblem_lines(kind)),
+            art: emblem.lines,
+            art_tints: emblem.tints,
             color: descriptor.brand.color,
             color_rgb: Some(descriptor.brand.color_rgb),
         };
     }
     ProviderStyleDefaults {
         product_name: provider_title_case(kind),
-        art: crate::agents::fallback_emblem(),
+        art: emblem.lines,
+        art_tints: emblem.tints,
         color: 244,
         color_rgb: None,
     }

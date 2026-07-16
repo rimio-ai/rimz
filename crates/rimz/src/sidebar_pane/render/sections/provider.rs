@@ -28,6 +28,11 @@ use super::{pin_right, trim_spans_to_width};
 /// Dropped (bars run full-width) below [`PROVIDER_ART_MIN_WIDTH`].
 const PROVIDER_ART_WIDTH: usize = 9;
 
+/// Emblem rows the body art column holds; an earlier row (the crest) rides the
+/// chrome line directly above the body — the header when it reserves the art
+/// column, the wide spacer otherwise — so four-row art stays height-neutral.
+const PROVIDER_ART_BODY_ROWS: usize = 3;
+
 /// Narrowest sidebar that still affords the art column beside a bar; below it
 /// the emblem is dropped so the bar keeps a legible length.
 const PROVIDER_ART_MIN_WIDTH: usize = 34;
@@ -561,7 +566,11 @@ fn single_block_lines(
     )];
     if layout == ProviderLayout::Wide {
         // Wide stacked blocks keep the historical identity/body breathing room.
-        lines.push(Line::from(""));
+        let crest = art_crest_row(panel)
+            .filter(|_| width >= PROVIDER_ART_MIN_WIDTH)
+            .map(|row| pad_line_to(Line::from(art_row_spans(theme, panel, row)), width))
+            .unwrap_or_else(|| Line::from(""));
+        lines.push(crest);
     }
     lines.extend(provider_body_lines(theme, panel, width, layout, zones, now));
     lines
@@ -916,7 +925,12 @@ fn provider_header_left(
     let mut left = Vec::new();
     let art_fits = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
     if (tabbed || inline_art) && art_fits {
-        left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
+        if let Some(row) = art_crest_row(panel) {
+            left.extend(art_row_spans(theme, panel, row));
+            left.push(Span::raw(" "));
+        } else {
+            left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
+        }
     }
     let version = panel
         .version
@@ -964,32 +978,22 @@ fn provider_body_lines(
     let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
     let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
     let bar_region = width.saturating_sub(art_column);
-    let art_start = 0;
+    let art_start = panel.art.len().saturating_sub(PROVIDER_ART_BODY_ROWS);
 
     let mut rights = provider_stats_rows(theme, panel, bar_region, layout);
     rights.extend(provider_bar_rows(theme, panel, bar_region, zones, now));
 
-    let art = if show_art {
-        panel.art.get(art_start..).unwrap_or(&[])
+    let art_rows = if show_art {
+        panel.art.len().saturating_sub(art_start)
     } else {
-        &[]
+        0
     };
-    let rows = art.len().max(rights.len());
+    let rows = art_rows.max(rights.len());
     let mut lines = Vec::with_capacity(rows);
     for index in 0..rows {
         let mut spans: Vec<Span<'static>> = Vec::new();
         if show_art {
-            let art_line = art.get(index).map(String::as_str).unwrap_or("");
-            spans.extend(
-                pad_line_to(
-                    Line::from(Span::styled(
-                        clip(art_line, PROVIDER_ART_WIDTH),
-                        theme.style(theme.brand_tone(panel), Modifier::empty()),
-                    )),
-                    PROVIDER_ART_WIDTH,
-                )
-                .spans,
-            );
+            spans.extend(art_row_spans(theme, panel, art_start.saturating_add(index)));
             spans.push(Span::raw(" "));
         }
         if let Some(right) = rights.get(index) {
@@ -998,6 +1002,60 @@ fn provider_body_lines(
         lines.push(Line::from(trim_spans_to_width(spans, width)));
     }
     lines
+}
+
+fn art_crest_row(panel: &SidebarProviderPanel) -> Option<usize> {
+    panel
+        .art
+        .len()
+        .saturating_sub(PROVIDER_ART_BODY_ROWS)
+        .checked_sub(1)
+}
+
+fn art_row_spans(theme: &Theme, panel: &SidebarProviderPanel, row: usize) -> Vec<Span<'static>> {
+    let clipped = clip(
+        panel.art.get(row).map(String::as_str).unwrap_or(""),
+        PROVIDER_ART_WIDTH,
+    );
+    let chars: Vec<char> = clipped.chars().collect();
+    let brand = theme.style(theme.brand_tone(panel), Modifier::empty());
+    let mut row_tints: Vec<_> = panel
+        .art_tints
+        .iter()
+        .filter(|tint| tint.row == row && tint.len > 0)
+        .collect();
+    row_tints.sort_by_key(|tint| tint.start);
+
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    for tint in row_tints {
+        let start = tint.start.max(cursor).min(chars.len());
+        let end = tint.start.saturating_add(tint.len).min(chars.len());
+        if start >= end {
+            continue;
+        }
+        if cursor < start {
+            spans.push(Span::styled(
+                chars[cursor..start].iter().collect::<String>(),
+                brand,
+            ));
+        }
+        spans.push(Span::styled(
+            chars[start..end].iter().collect::<String>(),
+            theme.style(
+                theme.brand_rgb_tone(tint.color, Some(tint.color_rgb)),
+                Modifier::empty(),
+            ),
+        ));
+        cursor = end;
+    }
+    if cursor < chars.len() {
+        spans.push(Span::styled(
+            chars[cursor..].iter().collect::<String>(),
+            brand,
+        ));
+    }
+    pad_line_to(Line::from(spans), PROVIDER_ART_WIDTH).spans
 }
 
 fn provider_stats_rows(

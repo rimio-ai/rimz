@@ -494,6 +494,7 @@ fn provider_panel(
             "▝▜█████▛▘".to_owned(),
             "  ▘▘ ▝▝".to_owned(),
         ],
+        art_tints: Vec::new(),
         color,
         color_rgb: None,
         color_role: None,

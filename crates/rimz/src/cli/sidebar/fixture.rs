@@ -2163,37 +2163,23 @@ fn provider_panel(
             ..Default::default()
         })
         .collect();
-    let (product_name, art, color, color_rgb) =
+    let emblem = rimz::agents::emblem_for(kind);
+    let (product_name, color, color_rgb) =
         if let Some(descriptor) = rimz::agents::descriptor_by_kind(kind) {
             (
                 descriptor.display_name.to_owned(),
-                descriptor
-                    .brand
-                    .emblem
-                    .map(|emblem| {
-                        emblem
-                            .trim_matches('\n')
-                            .lines()
-                            .map(ToOwned::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_else(|| rimz::agents::emblem_lines(kind)),
                 descriptor.brand.color,
                 Some(descriptor.brand.color_rgb),
             )
         } else {
-            (
-                provider_title_case(kind),
-                rimz::agents::fallback_emblem(),
-                244,
-                None,
-            )
+            (provider_title_case(kind), 244, None)
         };
     rimz::SidebarProviderPanel {
         kind: kind.to_owned(),
         account_scope: Default::default(),
         product_name,
-        art,
+        art: emblem.lines,
+        art_tints: emblem.tints,
         color,
         color_rgb,
         color_role: None,

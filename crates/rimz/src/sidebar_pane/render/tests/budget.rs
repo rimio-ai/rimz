@@ -106,6 +106,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         account_scope: Default::default(),
         product_name: format!("Provider {index}"),
         art: vec!["▐███▌".to_owned(), "▝▜█▛▘".to_owned(), " ▘▝ ".to_owned()],
+        art_tints: Vec::new(),
         color: 100 + index as u8,
         color_rgb: None,
         color_role: None,

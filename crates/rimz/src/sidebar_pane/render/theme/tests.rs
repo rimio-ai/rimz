@@ -304,6 +304,7 @@ fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
         account_scope: Default::default(),
         product_name: "Claude".to_owned(),
         art: Vec::new(),
+        art_tints: Vec::new(),
         color: 173,
         color_rgb: Some((0xd9, 0x77, 0x57)),
         version: None,

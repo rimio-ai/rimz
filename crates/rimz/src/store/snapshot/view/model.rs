@@ -42,6 +42,9 @@ pub struct SidebarProviderPanel {
     pub product_name: String,
     /// Multi-line ASCII emblem, painted brand-colored at the block's left.
     pub art: Vec<String>,
+    /// Tinted emblem runs painted over the brand tone; empty for one-tone art.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub art_tints: Vec<crate::agents::EmblemTint>,
     /// 256-color index for the emblem.
     pub color: u8,
     /// Truecolor brand tone for renderers using RGB depth. Older snapshots may

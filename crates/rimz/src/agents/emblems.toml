@@ -51,12 +51,6 @@ droid = """
  ▝▀▀▀▀▀▘
 """
 
-copilot = """
- ▗█████▖
-▐█ ▘ ▝ █▌
-  ▔▔▔▔▔
-"""
-
 kiro = """
  ▗▛▀▀▀▜▖
 ▐█ ▘ ▘ █▌
@@ -116,3 +110,20 @@ fallback = [
  ▝▀▀▀▀▀▘
 """
 ]
+
+[copilot]
+art = """
+╭─╮╭─╮
+╰─╯╰─╯
+█ ▘▝ █
+ ▔▔▔▔
+"""
+tint = """
+gggggg
+gggggg
+  ee
+"""
+
+[copilot.tints]
+g = { rgb = "#2f94ff", indexed = 33 }
+e = { rgb = "#60ed83", indexed = 84 }
