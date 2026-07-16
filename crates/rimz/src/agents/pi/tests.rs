@@ -1,7 +1,9 @@
 use super::*;
 
 use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
-use crate::agents::{AgentErr, AgentHookClass, AgentStatus};
+use crate::agents::{AgentErr, AgentHookClass, AgentStatus, AnswerStep, AskReply};
+use crate::mux::NamedKey;
+use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 use serde_json::json;
 
 // Capability and coverage-table honesty is cross-checked against behavior for
@@ -53,6 +55,343 @@ fn pi_activity_filter_excludes_the_blocking_gate_and_launch_commands_build() {
             "review this".to_owned(),
         ])
     );
+}
+
+#[test]
+fn pi_question_detail_normalizes_the_rpiv_schema() {
+    let questions = PiAdapter
+        .ask_question_detail(
+            "tool_call",
+            &json!({
+                "tool_name": "ask_user_question",
+                "tool_input": {
+                    "questions": [
+                        {
+                            "question": "  Which route?  ",
+                            "header": "Route",
+                            "options": [
+                                {
+                                    "label": "  Safe  ",
+                                    "description": "  Stage the rollout  ",
+                                    "preview": "## Staged"
+                                },
+                                {
+                                    "label": "Fast",
+                                    "description": "   ",
+                                    "preview": ""
+                                },
+                                { "label": "  ", "description": "dropped" }
+                            ],
+                            "multiSelect": true
+                        },
+                        { "question": "  ", "options": [] }
+                    ]
+                }
+            }),
+        )
+        .expect("question detail");
+    assert_eq!(
+        questions,
+        vec![AskQuestion {
+            question: "Which route?".to_owned(),
+            options: vec![
+                AskOption {
+                    label: "Safe".to_owned(),
+                    description: Some("Stage the rollout".to_owned()),
+                    caution: None,
+                },
+                AskOption::from("Fast".to_owned()),
+            ],
+            multi_select: true,
+            has_option_previews: true,
+        }]
+    );
+
+    for payload in [
+        json!({ "tool_name": "bash", "tool_input": {} }),
+        json!({ "tool_name": "ask_user_question", "tool_input": { "questions": "bad" } }),
+        json!({
+            "tool_name": "ask_user_question",
+            "tool_input": { "questions": [{ "question": " ", "options": [] }] }
+        }),
+        json!({
+            "tool_name": "ask_user_question",
+            "has_ui": false,
+            "tool_input": {
+                "questions": [{ "question": "Hidden?", "options": [] }]
+            }
+        }),
+    ] {
+        assert_eq!(PiAdapter.ask_question_detail("tool_call", &payload), None);
+    }
+}
+
+#[test]
+fn pi_native_answer_detail_maps_rpiv_results_and_ignores_cancellation() {
+    let answers = PiAdapter
+        .native_ask_answer(
+            "tool_execution_end",
+            &json!({
+                "tool_name": "ask_user_question",
+                "tool_details": {
+                    "answers": [
+                        {
+                            "questionIndex": 0,
+                            "question": "  Route?  ",
+                            "kind": "option",
+                            "answer": "  Safe  ",
+                            "notes": "  gradual  "
+                        },
+                        {
+                            "questionIndex": 1,
+                            "question": "Name?",
+                            "kind": "custom",
+                            "answer": "  Canary  "
+                        },
+                        {
+                            "questionIndex": 2,
+                            "question": "Discuss?",
+                            "kind": "chat",
+                            "answer": "localized label"
+                        },
+                        {
+                            "questionIndex": 3,
+                            "question": "Checks?",
+                            "kind": "multi",
+                            "answer": null,
+                            "selected": ["  Unit  ", "Integration"]
+                        },
+                        {
+                            "questionIndex": 4,
+                            "question": "Skipped?",
+                            "kind": "custom",
+                            "answer": null
+                        }
+                    ],
+                    "cancelled": false
+                }
+            }),
+        )
+        .expect("answer detail");
+    assert_eq!(
+        answers,
+        vec![
+            AskAnswer {
+                question: Some("Route?".to_owned()),
+                chosen: vec!["Safe".to_owned()],
+                note: Some("gradual".to_owned()),
+            },
+            AskAnswer {
+                question: Some("Name?".to_owned()),
+                chosen: vec!["Canary".to_owned()],
+                note: None,
+            },
+            AskAnswer {
+                question: Some("Discuss?".to_owned()),
+                chosen: vec!["Chat about this".to_owned()],
+                note: None,
+            },
+            AskAnswer {
+                question: Some("Checks?".to_owned()),
+                chosen: vec!["Unit".to_owned(), "Integration".to_owned()],
+                note: None,
+            },
+        ]
+    );
+
+    assert_eq!(
+        PiAdapter.native_ask_answer(
+            "tool_execution_end",
+            &json!({
+                "tool_name": "ask_user_question",
+                "tool_details": {
+                    "answers": [{
+                        "question": "Partially answered?",
+                        "kind": "option",
+                        "answer": "Yes"
+                    }],
+                    "cancelled": true
+                }
+            }),
+        ),
+        None,
+        "cancelling after a partial answer must not record that answer"
+    );
+    assert_eq!(
+        PiAdapter.native_ask_answer(
+            "tool_execution_end",
+            &json!({
+                "tool_name": "ask_user_question",
+                "tool_details": { "answers": [], "cancelled": true, "error": "no_ui" }
+            }),
+        ),
+        None
+    );
+}
+
+#[test]
+fn pi_answer_plan_drives_single_pick_preview_and_free_text() {
+    let plain = ask_question(3, false, false);
+    assert_eq!(
+        PiAdapter
+            .answer_plan(
+                AskKind::Question,
+                std::slice::from_ref(&plain),
+                &[AskReply {
+                    picks: vec![2],
+                    text: None,
+                }],
+            )
+            .unwrap(),
+        vec![
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Enter),
+        ]
+    );
+
+    let preview = ask_question(2, false, true);
+    assert_eq!(
+        PiAdapter
+            .answer_plan(
+                AskKind::Question,
+                &[preview],
+                &[AskReply {
+                    picks: vec![1],
+                    text: None,
+                }],
+            )
+            .unwrap(),
+        vec![
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Enter),
+        ]
+    );
+
+    assert_eq!(
+        PiAdapter
+            .answer_plan(
+                AskKind::Question,
+                &[ask_question(2, false, false)],
+                &[AskReply {
+                    picks: vec![],
+                    text: Some("Use a canary".to_owned()),
+                }],
+            )
+            .unwrap(),
+        vec![
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Paste("Use a canary".to_owned()),
+            AnswerStep::Key(NamedKey::Enter),
+        ]
+    );
+}
+
+#[test]
+fn pi_answer_plan_drives_multi_select_and_multi_question_submit() {
+    assert_eq!(
+        PiAdapter
+            .answer_plan(
+                AskKind::Question,
+                &[ask_question(4, true, false)],
+                &[AskReply {
+                    picks: vec![2, 0],
+                    text: None,
+                }],
+            )
+            .unwrap(),
+        vec![
+            AnswerStep::Text(" ".to_owned()),
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Text(" ".to_owned()),
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Enter),
+        ]
+    );
+
+    assert_eq!(
+        PiAdapter
+            .answer_plan(
+                AskKind::Question,
+                &[ask_question(2, false, false), ask_question(2, false, false),],
+                &[
+                    AskReply {
+                        picks: vec![1],
+                        text: None,
+                    },
+                    AskReply {
+                        picks: vec![],
+                        text: Some("Custom".to_owned()),
+                    },
+                ],
+            )
+            .unwrap(),
+        vec![
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Enter),
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Key(NamedKey::Down),
+            AnswerStep::Paste("Custom".to_owned()),
+            AnswerStep::Key(NamedKey::Enter),
+            AnswerStep::Key(NamedKey::Enter),
+        ]
+    );
+}
+
+#[test]
+fn pi_answer_plan_rejects_unavailable_or_mismatched_answers() {
+    for question in [ask_question(2, true, false), ask_question(2, false, true)] {
+        let error = PiAdapter
+            .answer_plan(
+                AskKind::Question,
+                &[question],
+                &[AskReply {
+                    picks: vec![],
+                    text: Some("Custom".to_owned()),
+                }],
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("suppresses the `Type something.` row")
+        );
+    }
+    assert!(
+        PiAdapter
+            .answer_plan(AskKind::Question, &[ask_question(2, false, false)], &[])
+            .unwrap_err()
+            .to_string()
+            .contains("expected 1 answers, got 0")
+    );
+    assert!(
+        PiAdapter
+            .answer_plan(
+                AskKind::Permission,
+                &[ask_question(2, false, false)],
+                &[AskReply {
+                    picks: vec![0],
+                    text: None,
+                }],
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("only for questionnaire asks")
+    );
+}
+
+fn ask_question(option_count: usize, multi_select: bool, has_option_previews: bool) -> AskQuestion {
+    AskQuestion {
+        question: "Choose?".to_owned(),
+        options: (0..option_count)
+            .map(|index| AskOption::from(format!("Option {index}")))
+            .collect(),
+        multi_select,
+        has_option_previews,
+    }
 }
 
 #[test]
@@ -445,6 +784,71 @@ fn normalized_context(payload: serde_json::Value) -> Option<AgentContext> {
 }
 
 #[test]
+fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
+    let ask_payload = json!({
+        "session_id": "sess-1",
+        "tool_name": "ask_user_question",
+        "tool_input": {
+            "questions": [{
+                "question": "Which route?",
+                "options": [
+                    { "label": "Safe", "description": "Stage it" },
+                    { "label": "Fast", "description": "Ship it" }
+                ]
+            }]
+        }
+    });
+    assert_eq!(
+        PiAdapter
+            .observe_lifecycle("tool_call", &ask_payload)
+            .map(|observation| observation.signal),
+        Some(LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question,
+            ask_id: None,
+            detail: None,
+        })
+    );
+    assert_eq!(
+        PiAdapter.classify_hook("tool_call", &ask_payload).class,
+        AgentHookClass::AwaitingUser
+    );
+    assert_eq!(
+        PiAdapter
+            .classify_hook(
+                "tool_call",
+                &json!({ "session_id": "sess-1", "tool_name": "bash" }),
+            )
+            .class,
+        AgentHookClass::Unknown
+    );
+
+    let mut headless = ask_payload;
+    headless["has_ui"] = json!(false);
+    assert_eq!(PiAdapter.observe_lifecycle("tool_call", &headless), None);
+    assert_eq!(
+        PiAdapter.classify_hook("tool_call", &headless).class,
+        AgentHookClass::Unknown
+    );
+
+    assert_eq!(
+        PiAdapter
+            .observe_lifecycle(
+                "tool_execution_end",
+                &json!({
+                    "session_id": "sess-1",
+                    "tool_name": "ask_user_question",
+                    "tool_details": { "answers": [], "cancelled": true }
+                }),
+            )
+            .map(|observation| observation.signal),
+        Some(LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+        })
+    );
+}
+
+#[test]
 fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
     for (tool_name, expected) in [
         (
@@ -637,6 +1041,9 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains("rate_limits"));
     assert!(EXTENSION_SOURCE.contains("compaction_reason"));
     assert!(EXTENSION_SOURCE.contains("compaction_will_retry"));
+    assert!(EXTENSION_SOURCE.contains("has_ui: ctx?.hasUI === true"));
+    assert!(EXTENSION_SOURCE.contains("tool_details:"));
+    assert!(EXTENSION_SOURCE.contains("ev?.result?.details"));
     assert!(
         !EXTENSION_SOURCE.contains("addSessionCost(sessionId(ctx), last?.usage"),
         "agent_end's last message is the final turn_end usage and must not add cost again"

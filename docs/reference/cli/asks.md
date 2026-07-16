@@ -66,3 +66,5 @@ RimZ validates every answer before sending a keystroke. An ask-id target also ac
 Confirmation waits 30 seconds by default. `--wait 5m` changes the deadline; `--no-wait` returns after the pane write. Exit `0` means confirmed or intentionally not waited, `2` means the ask was stale or its pane unavailable, `3` means validation or adapter capability failed, and `4` means the agent did not confirm before the deadline.
 
 Claude questions support single picks, multi-select picks, and free text. Permission `allow` uses the stable first menu action. Plan `approve` uses Shift-Tab and enables auto-accept edits. The Escape-based deny and keep-planning actions stay pane-only because Claude Code 2.1.205 emits no lifecycle confirmation for them.
+
+Pi questions from `@juicesharp/rpiv-ask-user-question` support single picks, multi-select picks, and free text. Preview-carrying and multi-select questions suppress the native free-text row; cancel and Chat about this stay in the pi pane.

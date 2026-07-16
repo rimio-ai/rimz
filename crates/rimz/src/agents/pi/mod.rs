@@ -15,18 +15,21 @@
 //! registers, `before_agent_start` starts the turn with the prompt,
 //! `agent_end` captures its in-band verdict, `agent_settled` ends it once no
 //! automatic continuation remains,
-//! `tool_execution_end` is the mutating-tool heartbeat, and
+//! `tool_execution_end` is the mutating-tool heartbeat and questionnaire
+//! resolution boundary, and
 //! `session_before_compact`/`session_compact`/`session_shutdown` are the
 //! compaction and exit signals. Spend stays in [`spend`].
 //!
 //! One wired event is an ask: `tool_call`, pi's pre-tool gate, whose extension
-//! handler pi awaits. Pi draws no permission prompt of its own
-//! (`native_ask_ui: false`), so the hook returns neutral immediately and RimZ
-//! records no waiting state. Subagents and background tasks stay declared off
+//! handler pi awaits. The `@juicesharp/rpiv-ask-user-question` extension draws
+//! the `ask_user_question` questionnaire in pi's pane; RimZ records that one
+//! blocking tool as a native question and returns neutral so pi can open its
+//! UI. Subagents and background tasks stay declared off
 //! (`docs/externals/agent-adapter/pi-reference.md`) and the absences render
 //! deliberately.
 
 pub(crate) mod account;
+mod ask;
 pub(crate) mod payloads;
 pub(crate) mod spend;
 pub(crate) mod transcript;
@@ -52,11 +55,12 @@ use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentLifecycleObservation, ClassifiedHook, Result, TranscriptMessage,
-    agent_config_path, classify_agent_hook, non_empty_trimmed, optional_payload_string,
-    sanitize_user_prompt,
+    AgentAdapter, AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, ClassifiedHook,
+    Result, TranscriptMessage, agent_config_path, classify_agent_hook, non_empty_trimmed,
+    optional_payload_string, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
+use crate::transcript::{AskAnswer, AskQuestion};
 
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
 /// descriptor-vs-trait split.
@@ -75,19 +79,17 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // subscriptions rather than metering one of its own.
     sub_providers: &[],
     // Pi's built-in tool set: `edit`/`write` edit files; `bash` mutates
-    // without editing, so the reasoning phase survives it.
+    // without editing, so the reasoning phase survives it. The rpiv
+    // questionnaire extension contributes the one blocking ask tool.
     tools: ToolClassification {
         mutating: &["bash", "edit", "write"],
         editing: &["edit", "write"],
-        blocking: &[],
+        blocking: &[("ask_user_question", AskKind::Question)],
     },
     capabilities: Capabilities {
-        // `tool_call` is pi's awaited pre-tool gate. Pi has no native ask UI,
-        // so RimZ records no ask and returns neutral.
-        // Pi never asks natively — no permission prompts, plan approvals, or
-        // questions — so RimZ has no surface to route to. It returns neutral
-        // with no waiting state.
-        native_ask_ui: false,
+        // Pi itself runs tools unasked; the rpiv questionnaire extension owns
+        // a native blocking question UI on the same awaited `tool_call` gate.
+        native_ask_ui: true,
         transcript_tail_context: false,
         registers_lazily: false,
         local_session_discovery: false,
@@ -150,15 +152,17 @@ const PI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
     turn_lifecycle: ConcernCoverage::Wired {
         via: "session_start/before_agent_start/agent_settled",
     },
-    permission: ConcernCoverage::Wired { via: "tool_call" },
+    permission: ConcernCoverage::Unsupported {
+        reason: "pi runs tools unasked; the pre-tool gate stays neutral",
+    },
     plan_approval: ConcernCoverage::Unsupported {
         reason: "no plan-approval gate",
     },
-    user_question: ConcernCoverage::Unsupported {
-        reason: "no native question tool",
+    user_question: ConcernCoverage::Wired {
+        via: "tool_call (ask_user_question, rpiv extension tool)",
     },
-    answer: ConcernCoverage::Unsupported {
-        reason: "native prompt choreography is not mapped",
+    answer: ConcernCoverage::Wired {
+        via: "answer_plan questionnaire choreography",
     },
     compaction: ConcernCoverage::Wired {
         via: "session_before_compact/session_compact",
@@ -211,9 +215,7 @@ const PI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     tool_used: HookCoverage::Native {
         event: "tool_execution_end",
     },
-    awaiting_input: HookCoverage::Absent {
-        reason: "pi has no native ask UI",
-    },
+    awaiting_input: HookCoverage::Native { event: "tool_call" },
     subagent_started: HookCoverage::Absent {
         reason: "pi has no subagents",
     },
@@ -301,11 +303,16 @@ impl AgentAdapter for PiAdapter {
         &PI_DESCRIPTOR
     }
 
-    fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        // `tool_call` is pi's only blocking gate — every tool routes through
-        // it, so it classifies as a permission ask. Everything else rides the
-        // lifecycle channel.
-        let ask_kind = (event_name == "tool_call").then_some(AskKind::Permission);
+    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+        // Only the rpiv questionnaire blocks on native UI. Ordinary tool calls
+        // remain neutral, and headless calls cannot strand a waiting row.
+        let ask_kind = (event_name == "tool_call"
+            && payload.get("has_ui").and_then(Value::as_bool) != Some(false))
+        .then(|| {
+            self.descriptor()
+                .blocking_tool_kind(payload.get("tool_name").and_then(Value::as_str))
+        })
+        .flatten();
         classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
     }
 
@@ -321,9 +328,22 @@ impl AgentAdapter for PiAdapter {
         vec![
             ClassificationSample::new(
                 "tool_call",
-                json!({ "session_id": "sess-1", "tool_name": "bash" }),
+                json!({
+                    "session_id": "sess-1",
+                    "tool_name": "ask_user_question",
+                    "tool_input": {
+                        "questions": [{
+                            "question": "Which route?",
+                            "header": "Route",
+                            "options": [
+                                { "label": "Safe", "description": "Stage it" },
+                                { "label": "Fast", "description": "Ship it" }
+                            ]
+                        }]
+                    }
+                }),
                 AgentHookClass::AwaitingUser,
-                Some(AskKind::Permission),
+                Some(AskKind::Question),
             ),
             ClassificationSample::new(
                 "session_start",
@@ -380,6 +400,12 @@ impl AgentAdapter for PiAdapter {
                 None,
             ),
             ClassificationSample::new(
+                "tool_execution_end",
+                json!({ "session_id": "sess-1", "tool_name": "ask_user_question" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
                 "model_select",
                 json!({ "session_id": "sess-1", "model": "gpt-5.5" }),
                 AgentHookClass::Lifecycle,
@@ -424,9 +450,37 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
-        // Empty stdout is the extension's allow: pi has no native prompt to
-        // fall back to, so "no answer" must let the tool run.
+        // Empty stdout is the extension's allow: ordinary tools run unasked,
+        // while the questionnaire tool proceeds into its own native UI.
         Ok(None)
+    }
+
+    fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
+        if event_name != "tool_call"
+            || payload.get("has_ui").and_then(Value::as_bool) == Some(false)
+        {
+            return None;
+        }
+        ask::question_detail(
+            payload.get("tool_name")?.as_str()?,
+            payload.get("tool_input")?,
+        )
+    }
+
+    fn answer_plan(
+        &self,
+        kind: AskKind,
+        questions: &[AskQuestion],
+        answers: &[AskReply],
+    ) -> std::result::Result<Vec<AnswerStep>, AnswerPlanErr> {
+        ask::answer_plan(kind, questions, answers)
+    }
+
+    fn native_ask_answer(&self, event_name: &str, payload: &Value) -> Option<Vec<AskAnswer>> {
+        (event_name == "tool_execution_end"
+            && payload.get("tool_name").and_then(Value::as_str) == Some("ask_user_question"))
+        .then(|| ask::answer_detail(payload))
+        .flatten()
     }
 
     fn observe_lifecycle(
@@ -438,6 +492,10 @@ impl AgentAdapter for PiAdapter {
         // The status decision lives in the shared `lifecycle::step` table —
         // here the adapter only names the intent. The native-event → signal
         // mapping is docs/internals/agents/pi.md.
+        let tool_name = payload.get("tool_name").and_then(Value::as_str);
+        let blocking_kind = (payload.get("has_ui").and_then(Value::as_bool) != Some(false))
+            .then(|| self.descriptor().blocking_tool_kind(tool_name))
+            .flatten();
         let signal = match event_name {
             "session_start" => LifecycleSignal::Registered,
             // `before_agent_start` carries the prompt. `agent_end` can still
@@ -454,6 +512,19 @@ impl AgentAdapter for PiAdapter {
                 errored: payloads::agent_end_errored(&parsed),
                 parked_on_background: false,
             },
+            "tool_call" if blocking_kind.is_some() => LifecycleSignal::AwaitingInput {
+                kind: blocking_kind?,
+                ask_id: None,
+                detail: None,
+            },
+            // The questionnaire's completed tool boundary clears waiting for
+            // answers, cancellation, validation failure, and headless no-UI.
+            "tool_execution_end" if tool_name == Some("ask_user_question") => {
+                LifecycleSignal::ToolUsed {
+                    mutates: false,
+                    edits: false,
+                }
+            }
             // Only a *mutating* tool rides the lifecycle channel: it is proof
             // of real work (read-only tools stay silent). The `edits` bit
             // marks the file-writing subset, which ends the turn's thinking

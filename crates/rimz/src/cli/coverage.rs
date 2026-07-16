@@ -416,9 +416,9 @@ mod tests {
         );
 
         let pi = agent_cells(&matrix, "pi");
-        assert_eq!(count(&pi, MatrixCellState::Ok), 9);
+        assert_eq!(count(&pi, MatrixCellState::Ok), 10);
         assert_eq!(count(&pi, MatrixCellState::Partial), 1);
-        assert_eq!(count(&pi, MatrixCellState::Absent), 6);
+        assert_eq!(count(&pi, MatrixCellState::Absent), 5);
         // Pi's `agent_settled` marks final idle, while the stall window
         // reconstructs the missing idle-timeout nudge — partial, like Codex,
         // not absent. `live$` is wired: the extension pushes a running dollar
@@ -431,7 +431,7 @@ mod tests {
         );
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Absent),
-            ["plan", "ask", "answer", "sub", "bg", "remote"]
+            ["perm", "plan", "sub", "bg", "remote"]
         );
 
         let cursor = agent_cells(&matrix, "cursor");

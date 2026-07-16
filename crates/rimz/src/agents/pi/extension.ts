@@ -324,6 +324,7 @@ export default function rimz(pi) {
     feed("tool_execution_end", ctx, {
       tool_name: ev?.toolName,
       is_error: ev?.isError === true,
+      tool_details: ev?.toolName === "ask_user_question" ? ev?.result?.details : undefined,
     }),
   );
   pi.on("model_select", (ev, ctx) => feed("model_select", ctx, { model: ev?.model?.id }));
@@ -362,10 +363,10 @@ export default function rimz(pi) {
   });
 
   // The blocking pre-tool gate. Pi awaits this handler, so rimz returns the
-  // neutral no-op immediately. Pi has no native ask UI, so no waiting state is
-  // created and every non-deny outcome — empty stdout, a parse
-  // failure, a spawn error, a missing binary — resolves to "let the tool
-  // run": pi has no native permission prompt, so blocking stays in pi itself.
+  // neutral no-op immediately. The ask_user_question tool is classified as a
+  // native question before the rpiv extension opens its UI; every other tool
+  // stays neutral. Every non-deny outcome — empty stdout, a parse failure, a
+  // spawn error, a missing binary — resolves to "let the tool run".
   pi.on("tool_call", (ev, ctx) =>
     new Promise((resolve) => {
       const allow = () => resolve(undefined);
@@ -396,7 +397,11 @@ export default function rimz(pi) {
         });
         child.stdin.end(
           JSON.stringify(
-            envelope("tool_call", ctx, { tool_name: ev?.toolName, tool_input: ev?.input }),
+            envelope("tool_call", ctx, {
+              tool_name: ev?.toolName,
+              tool_input: ev?.input,
+              has_ui: ctx?.hasUI === true,
+            }),
           ),
         );
       } catch {

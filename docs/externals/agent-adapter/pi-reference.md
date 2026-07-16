@@ -24,6 +24,7 @@ Re-fetch these pages to refresh this mirror. Each `pi.dev/docs/latest/<page>` pa
 | Version-pinned docs, types, and examples for this refresh | <https://github.com/earendil-works/pi/tree/v0.80.6/packages/coding-agent> — `docs/`, `src/core/extensions/types.ts`, `examples/extensions/` |
 | Changelog | <https://github.com/earendil-works/pi/blob/v0.80.6/packages/coding-agent/CHANGELOG.md> |
 | Extension type definitions | npm [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) |
+| Structured questionnaire extension | npm [`@juicesharp/rpiv-ask-user-question` 1.20.0](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question/v/1.20.0); [package source](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-ask-user-question) |
 
 ## Integration surface — in-process extensions
 
@@ -108,6 +109,25 @@ Session identity rides `ctx.sessionManager` rather than event payloads: `getSess
 `tool_call` is the one blocking return — `{ block: true, reason }` — and pi imposes **no deadline** on a handler: an awaiting handler holds the turn open indefinitely, so any cap is the extension's own (e.g. `ctx.ui` dialogs take a `timeout` option that auto-dismisses with a countdown — `confirm` resolves `false`, `select`/`input` resolve `undefined`). Tool preflight is sequential even in parallel tool mode, so a blocked `tool_call` also delays the assistant message's sibling tools.
 
 Extension error handling is fail-safe in the right direction: a handler exception is logged and the agent continues, **except** in `tool_call`, where an exception blocks the tool. A custom tool's `execute` signals failure by throwing (sets `isError: true`); its return value never does.
+
+### `rpiv-ask-user-question` questionnaire
+
+RimZ consumes the questionnaire tool wire from [`@juicesharp/rpiv-ask-user-question` 1.20.0](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question/v/1.20.0), whose source lives in the [`rpiv-mono` package directory](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-ask-user-question). The extension registers `ask_user_question`; Pi's awaited `tool_call` carries `input` in this shape:
+
+```jsonc
+{
+  "questions": [{
+    "question": "Which route?",
+    "header": "Route",
+    "options": [{ "label": "Safe", "description": "Stage it", "preview": "optional markdown" }],
+    "multiSelect": false
+  }]
+}
+```
+
+The tool finishes through `tool_execution_end.result = { content, details }`. `details` is `{ answers, cancelled, error? }`; each answer is `{ questionIndex, question, kind, answer, selected?, notes?, preview? }`, where `kind` is `option`, `custom`, `chat`, or `multi`, and `selected` carries multi-select labels. `cancelled: true` covers Esc/decline; headless `ctx.hasUI === false` returns `error: "no_ui"` with no answers. RimZ forwards `result.details` only for this tool.
+
+Focus starts at option zero and every automatic tab switch resets option, input, and submit focus to zero. Single-select Enter commits immediately for one question or advances to the next question; the appended Type something. row exists only when the question is neither multi-select nor preview-carrying. Multi-select uses Space to toggle options and Enter on the appended Next row to commit. Multiple questions add a final Submit tab whose initial choice is Submit.
 
 ## Session JSONL
 
