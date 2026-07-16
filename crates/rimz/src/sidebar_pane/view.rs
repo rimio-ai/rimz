@@ -219,6 +219,13 @@ fn project_rows<'a>(
                 .map(|row| row.id.as_str())
         })
         .flatten();
+    // Keep a finished roster whole while focus or the order hold anchors any
+    // member. Once both clear, every row collapses into the receipt together.
+    let revealed = finished
+        && source.iter().any(|row| {
+            row.pane.as_ref().is_some_and(|pane| pane.is_focused)
+                || held.is_some_and(|ids| ids.contains(&row.id))
+        });
     let mut rows = Vec::new();
     let mut natural_visible = 0;
     let mut actual_visible = 0;
@@ -230,7 +237,7 @@ fn project_rows<'a>(
             || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
             || liveness_process_id == Some(row.id.as_str());
         let natural = if finished {
-            row.pane.as_ref().is_some_and(|pane| pane.is_focused)
+            revealed
         } else {
             essential || natural_visible < WORKTREE_ROW_CAP
         };
@@ -239,7 +246,7 @@ fn project_rows<'a>(
         let visible = match filter {
             Some(filter) => row_passes_filter(row, Some(filter)),
             None if expanded => true,
-            None if finished => natural || held.is_some_and(|ids| ids.contains(&row.id)),
+            None if finished => revealed,
             None => {
                 essential
                     || held.is_some_and(|ids| ids.contains(&row.id))
@@ -384,9 +391,9 @@ mod tests {
             .unwrap()
             .is_focused = true;
         let focused = VisibleRoster::baseline(&snapshot);
-        assert_eq!(ids(&focused), ["done-focused", "active"]);
-        assert_eq!(focused.ordinal_of_id("active"), Some(1));
-        assert_eq!(focused.neighboring_group_head(0, 1), Some(1));
+        assert_eq!(ids(&focused), ["done-unread", "done-focused", "active"]);
+        assert_eq!(focused.ordinal_of_id("active"), Some(2));
+        assert_eq!(focused.neighboring_group_head(0, 1), Some(2));
 
         let filtered = VisibleRoster::new(
             &snapshot,

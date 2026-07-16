@@ -192,8 +192,8 @@ fn finished_group_collapses_unread_success_until_revealed() {
     let held = HashSet::from(["success-unread".to_owned()]);
     assert_eq!(
         visible_ids_with_held(&group, None, false, Some(&held)),
-        ["success-unread"],
-        "the order hold keeps a row visible while the terminal collapse settles"
+        ["success-unread", "success"],
+        "the order hold reveals the whole roster while the terminal collapse settles"
     );
     assert_eq!(visible_ids(&group, None, true).len(), 2);
     assert_eq!(
@@ -208,7 +208,20 @@ fn finished_group_collapses_unread_success_until_revealed() {
     );
 
     group.rows[1].pane.as_mut().expect("pane").is_focused = true;
-    assert_eq!(visible_ids(&group, None, false), ["success"]);
+    assert_eq!(
+        visible_ids(&group, None, false),
+        ["success-unread", "success"],
+        "a focused member reveals the whole finished roster"
+    );
+    let (focused_texts, focused_map, _) = render_group(&group, false);
+    assert!(
+        focused_texts.iter().all(|line| !line.contains('▸')),
+        "a revealed finished roster renders full cards and no receipt: {focused_texts:?}"
+    );
+    assert!(
+        focused_map.iter().skip(1).all(Option::is_some),
+        "every line after the header belongs to a revealed card: {focused_map:?}"
+    );
     group.rows[1].pane.as_mut().expect("pane").is_focused = false;
     group.rows[0]
         .as_agent_mut()
@@ -435,13 +448,16 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
 }
 
 #[test]
-fn finished_group_toggle_carries_the_member_cost_receipt() {
+fn finished_roster_pins_the_member_cost() {
     let total = 0.42 + 0.58;
     let mut finished = group(vec![
         agent_row_with_cost("first", 0.42),
         agent_row_with_cost("second", 0.58),
     ]);
     finished.finished = true;
+    for row in &mut finished.rows {
+        row.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
+    }
 
     let (texts, _, _) = render_group(&finished, false);
 
@@ -450,13 +466,17 @@ fn finished_group_toggle_carries_the_member_cost_receipt() {
         .find(|line| line.contains("✓ first  ✓ second"))
         .expect("member roster receipt");
     assert!(
-        !roster.contains('$'),
-        "cost belongs on the totals line: {texts:?}"
+        roster.trim_end().ends_with(&dollars2(total)),
+        "finished roster pins the accepted work's cost: {texts:?}"
+    );
+    assert!(
+        roster.starts_with(" ▸"),
+        "the roster glyph leads the content without an extra indent: {texts:?}"
     );
     let totals = texts.last().expect("finished totals receipt");
     assert!(
-        totals.trim_end().ends_with(&dollars2(total)),
-        "finished totals carry the accepted work's cost: {texts:?}"
+        !totals.contains('$'),
+        "cost stays off the token and age line: {texts:?}"
     );
 
     let mut no_cost = group(vec![
@@ -521,7 +541,7 @@ fn finished_roster_falls_back_to_count_for_process_only_groups() {
 }
 
 #[test]
-fn finished_roster_excludes_a_held_visible_member() {
+fn held_member_reveals_the_whole_finished_roster() {
     let mut finished = group(vec![
         agent_row("planner", AgentStatus::Success),
         agent_row("coder", AgentStatus::Success),
@@ -539,6 +559,14 @@ fn finished_roster_excludes_a_held_visible_member() {
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let roster =
         crate::sidebar_pane::view::VisibleRoster::single(&finished, None, false, Some(&held));
+    assert_eq!(
+        roster
+            .rows()
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["planner", "coder", "reviewer"]
+    );
     worktree_group_lines_projected(
         &ctx,
         &roster,
@@ -557,14 +585,14 @@ fn finished_roster_excludes_a_held_visible_member() {
                 .collect::<String>()
         })
         .collect::<Vec<_>>();
-    let receipt = roster_receipt(&texts);
-
-    assert!(receipt.contains("✓ planner  ✓ reviewer"), "{texts:?}");
-    assert!(!receipt.contains("coder"), "{texts:?}");
     assert_eq!(
-        texts.iter().filter(|line| line.contains("coder")).count(),
-        1,
-        "held member renders only as a full card: {texts:?}"
+        texts.iter().filter(|line| line.contains('▸')).count(),
+        0,
+        "an order hold reveals full cards without a partial receipt: {texts:?}"
+    );
+    assert!(
+        map.iter().skip(1).all(Option::is_some),
+        "every line after the header belongs to a revealed card: {map:?}"
     );
 }
 
@@ -595,7 +623,7 @@ fn finished_header_toggles_both_directions_while_live_header_jumps_to_a_row() {
 }
 
 #[test]
-fn finished_totals_sum_tokens_and_pin_elapsed_age_and_cost() {
+fn finished_receipt_pins_cost_then_tokens_and_muted_age() {
     let mut first = agent_row_with_cost("planner", 0.42);
     first.last_activity = fixed_now() - Duration::from_secs(2 * 60 * 60);
     let first_agent = first.as_agent_mut().expect("agent row");
@@ -616,16 +644,43 @@ fn finished_totals_sum_tokens_and_pin_elapsed_age_and_cost() {
 
     let mut finished = group(vec![first, second]);
     finished.finished = true;
-    let (texts, _, _) = render_group_at_width(&finished, false, 80);
-    let totals = texts.last().expect("finished totals receipt");
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.worktree_groups = vec![finished];
+    let theme = Theme::fixed(true);
+    let lines = group_lines_at_width(&snapshot, &theme, 0, 80);
+    let texts = line_texts(&lines);
+    let roster = texts
+        .iter()
+        .find(|line| line.contains("✓ planner  ✓ coder"))
+        .expect("finished roster receipt");
+    let totals = lines.last().expect("finished totals receipt");
+    let totals_text = texts.last().expect("finished totals text");
 
     assert!(
-        totals.contains("◇ 1M ↘ 300k ↗ 180k ◌ 700k"),
+        roster.trim_end().ends_with("$1.00"),
+        "cost pins the identity line: {texts:?}"
+    );
+    assert!(
+        totals_text.contains("◇ 1M ↘ 300k ↗ 180k ◌ 700k"),
         "member token counters sum into one detailed breakdown: {texts:?}"
     );
     assert!(
-        totals.trim_end().ends_with("32m  ◉ 2h  $1.00"),
-        "duration, finished age, and cost stay pinned in order: {texts:?}"
+        totals_text.trim_end().ends_with("◉ 2h"),
+        "finished age is the rightmost pin: {texts:?}"
+    );
+    assert!(
+        !totals_text.contains("32m") && !totals_text.contains('$'),
+        "misleading duration and cost stay off the totals line: {texts:?}"
+    );
+    let age = totals
+        .spans
+        .iter()
+        .find(|span| span.content.contains("◉ 2h"))
+        .expect("finished age span");
+    assert_eq!(
+        age.style,
+        theme.muted(),
+        "a settled receipt keeps a flat age tone"
     );
 }
 
@@ -642,24 +697,26 @@ fn finished_totals_degrade_tokens_before_the_right_pin() {
     let mut finished = group(vec![row]);
     finished.finished = true;
 
-    let (texts, _, _) = render_group_at_width(&finished, false, 44);
+    let (texts, _, _) = render_group_at_width(&finished, false, 30);
     let summary = texts.last().expect("summary totals receipt");
     assert!(summary.contains("◇ 1M ◌ 700k"), "{texts:?}");
     assert!(
         !summary.contains('↘') && !summary.contains('↗'),
         "{texts:?}"
     );
+    assert!(summary.trim_end().ends_with("◉ 2h"), "{texts:?}");
     assert!(
-        summary.trim_end().ends_with("32m  ◉ 2h  $1.00"),
+        !summary.contains("32m") && !summary.contains('$'),
         "{texts:?}"
     );
 
-    let (texts, _, _) = render_group_at_width(&finished, false, 30);
+    let (texts, _, _) = render_group_at_width(&finished, false, 18);
     let total_only = texts.last().expect("total-only receipt");
     assert!(total_only.contains("◇ 1M"), "{texts:?}");
     assert!(!total_only.contains('◌'), "{texts:?}");
+    assert!(total_only.trim_end().ends_with("◉ 2h"), "{texts:?}");
     assert!(
-        total_only.trim_end().ends_with("32m  ◉ 2h  $1.00"),
+        !total_only.contains("32m") && !total_only.contains('$'),
         "right pin survives token degradation: {texts:?}"
     );
 }

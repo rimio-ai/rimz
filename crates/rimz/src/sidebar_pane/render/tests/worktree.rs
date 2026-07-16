@@ -225,6 +225,36 @@ fn render_pr_badge_keeps_identity_style_across_states() {
 }
 
 #[test]
+fn render_finished_header_dims_the_label_while_live_header_stays_full_tone() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Merged));
+    snapshot.worktree_groups[0].finished = true;
+
+    let finished = group_lines(&snapshot, &theme, 0);
+    let finished_label = finished[0]
+        .spans
+        .iter()
+        .find(|span| span.content.contains("feature-migration"))
+        .expect("finished worktree label");
+    assert_eq!(
+        finished_label.style,
+        theme.muted().add_modifier(Modifier::BOLD)
+    );
+
+    snapshot.worktree_groups[0].finished = false;
+    let live = group_lines(&snapshot, &theme, 0);
+    let live_label = live[0]
+        .spans
+        .iter()
+        .find(|span| span.content.contains("feature-migration"))
+        .expect("live worktree label");
+    assert_eq!(
+        live_label.style,
+        theme.styled(Component::WorktreeHeader, Modifier::BOLD)
+    );
+}
+
+#[test]
 fn render_pr_badge_yields_to_the_name_at_extreme_width() {
     let theme = Theme::fixed(false);
     let mut snapshot = pristine_worktree_with_pr_state(None);
@@ -576,6 +606,40 @@ fn render_diverged_worktree_uses_pr_state_marker() {
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
     let rendered = snapshot_to_screen(&snapshot, 42, 14);
     assert!(rendered.contains("✕ main"), "header:\n{rendered}");
+}
+
+#[test]
+fn render_diverged_merged_pr_drops_spent_stats_but_closed_keeps_them() {
+    let codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    let mut snapshot = snapshot_with(vec![codex]);
+    let group = &mut snapshot.worktree_groups[0];
+    group.trunk = Some("main".to_owned());
+    group.trunk_sync = Some(crate::WorktreeTrunkSync::Diverged);
+    group.commits_ahead = Some(2);
+    group.commits_behind = Some(1);
+    group.diff_added = Some(12);
+    group.diff_removed = Some(3);
+    group.pr_state = Some(crate::WorktreePrState::Merged);
+
+    let merged = snapshot_to_screen(&snapshot, 48, 14);
+    assert!(merged.contains("✓ main"), "header:\n{merged}");
+    assert!(
+        !merged.contains('⇡') && !merged.contains("+12"),
+        "a merged verdict leaves only its marker:\n{merged}"
+    );
+
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
+    let closed = snapshot_to_screen(&snapshot, 48, 14);
+    assert!(closed.contains("✕ main"), "header:\n{closed}");
+    assert!(closed.contains("⇡2"), "header:\n{closed}");
+    assert!(closed.contains("+12 -3"), "header:\n{closed}");
 }
 /// The borderless repo header (dashboard L1): the workspace name behind `⌘`
 /// on the left, then the project path pinned to the right edge of the same

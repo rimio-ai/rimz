@@ -1,8 +1,8 @@
 //! Worktree group composition: the bold pod header with its linked-PR identity
 //! and right-pinned git story, the dim `external` divider, and the row roster
 //! with its parallel hit-test map entries. Finished pods collapse hidden agents
-//! into a two-line receipt: an expandable team/member roster, then the accepted
-//! work's token, time, and cost totals.
+//! into a two-line receipt: an expandable team/member roster with cost pinned
+//! right, then token totals with the finished age pinned right.
 
 use std::collections::HashSet;
 
@@ -15,12 +15,10 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::pixel::meter::MeterPixels;
-use crate::sidebar_pane::render::fmt::{
-    activity_short, age_secs, dollars2, elapsed_label, tokens_int,
-};
+use crate::sidebar_pane::render::fmt::{activity_short, age_secs, dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::{
-    TokenColumns, TokenDetail, activity_age_style, branch_delta_spans, diff_spans, elapsed_glyph,
-    status_glyph, status_rest_style, token_breakdown_spans, token_total_glyph, trunk_glyph_spans,
+    TokenColumns, TokenDetail, branch_delta_spans, diff_spans, elapsed_glyph, status_glyph,
+    status_rest_style, token_breakdown_spans, token_total_glyph, trunk_glyph_spans,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -155,8 +153,16 @@ fn finished_roster_line(
     let process_count = hidden_rows.len().saturating_sub(members.len());
 
     let team = finished_team(group);
+    let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
+    let cost_spans = if cost >= 0.005 {
+        vec![Span::styled(
+            dollars2(cost),
+            ctx.theme.money_style(Modifier::empty()),
+        )]
+    } else {
+        Vec::new()
+    };
     let mut spans = vec![
-        Span::raw("  "),
         Span::styled(
             ctx.theme.glyph(GlyphRole::WorktreeExpand).to_owned(),
             ctx.theme.muted(),
@@ -170,7 +176,9 @@ fn finished_roster_line(
         ));
         spans.push(Span::raw("  "));
     }
-    let budget = content_width(ctx.width);
+    let width = content_width(ctx.width);
+    let budget =
+        width.saturating_sub(spans_width(&cost_spans) + usize::from(!cost_spans.is_empty()));
     let mut roster_width = spans_width(&spans);
     let mut placed = 0;
     for (row, status) in &members {
@@ -211,7 +219,7 @@ fn finished_roster_line(
         }
     }
 
-    Line::from(spans)
+    pin_right(spans, cost_spans, width)
 }
 
 fn finished_team(group: &SidebarWorktreeGroup) -> Option<&str> {
@@ -245,38 +253,13 @@ fn finished_totals_line(ctx: &RowCtx<'_>, group: &SidebarWorktreeGroup) -> Optio
         },
     );
 
-    let duration = agents
-        .iter()
-        .filter_map(|(_, agent)| agent.registered_at)
-        .min()
-        .map(|registered_at| {
-            let seconds = max_last_activity
-                .duration_since(registered_at)
-                .as_secs()
-                .max(0);
-            vec![Span::styled(elapsed_label(seconds), ctx.theme.muted())]
-        });
-    let ago = activity_short(max_last_activity, ctx.now).map(|label| {
+    let right = activity_short(max_last_activity, ctx.now).map_or_else(Vec::new, |label| {
         let seconds = age_secs(max_last_activity, ctx.now);
         vec![Span::styled(
             format!("{} {label}", elapsed_glyph(ctx.theme, seconds)),
-            activity_age_style(ctx.theme, seconds),
+            ctx.theme.muted(),
         )]
     });
-    let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
-    let cost = (cost >= 0.005).then(|| {
-        vec![Span::styled(
-            dollars2(cost),
-            ctx.theme.money_style(Modifier::empty()),
-        )]
-    });
-    let mut right = Vec::new();
-    for cluster in [duration, ago, cost].into_iter().flatten() {
-        if !right.is_empty() {
-            right.push(Span::raw("  "));
-        }
-        right.extend(cluster);
-    }
     if total == 0 && right.is_empty() {
         return None;
     }
@@ -444,10 +427,12 @@ fn group_header(
     } else {
         theme.faint()
     };
-    let mut spans = vec![Span::styled(
-        left,
-        theme.styled(Component::WorktreeHeader, Modifier::BOLD),
-    )];
+    let label_style = if group.finished {
+        theme.muted().add_modifier(Modifier::BOLD)
+    } else {
+        theme.styled(Component::WorktreeHeader, Modifier::BOLD)
+    };
+    let mut spans = vec![Span::styled(left, label_style)];
     if let Some(badge) = badge {
         spans.push(Span::styled(
             badge,
@@ -463,10 +448,11 @@ fn group_header(
 /// outranks the local trunk relationship, so a pristine or locally-landed
 /// worktree still shows its forge state; a live local rebase/merge (`⟳`) stays
 /// on top as the one actionable working-tree state. Diverged and reconciling
-/// worktrees keep the numeric `⇡/⇣ +/-` stats before the marker; every other
-/// state collapses to the marker alone. Worktree-backed channels share this
-/// cluster and lead with the same fork/merge glyph as a worktree pod. Empty when
-/// no git facts reached this group or the group is the trunk worktree itself.
+/// worktrees keep the numeric `⇡/⇣ +/-` stats before the marker, except that a
+/// merged PR collapses spent stats to its marker alone; every other state also
+/// collapses to the marker. Worktree-backed channels share this cluster and lead
+/// with the same fork/merge glyph as a worktree pod. Empty when no git facts
+/// reached this group or the group is the trunk worktree itself.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
     let Some(trunk) = group.trunk.as_deref() else {
         return plain_git_spans(theme, group);
@@ -479,7 +465,8 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
     if matches!(
         group.trunk_sync,
         Some(WorktreeTrunkSync::Diverged | WorktreeTrunkSync::Reconciling)
-    ) {
+    ) && component != Component::WorktreeMerged
+    {
         let mut spans = plain_git_spans(theme, group);
         if !spans.is_empty() {
             spans.push(Span::raw("  "));
