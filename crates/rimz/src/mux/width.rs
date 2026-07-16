@@ -104,8 +104,8 @@ impl SidebarWidth {
     /// wide: [`Self::target_cols`] of the probe — the percentage capped at
     /// `max_cols` — as columns for tmux and as a percentage spelling for
     /// Zellij layouts. An unknown width (`None` — launch outside a tty)
-    /// resolves to the bare cap with the explicit percentage or the automatic
-    /// policy's narrow fallback.
+    /// resolves to the bare cap with the explicit percentage, the pets wide
+    /// default, or the automatic policy's narrow fallback.
     pub fn birth_size(self, detected_cols: Option<u16>) -> BirthSize {
         let fallback_percent = self.percent.resolve(None);
         match detected_cols {
@@ -175,7 +175,8 @@ pub struct BirthSize {
     pub cols: NonZeroU16,
     /// The verdict as a share of the probed width (rounded to nearest, ≥ 1%)
     /// — the unknown-geometry spelling; the configured percentage when no
-    /// terminal was probed; automatic policy uses its narrow fallback.
+    /// terminal was probed; pets use the wide default and automatic policy
+    /// uses its narrow fallback.
     pub percent: u16,
 }
 
