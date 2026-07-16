@@ -38,17 +38,15 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
     let mut entries = Vec::new();
     let mut unknown_models = BTreeMap::new();
     for wire_record in &records {
-        if wire_record.kind == "llm.request" {
-            state.request = wire_record.parse::<wire::RequestAttribution>();
-            continue;
-        }
-        if wire_record.kind != "usage.record" {
-            continue;
-        }
-        let Some(timestamp) = wire_record.time else {
-            continue;
+        let record = match &wire_record.event {
+            wire::WireEvent::LlmRequest(request) => {
+                state.request = Some(request.clone());
+                continue;
+            }
+            wire::WireEvent::Usage(record) => record,
+            _ => continue,
         };
-        let Some(record) = wire_record.parse::<wire::UsageRecord>() else {
+        let Some(timestamp) = wire_record.time else {
             continue;
         };
         let request_key = state.request.as_ref().and_then(request_model_key);
@@ -77,7 +75,7 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
         let Some(model_label) = model.clone().or(unknown_label) else {
             continue;
         };
-        let usage = record.usage;
+        let usage = &record.usage;
         let fresh = usage.input_other.unwrap_or(0);
         let cache_read = usage.input_cache_read.unwrap_or(0);
         let cache_write = usage.input_cache_creation.unwrap_or(0);

@@ -140,7 +140,15 @@ fn resolve_start_once(session_dir: &Path, prompt_preview: Option<&str>) -> Start
             let records = child_records(&child.transcript_path)?;
             records
                 .iter()
-                .all(|record| record.kind != "turn.prompt")
+                .all(|record| {
+                    !matches!(
+                        &record.event,
+                        wire::WireEvent::Prompt {
+                            kind: wire::PromptKind::Prompt,
+                            ..
+                        }
+                    )
+                })
                 .then_some((child, records))
         })
         .collect::<Vec<_>>();
@@ -228,15 +236,13 @@ fn main_turn_mid_step_once(session_dir: &Path) -> bool {
     else {
         return false;
     };
-    records.iter().fold(false, |mid_step, record| {
-        if record.kind == "llm.request" {
-            true
-        } else if wire::loop_event(record).is_some_and(|event| event.kind == "step.end") {
-            false
-        } else {
-            mid_step
-        }
-    })
+    records
+        .iter()
+        .fold(false, |mid_step, record| match &record.event {
+            wire::WireEvent::LlmRequest(_) => true,
+            wire::WireEvent::AppendLoopEvent(wire::LoopEvent::StepEnd { .. }) => false,
+            _ => mid_step,
+        })
 }
 
 fn child_records(path: &Path) -> Option<Vec<wire::WireRecord>> {
@@ -264,31 +270,24 @@ fn child_match(
 
 fn first_prompt(records: &[wire::WireRecord]) -> Option<String> {
     records.iter().find_map(|record| {
-        let prompt = wire::prompt(record)?;
+        let wire::WireEvent::Prompt { prompt, .. } = &record.event else {
+            return None;
+        };
         non_empty(Some(
             prompt
                 .input
                 .iter()
-                .filter(|part| part.kind == "text")
-                .filter_map(|part| part.text.as_deref())
+                .filter_map(wire::ContentPart::text)
                 .collect::<Vec<_>>()
                 .join("\n"),
         ))
     })
 }
 
-#[derive(Deserialize)]
-struct ProfileUpdate {
-    #[serde(rename = "profileName")]
-    profile_name: Option<String>,
-}
-
 fn latest_profile(records: &[wire::WireRecord]) -> Option<String> {
-    records.iter().rev().find_map(|record| {
-        (record.kind == "config.update")
-            .then(|| record.parse::<ProfileUpdate>())
-            .flatten()
-            .and_then(|update| non_empty(update.profile_name))
+    records.iter().rev().find_map(|record| match &record.event {
+        wire::WireEvent::ConfigUpdate(update) => non_empty(update.profile_name.clone()),
+        _ => None,
     })
 }
 

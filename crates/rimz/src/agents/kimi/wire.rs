@@ -2,28 +2,51 @@
 
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::agents::transcript_fs::{home_dir, read_spend_lines};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct WireRecord {
-    #[serde(rename = "type")]
-    pub kind: String,
-    #[serde(default, deserialize_with = "optional_number")]
     pub time: Option<f64>,
-    #[serde(flatten)]
-    pub fields: serde_json::Map<String, Value>,
+    pub event: WireEvent,
 }
 
-fn optional_number<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(Option::<Value>::deserialize(deserializer)?
-        .and_then(|value| value.as_f64())
-        .filter(|value| value.is_finite() && *value > 0.0))
+impl WireRecord {
+    pub fn timestamp(&self) -> Option<Timestamp> {
+        let millis = self.time?.trunc();
+        if millis > i64::MAX as f64 {
+            return None;
+        }
+        Timestamp::from_millisecond(millis as i64).ok()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum WireEvent {
+    Metadata,
+    Prompt {
+        kind: PromptKind,
+        prompt: PromptRecord,
+    },
+    ConfigUpdate(ConfigUpdate),
+    LlmRequest(RequestAttribution),
+    Usage(UsageRecord),
+    AppendMessage(AppendedMessage),
+    AppendLoopEvent(LoopEvent),
+    ContextClear,
+    ApplyCompaction {
+        tokens_after: Option<u64>,
+    },
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptKind {
+    Prompt,
+    Steer,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -92,37 +115,70 @@ impl UsageRecord {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default)]
 pub struct PromptRecord {
     pub input: Vec<ContentPart>,
     pub origin: PromptOrigin,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct PromptOrigin {
-    pub kind: String,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PromptOrigin {
+    User,
+    #[default]
+    Other,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct ContentPart {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub text: Option<String>,
+#[derive(Clone, Debug, Default)]
+pub enum ContentPart {
+    Text(String),
+    #[default]
+    Other,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct LoopEvent {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub uuid: Option<String>,
-    #[serde(rename = "stepUuid")]
-    pub step_uuid: Option<String>,
-    pub part: Option<ContentPart>,
-    pub usage: Option<TokenUsage>,
+impl ContentPart {
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Other => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum LoopEvent {
+    StepBegin {
+        id: Option<String>,
+    },
+    ContentPart {
+        step_id: Option<String>,
+        part: ContentPart,
+    },
+    StepEnd {
+        id: Option<String>,
+        usage: Option<TokenUsage>,
+    },
+    Other,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AppendedMessage {
+    pub role: MessageRole,
+    pub content: MessageContent,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MessageRole {
+    Assistant,
+    #[default]
+    Other,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum MessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+    #[default]
+    Other,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -138,11 +194,13 @@ pub struct RequestAttribution {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-struct ConfigUpdate {
+pub struct ConfigUpdate {
     #[serde(rename = "modelAlias")]
-    model_alias: Option<String>,
+    pub model_alias: Option<String>,
     #[serde(rename = "thinkingEffort")]
-    thinking_effort: Option<String>,
+    pub thinking_effort: Option<String>,
+    #[serde(rename = "profileName")]
+    pub profile_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -154,32 +212,29 @@ pub struct EffectiveAttribution {
 
 impl EffectiveAttribution {
     pub fn observe(&mut self, record: &WireRecord) {
-        match record.kind.as_str() {
-            "config.update" => {
-                if let Some(config) = record.parse::<ConfigUpdate>() {
-                    if let Some(alias) = non_empty(config.model_alias) {
-                        self.model_alias = Some(normalize_model_alias(&alias));
-                    }
-                    if let Some(effort) = non_empty(config.thinking_effort) {
-                        self.thinking_effort = Some(effort);
-                    }
+        match &record.event {
+            WireEvent::ConfigUpdate(config) => {
+                if let Some(alias) = non_empty(config.model_alias.clone()) {
+                    self.model_alias = Some(normalize_model_alias(&alias));
+                }
+                if let Some(effort) = non_empty(config.thinking_effort.clone()) {
+                    self.thinking_effort = Some(effort);
                 }
             }
-            "llm.request" => {
-                if let Some(mut request) = record.parse::<RequestAttribution>() {
-                    request.provider = non_empty(request.provider);
-                    request.model = non_empty(request.model);
-                    request.model_alias =
-                        non_empty(request.model_alias).map(|alias| normalize_model_alias(&alias));
-                    request.thinking_effort = non_empty(request.thinking_effort);
-                    if request.model_alias.is_some() {
-                        self.model_alias = request.model_alias.clone();
-                    }
-                    if request.thinking_effort.is_some() {
-                        self.thinking_effort = request.thinking_effort.clone();
-                    }
-                    self.request = Some(request);
+            WireEvent::LlmRequest(request) => {
+                let mut request = request.clone();
+                request.provider = non_empty(request.provider);
+                request.model = non_empty(request.model);
+                request.model_alias =
+                    non_empty(request.model_alias).map(|alias| normalize_model_alias(&alias));
+                request.thinking_effort = non_empty(request.thinking_effort);
+                if request.model_alias.is_some() {
+                    self.model_alias = request.model_alias.clone();
                 }
+                if request.thinking_effort.is_some() {
+                    self.thinking_effort = request.thinking_effort.clone();
+                }
+                self.request = Some(request);
             }
             _ => {}
         }
@@ -191,12 +246,6 @@ impl EffectiveAttribution {
                 .as_ref()
                 .and_then(|request| request.model.clone())
         })
-    }
-}
-
-impl WireRecord {
-    pub fn parse<T: for<'de> Deserialize<'de>>(&self) -> Option<T> {
-        serde_json::from_value(Value::Object(self.fields.clone())).ok()
     }
 }
 
@@ -344,12 +393,193 @@ pub(crate) fn transcript_files_under(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+#[derive(Deserialize)]
+struct RawWireRecord {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default, deserialize_with = "optional_number")]
+    time: Option<f64>,
+    #[serde(flatten)]
+    fields: serde_json::Map<String, Value>,
+}
+
+fn optional_number<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<Value>::deserialize(deserializer)?
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite() && *value > 0.0))
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct RawPromptRecord {
+    input: Vec<RawContentPart>,
+    origin: Value,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct RawContentPart {
+    #[serde(rename = "type")]
+    kind: String,
+    text: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct RawLoopEvent {
+    #[serde(rename = "type")]
+    kind: String,
+    uuid: Option<String>,
+    #[serde(rename = "stepUuid")]
+    step_uuid: Option<String>,
+    part: Option<RawContentPart>,
+    usage: Option<TokenUsage>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct RawAppendedMessage {
+    role: String,
+    content: Value,
+}
+
 pub fn records_from_bytes(bytes: &[u8]) -> Vec<WireRecord> {
     bytes
         .split(|byte| *byte == b'\n')
-        .filter_map(|line| serde_json::from_slice::<WireRecord>(line).ok())
-        .filter(|record| record.kind != "metadata")
+        .filter_map(record_from_slice)
+        .filter(|record| !matches!(record.event, WireEvent::Metadata))
         .collect()
+}
+
+pub(super) fn records_from_str(input: &str) -> Vec<WireRecord> {
+    input
+        .lines()
+        .filter_map(|line| record_from_slice(line.as_bytes()))
+        .filter(|record| !matches!(record.event, WireEvent::Metadata))
+        .collect()
+}
+
+fn record_from_slice(line: &[u8]) -> Option<WireRecord> {
+    let raw = serde_json::from_slice::<RawWireRecord>(line).ok()?;
+    Some(WireRecord {
+        time: raw.time,
+        event: decode_event(&raw.kind, raw.fields),
+    })
+}
+
+fn decode_event(kind: &str, mut fields: serde_json::Map<String, Value>) -> WireEvent {
+    match kind {
+        "metadata" => WireEvent::Metadata,
+        "turn.prompt" | "turn.steer" => from_fields::<RawPromptRecord>(fields)
+            .map(|raw| WireEvent::Prompt {
+                kind: if kind == "turn.prompt" {
+                    PromptKind::Prompt
+                } else {
+                    PromptKind::Steer
+                },
+                prompt: PromptRecord {
+                    input: raw.input.into_iter().map(typed_content_part).collect(),
+                    origin: prompt_origin(&raw.origin),
+                },
+            })
+            .unwrap_or(WireEvent::Unknown),
+        "config.update" => from_fields(fields)
+            .map(WireEvent::ConfigUpdate)
+            .unwrap_or(WireEvent::Unknown),
+        "llm.request" => from_fields(fields)
+            .map(WireEvent::LlmRequest)
+            .unwrap_or(WireEvent::Unknown),
+        "usage.record" => from_fields(fields)
+            .map(WireEvent::Usage)
+            .unwrap_or(WireEvent::Unknown),
+        "context.append_message" => fields
+            .remove("message")
+            .and_then(|message| serde_json::from_value::<RawAppendedMessage>(message).ok())
+            .map(|message| {
+                WireEvent::AppendMessage(AppendedMessage {
+                    role: if message.role == "assistant" {
+                        MessageRole::Assistant
+                    } else {
+                        MessageRole::Other
+                    },
+                    content: message_content(message.content),
+                })
+            })
+            .unwrap_or(WireEvent::Unknown),
+        "context.append_loop_event" => fields
+            .remove("event")
+            .map(loop_event)
+            .map(WireEvent::AppendLoopEvent)
+            .unwrap_or(WireEvent::Unknown),
+        "context.clear" => WireEvent::ContextClear,
+        "context.apply_compaction" => WireEvent::ApplyCompaction {
+            tokens_after: fields
+                .remove("tokensAfter")
+                .and_then(|value| value.as_u64()),
+        },
+        _ => WireEvent::Unknown,
+    }
+}
+
+fn from_fields<T: for<'de> Deserialize<'de>>(fields: serde_json::Map<String, Value>) -> Option<T> {
+    serde_json::from_value(Value::Object(fields)).ok()
+}
+
+fn prompt_origin(value: &Value) -> PromptOrigin {
+    if value.get("kind").and_then(Value::as_str) == Some("user") {
+        PromptOrigin::User
+    } else {
+        PromptOrigin::Other
+    }
+}
+
+fn content_part(value: Value) -> ContentPart {
+    if value.get("type").and_then(Value::as_str) == Some("text")
+        && let Some(text) = value.get("text").and_then(Value::as_str)
+    {
+        ContentPart::Text(text.to_owned())
+    } else {
+        ContentPart::Other
+    }
+}
+
+fn typed_content_part(part: RawContentPart) -> ContentPart {
+    if part.kind == "text"
+        && let Some(text) = part.text
+    {
+        ContentPart::Text(text)
+    } else {
+        ContentPart::Other
+    }
+}
+
+fn message_content(value: Value) -> MessageContent {
+    match value {
+        Value::String(text) => MessageContent::Text(text),
+        Value::Array(parts) => MessageContent::Parts(parts.into_iter().map(content_part).collect()),
+        _ => MessageContent::Other,
+    }
+}
+
+fn loop_event(value: Value) -> LoopEvent {
+    let Ok(event) = serde_json::from_value::<RawLoopEvent>(value) else {
+        return LoopEvent::Other;
+    };
+    match event.kind.as_str() {
+        "step.begin" => LoopEvent::StepBegin { id: event.uuid },
+        "content.part" => LoopEvent::ContentPart {
+            step_id: event.step_uuid.or(event.uuid),
+            part: event.part.map(typed_content_part).unwrap_or_default(),
+        },
+        "step.end" => LoopEvent::StepEnd {
+            id: event.uuid,
+            usage: event.usage,
+        },
+        _ => LoopEvent::Other,
+    }
 }
 
 pub fn read_records(path: &Path, offset: u64) -> Option<(Vec<WireRecord>, u64)> {
@@ -360,11 +590,9 @@ pub fn read_records(path: &Path, offset: u64) -> Option<(Vec<WireRecord>, u64)> 
 pub fn usage_records(records: &[WireRecord]) -> Vec<(Option<f64>, UsageRecord)> {
     records
         .iter()
-        .filter(|record| record.kind == "usage.record")
-        .filter_map(|record| {
-            record
-                .parse::<UsageRecord>()
-                .map(|usage| (record.time, usage))
+        .filter_map(|record| match &record.event {
+            WireEvent::Usage(usage) => Some((record.time, usage.clone())),
+            _ => None,
         })
         .collect()
 }
@@ -372,33 +600,20 @@ pub fn usage_records(records: &[WireRecord]) -> Vec<(Option<f64>, UsageRecord)> 
 pub fn latest_context_tokens(records: &[WireRecord]) -> Option<u64> {
     records
         .iter()
-        .fold(None, |latest, record| match record.kind.as_str() {
-            "context.append_loop_event" => record
-                .fields
-                .get("event")
-                .cloned()
-                .and_then(|event| serde_json::from_value::<LoopEvent>(event).ok())
-                .filter(|event| event.kind == "step.end")
-                .and_then(|event| event.usage)
-                .filter(|usage| !usage.is_zero())
-                .map(|usage| usage.total())
-                .or(latest),
-            "context.clear" => Some(0),
-            "context.apply_compaction" => record
-                .fields
-                .get("tokensAfter")
-                .and_then(Value::as_u64)
-                .or(latest),
+        .fold(None, |latest, record| match &record.event {
+            WireEvent::AppendLoopEvent(LoopEvent::StepEnd {
+                usage: Some(usage), ..
+            }) if !usage.is_zero() => Some(usage.total()),
+            WireEvent::ContextClear => Some(0),
+            WireEvent::ApplyCompaction { tokens_after } => (*tokens_after).or(latest),
             _ => latest,
         })
 }
 
 pub fn latest_turn_usage(records: &[WireRecord]) -> Option<UsageRecord> {
-    records.iter().rev().find_map(|record| {
-        (record.kind == "usage.record")
-            .then(|| record.parse::<UsageRecord>())
-            .flatten()
-            .filter(UsageRecord::is_turn_scoped)
+    records.iter().rev().find_map(|record| match &record.event {
+        WireEvent::Usage(usage) if usage.is_turn_scoped() => Some(usage.clone()),
+        _ => None,
     })
 }
 
@@ -410,20 +625,4 @@ pub fn effective_attribution(records: &[WireRecord]) -> EffectiveAttribution {
             attribution
         },
     )
-}
-
-pub fn prompt(record: &WireRecord) -> Option<PromptRecord> {
-    matches!(record.kind.as_str(), "turn.prompt" | "turn.steer")
-        .then(|| record.parse::<PromptRecord>())?
-}
-
-pub fn loop_event(record: &WireRecord) -> Option<LoopEvent> {
-    if record.kind != "context.append_loop_event" {
-        return None;
-    }
-    serde_json::from_value(record.fields.get("event")?.clone()).ok()
-}
-
-pub fn record_message(record: &WireRecord) -> Option<&Value> {
-    (record.kind == "context.append_message").then(|| record.fields.get("message"))?
 }

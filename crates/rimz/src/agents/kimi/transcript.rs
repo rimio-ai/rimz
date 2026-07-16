@@ -1,14 +1,15 @@
 //! Kimi Code durable conversation normalization.
 //!
-//! Human turns live in `turn.prompt`/`turn.steer`; normal assistant text is
-//! reconstructed from recorded loop steps. Model-facing context and tool
-//! plumbing stay out of the user-visible conversation.
+//! Human turns and assistant steps arrive as typed Wire events. Model-facing
+//! context, thinking, and tool plumbing stay out of visible conversation.
 
 use jiff::Timestamp;
-use serde_json::Value;
 
 use super::super::{TranscriptMessage, TranscriptRole, sanitize_user_prompt};
-use super::wire::{self, WireRecord};
+use super::wire::{
+    self, AppendedMessage, ContentPart, LoopEvent, MessageContent, MessageRole, PromptOrigin,
+    PromptRecord, WireEvent, WireRecord,
+};
 
 #[derive(Default)]
 struct AssistantStep {
@@ -17,120 +18,130 @@ struct AssistantStep {
     at: Option<Timestamp>,
 }
 
-pub(super) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
-    let records = lines
-        .lines()
-        .filter_map(|line| serde_json::from_str::<WireRecord>(line).ok())
-        .collect::<Vec<_>>();
-    normalize(&records)
+#[derive(Default)]
+struct TranscriptFold {
+    messages: Vec<TranscriptMessage>,
+    steps: Vec<AssistantStep>,
 }
 
-pub(super) fn normalize(records: &[WireRecord]) -> Vec<TranscriptMessage> {
-    let mut messages = Vec::new();
-    let mut steps = Vec::<AssistantStep>::new();
-
-    for record in records {
-        if let Some(prompt) = wire::prompt(record) {
-            if prompt.origin.kind != "user" {
-                continue;
+impl TranscriptFold {
+    fn observe(&mut self, record: &WireRecord) {
+        match &record.event {
+            WireEvent::Prompt { prompt, .. } if prompt.origin == PromptOrigin::User => {
+                self.observe_prompt(record, prompt);
             }
-            flush_steps(&mut messages, &mut steps);
-            let visible = prompt
-                .input
-                .iter()
-                .filter(|part| part.kind == "text")
-                .filter_map(|part| part.text.as_deref())
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            if let Some(text) = sanitize_user_prompt(Some(&visible)) {
-                messages.push(TranscriptMessage {
-                    role: TranscriptRole::User,
-                    at: record_time(record.time),
-                    text,
-                });
+            WireEvent::AppendLoopEvent(event) => self.observe_loop_event(record, event),
+            WireEvent::AppendMessage(message) if message.role == MessageRole::Assistant => {
+                self.observe_message(record, message);
             }
-            continue;
+            _ => {}
         }
+    }
 
-        if let Some(event) = wire::loop_event(record) {
-            match event.kind.as_str() {
-                "step.begin" => {
-                    let Some(id) = event.uuid else { continue };
-                    if steps.iter().all(|step| step.id != id) {
-                        steps.push(AssistantStep {
-                            id,
-                            at: record_time(record.time),
-                            ..AssistantStep::default()
-                        });
-                    }
-                }
-                "content.part" => {
-                    let Some(part) = event.part.filter(|part| part.kind == "text") else {
-                        continue;
-                    };
-                    let Some(text) = part
-                        .text
-                        .map(|text| text.trim().to_owned())
-                        .filter(|text| !text.is_empty())
-                    else {
-                        continue;
-                    };
-                    let Some(id) = event.step_uuid.or(event.uuid) else {
-                        continue;
-                    };
-                    let step = if let Some(index) = steps.iter().position(|step| step.id == id) {
-                        &mut steps[index]
-                    } else {
-                        let index = steps.len();
-                        steps.push(AssistantStep {
-                            id,
-                            at: record_time(record.time),
-                            ..AssistantStep::default()
-                        });
-                        // The just-pushed index is provably in bounds.
-                        &mut steps[index]
-                    };
-                    step.at = record_time(record.time).or(step.at);
-                    step.text.push(text);
-                }
-                "step.end" => {
-                    let Some(id) = event.uuid else { continue };
-                    if let Some(index) = steps.iter().position(|step| step.id == id) {
-                        let mut step = steps.remove(index);
-                        step.at = record_time(record.time).or(step.at);
-                        emit_step(&mut messages, step);
-                    }
-                }
-                _ => {}
-            }
-            continue;
-        }
-
-        if record.kind == "context.append_message"
-            && let Some(message) = wire::record_message(record)
-            && message.get("role").and_then(Value::as_str) == Some("assistant")
-            && let Some(text) = visible_text(message.get("content"))
-        {
-            flush_steps(&mut messages, &mut steps);
-            messages.push(TranscriptMessage {
-                role: TranscriptRole::Assistant,
-                at: record_time(record.time),
+    fn observe_prompt(&mut self, record: &WireRecord, prompt: &PromptRecord) {
+        self.flush_steps();
+        let visible = visible_parts(&prompt.input);
+        if let Some(text) = sanitize_user_prompt(Some(&visible)) {
+            self.messages.push(TranscriptMessage {
+                role: TranscriptRole::User,
+                at: record.timestamp(),
                 text,
             });
         }
     }
-    flush_steps(&mut messages, &mut steps);
-    messages
+
+    fn observe_loop_event(&mut self, record: &WireRecord, event: &LoopEvent) {
+        match event {
+            LoopEvent::StepBegin { id: Some(id) } => self.begin_step(id, record.timestamp()),
+            LoopEvent::ContentPart {
+                step_id: Some(id),
+                part: ContentPart::Text(text),
+            } => self.append_part(id, text, record.timestamp()),
+            LoopEvent::StepEnd { id: Some(id), .. } => self.end_step(id, record.timestamp()),
+            _ => {}
+        }
+    }
+
+    fn observe_message(&mut self, record: &WireRecord, message: &AppendedMessage) {
+        let Some(text) = visible_message(&message.content) else {
+            return;
+        };
+        self.flush_steps();
+        self.messages.push(TranscriptMessage {
+            role: TranscriptRole::Assistant,
+            at: record.timestamp(),
+            text,
+        });
+    }
+
+    fn begin_step(&mut self, id: &str, at: Option<Timestamp>) {
+        if self.steps.iter().all(|step| step.id != id) {
+            self.steps.push(AssistantStep {
+                id: id.to_owned(),
+                at,
+                ..AssistantStep::default()
+            });
+        }
+    }
+
+    fn append_part(&mut self, id: &str, text: &str, at: Option<Timestamp>) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let step = self.step_mut(id, at);
+        step.at = at.or(step.at);
+        step.text.push(text.to_owned());
+    }
+
+    fn step_mut(&mut self, id: &str, at: Option<Timestamp>) -> &mut AssistantStep {
+        if let Some(index) = self.steps.iter().position(|step| step.id == id) {
+            return &mut self.steps[index];
+        }
+        self.steps.push(AssistantStep {
+            id: id.to_owned(),
+            at,
+            ..AssistantStep::default()
+        });
+        let index = self.steps.len() - 1;
+        &mut self.steps[index]
+    }
+
+    fn end_step(&mut self, id: &str, at: Option<Timestamp>) {
+        let Some(index) = self.steps.iter().position(|step| step.id == id) else {
+            return;
+        };
+        let mut step = self.steps.remove(index);
+        step.at = at.or(step.at);
+        emit_step(&mut self.messages, step);
+    }
+
+    fn flush_steps(&mut self) {
+        for step in std::mem::take(&mut self.steps) {
+            emit_step(&mut self.messages, step);
+        }
+    }
+
+    fn finish(mut self) -> Vec<TranscriptMessage> {
+        self.flush_steps();
+        self.messages
+    }
+}
+
+pub(super) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
+    normalize(&wire::records_from_str(lines))
+}
+
+pub(super) fn normalize(records: &[WireRecord]) -> Vec<TranscriptMessage> {
+    let mut fold = TranscriptFold::default();
+    for record in records {
+        fold.observe(record);
+    }
+    fold.finish()
 }
 
 pub(super) fn latest_assistant(lines: &str) -> Option<String> {
-    let records = lines
-        .lines()
-        .filter_map(|line| serde_json::from_str::<WireRecord>(line).ok())
-        .collect::<Vec<_>>();
-    latest_assistant_from_records(&records)
+    latest_assistant_from_records(&wire::records_from_str(lines))
 }
 
 pub(super) fn latest_assistant_from_records(records: &[WireRecord]) -> Option<String> {
@@ -149,10 +160,23 @@ pub(super) fn latest_assistant_from_records(records: &[WireRecord]) -> Option<St
         .map(|(_, message)| message.text.clone())
 }
 
-fn flush_steps(messages: &mut Vec<TranscriptMessage>, steps: &mut Vec<AssistantStep>) {
-    for step in std::mem::take(steps) {
-        emit_step(messages, step);
-    }
+fn visible_parts(parts: &[ContentPart]) -> String {
+    parts
+        .iter()
+        .filter_map(ContentPart::text)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn visible_message(content: &MessageContent) -> Option<String> {
+    let text = match content {
+        MessageContent::Text(text) => text.trim().to_owned(),
+        MessageContent::Parts(parts) => visible_parts(parts),
+        MessageContent::Other => return None,
+    };
+    (!text.is_empty()).then_some(text)
 }
 
 fn emit_step(messages: &mut Vec<TranscriptMessage>, step: AssistantStep) {
@@ -164,29 +188,4 @@ fn emit_step(messages: &mut Vec<TranscriptMessage>, step: AssistantStep) {
             text,
         });
     }
-}
-
-fn visible_text(content: Option<&Value>) -> Option<String> {
-    let content = content?;
-    let text = match content {
-        Value::String(text) => text.trim().to_owned(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => return None,
-    };
-    (!text.is_empty()).then_some(text)
-}
-
-fn record_time(time: Option<f64>) -> Option<Timestamp> {
-    let millis = time?.trunc();
-    if millis > i64::MAX as f64 {
-        return None;
-    }
-    Timestamp::from_millisecond(millis as i64).ok()
 }

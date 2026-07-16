@@ -788,6 +788,20 @@ fn unknown_and_malformed_wire_records_do_not_block_following_facts() {
     );
 
     let records = wire::records_from_bytes(lines.as_bytes());
+    assert!(matches!(records[0].event, wire::WireEvent::Unknown));
+    assert!(matches!(records[1].event, wire::WireEvent::Unknown));
+    assert!(matches!(
+        records[2].event,
+        wire::WireEvent::AppendLoopEvent(wire::LoopEvent::Other)
+    ));
+    assert!(matches!(records[3].event, wire::WireEvent::Unknown));
+    assert!(matches!(
+        records[4].event,
+        wire::WireEvent::Prompt {
+            kind: wire::PromptKind::Prompt,
+            ..
+        }
+    ));
     let messages = transcript::normalize(&records);
     assert_eq!(
         messages
@@ -822,6 +836,20 @@ fn interleaved_assistant_steps_keep_completion_and_flush_order() {
             .collect::<Vec<_>>(),
         ["completed first", "pending first", "next", "orphan", "last"]
     );
+}
+
+#[test]
+fn wire_timestamps_require_positive_in_range_milliseconds() {
+    let lines = concat!(
+        "{\"type\":\"turn.prompt\",\"time\":0,\"input\":[{\"type\":\"text\",\"text\":\"zero\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"turn.prompt\",\"time\":-1,\"input\":[{\"type\":\"text\",\"text\":\"negative\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"turn.prompt\",\"time\":1e30,\"input\":[{\"type\":\"text\",\"text\":\"overflow\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"turn.prompt\",\"time\":1770000000000,\"input\":[{\"type\":\"text\",\"text\":\"valid\"}],\"origin\":{\"kind\":\"user\"}}\n",
+    );
+
+    let messages = transcript::parse_messages(lines);
+    assert!(messages[..3].iter().all(|message| message.at.is_none()));
+    assert!(messages[3].at.is_some());
 }
 
 #[test]
