@@ -162,6 +162,7 @@ impl WaitStyle {
                         None,
                         current_channel,
                     )?;
+                    return Ok(());
                 }
                 print_single_outcome(outcome, json)
             }
