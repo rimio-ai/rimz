@@ -387,7 +387,7 @@ fn probe_stream_waits_for_control_master_before_starting() {
         .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
         .env("RIMZ_TEST_CONTROL_MASTER_READY_DELAY_MS", "100")
         .env("RIMZ_TEST_PROBE_BEFORE_MASTER", &fallback)
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "220")
+        .env("RIMZ_TEST_WAIT_FOR_PROBE_MS", "5000")
         .env("RIMZ_REMOTE_DIAL_MS", "0")
         .env("RIMZ_REMOTE_PROBE_MS", "20")
         .env("RIMZ_REMOTE_PROBE_TIMEOUT_MS", "20")

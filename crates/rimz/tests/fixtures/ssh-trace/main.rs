@@ -53,6 +53,7 @@ fn main() {
     }
 
     publish_control_master_if_requested();
+    wait_for_probe_if_requested(&log_path);
 
     if let Ok(ms) = env::var("RIMZ_TEST_SSH_SLEEP_MS")
         && let Ok(ms) = ms.parse::<u64>()
@@ -195,6 +196,25 @@ fn publish_control_master_if_requested() {
         std::thread::sleep(std::time::Duration::from_millis(ms));
     }
     std::fs::write(path, b"ready").expect("publish control-master marker");
+}
+
+fn wait_for_probe_if_requested(log_path: &std::ffi::OsStr) {
+    let Some(timeout) = env::var("RIMZ_TEST_WAIT_FOR_PROBE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(std::time::Duration::from_millis)
+    else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if std::fs::read_to_string(log_path)
+            .is_ok_and(|log| log.contains("remote link-stats ingest"))
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 fn ack_probe_stream() {
