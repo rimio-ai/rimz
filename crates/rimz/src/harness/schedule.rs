@@ -295,6 +295,7 @@ pub struct TaskTiming {
     parsed: Result<ParsedSchedule, ScheduleErr>,
     state: TaskTimingState,
     active_pause: Option<pauses::PauseEntry>,
+    scheduled_next: Option<Timestamp>,
 }
 
 /// Current schedule state before CLI presentation and live run-lock overlays.
@@ -323,6 +324,14 @@ impl TaskTiming {
         let active_pause = pause
             .filter(|pause| pauses::is_active(pause, now.timestamp()))
             .copied();
+        let scheduled_next = match (&parsed, last_fire) {
+            (Ok(parsed), Some(last_fire)) => parsed.schedule.next_after(
+                pauses::effective_last_fire(last_fire, pause, now.timestamp()),
+                now,
+                window_reset,
+            ),
+            (Ok(_), None) | (Err(_), _) => None,
+        };
         let state = if let Some(state) = blocked {
             TaskTimingState::Blocked(state)
         } else if let Some(pause) = active_pause {
@@ -331,24 +340,18 @@ impl TaskTiming {
             match (&parsed, last_fire) {
                 (Err(_), _) => TaskTimingState::Invalid,
                 (Ok(_), None) => TaskTimingState::Unarmed,
-                (Ok(parsed), Some(last_fire)) => {
-                    let effective_last_fire =
-                        pauses::effective_last_fire(last_fire, pause, now.timestamp());
-                    match parsed
-                        .schedule
-                        .next_after(effective_last_fire, now, window_reset)
-                    {
-                        Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),
-                        Some(next) => TaskTimingState::Upcoming(next),
-                        None => TaskTimingState::NoOccurrence,
-                    }
-                }
+                (Ok(_), Some(_)) => match scheduled_next {
+                    Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),
+                    Some(next) => TaskTimingState::Upcoming(next),
+                    None => TaskTimingState::NoOccurrence,
+                },
             }
         };
         Self {
             parsed,
             state,
             active_pause,
+            scheduled_next,
         }
     }
 
@@ -369,6 +372,11 @@ impl TaskTiming {
             TaskTimingState::Upcoming(next) | TaskTimingState::Due(next) => Some(next),
             _ => None,
         }
+    }
+
+    /// Parsed schedule occurrence independent of trust and active-pause display overlays.
+    pub const fn scheduled_next_timestamp(&self) -> Option<Timestamp> {
+        self.scheduled_next
     }
 }
 

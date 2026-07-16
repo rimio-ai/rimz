@@ -29,6 +29,7 @@ fn grouped_tasks<'a>(
     tasks: &'a BTreeMap<String, (TaskEntry, TaskSource)>,
     pauses: &BTreeMap<String, PauseEntry>,
     now_zoned: &jiff::Zoned,
+    retain_overlaid_next: bool,
 ) -> Vec<ObservedTaskGroup<'a>> {
     let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &TaskEntry, TaskSource)>> =
         BTreeMap::new();
@@ -60,6 +61,7 @@ fn grouped_tasks<'a>(
                         &stamps,
                         pauses.get(name),
                         now_zoned,
+                        retain_overlaid_next,
                     ),
                 })
                 .collect();
@@ -86,7 +88,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let mut blocked_count = 0;
-    let groups = grouped_tasks(&tasks, &pause_entries, &now_zoned);
+    let groups = grouped_tasks(&tasks, &pause_entries, &now_zoned, false);
     for (idx, group) in groups.into_iter().enumerate() {
         if idx > 0 {
             writeln!(out)?;
@@ -252,7 +254,7 @@ fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: b
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let context = ListRowContext { stats: &stats, now };
-    let groups = grouped_tasks(&tasks, &pause_entries, &now_zoned)
+    let groups = grouped_tasks(&tasks, &pause_entries, &now_zoned, true)
         .into_iter()
         .map(|group| WatchGroup {
             root: group.root,
@@ -306,11 +308,11 @@ struct WatchGroup {
 }
 
 fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> WatchRow {
-    let next_ts = task.timing.next_timestamp();
     let running = matches!(
         probe_run_lock(task.name, task.entry),
         Ok(RunLockState::Held(_))
     );
+    let next_ts = watch_next_timestamp(&task.timing, running);
     let state = if running {
         RowState::Running
     } else {
@@ -353,6 +355,14 @@ fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Wat
         next_text,
         last_text,
         status_text,
+    }
+}
+
+fn watch_next_timestamp(timing: &schedule::TaskTiming, running: bool) -> Option<Timestamp> {
+    if running {
+        timing.scheduled_next_timestamp()
+    } else {
+        timing.next_timestamp()
     }
 }
 
@@ -926,6 +936,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         &stamps,
         pause.as_ref(),
         &now_zoned,
+        false,
     );
     let records = run_log::task_records(&state_home(), &args.name);
     let show_agent_runs = has_agent_runs_section(&entry);
@@ -1070,8 +1081,8 @@ fn write_show_headline(
     }
     writeln!(out)?;
     if matches!(
-        timing.state(),
-        schedule::TaskTimingState::Paused(PauseEntry {
+        timing.active_pause(),
+        Some(PauseEntry {
             until: None,
             strikes: None,
         })

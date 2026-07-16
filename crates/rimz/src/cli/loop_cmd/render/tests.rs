@@ -590,7 +590,7 @@ fn show_headline_keeps_blocked_before_pause() {
     let now = Timestamp::from_second(10_000).unwrap();
     let pause = PauseEntry {
         until: None,
-        strikes: Some(3),
+        strikes: None,
     };
     let timing = interval_timing(Some(TrustState::Untrusted), None, Some(&pause), now);
     let mut out = Vec::new();
@@ -600,6 +600,25 @@ fn show_headline_keeps_blocked_before_pause() {
     let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
     assert!(out.contains("next blocked · trust"), "{out}");
     assert!(!out.contains("paused"), "{out}");
+    assert!(out.contains("resume with `rimz loop resume task`"), "{out}");
+}
+
+#[test]
+fn running_watch_row_retains_next_fire_through_pause_overlay() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let pause = PauseEntry {
+        until: None,
+        strikes: None,
+    };
+    let timing = interval_timing(None, Timestamp::from_second(9_400).ok(), Some(&pause), now);
+
+    assert_eq!(timing.state(), schedule::TaskTimingState::Paused(pause));
+    assert_eq!(timing.next_timestamp(), None);
+    assert_eq!(watch_next_timestamp(&timing, false), None);
+    assert_eq!(
+        watch_next_timestamp(&timing, true),
+        Timestamp::from_second(10_300).ok()
+    );
 }
 
 #[test]

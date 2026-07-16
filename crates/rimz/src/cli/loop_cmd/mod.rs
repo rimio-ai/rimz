@@ -347,6 +347,7 @@ fn observe_task_timing(
     stamps: &BTreeMap<String, Timestamp>,
     pause: Option<&PauseEntry>,
     now_zoned: &jiff::Zoned,
+    retain_overlaid_next: bool,
 ) -> schedule::TaskTiming {
     let last_fire = stamps.get(name).copied();
     let active_pause = pause.is_some_and(|pause| pauses::is_active(pause, now_zoned.timestamp()));
@@ -358,10 +359,11 @@ fn observe_task_timing(
             .as_deref()
             .and_then(rimz::harness::spec::ping_kind)
             .is_some();
-    let window_reset =
-        (blocked.is_none() && !active_pause && last_fire.is_some() && valid_reset_shape)
-            .then(|| window_reset_for(entry))
-            .flatten();
+    let window_reset = ((retain_overlaid_next || (blocked.is_none() && !active_pause))
+        && last_fire.is_some()
+        && valid_reset_shape)
+        .then(|| window_reset_for(entry))
+        .flatten();
     schedule::TaskTiming::evaluate(
         name,
         entry,
@@ -382,7 +384,7 @@ fn task_next_fire_text(
     let runtime = runtime_for_root(&entry.resolved_root())?;
     let stamps = schedule::last_stamps(&runtime);
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    observe_task_timing(name, entry, None, &stamps, pause, &now_zoned)
+    observe_task_timing(name, entry, None, &stamps, pause, &now_zoned, false)
         .next_timestamp()
         .map(|next| ui::rel_until(next, now))
 }
