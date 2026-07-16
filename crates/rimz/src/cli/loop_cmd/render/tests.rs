@@ -31,10 +31,14 @@ fn dashboard_row(name: &str, state: RowState, failed: bool) -> WatchRow {
 }
 
 fn dashboard(group: &WatchGroup, cols: usize, rows: usize) -> String {
+    dashboards(std::slice::from_ref(group), cols, rows)
+}
+
+fn dashboards(groups: &[WatchGroup], cols: usize, rows: usize) -> String {
     let mut out = anstream::StripStream::new(Vec::new());
     render_dashboard(
         &mut out,
-        std::slice::from_ref(group),
+        groups,
         cols,
         rows,
         Timestamp::from_second(100).unwrap(),
@@ -42,6 +46,25 @@ fn dashboard(group: &WatchGroup, cols: usize, rows: usize) -> String {
     )
     .unwrap();
     String::from_utf8(out.into_inner()).unwrap()
+}
+
+fn dashboard_group(root: &str, names: &[&str]) -> WatchGroup {
+    WatchGroup {
+        root: PathBuf::from(root),
+        room_is_open: true,
+        rows: names
+            .iter()
+            .map(|name| dashboard_row(name, RowState::NeverRun, false))
+            .collect(),
+    }
+}
+
+fn assert_dashboard_bounds(rendered: &str, cols: usize, rows: usize) {
+    assert!(rendered.lines().count() <= rows, "{rendered}");
+    assert!(
+        rendered.lines().all(|line| line.width() <= cols),
+        "{rendered}"
+    );
 }
 
 #[test]
@@ -151,6 +174,90 @@ fn watch_dashboard_adapts_band_columns_rank_height_and_width() {
     assert!(short.contains("+6 more"), "{short}");
     assert!(short.lines().all(|line| line.width() <= 30), "{short}");
     assert_eq!(dashboard(&group, 14, 2).lines().count(), 1);
+}
+
+#[test]
+fn watch_dashboard_renders_two_complete_groups_in_order() {
+    let groups = [
+        dashboard_group("/repo/first", &["z-last", "a-first"]),
+        dashboard_group("/repo/second", &["d-last", "b-first"]),
+    ];
+
+    let rendered = dashboards(&groups, 80, 10);
+
+    assert_eq!(rendered.lines().count(), 10, "{rendered}");
+    let positions = [
+        "/repo/first",
+        "a-first",
+        "z-last",
+        "/repo/second",
+        "b-first",
+        "d-last",
+    ]
+    .map(|text| rendered.find(text).expect(text));
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{rendered}"
+    );
+    assert_eq!(rendered.matches("last run").count(), 2, "{rendered}");
+    assert_dashboard_bounds(&rendered, 80, 10);
+}
+
+#[test]
+fn watch_dashboard_hides_only_the_second_group_when_it_does_not_fit() {
+    let groups = [
+        dashboard_group("/repo/first", &["one", "two"]),
+        dashboard_group("/repo/second", &["three", "four", "five"]),
+    ];
+
+    let rendered = dashboards(&groups, 80, 9);
+
+    assert_eq!(rendered.lines().count(), 7, "{rendered}");
+    assert!(rendered.contains("/repo/first"), "{rendered}");
+    assert!(
+        rendered.contains("one") && rendered.contains("two"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("/repo/second"), "{rendered}");
+    assert!(rendered.contains("+3 more"), "{rendered}");
+    assert_dashboard_bounds(&rendered, 80, 9);
+}
+
+#[test]
+fn watch_dashboard_partially_renders_only_the_first_group() {
+    let groups = [
+        dashboard_group("/repo/first", &["delta", "alpha", "charlie", "bravo"]),
+        dashboard_group("/repo/second", &["echo", "foxtrot"]),
+    ];
+
+    let rendered = dashboards(&groups, 80, 7);
+
+    assert_eq!(rendered.lines().count(), 7, "{rendered}");
+    let alpha = rendered.find("alpha").expect("highest-ranked task");
+    let bravo = rendered.find("bravo").expect("second-ranked task");
+    assert!(alpha < bravo, "{rendered}");
+    assert!(
+        !rendered.contains("charlie") && !rendered.contains("delta"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("/repo/second"), "{rendered}");
+    assert!(rendered.contains("+4 more"), "{rendered}");
+    assert_dashboard_bounds(&rendered, 80, 7);
+}
+
+#[test]
+fn watch_dashboard_uses_only_more_line_below_partial_section_minimum() {
+    let groups = [
+        dashboard_group("/repo/first", &["one", "two"]),
+        dashboard_group("/repo/second", &["three"]),
+    ];
+
+    let rendered = dashboards(&groups, 12, 4);
+
+    assert_eq!(rendered.lines().count(), 3, "{rendered}");
+    assert_eq!(rendered.lines().last(), Some("+3 more"), "{rendered}");
+    assert!(!rendered.contains("/repo/"), "{rendered}");
+    assert_dashboard_bounds(&rendered, 12, 4);
 }
 
 #[test]
@@ -426,6 +533,94 @@ fn run_status_names_check_skipped_outcomes() {
         loop_result_style(LoopRunResult::SurplusSkipped),
         ui::palette::MUTED
     );
+}
+
+#[test]
+fn run_result_marks_and_static_labels_cover_every_variant() {
+    let cases = [
+        (
+            LoopRunResult::Completed,
+            "✓",
+            ui::palette::GOOD,
+            "completed",
+        ),
+        (
+            LoopRunResult::Delivered,
+            "✓",
+            ui::palette::GOOD,
+            "delivered",
+        ),
+        (LoopRunResult::Failed, "✗", ui::palette::ALARM, "failed"),
+        (
+            LoopRunResult::VerifyFailed,
+            "✗",
+            ui::palette::ALARM,
+            "verify failed",
+        ),
+        (
+            LoopRunResult::TimedOut,
+            "✗",
+            ui::palette::ALARM,
+            "timed out",
+        ),
+        (
+            LoopRunResult::BudgetExceeded,
+            "✗",
+            ui::palette::ALARM,
+            "budget exceeded",
+        ),
+        (LoopRunResult::Errored, "✗", ui::palette::ALARM, "error"),
+        (LoopRunResult::Expired, "○", ui::palette::WARN, "expired"),
+        (LoopRunResult::Canceled, "○", ui::palette::WARN, "canceled"),
+        (
+            LoopRunResult::TargetGone,
+            "○",
+            ui::palette::WARN,
+            "target gone",
+        ),
+        (
+            LoopRunResult::Overlapped,
+            "○",
+            ui::palette::WARN,
+            "overlapped",
+        ),
+        (
+            LoopRunResult::BudgetSkipped,
+            "○",
+            ui::palette::WARN,
+            "budget skipped",
+        ),
+        (
+            LoopRunResult::SkippedWindow,
+            "○",
+            ui::palette::MUTED,
+            "skipped",
+        ),
+        (
+            LoopRunResult::SurplusSkipped,
+            "○",
+            ui::palette::MUTED,
+            "surplus skipped",
+        ),
+        (
+            LoopRunResult::CheckSkipped,
+            "○",
+            ui::palette::MUTED,
+            "skipped",
+        ),
+    ];
+
+    for (result, glyph, style, label) in cases {
+        assert_eq!(loop_result_glyph(result), glyph, "{result:?}");
+        assert_eq!(loop_result_style(result), style, "{result:?}");
+        assert_eq!(result.label(), label, "{result:?}");
+        if result != LoopRunResult::CheckSkipped {
+            let status = run_status(&record(10, result));
+            assert_eq!(status.glyph, glyph, "{result:?}");
+            assert_eq!(status.style, style, "{result:?}");
+            assert_eq!(status.label, label, "{result:?}");
+        }
+    }
 }
 
 #[test]
