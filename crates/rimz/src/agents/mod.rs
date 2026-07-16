@@ -828,6 +828,12 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Derive provider-store-backed subagent lifecycle observations for parents in this workspace.
+    /// Hook ingestion owns rollup deduplication and durable appends; adapters only map local truth.
+    fn derive_subagent_observations(&self, _workspace: &Path) -> Vec<AgentLifecycleObservation> {
+        Vec::new()
+    }
+
     /// Correlate one identity-bearing hook with one pane-local candidate
     /// parent through provider-owned durable records. The shared hook path
     /// bounds and disambiguates candidates; adapters with no such relation

@@ -35,26 +35,34 @@ pub(crate) fn resolve_subagent_identity(
     parent_id: Option<&str>,
     payload: &Value,
 ) -> SubagentIdentity {
+    if let Some((agent_id, parent_agent_id)) = validated_subagent_identity(child_id, parent_id) {
+        return SubagentIdentity::Resolved {
+            agent_id,
+            parent_agent_id,
+        };
+    }
     let child = child_id.map(str::trim).filter(|value| !value.is_empty());
     let parent = parent_id.map(str::trim).filter(|value| !value.is_empty());
-    match (child, parent) {
-        (Some(child), Some(parent)) if child != parent => SubagentIdentity::Resolved {
-            agent_id: AgentSessionId::from(child),
-            parent_agent_id: AgentSessionId::from(parent),
-        },
-        _ => {
-            error!(
-                target: "rimz::agent::lifecycle",
-                kind,
-                event = event_name,
-                child_id = child.unwrap_or(""),
-                parent_id = parent.unwrap_or(""),
-                payload = %payload,
-                "subagent identity unusable — quarantined (need a distinct child and parent id)",
-            );
-            SubagentIdentity::Quarantined
-        }
-    }
+    error!(
+        target: "rimz::agent::lifecycle",
+        kind,
+        event = event_name,
+        child_id = child.unwrap_or(""),
+        parent_id = parent.unwrap_or(""),
+        payload = %payload,
+        "subagent identity unusable — quarantined (need a distinct child and parent id)",
+    );
+    SubagentIdentity::Quarantined
+}
+
+/// Validate the shared child/parent identity rule without logging provider-local discovery failures.
+pub(crate) fn validated_subagent_identity(
+    child_id: Option<&str>,
+    parent_id: Option<&str>,
+) -> Option<(AgentSessionId, AgentSessionId)> {
+    let child = child_id.map(str::trim).filter(|value| !value.is_empty())?;
+    let parent = parent_id.map(str::trim).filter(|value| !value.is_empty())?;
+    (child != parent).then(|| (AgentSessionId::from(child), AgentSessionId::from(parent)))
 }
 
 /// The outcome of resolving a non-subagent (root-arm) event's identity.

@@ -171,6 +171,123 @@ fn create_plan_message() -> Vec<u8> {
     }))
 }
 
+struct CursorSubagentFixture {
+    _dir: tempfile::TempDir,
+    home: PathBuf,
+    workspace: PathBuf,
+    bucket: PathBuf,
+}
+
+impl CursorSubagentFixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("cursor-home");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let bucket = home.join("chats").join(hex::encode(Md5::digest(
+            workspace.to_str().unwrap().as_bytes(),
+        )));
+        std::fs::create_dir_all(&bucket).unwrap();
+        Self {
+            _dir: dir,
+            home,
+            workspace,
+            bucket,
+        }
+    }
+
+    fn add_child(
+        &self,
+        child_id: &str,
+        parent_agent_id: Option<&str>,
+        type_name: Option<&str>,
+        created_at: i64,
+        schema: i64,
+    ) -> PathBuf {
+        let session = self.bucket.join(child_id);
+        std::fs::create_dir_all(&session).unwrap();
+        let subagent_info = parent_agent_id.map(|parent_agent_id| {
+            json!({
+                "parentAgentId": parent_agent_id,
+                "rootParentAgentId": parent_agent_id,
+                "toolCallId": format!("call-{child_id}"),
+                "typeName": type_name,
+            })
+        });
+        self.write_store(
+            &session.join("store.db"),
+            schema,
+            &json!({
+                "agentId": child_id,
+                "latestRootBlobId": "a".repeat(64),
+                "createdAt": created_at,
+                "subagentInfo": subagent_info,
+            }),
+        );
+        session
+    }
+
+    fn write_store(&self, path: &Path, schema: i64, metadata: &Value) {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .pragma_update(None, "user_version", schema)
+            .unwrap();
+        connection
+            .execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO meta(key, value) VALUES ('0', ?1)",
+                [hex::encode(serde_json::to_vec(metadata).unwrap())],
+            )
+            .unwrap();
+    }
+
+    fn replace_store_metadata(&self, session: &Path, encoded: &str) {
+        let connection = Connection::open(session.join("store.db")).unwrap();
+        connection
+            .execute("UPDATE meta SET value = ?1 WHERE key = '0'", [encoded])
+            .unwrap();
+    }
+
+    fn write_transcript(&self, child_id: &str, lines: &[Value]) -> PathBuf {
+        let path = self
+            .home
+            .join("projects/project/agent-transcripts")
+            .join(child_id)
+            .join(format!("{child_id}.jsonl"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text = lines
+            .iter()
+            .map(|line| serde_json::to_string(line).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn observations(&self) -> Vec<AgentLifecycleObservation> {
+        CursorAdapter.derive_subagent_observations_under(&self.home, &self.workspace)
+    }
+
+    fn records(&self) -> Vec<session::CursorSubagentRecord> {
+        session::discover_subagent_chats(&self.home, &self.workspace)
+    }
+}
+
+fn cursor_child_user_message(task: &str) -> Value {
+    json!({
+        "role": "user",
+        "message": {
+            "content": [{
+                "type": "text",
+                "text": format!("<user_query>\n  {task}  \n</user_query>"),
+            }],
+        },
+    })
+}
+
 fn pending_ask(prompt: &str, run_async: bool, sentinel: Option<&str>) -> Value {
     json!({
         "id": "assistant-message",
@@ -442,6 +559,148 @@ fn cursor_subagent_malformed_identity_is_quarantined() {
             );
         }
     }
+}
+
+#[test]
+fn cursor_chats_store_derives_running_finished_and_errored_children() {
+    let fixture = CursorSubagentFixture::new();
+    fixture.add_child(
+        "child-running",
+        Some("parent-1"),
+        Some("generalPurpose"),
+        1_735_689_600_000,
+        1,
+    );
+    fixture.write_transcript(
+        "child-running",
+        &[
+            cursor_child_user_message("inspect hooks"),
+            json!({"role":"assistant","message":{"content":[]}}),
+        ],
+    );
+    fixture.add_child(
+        "child-finished",
+        Some("parent-1"),
+        Some("explore"),
+        1_735_689_601_000,
+        1,
+    );
+    let finished_path = fixture.write_transcript(
+        "child-finished",
+        &[
+            cursor_child_user_message("map the store"),
+            json!({"type":"turn_ended","status":"success"}),
+        ],
+    );
+    fixture.add_child(
+        "child-errored",
+        Some("parent-1"),
+        Some("generalPurpose"),
+        1_735_689_602_000,
+        1,
+    );
+    fixture.write_transcript(
+        "child-errored",
+        &[
+            cursor_child_user_message("check failure"),
+            json!({"type":"turn_ended","status":"error"}),
+        ],
+    );
+
+    let observations = fixture.observations();
+    assert_eq!(observations.len(), 5);
+    let running = observations
+        .iter()
+        .find(|observation| observation.agent_id.as_deref() == Some("child-running"))
+        .expect("running child start");
+    assert_eq!(running.signal, LifecycleSignal::SubagentStarted);
+    assert_eq!(running.parent_agent_id.as_deref(), Some("parent-1"));
+    assert_eq!(running.agent_name.as_deref(), Some("generalPurpose"));
+    assert_eq!(running.launch.role.as_deref(), Some("generalPurpose"));
+    assert_eq!(running.task.as_deref(), Some("inspect hooks"));
+    assert_eq!(running.transcript_path, None);
+
+    let finished = observations
+        .iter()
+        .filter(|observation| observation.agent_id.as_deref() == Some("child-finished"))
+        .collect::<Vec<_>>();
+    assert_eq!(finished.len(), 2);
+    assert_eq!(finished[0].signal, LifecycleSignal::SubagentStarted);
+    assert_eq!(
+        finished[1].signal,
+        LifecycleSignal::SubagentStopped { errored: false }
+    );
+    assert_eq!(finished[1].task.as_deref(), Some("map the store"));
+    assert_eq!(
+        finished[1].transcript_path.as_deref(),
+        Some(finished_path.to_string_lossy().as_ref())
+    );
+
+    let errored = observations
+        .iter()
+        .find(|observation| {
+            observation.agent_id.as_deref() == Some("child-errored")
+                && matches!(observation.signal, LifecycleSignal::SubagentStopped { .. })
+        })
+        .expect("errored child stop");
+    assert_eq!(
+        errored.signal,
+        LifecycleSignal::SubagentStopped { errored: true }
+    );
+}
+
+#[test]
+fn cursor_chats_store_fails_closed_on_child_identity_schema_and_admission_drift() {
+    let fixture = CursorSubagentFixture::new();
+    fixture.add_child("missing-parent", None, Some("explore"), 1, 1);
+    fixture.add_child("blank-parent", Some("  "), Some("explore"), 2, 1);
+    fixture.add_child("equal-parent", Some("equal-parent"), Some("explore"), 3, 1);
+    fixture.add_child("wrong-schema", Some("parent-1"), Some("explore"), 4, 2);
+    let malformed = fixture.add_child(
+        "malformed-metadata",
+        Some("parent-1"),
+        Some("explore"),
+        5,
+        1,
+    );
+    fixture.replace_store_metadata(&malformed, &hex::encode(b"{"));
+    let root = fixture.add_child("root-marker", Some("parent-1"), Some("explore"), 6, 1);
+    std::fs::write(root.join("meta.json"), "{}").unwrap();
+
+    #[cfg(unix)]
+    {
+        let symlinked = fixture.bucket.join("symlinked-store");
+        std::fs::create_dir_all(&symlinked).unwrap();
+        let target = fixture.home.join("outside-store.db");
+        fixture.write_store(
+            &target,
+            1,
+            &json!({
+                "agentId": "symlinked-store",
+                "latestRootBlobId": "a".repeat(64),
+                "createdAt": 7,
+                "subagentInfo": {"parentAgentId":"parent-1"},
+            }),
+        );
+        std::os::unix::fs::symlink(target, symlinked.join("store.db")).unwrap();
+    }
+
+    assert!(fixture.records().is_empty());
+}
+
+#[test]
+fn cursor_chats_store_bounds_newest_workspace_directories() {
+    let fixture = CursorSubagentFixture::new();
+    for index in 0..40 {
+        fixture.add_child(
+            &format!("child-{index:02}"),
+            Some("parent-1"),
+            Some("explore"),
+            index,
+            1,
+        );
+    }
+    assert_eq!(fixture.records().len(), 32);
 }
 
 #[test]

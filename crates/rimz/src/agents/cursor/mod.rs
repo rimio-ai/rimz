@@ -1,10 +1,10 @@
 //! Cursor CLI hook adapter.
 //!
 //! Cursor's native hooks expose session, turn, tool, child, exit, and
-//! compaction-open signals. A version-pinned local pending-call reader derives
-//! pane-only `AskQuestion` and plan-approval waits; permission, structured
-//! answers, machine-readable spend, and post-compaction events remain explicit
-//! gaps.
+//! compaction-open signals. Version-pinned local chat readers derive pane-only
+//! `AskQuestion` and plan-approval waits plus child lifecycle; permission,
+//! structured answers, machine-readable spend, and post-compaction events
+//! remain explicit gaps.
 
 mod account;
 mod install;
@@ -129,8 +129,9 @@ const CURSOR_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "preCompact opens; the next lifecycle signal closes the bracket",
         gap: "no post-compaction event; landing status and phase held",
     },
-    subagents: ConcernCoverage::Wired {
-        via: "subagentStart/subagentStop with exact child and parent ids",
+    subagents: ConcernCoverage::Partial {
+        via: "chats-store subagentInfo and child transcript derivation at parent-hook cadence; native subagentStart/subagentStop mapping retained",
+        gap: "the installed CLI never issues subagent hook requests, so children land on the next parent hook, often only at turn end",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking signal",
@@ -414,6 +415,13 @@ impl AgentAdapter for CursorAdapter {
         Some(observation)
     }
 
+    fn derive_subagent_observations(&self, workspace: &Path) -> Vec<AgentLifecycleObservation> {
+        let Some(home) = session::cursor_home(std::env::var_os("HOME").as_deref()) else {
+            return Vec::new();
+        };
+        self.derive_subagent_observations_under(&home, workspace)
+    }
+
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
         let payload =
             serde_json::from_value::<statusline::StatuslinePayload>(payload.clone()).ok()?;
@@ -583,6 +591,40 @@ impl AgentAdapter for CursorAdapter {
 }
 
 impl CursorAdapter {
+    fn derive_subagent_observations_under(
+        &self,
+        home: &Path,
+        workspace: &Path,
+    ) -> Vec<AgentLifecycleObservation> {
+        session::discover_subagent_chats(home, workspace)
+            .into_iter()
+            .flat_map(|record| {
+                let mut observations = vec![Self::mapped_subagent_observation(
+                    record.child_id.clone(),
+                    record.parent_agent_id.clone(),
+                    LifecycleSignal::SubagentStarted,
+                    record.type_name.clone(),
+                    record.task.clone(),
+                )];
+                if let Some(terminal) = record.terminal {
+                    let mut stopped = Self::mapped_subagent_observation(
+                        record.child_id,
+                        record.parent_agent_id,
+                        LifecycleSignal::SubagentStopped {
+                            errored: terminal.errored,
+                        },
+                        record.type_name,
+                        record.task,
+                    );
+                    stopped.transcript_path = record
+                        .transcript_path
+                        .map(|path| path.to_string_lossy().into_owned());
+                    observations.push(stopped);
+                }
+                observations
+            })
+            .collect()
+    }
     fn observe_subagent_lifecycle(
         &self,
         event_name: &str,
@@ -610,17 +652,20 @@ impl CursorAdapter {
             SubagentIdentity::Quarantined => return None,
         };
 
-        let mut observation = AgentLifecycleObservation::new(Some(agent_id), signal)
-            .with_worktree_from_payload(payload);
-        observation.parent_agent_id = Some(parent_agent_id);
         let subagent_type = parsed.subagent_type.as_deref().and_then(non_empty_trimmed);
-        observation.agent_name = subagent_type.clone();
-        observation.launch.role = subagent_type;
-        observation.task = sanitize_user_prompt(parsed.task.as_deref()).or_else(|| {
+        let task = sanitize_user_prompt(parsed.task.as_deref()).or_else(|| {
             (event_name == "subagentStop")
                 .then(|| sanitize_user_prompt(parsed.description.as_deref()))
                 .flatten()
         });
+        let mut observation = Self::mapped_subagent_observation(
+            agent_id,
+            parent_agent_id,
+            signal,
+            subagent_type,
+            task,
+        )
+        .with_worktree_from_payload(payload);
         observation.worktree_branch = parsed.git_branch;
         if event_name == "subagentStart" {
             observation.launch.model = parsed.subagent_model.map(statusline::normalize_model);
@@ -628,6 +673,21 @@ impl CursorAdapter {
             observation.transcript_path = parsed.agent_transcript_path;
         }
         Some(observation)
+    }
+
+    fn mapped_subagent_observation(
+        agent_id: AgentSessionId,
+        parent_agent_id: AgentSessionId,
+        signal: LifecycleSignal,
+        type_name: Option<String>,
+        task: Option<String>,
+    ) -> AgentLifecycleObservation {
+        let mut observation = AgentLifecycleObservation::new(Some(agent_id), signal);
+        observation.parent_agent_id = Some(parent_agent_id);
+        observation.agent_name = type_name.clone();
+        observation.launch.role = type_name;
+        observation.task = task;
+        observation
     }
 }
 

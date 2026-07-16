@@ -14,122 +14,152 @@ pub(super) fn record_lifecycle_observation(
     owner_pid: Option<u32>,
     globals: &GlobalFlags,
 ) -> Option<RecordedLifecycle> {
-    if let Some(mut observation) = agent.observe_lifecycle(event_name, payload) {
-        if let LifecycleSignal::AwaitingInput { ask_id, detail, .. } = &mut observation.signal {
-            ask_id.get_or_insert_with(rimz::ids::AskId::new);
-            if detail.is_none() {
-                *detail = agent.ask_detail(event_name, payload);
-            }
+    let mut observation = agent.observe_lifecycle(event_name, payload)?;
+    if let LifecycleSignal::AwaitingInput { ask_id, detail, .. } = &mut observation.signal {
+        ask_id.get_or_insert_with(rimz::ids::AskId::new);
+        if detail.is_none() {
+            *detail = agent.ask_detail(event_name, payload);
         }
-        attach_agent_owner(agent.descriptor().kind, owner_pid, &mut observation);
-        attach_agent_pane(&mut observation);
-        correlate_subagent_observation(workspace, store, agent, &mut observation);
-        // Launch identity belongs to the pane's root session. A child stop can
-        // omit its optional label fields; filling those from the parent
-        // process environment would overwrite the child's carried identity.
-        if observation.parent_agent_id.is_none() && observation.agent_name.is_none() {
-            observation.agent_name = agent_identity_env(
-                &observation,
-                rimz::harness::run::ENV_AGENT_NAME,
-                validate_agent_name_env,
-            );
-        }
-        if observation.parent_agent_id.is_none()
-            && (observation.launch.role.is_none()
-                || observation.launch.channel.is_none()
-                || observation.launch.profile.is_none()
-                || observation.launch.model.is_none()
-                || observation.launch.effort.is_none())
-        {
-            let configured_identity =
-                if observation.launch.model.is_none() || observation.launch.effort.is_none() {
-                    agent.configured_identity()
-                } else {
-                    (None, None)
-                };
-            fill_root_launch_identity(&mut observation, configured_identity, |observation, var| {
-                agent_identity_env(observation, var, validate_non_empty_identity_env)
-            });
-        }
-        if observation.worktree_path.is_none() {
-            observation.worktree_path = Some(workspace.worktree_root.display().to_string());
-        }
-        if observation.worktree_branch.is_none() {
-            observation.worktree_branch = workspace.worktree_branch.clone();
-        }
-        enrich_pane_stamp_from_cache(workspace, store, &mut observation);
-        recover_focused_pane_binding(
-            agent.descriptor().kind,
-            agent.descriptor().capabilities.registers_lazily,
-            globals.mux,
-            workspace,
-            store,
-            &mut observation,
+    }
+    attach_agent_owner(agent.descriptor().kind, owner_pid, &mut observation);
+    attach_agent_pane(&mut observation);
+    correlate_subagent_observation(workspace, store, agent, &mut observation);
+    Some(record_mapped_lifecycle_observation(
+        workspace,
+        store,
+        agent,
+        event_name,
+        observation,
+        globals,
+    ))
+}
+
+pub(super) fn record_derived_lifecycle_observation(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    mut observation: AgentLifecycleObservation,
+    owner_pid: Option<u32>,
+    globals: &GlobalFlags,
+) -> RecordedLifecycle {
+    attach_agent_owner(agent.descriptor().kind, owner_pid, &mut observation);
+    attach_agent_pane(&mut observation);
+    record_mapped_lifecycle_observation(workspace, store, agent, event_name, observation, globals)
+}
+
+fn record_mapped_lifecycle_observation(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    mut observation: AgentLifecycleObservation,
+    globals: &GlobalFlags,
+) -> RecordedLifecycle {
+    // Launch identity belongs to the pane's root session. A child stop can
+    // omit its optional label fields; filling those from the parent
+    // process environment would overwrite the child's carried identity.
+    if observation.parent_agent_id.is_none() && observation.agent_name.is_none() {
+        observation.agent_name = agent_identity_env(
+            &observation,
+            rimz::harness::run::ENV_AGENT_NAME,
+            validate_agent_name_env,
         );
-        let model_hint = observation.launch.model.clone();
-        // Validate the transition this event drives against the prior rollup
-        // and log any anomaly once, here at ingestion. Replay re-derives the
-        // same state silently.
-        let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
-        if transition.is_some_and(|transition| {
-            transition.compaction_closed
-                && !matches!(observation.signal, LifecycleSignal::CompactionEnded { .. })
-        }) {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                kind = agent.descriptor().kind,
-                agent_id = observation.agent_id.as_deref().unwrap_or(""),
-                signal = ?observation.signal,
-                "closed compaction bracket on a non-compaction signal",
-            );
-        }
-        let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
-        // Capture the child rows before the parent Stop can make a resting
-        // provisional root look superseded in the freshly rebuilt view. The
-        // adoption event still appends after the parent event below.
-        let pre_adoption_snapshot = (observation.parent_agent_id.is_none()
-            && matches!(observation.signal, LifecycleSignal::TurnEnded { .. }))
-        .then(|| store.snapshot_cached().ok())
-        .flatten();
-        let (rotation_due, parent_recorded) =
-            match store.append_agent_lifecycle(AgentLifecycleIntent {
-                session_name: &workspace.session_name,
-                agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
-                event_name,
-                observation: &observation,
-                transition,
-            }) {
-                Ok(AgentLifecycleOutcome::RotationDue) => (true, true),
-                Ok(AgentLifecycleOutcome::Suppressed | AgentLifecycleOutcome::Appended) => {
-                    (false, true)
-                }
-                Err(err) => {
-                    warn!(
-                        agent = agent.descriptor().kind,
-                        event = %event_name,
-                        error = %err,
-                        "lifecycle: failed to record the agent.lifecycle event",
-                    );
-                    (false, false)
-                }
+    }
+    if observation.parent_agent_id.is_none()
+        && (observation.launch.role.is_none()
+            || observation.launch.channel.is_none()
+            || observation.launch.profile.is_none()
+            || observation.launch.model.is_none()
+            || observation.launch.effort.is_none())
+    {
+        let configured_identity =
+            if observation.launch.model.is_none() || observation.launch.effort.is_none() {
+                agent.configured_identity()
+            } else {
+                (None, None)
             };
-        if parent_recorded {
-            adopt_spawned_subagents(
-                workspace,
-                store,
-                agent,
-                &observation,
-                pre_adoption_snapshot.as_ref(),
-            );
-        }
-        return Some(RecordedLifecycle {
-            model_hint,
-            observation,
-            rotation_due,
-            waiting_cleared,
+        fill_root_launch_identity(&mut observation, configured_identity, |observation, var| {
+            agent_identity_env(observation, var, validate_non_empty_identity_env)
         });
     }
-    None
+    if observation.worktree_path.is_none() {
+        observation.worktree_path = Some(workspace.worktree_root.display().to_string());
+    }
+    if observation.worktree_branch.is_none() {
+        observation.worktree_branch = workspace.worktree_branch.clone();
+    }
+    enrich_pane_stamp_from_cache(workspace, store, &mut observation);
+    recover_focused_pane_binding(
+        agent.descriptor().kind,
+        agent.descriptor().capabilities.registers_lazily,
+        globals.mux,
+        workspace,
+        store,
+        &mut observation,
+    );
+    let model_hint = observation.launch.model.clone();
+    // Validate the transition this event drives against the prior rollup
+    // and log any anomaly once, here at ingestion. Replay re-derives the
+    // same state silently.
+    let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
+    if transition.is_some_and(|transition| {
+        transition.compaction_closed
+            && !matches!(observation.signal, LifecycleSignal::CompactionEnded { .. })
+    }) {
+        debug!(
+            target: "rimz::agent::lifecycle",
+            kind = agent.descriptor().kind,
+            agent_id = observation.agent_id.as_deref().unwrap_or(""),
+            signal = ?observation.signal,
+            "closed compaction bracket on a non-compaction signal",
+        );
+    }
+    let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
+    // Capture child rows before a parent Stop can make a resting provisional
+    // root look superseded in the freshly rebuilt view. Adoption still appends
+    // after the parent event below.
+    let pre_adoption_snapshot = (observation.parent_agent_id.is_none()
+        && matches!(observation.signal, LifecycleSignal::TurnEnded { .. }))
+    .then(|| store.snapshot_cached().ok())
+    .flatten();
+    let (rotation_due, observation_recorded) =
+        match store.append_agent_lifecycle(AgentLifecycleIntent {
+            session_name: &workspace.session_name,
+            agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+            event_name,
+            observation: &observation,
+            transition,
+        }) {
+            Ok(AgentLifecycleOutcome::RotationDue) => (true, true),
+            Ok(AgentLifecycleOutcome::Suppressed | AgentLifecycleOutcome::Appended) => {
+                (false, true)
+            }
+            Err(err) => {
+                warn!(
+                    agent = agent.descriptor().kind,
+                    event = %event_name,
+                    error = %err,
+                    "lifecycle: failed to record the agent.lifecycle event",
+                );
+                (false, false)
+            }
+        };
+    if observation_recorded {
+        adopt_spawned_subagents(
+            workspace,
+            store,
+            agent,
+            &observation,
+            pre_adoption_snapshot.as_ref(),
+        );
+    }
+    RecordedLifecycle {
+        model_hint,
+        observation,
+        rotation_due,
+        waiting_cleared,
+    }
 }
 
 fn adopt_spawned_subagents(

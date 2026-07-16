@@ -1,7 +1,8 @@
-//! Version-pinned, read-only Cursor CLI local wait discovery.
+//! Version-pinned, read-only Cursor CLI local wait and subagent discovery.
 
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
@@ -10,13 +11,12 @@ use md5::{Digest as _, Md5};
 use prost::Message;
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
-use serde_json::Value;
 use sha2::Sha256;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
-    sanitize_user_prompt,
+    non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -30,6 +30,8 @@ const MAX_MESSAGE_BLOB_BYTES: usize = 256 * 1024;
 const MAX_PENDING_CALLS: usize = 64;
 const MAX_PENDING_JSON_BYTES: usize = 256 * 1024;
 const MAX_TOOL_CALL_ID_BYTES: usize = 512;
+const MAX_TRANSCRIPT_PREFIX_BYTES: u64 = 256 * 1024;
+const MAX_TRANSCRIPT_PREFIX_LINES: usize = 64;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,7 +56,59 @@ struct StoreMetadata {
     #[serde(default)]
     current_plan_uri: Option<String>,
     #[serde(default)]
-    subagent_info: Option<Value>,
+    subagent_info: Option<SubagentInfo>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubagentInfo {
+    parent_agent_id: String,
+    #[serde(default)]
+    type_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TranscriptMessage {
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    message: Option<TranscriptMessageBody>,
+}
+
+#[derive(Deserialize)]
+struct TranscriptMessageBody {
+    #[serde(default)]
+    content: Vec<TranscriptContent>,
+}
+
+#[derive(Deserialize)]
+struct TranscriptContent {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TranscriptTerminal {
+    #[serde(default)]
+    r#type: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CursorSubagentTerminal {
+    pub(super) errored: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CursorSubagentRecord {
+    pub(super) child_id: AgentSessionId,
+    pub(super) parent_agent_id: AgentSessionId,
+    pub(super) type_name: Option<String>,
+    pub(super) task: Option<String>,
+    pub(super) created_at: Timestamp,
+    pub(super) transcript_path: Option<PathBuf>,
+    pub(super) terminal: Option<CursorSubagentTerminal>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -147,20 +201,54 @@ pub(super) fn cursor_home(home: Option<&OsStr>) -> Option<PathBuf> {
 }
 
 pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionObservation> {
-    let workspace = crate::worktree::normalize_path_lexical(workspace);
-    let Some(workspace_text) = workspace.to_str() else {
+    let Some((bucket, workspace)) = chats_bucket(home, workspace) else {
         return Vec::new();
     };
-    if !workspace.is_absolute() || !regular_dir(&workspace) {
+    let mut observations = newest_chat_dirs(&bucket)
+        .into_iter()
+        .filter_map(|session| observation(home, &bucket, &session, &workspace))
+        .collect::<Vec<_>>();
+    observations.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.session_id.cmp(&right.session_id))
+    });
+    observations
+}
+
+pub(super) fn discover_subagent_chats(home: &Path, workspace: &Path) -> Vec<CursorSubagentRecord> {
+    let Some((bucket, _workspace)) = chats_bucket(home, workspace) else {
         return Vec::new();
+    };
+    let mut records = newest_chat_dirs(&bucket)
+        .into_iter()
+        .filter_map(|session| subagent_record(home, &bucket, &session))
+        .collect::<Vec<_>>();
+    records.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then(left.child_id.cmp(&right.child_id))
+    });
+    records
+}
+
+fn chats_bucket(home: &Path, workspace: &Path) -> Option<(PathBuf, PathBuf)> {
+    let workspace = crate::worktree::normalize_path_lexical(workspace);
+    let workspace_text = workspace.to_str()?;
+    if !workspace.is_absolute() || !regular_dir(&workspace) {
+        return None;
     }
     let bucket = home
         .join("chats")
         .join(hex::encode(Md5::digest(workspace_text.as_bytes())));
     if !regular_dir(&bucket) {
-        return Vec::new();
+        return None;
     }
-    let Ok(entries) = fs::read_dir(&bucket) else {
+    Some((bucket, workspace))
+}
+
+fn newest_chat_dirs(bucket: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(bucket) else {
         return Vec::new();
     };
     let mut sessions = entries
@@ -172,17 +260,11 @@ pub(super) fn discover_under(home: &Path, workspace: &Path) -> Vec<LocalSessionO
         })
         .collect::<Vec<_>>();
     sessions.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    let mut observations = sessions
+    sessions
         .into_iter()
         .take(MAX_SESSIONS_PER_WORKSPACE)
-        .filter_map(|(_, session)| observation(home, &bucket, &session, &workspace))
-        .collect::<Vec<_>>();
-    observations.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then(left.session_id.cmp(&right.session_id))
-    });
-    observations
+        .map(|(_, session)| session)
+        .collect()
 }
 
 #[cfg(test)]
@@ -264,6 +346,44 @@ fn observation(
     })
 }
 
+fn subagent_record(home: &Path, bucket: &Path, session: &Path) -> Option<CursorSubagentRecord> {
+    let session_id = session.file_name()?.to_str()?;
+    valid_session_id(session_id).then_some(())?;
+    regular_dir(session).then_some(())?;
+    session
+        .parent()
+        .is_some_and(|parent| parent == bucket)
+        .then_some(())?;
+
+    metadata_absent(&session.join("meta.json")).then_some(())?;
+    let store_path = session.join("store.db");
+    regular_file(&store_path).then_some(())?;
+    let (_, store_metadata) = read_store_metadata(&store_path)?;
+    (store_metadata.agent_id == session_id).then_some(())?;
+    let subagent = store_metadata.subagent_info?;
+    let (child_id, parent_agent_id) = crate::agents::identity::validated_subagent_identity(
+        Some(session_id),
+        Some(&subagent.parent_agent_id),
+    )?;
+    (store_metadata.created_at >= 0).then_some(())?;
+    let created_at = timestamp_ms(store_metadata.created_at)?;
+    let transcript_path = super::transcript::discover_under(&home.join("projects"), session_id);
+    let (task, terminal) = match transcript_path.as_deref() {
+        Some(path) => read_subagent_transcript(path)?,
+        None => (None, None),
+    };
+
+    Some(CursorSubagentRecord {
+        child_id,
+        parent_agent_id,
+        type_name: subagent.type_name.as_deref().and_then(non_empty_trimmed),
+        task,
+        created_at,
+        transcript_path,
+        terminal,
+    })
+}
+
 fn validate_metadata(metadata: &ChatMetadata, workspace: &Path) -> bool {
     metadata.schema_version == META_SCHEMA_VERSION
         && metadata.has_conversation
@@ -280,6 +400,33 @@ fn read_open_wait(
     created_at_ms: i64,
     updated_at_ms: i64,
 ) -> Option<OpenWait> {
+    let (connection, store_metadata) = read_store_metadata(store_path)?;
+    (store_metadata.agent_id == session_id
+        && store_metadata.created_at == created_at_ms
+        && store_metadata.subagent_info.is_none()
+        && valid_blob_id(&store_metadata.latest_root_blob_id))
+    .then_some(())?;
+
+    let blob = read_blob(
+        &connection,
+        &store_metadata.latest_root_blob_id,
+        MAX_ROOT_BLOB_BYTES,
+    )?;
+    (hex::encode(Sha256::digest(&blob)) == store_metadata.latest_root_blob_id).then_some(())?;
+    let root = ConversationStateStructure::decode(blob.as_slice()).ok()?;
+    if let Some(open_ask) = parse_open_ask(&root.pending_tool_calls) {
+        return Some(open_ask);
+    }
+    root.pending_tool_calls.is_empty().then_some(())?;
+    read_open_plan_approval(
+        &connection,
+        &store_metadata,
+        &root.message_ids,
+        updated_at_ms,
+    )
+}
+
+fn read_store_metadata(store_path: &Path) -> Option<(Connection, StoreMetadata)> {
     let connection = Connection::open_with_flags(
         store_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -309,29 +456,7 @@ fn read_open_wait(
     encoded.len().is_multiple_of(2).then_some(())?;
     let decoded = hex::decode(encoded).ok()?;
     let store_metadata = serde_json::from_slice::<StoreMetadata>(&decoded).ok()?;
-    (store_metadata.agent_id == session_id
-        && store_metadata.created_at == created_at_ms
-        && store_metadata.subagent_info.is_none()
-        && valid_blob_id(&store_metadata.latest_root_blob_id))
-    .then_some(())?;
-
-    let blob = read_blob(
-        &connection,
-        &store_metadata.latest_root_blob_id,
-        MAX_ROOT_BLOB_BYTES,
-    )?;
-    (hex::encode(Sha256::digest(&blob)) == store_metadata.latest_root_blob_id).then_some(())?;
-    let root = ConversationStateStructure::decode(blob.as_slice()).ok()?;
-    if let Some(open_ask) = parse_open_ask(&root.pending_tool_calls) {
-        return Some(open_ask);
-    }
-    root.pending_tool_calls.is_empty().then_some(())?;
-    read_open_plan_approval(
-        &connection,
-        &store_metadata,
-        &root.message_ids,
-        updated_at_ms,
-    )
+    Some((connection, store_metadata))
 }
 
 fn read_blob(connection: &Connection, id: &str, max_bytes: usize) -> Option<Vec<u8>> {
@@ -348,6 +473,52 @@ fn read_blob(connection: &Connection, id: &str, max_bytes: usize) -> Option<Vec<
             },
         )
         .ok()
+}
+
+fn read_subagent_transcript(
+    transcript_path: &Path,
+) -> Option<(Option<String>, Option<CursorSubagentTerminal>)> {
+    let task = read_subagent_task(transcript_path);
+    let tail = crate::agents::read_transcript_tail_with_status(transcript_path)?;
+    let terminal = if tail.torn_suffix {
+        None
+    } else {
+        let Some(line) = tail.text.lines().rev().find(|line| !line.trim().is_empty()) else {
+            return Some((task, None));
+        };
+        match serde_json::from_str::<TranscriptTerminal>(line) {
+            Ok(record) if record.r#type.as_deref() != Some("turn_ended") => None,
+            Ok(record) => Some(CursorSubagentTerminal {
+                errored: !matches!(record.status.as_deref(), Some("success" | "aborted")),
+            }),
+            Err(_) => Some(CursorSubagentTerminal { errored: true }),
+        }
+    };
+    Some((task, terminal))
+}
+
+fn read_subagent_task(transcript_path: &Path) -> Option<String> {
+    let file = fs::File::open(transcript_path).ok()?;
+    let mut prefix = Vec::new();
+    file.take(MAX_TRANSCRIPT_PREFIX_BYTES + 1)
+        .read_to_end(&mut prefix)
+        .ok()?;
+    prefix.truncate(MAX_TRANSCRIPT_PREFIX_BYTES as usize);
+    let prefix = String::from_utf8_lossy(&prefix);
+    prefix
+        .lines()
+        .take(MAX_TRANSCRIPT_PREFIX_LINES)
+        .filter_map(|line| serde_json::from_str::<TranscriptMessage>(line).ok())
+        .find(|message| message.role.as_deref() == Some("user"))?
+        .message?
+        .content
+        .iter()
+        .filter_map(|content| content.text.as_deref())
+        .find_map(|text| {
+            let (_, rest) = text.split_once("<user_query>")?;
+            let (query, _) = rest.split_once("</user_query>")?;
+            sanitize_user_prompt(Some(query))
+        })
 }
 
 fn read_open_plan_approval(
@@ -443,6 +614,10 @@ fn regular_dir(path: &Path) -> bool {
 
 fn regular_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+fn metadata_absent(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
 fn bounded_regular_file(path: &Path, max_bytes: u64) -> bool {

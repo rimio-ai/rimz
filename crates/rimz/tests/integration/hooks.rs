@@ -586,6 +586,117 @@ fn cursor_lifecycle_hook_writes_state_and_returns_json_neutral() {
 }
 
 #[test]
+fn cursor_parent_hook_derives_chats_store_children_once() {
+    let env = Env::new();
+    let parent_id = "cursor-derived-parent";
+    let child_id = "cursor-derived-child";
+    let registered = env.run_hook(
+        "cursor",
+        &json!({
+            "hook_event_name": "sessionStart",
+            "conversation_id": parent_id,
+        })
+        .to_string(),
+    );
+    assert!(registered.status.success());
+    assert_eq!(String::from_utf8_lossy(&registered.stdout), "{}\n");
+
+    let cursor_home = env.home_root.join(".cursor");
+    let bucket = cursor_home.join("chats").join(hex::encode(Md5::digest(
+        env.project_root.to_str().unwrap().as_bytes(),
+    )));
+    let child = bucket.join(child_id);
+    std::fs::create_dir_all(&child).unwrap();
+    let connection = Connection::open(child.join("store.db")).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA user_version = 1;\
+             CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO meta(key, value) VALUES ('0', ?1)",
+            [hex::encode(
+                serde_json::to_vec(&json!({
+                    "agentId": child_id,
+                    "latestRootBlobId": "a".repeat(64),
+                    "createdAt": Timestamp::now().as_millisecond(),
+                    "subagentInfo": {
+                        "parentAgentId": parent_id,
+                        "rootParentAgentId": parent_id,
+                        "toolCallId": "call-derived-child",
+                        "typeName": "generalPurpose",
+                    },
+                }))
+                .unwrap(),
+            )],
+        )
+        .unwrap();
+    drop(connection);
+    let transcript = cursor_home
+        .join("projects/project/agent-transcripts")
+        .join(child_id)
+        .join(format!("{child_id}.jsonl"));
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(
+        &transcript,
+        concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<user_query>\\ninspect the hook store\\n</user_query>\"}]}}\n",
+            "{\"type\":\"turn_ended\",\"status\":\"success\"}\n"
+        ),
+    )
+    .unwrap();
+
+    let stop_payload = json!({
+        "hook_event_name": "stop",
+        "conversation_id": parent_id,
+        "status": "completed",
+    })
+    .to_string();
+    let stopped = env.run_hook("cursor", &stop_payload);
+    assert!(
+        stopped.status.success(),
+        "cursor stderr: {}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&stopped.stdout), "{}\n");
+
+    let snapshot = env.snapshot_json();
+    let agents = snapshot["agents"].as_array().expect("agents");
+    let child = agents
+        .iter()
+        .find(|agent| agent["agent_id"] == child_id)
+        .unwrap_or_else(|| panic!("derived child missing: {agents:?}"));
+    assert_eq!(child["parent_agent_id"], parent_id);
+    assert_eq!(child["name"], "generalPurpose");
+    assert_eq!(child["role"], "generalPurpose");
+    assert_eq!(child["task"], "inspect the hook store");
+    assert_eq!(child["status"], "success");
+    assert_eq!(
+        child["transcript_path"],
+        transcript.to_string_lossy().as_ref()
+    );
+
+    let derived_event_count = |env: &Env| {
+        env.read_events()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.kind(),
+                    rimz::store::event::EventKind::AgentLifecycle(payload)
+                        if payload.event_name.as_deref().is_some_and(|event_name| event_name.starts_with("chatsStoreSubagent"))
+                )
+            })
+            .count()
+    };
+    assert_eq!(derived_event_count(&env), 2);
+    let repeated = env.run_hook("cursor", &stop_payload);
+    assert!(repeated.status.success());
+    assert_eq!(derived_event_count(&env), 2, "derived facts dedupe");
+}
+
+#[test]
 fn cursor_user_hook_uses_project_dir_for_pinned_worktree_attribution() {
     let env = Env::new();
     let cursor_cwd = env.home_root.join(".cursor");

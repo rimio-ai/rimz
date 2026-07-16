@@ -14,7 +14,7 @@ use delivery::*;
 use identity::{
     agent_identity_env, env_run_id, validate_agent_name_env, validate_non_empty_identity_env,
 };
-use observe::record_lifecycle_observation;
+use observe::{record_derived_lifecycle_observation, record_lifecycle_observation};
 use transcript::*;
 
 pub(super) use identity::fill_root_launch_identity;
@@ -32,6 +32,12 @@ pub(crate) fn handle_lifecycle_hook(
     let recorded = record_lifecycle_observation(
         workspace, store, agent, event_name, payload, owner_pid, globals,
     );
+    if recorded.as_ref().is_some_and(|recorded| {
+        recorded.observation.agent_id.is_some() && recorded.observation.parent_agent_id.is_none()
+    }) && derive_subagent_lifecycle(workspace, store, agent, owner_pid, globals)
+    {
+        spawn_auto_rotation(workspace);
+    }
     let assistant_message = record_assistant_response(
         workspace,
         store,
@@ -164,6 +170,76 @@ pub(crate) fn handle_lifecycle_hook(
         }
     }
     Ok(())
+}
+
+fn derive_subagent_lifecycle(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    owner_pid: Option<u32>,
+    globals: &GlobalFlags,
+) -> bool {
+    let observations = agent.derive_subagent_observations(&workspace.worktree_root);
+    if observations.is_empty() {
+        return false;
+    }
+    let snapshot = match store.snapshot_cached() {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            debug!(
+                kind = agent.descriptor().kind,
+                error = %err,
+                "lifecycle: skipped derived subagents because the prior rollup was unreadable",
+            );
+            return false;
+        }
+    };
+    let kind = agent.descriptor().kind;
+    let mut rotation_due = false;
+    for observation in observations {
+        let (Some(child_id), Some(parent_id)) = (
+            observation.agent_id.as_ref(),
+            observation.parent_agent_id.as_ref(),
+        ) else {
+            continue;
+        };
+        if !snapshot
+            .agents
+            .iter()
+            .any(|state| state.kind.as_str() == kind && state.agent_id == *parent_id)
+        {
+            continue;
+        }
+        let prior = snapshot
+            .agents
+            .iter()
+            .find(|state| state.kind.as_str() == kind && state.agent_id == *child_id);
+        let event_name = match &observation.signal {
+            LifecycleSignal::SubagentStarted if prior.is_none() => "chatsStoreSubagentStart",
+            LifecycleSignal::SubagentStopped { .. }
+                if !prior.is_some_and(|state| {
+                    matches!(
+                        state.status,
+                        rimz::agents::AgentStatus::Success | rimz::agents::AgentStatus::Failed
+                    )
+                }) =>
+            {
+                "chatsStoreSubagentStop"
+            }
+            _ => continue,
+        };
+        let recorded = record_derived_lifecycle_observation(
+            workspace,
+            store,
+            agent,
+            event_name,
+            observation,
+            owner_pid,
+            globals,
+        );
+        rotation_due |= recorded.rotation_due;
+    }
+    rotation_due
 }
 
 fn user_input_state_root(_store: &Store) -> Option<&std::path::Path> {
