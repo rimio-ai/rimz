@@ -16,6 +16,7 @@ pub mod pane_topology;
 mod parse;
 mod presence;
 mod raw_pane;
+mod reap;
 mod session;
 mod sidebar;
 pub mod socket;
@@ -23,6 +24,7 @@ pub mod socket;
 #[doc(hidden)]
 pub use pane_pid::ZellijPaneResolver;
 pub use presence::{ensure_presence_plugin_artifact, presence_plugin_path};
+pub use reap::{ReapOutcome, reap_lineage_clients};
 pub use socket::{socket_headroom, socket_preflight};
 
 use std::env;

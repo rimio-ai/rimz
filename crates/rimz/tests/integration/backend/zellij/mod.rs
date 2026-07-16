@@ -24,6 +24,7 @@ mod daemon;
 mod launch;
 mod pane_io;
 mod presence;
+mod reap;
 mod reconcile;
 mod resume;
 mod self_close;

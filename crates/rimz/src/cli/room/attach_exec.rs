@@ -3,7 +3,7 @@
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
-use rimz::ids::MuxName;
+use rimz::ids::{MuxName, WorkspaceId};
 
 use super::{AttachAction, AttachMode};
 
@@ -11,6 +11,8 @@ pub(super) fn run_attach_action(
     spec: &rimz::mux::CommandSpec,
     mode: AttachMode,
     mux: MuxName,
+    session_name: &str,
+    workspace_id: Option<&WorkspaceId>,
 ) -> Result<()> {
     match attach_action(
         mode,
@@ -22,7 +24,55 @@ pub(super) fn run_attach_action(
             print_attach_command(spec);
             Ok(())
         }
-        AttachAction::Exec => exec_attach_command(spec),
+        AttachAction::Exec => {
+            reap_remote_zellij_predecessors(mux, session_name, workspace_id);
+            exec_attach_command(spec)
+        }
+    }
+}
+
+fn reap_remote_zellij_predecessors(
+    mux: MuxName,
+    session_name: &str,
+    workspace_id: Option<&WorkspaceId>,
+) {
+    if mux != MuxName::Zellij || inside_selected_mux(mux) {
+        return;
+    }
+    let Some(lineage) = std::env::var(rimz::remote::REMOTE_LINEAGE_ENV)
+        .ok()
+        .filter(|lineage| !lineage.is_empty())
+    else {
+        return;
+    };
+
+    let outcome = rimz::mux::zellij::reap_lineage_clients(
+        rimz::mux::backend_for(MuxName::Zellij).as_ref(),
+        session_name,
+        &lineage,
+    )
+    .unwrap_or_else(|err| rimz::mux::zellij::ReapOutcome {
+        errors: vec![format!("reading the pre-reap client count: {err}")],
+        ..rimz::mux::zellij::ReapOutcome::default()
+    });
+    let degraded = !outcome.settled;
+    if let Some(workspace_id) = workspace_id {
+        rimz::diag::DiagSink::for_workspace(workspace_id.clone(), session_name, None)
+            .emit_unlimited(rimz::diag::record::DiagEvent::ClientReaped {
+                killed_pids: outcome.killed_pids,
+                pre_clients: outcome.pre_clients,
+                post_clients: outcome.post_clients,
+                settled: outcome.settled,
+                timed_out: outcome.timed_out,
+                errors: outcome.errors,
+            });
+    }
+    if degraded {
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(
+            stderr,
+            "rimz: Zellij predecessor cleanup did not settle; attaching anyway"
+        );
     }
 }
 

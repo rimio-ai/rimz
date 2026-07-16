@@ -13,6 +13,7 @@ fn attach_plan(
 ) -> SshAttachPlan {
     SshAttachPlan::new(SshAttachOptions {
         target: parse(target),
+        lineage: "0123456789abcdef".to_owned(),
         no_resume,
         mux,
         term,
@@ -514,6 +515,16 @@ fn ssh_attach_plan_marks_retries_only() {
     let attended = plan.initial().plain();
     let retry = plan.retry().plain();
 
+    for attempt in [&attended, &retry] {
+        assert!(
+            attempt
+                .args
+                .last()
+                .unwrap()
+                .contains("export RIMZ_REMOTE_LINEAGE='0123456789abcdef';"),
+            "every attempt carries the stable client lineage"
+        );
+    }
     assert!(
         !attended.args.last().unwrap().contains(REMOTE_RECONNECT_ENV),
         "the first connect stays attended"
@@ -525,6 +536,23 @@ fn ssh_attach_plan_marks_retries_only() {
             .unwrap()
             .contains("export RIMZ_REMOTE_RECONNECT=1;"),
         "retry snippet marks an unattended reconnect"
+    );
+}
+
+#[test]
+fn remote_lineage_is_stable_and_room_scoped() {
+    let target = parse("dev-box:query-engine");
+    let lineage = remote_lineage(&target, "laptop", "alice");
+
+    assert_eq!(lineage, remote_lineage(&target, "laptop", "alice"));
+    assert_eq!(lineage.len(), 16);
+    assert_ne!(
+        lineage,
+        remote_lineage(&parse("other-box:query-engine"), "laptop", "alice")
+    );
+    assert_ne!(
+        lineage,
+        remote_lineage(&parse("dev-box:other-room"), "laptop", "alice")
     );
 }
 

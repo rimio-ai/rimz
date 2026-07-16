@@ -876,7 +876,13 @@ fn finish_attach(ready: ReadyRoom, mode: AttachMode) -> Result<()> {
                 mux = %context.mux_name(),
                 "workspace ready",
             );
-            run_attach_action(&spec, mode, context.mux_name())
+            run_attach_action(
+                &spec,
+                mode,
+                context.mux_name(),
+                context.session_name(),
+                Some(context.workspace_id()),
+            )
         }
         ReadyRoom::External {
             session_name,
@@ -886,7 +892,7 @@ fn finish_attach(ready: ReadyRoom, mode: AttachMode) -> Result<()> {
             let backend = rimz::mux::backend_for(mux);
             let spec = backend.attach_command(&session_name, &mux_config);
             tracing::info!(session = %session_name, mux = %mux, "workspace ready");
-            run_attach_action(&spec, mode, mux)
+            run_attach_action(&spec, mode, mux, &session_name, None)
         }
     }
 }

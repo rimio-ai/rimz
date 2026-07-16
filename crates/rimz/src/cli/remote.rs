@@ -13,7 +13,7 @@ use rimz::ids::MuxName;
 use rimz::remote::aliases::{RemoteAlias, RemoteAliases};
 use rimz::remote::{
     RemoteTarget, RemoteTargetError, SshAttachOptions, SshAttachPlan, SshDestination, TermPlan,
-    infocmp_program, term_plan_from,
+    infocmp_program, remote_lineage, term_plan_from,
 };
 
 mod bandwidth;
@@ -364,8 +364,10 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 bail!("--web is web-only and has no SSH attach command; drop --print");
             }
             let term = remote_term_plan();
+            let lineage = local_remote_lineage(&remote.target)?;
             let plan = SshAttachPlan::new(SshAttachOptions {
                 target: remote.target,
+                lineage,
                 no_resume: remote.no_resume,
                 mux: remote.mux,
                 term,
@@ -388,8 +390,10 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 return web::run_remote_web(&remote, client_size);
             }
             let term = remote_term_plan();
+            let lineage = local_remote_lineage(&remote.target)?;
             let plan = SshAttachPlan::new(SshAttachOptions {
                 target: remote.target,
+                lineage,
                 no_resume: remote.no_resume,
                 mux: remote.mux,
                 term,
@@ -407,6 +411,20 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
             }
         }
     }
+}
+
+fn local_remote_lineage(target: &RemoteTarget) -> Result<String> {
+    let hostname = nix::unistd::gethostname()
+        .context("reading the local hostname for remote reconnect identity")?
+        .to_string_lossy()
+        .into_owned();
+    if hostname.is_empty() {
+        bail!("the local hostname is empty; cannot derive remote reconnect identity");
+    }
+    let user = nix::unistd::User::from_uid(nix::unistd::Uid::current())
+        .context("reading the local user for remote reconnect identity")?
+        .context("the local user has no passwd entry for remote reconnect identity")?;
+    Ok(remote_lineage(target, &hostname, &user.name))
 }
 
 fn remote_term_plan() -> TermPlan {

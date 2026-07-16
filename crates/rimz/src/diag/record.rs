@@ -202,6 +202,17 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recovered_after_ms: Option<u64>,
     },
+    ClientReaped {
+        killed_pids: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pre_clients: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        post_clients: Option<usize>,
+        settled: bool,
+        timed_out: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        errors: Vec<String>,
+    },
     TickBudgetBreach {
         tick_loop: TickLoop,
         /// Consecutive over-budget ticks at emit time.
@@ -326,6 +337,7 @@ impl DiagEvent {
                 recovered_after_ms: None,
                 ..
             }
+            | Self::ClientReaped { settled: false, .. }
             | Self::TickBudgetBreach {
                 recovered_after_ms: None,
                 ..
@@ -372,6 +384,7 @@ impl DiagEvent {
                 recovered_after_ms: Some(_),
                 ..
             } => DiagSeverity::Info,
+            Self::ClientReaped { settled: true, .. } => DiagSeverity::Info,
             Self::TickBudgetBreach {
                 recovered_after_ms: Some(_),
                 ..
@@ -394,6 +407,7 @@ impl DiagEvent {
             Self::FetchFailure { .. } => "fetch_failure",
             Self::HealthAlert { .. } => "health_alert",
             Self::LinkAlert { .. } => "link_alert",
+            Self::ClientReaped { .. } => "client_reaped",
             Self::TickBudgetBreach { .. } => "tick_budget_breach",
             Self::ProducerElected { .. } => "producer_elected",
             Self::ProducerDemoted { .. } => "producer_demoted",
@@ -468,6 +482,11 @@ impl DiagEvent {
                 };
                 format!("{}:{tier:?}:{phase}:{since_ms}", self.kind_name())
             }
+            Self::ClientReaped {
+                killed_pids,
+                settled,
+                ..
+            } => format!("{}:{killed_pids:?}:{settled}", self.kind_name()),
             Self::TickBudgetBreach {
                 tick_loop,
                 since_ms,

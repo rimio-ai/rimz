@@ -168,6 +168,14 @@ fn severity_table_pins_conditional_and_regression_categories() {
         DiagEvent::RendererExit {
             cause: RendererExitCause::SelfCloseEmptyTab,
         },
+        DiagEvent::ClientReaped {
+            killed_pids: vec![42],
+            pre_clients: Some(2),
+            post_clients: Some(1),
+            settled: true,
+            timed_out: false,
+            errors: Vec::new(),
+        },
     ];
     let warn = [
         health_alert(10, None),
@@ -177,6 +185,14 @@ fn severity_table_pins_conditional_and_regression_categories() {
         hosted_carry(HostedCarryDropReason::ForegroundKindMismatch),
         DiagEvent::RendererExit {
             cause: RendererExitCause::DegradedGaveUp,
+        },
+        DiagEvent::ClientReaped {
+            killed_pids: vec![42],
+            pre_clients: Some(2),
+            post_clients: Some(2),
+            settled: false,
+            timed_out: true,
+            errors: Vec::new(),
         },
     ];
     let error = [

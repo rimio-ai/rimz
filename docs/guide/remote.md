@@ -40,6 +40,8 @@ rimz remote rm devbox                             # forget one
 
 A plain `ssh` ends the moment the connection drops. `rimz remote connect` supervises the SSH link instead: when the train wifi cuts out or a laptop sleeps, it reconnects on its own and reattaches to the untouched room on the host, so a flaky connection never costs you your place. The link watches for the network's return and normally reattaches within a couple of seconds after the host becomes reachable again. Retry attempts run unattended, so hook installation, project trust, and recovery consent wait for the next start you make while present instead of parking the link. Your terminal beeps when the link drops and again when it comes back, and any notification handler fires on the same edges, because a dead link cannot count on the remote sidebar to reach you.
 
+On Zellij, a reconnect retires an orphaned prior attach from the same device before entering the room; opening that same remote room twice from one device therefore moves the attachment to the newer terminal, while attachments from different devices coexist.
+
 Two flags tune the posture:
 
 ```sh

@@ -19,6 +19,8 @@ pub mod web;
 use std::path::Path;
 use std::time::Duration;
 
+use sha2::{Digest, Sha256};
+
 use crate::ids::MuxName;
 use crate::mux::{CLIENT_SIZE_ENV, CommandSpec};
 
@@ -30,6 +32,10 @@ pub const SSH_BIN_ENV: &str = "RIMZ_SSH_BIN";
 /// Marks an SSH attach started by the local reconnect supervisor's retry
 /// loop, so the remote room start uses its unattended posture.
 pub const REMOTE_RECONNECT_ENV: &str = "RIMZ_REMOTE_RECONNECT";
+
+/// Stable per-device identity carried to the remote attach so a replacement
+/// can retire an orphaned predecessor before entering the multiplexer.
+pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
 
 /// Binary override for tests, mirroring `RIMZ_SSH_BIN`.
 pub const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";
@@ -268,11 +274,35 @@ pub fn infocmp_program() -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshAttachOptions {
     pub target: RemoteTarget,
+    pub lineage: String,
     pub no_resume: bool,
     pub mux: Option<MuxName>,
     pub term: TermPlan,
     pub truecolor: bool,
     pub client_size: Option<(u16, u16)>,
+}
+
+/// Derive the stable, non-secret identity one local device uses for one remote
+/// room. Length-prefixing keeps the hash projection unambiguous when fields
+/// contain separators.
+pub fn remote_lineage(target: &RemoteTarget, local_hostname: &str, local_user: &str) -> String {
+    let (spec_kind, spec) = match &target.spec {
+        RemoteSpec::Path(path) => ("path", path.as_str()),
+        RemoteSpec::Session(session) => ("session", session.as_str()),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(b"rimz.remote-lineage.v1");
+    for field in [
+        local_hostname,
+        local_user,
+        target.host_display(),
+        spec_kind,
+        spec,
+    ] {
+        hasher.update((field.len() as u64).to_be_bytes());
+        hasher.update(field.as_bytes());
+    }
+    hex::encode(&hasher.finalize()[..8])
 }
 
 /// Compiles initial and retry SSH attempts without exposing reconnect flags or
@@ -447,6 +477,10 @@ fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase) -> String {
         rimz.push_str(&format!(" --mux {mux}"));
     }
     let mut env_setup = String::new();
+    env_setup.push_str(&format!(
+        "export {REMOTE_LINEAGE_ENV}={}; ",
+        sh_quote(&options.lineage)
+    ));
     if matches!(phase, AttemptPhase::Retry) {
         env_setup.push_str("export RIMZ_REMOTE_RECONNECT=1; ");
     }

@@ -231,6 +231,27 @@ pub(in crate::backend::zellij) struct AttachedClient {
 
 impl AttachedClient {
     pub(in crate::backend::zellij) fn attach(xdg: &Path, name: &str, cols: u16, rows: u16) -> Self {
+        Self::attach_inner(xdg, name, cols, rows, None, false)
+    }
+
+    pub(in crate::backend::zellij) fn attach_with_lineage(
+        xdg: &Path,
+        name: &str,
+        lineage: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Self {
+        Self::attach_inner(xdg, name, cols, rows, Some(lineage), true)
+    }
+
+    fn attach_inner(
+        xdg: &Path,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        lineage: Option<&str>,
+        create: bool,
+    ) -> Self {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -250,7 +271,14 @@ impl AttachedClient {
         cmd.env("XDG_CACHE_HOME", xdg);
         cmd.env("HOME", xdg);
         cmd.env("TMPDIR", xdg);
-        cmd.args(["attach", name]);
+        if let Some(lineage) = lineage {
+            cmd.env(rimz::remote::REMOTE_LINEAGE_ENV, lineage);
+        }
+        if create {
+            cmd.args(["attach", "--create", name]);
+        } else {
+            cmd.args(["attach", name]);
+        }
         let child = pair.slave.spawn_command(cmd).expect("spawn zellij attach");
         drop(pair.slave);
         // Drain the PTY in the background so the kernel buffer never fills and

@@ -859,6 +859,21 @@ fn diagnostic_summary(event: &rimz::diag::record::DiagEvent) -> String {
                 None => format!("link {tier:?}; rtt {rtt}; loss {miss_pct}%"),
             }
         }
+        DiagEvent::ClientReaped {
+            killed_pids,
+            pre_clients,
+            post_clients,
+            settled,
+            timed_out,
+            errors,
+        } => format!(
+            "remote Zellij client reap pids {killed_pids:?}; clients {pre_clients:?}->{post_clients:?}; settled={settled}; timed_out={timed_out}{}",
+            if errors.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", errors.join("; "))
+            }
+        ),
         DiagEvent::TickBudgetBreach {
             tick_loop,
             over_ticks,
