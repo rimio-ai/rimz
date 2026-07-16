@@ -41,6 +41,10 @@ pub struct SidebarHeartbeat {
     /// as live but not build-verified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
+    /// Semantic RimZ version of the writer, for human-facing build-drift
+    /// notices. Missing means the renderer predates this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub last_seen: Timestamp,
 }
 
@@ -62,6 +66,7 @@ impl SidebarHeartbeat {
             wakeup_socket,
             pane_id,
             build: None,
+            version: None,
             last_seen: Timestamp::now(),
         }
     }
@@ -133,7 +138,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sidebar_heartbeat_build_is_backward_compatible() {
+    fn sidebar_heartbeat_build_identity_is_backward_compatible() {
         let json = serde_json::json!({
             "protocol_version": SIDEBAR_PROTOCOL_VERSION,
             "workspace_id": WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
@@ -145,13 +150,18 @@ mod tests {
         });
 
         let heartbeat: SidebarHeartbeat =
-            serde_json::from_value(json).expect("missing build defaults to None");
+            serde_json::from_value(json).expect("missing build identity defaults to None");
         assert_eq!(heartbeat.build, None);
+        assert_eq!(heartbeat.version, None);
 
         let encoded = serde_json::to_string(&heartbeat).expect("serialize heartbeat");
         assert!(
             !encoded.contains("\"build\""),
             "None build stays absent from heartbeat JSON",
+        );
+        assert!(
+            !encoded.contains("\"version\""),
+            "None version stays absent from heartbeat JSON",
         );
     }
 }

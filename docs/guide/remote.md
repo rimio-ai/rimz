@@ -12,6 +12,8 @@ rimz remote connect dev-box:~/code/query-engine   # [user@]host:<session-or-path
 
 The target is `[user@]host:<session-or-path>`. After the colon, a path opens (or creates) that project's room, and a bare session name reaches one by name. Under the hood this is close to typing `ssh -t dev-box rimz attach query-engine` yourself: a normal SSH session that runs the host's own `rimz`, so your SSH config, keys, agent, ports, and jump hosts all apply exactly as for any `ssh` you run.
 
+The connection warns when your local and remote RimZ versions differ, so you can upgrade the older side before their behavior drifts.
+
 Because you attach to the session the host is already running, everything you left is there: every agent in its `#channel` tab, every question still ranked exactly where it was, plus whatever finished while you were gone, already triaged.
 
 ### Install rimz on the host

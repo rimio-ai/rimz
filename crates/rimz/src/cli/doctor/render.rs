@@ -1316,7 +1316,7 @@ mod tests {
 
     fn report_fixture() -> DoctorReport {
         DoctorReport {
-            version: crate::cli::version::VERSION,
+            version: rimz::build_id::VERSION,
             host: Host {
                 user: None,
                 uid: 0,

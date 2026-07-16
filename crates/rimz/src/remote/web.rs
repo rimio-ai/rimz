@@ -7,8 +7,8 @@ use crate::mux::CommandSpec;
 use crate::web::WebEngine;
 
 use super::{
-    RemoteSpec, RemoteTarget, client_size_env_setup, quote_remote_path, remote_exec_snippet,
-    sh_quote, ssh_program,
+    REMOTE_CLIENT_VERSION_ENV, RemoteSpec, RemoteTarget, client_size_env_setup, quote_remote_path,
+    remote_exec_snippet, sh_quote, ssh_program,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,7 +80,8 @@ fn one_shot_spec(
 
 fn web_snippet(target: &RemoteTarget, rimz: &str, client_size: Option<(u16, u16)>) -> String {
     let env_setup = format!(
-        "export TERM=xterm-256color; export COLORTERM=truecolor; {}",
+        "export TERM=xterm-256color; export COLORTERM=truecolor; export {REMOTE_CLIENT_VERSION_ENV}={}; {}",
+        sh_quote(crate::build_id::VERSION),
         client_size_env_setup(client_size),
     );
     remote_exec_snippet(target.host_display(), &env_setup, rimz)
@@ -114,8 +115,13 @@ mod tests {
         );
         assert!(
             session.args[4].contains(
-                "export TERM=xterm-256color; export COLORTERM=truecolor; export RIMZ_CLIENT_SIZE=180x50; exec rimz web open"
+                "export TERM=xterm-256color; export COLORTERM=truecolor; export RIMZ_REMOTE_CLIENT_VERSION="
             ),
+            "{}",
+            session.args[4]
+        );
+        assert!(
+            session.args[4].contains("export RIMZ_CLIENT_SIZE=180x50; exec rimz web open"),
             "{}",
             session.args[4]
         );

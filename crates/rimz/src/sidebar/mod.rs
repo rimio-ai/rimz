@@ -35,7 +35,7 @@ pub mod timing;
 pub mod unread;
 pub mod width_override;
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -103,6 +103,7 @@ pub fn write_heartbeat(
         pane_id,
     );
     heartbeat.build = crate::build_id::current().map(str::to_owned);
+    heartbeat.version = Some(crate::build_id::VERSION.to_owned());
     let path = runtime.sidebar_heartbeat_path(instance_id);
     // Cache-class: a heartbeat is disposable liveness, rewritten every beat
     // and gc-swept when stale — surviving a power cut buys nothing.
@@ -128,6 +129,51 @@ pub(crate) fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbea
         .filter(|(path, _)| mtime_within_ttl(path))
         .map(|(_, heartbeat)| heartbeat)
         .collect()
+}
+
+/// A live sidebar serving one session from a different RimZ build.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionBuildDrift {
+    /// Distinct semantic versions reported by foreign-build writers, sorted.
+    /// Empty means those renderers predate the heartbeat version field.
+    pub versions: Vec<String>,
+}
+
+/// Return build drift for the live sidebars serving `(mux, session_name)`.
+///
+/// A missing build id on either this process or a heartbeat is inconclusive
+/// and does not create drift.
+pub fn session_build_drift(
+    rt: &RuntimePaths,
+    mux: MuxName,
+    session_name: &str,
+) -> Option<SessionBuildDrift> {
+    let own_build = crate::build_id::current()?;
+    let heartbeats = fresh_sidebar_heartbeats(rt);
+    session_build_drift_from(
+        heartbeats
+            .iter()
+            .filter(|heartbeat| heartbeat.mux == mux && heartbeat.session_name == session_name)
+            .map(|heartbeat| (heartbeat.build.as_deref(), heartbeat.version.as_deref())),
+        own_build,
+    )
+}
+
+fn session_build_drift_from<'a>(
+    writers: impl IntoIterator<Item = (Option<&'a str>, Option<&'a str>)>,
+    own_build: &str,
+) -> Option<SessionBuildDrift> {
+    let mut has_foreign = false;
+    let mut versions = BTreeSet::new();
+    for (build, version) in writers {
+        if build.is_some_and(|build| build != own_build) {
+            has_foreign = true;
+            versions.extend(version.map(str::to_owned));
+        }
+    }
+    has_foreign.then(|| SessionBuildDrift {
+        versions: versions.into_iter().collect(),
+    })
 }
 
 fn fresh_sidebar_instances(rt: &RuntimePaths) -> Vec<SidebarInstanceId> {
@@ -654,6 +700,31 @@ mod tests {
         // a test controls who is the elder. 32 hex chars after the `sb_` prefix.
         let body = format!("{hex_tail:0>32}");
         SidebarInstanceId::parse(&format!("sb_{body}")).expect("valid instance id")
+    }
+
+    #[test]
+    fn session_build_drift_uses_only_foreign_builds() {
+        let drift = session_build_drift_from(
+            [
+                (Some("bbb"), Some("0.4.0")),
+                (Some("aaa"), Some("0.5.0")),
+                (Some("ccc"), Some("0.3.0")),
+                (Some("bbb"), Some("0.4.0")),
+            ],
+            "aaa",
+        )
+        .expect("foreign build drifts");
+        assert_eq!(drift.versions, ["0.3.0", "0.4.0"]);
+        assert!(
+            session_build_drift_from([(Some("bbb"), None)], "aaa")
+                .expect("foreign build drifts")
+                .versions
+                .is_empty()
+        );
+        assert!(
+            session_build_drift_from([(Some("aaa"), Some("0.3.0")), (None, Some("0.2.0"))], "aaa")
+                .is_none()
+        );
     }
 
     #[test]

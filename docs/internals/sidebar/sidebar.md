@@ -152,7 +152,7 @@ The tabs are the panel's only hit targets; everything else in the dashboard stay
 
 ### State access
 
-Data flow is [state.md](./state.md)'s domain: the node model, producer election, the published-file inventory, typed realtime events and push channels, fusion, render cadences, and the pull-tick table (values in [`sidebar/timing.rs`](../../../crates/rimz/src/sidebar/timing.rs)). This doc keeps the liveness contract: each renderer writes its own heartbeat in process and binds a per-instance wakeup socket, and the heartbeat carries the workspace, session, mux, instance id, protocol version, socket path, pane id, build id, and last-seen timestamp.
+Data flow is [state.md](./state.md)'s domain: the node model, producer election, the published-file inventory, typed realtime events and push channels, fusion, render cadences, and the pull-tick table (values in [`sidebar/timing.rs`](../../../crates/rimz/src/sidebar/timing.rs)). This doc keeps the liveness contract: each renderer writes its own heartbeat in process and binds a per-instance wakeup socket, and the heartbeat carries the workspace, session, mux, instance id, protocol version, socket path, pane id, build id, semantic version, and last-seen timestamp.
 
 ### Drawing
 

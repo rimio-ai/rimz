@@ -33,7 +33,7 @@ use attach_exec::{
 };
 use resume::{report_previous_session_death, report_resume};
 use rimz::harness::rebirth::RebirthChoice;
-use start_notice::report_start_notices;
+use start_notice::{report_start_notices, report_version_mismatch_notices};
 
 pub(crate) use attach_exec::{attach_action, exec_attach_command};
 
@@ -133,6 +133,20 @@ impl RoomEntry<'_> {
             | Self::AttachCwd { workspace, .. } => &workspace.session_name,
             Self::WebSession { record, .. } => &record.session_name,
             Self::AttachSession { session, .. } => session,
+        }
+    }
+
+    fn workspace_id(&self) -> Option<&WorkspaceId> {
+        match self {
+            Self::Start { workspace, .. }
+            | Self::StartWeb { workspace, .. }
+            | Self::AttachCwd { workspace, .. } => Some(&workspace.workspace_id),
+            Self::WebSession { record, .. } => Some(&record.workspace_id),
+            Self::AttachSession { record, .. } => record
+                .as_ref()
+                .ok()
+                .and_then(|record| record.as_ref())
+                .map(|record| &record.workspace_id),
         }
     }
 }
@@ -441,6 +455,7 @@ fn prepare_room(entry: RoomEntry<'_>, globals: &GlobalFlags) -> Result<ReadyRoom
     // tmux would create the session and erase the distinction. A healthy live room
     // re-seeds nothing; only a birth (absent or stuck) resumes prior agents.
     let was_live = RoomContext::session_is_healthy_live(mux, entry.session_name());
+    report_version_mismatch_notices(entry.workspace_id(), mux, entry.session_name(), was_live)?;
 
     let hook_intro_rendered = if matches!(entry, RoomEntry::Start { .. }) && !was_live {
         ensure_detected_agent_hooks(start_attended())?

@@ -153,6 +153,8 @@ rimz reload    # re-exec sidebars onto the current build, repair geometry, close
 
 `rimz doctor` also warns when more than one RimZ build is writing the workspace at the same time; `rimz reload` is the fix for that mixed-build state too.
 
+After an upgrade, `rimz start` and `rimz attach` also warn when a live room still runs a different sidebar build and point to `rimz reload`.
+
 `rimz reload` runs from anywhere and leaves stopped sessions stopped. Agent version drift and its exact effects are in [agent support](../reference/agent-support.md).
 
 ### Scroll wheel sends arrow keys (Ghostty)

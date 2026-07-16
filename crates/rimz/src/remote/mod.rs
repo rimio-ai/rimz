@@ -37,6 +37,10 @@ pub const REMOTE_RECONNECT_ENV: &str = "RIMZ_REMOTE_RECONNECT";
 /// can retire an orphaned predecessor before entering the multiplexer.
 pub const REMOTE_LINEAGE_ENV: &str = "RIMZ_REMOTE_LINEAGE";
 
+/// Local client version carried to the remote RimZ for launch-time skew
+/// notices.
+pub const REMOTE_CLIENT_VERSION_ENV: &str = "RIMZ_REMOTE_CLIENT_VERSION";
+
 /// Binary override for tests, mirroring `RIMZ_SSH_BIN`.
 pub const INFOCMP_BIN_ENV: &str = "RIMZ_INFOCMP_BIN";
 
@@ -480,6 +484,10 @@ fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase) -> String {
     env_setup.push_str(&format!(
         "export {REMOTE_LINEAGE_ENV}={}; ",
         sh_quote(&options.lineage)
+    ));
+    env_setup.push_str(&format!(
+        "export {REMOTE_CLIENT_VERSION_ENV}={}; ",
+        sh_quote(crate::build_id::VERSION)
     ));
     if matches!(phase, AttemptPhase::Retry) {
         env_setup.push_str("export RIMZ_REMOTE_RECONNECT=1; ");

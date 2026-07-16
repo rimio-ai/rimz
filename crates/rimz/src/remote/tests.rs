@@ -517,13 +517,17 @@ fn ssh_attach_plan_marks_retries_only() {
     let retry = plan.retry().plain();
 
     for attempt in [&attended, &retry] {
+        let snippet = attempt.args.last().unwrap();
         assert!(
-            attempt
-                .args
-                .last()
-                .unwrap()
-                .contains("export RIMZ_REMOTE_LINEAGE='0123456789abcdef';"),
+            snippet.contains("export RIMZ_REMOTE_LINEAGE='0123456789abcdef';"),
             "every attempt carries the stable client lineage"
+        );
+        assert!(
+            snippet.contains(&format!(
+                "export RIMZ_REMOTE_CLIENT_VERSION='{}';",
+                crate::build_id::VERSION
+            )),
+            "every attempt carries the local RimZ version: {snippet}"
         );
     }
     assert!(

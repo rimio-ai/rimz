@@ -14,6 +14,12 @@ use std::sync::OnceLock;
 
 use sha2::{Digest, Sha256};
 
+/// Human-facing build version surfaced by CLI reports and sidebar heartbeats.
+pub const VERSION: &str = match option_env!("RIMZ_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 /// Bytes of build identity RimZ stamps into runtime artifacts.
 const BUILD_ID_BYTES: usize = 6;
 /// Bytes of the image prefix scanned for the linker build id.
@@ -269,6 +275,11 @@ fn running_image_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_starts_with_package_version() {
+        assert!(VERSION.starts_with(env!("CARGO_PKG_VERSION")), "{VERSION}");
+    }
 
     fn write_u16_le(bytes: &mut [u8], offset: usize, value: u16) {
         bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
