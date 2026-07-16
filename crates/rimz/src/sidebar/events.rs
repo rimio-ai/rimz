@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_pane_frame_publication_decodes_as_topology() {
+    fn legacy_pane_frame_published_decodes_as_topology() {
         let decoded: SidebarEvent =
             serde_json::from_str(r#"{"kind":"pane_frame_published"}"#).unwrap();
 
@@ -381,6 +381,23 @@ mod tests {
                 publication: PaneFramePublicationKind::Topology,
             }
         );
+    }
+
+    #[test]
+    fn typed_pane_frame_published_decodes_for_a_legacy_unit_consumer() {
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum LegacySidebarEvent {
+            PaneFramePublished,
+        }
+
+        let encoded = serde_json::to_vec(&SidebarEvent::PaneFramePublished {
+            publication: PaneFramePublicationKind::Metrics,
+        })
+        .unwrap();
+        let decoded: LegacySidebarEvent = serde_json::from_slice(&encoded).unwrap();
+
+        assert!(matches!(decoded, LegacySidebarEvent::PaneFramePublished));
     }
 
     #[test]
