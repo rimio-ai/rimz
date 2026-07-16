@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/cli/sidebar/tests.rs
+expression: strip_sgr(&ansi)
+---
+ ⌘ query-engine                /srv/code/query-engine
+
+ ◎ 5                        ◇ 481k ↘ 336k ↗ 96k ◌ 48k
+ ¤ 9                                           $10.08
+ ────────────────────────────────────────────────────
+ ? 1   ! 1   ⏸︎ 0   ✓ 0                      ⢿ 1   ○ 6
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47🮇
+▌? codex · GPT 5.5 · xhigh · 272k               $4.36▐
+▌  approve pricing cache write                       ▐
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━────────────   71%▐
+▌  ▤ 193k · ◌ 185k ↘ 7k ↗ 24k                        ▐
+▎⢄ claude · Opus 4.8 · xhigh · 1m              $12.40🮇
+▎  port auth watcher                                 🮇
+▎  ▣ ━━━━━━━━━━━━━━━━━━━━╺━━╺──────────────────   34%🮇
+▎  ▤ 341k · ◌ 293k ◍ 34k ↘ 13k ↗ 42k                 🮇
+▎⣾ cargo nextest                                     🮇
+▎  integration::backend::zellij                      🮇
+▎○ codex · GPT 5.1 Codex · xhigh                     🮇
+▎○ codex · GPT 5.1 Codex · xhigh                     🮇
+▎○ codex · GPT 5.1 Codex · xhigh                     🮇
+▎  +3 more                                           🮇
+
+ ⑂ zellij-health                           ⇡1  +14 -3
+ ! pi · GPT 5.5 · xhigh · 272k                  $2.18
+   API error
+   ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━──   95%
+   ▤ 258k · ◌ 248k ↘ 10k ↗ 32k
+
+ ────────────────────────────────────────────────────
+  W: ◎ 22  ◇ 2.0M ↘ 1.4M ↗ 398.7k ◌ 199.4k     $26.38
+  M: ◎ 90  ◇ 8.0M ↘ 5.6M ↗   1.6M ◌ 797.4k    $105.50
+
+                                           ? for help

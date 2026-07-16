@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/cli/sidebar/tests.rs
+expression: strip_sgr(&ansi)
+---
+  flightdeck                    /srv/code/flightdeck
+
+  78                           68M  47M  13M 󱥸 6M
+  13 (4)                                     $392.00
+ ────────────────────────────────────────────────────
+  2    1    2    1                      ⢿ 5    2
+ ↑ 2 need you
+
+▎ pricing-refresh #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1180 -430🮇
+▌ codex · GPT 5.5 · xhigh · 272k               $4.82▐
+▌  approve pricing cache write                       ▐
+▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━╺─────────────────   58%▐
+▌  󰿦 158k · 󱥸 151k  6k  19k                   󰪠 18m▐
+
+  main                     ⇡3 ⇣1  +1840 -620   main
+ ⢄ claude · Opus 4.8 · xhigh · 1m               $8.64
+   stabilize render diff
+   󰕰 ━━━━━━━━━━━━━━━━╺━╺───────────────────────   24%
+   󰿦 247k · 󱥸 212k  24k  9k  30k
+ ▁ claude · Opus 4.8 · xhigh · 1m              $28.90
+   compact provider trace
+
+ ─── Claude ──── Codex ──── Pi ──── Opencode ────────
+
+           ChatGPT Pro · v0.135.0           󰑐 2  ⇅ rc
+  ▗▛▀▀▀▜▖   24   31M  21M  6M 󱥸 3M        $428.00
+ ▐█ ▜▖  █▌ 5h  ▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ 󰑐  2h00m
+  ▝▀▀▀▀▀▘  7d  ▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ 󰑐  4d21h
+
+  ── Total: ─────────────────────────────────────────
+  W:   269   255.1M  178.6M   51.0M 󱥸   $3,990.00
+  M:  1075     1.0B  714.2M  204.1M 󱥸  $15,960.00
+
+                                           ? for help

@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/cli/sidebar/tests.rs
+expression: strip_sgr(&ansi)
+---
+ ⌘ farlink                          /srv/code/farlink
+
+ ◎ 64                           ◇ 41M ↘ 28M ↗ 8M ◌ 4M
+ ¤ 12 (5)                                     $204.00
+ ────────────────────────────────────────────────────
+ ? 2   ! 0   ⏸︎ 1   ✓ 2                      ⢿ 5   ○ 2
+ ↑ 2 need you
+
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +720 -160🮇
+▌⢄ claude · Opus 4.8 · xhigh · 1m              $13.56▐
+▌  verify remote attach                              ▐
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━╺━━╺──────────────────   33%▐
+▌  ▤ 333k · ◌ 286k ◍ 33k ↘ 13k ↗ 41k · ↻ 2           ▐
+▌  ⧉ subagents (2)                                   ▐
+▌    ✓ Explore — audit auth watcher changes          ▐
+▌    ⠁ Plan — run focused nextest                    ▐
+▌      ◇ 18k · Haiku · xhigh                    ◔  3m▐
+
+ ⑂ remote-link              ⇡1 ⇣1  +1240 -380  ⑂ main
+ ? codex · GPT 5.5 · xhigh · 272k               $3.71
+   approve SSH link retry
+
+ ─── Claude ──── Codex ──── Pi ──── Opencode ────────
+
+           Claude Max · v2.1.158                 ⇅ rc
+  ▐▛███▜▌  ◎ 22  ◇ 28M ↘ 20M ↗ 5M ◌ 2M        $438.00
+ ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻  2h00m
+   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻  2d00h
+
+  ── Total: ─────────────────────────────────────────
+  W: ◎ 235  ◇ 178.6M ↘ 125.0M ↗  35.7M ◌ 1  $2,744.00
+  M: ◎ 941  ◇ 714.6M ↘ 500.2M ↗ 142.9M ◌ 7 $10,976.00
+
+                                           ? for help

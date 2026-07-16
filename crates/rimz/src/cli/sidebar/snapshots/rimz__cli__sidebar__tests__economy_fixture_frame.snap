@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/cli/sidebar/tests.rs
+expression: strip_sgr(&ansi)
+---
+  abacus                            /srv/code/abacus
+
+  83                           88M  61M  17M 󱥸 8M
+  12 (5)                                     $486.00
+ ────────────────────────────────────────────────────
+  2    0    1    4                      ⢿ 3    2
+
+▎ provider-store #91 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡1  +1580 -520🮇
+▌⢄ opencode · GPT 5.5 · xhigh · 272k            $7.44▐
+▌  rebalance metered sessions                        ▐
+▌  󰕰 ━━━━━━━━━━━━━━━━━━━━━━━━━╺━───────────────   64%▐
+▌  󰿦 175k · 󱥸 168k  7k  21k                        ▐
+▌   subagents (2)                                   ▐
+▌     Explore — audit auth watcher changes          ▐
+▌    ⠁ Plan — run focused nextest                    ▐
+▌       18k · Haiku · xhigh                    󰪞  3m▐
+▎⢄ claude · Opus 4.8 · xhigh · 1m              $12.62🮇
+▎  audit provider spend                              🮇
+▎  󰕰 ━━━━━━━━━━━━━━━━━━╺━━╺────────────────────   29%🮇
+▎  󰿦 296k · 󱥸 254k  29k  11k  37k             󰪞 6m🮇
+▎⣾ pnpm serve                  12%   262M   450k/s🮇
+
+ ─── Claude ──── Codex ──── Pi ──── Opencode ────────
+
+           OpenAI OAuth · v0.7.2
+  ▗▛▀▀▀▜▖   29   28M  19M  5M 󱥸 2M        $516.00
+ ▝▜▌ █ ▐▛▘ 5h  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
+  ▝▀▀▀▀▀▘  7d  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱ 󰑐  4d00h
+
+  ── Total: ─────────────────────────────────────────
+  W:   302   330.4M  231.3M   66.1M 󱥸   $4,984.00
+  M:  1210     1.3B  925.1M  264.3M 󱥸  $19,936.00
+
+                                           ? for help

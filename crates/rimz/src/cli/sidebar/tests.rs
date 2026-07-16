@@ -81,12 +81,29 @@ fn strip_sgr(ansi: &[u8]) -> String {
 
 #[test]
 fn provider_fixture_frame_is_deterministic() {
-    let snapshot = sidebar_fixture_snapshot(SidebarFixtureState::Provider).unwrap();
+    assert_fixture_frame_snapshot(SidebarFixtureState::Provider, "provider_fixture_frame");
+}
+
+#[test]
+fn fixture_frames_are_deterministic() {
+    for (state, snapshot_name) in [
+        (SidebarFixtureState::Fleet, "fleet_fixture_frame"),
+        (SidebarFixtureState::Cockpit, "cockpit_fixture_frame"),
+        (SidebarFixtureState::Focus, "focus_fixture_frame"),
+        (SidebarFixtureState::Economy, "economy_fixture_frame"),
+        (SidebarFixtureState::Reach, "reach_fixture_frame"),
+    ] {
+        assert_fixture_frame_snapshot(state, snapshot_name);
+    }
+}
+
+fn assert_fixture_frame_snapshot(state: SidebarFixtureState, snapshot_name: &str) {
+    let snapshot = sidebar_fixture_snapshot(state).unwrap();
 
     let mut ansi = Vec::new();
     rimz::sidebar_pane::render::render_fixed_line_ansi(&mut ansi, &snapshot, None, 54, 34).unwrap();
 
-    insta::assert_snapshot!("provider_fixture_frame", strip_sgr(&ansi));
+    insta::assert_snapshot!(snapshot_name, strip_sgr(&ansi));
 }
 
 #[test]
