@@ -34,7 +34,7 @@
 RimZ is a realtime dashboard for harnessing agentic coding: one human and tens of agents working together in one Zellij or tmux room, where everything about every agent reads at a glance. Every agent gets a live card (state, task, context health, live cost), and the sidebar routes your attention to whichever one needs you.
 
 <p align="center">
-  <img src="docs/rimz-full.png" alt="A RimZ room: the sidebar triaging a fleet of coding agents beside their panes" width="100%">
+  <img src="https://raw.githubusercontent.com/rimio-ai/rimz/HEAD/docs/rimz-full.png" alt="A RimZ room: the sidebar triaging a fleet of coding agents beside their panes" width="100%">
   <br/><sub>The sidebar triages the fleet on the left; agents work in their own panes.</sub>
 </p>
 
@@ -54,7 +54,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 ## What it does
 
 <p align="center">
-  <img src="docs/rimz-gallery.png" alt="" width="100%">
+  <img src="https://raw.githubusercontent.com/rimio-ai/rimz/HEAD/docs/rimz-gallery.png" alt="" width="100%">
   <br/><sub>Realtime harness dashboard, with rich information at a glance</sub>
 </p>
 
