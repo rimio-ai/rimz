@@ -489,6 +489,7 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
 fn ssh_attach_plan_exports_client_size_when_present() {
     let plan = SshAttachPlan::new(SshAttachOptions {
         target: parse("dev-box:query-engine"),
+        lineage: "0123456789abcdef".to_owned(),
         no_resume: false,
         mux: None,
         term: TermPlan::Keep,
