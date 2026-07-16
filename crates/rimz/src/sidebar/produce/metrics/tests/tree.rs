@@ -46,9 +46,14 @@ fn pane_tree_sample_aggregates_root_children_and_grandchildren() {
         sample
             .state_samples
             .iter()
-            .map(|sample| sample.pid)
+            .map(|sample| (sample.pid, sample.cpu_ticks, sample.io_bytes))
             .collect::<Vec<_>>(),
-        vec![10, 30, 20, 40]
+        vec![
+            (10, 5, Some(100)),
+            (30, 11, Some(300)),
+            (20, 7, Some(200)),
+            (40, 13, Some(400)),
+        ]
     );
 }
 
@@ -111,6 +116,8 @@ fn pane_tree_rates_on_stable_root_when_children_churn() {
             pid: 10,
             start_ticks: 100,
             state: 'S',
+            cpu_ticks: 1_300,
+            io_bytes: Some(800),
         }],
     };
 
@@ -140,6 +147,8 @@ fn pane_tree_io_rate_waits_for_a_complete_prior_baseline() {
             pid: 10,
             start_ticks: 100,
             state: 'S',
+            cpu_ticks: 1_100,
+            io_bytes: Some(10_000),
         }],
     };
 
@@ -155,21 +164,29 @@ fn tree_stuck_detection_tracks_pid_start_identity() {
         pid: 20,
         start_ticks: 200,
         state: 'D',
+        cpu_ticks: 10,
+        io_bytes: Some(100),
     }];
     let still_d = [ProcessStateSample {
         pid: 20,
         start_ticks: 200,
         state: 'D',
+        cpu_ticks: 10,
+        io_bytes: Some(100),
     }];
     let reused_pid = [ProcessStateSample {
         pid: 20,
         start_ticks: 201,
         state: 'D',
+        cpu_ticks: 10,
+        io_bytes: Some(100),
     }];
     let zombie = [ProcessStateSample {
         pid: 30,
         start_ticks: 300,
         state: 'Z',
+        cpu_ticks: 10,
+        io_bytes: Some(100),
     }];
 
     assert_eq!(
@@ -180,6 +197,54 @@ fn tree_stuck_detection_tracks_pid_start_identity() {
     assert_eq!(process_state_from_tree(&zombie, &[]), None);
     assert_eq!(
         process_state_from_tree(&zombie, &zombie),
+        Some(ProcessState::Stuck)
+    );
+}
+
+#[test]
+fn tree_stuck_detection_requires_no_process_progress() {
+    let prior = ProcessStateSample {
+        pid: 20,
+        start_ticks: 200,
+        state: 'D',
+        cpu_ticks: 10,
+        io_bytes: Some(100),
+    };
+    let cpu_progress = ProcessStateSample {
+        cpu_ticks: 11,
+        ..prior
+    };
+    let io_progress = ProcessStateSample {
+        io_bytes: Some(101),
+        ..prior
+    };
+    let missing_current_io = ProcessStateSample {
+        io_bytes: None,
+        ..prior
+    };
+    let prior_missing_io = ProcessStateSample {
+        io_bytes: None,
+        ..prior
+    };
+    let zombie_with_progress = ProcessStateSample {
+        state: 'Z',
+        cpu_ticks: 11,
+        io_bytes: Some(101),
+        ..prior
+    };
+
+    assert_eq!(process_state_from_tree(&[cpu_progress], &[prior]), None);
+    assert_eq!(process_state_from_tree(&[io_progress], &[prior]), None);
+    assert_eq!(
+        process_state_from_tree(&[missing_current_io], &[prior]),
+        Some(ProcessState::Stuck)
+    );
+    assert_eq!(
+        process_state_from_tree(&[prior], &[prior_missing_io]),
+        Some(ProcessState::Stuck)
+    );
+    assert_eq!(
+        process_state_from_tree(&[zombie_with_progress], &[prior]),
         Some(ProcessState::Stuck)
     );
 }

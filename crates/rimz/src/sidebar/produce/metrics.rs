@@ -90,6 +90,10 @@ struct ProcessStateSample {
     pid: u32,
     start_ticks: u64,
     state: char,
+    #[serde(default)]
+    cpu_ticks: u64,
+    #[serde(default)]
+    io_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -387,7 +391,8 @@ fn add_process_to_sample(
         .saturating_add(stat.cpu_ticks)
         .saturating_add(stat.child_cpu_ticks);
     sample.rss_kb = sample.rss_kb.saturating_add(stat.rss_kb);
-    sample.io_bytes = match (sample.io_bytes, io_bytes(pid)) {
+    let process_io_bytes = io_bytes(pid);
+    sample.io_bytes = match (sample.io_bytes, process_io_bytes) {
         (Some(total), Some(bytes)) => Some(total.saturating_add(bytes)),
         _ => None,
     };
@@ -395,23 +400,40 @@ fn add_process_to_sample(
         pid,
         start_ticks: stat.start_ticks,
         state: stat.state,
+        cpu_ticks: stat.cpu_ticks,
+        io_bytes: process_io_bytes,
     });
 }
 
+/// A repeated zombie is stuck; a repeated uninterruptible sleep is stuck only
+/// when the process made no CPU or I/O progress between samples.
 fn process_state_from_tree(
     current: &[ProcessStateSample],
     prior: &[ProcessStateSample],
 ) -> Option<ProcessState> {
-    let prior_stuck: HashSet<(u32, u64)> = prior
+    let prior_stuck: HashMap<(u32, u64), &ProcessStateSample> = prior
         .iter()
         .filter(|sample| matches!(sample.state, 'Z' | 'D'))
-        .map(|sample| (sample.pid, sample.start_ticks))
+        .map(|sample| ((sample.pid, sample.start_ticks), sample))
         .collect();
     current
         .iter()
         .any(|sample| {
-            matches!(sample.state, 'Z' | 'D')
-                && prior_stuck.contains(&(sample.pid, sample.start_ticks))
+            let Some(prior) = prior_stuck.get(&(sample.pid, sample.start_ticks)) else {
+                return false;
+            };
+            match sample.state {
+                'Z' => true,
+                'D' => {
+                    let cpu_progress = sample.cpu_ticks > prior.cpu_ticks;
+                    let io_progress = matches!(
+                        (sample.io_bytes, prior.io_bytes),
+                        (Some(current), Some(prior)) if current > prior
+                    );
+                    !cpu_progress && !io_progress
+                }
+                _ => false,
+            }
         })
         .then_some(ProcessState::Stuck)
 }
