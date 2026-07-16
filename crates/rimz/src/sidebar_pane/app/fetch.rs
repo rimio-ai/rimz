@@ -1020,7 +1020,7 @@ impl FetchDispatcher {
     pub(super) fn complete(&mut self, dispatch_follow_up: bool) {
         self.in_flight = false;
         if dispatch_follow_up && let Some(request) = self.pending_refetch.take() {
-            self.dispatch(request, false);
+            self.request(request, false);
         }
     }
 }

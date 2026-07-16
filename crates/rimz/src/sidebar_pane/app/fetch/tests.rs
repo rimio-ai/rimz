@@ -855,6 +855,28 @@ fn fetch_dispatcher_fires_one_strongest_follow_up_after_in_flight_work() {
 }
 
 #[test]
+fn fetch_dispatcher_completion_absorbs_deferred_into_pending_follow_up() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut dispatcher = FetchDispatcher::new(tx);
+    dispatcher.request(FetchRequest::default(), false);
+    rx.try_recv().expect("initial request");
+    dispatcher.request(FetchRequest::default(), true);
+    dispatcher.defer_until(
+        FetchRequest::producer_fresh_panes(),
+        Instant::now() + Duration::from_secs(3),
+    );
+
+    dispatcher.complete(true);
+
+    let follow_up = rx
+        .try_recv()
+        .expect("pending follow-up absorbs deferred work");
+    assert!(follow_up.is_producer_fresh_panes());
+    assert!(dispatcher.next_deadline().is_none());
+    assert!(rx.try_recv().is_err(), "only one follow-up dispatches");
+}
+
+#[test]
 fn pane_frame_published_refolds_a_consumer_from_cache() {
     let fixture = ConsumerFixture::new();
     fixture.write_pane_frame();
