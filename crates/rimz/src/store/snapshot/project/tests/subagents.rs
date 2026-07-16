@@ -162,6 +162,37 @@ fn parent_stamped_observation_cannot_reparent_or_release_existing_roots() {
 }
 
 #[test]
+fn subagent_adoption_attaches_an_existing_root_once() {
+    let root = raw_lifecycle(
+        "antigravity",
+        serde_json::json!({
+            "event_name": "PreInvocation",
+            "agent_id": "child",
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+    let adoption = raw_lifecycle(
+        "antigravity",
+        serde_json::json!({
+            "event_name": "SubagentAdopted",
+            "agent_id": "child",
+            "parent_agent_id": "parent",
+            "task": "Inspect",
+            "signal": { "signal": "subagent_stopped", "errored": false },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[root, adoption]);
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id == "child")
+        .expect("adopted child");
+    assert_eq!(child.status, AgentStatus::Success);
+    assert_eq!(child.parent_agent_id.as_deref(), Some("parent"));
+    assert_eq!(child.task.as_deref(), Some("Inspect"));
+}
+
+#[test]
 fn root_and_child_labels_do_not_contend_across_allocator_rebuilds() {
     let child = raw_lifecycle(
         "cursor",

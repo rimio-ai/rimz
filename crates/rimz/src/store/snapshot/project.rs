@@ -552,8 +552,13 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     fold_launch_params(&mut state, &input.observation.launch);
     let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
     let enrichment = enrichment_projection(input.observation, input.prior, input.kind);
+    // Established lineage stays authoritative. The explicit adoption event is
+    // the one path that converts a provisional root after provider evidence
+    // became readable later than the child's own hooks.
     let parent_agent_id = match input.prior {
-        Some(prior) => prior.parent_agent_id.clone(),
+        Some(prior) if prior.parent_agent_id.is_some() => prior.parent_agent_id.clone(),
+        Some(_) if input.event_name == Some("SubagentAdopted") => input.event_parent_agent_id,
+        Some(_) => None,
         None => input.event_parent_agent_id,
     };
     let worktree = worktree_projection(
