@@ -584,3 +584,68 @@ fn spending_walk_gates_warm_cursor_persists() {
         "large parse work persists regardless of the interval"
     );
 }
+
+#[test]
+fn live_origin_updates_share_the_walk_persist_gate() {
+    let dir = TempDir::new().unwrap();
+    let cache_path = dir.path().join("spending.json");
+    let transcript = dir.path().join("chat.jsonl");
+    std::fs::write(&transcript, b"").unwrap();
+    let key = transcript.to_string_lossy().into_owned();
+    let mut cache = read_spending_cache(&cache_path);
+    cache.files.insert(
+        key.clone(),
+        FileCacheEntry {
+            mtime_secs: 0,
+            len: 0,
+            cursor: SpendCursor::default(),
+            origin_path: None,
+            entries: Vec::new(),
+            unknown_models: BTreeMap::new(),
+        },
+    );
+    assert!(write_spending_cache(&cache_path, &cache));
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    let mut walker = SpendingWalker::new();
+
+    walker.apply_origin_overrides(
+        &cache_path,
+        &HashMap::from([(transcript.clone(), first.clone())]),
+        true,
+        NOW_SECS,
+    );
+    assert_eq!(
+        read_spending_cache(&cache_path).files[&key]
+            .origin_path
+            .as_ref(),
+        Some(&first)
+    );
+
+    walker.apply_origin_overrides(
+        &cache_path,
+        &HashMap::from([(transcript.clone(), second.clone())]),
+        true,
+        NOW_SECS + 1,
+    );
+    assert_eq!(
+        read_spending_cache(&cache_path).files[&key]
+            .origin_path
+            .as_ref(),
+        Some(&first),
+        "a second live origin stays in memory inside the persist interval"
+    );
+
+    walker.apply_origin_overrides(
+        &cache_path,
+        &HashMap::from([(transcript, second.clone())]),
+        true,
+        NOW_SECS + SPENDING_PERSIST_MIN_INTERVAL,
+    );
+    assert_eq!(
+        read_spending_cache(&cache_path).files[&key]
+            .origin_path
+            .as_ref(),
+        Some(&second)
+    );
+}

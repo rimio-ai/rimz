@@ -285,7 +285,14 @@ pub fn refresh_producer_caches(
 ) -> Result<()> {
     let base = read_published_snapshot(cursor, state, runtime, session, exclude)?;
     let config = crate::config::MachineConfig::load_lenient();
-    let _ = refresh_heavy_lanes(&base, &base.agents, &state.messages_dir, runtime, &config);
+    let _ = refresh_heavy_lanes(
+        &base,
+        &base.agents,
+        &state.messages_dir,
+        runtime,
+        &config,
+        crate::agents::spending::service::SpendingServiceStartup::HostEligible,
+    );
     Ok(())
 }
 
@@ -415,6 +422,7 @@ fn enrich_with_refresh(
         opts.messages_dir,
         opts.runtime,
         &config,
+        crate::agents::spending::service::SpendingServiceStartup::OneShot,
     );
     enrich_producing_with(
         snapshot,

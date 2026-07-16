@@ -195,6 +195,19 @@ struct PreparationKey {
     aspect: CellAspect,
 }
 
+impl PreparationKey {
+    fn new(tier: PetRenderTier, size: PetGridSize, aspect: CellAspect) -> Self {
+        Self {
+            tier,
+            size,
+            aspect: match tier {
+                PetRenderTier::Pixel => CellAspect::NEUTRAL,
+                PetRenderTier::Cell => aspect,
+            },
+        }
+    }
+}
+
 enum LoadedPetAsset {
     Cell(Vec<PetCellGrid>),
     Pixel(Vec<RgbaImage>),
@@ -237,11 +250,11 @@ impl PetAssets {
         Self {
             loaded: Some(LoadedPet {
                 id: pet_id.to_owned(),
-                key: PreparationKey {
-                    tier: PetRenderTier::Pixel,
-                    size: DASHBOARD_PIXEL_PET,
-                    aspect: CellAspect::NEUTRAL,
-                },
+                key: PreparationKey::new(
+                    PetRenderTier::Pixel,
+                    DASHBOARD_PIXEL_PET,
+                    CellAspect::NEUTRAL,
+                ),
                 asset: LoadedPetAsset::Pixel(vec![frame; catalog::FRAME_COUNT]),
             }),
             ..Self::default()
@@ -306,11 +319,8 @@ impl PetAssets {
         let id = source.id();
         let id: &str = id.as_ref();
 
-        let preparation = body_tier.map(|tier| PreparationKey {
-            tier,
-            size: dashboard_pet_size(tier),
-            aspect: cell_aspect,
-        });
+        let preparation =
+            body_tier.map(|tier| PreparationKey::new(tier, dashboard_pet_size(tier), cell_aspect));
         self.poll_loader(phase);
         self.clear_mismatched_pet(id, preparation);
         if let Some(key) = preparation {

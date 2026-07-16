@@ -17,7 +17,7 @@ pub(super) fn run_refresh(dollars: bool, hold: bool) -> Result<()> {
         let (tx, rx) = mpsc::channel();
         let worker_paths = paths.clone();
         thread::spawn(move || {
-            let event = refresh_event(|| load_or_refresh_stats_via_service(&worker_paths, None));
+            let event = refresh_event(|| load_or_refresh_stats_via_service(&worker_paths));
             let _ = tx.send(event);
         });
         match hold_cycle(hold, &mut current, &rx, dollars, &glyphs, &mut active)? {

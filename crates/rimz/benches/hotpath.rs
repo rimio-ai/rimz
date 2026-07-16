@@ -170,13 +170,14 @@ fn fold_fixture() -> FoldFixture {
 }
 
 fn spending_fixture(warm: bool) -> SpendingFixture {
-    spending_fixture_scaled(SPENDING_FILES, SPENDING_ENTRIES_PER_FILE, warm)
+    spending_fixture_scaled(SPENDING_FILES, SPENDING_ENTRIES_PER_FILE, warm, false)
 }
 
 fn spending_fixture_scaled(
     files_count: usize,
     entries_per_file: usize,
     warm: bool,
+    scoped: bool,
 ) -> SpendingFixture {
     let tempdir = TempDir::new().expect("tempdir");
     let cache_path = tempdir.path().join("spending.json");
@@ -221,7 +222,7 @@ fn spending_fixture_scaled(
                 mtime_secs,
                 len: metadata.len(),
                 cursor: rimz::agents::spending::SpendCursor::default(),
-                origin_path: Some(tempdir.path().to_path_buf()),
+                origin_path: scoped.then(|| tempdir.path().to_path_buf()),
                 entries,
                 unknown_models: BTreeMap::new(),
             },
@@ -334,7 +335,7 @@ fn spending_walk_warm_no_change(bencher: Bencher) {
 #[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
 fn spending_live_scale_cold_hydrate(bencher: Bencher) {
     bencher
-        .with_inputs(|| spending_fixture_scaled(6_000, 17, false))
+        .with_inputs(|| spending_fixture_scaled(6_000, 17, false, true))
         .bench_local_values(|mut fixture| {
             let origin_overrides = HashMap::new();
             let user_inputs = Vec::new();
@@ -359,7 +360,7 @@ fn spending_live_scale_cold_hydrate(bencher: Bencher) {
 #[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
 fn spending_live_scale_warm_global_refresh(bencher: Bencher) {
     bencher
-        .with_inputs(|| spending_fixture_scaled(6_000, 17, true))
+        .with_inputs(|| spending_fixture_scaled(6_000, 17, true, true))
         .bench_local_values(|mut fixture| {
             let origin_overrides = HashMap::new();
             let user_inputs = Vec::new();
@@ -384,7 +385,7 @@ fn spending_live_scale_warm_global_refresh(bencher: Bencher) {
 #[divan::bench(sample_count = 3, sample_size = 1, skip_ext_time)]
 fn spending_live_scale_additional_workspace_scope(bencher: Bencher) {
     bencher
-        .with_inputs(|| spending_fixture_scaled(6_000, 17, true))
+        .with_inputs(|| spending_fixture_scaled(6_000, 17, true, true))
         .bench_local_values(|mut fixture| {
             let root = fixture._tempdir.path().to_path_buf();
             let scope = rimz::agents::spending::SpendScope::from_roots(Some(&root), &[]);

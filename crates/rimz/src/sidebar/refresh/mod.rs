@@ -69,6 +69,7 @@ pub fn refresh_heavy_lanes(
     state_messages_dir: &Path,
     runtime: &RuntimePaths,
     config: &MachineConfig,
+    spending_startup: crate::agents::spending::service::SpendingServiceStartup,
 ) -> RefreshedLanes {
     refresh_codex_daemon_reap_cache(
         daemon_probe_agents,
@@ -78,8 +79,12 @@ pub fn refresh_heavy_lanes(
     );
 
     let accounts = produce_accounts(base, runtime);
-    let spending =
-        spending::compute_fleet_spending_via_service(runtime, base, &config.headline_spec());
+    let spending = spending::compute_fleet_spending_via_service(
+        runtime,
+        base,
+        &config.headline_spec(),
+        spending_startup,
+    );
     // Rate-limit persistence and same-pass usage scheduling use resolved
     // provider panels, not the bare rollup. Final folds merge the just-written
     // cache read-only.

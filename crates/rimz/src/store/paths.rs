@@ -387,25 +387,34 @@ impl RuntimePaths {
     }
 
     /// Socket and lifetime-owner lock for the warm account-global spending
-    /// walker. Both names discriminate the wire and durable cursor versions so
-    /// incompatible live builds elect independent owners.
+    /// walker. Both names discriminate every wire-visible cache version and the
+    /// persistent/discovery namespace so incompatible clients elect independent
+    /// owners.
+    #[allow(clippy::too_many_arguments)]
     pub fn shared_spending_service_socket_path(
         &self,
         protocol_version: u32,
         cache_version: u32,
+        provider_version: u32,
+        workspace_version: u32,
+        namespace: &str,
     ) -> PathBuf {
         self.shared_root.join(format!(
-            "spending-service.v{protocol_version}.c{cache_version}.sock"
+            "spending.v{protocol_version}.c{cache_version}.p{provider_version}.w{workspace_version}.n{namespace}.sock"
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn shared_spending_service_owner_lock(
         &self,
         protocol_version: u32,
         cache_version: u32,
+        provider_version: u32,
+        workspace_version: u32,
+        namespace: &str,
     ) -> PathBuf {
         self.shared_root.join(format!(
-            "spending-service.v{protocol_version}.c{cache_version}.lock"
+            "spending.v{protocol_version}.c{cache_version}.p{provider_version}.w{workspace_version}.n{namespace}.lock"
         ))
     }
 
@@ -422,22 +431,18 @@ impl RuntimePaths {
         self.root.join(format!("workspace-spending.{prefix}.json"))
     }
 
-    pub fn ensure_dirs(&self) -> Result<()> {
-        let rimz_root = self
-            .root
-            .parent()
-            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
-                path: self.root.clone(),
-            })?;
-        let runtime_root = rimz_root
-            .parent()
-            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
-                path: self.root.clone(),
-            })?;
+    /// Prepare only user-shared runtime ownership and persistent cache roots.
+    /// Account-global readers use this without materializing the reserved
+    /// all-zero workspace tree returned by [`Self::shared`].
+    pub fn ensure_shared_dirs(&self) -> Result<()> {
+        let (runtime_root, rimz_root) = self.runtime_roots()?;
         ensure_private_runtime_dir(runtime_root)?;
         ensure_private_runtime_dir(rimz_root)?;
-        ensure_private_runtime_dir(&self.root)?;
         ensure_private_runtime_dir(&self.shared_root)?;
+        self.ensure_persistent_shared_root()
+    }
+
+    fn ensure_persistent_shared_root(&self) -> Result<()> {
         if self.shared_root != self.persistent_shared_root {
             for name in LEGACY_RUNTIME_SHARED_CACHES {
                 let path = self.shared_root.join(name);
@@ -453,6 +458,40 @@ impl RuntimePaths {
             }
         }
         mkdir_p(&self.persistent_shared_root)?;
+        Ok(())
+    }
+
+    /// Prepare the workspace root needed by workspace-scoped disposable
+    /// publications without creating every renderer subdirectory.
+    pub(crate) fn ensure_workspace_root(&self) -> Result<()> {
+        let (runtime_root, rimz_root) = self.runtime_roots()?;
+        ensure_private_runtime_dir(runtime_root)?;
+        ensure_private_runtime_dir(rimz_root)?;
+        ensure_private_runtime_dir(&self.root)
+    }
+
+    fn runtime_roots(&self) -> Result<(&Path, &Path)> {
+        let rimz_root = self
+            .root
+            .parent()
+            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
+                path: self.root.clone(),
+            })?;
+        let runtime_root = rimz_root
+            .parent()
+            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
+                path: self.root.clone(),
+            })?;
+        Ok((runtime_root, rimz_root))
+    }
+
+    pub fn ensure_dirs(&self) -> Result<()> {
+        let (runtime_root, rimz_root) = self.runtime_roots()?;
+        ensure_private_runtime_dir(runtime_root)?;
+        ensure_private_runtime_dir(rimz_root)?;
+        ensure_private_runtime_dir(&self.root)?;
+        ensure_private_runtime_dir(&self.shared_root)?;
+        self.ensure_persistent_shared_root()?;
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
         mkdir_p(&self.read_marks_dir)?;
@@ -776,15 +815,53 @@ mod tests {
         )
         .unwrap();
 
-        let socket = first.shared_spending_service_socket_path(1, 18);
-        assert_eq!(socket, second.shared_spending_service_socket_path(1, 18));
+        let socket =
+            first.shared_spending_service_socket_path(1, 18, 10, 7, "0123456789abcdef01234567");
         assert_eq!(
-            first.shared_spending_service_owner_lock(1, 18),
-            second.shared_spending_service_owner_lock(1, 18)
+            socket,
+            second.shared_spending_service_socket_path(1, 18, 10, 7, "0123456789abcdef01234567")
         );
-        assert_ne!(socket, first.shared_spending_service_socket_path(2, 18));
-        assert_ne!(socket, first.shared_spending_service_socket_path(1, 19));
+        assert_eq!(
+            first.shared_spending_service_owner_lock(1, 18, 10, 7, "0123456789abcdef01234567"),
+            second.shared_spending_service_owner_lock(1, 18, 10, 7, "0123456789abcdef01234567")
+        );
+        assert_ne!(
+            socket,
+            first.shared_spending_service_socket_path(2, 18, 10, 7, "0123456789abcdef01234567")
+        );
+        assert_ne!(
+            socket,
+            first.shared_spending_service_socket_path(1, 19, 10, 7, "0123456789abcdef01234567")
+        );
+        assert_ne!(
+            socket,
+            first.shared_spending_service_socket_path(1, 18, 11, 7, "0123456789abcdef01234567")
+        );
+        assert_ne!(
+            socket,
+            first.shared_spending_service_socket_path(1, 18, 10, 8, "0123456789abcdef01234567")
+        );
+        assert_ne!(
+            socket,
+            first.shared_spending_service_socket_path(1, 18, 10, 7, "fedcba9876543210fedcba98")
+        );
         crate::sock::validate_socket_path(&socket).unwrap();
+    }
+
+    #[test]
+    fn shared_directory_preparation_leaves_workspace_tree_absent() {
+        let temp = short_tempdir();
+        let paths = RuntimePaths::under(
+            WorkspaceId::parse("ws_000000000000000000000000").unwrap(),
+            temp.path(),
+        )
+        .unwrap();
+
+        paths.ensure_shared_dirs().unwrap();
+
+        assert!(paths.shared_root.is_dir());
+        assert!(paths.persistent_shared_root.is_dir());
+        assert!(!paths.root.exists());
     }
 
     #[test]

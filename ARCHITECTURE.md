@@ -43,7 +43,7 @@ rimz CLI and hook subprocesses
 workspace store (a directory of flat files)
 ```
 
-The spending service is a private thread inside whichever existing long-lived RimZ process wins its user-scoped lifetime lock. Its versioned Unix socket coordinates clients, while `spending.json`, provider/workspace publications, and their atomic-write and downgrade guards remain truth. Process exit discards the service and the next client re-elects an owner, so this warm-cache optimization introduces no RimZ daemon.
+The spending service is a private thread inside whichever host-eligible long-lived RimZ process wins its persistent/discovery-namespace lifetime lock; one-shot inspection commands connect or fall back directly without becoming the warm owner. Its schema- and namespace-versioned Unix socket accepts clients concurrently while one try-locked walker owns stale work, so a slow request cannot queue another workspace's refresh tick. `spending.json`, provider/workspace publications, and their atomic-write and downgrade guards remain truth. Process exit discards the service and the next eligible client re-elects an owner, so this warm-cache optimization introduces no RimZ daemon.
 
 The CLI and hook subprocesses are the only writers of product truth. The sidebar reads the store read-only and writes its own runtime caches and read receipts; `rimz sidebar snapshot` is the one-shot inspection surface over the same pipeline. The per-instance sidebar socket is the wakeup channel of record — backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)). The producer/consumer split, push channels, and timing cadences are in [state.md](./docs/internals/sidebar/state.md).
 

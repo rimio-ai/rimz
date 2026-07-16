@@ -283,19 +283,16 @@ fn load_or_refresh_stats(
     }
 }
 
-fn load_or_refresh_stats_via_service(
-    paths: &RuntimePaths,
-    mut progress: Option<&mut dyn FnMut(SpendProgress)>,
-) -> Result<Stats> {
+fn load_or_refresh_stats_via_service(paths: &RuntimePaths) -> Result<Stats> {
     let request = rimz::agents::spending::service::SpendingServiceRequest::global(
+        paths,
         MachineConfig::load_lenient().headline_spec(),
-        progress.is_some(),
     );
-    let caches = rimz::agents::spending::service::request(paths, request, |frame| {
-        if let Some(progress) = progress.as_deref_mut() {
-            progress(frame);
-        }
-    });
+    let caches = rimz::agents::spending::service::request(
+        paths,
+        request,
+        rimz::agents::spending::service::SpendingServiceStartup::HostEligible,
+    );
     match caches {
         Ok(caches) => Ok(Stats::from_provider(caches.provider)),
         Err(error) => load_published_stats(paths).ok_or_else(|| error.into()),
@@ -385,16 +382,7 @@ fn compute_stats_from_files(
 }
 
 fn ensure_shared_runtime(paths: &RuntimePaths) -> Result<()> {
-    let rimz_root = paths
-        .shared_root
-        .parent()
-        .ok_or_else(|| anyhow!("invalid RimZ shared runtime path"))?;
-    let runtime_root = rimz_root
-        .parent()
-        .ok_or_else(|| anyhow!("invalid RimZ runtime path"))?;
-    rimz::store::paths::ensure_private_runtime_dir(runtime_root)?;
-    rimz::store::paths::ensure_private_runtime_dir(rimz_root)?;
-    rimz::store::paths::ensure_private_runtime_dir(&paths.shared_root)?;
+    paths.ensure_shared_dirs()?;
     Ok(())
 }
 

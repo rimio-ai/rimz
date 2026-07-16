@@ -162,18 +162,33 @@ fn sidebar_enrich_stays_projection_only() {
 #[test]
 fn long_lived_renderers_cannot_construct_spending_walkers() {
     let root = temp_repo_root("spending-walker-ownership");
+    let data_plane = root.join("crates/rimz/src/sidebar/refresh/spending.rs");
+    let data_plane_test = root.join("crates/rimz/src/sidebar/refresh/spending/tests.rs");
     let sidebar = root.join("crates/rimz/src/sidebar_pane/app/cache_refresh.rs");
     let held = root.join("crates/rimz/src/cli/stats/hold.rs");
     let direct = root.join("crates/rimz/src/cli/stats/mod.rs");
-    for path in [&sidebar, &held, &direct] {
+    for path in [&data_plane, &data_plane_test, &sidebar, &held, &direct] {
         std::fs::create_dir_all(path.parent().expect("test path has parent")).expect("mkdir");
         std::fs::write(path, "fn f() { SpendingWalker::new(); }\n").expect("write source");
     }
 
-    let err =
-        ensure_spending_walker_ownership(&root, &[sidebar.clone(), held.clone(), direct.clone()])
-            .unwrap_err();
+    let err = ensure_spending_walker_ownership(
+        &root,
+        &[
+            data_plane.clone(),
+            data_plane_test.clone(),
+            sidebar.clone(),
+            held.clone(),
+            direct.clone(),
+        ],
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("elected spending service"));
+    assert!(err.to_string().contains(&data_plane.display().to_string()));
+    assert!(
+        !err.to_string()
+            .contains(&data_plane_test.display().to_string())
+    );
     assert!(err.to_string().contains(&sidebar.display().to_string()));
     assert!(err.to_string().contains(&held.display().to_string()));
     assert!(!err.to_string().contains(&direct.display().to_string()));

@@ -190,6 +190,7 @@ mod tests {
             &messages,
             &runtime,
             &crate::config::MachineConfig::default(),
+            crate::agents::spending::service::SpendingServiceStartup::OneShot,
         );
 
         assert_ne!(

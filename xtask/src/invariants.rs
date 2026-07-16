@@ -63,13 +63,20 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
 }
 
 fn ensure_spending_walker_ownership(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let sidebar = root.join("crates/rimz/src/sidebar");
     let sidebar_pane = root.join("crates/rimz/src/sidebar_pane");
     let held_stats = root.join("crates/rimz/src/cli/stats/hold.rs");
     ensure_no_match(
         files,
         concat!("SpendingWalker", "::new"),
-        |path| !path.starts_with(&sidebar_pane) && path != held_stats.as_path(),
-        "long-lived sidebar and held-stats code must use the elected spending service",
+        |path| {
+            let sidebar_test = path.starts_with(&sidebar)
+                && path.file_name().and_then(OsStr::to_str) == Some("tests.rs");
+            (!path.starts_with(&sidebar) || sidebar_test)
+                && !path.starts_with(&sidebar_pane)
+                && path != held_stats.as_path()
+        },
+        "sidebar data/render planes and held-stats code must use the elected spending service",
     )
 }
 

@@ -406,6 +406,22 @@ fn prepared_grids_are_invalidated_on_size_or_aspect_change() {
 }
 
 #[test]
+fn pixel_preparation_key_ignores_cell_aspect() {
+    assert_eq!(
+        PreparationKey::new(
+            PetRenderTier::Pixel,
+            DASHBOARD_PIXEL_PET,
+            CellAspect::NEUTRAL,
+        ),
+        PreparationKey::new(
+            PetRenderTier::Pixel,
+            DASHBOARD_PIXEL_PET,
+            CellAspect::from_ratio(2.5).expect("valid aspect"),
+        )
+    );
+}
+
+#[test]
 fn observe_unread_rows_triggers_only_on_new_rows() {
     let mut assets = PetAssets::default();
 

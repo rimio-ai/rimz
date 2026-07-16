@@ -73,7 +73,7 @@ pub(crate) const WALK_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 const SPENDING_PERSIST_MIN_INTERVAL: u64 = 5 * 60;
 const SPENDING_PERSIST_PARSE_BYTES: u64 = 1 << 20;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpendProgress {
     pub finished_files: usize,
     pub total_files: usize,
@@ -413,14 +413,15 @@ impl SpendingWalker {
     }
 
     /// Apply trusted live transcript origins before a scope-only derivation.
-    /// A changed origin invalidates the compact location memo exactly once;
-    /// callers holding the shared spending lock may persist the corrected
-    /// cursor so a replacement service inherits it.
+    /// A changed origin invalidates the compact location memo exactly once. The
+    /// same five-minute gate as a walk bounds full cursor rewrites when newly
+    /// live transcripts reveal their origins between global refreshes.
     pub(crate) fn apply_origin_overrides(
         &mut self,
         cache_path: &Path,
         origin_overrides: &HashMap<PathBuf, PathBuf>,
         persist: bool,
+        now_secs: u64,
     ) {
         let mut stats = WalkStats::default();
         self.sync_from_disk(cache_path, &mut stats);
@@ -431,14 +432,20 @@ impl SpendingWalker {
                 changed |= aggregate::stamp_file_origin(file, origin);
             }
         }
-        if !changed {
-            return;
+        if changed {
+            self.cache.mark_changed();
+            self.memo = None;
         }
-        self.cache.mark_changed();
-        self.memo = None;
-        if persist && write_spending_cache(cache_path, &self.cache) {
+        if self.cache.dirty
+            && persist
+            && self
+                .last_persisted_now_secs
+                .is_none_or(|last| now_secs.saturating_sub(last) >= SPENDING_PERSIST_MIN_INTERVAL)
+            && write_spending_cache(cache_path, &self.cache)
+        {
             self.cache.dirty = false;
             self.cache_stamp = cache_stamp(cache_path);
+            self.last_persisted_now_secs = Some(now_secs);
         }
     }
 }

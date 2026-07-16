@@ -66,17 +66,18 @@ pub(crate) fn compute_fleet_spending_via_service(
     runtime: &RuntimePaths,
     snapshot: &SidebarSnapshot,
     spec: &crate::agents::spending::HeadlineSpec,
+    startup: crate::agents::spending::service::SpendingServiceStartup,
 ) -> SpendingCaches {
     let request = crate::agents::spending::service::SpendingServiceRequest::workspace(
+        runtime,
         runtime.workspace_id.clone(),
         snapshot.project_root.clone(),
         snapshot.worktree_roots.clone(),
         snapshot.worktree_home.clone(),
         codex_origin_overrides(snapshot),
         spec.clone(),
-        false,
     );
-    match crate::agents::spending::service::request(runtime, request, |_| {}) {
+    match crate::agents::spending::service::request(runtime, request, startup) {
         Ok(caches) => caches,
         Err(error) => {
             tracing::debug!(error = %error, "spending service unavailable; serving publication");
@@ -101,6 +102,36 @@ pub(crate) fn serve_spending_service_request(
     compute_fleet_spending(walker, runtime, &context, &request.headline, progress)
 }
 
+pub(crate) fn serve_spending_direct_request(
+    walker: &mut crate::agents::spending::SpendingWalker,
+    runtime: &RuntimePaths,
+    request: &crate::agents::spending::service::SpendingServiceRequest,
+) -> SpendingCaches {
+    let context = SpendingRequestContext {
+        project_root: request.project_root.as_deref(),
+        worktree_roots: &request.worktree_roots,
+        worktree_home: request.worktree_home.as_deref(),
+        origin_overrides: request.origin_overrides.clone(),
+        allow_local_fallback: true,
+    };
+    compute_fleet_spending(walker, runtime, &context, &request.headline, &mut |_| {})
+}
+
+/// Serve a fully fresh durable result without waiting for the warm walker. The
+/// service calls this before its try-lock so concurrent workspace requests do
+/// not queue behind an unrelated cold walk.
+pub(crate) fn fresh_spending_service_publication(
+    runtime: &RuntimePaths,
+    request: &crate::agents::spending::service::SpendingServiceRequest,
+) -> Option<SpendingCaches> {
+    fresh_published_spending(
+        runtime,
+        request.project_root.as_deref(),
+        &request.worktree_roots,
+        request.worktree_home.as_deref(),
+    )
+}
+
 struct SpendingRequestContext<'a> {
     project_root: Option<&'a std::path::Path>,
     worktree_roots: &'a [PathBuf],
@@ -118,7 +149,6 @@ fn compute_fleet_spending(
 ) -> SpendingCaches {
     use crate::agents::spending::{SpendScope, read_provider_spending_cache};
 
-    let now_ms = unix_now_ms();
     let scope = SpendScope::for_workspace(
         context.project_root,
         context.worktree_roots,
@@ -128,14 +158,13 @@ fn compute_fleet_spending(
     let provider_path = runtime.shared_provider_spending_path();
     // Fresh stamp: the published walk is young enough — serve it back with the
     // same single small read a consumer tab pays.
-    let published = read_provider_spending_cache(&provider_path);
-    if published.is_fresh(now_ms)
-        && let Some(workspace) = fresh_workspace_cache(runtime, scope_hash.as_deref(), now_ms)
-    {
-        return crate::agents::spending::SpendingCaches {
-            provider: published,
-            workspace,
-        };
+    if let Some(caches) = fresh_published_spending(
+        runtime,
+        context.project_root,
+        context.worktree_roots,
+        context.worktree_home,
+    ) {
+        return caches;
     }
 
     let fresh = || {
@@ -183,14 +212,6 @@ fn compute_fleet_spending(
             }
         }
         crate::store::single_flight::Coalesced::ProduceLocal => {
-            if !context.allow_local_fallback {
-                return served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
-                    SpendingCaches {
-                        provider: current_provider_spending_cache(runtime),
-                        workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
-                    }
-                });
-            }
             let provider = read_provider_spending_cache(&provider_path);
             let files = discover_spending_files();
             if provider.is_fresh(unix_now_ms())
@@ -210,6 +231,13 @@ fn compute_fleet_spending(
                     provider,
                     workspace,
                 }
+            } else if !context.allow_local_fallback {
+                served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
+                    SpendingCaches {
+                        provider: current_provider_spending_cache(runtime),
+                        workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
+                    }
+                })
             } else {
                 served_within_grace(runtime, scope_hash.as_deref()).unwrap_or_else(|| {
                     walk_fleet_spending_context(walker, runtime, context, spec, false, progress)
@@ -217,6 +245,25 @@ fn compute_fleet_spending(
             }
         }
     }
+}
+
+fn fresh_published_spending(
+    runtime: &RuntimePaths,
+    project_root: Option<&std::path::Path>,
+    worktree_roots: &[PathBuf],
+    worktree_home: Option<&std::path::Path>,
+) -> Option<SpendingCaches> {
+    let now_ms = unix_now_ms();
+    let scope = SpendScope::for_workspace(project_root, worktree_roots, worktree_home);
+    let scope_hash = (!scope.is_empty()).then(|| scope.hash());
+    let provider = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    if !provider.is_fresh(now_ms) {
+        return None;
+    }
+    fresh_workspace_cache(runtime, scope_hash.as_deref(), now_ms).map(|workspace| SpendingCaches {
+        provider,
+        workspace,
+    })
 }
 
 /// Read producer-published spending caches for a consumer fold. A missing or
@@ -566,6 +613,7 @@ fn workspace_cache_from_shared_entries_inner(
         &runtime.shared_spending_cursor_path(),
         origin_overrides,
         publish,
+        unix_secs_now(),
     );
     let user_inputs = user_input::load();
     let cached = walker.scoped_from_cache(
