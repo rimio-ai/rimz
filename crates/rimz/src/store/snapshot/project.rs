@@ -190,13 +190,14 @@ fn reduce_lifecycle_event(
         return;
     };
     let key = (kind.clone(), agent_id.clone());
-    let event_is_child = non_empty_string(observation.parent_agent_id.as_deref()).is_some();
-    let provisional_prior = if map.contains_key(&key) {
-        release_stamped_provisional_for_existing(map, identity, &kind, &key, observation);
-        None
-    } else if event_is_child {
+    let event_is_child = observation.parent_agent_id.is_some();
+    let provisional_prior = if event_is_child {
         // Exact child IDs are authoritative. A child may share its type label
-        // and pane with siblings or its parent, so neither is an adoption key.
+        // and pane with siblings or its parent, so neither is an adoption or
+        // provisional-release key.
+        None
+    } else if map.contains_key(&key) {
+        release_stamped_provisional_for_existing(map, identity, &kind, &key, observation);
         None
     } else {
         adopt_provisional(map, identity, &kind, &key, observation)

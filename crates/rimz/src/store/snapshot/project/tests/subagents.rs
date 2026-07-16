@@ -113,6 +113,120 @@ fn exact_child_cannot_adopt_a_same_pane_provisional_root() {
 }
 
 #[test]
+fn parent_stamped_observation_cannot_release_a_same_pane_provisional_root() {
+    let pane = "tmux:%9";
+    let exact_root = raw_lifecycle(
+        "claude",
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "exact",
+            "agent_name": "exact-root",
+            "signal": { "signal": "registered" },
+        }),
+    );
+    let provisional_root = raw_launch(
+        AgentLaunchState::Starting,
+        "launch_root",
+        "provisional-root",
+        Some(pane),
+    );
+    let child = raw_lifecycle(
+        "claude",
+        serde_json::json!({
+            "event_name": "SubagentStart",
+            "agent_id": "exact",
+            "agent_name": "Explore",
+            "parent_agent_id": "parent",
+            "task": "Inspect",
+            "pane_id": pane,
+            "signal": { "signal": "subagent_started" },
+        }),
+    );
+
+    let events = [exact_root, provisional_root, child];
+    let events = decode_events(&events);
+    let (agents, identity) = reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        AgentIdentityState::default(),
+        &events,
+    );
+    assert!(agents.values().any(|agent| agent.agent_id == "launch_root"));
+    let child = agents
+        .values()
+        .find(|agent| agent.agent_id == "exact")
+        .expect("exact child");
+    assert_eq!(child.name.as_deref(), Some("Explore"));
+    assert_eq!(child.parent_agent_id.as_deref(), Some("parent"));
+    assert!(!identity.names.values().any(|owner| owner.1 == "exact"));
+    assert_eq!(identity.names["provisional-root"].1, "launch_root");
+}
+
+#[test]
+fn root_and_child_labels_do_not_contend_across_allocator_rebuilds() {
+    let child = raw_lifecycle(
+        "cursor",
+        serde_json::json!({
+            "event_name": "subagentStart",
+            "agent_id": "child",
+            "agent_name": "shared-label",
+            "parent_agent_id": "parent",
+            "task": "Explore",
+            "signal": { "signal": "subagent_started" },
+        }),
+    );
+    let child_events = [child];
+    let child_events = decode_events(&child_events);
+    let (children, mut identity) = reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        AgentIdentityState::default(),
+        &child_events,
+    );
+    let child_ordinal = children
+        .values()
+        .find(|agent| agent.agent_id == "child")
+        .and_then(|agent| agent.kind_ordinal)
+        .expect("child ordinal");
+    identity.names.insert(
+        "shared-label".to_owned(),
+        (
+            AgentKind::new_unchecked("cursor"),
+            AgentSessionId::from("child"),
+        ),
+    );
+    let root = raw_lifecycle(
+        "cursor",
+        serde_json::json!({
+            "event_name": "sessionStart",
+            "agent_id": "root",
+            "agent_name": "shared-label",
+            "signal": { "signal": "registered" },
+        }),
+    );
+    let root_events = [root];
+    let root_events = decode_events(&root_events);
+
+    let (agents, identity) =
+        reduce_agent_states_seeded_with_identity(children, identity, &root_events);
+    let child = agents
+        .values()
+        .find(|agent| agent.agent_id == "child")
+        .expect("child");
+    let root = agents
+        .values()
+        .find(|agent| agent.agent_id == "root")
+        .expect("root");
+    assert_eq!(child.name.as_deref(), Some("shared-label"));
+    assert_eq!(root.name.as_deref(), Some("shared-label"));
+    assert_eq!(child.kind_ordinal, Some(child_ordinal));
+    assert_eq!(root.kind_ordinal, Some(child_ordinal + 1));
+    assert_eq!(identity.names["shared-label"].1.as_str(), "root");
+
+    let (_, replayed_identity) = reduce_agent_states_seeded_with_identity(agents, identity, &[]);
+    assert_eq!(replayed_identity.names.len(), 1);
+    assert_eq!(replayed_identity.names["shared-label"].1.as_str(), "root");
+}
+
+#[test]
 fn subagent_start_reduces_identity_that_survives_stop() {
     let start = raw_lifecycle(
         "claude",
