@@ -234,6 +234,17 @@ pub enum TurnPhase {
     Parked,
 }
 
+impl TurnPhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Reasoning => "reasoning",
+            Self::Acting => "acting",
+            Self::Parked => "parked",
+        }
+    }
+}
+
 /// The small reduced lifecycle state [`step`] owns — and the only fields it
 /// writes. Everything else on the agent rollup (identity, task, prompt, model,
 /// gauges, worktree, parent link, timestamps) is governed by the reducer's

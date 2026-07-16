@@ -38,6 +38,16 @@ fn seed_sets_status_phase_clocks_and_empty_enrichment() {
 }
 
 #[test]
+fn agent_status_labels_are_stable() {
+    assert_eq!(AgentStatus::Running.as_str(), "running");
+    assert_eq!(AgentStatus::Waiting.as_str(), "waiting");
+    assert_eq!(AgentStatus::Idle.as_str(), "idle");
+    assert_eq!(AgentStatus::Success.as_str(), "success");
+    assert_eq!(AgentStatus::Failed.as_str(), "failed");
+    assert_eq!(AgentStatus::Paused.as_str(), "paused");
+}
+
+#[test]
 fn logical_card_matches_exact_sessions_or_shared_stable_names() {
     let claude = AgentKind::new_unchecked("claude");
     let codex = AgentKind::new_unchecked("codex");

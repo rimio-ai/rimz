@@ -1753,6 +1753,98 @@ fn write_run_status(store: &rimz::Store, record: &mut RunRecord, status: RunStat
     rimz::store::run_store::write(&store.paths().runs_dir, record).expect("write run status");
 }
 
+fn register_running_wait_agent(env: &Env, store: &rimz::Store, name: &str, session_id: &str) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let agent_id = AgentSessionId::from(session_id);
+    let mut registered =
+        AgentLifecycleObservation::new(Some(agent_id.clone()), LifecycleSignal::Registered);
+    registered.agent_name = Some(name.to_owned());
+    registered.worktree_path = Some(env.project_root.display().to_string());
+    registered.pane_id = Some(PaneId::from_parts(MuxName::Zellij, "terminal_11"));
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "SessionStart",
+            &registered,
+        ))
+        .expect("register wait agent");
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            &workspace.session_name,
+            "codex",
+            "UserPromptSubmit",
+            &AgentLifecycleObservation::new(Some(agent_id), LifecycleSignal::TurnStarted),
+        ))
+        .expect("start wait agent turn");
+}
+
+fn end_wait_agent(env: &Env, store: &rimz::Store, session_id: &str) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    store
+        .append_event(&EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            workspace.session_name,
+            "codex",
+            "SessionEnd",
+            &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from(session_id)),
+                LifecycleSignal::Ended,
+            ),
+        ))
+        .expect("end wait agent");
+}
+
+#[test]
+fn wait_single_run_prints_full_human_output_and_terminal_exit() {
+    let env = Env::new();
+    let store = env.store();
+    let mut record = create_running_named_run(&env, &store, "swift-otter");
+    record.last_message = Some("finished review\n".to_owned());
+    record.failure_tail = Some("review failed".to_owned());
+    record.transcript_path = Some("/tmp/swift-otter.jsonl".to_owned());
+    write_run_status(&store, &mut record, RunStatus::VerifyFailed);
+
+    let out = env
+        .rimz()
+        .args(["agents", "wait", record.run_id.as_str()])
+        .output()
+        .expect("wait for one run");
+
+    assert_eq!(out.status.code(), Some(123));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "finished review\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("rimz: run verify_failed (exit 123)"));
+    assert!(stderr.contains("review failed"));
+    assert!(stderr.contains("transcript: /tmp/swift-otter.jsonl"));
+}
+
+#[test]
+fn wait_single_run_json_prints_full_record() {
+    let env = Env::new();
+    let store = env.store();
+    let mut record = create_running_named_run(&env, &store, "swift-otter");
+    record.last_message = Some("done".to_owned());
+    record.cost_usd = Some(0.42);
+    write_run_status(&store, &mut record, RunStatus::Completed);
+
+    let out = env
+        .rimz()
+        .args(["agents", "wait", record.run_id.as_str(), "--json"])
+        .output()
+        .expect("wait for one JSON run");
+
+    assert!(out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("full run record");
+    assert_eq!(json["run_id"], record.run_id.as_str());
+    assert_eq!(json["prompt"], "task for swift-otter");
+    assert_eq!(json["last_message"], "done");
+    assert_eq!(json["cost_usd"], 0.42);
+    assert!(json.get("exit").is_none(), "must not use wait summary JSON");
+}
+
 #[test]
 fn wait_multi_blocks_until_all_terminal() {
     let env = Env::new();
@@ -1950,6 +2042,92 @@ fn wait_any_first_finisher_failure_is_nonzero() {
         .expect("wait for failed first finisher");
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "quiet-fox\n");
+}
+
+#[test]
+fn wait_any_same_poll_selects_first_input_reference() {
+    let env = Env::new();
+    let store = env.store();
+    let mut otter = create_running_named_run(&env, &store, "swift-otter");
+    let mut fox = create_running_named_run(&env, &store, "quiet-fox");
+    write_run_status(&store, &mut otter, RunStatus::Completed);
+    write_run_status(&store, &mut fox, RunStatus::Failed);
+
+    let out = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox", "--any"])
+        .output()
+        .expect("wait on same-poll terminals");
+
+    assert!(out.status.success(), "first input exit code must win");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "swift-otter\n");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "swift-otter completed\n"
+    );
+}
+
+#[test]
+fn wait_single_disappearing_agent_returns_resolution_error() {
+    let env = Env::new();
+    let store = env.store();
+    register_running_wait_agent(&env, &store, "swift-otter", "sess-wait-single");
+
+    let child = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "--timeout", "3s"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn single agent wait");
+    std::thread::sleep(Duration::from_millis(100));
+    end_wait_agent(&env, &store, "sess-wait-single");
+
+    let out = child
+        .wait_with_output()
+        .expect("wait for disappearing agent");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no agent matches target `swift-otter`"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("swift-otter: agent disappeared while waiting"));
+}
+
+#[test]
+fn wait_multi_disappearing_agent_records_failed_entry_and_diagnostic() {
+    let env = Env::new();
+    let store = env.store();
+    register_running_wait_agent(&env, &store, "swift-otter", "sess-wait-multi");
+    let mut fox = create_running_named_run(&env, &store, "quiet-fox");
+
+    let child = env
+        .rimz()
+        .args(["agents", "wait", "swift-otter", "quiet-fox", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn multi agent wait");
+    std::thread::sleep(Duration::from_millis(100));
+    end_wait_agent(&env, &store, "sess-wait-multi");
+    write_run_status(&store, &mut fox, RunStatus::Completed);
+
+    let out = child
+        .wait_with_output()
+        .expect("wait for disappearing join");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "swift-otter: agent disappeared while waiting\n"
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("wait result map");
+    assert_eq!(json["swift-otter"]["status"], "failed");
+    assert_eq!(
+        json["swift-otter"]["error"],
+        "agent disappeared while waiting"
+    );
+    assert_eq!(json["quiet-fox"]["status"], "completed");
 }
 
 #[test]

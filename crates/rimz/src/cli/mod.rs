@@ -726,6 +726,21 @@ pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()
 mod tests {
     use super::*;
 
+    fn parsed_scope(args: &[&str]) -> (String, String, Option<String>, Option<String>) {
+        let mut matches = help::customize(<Cli as CommandFactory>::command())
+            .try_get_matches_from(args)
+            .unwrap();
+        let canonical = matches.subcommand_name().unwrap_or("start").to_owned();
+        let cli = Cli::from_arg_matches_mut(&mut matches).unwrap();
+        let facts = scope_facts(cli.subcommand.as_ref());
+        (
+            canonical,
+            facts.command.to_owned(),
+            facts.session.map(ToOwned::to_owned),
+            facts.agent.map(ToOwned::to_owned),
+        )
+    }
+
     fn workspace(
         project_root: &str,
         worktree_root: &str,
@@ -864,6 +879,74 @@ mod tests {
 
         let cli = Cli::try_parse_from(["rimz", "msg", "list"]).unwrap();
         assert!(matches!(cli.subcommand, Some(Subcmd::Message(_))));
+    }
+
+    #[test]
+    fn command_scope_uses_canonical_clap_labels() {
+        assert_eq!(
+            parsed_scope(&["rimz"]),
+            ("start".to_owned(), "start".to_owned(), None, None)
+        );
+        assert_eq!(
+            parsed_scope(&["rimz", "list"]),
+            ("list".to_owned(), "list".to_owned(), None, None)
+        );
+        assert_eq!(
+            parsed_scope(&["rimz", "msg", "@codex", "hi"]),
+            ("message".to_owned(), "message".to_owned(), None, None)
+        );
+    }
+
+    #[test]
+    fn command_scope_keeps_nested_labels_and_agent_identity() {
+        for (args, expected) in [
+            (vec!["rimz", "remote", "list"], ("remote list", None, None)),
+            (
+                vec!["rimz", "sidebar", "snapshot"],
+                ("sidebar snapshot", None, None),
+            ),
+            (
+                vec!["rimz", "hooks", "feed", "--source", "codex"],
+                ("hooks feed", None, Some("codex")),
+            ),
+            (
+                vec![
+                    "rimz",
+                    "codex",
+                    "refresh-context",
+                    "--session-id",
+                    "sess-codex",
+                    "--workspace-id",
+                    "ws-test",
+                ],
+                ("codex refresh-context", Some("sess-codex"), Some("codex")),
+            ),
+            (
+                vec![
+                    "rimz",
+                    "opencode",
+                    "refresh-context",
+                    "--session-id",
+                    "sess-opencode",
+                    "--workspace-id",
+                    "ws-test",
+                    "--server-url",
+                    "http://127.0.0.1:1",
+                ],
+                (
+                    "opencode refresh-context",
+                    Some("sess-opencode"),
+                    Some("opencode"),
+                ),
+            ),
+        ] {
+            let (_, command, session, agent) = parsed_scope(&args);
+            assert_eq!(
+                (command.as_str(), session.as_deref(), agent.as_deref()),
+                expected,
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

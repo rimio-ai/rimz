@@ -1,5 +1,13 @@
 use super::*;
 
+#[test]
+fn turn_phase_labels_are_stable() {
+    assert_eq!(TurnPhase::Idle.as_str(), "idle");
+    assert_eq!(TurnPhase::Reasoning.as_str(), "reasoning");
+    assert_eq!(TurnPhase::Acting.as_str(), "acting");
+    assert_eq!(TurnPhase::Parked.as_str(), "parked");
+}
+
 use crate::agents::testkit::all_signals;
 
 fn state(status: AgentStatus, phase: TurnPhase, compacting: bool) -> LifecycleState {

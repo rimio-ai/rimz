@@ -41,7 +41,8 @@ pub use sessions::{
     refresh_session_transcript_context_from_watch,
 };
 pub use usage::{
-    merge_account_usage_if_due, publish_account_usage_snapshot, refresh_claimed_account_usage,
+    complete_realtime_account_usage, merge_account_usage_if_due, publish_account_usage_snapshot,
+    refresh_claimed_account_usage,
 };
 
 use self::accounts::produce_accounts;

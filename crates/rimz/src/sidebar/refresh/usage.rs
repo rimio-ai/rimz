@@ -236,6 +236,67 @@ fn direct_windows_should_publish(
         || (realtime.is_none() && !defer_to_fresh_realtime)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AccountUsageCompletionDecision {
+    publish_realtime: bool,
+    run_direct: bool,
+    merge_direct_windows: bool,
+}
+
+fn account_usage_completion_decision(
+    oauth_enabled: bool,
+    realtime: Option<&AccountUsageSnapshot>,
+) -> AccountUsageCompletionDecision {
+    if !oauth_enabled {
+        return AccountUsageCompletionDecision::default();
+    }
+    let Some(realtime) = realtime else {
+        return AccountUsageCompletionDecision {
+            run_direct: true,
+            merge_direct_windows: true,
+            ..Default::default()
+        };
+    };
+    AccountUsageCompletionDecision {
+        publish_realtime: realtime.plan.is_some()
+            || realtime.extra_credits.is_some()
+            || realtime.reset_credits.is_some(),
+        run_direct: realtime.plan.is_none()
+            || realtime.extra_credits.is_none()
+            || realtime.rate_limits.is_none(),
+        merge_direct_windows: realtime.rate_limits.is_none(),
+    }
+}
+
+/// Complete one synchronous provider refresh from optional realtime data and a
+/// due direct probe. Codex uses this after its app-server read so publication,
+/// fallback, and window precedence stay owned by the sidebar cache layer.
+pub fn complete_realtime_account_usage(
+    runtime: &RuntimePaths,
+    kind: &str,
+    oauth_enabled: bool,
+    realtime: Option<AccountUsageSnapshot>,
+) -> bool {
+    let decision = account_usage_completion_decision(oauth_enabled, realtime.as_ref());
+    let mut wrote = false;
+    if decision.publish_realtime {
+        wrote |= publish_account_usage_snapshot(
+            runtime,
+            kind,
+            ProviderAccountScope::KindWide,
+            realtime
+                .as_ref()
+                .expect("publish decision requires realtime usage")
+                .clone(),
+            true,
+        );
+    }
+    if decision.run_direct {
+        wrote |= merge_account_usage_if_due(runtime, kind, decision.merge_direct_windows);
+    }
+    wrote
+}
+
 /// Claim and execute a direct read in-process. Codex synchronous refresh paths
 /// use this instead of maintaining a separate cadence.
 pub fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> bool {
@@ -407,6 +468,89 @@ mod tests {
     use crate::sidebar::test_support::{provider_panel, snapshot_with_panels};
 
     use super::*;
+
+    fn complete_realtime() -> AccountUsageSnapshot {
+        AccountUsageSnapshot {
+            plan: Some("pro".to_owned()),
+            extra_credits: Some(crate::agents::ExtraCredits::Disabled),
+            rate_limits: Some(AgentRateLimits::default()),
+            reset_credits: None,
+        }
+    }
+
+    #[test]
+    fn account_usage_completion_decision_matrix() {
+        let complete = complete_realtime();
+        assert_eq!(
+            account_usage_completion_decision(false, Some(&complete)),
+            AccountUsageCompletionDecision::default()
+        );
+        assert_eq!(
+            account_usage_completion_decision(true, None),
+            AccountUsageCompletionDecision {
+                publish_realtime: false,
+                run_direct: true,
+                merge_direct_windows: true,
+            }
+        );
+        assert_eq!(
+            account_usage_completion_decision(true, Some(&complete)),
+            AccountUsageCompletionDecision {
+                publish_realtime: true,
+                run_direct: false,
+                merge_direct_windows: false,
+            }
+        );
+
+        let mut missing_plan = complete.clone();
+        missing_plan.plan = None;
+        assert_eq!(
+            account_usage_completion_decision(true, Some(&missing_plan)),
+            AccountUsageCompletionDecision {
+                publish_realtime: true,
+                run_direct: true,
+                merge_direct_windows: false,
+            }
+        );
+
+        let mut missing_extra = complete.clone();
+        missing_extra.extra_credits = None;
+        assert_eq!(
+            account_usage_completion_decision(true, Some(&missing_extra)),
+            AccountUsageCompletionDecision {
+                publish_realtime: true,
+                run_direct: true,
+                merge_direct_windows: false,
+            }
+        );
+
+        let mut missing_windows = complete.clone();
+        missing_windows.rate_limits = None;
+        assert_eq!(
+            account_usage_completion_decision(true, Some(&missing_windows)),
+            AccountUsageCompletionDecision {
+                publish_realtime: true,
+                run_direct: true,
+                merge_direct_windows: true,
+            }
+        );
+
+        let reset_only = AccountUsageSnapshot {
+            reset_credits: Some(crate::agents::ResetCredits {
+                count: 1,
+                soonest_expiry: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            account_usage_completion_decision(true, Some(&reset_only)),
+            AccountUsageCompletionDecision {
+                publish_realtime: true,
+                run_direct: true,
+                merge_direct_windows: true,
+            }
+        );
+    }
 
     #[test]
     fn fresh_realtime_claude_windows_defer_direct_window_publication() {
