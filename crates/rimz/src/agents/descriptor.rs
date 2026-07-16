@@ -115,6 +115,11 @@ pub struct AgentDescriptor {
     /// `anthropic`, `openai`, …). Used for account labeling and
     /// provider-specific probes.
     pub sub_providers: &'static [&'static str],
+    /// Budget-window labels a metered account of this kind reports, ordered
+    /// short-to-long and matching the rendered `window_label` form (`5h`,
+    /// `7d`). The dashboard paints these as placeholder tracks before the
+    /// first reading; empty when the shape is unknown or unstable.
+    pub expected_windows: &'static [&'static str],
     /// Tool-name classification tables for lifecycle and native blocking prompts.
     pub tools: ToolClassification,
     /// What this agent can and cannot do — consumed by the sidebar and doctor

@@ -137,6 +137,29 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
 }
 
 #[test]
+fn provider_panels_carry_descriptor_window_placeholders() {
+    let snapshot = room(vec![
+        agent("claude", "c1", AgentStatus::Idle, 10),
+        agent("unregistered", "u1", AgentStatus::Idle, 20),
+    ])
+    .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+
+    let claude = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.kind == "claude")
+        .expect("claude panel");
+    assert_eq!(claude.window_placeholders, ["5h", "7d"]);
+
+    let unregistered = snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.kind == "unregistered")
+        .expect("unregistered panel");
+    assert!(unregistered.window_placeholders.is_empty());
+}
+
+#[test]
 fn copilot_catalog_tints_survive_color_overrides_but_not_art_overrides() {
     let panel_for = |mut snapshot: SidebarSnapshot| {
         snapshot =

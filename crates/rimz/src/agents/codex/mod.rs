@@ -149,6 +149,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // An OpenAI OAuth subscription is the ChatGPT account Codex meters; Pi's
     // auth file names it `openai` (legacy installs `openai-codex`).
     sub_providers: &["openai", "openai-codex"],
+    expected_windows: &["5h", "7d"],
     tools: ToolClassification {
         mutating: &[
             "Bash",

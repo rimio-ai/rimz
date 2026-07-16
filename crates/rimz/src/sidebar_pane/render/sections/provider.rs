@@ -1065,13 +1065,35 @@ fn provider_stats_rows(
     layout: ProviderLayout,
 ) -> Vec<Vec<Span<'static>>> {
     let Some(headline) = panel.spending.as_ref().map(|spending| spending.headline) else {
-        return vec![vec![
+        fn dash(_: u64) -> String {
+            "–".to_owned()
+        }
+
+        let mut left = vec![
             Span::styled(
                 theme.glyph(GlyphRole::CockpitSessions).to_owned(),
                 theme.styled(Component::Sessions, Modifier::empty()),
             ),
             Span::styled(format!(" {}", panel.active_sessions), theme.body()),
-        ]];
+            Span::raw("  "),
+        ];
+        let detail = if layout == ProviderLayout::Narrow {
+            TokenDetail::Summary
+        } else {
+            TokenDetail::Full
+        };
+        left.extend(token_breakdown_spans(
+            theme,
+            0,
+            0,
+            0,
+            0,
+            dash,
+            detail,
+            &TokenColumns::default(),
+        ));
+        let right = vec![Span::styled("$ –".to_owned(), theme.muted())];
+        return vec![pin_right(left, right, region).spans];
     };
     let detail = provider_token_detail(theme, &headline, layout, region);
     vec![provider_stats_row(theme, panel, &headline, detail, region).spans]
@@ -1158,9 +1180,10 @@ fn provider_token_detail(
 
 /// The provider's budget bars within `region`: a metered account drains one
 /// "mana" bar per reported window (`5h`, `7d`, `30d`, …, ordered short→long);
-/// a metered account whose windows have not arrived yet shows one anonymous
-/// unknown-track row; an unmetered account shows one `api` budget row, full with
-/// `∞` when uncapped.
+/// a metered account whose windows have not arrived yet shows one unknown-track
+/// row per descriptor-declared placeholder, or one anonymous fallback row when
+/// the shape is unknown; an unmetered account shows one `api` budget row, full
+/// with `∞` when uncapped.
 /// Each reset reads a two-unit countdown scaled to its magnitude. Each row
 /// aligns front and back within `region`, so they line up across providers too.
 fn provider_bar_rows(
@@ -1179,7 +1202,14 @@ fn provider_bar_rows(
         )];
     }
     if panel.windows.is_empty() {
-        return vec![unknown_bar_row(theme, "", region)];
+        if panel.window_placeholders.is_empty() {
+            return vec![unknown_bar_row(theme, "", region)];
+        }
+        return panel
+            .window_placeholders
+            .iter()
+            .map(|label| unknown_bar_row(theme, label, region))
+            .collect();
     }
     select_provider_bars(panel)
         .into_iter()
@@ -1362,8 +1392,8 @@ fn metered_bar_row(
 }
 
 /// Unknown metered budget row: the same bar geometry as a reported window with
-/// no usage, with either the known window label or a blank label while the
-/// provider has not reported any windows yet.
+/// no usage, with either a reported or descriptor-declared window label, or a
+/// blank label when the provider's window shape is unknown.
 fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
     bar_row(

@@ -23,9 +23,9 @@ impl SidebarSnapshot {
     /// `auth.json`), preferred only when the freshest context has none — and a kind
     /// whose only signal is a qualifying probed account still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` visibility and managed-server
-    /// health. Styling (emblem, color, name) resolves from
-    /// `self.theme.providers` over the built-in defaults, so the renderer gets a
-    /// ready-to-paint block. With no explicit
+    /// health. Styling (emblem, color, name) and the descriptor-declared empty
+    /// budget-window shape resolve here, so the renderer gets a ready-to-paint
+    /// block. With no explicit
     /// `provider_list`, providers paint in usage-rank order: live sessions,
     /// then week/month/year session counts, then login and credential recency.
     /// This deliberately ignores intra-day spend shifts. A *stacked* dashboard
@@ -151,6 +151,15 @@ impl SidebarSnapshot {
                 None => (defaults.color, defaults.color_rgb, None),
             };
             let remote_control = remote_control.get(&kind).copied().unwrap_or_default();
+            let window_placeholders = crate::agents::descriptor_by_kind(&kind)
+                .map(|descriptor| {
+                    descriptor
+                        .expected_windows
+                        .iter()
+                        .map(|&label| label.to_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
             let tally = provider_spending.get(&kind);
             let spending = tally.cloned();
             let rank = ProviderRank {
@@ -185,6 +194,7 @@ impl SidebarSnapshot {
                     day_budget: None,
                     extra_credits: None,
                     reset_credits: None,
+                    window_placeholders,
                     windows,
                 },
                 rank,

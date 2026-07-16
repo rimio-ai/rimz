@@ -78,6 +78,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // Pi is the multi-provider client: it runs *on* other providers'
     // subscriptions rather than metering one of its own.
     sub_providers: &[],
+    expected_windows: &[],
     // Pi's built-in tool set: `edit`/`write` edit files; `bash` mutates
     // without editing, so the reasoning phase survives it. The rpiv
     // questionnaire extension contributes the one blocking ask tool.

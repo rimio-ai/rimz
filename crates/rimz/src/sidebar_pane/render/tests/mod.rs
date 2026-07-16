@@ -523,6 +523,7 @@ fn provider_panel(
         day_budget: None,
         extra_credits: None,
         reset_credits: None,
+        window_placeholders: Vec::new(),
         windows: windows
             .map(|(five, seven)| {
                 vec![

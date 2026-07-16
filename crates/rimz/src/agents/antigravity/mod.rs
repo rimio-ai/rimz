@@ -74,6 +74,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     plan_label: PlanLabel::TitleCaseOnly,
     sub_providers: &[],
+    expected_windows: &[],
     tools: ToolClassification {
         mutating: &[
             "write_to_file",

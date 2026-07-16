@@ -2196,6 +2196,7 @@ fn provider_panel(
         day_budget: None,
         extra_credits: matches!(kind, "pi" | "opencode").then_some(rimz::ExtraCredits::Disabled),
         reset_credits: None,
+        window_placeholders: Vec::new(),
         windows,
     }
 }

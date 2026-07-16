@@ -257,7 +257,7 @@ fn provider_tripped_daily_cap_renders_against_account_day_spend() {
 }
 
 #[test]
-fn ledgerless_provider_renders_only_its_live_session_count() {
+fn ledgerless_provider_renders_placeholder_stats_row() {
     let theme = Theme::default();
     let mut antigravity = provider_panel("antigravity", "Antigravity", 33, true, false, None);
     antigravity.active_sessions = 1;
@@ -273,9 +273,10 @@ fn ledgerless_provider_renders_only_its_live_session_count() {
     );
     let rendered = line_texts(&lines).join("\n");
     assert!(rendered.contains("◎ 1"), "{rendered}");
-    for unavailable in ["◇", "↘", "↗", "◌", "$0.00"] {
-        assert!(!rendered.contains(unavailable), "{unavailable}: {rendered}");
+    for placeholder in ["◇ –", "↘ –", "↗ –", "◌ –", "$ –"] {
+        assert!(rendered.contains(placeholder), "{placeholder}: {rendered}");
     }
+    assert!(!rendered.contains("$0.00"), "{rendered}");
 
     let accounted = provider_panel("claude", "Claude", 173, true, false, None);
     let (lines, _) = provider_panel_lines(
@@ -291,6 +292,33 @@ fn ledgerless_provider_renders_only_its_live_session_count() {
     assert!(rendered.contains("◎ 12"), "{rendered}");
     assert!(rendered.contains("◇ 498k"), "{rendered}");
     assert!(rendered.contains("$3.50"), "{rendered}");
+}
+
+#[test]
+fn render_provider_dashboard_pins_empty_state_template() {
+    let theme = Theme::fixed(false);
+    let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
+    claude.active_sessions = 0;
+    claude.spending = None;
+    claude.window_placeholders = vec!["5h".to_owned(), "7d".to_owned()];
+    let (lines, _) = provider_panel_lines(
+        &theme,
+        &[claude],
+        None,
+        false,
+        54,
+        &crate::config::BudgetBarConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+
+    assert!(rendered.contains("Claude v2.1.158 · Claude Max"));
+    assert!(rendered.contains("◎ 0  ◇ – ↘ – ↗ – ◌ –"));
+    assert!(rendered.contains("$ –"));
+    assert!(rendered.contains("5h"));
+    assert!(rendered.contains("7d"));
+    assert!(!rendered.contains('↻'));
+    assert_snapshot("provider_dashboard_empty_state", rendered);
 }
 /// The dashboard paints the Codex block whichever way the active tab is
 /// derived: a manual pick (`←`/`→` or a click on the label) swaps the chip onto

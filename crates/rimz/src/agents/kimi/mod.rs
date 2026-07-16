@@ -80,6 +80,7 @@ static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     plan_label: PlanLabel::Prefixed { prefix: "Kimi" },
     sub_providers: &[],
+    expected_windows: &["5h", "7d"],
     tools: ToolClassification {
         mutating: &["Bash", "Write", "Edit"],
         editing: &["Write", "Edit"],

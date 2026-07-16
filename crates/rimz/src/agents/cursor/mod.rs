@@ -45,6 +45,7 @@ static CURSOR_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     plan_label: PlanLabel::Prefixed { prefix: "Cursor" },
     sub_providers: &[],
+    expected_windows: &[],
     tools: ToolClassification {
         mutating: &["Shell", "Write", "Delete"],
         editing: &["Write", "Delete"],

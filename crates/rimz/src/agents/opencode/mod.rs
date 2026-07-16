@@ -55,6 +55,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     plan_label: PlanLabel::TitleCaseOnly,
     sub_providers: &[],
+    expected_windows: &[],
     tools: ToolClassification {
         mutating: &["bash", "edit", "write", "apply_patch", "patch"],
         editing: &["edit", "write", "apply_patch", "patch"],

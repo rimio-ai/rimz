@@ -49,6 +49,7 @@ static DROID_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     plan_label: PlanLabel::TitleCaseOnly,
     sub_providers: &[],
+    expected_windows: &[],
     tools: ToolClassification {
         mutating: &["Create", "Edit", "ApplyPatch", "Execute"],
         editing: &["Create", "Edit", "ApplyPatch"],

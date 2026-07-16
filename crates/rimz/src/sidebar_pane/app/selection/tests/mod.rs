@@ -154,6 +154,7 @@ fn provider(kind: &str) -> crate::SidebarProviderPanel {
         day_budget: None,
         extra_credits: None,
         reset_credits: None,
+        window_placeholders: Vec::new(),
         windows: Vec::new(),
     }
 }

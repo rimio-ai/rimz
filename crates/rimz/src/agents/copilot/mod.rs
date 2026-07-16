@@ -53,6 +53,7 @@ static COPILOT_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     plan_label: PlanLabel::Prefixed { prefix: "Copilot" },
     sub_providers: &[],
+    expected_windows: &[],
     tools: ToolClassification {
         mutating: &["bash", "powershell", "create", "edit"],
         editing: &["create", "edit"],

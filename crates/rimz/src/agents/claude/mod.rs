@@ -85,6 +85,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // An Anthropic OAuth subscription is the account Claude meters, so a
     // multi-provider client (Pi) on that sub shares this budget.
     sub_providers: &["anthropic"],
+    expected_windows: &["5h", "7d"],
     tools: ToolClassification {
         mutating: &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"],
         editing: &["Edit", "Write", "MultiEdit", "NotebookEdit"],

@@ -730,6 +730,33 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
 }
 
 #[test]
+fn provider_window_placeholders_preserve_known_shape() {
+    let theme = Theme::fixed(false);
+    let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
+    claude.window_placeholders = vec!["5h".to_owned(), "7d".to_owned()];
+
+    let rows = metered_bar_rows(&theme, &claude);
+    let labels = rows
+        .iter()
+        .map(|row| row.spans.first().unwrap().content.trim().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["5h", "7d"]);
+    for row in rows {
+        let (label_fg, glyph_fg, has_reset) = bar_row_facts(&row);
+        assert_eq!(label_fg, glyph_fg, "placeholder label mirrors its track");
+        assert!(!has_reset, "placeholder rows have no reset countdown");
+        assert!(
+            row.spans.iter().any(|span| span.content.contains('▱')),
+            "placeholder rows keep the unknown empty track"
+        );
+        assert!(
+            !row.spans.iter().any(|span| span.content.contains('▰')),
+            "placeholder rows have no filled budget cells"
+        );
+    }
+}
+
+#[test]
 fn provider_window_layout_handles_single_windows_and_wide_hour_countdowns() {
     let theme = Theme::fixed(false);
     let now = fixed_now();

@@ -473,6 +473,7 @@ fn build_descriptor(
         },
         plan_label: PlanLabel::TitleCaseOnly,
         sub_providers: &[],
+        expected_windows: &[],
         tools: ToolClassification {
             mutating: leak_strings(&manifest.tools.mutating),
             editing: leak_strings(&manifest.tools.editing),

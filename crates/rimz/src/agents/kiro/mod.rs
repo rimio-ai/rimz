@@ -38,6 +38,7 @@ static KIRO_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     plan_label: PlanLabel::Prefixed { prefix: "Kiro" },
     sub_providers: &[],
+    expected_windows: &[],
     tools: ToolClassification {
         mutating: &["fs_write"],
         editing: &["fs_write"],

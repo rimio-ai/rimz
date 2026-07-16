@@ -43,6 +43,7 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     },
     plan_label: PlanLabel::TitleCaseOnly,
     sub_providers: &[],
+    expected_windows: &[],
     tools: ToolClassification {
         mutating: &["shell_command", "apply_patch", "create_file", "edit_file"],
         editing: &["apply_patch", "create_file", "edit_file"],

@@ -1,0 +1,11 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 162
+expression: screen
+---
+──────────────────────────────────────────────────────
+Claude v2.1.158 · Claude Max
+
+ ▐▛███▜▌  ◎ 0  ◇ – ↘ – ↗ – ◌ –                     $ –
+▝▜█████▛▘ <t>  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
+  ▘▘ ▝▝   <t>  ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱

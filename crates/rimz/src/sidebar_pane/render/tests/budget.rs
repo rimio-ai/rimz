@@ -124,6 +124,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         day_budget: None,
         extra_credits: None,
         reset_credits: None,
+        window_placeholders: Vec::new(),
         // Two budget windows per panel so the mana bars and the fleet store's
         // W/M columns pay their real per-window cost at provider scale.
         windows: vec![

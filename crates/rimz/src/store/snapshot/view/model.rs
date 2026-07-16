@@ -82,6 +82,10 @@ pub struct SidebarProviderPanel {
     /// Codex rate-limit reset credits, shown as a compact header marker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reset_credits: Option<ResetCredits>,
+    /// Descriptor-declared budget-window labels, painted as placeholder tracks
+    /// while a metered account has no window readings yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub window_placeholders: Vec<String>,
     /// The account-scoped budget windows, ordered short→long by duration.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<RateLimitWindow>,
