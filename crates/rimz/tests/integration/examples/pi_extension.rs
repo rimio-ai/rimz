@@ -127,7 +127,7 @@ busHandlers.get("subagent:async-started")({{
   id: "run-1",
   sessionId: "/sessions/parent/session.jsonl",
   mode: "parallel",
-  agents: ["scout", "reviewer"],
+  agents: ["scout", "reviewer", " "],
   cwd: "/repo",
 }});
 busHandlers.get("subagent:async-complete")({{
@@ -137,6 +137,7 @@ busHandlers.get("subagent:async-complete")({{
   results: [
     {{ index: 0, agent: "scout", status: "completed" }},
     {{ index: 1, agent: "reviewer", status: "failed" }},
+    {{ index: 2, agent: " ", status: "completed" }},
   ],
   cwd: "/repo",
 }});
@@ -168,11 +169,11 @@ const readPayloads = async () => {{
 let payloads = [];
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
-  if (payloads.length >= 9) break;
+  if (payloads.length >= 11) break;
   await new Promise((resolve) => setTimeout(resolve, 20));
 }}
-if (payloads.length < 9) {{
-  throw new Error(`expected 9 forwarded payloads, got ${{payloads.length}}`);
+if (payloads.length < 11) {{
+  throw new Error(`expected 11 forwarded payloads, got ${{payloads.length}}`);
 }}
 const byEvent = Object.fromEntries(payloads.map((payload) => [payload.hook_event_name, payload]));
 const boundary = byEvent[boundaryEvent];
@@ -193,7 +194,7 @@ if ("total_cost_usd" in byEvent.session_shutdown) {{
 }}
 const childStarts = payloads.filter((payload) => payload.hook_event_name === "subagent_started");
 const childStops = payloads.filter((payload) => payload.hook_event_name === "subagent_stopped");
-if (childStarts.length !== 3 || childStops.length !== 3) {{
+if (childStarts.length !== 4 || childStops.length !== 4) {{
   throw new Error(`unexpected child fanout: ${{JSON.stringify({{ childStarts, childStops }})}}`);
 }}
 for (const child of [...childStarts, ...childStops]) {{
@@ -204,6 +205,10 @@ for (const child of [...childStarts, ...childStops]) {{
 const reviewer = childStops.find((child) => child.subagent_id === "run-1#1");
 if (reviewer?.subagent_label !== "reviewer" || reviewer.errored !== true) {{
   throw new Error(`parallel failure mapping was ${{JSON.stringify(reviewer)}}`);
+}}
+const unnamed = childStarts.find((child) => child.subagent_id === "run-1#2");
+if (unnamed?.subagent_label !== "subagent") {{
+  throw new Error(`unnamed parallel child was ${{JSON.stringify(unnamed)}}`);
 }}
 const tint = childStops.find((child) => child.subagent_id === "tint-1");
 if (tint?.subagent_label !== "general-purpose: Check the parser" || tint.total_tokens !== 77) {{

@@ -408,8 +408,7 @@ export default function rimz(pi) {
       runAgents.set(runId, agents.length);
       runLabels.delete(runId);
       agents.forEach((agent, index) => {
-        const agentLabel = label(agent);
-        if (!agentLabel) return;
+        const agentLabel = label(agent, "subagent");
         feedSubagent("subagent_started", parentId, data?.cwd, {
           subagent_id: `${runId}#${index}`,
           subagent_label: agentLabel,
