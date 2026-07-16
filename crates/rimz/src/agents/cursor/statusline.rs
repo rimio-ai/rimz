@@ -181,6 +181,7 @@ impl ContextWindow {
             context_window_size: self.context_window_size,
             used_percentage: clamp_pct(self.used_percentage),
             remaining_percentage: clamp_pct(self.remaining_percentage),
+            current_context_tokens: None,
             current_usage,
             session_usage: None,
         };

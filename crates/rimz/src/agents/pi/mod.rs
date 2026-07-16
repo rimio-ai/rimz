@@ -711,6 +711,7 @@ fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
             context_window_size: parsed.context_window,
             used_percentage: payload_context_pct(payload, None),
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage,
             session_usage: None,
         };

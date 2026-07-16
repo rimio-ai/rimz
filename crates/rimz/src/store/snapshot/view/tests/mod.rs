@@ -96,6 +96,7 @@ fn capacity_and_session_usage_do_not_fabricate_a_context_percentage() {
         context_window_size: Some(200_000),
         used_percentage: None,
         remaining_percentage: None,
+        current_context_tokens: None,
         current_usage: None,
         session_usage: Some(crate::agents::AgentSessionUsage {
             input_tokens: Some(12_000),

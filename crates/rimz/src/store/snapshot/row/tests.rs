@@ -295,6 +295,7 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
             context_window_size: None,
             used_percentage: Some(82),
             remaining_percentage: Some(18),
+            current_context_tokens: None,
             current_usage: None,
             session_usage: None,
         })),
@@ -310,6 +311,7 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
             context_window_size: Some(1_000_000),
             used_percentage: Some(40),
             remaining_percentage: Some(60),
+            current_context_tokens: None,
             current_usage: None,
             session_usage: None,
         })),
@@ -341,6 +343,7 @@ fn context_gauge_percent_derives_from_sidecar_usage_when_percentage_is_absent() 
             context_window_size: Some(258_400),
             used_percentage: None,
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage: Some(AgentCurrentUsage {
                 input_tokens: Some(6_700),
                 output_tokens: Some(825),
@@ -357,4 +360,32 @@ fn context_gauge_percent_derives_from_sidecar_usage_when_percentage_is_absent() 
         Some(24),
         "rich Codex context derives the filled bar from current usage over its own window"
     );
+}
+
+#[test]
+fn current_context_scalar_controls_total_and_lifecycle_split_correlation() {
+    let mut card = AgentCard {
+        cache_read_input_tokens: Some(80),
+        cache_write_input_tokens: Some(5),
+        fresh_input_tokens: Some(15),
+        output_tokens: Some(9),
+        context: Some(context_with_tokens(AgentTokenUsage {
+            context_window_size: Some(1_000),
+            current_context_tokens: Some(100),
+            ..AgentTokenUsage::default()
+        })),
+        ..AgentCard::default()
+    };
+
+    assert_eq!(card.context_used_tokens(), Some(100));
+    assert_eq!(card.context_gauge_percent(), Some(10));
+    assert_eq!(card.call_split().map(|split| split.filled()), Some(100));
+
+    card.context
+        .as_mut()
+        .and_then(|context| context.tokens.as_mut())
+        .unwrap()
+        .current_context_tokens = Some(101);
+    assert_eq!(card.context_used_tokens(), Some(101));
+    assert_eq!(card.call_split(), None);
 }

@@ -412,6 +412,7 @@ impl StatuslinePayload {
             context_window_size: self.context_window.context_window_size,
             used_percentage: clamp_pct(self.context_window.used_percentage),
             remaining_percentage: clamp_pct(self.context_window.remaining_percentage),
+            current_context_tokens: None,
             current_usage: current_usage(self.context_window.current_usage),
             session_usage: None,
         });

@@ -20,6 +20,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
         context_window_size: Some(128_000),
         used_percentage: Some(42),
         remaining_percentage: Some(58),
+        current_context_tokens: None,
         current_usage: Some(current_usage(10, 2, 3, 40)),
         session_usage: Some(AgentSessionUsage {
             input_tokens: Some(100),
@@ -37,6 +38,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
             context_window_size: Some(200_000),
             used_percentage: None,
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage: None,
             session_usage: Some(AgentSessionUsage {
                 input_tokens: Some(90),
@@ -338,6 +340,7 @@ fn observed_context_merge_preserves_fields_cost_coverage_and_monotonicity() {
         context_window_size: Some(300_000),
         used_percentage: None,
         remaining_percentage: None,
+        current_context_tokens: None,
         current_usage: None,
         session_usage: None,
     });
@@ -369,6 +372,31 @@ fn context_merge_accepts_model_and_effort_only_enrichment() {
     let merged = read_one(&runtime, "pi", "sess-1").unwrap();
     assert_eq!(merged.context.model_id.as_deref(), Some("gpt-5.5"));
     assert_eq!(merged.context.effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn observed_context_merge_replaces_authoritative_scalar_including_zero() {
+    let (_dir, runtime) = runtime();
+    let observed = |current_context_tokens| {
+        let mut context = empty_context("pi", observed_at());
+        context.tokens = Some(AgentTokenUsage {
+            current_context_tokens: Some(current_context_tokens),
+            ..AgentTokenUsage::default()
+        });
+        context
+    };
+
+    assert!(merge_observed(&runtime, "pi", "sess-1", observed(42)).unwrap());
+    assert!(merge_observed(&runtime, "pi", "sess-1", observed(0)).unwrap());
+    assert_eq!(
+        read_one(&runtime, "pi", "sess-1")
+            .unwrap()
+            .context
+            .tokens
+            .unwrap()
+            .current_context_tokens,
+        Some(0)
+    );
 }
 
 fn codex_record(observed_at: Timestamp) -> AgentContextRecord {
@@ -631,6 +659,7 @@ fn tokens(
         context_window_size: Some(context_window_size),
         used_percentage: Some(used_percentage),
         remaining_percentage: Some(remaining_percentage),
+        current_context_tokens: None,
         current_usage,
         session_usage: None,
     }
@@ -646,6 +675,7 @@ fn codex_tokens(
         context_window_size: Some(context_window_size),
         used_percentage: None,
         remaining_percentage: None,
+        current_context_tokens: None,
         current_usage,
         session_usage: None,
     }
@@ -722,6 +752,7 @@ fn observed_context() -> AgentContext {
             context_window_size: Some(272_000),
             used_percentage: Some(42),
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage: Some(AgentCurrentUsage {
                 input_tokens: Some(10),
                 output_tokens: Some(2),

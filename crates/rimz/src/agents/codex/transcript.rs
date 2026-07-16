@@ -252,6 +252,7 @@ pub(super) fn transcript_enrichment(
             context_window_size: usage.context_window,
             used_percentage: None,
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage,
             session_usage: None,
         })

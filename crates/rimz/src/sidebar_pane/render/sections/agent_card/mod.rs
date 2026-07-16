@@ -4,7 +4,7 @@
 //! card anatomy is drawn in docs/interface/sidebar.md; the density and
 //! selection invariants live in docs/internals/sidebar/sidebar.md.
 
-use crate::agents::{AgentContext, TurnPhase};
+use crate::agents::{AgentContext, AgentCurrentUsage, TurnPhase};
 use crate::agents::{AgentStatus, ContextSeverity};
 use crate::config::{AnimationRole, CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};

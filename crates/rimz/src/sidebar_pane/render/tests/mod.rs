@@ -258,6 +258,7 @@ fn claude_context(now: Timestamp) -> AgentContext {
             context_window_size: Some(200_000),
             used_percentage: Some(38),
             remaining_percentage: Some(62),
+            current_context_tokens: None,
             // A realistic per-call split: cache reads carry the context,
             // fresh input stays small. The input side sums to 76,500 so
             // the precise meter still reads 38.2% of the 200k window.

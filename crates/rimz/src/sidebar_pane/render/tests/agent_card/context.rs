@@ -23,6 +23,7 @@ fn droid_waiting_card_renders_native_ask_and_last_call_context_fill() {
         context_window_size: Some(1_000_000),
         used_percentage: None,
         remaining_percentage: None,
+        current_context_tokens: None,
         current_usage: Some(AgentCurrentUsage {
             input_tokens: Some(1_166),
             output_tokens: Some(162),
@@ -385,6 +386,7 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
         context_window_size: Some(1_000_000),
         used_percentage: Some(4),
         remaining_percentage: Some(96),
+        current_context_tokens: Some(38_727),
         current_usage: None,
         session_usage: Some(AgentSessionUsage {
             input_tokens: Some(12_000),
@@ -419,9 +421,6 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
     assert!(!first.contains('◍'), "{first}");
 
     qwen.context_pct = None;
-    qwen.cache_read_input_tokens = None;
-    qwen.fresh_input_tokens = None;
-    qwen.output_tokens = None;
     let tokens = qwen
         .context
         .as_mut()
@@ -429,10 +428,13 @@ fn qwen_card_combines_live_gauge_with_correlated_call_split() {
         .unwrap();
     tokens.used_percentage = None;
     tokens.remaining_percentage = None;
+    tokens.current_context_tokens = Some(40_000);
     let second = render(qwen);
-    assert!(second.contains("◇ 14k ↘ 12k ↗ 2k ◌ 7k"), "{second}");
-    assert!(second.contains('▢') && second.contains("0%"), "{second}");
-    assert!(!second.contains('▤'), "{second}");
+    assert!(second.contains("4.0%"), "{second}");
+    assert!(second.contains("▤ 40k"), "{second}");
+    assert!(!second.contains("◇ 14k"), "{second}");
+    assert!(!second.contains("◌ 38k"), "{second}");
+    assert!(!second.contains("↘ 71"), "{second}");
     assert_ne!(first, second);
 }
 
@@ -456,6 +458,7 @@ fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
         context_window_size: Some(258_400),
         used_percentage: None,
         remaining_percentage: None,
+        current_context_tokens: None,
         current_usage: Some(AgentCurrentUsage {
             input_tokens: Some(6_700),
             output_tokens: Some(825),
@@ -875,6 +878,7 @@ fn calm_context_bar_orders_segments_left_to_right() {
         context_window_size: Some(100_000),
         used_percentage: Some(30),
         remaining_percentage: Some(70),
+        current_context_tokens: None,
         current_usage: Some(AgentCurrentUsage {
             input_tokens: Some(10_000),
             output_tokens: Some(0),

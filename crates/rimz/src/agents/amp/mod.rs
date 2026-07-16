@@ -354,6 +354,7 @@ impl AgentAdapter for AmpAdapter {
             context_window_size: None,
             used_percentage: None,
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage: Some(AgentCurrentUsage {
                 input_tokens: Some(usage.input),
                 output_tokens: Some(usage.output),

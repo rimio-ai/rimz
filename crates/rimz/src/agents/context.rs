@@ -319,11 +319,11 @@ pub struct AgentCost {
     pub total_lines_removed: Option<u64>,
 }
 
-/// Token accounting from two deliberately separate scopes. `used_percentage`
-/// and `current_usage` describe the current context window; `session_usage`
-/// carries cumulative lifetime counters when a provider exposes those without
-/// exposing context occupancy. Only the current-window fields drive gauges and
-/// compaction decisions.
+/// Token accounting from two deliberately separate scopes. `used_percentage`,
+/// `current_context_tokens`, and `current_usage` describe the current context
+/// window; `session_usage` carries cumulative lifetime counters when a provider
+/// exposes those without exposing context occupancy. Only the current-window
+/// fields drive gauges and compaction decisions.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentTokenUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -332,6 +332,11 @@ pub struct AgentTokenUsage {
     pub used_percentage: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remaining_percentage: Option<u8>,
+    /// Provider-reported tokens currently occupying the context window when
+    /// their categories are unavailable. This authoritative numerator takes
+    /// precedence over a categorized split when both are present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_context_tokens: Option<u64>,
     /// The most-recent API response's token composition. Its input side
     /// (`input + cache_creation + cache_read`) is exactly what `used_percentage`
     /// measures, so a renderer can color the context bar by where the window
@@ -345,18 +350,20 @@ pub struct AgentTokenUsage {
 }
 
 impl AgentTokenUsage {
-    /// Tokens currently occupying the context window — the latest API
-    /// response's `input + cache_creation + cache_read`, exactly the numerator
+    /// Tokens currently occupying the context window — the provider-reported
+    /// scalar when available, else the latest API response's
+    /// `input + cache_creation + cache_read`. This is the numerator
     /// [`AgentTokenUsage::used_percentage`] scales (output joins the window only
-    /// next turn). `None` before the first call or right after `/compact`
-    /// clears the breakdown.
+    /// next turn). `None` before the first measurement clears the breakdown.
     pub fn used_tokens(&self) -> Option<u64> {
-        let usage = self.current_usage.as_ref()?;
-        Some(
-            usage.input_tokens.unwrap_or(0)
-                + usage.cache_creation_input_tokens.unwrap_or(0)
-                + usage.cache_read_input_tokens.unwrap_or(0),
-        )
+        self.current_context_tokens.or_else(|| {
+            let usage = self.current_usage.as_ref()?;
+            Some(
+                usage.input_tokens.unwrap_or(0)
+                    + usage.cache_creation_input_tokens.unwrap_or(0)
+                    + usage.cache_read_input_tokens.unwrap_or(0),
+            )
+        })
     }
 }
 
@@ -928,6 +935,19 @@ mod tests {
             ..AgentTokenUsage::default()
         };
         assert_eq!(tokens.used_tokens(), Some(305_000));
+        let mut scalar = tokens.clone();
+        scalar.current_context_tokens = Some(42);
+        assert_eq!(scalar.used_tokens(), Some(42));
+        assert_eq!(
+            serde_json::to_value(&scalar).unwrap()["current_context_tokens"],
+            42
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentTokenUsage>(serde_json::json!({}))
+                .unwrap()
+                .current_context_tokens,
+            None
+        );
 
         // is_zero holds when every count is absent or explicitly zero, and fails
         // the moment one is non-zero.

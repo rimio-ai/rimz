@@ -50,6 +50,26 @@ fn write_then_read_round_trips() {
 }
 
 #[test]
+fn old_context_record_without_current_scalar_still_decodes() {
+    let now = Timestamp::now();
+    let mut record = new_record("qwen", "sess-1", ctx(now));
+    record.context.tokens = Some(crate::agents::AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        current_context_tokens: Some(42),
+        ..Default::default()
+    });
+    let mut value = serde_json::to_value(record).unwrap();
+    value
+        .pointer_mut("/context/tokens")
+        .and_then(serde_json::Value::as_object_mut)
+        .unwrap()
+        .remove("current_context_tokens");
+
+    let decoded: AgentContextRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.context.tokens.unwrap().current_context_tokens, None);
+}
+
+#[test]
 fn turn_openers_replace_and_survive_statusline_refresh() {
     let (_dir, runtime) = runtime();
     let now = Timestamp::now();

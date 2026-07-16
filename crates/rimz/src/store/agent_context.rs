@@ -480,6 +480,9 @@ fn merge_observed_tokens(prior: &mut Option<AgentTokenUsage>, incoming: AgentTok
     if incoming.remaining_percentage.is_some() {
         target.remaining_percentage = incoming.remaining_percentage;
     }
+    if incoming.current_context_tokens.is_some() {
+        target.current_context_tokens = incoming.current_context_tokens;
+    }
     if let Some(current_usage) = incoming.current_usage {
         target.current_usage = Some(current_usage);
     }
@@ -523,6 +526,7 @@ fn merge_droid_local_tokens(
         let mut preserved = prior.clone();
         preserved.used_percentage = None;
         preserved.remaining_percentage = None;
+        preserved.current_context_tokens = None;
         preserved.current_usage = None;
         if model_changed {
             preserved.context_window_size = None;
@@ -581,6 +585,9 @@ fn preserve_established_tokens(
 fn established_token_usage(tokens: &AgentTokenUsage) -> bool {
     tokens.used_percentage.is_some_and(|pct| pct > 0)
         || tokens
+            .current_context_tokens
+            .is_some_and(|tokens| tokens > 0)
+        || tokens
             .current_usage
             .as_ref()
             .is_some_and(|usage| !usage.is_zero())
@@ -597,6 +604,7 @@ fn inferred_fresh_tokens(tokens: &AgentTokenUsage) -> bool {
     // established record rather than overwriting real context with zeros and a
     // default window.
     tokens.used_percentage.is_none()
+        && tokens.current_context_tokens.is_none()
         && tokens
             .current_usage
             .as_ref()

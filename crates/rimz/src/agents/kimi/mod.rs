@@ -729,6 +729,7 @@ fn refresh_wire_path(
             context_window_size,
             used_percentage: context_window_size.map(|window| percentage(input, window)),
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage: Some(AgentCurrentUsage {
                 input_tokens: latest_usage
                     .as_ref()
@@ -753,6 +754,7 @@ fn refresh_wire_path(
             context_window_size,
             used_percentage: None,
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage: Some(AgentCurrentUsage::default()),
             session_usage: None,
         })

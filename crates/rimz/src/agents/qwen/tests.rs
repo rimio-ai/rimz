@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::agents::transcript::TranscriptCursor;
-use crate::agents::{AgentHookClass, AgentSessionUsage, AskKind, CostCoverage};
+use crate::agents::{AgentHookClass, AskKind, CostCoverage};
 
 const REWOUND_SESSION: &str = include_str!("tests/fixtures/rewound-session.jsonl");
 
@@ -237,7 +237,7 @@ fn transcript_tail_and_statusline_supply_context() {
     let context = adapter.observe_context("qwen", &json!({
         "version":"0.19.10",
         "model":{"display_name":"[DeepSeek] deepseek-v4-pro"},
-        "context_window":{"context_window_size":1000000,"used_percentage":3.9,"remaining_percentage":96.1,"current_usage":38727},
+        "context_window":{"context_window_size":1000000,"used_percentage":3.9,"remaining_percentage":96.1,"current_usage":38727,"total_input_tokens":30000,"total_output_tokens":5000},
         "metrics":{"models":{"qwen3":{"tokens":{"prompt":30000,"completion":5000,"cached":10000,"thoughts":2000}}},"files":{"total_lines_added":12,"total_lines_removed":3}},
         "vim":{"mode":"INSERT"}
     })).unwrap();
@@ -262,17 +262,9 @@ fn transcript_tail_and_statusline_supply_context() {
     let tokens = context.tokens.as_ref().unwrap();
     assert_eq!(tokens.context_window_size, Some(1_000_000));
     assert_eq!(tokens.remaining_percentage, Some(96));
+    assert_eq!(tokens.current_context_tokens, Some(38_727));
     assert_eq!(tokens.current_usage, None);
-    assert_eq!(
-        tokens.session_usage,
-        Some(AgentSessionUsage {
-            input_tokens: Some(20_000),
-            output_tokens: Some(3_000),
-            cache_creation_input_tokens: None,
-            cache_read_input_tokens: Some(10_000),
-            thinking_tokens: Some(2_000),
-        })
-    );
+    assert_eq!(tokens.session_usage, None);
     assert_eq!(
         context
             .cost
@@ -283,14 +275,15 @@ fn transcript_tail_and_statusline_supply_context() {
 }
 
 #[test]
-fn statusline_aggregates_routed_usage_without_claiming_current_window_categories() {
+fn statusline_uses_numeric_string_context_occupancy_without_session_categories() {
     let context = QwenAdapter
         .observe_context(
             "qwen",
             &json!({
                 "context_window": {
                     "context_window_size": 1_000_000,
-                    "used_percentage": 7.2
+                    "used_percentage": 7.2,
+                    "current_usage": "72000"
                 },
                 "metrics": {
                     "models": {
@@ -320,21 +313,13 @@ fn statusline_aggregates_routed_usage_without_claiming_current_window_categories
     let tokens = context.tokens.unwrap();
     assert_eq!(tokens.context_window_size, Some(1_000_000));
     assert_eq!(tokens.used_percentage, Some(7));
+    assert_eq!(tokens.current_context_tokens, Some(72_000));
     assert_eq!(tokens.current_usage, None);
-    assert_eq!(
-        tokens.session_usage,
-        Some(AgentSessionUsage {
-            input_tokens: Some(225),
-            output_tokens: Some(60),
-            cache_creation_input_tokens: None,
-            cache_read_input_tokens: Some(75),
-            thinking_tokens: Some(60),
-        })
-    );
+    assert_eq!(tokens.session_usage, None);
 }
 
 #[test]
-fn statusline_usage_preserves_absence_and_saturates_aggregates() {
+fn statusline_context_occupancy_preserves_zero_absence_and_malformed_values() {
     let absent = QwenAdapter
         .observe_context(
             "qwen",
@@ -350,41 +335,34 @@ fn statusline_usage_preserves_absence_and_saturates_aggregates() {
         )
         .unwrap();
     let tokens = absent.tokens.unwrap();
+    assert_eq!(tokens.current_context_tokens, None);
     assert_eq!(tokens.current_usage, None);
     assert_eq!(tokens.session_usage, None);
 
-    let max = u64::MAX.to_string();
-    let saturated = QwenAdapter
+    let zero = QwenAdapter
         .observe_context(
             "qwen",
             &json!({
-                "metrics": {
-                    "models": {
-                        "input-max": {"tokens": {"prompt": max.clone()}},
-                        "input-extra": {"tokens": {"prompt": 1}},
-                        "cache-max": {"tokens": {"prompt": max.clone(), "cached": max.clone()}},
-                        "cache-extra": {"tokens": {"prompt": 1, "cached": 1}},
-                        "output-max": {"tokens": {"prompt": 0, "total": max.clone()}},
-                        "output-extra": {"tokens": {"prompt": 0, "total": 1}},
-                        "thought-max": {"tokens": {"prompt": 0, "total": max.clone(), "thoughts": max}},
-                        "thought-extra": {"tokens": {"prompt": 0, "total": 1, "thoughts": 1}}
-                    }
+                "context_window": {"current_usage": 0}
+            }),
+        )
+        .unwrap();
+    assert_eq!(zero.tokens.unwrap().current_context_tokens, Some(0));
+
+    let malformed = QwenAdapter
+        .observe_context(
+            "qwen",
+            &json!({
+                "context_window": {
+                    "context_window_size": 10_000,
+                    "current_usage": "unknown"
                 }
             }),
         )
         .unwrap();
-    let tokens = saturated.tokens.unwrap();
-    assert_eq!(tokens.current_usage, None);
-    assert_eq!(
-        tokens.session_usage,
-        Some(AgentSessionUsage {
-            input_tokens: Some(u64::MAX),
-            output_tokens: Some(u64::MAX),
-            cache_creation_input_tokens: None,
-            cache_read_input_tokens: Some(u64::MAX),
-            thinking_tokens: Some(u64::MAX),
-        })
-    );
+    let tokens = malformed.tokens.unwrap();
+    assert_eq!(tokens.current_context_tokens, None);
+    assert_eq!(tokens.session_usage, None);
 }
 
 #[test]

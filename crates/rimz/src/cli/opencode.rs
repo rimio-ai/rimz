@@ -247,6 +247,7 @@ mod tests {
                     context_window_size: Some(1000),
                     used_percentage: Some(25),
                     remaining_percentage: Some(75),
+                    current_context_tokens: None,
                     current_usage: Some(AgentCurrentUsage {
                         input_tokens: Some(200),
                         output_tokens: Some(50),

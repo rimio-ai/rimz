@@ -35,6 +35,8 @@ struct ContextWindow {
     context_window_size: Option<u64>,
     used_percentage: Option<f64>,
     remaining_percentage: Option<f64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64_lossy")]
+    current_usage: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -99,12 +101,6 @@ where
         .collect())
 }
 
-fn add_optional(target: &mut Option<u64>, value: Option<u64>) {
-    if let Some(value) = value {
-        *target = Some(target.unwrap_or(0).saturating_add(value));
-    }
-}
-
 impl ModelTokens {
     fn session_usage(&self) -> Option<AgentSessionUsage> {
         let generated =
@@ -127,28 +123,6 @@ impl ModelTokens {
             || usage.cache_read_input_tokens.is_some()
             || usage.thinking_tokens.is_some())
         .then_some(usage)
-    }
-}
-
-impl Metrics {
-    fn session_usage(&self) -> Option<AgentSessionUsage> {
-        let mut aggregate = AgentSessionUsage::default();
-        let mut present = false;
-        for usage in self
-            .models
-            .values()
-            .filter_map(|metrics| metrics.tokens.session_usage())
-        {
-            present = true;
-            add_optional(&mut aggregate.input_tokens, usage.input_tokens);
-            add_optional(&mut aggregate.output_tokens, usage.output_tokens);
-            add_optional(
-                &mut aggregate.cache_read_input_tokens,
-                usage.cache_read_input_tokens,
-            );
-            add_optional(&mut aggregate.thinking_tokens, usage.thinking_tokens);
-        }
-        present.then_some(aggregate)
     }
 }
 
@@ -201,17 +175,17 @@ impl StatuslinePayload {
     }
 
     pub(crate) fn into_context(self, source: &str, observed_at: Timestamp) -> AgentContext {
-        let session_usage = self.metrics.session_usage();
         let tokens = (self.context_window.context_window_size.is_some()
             || self.context_window.used_percentage.is_some()
             || self.context_window.remaining_percentage.is_some()
-            || session_usage.is_some())
+            || self.context_window.current_usage.is_some())
         .then(|| AgentTokenUsage {
             context_window_size: self.context_window.context_window_size,
             used_percentage: clamp_pct(self.context_window.used_percentage),
             remaining_percentage: clamp_pct(self.context_window.remaining_percentage),
+            current_context_tokens: self.context_window.current_usage,
             current_usage: None,
-            session_usage,
+            session_usage: None,
         });
         let cost = (self.metrics.files.total_lines_added.is_some()
             || self.metrics.files.total_lines_removed.is_some())

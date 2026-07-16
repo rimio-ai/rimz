@@ -411,10 +411,7 @@ impl AgentCard {
             .and_then(|context| context.tokens.as_ref());
         if context_tokens.is_some_and(|tokens| {
             tokens.context_window_size.is_none()
-                && tokens
-                    .current_usage
-                    .as_ref()
-                    .is_some_and(|usage| !usage.is_zero())
+                && tokens.used_tokens().is_some_and(|used| used > 0)
         }) {
             return None;
         }
@@ -429,9 +426,8 @@ impl AgentCard {
             .or(self.context_pct)
     }
 
-    /// Tokens currently occupying the context window — the current message's
-    /// `input + cache_creation + cache_read`, exactly the numerator the gauge
-    /// percent scales.
+    /// Tokens currently occupying the context window — the authoritative live
+    /// scalar when present, else the current message's categorized input.
     pub fn context_used_tokens(&self) -> Option<u64> {
         self.context
             .as_ref()
@@ -444,12 +440,18 @@ impl AgentCard {
     /// current_usage` blob is absent.
     pub fn call_split(&self) -> Option<RowCallSplit> {
         let fresh_input = self.fresh_input_tokens?;
-        Some(RowCallSplit {
+        let split = RowCallSplit {
             cache_read: self.cache_read_input_tokens.unwrap_or(0),
             cache_write: self.cache_write_input_tokens.unwrap_or(0),
             fresh_input,
             output: self.output_tokens.unwrap_or(0),
-        })
+        };
+        let authoritative = self
+            .context
+            .as_ref()
+            .and_then(|context| context.tokens.as_ref())
+            .and_then(|tokens| tokens.current_context_tokens);
+        (authoritative.is_none() || authoritative == Some(split.filled())).then_some(split)
     }
 
     /// Evidence that the session has already done work. A compacted session may
@@ -462,8 +464,8 @@ impl AgentCard {
                 .context
                 .as_ref()
                 .and_then(|context| context.tokens.as_ref())
-                .and_then(|tokens| tokens.current_usage.as_ref())
-                .is_some_and(|usage| !usage.is_zero())
+                .and_then(AgentTokenUsage::used_tokens)
+                .is_some_and(|tokens| tokens > 0)
             || self
                 .context
                 .as_ref()

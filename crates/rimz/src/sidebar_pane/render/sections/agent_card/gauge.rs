@@ -269,6 +269,16 @@ pub(super) fn gauge_percent(row: &SidebarRow) -> Option<u8> {
     row.context_gauge_percent()
 }
 
+fn correlated_current_usage(row: &SidebarRow) -> Option<&AgentCurrentUsage> {
+    let tokens = ctx(row)?.tokens.as_ref()?;
+    let usage = tokens.current_usage.as_ref()?;
+    let filled = usage.input_tokens.unwrap_or(0)
+        + usage.cache_creation_input_tokens.unwrap_or(0)
+        + usage.cache_read_input_tokens.unwrap_or(0);
+    (tokens.current_context_tokens.is_none() || tokens.current_context_tokens == Some(filled))
+        .then_some(usage)
+}
+
 /// The context bar's color segments, when the per-message breakdown is known,
 /// left to right: cache reads (row health tone, seeded with green), cache writes
 /// (compaction/delegation violet), fresh `input` (the expense vermilion) — the
@@ -280,10 +290,7 @@ pub(super) fn gauge_percent(row: &SidebarRow) -> Option<u8> {
 /// split refreshes with the next call instead), so the bar falls back to a
 /// single-color ramp.
 pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, Color); 3]> {
-    if let Some(usage) = ctx(row)
-        .and_then(|context| context.tokens.as_ref())
-        .and_then(|tokens| tokens.current_usage.as_ref())
-    {
+    if let Some(usage) = correlated_current_usage(row) {
         let input = usage.input_tokens.unwrap_or(0);
         let writes = usage.cache_creation_input_tokens.unwrap_or(0);
         let reads = usage.cache_read_input_tokens.unwrap_or(0);
@@ -311,13 +318,15 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// from cache, `◍` newly written to it, `↘` fresh input, `↗` output generated
 /// (which joins the window next turn) — each marker in its bar-segment color,
 /// so the line doubles as the bar's legend. The `◇` totals stay the cockpit /
-/// fleet-store / subagent vocabulary. When current-window composition is
-/// unavailable but the provider exposes cumulative session counters, the line
-/// instead uses that shared `◇ ↘ ↗ ◌` grammar without implying occupancy. The
+/// fleet-store / subagent vocabulary. An authoritative occupancy scalar with
+/// no matching composition renders as a bare `▤` total and flat meter. When no
+/// current-window occupancy is available but the provider exposes cumulative
+/// session counters, the line instead uses that shared `◇ ↘ ↗ ◌` grammar
+/// without implying occupancy. The
 /// rich statusline blob is preferred; the row-level
 /// [`SidebarRow::call_split`] stands in when the blob carries no split. The
-/// exact latest-call `▤` composition wins over cumulative `◇` session totals,
-/// which are the honest fallback when the hook/transcript split is absent.
+/// exact latest-call `▤` composition wins over cumulative `◇` session totals;
+/// the scalar wins over both when the split disagrees.
 /// Falls back to the bare `▤` rollup total when no categorized source exists,
 /// using zero before the first token measurement. The age rides the right edge
 /// only once it crosses five minutes
@@ -347,10 +356,7 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
     // percent folds to 0 and lets the token overlay alone speak.
     let severity = row_severity_color(theme, row, bands, row_severity(row, bands));
     let mut left = vec![Span::raw("  ")];
-    if let Some(usage) = ctx(row)
-        .and_then(|context| context.tokens.as_ref())
-        .and_then(|tokens| tokens.current_usage.as_ref())
-    {
+    if let Some(usage) = correlated_current_usage(row) {
         let input = usage.input_tokens.unwrap_or(0);
         let output = usage.output_tokens.unwrap_or(0);
         let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
@@ -377,6 +383,11 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             split.output,
             tokens_int,
         ));
+    } else if let Some(total) = ctx(row)
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.current_context_tokens)
+    {
+        left.extend(context_total_spans(theme, severity, total, tokens_int));
     } else if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.session_usage.as_ref())
@@ -392,7 +403,10 @@ pub(super) fn context_tokens_line(row_ctx: &RowCtx<'_>, row: &SidebarRow) -> Lin
             &TokenColumns::default(),
         ));
     } else {
-        let total = agent(row).and_then(|agent| agent.total_tokens).unwrap_or(0);
+        let total = row
+            .context_used_tokens()
+            .or_else(|| agent(row).and_then(|agent| agent.total_tokens))
+            .unwrap_or(0);
         left.extend(context_total_spans(theme, severity, total, tokens_int));
     }
     left.extend(context_compaction_spans(

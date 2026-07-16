@@ -463,6 +463,7 @@ impl AgentAdapter for DroidAdapter {
             context_window_size,
             used_percentage: None,
             remaining_percentage: None,
+            current_context_tokens: None,
             current_usage: refresh.telemetry.current_usage,
             session_usage: refresh.telemetry.session_usage,
         });
