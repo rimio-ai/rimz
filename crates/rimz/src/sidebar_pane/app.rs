@@ -302,7 +302,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 diag: &diag,
                 tick,
             },
-        )?;
+        );
         state.run_width_control_backstop(&config, &mut terminal);
         state.maybe_remind(&config, &mut terminal, &diag);
         state.paint_frame_if_due(&mut terminal, anim_start, active)?;

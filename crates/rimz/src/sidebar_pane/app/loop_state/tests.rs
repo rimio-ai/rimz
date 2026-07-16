@@ -126,15 +126,13 @@ fn fold_snapshot(
             },
         })
         .expect("send fetch outcome");
-    state
-        .on_snapshot(
-            config,
-            fetch,
-            &result_rx,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("fold snapshot");
+    state.on_snapshot(
+        config,
+        fetch,
+        &result_rx,
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
 }
 
 fn fetch_dispatcher() -> (FetchDispatcher, std::sync::mpsc::Receiver<FetchRequest>) {
@@ -297,20 +295,18 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
         })
         .expect("send fetch outcome");
 
-    state
-        .run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        )
-        .expect("maintenance drains ready outcome");
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
 
     assert_eq!(state.current.worktree_groups.len(), 1);
     assert_eq!(state.current.worktree_groups[0].rows[0].name, "claude");
@@ -333,15 +329,13 @@ fn unchanged_fetch_outcome_clears_in_flight_without_dirtying_frame() {
         })
         .expect("send unchanged outcome");
 
-    state
-        .on_snapshot(
-            &config,
-            &mut fetch,
-            &result_rx,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("apply unchanged outcome");
+    state.on_snapshot(
+        &config,
+        &mut fetch,
+        &result_rx,
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert!(!state.dirty);
     fetch.request(FetchRequest::default(), false);
@@ -368,15 +362,13 @@ fn unchanged_fetch_outcome_dispatches_queued_refetch() {
         })
         .expect("send unchanged outcome");
 
-    state
-        .on_snapshot(
-            &config,
-            &mut fetch,
-            &result_rx,
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("apply unchanged outcome");
+    state.on_snapshot(
+        &config,
+        &mut fetch,
+        &result_rx,
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert!(!state.dirty);
     assert!(
@@ -405,20 +397,18 @@ fn maintenance_requests_releasing_fetch_when_order_hold_expires() {
     let (mut fetch, request_rx) = fetch_dispatcher();
     let (_result_tx, result_rx) = std::sync::mpsc::channel();
 
-    state
-        .run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        )
-        .expect("maintenance requests release fold");
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
 
     assert!(
         request_rx.try_recv().is_ok(),
@@ -441,20 +431,18 @@ fn maintenance_requests_force_fold_when_tab_read_dwell_expires() {
     let (mut fetch, request_rx) = fetch_dispatcher();
     let (_result_tx, result_rx) = std::sync::mpsc::channel();
 
-    state
-        .run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        )
-        .expect("maintenance requests tab dwell fold");
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
 
     assert!(
         request_rx
@@ -480,20 +468,18 @@ fn maintenance_waits_for_own_view_before_tab_read_dwell_fetch() {
     let (mut fetch, request_rx) = fetch_dispatcher();
     let (_result_tx, result_rx) = std::sync::mpsc::channel();
 
-    state
-        .run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        )
-        .expect("maintenance handles missing own-view");
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
 
     assert!(
         request_rx.try_recv().is_err(),
@@ -524,20 +510,18 @@ fn self_close_watchdog_bypasses_unchanged_skip_while_empty_confirming() {
     state.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
     let (_result_tx, result_rx) = std::sync::mpsc::channel();
 
-    state
-        .run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        )
-        .expect("maintenance requests self-close fold");
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
 
     assert!(
         request_rx
@@ -608,24 +592,22 @@ fn frame_timing_resumes_on_own_pane_focus() {
         state.current = snapshot.clone();
         state.dirty = false;
         let (mut fetch, request_rx) = fetch_dispatcher();
-        state
-            .on_event(
-                &config,
-                &mut fetch,
-                &mut terminal,
-                SidebarEventEnvelope::new(
-                    ws.clone(),
-                    Some("rimz-test".to_owned()),
-                    crate::sidebar::timing::unix_now_ms(),
-                    SidebarEvent::FocusChanged {
-                        focused: vec![focused],
-                        unfocused: Vec::new(),
-                    },
-                ),
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("focus event folds");
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            SidebarEventEnvelope::new(
+                ws.clone(),
+                Some("rimz-test".to_owned()),
+                crate::sidebar::timing::unix_now_ms(),
+                SidebarEvent::FocusChanged {
+                    focused: vec![focused],
+                    unfocused: Vec::new(),
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
         state.dirty = false;
 
         assert_eq!(state.optimistic_watch_until.is_some(), resumes);
@@ -661,16 +643,14 @@ fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
             agent_signal: None,
         },
     ] {
-        state
-            .on_event(
-                &config,
-                &mut fetch,
-                &mut terminal,
-                event_envelope(&ws, event),
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("identity-free event");
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(&ws, event),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
     }
 
     assert!(
@@ -695,20 +675,18 @@ fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
     let (_result_tx, result_rx) = std::sync::mpsc::channel();
     state.last_heartbeat = Some(Instant::now());
     state.last_self_close_check = Instant::now();
-    state
-        .run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        )
-        .expect("maintenance fires due pending fetch");
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
 
     assert!(
         request_rx
@@ -730,19 +708,17 @@ fn repeated_hidden_metrics_publications_fold_once_at_the_background_deadline() {
     let (mut fetch, request_rx) = fetch_dispatcher();
 
     for _ in 0..3 {
-        state
-            .on_event(
-                &config,
-                &mut fetch,
-                &mut terminal,
-                event_envelope(
-                    &ws,
-                    pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
-                ),
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("defer metrics publication");
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
     }
     assert!(request_rx.try_recv().is_err());
     let deadline = fetch.next_deadline().expect("one deferred fetch");
@@ -761,20 +737,18 @@ fn repeated_hidden_metrics_publications_fold_once_at_the_background_deadline() {
     let (_result_tx, result_rx) = std::sync::mpsc::channel();
     state.last_heartbeat = Some(Instant::now());
     state.last_self_close_check = Instant::now();
-    state
-        .run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        )
-        .expect("maintenance folds due metrics");
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
 
     assert!(
         request_rx.try_recv().is_ok(),
@@ -801,44 +775,38 @@ fn topology_and_store_publications_shorten_a_metrics_deadline() {
         let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
         hide_consumer(&mut state, &ws);
         let (mut fetch, request_rx) = fetch_dispatcher();
-        state
-            .on_event(
-                &config,
-                &mut fetch,
-                &mut terminal,
-                event_envelope(
-                    &ws,
-                    pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
-                ),
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("defer metrics publication");
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
         let metrics_due = fetch.next_deadline().expect("metrics pending");
 
-        state
-            .on_event(
-                &config,
-                &mut fetch,
-                &mut terminal,
-                event_envelope(&ws, shorter),
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("shorter publication");
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(&ws, shorter),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
         let shortened = fetch.next_deadline().expect("shortened pending fetch");
         assert!(shortened < metrics_due);
 
-        state
-            .on_event(
-                &config,
-                &mut fetch,
-                &mut terminal,
-                event_envelope(&ws, SidebarEvent::PanesChanged),
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("stronger topology request");
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(&ws, SidebarEvent::PanesChanged),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
         assert_eq!(fetch.next_deadline(), Some(shortened));
         assert!(
             fetch
@@ -874,16 +842,14 @@ fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
         }
         let (mut fetch, request_rx) = fetch_dispatcher();
 
-        state
-            .on_event(
-                &config,
-                &mut fetch,
-                &mut terminal,
-                event_envelope(&ws, pane_publication(publication)),
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("immediate publication");
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(&ws, pane_publication(publication)),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
 
         assert!(request_rx.try_recv().is_ok());
         assert!(fetch.next_deadline().is_none());
@@ -904,16 +870,14 @@ fn width_target_event_reloads_the_override_without_a_producer_fetch() {
     let mut terminal = fixed_terminal();
     let (mut fetch, request_rx) = fetch_dispatcher();
 
-    state
-        .on_event(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            event_envelope(&ws, SidebarEvent::WidthTargetChanged),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("width target event");
+    state.on_event(
+        &config,
+        &mut fetch,
+        &mut terminal,
+        event_envelope(&ws, SidebarEvent::WidthTargetChanged),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert_eq!(
         state.width_control.decide(50, Instant::now()),
@@ -991,22 +955,20 @@ fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
     let mut terminal = fixed_terminal();
     let (mut fetch, request_rx) = fetch_dispatcher();
 
-    state
-        .on_event(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            event_envelope(
-                &ws,
-                SidebarEvent::StoreDelta {
-                    event_method: None,
-                    agent_signal: None,
-                },
-            ),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("defer store delta");
+    state.on_event(
+        &config,
+        &mut fetch,
+        &mut terminal,
+        event_envelope(
+            &ws,
+            SidebarEvent::StoreDelta {
+                event_method: None,
+                agent_signal: None,
+            },
+        ),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
     assert!(fetch.next_deadline().is_some());
 
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
@@ -1015,20 +977,18 @@ fn maintenance_watchdog_absorbs_deferred_unwatched_fetch() {
     let (_result_tx, result_rx) = std::sync::mpsc::channel();
     state.last_heartbeat = Some(Instant::now());
     state.last_self_close_check = Instant::now() - SELF_CLOSE_WATCHDOG;
-    state
-        .run_maintenance(
-            &mut fetch,
-            MaintenanceContext {
-                config: &config,
-                runtime: &runtime,
-                socket_path: &socket_path,
-                result_rx: &result_rx,
-                anim_start: Instant::now(),
-                diag: &crate::diag::DiagSink::disabled(),
-                tick: Duration::from_secs(60),
-            },
-        )
-        .expect("maintenance runs watchdog fetch");
+    state.run_maintenance(
+        &mut fetch,
+        MaintenanceContext {
+            config: &config,
+            runtime: &runtime,
+            socket_path: &socket_path,
+            result_rx: &result_rx,
+            anim_start: Instant::now(),
+            diag: &crate::diag::DiagSink::disabled(),
+            tick: Duration::from_secs(60),
+        },
+    );
 
     assert!(
         request_rx.try_recv().is_ok(),
@@ -1058,22 +1018,20 @@ fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
         }
         let (mut fetch, request_rx) = fetch_dispatcher();
 
-        state
-            .on_event(
-                &config,
-                &mut fetch,
-                &mut terminal,
-                event_envelope(
-                    &ws,
-                    SidebarEvent::StoreDelta {
-                        event_method: None,
-                        agent_signal: None,
-                    },
-                ),
-                Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
-            .expect("identity-free event");
+        state.on_event(
+            &config,
+            &mut fetch,
+            &mut terminal,
+            event_envelope(
+                &ws,
+                SidebarEvent::StoreDelta {
+                    event_method: None,
+                    agent_signal: None,
+                },
+            ),
+            Instant::now(),
+            &crate::diag::DiagSink::disabled(),
+        );
 
         assert!(request_rx.try_recv().is_ok());
         assert!(fetch.next_deadline().is_none());
@@ -1090,37 +1048,33 @@ fn focus_resume_flushes_pending_metrics_fetch() {
     let mut terminal = fixed_terminal();
     let (mut fetch, request_rx) = fetch_dispatcher();
 
-    state
-        .on_event(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            event_envelope(
-                &ws,
-                pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
-            ),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("defer metrics publication");
+    state.on_event(
+        &config,
+        &mut fetch,
+        &mut terminal,
+        event_envelope(
+            &ws,
+            pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
+        ),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
     assert!(fetch.next_deadline().is_some());
 
-    state
-        .on_event(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            event_envelope(
-                &ws,
-                SidebarEvent::FocusChanged {
-                    focused: vec![own_pane],
-                    unfocused: Vec::new(),
-                },
-            ),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("focus resumes");
+    state.on_event(
+        &config,
+        &mut fetch,
+        &mut terminal,
+        event_envelope(
+            &ws,
+            SidebarEvent::FocusChanged {
+                focused: vec![own_pane],
+                unfocused: Vec::new(),
+            },
+        ),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert!(fetch.next_deadline().is_none());
     assert!(
@@ -1145,22 +1099,20 @@ fn focus_out_closes_help_popup() {
     let mut terminal = fixed_terminal();
     let (mut fetch, _request_rx) = fetch_dispatcher();
 
-    state
-        .on_event(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            event_envelope(
-                &ws,
-                SidebarEvent::FocusChanged {
-                    focused: Vec::new(),
-                    unfocused: vec![own_pane],
-                },
-            ),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("focus-out event folds");
+    state.on_event(
+        &config,
+        &mut fetch,
+        &mut terminal,
+        event_envelope(
+            &ws,
+            SidebarEvent::FocusChanged {
+                focused: Vec::new(),
+                unfocused: vec![own_pane],
+            },
+        ),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert!(!state.ui.help_visible);
     assert!(state.optimistic_watch_until.is_none());
@@ -1384,14 +1336,12 @@ fn record_focus_intent_writes_anchor_without_storing_an_overlay() {
     };
     let recorded_order = state.ui.last_order.clone();
 
-    state
-        .record_focus_intent(
-            &config,
-            pane.clone(),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("record focus intent");
+    state.record_focus_intent(
+        &config,
+        pane.clone(),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     let anchor = crate::sidebar::focus_anchor::load(&runtime).expect("focus anchor");
     assert_eq!(anchor.pane_id, pane);
@@ -1415,52 +1365,46 @@ fn confirmed_focus_intent_does_not_mask_a_later_focus_change() {
     let snapshot = snapshot_with_focused_pane(&ws, first.clone());
     state.last_pulled = snapshot.clone();
     state.current = snapshot;
-    state
-        .record_focus_intent(
-            &config,
-            target.clone(),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("record focus intent");
+    state.record_focus_intent(
+        &config,
+        target.clone(),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
     let anchor = crate::sidebar::focus_anchor::load(&runtime).expect("focus anchor");
     let mut terminal = fixed_terminal();
     let (mut fetch, _request_rx) = fetch_dispatcher();
 
-    state
-        .on_event(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            event_envelope(
-                &ws,
-                SidebarEvent::FocusChanged {
-                    focused: vec![target],
-                    unfocused: vec![first.clone()],
-                },
-            ),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("confirming focus event");
+    state.on_event(
+        &config,
+        &mut fetch,
+        &mut terminal,
+        event_envelope(
+            &ws,
+            SidebarEvent::FocusChanged {
+                focused: vec![target],
+                unfocused: vec![first.clone()],
+            },
+        ),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
     assert_eq!(state.confirmed_focus_intent_ms, anchor.stamp_ms);
 
-    state
-        .on_event(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            event_envelope(
-                &ws,
-                SidebarEvent::FocusChanged {
-                    focused: vec![first.clone()],
-                    unfocused: Vec::new(),
-                },
-            ),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("later focus event");
+    state.on_event(
+        &config,
+        &mut fetch,
+        &mut terminal,
+        event_envelope(
+            &ws,
+            SidebarEvent::FocusChanged {
+                focused: vec![first.clone()],
+                unfocused: Vec::new(),
+            },
+        ),
+        Instant::now(),
+        &crate::diag::DiagSink::disabled(),
+    );
 
     assert_eq!(state.current.focused_pane, Some(first));
     assert!(crate::sidebar::focus_anchor::is_fresh(

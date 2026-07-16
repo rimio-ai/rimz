@@ -345,7 +345,7 @@ impl LoopState {
         result_rx: &Receiver<FetchUpdate>,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<()> {
+    ) {
         let mut latest = None;
         let mut saw_final = false;
         while let Ok(update) = result_rx.try_recv() {
@@ -353,7 +353,7 @@ impl LoopState {
             latest = Some(update);
         }
         let rejected = match latest {
-            Some(update) => self.apply_latest_snapshot(config, update, anim_start, diag)?,
+            Some(update) => self.apply_latest_snapshot(config, update, anim_start, diag),
             None => false,
         };
         if saw_final {
@@ -365,7 +365,6 @@ impl LoopState {
         if !self.should_exit && saw_final && rejected {
             fetch.request(FetchRequest::default(), false);
         }
-        Ok(())
     }
 
     // ponytail: flat dispatch inputs stay explicit; bundle loop context if this set grows.
@@ -383,11 +382,11 @@ impl LoopState {
     ) -> Result<LoopFlow> {
         match wakeup {
             Wakeup::Snapshot => {
-                self.on_snapshot(config, fetch, result_rx, anim_start, diag)?;
+                self.on_snapshot(config, fetch, result_rx, anim_start, diag);
                 Ok(LoopFlow::Continue)
             }
             Wakeup::Event(envelope) => {
-                self.on_event(config, fetch, terminal, envelope, anim_start, diag)
+                Ok(self.on_event(config, fetch, terminal, envelope, anim_start, diag))
             }
             // A recv timeout: the active grid reached a frame boundary, or the
             // idle backstop interval elapsed. It carries no state of its own —
@@ -429,11 +428,11 @@ impl LoopState {
         update: FetchUpdate,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<bool> {
+    ) -> bool {
         self.last_known_elder = update.role().is_producer();
         if matches!(update, FetchUpdate::Unchanged { .. }) {
             self.fetched_at = Instant::now();
-            return Ok(false);
+            return false;
         }
         let snapshot_ok = matches!(update, FetchUpdate::Snapshot { .. });
         let fresh_pane_frame = update.pane_frame() == PaneFrame::Fresh;
@@ -458,12 +457,12 @@ impl LoopState {
             FetchUpdate::Unchanged { .. } => unreachable!("handled above"),
         };
         self.fetched_at = Instant::now();
-        let rejected = self.fold_outcome(config, update, anim_start, diag)?;
+        let rejected = self.fold_outcome(config, update, anim_start, diag);
         if snapshot_ok {
             self.last_self_close_check = Instant::now();
         }
         self.release_paint_hold_after_snapshot(rejected, fresh_pane_frame);
-        Ok(rejected)
+        rejected
     }
 
     fn release_paint_hold_after_snapshot(&mut self, rejected: bool, fresh_pane_frame: bool) {
@@ -502,7 +501,7 @@ impl LoopState {
         config: &ServeConfig,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<()> {
+    ) {
         let fused = self.fused_snapshot(crate::sidebar::timing::unix_now_ms());
         self.fold_outcome(
             config,
@@ -518,9 +517,8 @@ impl LoopState {
             },
             anim_start,
             diag,
-        )?;
+        );
         self.next_frame = Instant::now();
-        Ok(())
     }
 
     pub(super) fn on_event(
@@ -531,15 +529,15 @@ impl LoopState {
         envelope: SidebarEventEnvelope,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<LoopFlow> {
+    ) -> LoopFlow {
         if !event_targets_this_renderer(&envelope, config) {
-            return Ok(LoopFlow::Repoll);
+            return LoopFlow::Repoll;
         }
         let requests_verification = envelope.event.requests_producer_verification();
         let sent_at_ms = envelope.sent_at_ms;
         match envelope.event {
             SidebarEvent::Reload => {
-                return Ok(self.handle_reload(config, fetch));
+                return self.handle_reload(config, fetch);
             }
             SidebarEvent::WidthTargetChanged => {
                 self.width_control.retarget(WidthTarget::from_override(
@@ -579,13 +577,13 @@ impl LoopState {
                 self.handle_notification(config, terminal, event, diag);
             }
             SidebarEvent::FocusStranded { pane_id } => {
-                self.handle_focus_stranded(config, pane_id, sent_at_ms, anim_start, diag)?;
+                self.handle_focus_stranded(config, pane_id, sent_at_ms, anim_start, diag);
             }
             SidebarEvent::FocusIntent { .. } => {
-                self.fold_fused_now(config, anim_start, diag)?;
+                self.fold_fused_now(config, anim_start, diag);
             }
             event if event.is_overlay() => {
-                self.handle_overlay_event(config, fetch, event, sent_at_ms, anim_start, diag)?;
+                self.handle_overlay_event(config, fetch, event, sent_at_ms, anim_start, diag);
             }
             // Identity-free nudges — `StoreDelta`, `PanesChanged`, a
             // `PaneOpened` without a command: nothing to fuse, so refetch,
@@ -602,7 +600,7 @@ impl LoopState {
                 );
             }
         }
-        Ok(LoopFlow::Continue)
+        LoopFlow::Continue
     }
 
     fn handle_notification(
@@ -653,7 +651,7 @@ impl LoopState {
         sent_at_ms: u64,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<()> {
+    ) {
         let now_ms = crate::sidebar::timing::unix_now_ms();
         let own_pane = crate::mux::own_pane_id(config.mux);
         if let Some(target) = focus_stranded_target(
@@ -666,10 +664,9 @@ impl LoopState {
         ) {
             // Match sidebar jumps: broadcast the intent before the mux
             // switch so peer tabs repaint while still hidden.
-            self.record_focus_intent(config, target.clone(), anim_start, diag)?;
+            self.record_focus_intent(config, target.clone(), anim_start, diag);
             spawn_pane_focus(target, &config.session_name);
         }
-        Ok(())
     }
 
     fn handle_overlay_event(
@@ -680,7 +677,7 @@ impl LoopState {
         sent_at_ms: u64,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<()> {
+    ) {
         // An overlay event fuses into the in-memory state and paints this
         // frame. A topology overlay also asks the producer to verify with a
         // real pull, which supersedes the overlay once its fresh frame
@@ -694,7 +691,7 @@ impl LoopState {
         let requests_verification = event.requests_producer_verification();
         let now_ms = crate::sidebar::timing::unix_now_ms();
         self.event_store.append(event, sent_at_ms, now_ms);
-        self.fold_fused_now(config, anim_start, diag)?;
+        self.fold_fused_now(config, anim_start, diag);
         if !self.should_exit && (requests_verification || own_focused) {
             fetch.request(FetchRequest::producer_fresh_panes(), true);
         }
@@ -704,7 +701,6 @@ impl LoopState {
             self.optimistic_watch_until = None;
             self.ui.help_visible = false;
         }
-        Ok(())
     }
 
     /// `settled_width` is the pane width the resize settled at, probed once at
@@ -858,7 +854,7 @@ impl LoopState {
                 // A jump records and broadcasts the focus intent so peer tabs
                 // adopt the anchor offset and repaint while still hidden. The
                 // mux focus switch fires last, so the destination tab is ready.
-                self.record_focus_intent(config, pane.clone(), anim_start, diag)?;
+                self.record_focus_intent(config, pane.clone(), anim_start, diag);
                 spawn_pane_focus(pane, &config.session_name);
             }
             Some(InputEffect::Width(dir)) => {
@@ -1015,13 +1011,13 @@ impl LoopState {
         &mut self,
         fetch: &mut FetchDispatcher,
         ctx: MaintenanceContext<'_>,
-    ) -> Result<()> {
+    ) {
         // Snapshot wakeups are a latency hint, not the only correctness path.
         // `rimz reload` replaces the renderer in place and a ready-result
         // datagram can be lost around socket teardown/rebind; the frame/tick
         // path still drains the channel so startup cannot strand the
         // placeholder cockpit.
-        self.on_snapshot(ctx.config, fetch, ctx.result_rx, ctx.anim_start, ctx.diag)?;
+        self.on_snapshot(ctx.config, fetch, ctx.result_rx, ctx.anim_start, ctx.diag);
         fetch.fire_due(Instant::now());
 
         // Tab-view read dwell: once the user has stayed past the dwell, provoke
@@ -1077,7 +1073,6 @@ impl LoopState {
         {
             fetch.request(FetchRequest::default(), false);
         }
-        Ok(())
     }
 
     pub(super) fn maybe_remind(
@@ -1237,7 +1232,7 @@ impl LoopState {
         update: FetchUpdate,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<ApplyOutcome> {
+    ) -> ApplyOutcome {
         let application = match update {
             FetchUpdate::Snapshot {
                 snapshot,
@@ -1255,11 +1250,11 @@ impl LoopState {
                 phase: FetchPhase::Final,
             },
             FetchUpdate::Unchanged { .. } => {
-                return Ok(ApplyOutcome {
+                return ApplyOutcome {
                     should_exit: false,
                     tab_emptied: false,
                     rejected: false,
-                });
+                };
             }
         };
         let (prev_good, rejected, now) = self.commit_fetch(application, diag);
@@ -1273,7 +1268,7 @@ impl LoopState {
             now.as_millisecond(),
         );
         self.fold_spend_rolls(anim_start);
-        Ok(self.exit_verdict(config, rejected))
+        self.exit_verdict(config, rejected)
     }
 
     fn exit_verdict(&mut self, config: &ServeConfig, rejected: bool) -> ApplyOutcome {
@@ -1537,8 +1532,8 @@ impl LoopState {
         update: FetchUpdate,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<bool> {
-        let applied = self.apply_fetch_outcome(config, update, anim_start, diag)?;
+    ) -> bool {
+        let applied = self.apply_fetch_outcome(config, update, anim_start, diag);
         self.should_exit = applied.should_exit;
         if applied.should_exit {
             self.exit_cause = Some(if applied.tab_emptied {
@@ -1551,7 +1546,7 @@ impl LoopState {
         self.apply_focus_anchor();
         self.observe_commit();
         self.dirty = true;
-        Ok(applied.rejected)
+        applied.rejected
     }
 
     fn apply_focus_anchor(&mut self) {
@@ -1603,7 +1598,7 @@ impl LoopState {
         pane: PaneId,
         anim_start: Instant,
         diag: &crate::diag::DiagSink,
-    ) -> Result<()> {
+    ) {
         let now_ms = crate::sidebar::timing::unix_now_ms();
         let anchor = FocusAnchor {
             pane_id: pane.clone(),
@@ -1614,7 +1609,7 @@ impl LoopState {
         if let Err(err) = crate::sidebar::focus_anchor::store(self.read_marks.runtime(), &anchor) {
             debug!(error = %err, "focus anchor write failed");
         }
-        self.fold_fused_now(config, anim_start, diag)?;
+        self.fold_fused_now(config, anim_start, diag);
         if let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone())
             && let Err(err) = crate::store::wakeup::broadcast_sidebar_event(
                 &runtime,
@@ -1626,7 +1621,6 @@ impl LoopState {
         {
             debug!(pane = %pane, error = %err, "renderer focus intent broadcast failed");
         }
-        Ok(())
     }
 
     fn observe_commit(&mut self) {

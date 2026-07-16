@@ -343,7 +343,6 @@ impl ApplyHarness {
     ) -> ApplyOutcome {
         self.state
             .apply_fetch_outcome(&self.config, outcome, std::time::Instant::now(), diag)
-            .expect("apply fetch outcome")
     }
 
     fn fail(&mut self, reason: &str) -> ApplyOutcome {
