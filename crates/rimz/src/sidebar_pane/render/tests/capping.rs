@@ -239,9 +239,14 @@ fn finished_group_collapses_unread_success_until_revealed() {
         .collect::<Vec<_>>();
 
     assert_eq!(lines.len(), 2, "header plus terminal toggle: {texts:?}");
-    assert!(texts.iter().any(|line| line.contains("+2 done")));
     assert!(
-        texts.iter().all(|line| !line.contains(" · $")),
+        texts
+            .iter()
+            .any(|line| line.contains("✓ success-unread  ✓ success")),
+        "terminal toggle names each hidden member: {texts:?}"
+    );
+    assert!(
+        texts.iter().all(|line| !line.contains('$')),
         "absent costs keep the terminal toggle bare: {texts:?}"
     );
     assert_eq!(more_hits.len(), 2);
@@ -250,7 +255,16 @@ fn finished_group_collapses_unread_success_until_revealed() {
         more_hits[0].target,
         HitTarget::ToggleGroup(group.key.clone())
     );
-    assert_eq!(map[0], None, "finished header has only the toggle meaning");
+    assert_eq!(more_hits[1].rows, 1..2);
+    assert_eq!(
+        more_hits[1].target,
+        HitTarget::ToggleGroup(group.key.clone())
+    );
+    assert_eq!(
+        map,
+        [None, None],
+        "finished header and roster have only the toggle meaning"
+    );
 }
 
 #[test]
@@ -280,13 +294,15 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
         screen.contains("merged-pod"),
         "finished header remains:\n{screen}"
     );
+    assert_eq!(screen.matches("finished-one").count(), 1, "{screen}");
+    assert_eq!(screen.matches("finished-two").count(), 1, "{screen}");
+    let receipt = screen
+        .lines()
+        .find(|line| line.contains("finished-one"))
+        .expect("finished roster receipt");
     assert!(
-        screen.contains("+2 done"),
-        "finished toggle remains:\n{screen}"
-    );
-    assert!(
-        !screen.contains("finished-one") && !screen.contains("finished-two"),
-        "finished member rows remain collapsed:\n{screen}"
+        receipt.contains("✓ finished-one  ✓ finished-two"),
+        "collapsed members share one roster line rather than full cards:\n{screen}"
     );
     assert!(
         screen.contains("live-runner"),
@@ -319,7 +335,7 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
         30,
     );
     assert!(
-        !filtered.contains("merged-pod") && !filtered.contains("+2 done"),
+        !filtered.contains("merged-pod") && !filtered.contains("finished-one"),
         "a filter-empty finished group is skipped whole:\n{filtered}"
     );
     assert!(
@@ -339,9 +355,12 @@ fn finished_group_toggle_carries_the_member_cost_receipt() {
 
     let (texts, _, _) = render_group(&finished, false);
 
-    let receipt = format!("+2 done · {}", dollars2(total));
+    let receipt = texts
+        .iter()
+        .find(|line| line.contains("✓ first  ✓ second"))
+        .expect("member roster receipt");
     assert!(
-        texts.iter().any(|line| line.contains(&receipt)),
+        receipt.trim_end().ends_with(&dollars2(total)),
         "finished toggle carries the accepted work's cost: {texts:?}"
     );
 
@@ -351,10 +370,101 @@ fn finished_group_toggle_carries_the_member_cost_receipt() {
     ]);
     no_cost.finished = true;
     let (texts, _, _) = render_group(&no_cost, false);
-    assert!(texts.iter().any(|line| line.contains("+2 done")));
+    assert!(texts.iter().any(|line| line.contains("✓ zero  ✓ absent")));
     assert!(
-        texts.iter().all(|line| !line.contains(" · $")),
+        texts.iter().all(|line| !line.contains('$')),
         "zero and absent costs keep the terminal toggle bare: {texts:?}"
+    );
+}
+
+#[test]
+fn finished_roster_folds_overflow_without_clipping_names() {
+    let mut finished = group(vec![
+        agent_row("planner", AgentStatus::Success),
+        agent_row("coder", AgentStatus::Success),
+        agent_row("reviewer", AgentStatus::Success),
+        agent_row("observer", AgentStatus::Success),
+    ]);
+    finished.finished = true;
+
+    let (texts, _, _) = render_group_at_width(&finished, false, 30);
+    let receipt = texts.last().expect("member roster receipt");
+    assert!(receipt.contains("✓ planner  ✓ coder  +2"), "{texts:?}");
+    assert!(!receipt.contains("reviewer"), "{texts:?}");
+    assert!(!receipt.contains("observer"), "{texts:?}");
+}
+
+#[test]
+fn finished_roster_folds_process_rows_into_the_remainder() {
+    let mut finished = group(vec![
+        agent_row("planner", AgentStatus::Success),
+        agent_row("coder", AgentStatus::Success),
+        process_row("shell"),
+    ]);
+    finished.finished = true;
+
+    let (texts, _, _) = render_group(&finished, false);
+    let receipt = texts.last().expect("member roster receipt");
+    assert!(receipt.contains("✓ planner  ✓ coder  +1"), "{texts:?}");
+    assert!(!receipt.contains("zsh"), "{texts:?}");
+}
+
+#[test]
+fn finished_roster_falls_back_to_count_for_process_only_groups() {
+    let mut finished = group(vec![process_row("shell-one"), process_row("shell-two")]);
+    finished.finished = true;
+
+    let (texts, _, _) = render_group(&finished, false);
+    let receipt = texts.last().expect("member roster receipt");
+    assert!(receipt.contains("+2 done"), "{texts:?}");
+    assert!(!receipt.contains("zsh"), "{texts:?}");
+}
+
+#[test]
+fn finished_roster_excludes_a_held_visible_member() {
+    let mut finished = group(vec![
+        agent_row("planner", AgentStatus::Success),
+        agent_row("coder", AgentStatus::Success),
+        agent_row("reviewer", AgentStatus::Success),
+    ]);
+    finished.finished = true;
+    let held = HashSet::from(["coder".to_owned()]);
+
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut more_hits = Vec::new();
+    let snapshot = snapshot_with(Vec::new());
+    let theme = Theme::fixed(true);
+    let cost_rolls = CostRolls::default();
+    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let roster =
+        crate::sidebar_pane::view::VisibleRoster::single(&finished, None, false, Some(&held));
+    worktree_group_lines_projected(
+        &ctx,
+        &roster,
+        &roster.groups()[0],
+        None,
+        &mut lines,
+        &mut map,
+        &mut more_hits,
+    );
+    let texts = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let receipt = texts.last().expect("member roster receipt");
+
+    assert!(receipt.contains("✓ planner  ✓ reviewer"), "{texts:?}");
+    assert!(!receipt.contains("coder"), "{texts:?}");
+    assert_eq!(
+        texts.iter().filter(|line| line.contains("coder")).count(),
+        1,
+        "held member renders only as a full card: {texts:?}"
     );
 }
 
@@ -384,6 +494,14 @@ fn render_group(
     group: &crate::SidebarWorktreeGroup,
     expanded: bool,
 ) -> (Vec<String>, Vec<Option<usize>>, Vec<HitRegion>) {
+    render_group_at_width(group, expanded, 54)
+}
+
+fn render_group_at_width(
+    group: &crate::SidebarWorktreeGroup,
+    expanded: bool,
+    width: usize,
+) -> (Vec<String>, Vec<Option<usize>>, Vec<HitRegion>) {
     let mut lines = Vec::new();
     let mut map = Vec::new();
     let mut more_hits = Vec::new();
@@ -391,7 +509,7 @@ fn render_group(
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
-    let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
+    let ctx = test_row_ctx(&snapshot, &theme, width, 0, 0, &cost_rolls);
     worktree_group_lines(
         &ctx,
         group,
@@ -480,7 +598,7 @@ fn idle_rows(count: usize) -> Vec<crate::SidebarRow> {
 fn agent_row(id: &str, status: AgentStatus) -> crate::SidebarRow {
     crate::SidebarRow {
         id: id.to_owned(),
-        name: "codex".to_owned(),
+        name: id.to_owned(),
         pane: Some(pane(&format!("%{id}"), "codex", "/repo/main")),
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),

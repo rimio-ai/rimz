@@ -1,6 +1,9 @@
 //! Worktree group composition: the bold pod header with its linked-PR identity
 //! and right-pinned git story, the dim `external` divider, and the row roster
-//! with its parallel hit-test map entries.
+//! with its parallel hit-test map entries. Finished pods collapse hidden agents
+//! into a status-and-name receipt with the accepted work's cost pinned right.
+
+use std::collections::HashSet;
 
 use crate::config::GlyphRole;
 use crate::{
@@ -13,7 +16,7 @@ use ratatui::text::{Line, Span};
 use crate::sidebar_pane::pixel::meter::MeterPixels;
 use crate::sidebar_pane::render::fmt::dollars2;
 use crate::sidebar_pane::render::labels::{
-    branch_delta_spans, diff_spans, status_glyph, trunk_glyph_spans,
+    branch_delta_spans, diff_spans, status_glyph, status_rest_style, trunk_glyph_spans,
 };
 use crate::sidebar_pane::render::layout::{ellipsize, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -91,21 +94,10 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
             lines.len(),
             HitTarget::ToggleGroup(group.key.clone()),
         ));
-        let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
-        let toggle = if group.finished && cost >= 0.005 {
-            Line::from(vec![
-                Span::styled(format!("  +{hidden} done"), ctx.theme.muted()),
-                Span::styled(" · ", ctx.theme.muted()),
-                Span::styled(dollars2(cost), ctx.theme.money_style(Modifier::empty())),
-            ])
+        let toggle = if group.finished {
+            finished_roster_line(ctx, visible_group, roster)
         } else {
-            Line::styled(
-                format!(
-                    "  +{hidden} {}",
-                    if group.finished { "done" } else { "more" }
-                ),
-                ctx.theme.muted(),
-            )
+            Line::styled(format!("  +{hidden} more"), ctx.theme.muted())
         };
         lines.push(with_gutter(ctx.theme, toggle, lane, None, ctx.width));
         map.push(None);
@@ -123,6 +115,86 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
         ));
         map.push(None);
     }
+}
+
+fn finished_roster_line(
+    ctx: &RowCtx<'_>,
+    visible_group: &VisibleGroup<'_>,
+    roster: &VisibleRoster<'_>,
+) -> Line<'static> {
+    let group = visible_group.source();
+    let visible_ids = visible_group
+        .rows(roster)
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect::<HashSet<_>>();
+    let hidden_rows = group
+        .rows
+        .iter()
+        .filter(|row| !visible_ids.contains(row.id.as_str()))
+        .collect::<Vec<_>>();
+    let members = hidden_rows
+        .iter()
+        .filter_map(|row| row.status().map(|status| (*row, status)))
+        .collect::<Vec<_>>();
+    let process_count = hidden_rows.len().saturating_sub(members.len());
+
+    let cost = group.rows.iter().filter_map(session_cost_usd).sum::<f64>();
+    let cost_span = (cost >= 0.005)
+        .then(|| Span::styled(dollars2(cost), ctx.theme.money_style(Modifier::empty())));
+    let cost_width = cost_span.as_ref().map(Span::width).unwrap_or_default();
+    let budget = content_width(ctx.width)
+        .saturating_sub(2)
+        .saturating_sub(cost_width + usize::from(cost_span.is_some()));
+
+    let mut spans = vec![Span::raw("  ")];
+    let mut roster_width = 0;
+    let mut placed = 0;
+    for (row, status) in &members {
+        let glyph = status_glyph(ctx.theme, *status);
+        let chip_width = text_width(&glyph) + 1 + text_width(row.display_name());
+        let separator_width = 2 * usize::from(placed > 0);
+        let remaining = members.len() - placed - 1 + process_count;
+        let remainder_width = if remaining > 0 {
+            text_width(&format!("  +{remaining}"))
+        } else {
+            0
+        };
+        if roster_width + separator_width + chip_width + remainder_width > budget {
+            break;
+        }
+        if separator_width > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(glyph, status_rest_style(ctx.theme, *status)));
+        spans.push(Span::styled(
+            format!(" {}", row.display_name()),
+            ctx.theme.muted(),
+        ));
+        roster_width += separator_width + chip_width;
+        placed += 1;
+    }
+
+    if placed == 0 {
+        spans.push(Span::styled(
+            format!("+{} done", hidden_rows.len()),
+            ctx.theme.muted(),
+        ));
+    } else {
+        let remaining = members.len() - placed + process_count;
+        if remaining > 0 {
+            spans.push(Span::styled(format!("  +{remaining}"), ctx.theme.muted()));
+        }
+    }
+
+    if let Some(cost_span) = cost_span {
+        let padding = content_width(ctx.width)
+            .saturating_sub(spans_width(&spans) + cost_width)
+            .max(1);
+        spans.push(Span::raw(" ".repeat(padding)));
+        spans.push(cost_span);
+    }
+    Line::from(spans)
 }
 
 #[cfg(test)]
