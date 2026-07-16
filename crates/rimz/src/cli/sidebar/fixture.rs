@@ -571,7 +571,6 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
             pr_state: Some(rimz::WorktreePrState::Merged),
             pr_number: Some(91),
-            ..WorktreeGroupSpec::default()
         },
         WorktreeGroupSpec {
             key: "/srv/code/query-engine/.rimz/worktrees/theme-tune",
@@ -1371,7 +1370,6 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
             pr_state: Some(rimz::WorktreePrState::Merged),
             pr_number: Some(91),
-            ..WorktreeGroupSpec::default()
         },
     ]
     .into_iter()
