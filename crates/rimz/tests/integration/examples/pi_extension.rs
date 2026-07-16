@@ -83,18 +83,27 @@ const boundaryEvent = {};
 const absentEvent = {};
 
 const {{ default: rimz }} = await import({});
-const handlers = new Map();
-const busHandlers = new Map();
-const pi = {{
-  on: (event, handler) => handlers.set(event, handler),
-  events: {{
-    on: (event, handler) => {{
-      busHandlers.set(event, handler);
-      return () => busHandlers.delete(event);
+const makePi = () => {{
+  const handlers = new Map();
+  const busHandlers = new Map();
+  const pi = {{
+    on: (event, handler) => handlers.set(event, handler),
+    events: {{
+      on: (event, handler) => {{
+        busHandlers.set(event, handler);
+        return () => busHandlers.delete(event);
+      }},
     }},
-  }},
-  getThinkingLevel: () => "medium",
+    getThinkingLevel: () => "medium",
+  }};
+  return {{ pi, handlers, busHandlers }};
 }};
+const {{ pi, handlers, busHandlers }} = makePi();
+const {{
+  pi: childPi,
+  handlers: childHandlers,
+  busHandlers: childBusHandlers,
+}} = makePi();
 const ctx = {{
   sessionManager: {{
     getSessionId: () => "sess-1",
@@ -103,7 +112,16 @@ const ctx = {{
   getContextUsage: () => ({{ percent: 45, contextWindow: 1000, tokens: 450 }}),
   model: {{ id: "gpt-5" }},
 }};
+const childCtx = {{
+  sessionManager: {{
+    getSessionId: () => "sess-child",
+    getCwd: () => "/repo",
+  }},
+  getContextUsage: () => ({{ percent: 5, contextWindow: 1000, tokens: 50 }}),
+  model: {{ id: "gpt-5-mini" }},
+}};
 rimz(pi);
+rimz(childPi);
 
 await handlers.get("tool_call")({{
   toolCallId: "ask-call",
@@ -140,6 +158,12 @@ busHandlers.get("subagent:async-started")({{
   agents: ["scout", "reviewer", " "],
   cwd: "/repo",
 }});
+busHandlers.get("subagents:started")({{
+  id: "tint-1",
+  type: "general-purpose",
+  description: "Check the parser",
+}});
+childHandlers.get("session_start")({{ reason: "in-process-child" }}, childCtx);
 busHandlers.get("subagent:async-complete")({{
   runId: "run-1",
   sessionId: "/sessions/parent/session.jsonl",
@@ -151,11 +175,6 @@ busHandlers.get("subagent:async-complete")({{
   ],
   cwd: "/repo",
 }});
-busHandlers.get("subagents:started")({{
-  id: "tint-1",
-  type: "general-purpose",
-  description: "Check the parser",
-}});
 busHandlers.get("subagents:completed")({{
   id: "tint-1",
   type: "general-purpose",
@@ -165,6 +184,9 @@ busHandlers.get("subagents:completed")({{
 handlers.get("session_shutdown")({{ reason: "quit" }}, ctx);
 if (busHandlers.size !== 0) {{
   throw new Error(`shutdown kept ${{busHandlers.size}} bus subscriptions`);
+}}
+if (childBusHandlers.size !== 5) {{
+  throw new Error(`root shutdown changed child subscriptions: ${{childBusHandlers.size}} remain`);
 }}
 
 const readPayloads = async () => {{
@@ -179,11 +201,11 @@ const readPayloads = async () => {{
 let payloads = [];
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
-  if (payloads.length >= 13) break;
+  if (payloads.length >= 14) break;
   await new Promise((resolve) => setTimeout(resolve, 20));
 }}
-if (payloads.length < 13) {{
-  throw new Error(`expected 13 forwarded payloads, got ${{payloads.length}}`);
+if (payloads.length < 14) {{
+  throw new Error(`expected 14 forwarded payloads, got ${{payloads.length}}`);
 }}
 const byEvent = Object.fromEntries(payloads.map((payload) => [payload.hook_event_name, payload]));
 if (byEvent.tool_call?.tool_call_id !== "ask-call") {{

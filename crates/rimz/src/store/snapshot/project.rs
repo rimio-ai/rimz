@@ -552,9 +552,10 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     fold_launch_params(&mut state, &input.observation.launch);
     let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
     let enrichment = enrichment_projection(input.observation, input.prior, input.kind);
-    let parent_agent_id = input
-        .event_parent_agent_id
-        .or_else(|| input.prior.and_then(|p| p.parent_agent_id.clone()));
+    let parent_agent_id = match input.prior {
+        Some(prior) => prior.parent_agent_id.clone(),
+        None => input.event_parent_agent_id,
+    };
     let worktree = worktree_projection(
         input.observation,
         input.prior,

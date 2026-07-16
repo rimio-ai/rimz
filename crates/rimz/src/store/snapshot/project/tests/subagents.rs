@@ -113,7 +113,7 @@ fn exact_child_cannot_adopt_a_same_pane_provisional_root() {
 }
 
 #[test]
-fn parent_stamped_observation_cannot_release_a_same_pane_provisional_root() {
+fn parent_stamped_observation_cannot_reparent_or_release_existing_roots() {
     let pane = "tmux:%9";
     let exact_root = raw_lifecycle(
         "claude",
@@ -151,12 +151,12 @@ fn parent_stamped_observation_cannot_release_a_same_pane_provisional_root() {
         &events,
     );
     assert!(agents.values().any(|agent| agent.agent_id == "launch_root"));
-    let child = agents
+    let exact = agents
         .values()
         .find(|agent| agent.agent_id == "exact")
-        .expect("exact child");
-    assert_eq!(child.name.as_deref(), Some("Explore"));
-    assert_eq!(child.parent_agent_id.as_deref(), Some("parent"));
+        .expect("exact root");
+    assert_eq!(exact.name.as_deref(), Some("Explore"));
+    assert_eq!(exact.parent_agent_id, None);
     assert!(!identity.names.values().any(|owner| owner.1 == "exact"));
     assert_eq!(identity.names["provisional-root"].1, "launch_root");
 }
@@ -266,6 +266,38 @@ fn subagent_start_reduces_identity_that_survives_stop() {
     // The projected sidebar row reads the type, never the hash placeholder.
     let now = Timestamp::from_second(1_700_000_100).unwrap();
     assert_eq!(sub_agent_from_state(child, now).name, "Explore");
+}
+
+#[test]
+fn established_subagent_parent_survives_mismatched_stop() {
+    let start = raw_lifecycle(
+        "pi",
+        serde_json::json!({
+            "event_name": "subagent_started",
+            "agent_id": "child-1",
+            "signal": { "signal": "subagent_started" },
+            "parent_agent_id": "parent-a",
+            "task": "reviewer",
+        }),
+    );
+    let stop = raw_lifecycle(
+        "pi",
+        serde_json::json!({
+            "event_name": "subagent_stopped",
+            "agent_id": "child-1",
+            "signal": { "signal": "subagent_stopped", "errored": false },
+            "parent_agent_id": "parent-b",
+        }),
+    );
+
+    let agents = reduce_agent_states(&[start, stop]);
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id == "child-1")
+        .expect("child row");
+    assert_eq!(child.status, AgentStatus::Success);
+    assert_eq!(child.parent_agent_id.as_deref(), Some("parent-a"));
+    assert_eq!(child.task.as_deref(), Some("reviewer"));
 }
 
 #[test]

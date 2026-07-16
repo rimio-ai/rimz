@@ -15,15 +15,6 @@ import { spawn } from "node:child_process";
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 
 const RIMZ = process.env.RIMZ_BIN || "rimz";
-const usageBySession = new Map();
-const costBySession = new Map();
-const verdictBySession = new Map();
-const nameBySession = new Map();
-const messagePushBySession = new Map();
-const runAgents = new Map();
-const runLabels = new Map();
-let lastSessionId;
-let latestWindows = [];
 
 const versionAtLeast = (version, floor) => {
   const parts = String(version)
@@ -45,64 +36,6 @@ const numberMaybe = (value) =>
   value == null || !Number.isFinite(Number(value)) ? undefined : Number(value);
 
 const sessionId = (ctx) => ctx?.sessionManager?.getSessionId?.();
-
-const hydrateSession = (ctx) => {
-  const id = sessionId(ctx);
-  if (!id || costBySession.has(id)) return;
-  try {
-    const branch = ctx?.sessionManager?.getBranch?.();
-    if (!Array.isArray(branch) || branch.length === 0) return;
-    let cost = 0;
-    let lastUsage;
-    let name;
-    for (const entry of branch) {
-      if (entry?.type === "session_info" && typeof entry?.name === "string") {
-        name = entry.name;
-      }
-      const message = entry?.message;
-      if (message?.role !== "assistant") continue;
-      lastUsage = message.usage ?? lastUsage;
-      const messageCost = numberMaybe(message?.usage?.cost?.total);
-      if (messageCost != null && messageCost > 0) cost += messageCost;
-    }
-    if (cost > 0) costBySession.set(id, cost);
-    if (lastUsage) recordUsage(id, lastUsage);
-    if (name) nameBySession.set(id, name);
-  } catch {
-    // Older pi releases may not expose getBranch; enrichment stays sparse.
-  }
-};
-
-const recordUsage = (id, usage) => {
-  if (!id || usage == null) return;
-  const gauge = {
-    input: roundMaybe(usage.input),
-    output: roundMaybe(usage.output),
-    cacheRead: roundMaybe(usage.cacheRead),
-    cacheWrite: roundMaybe(usage.cacheWrite),
-  };
-  if (Object.values(gauge).some((value) => value != null)) {
-    usageBySession.set(id, gauge);
-  }
-};
-
-const addSessionCost = (id, usage) => {
-  const cost = numberMaybe(usage?.cost?.total);
-  if (id && cost != null && cost > 0) {
-    costBySession.set(id, (costBySession.get(id) ?? 0) + cost);
-  }
-};
-
-const usageFields = (id) => {
-  const gauge = usageBySession.get(id);
-  if (!gauge) return {};
-  return {
-    input_tokens: gauge.input,
-    output_tokens: gauge.output,
-    cache_read_input_tokens: gauge.cacheRead,
-    cache_write_input_tokens: gauge.cacheWrite,
-  };
-};
 
 const visibleAssistantText = (message) => {
   const content = message?.content;
@@ -150,24 +83,92 @@ const windowFromHeaders = (headers, prefix, defaultMins, capturedAt) => {
   };
 };
 
-const updateWindows = (headers) => {
-  const map = headerMap(headers);
-  const capturedAt = nowSec();
-  const candidates = [
-    windowFromHeaders(map, "x-codex-primary", 300, capturedAt),
-    windowFromHeaders(map, "x-codex-secondary", 10080, capturedAt),
-    windowFromHeaders(map, "anthropic-ratelimit-unified-primary", 300, capturedAt),
-    windowFromHeaders(map, "anthropic-ratelimit-unified-secondary", 10080, capturedAt),
-    windowFromHeaders(map, "anthropic-ratelimit-unified-5h", 300, capturedAt),
-    windowFromHeaders(map, "anthropic-ratelimit-unified-7d", 10080, capturedAt),
-    windowFromHeaders(map, "anthropic-ratelimit-unified-five-hour", 300, capturedAt),
-    windowFromHeaders(map, "anthropic-ratelimit-unified-seven-day", 10080, capturedAt),
-  ].filter(Boolean);
-  if (candidates.length > 0) latestWindows = candidates;
-};
-
 export default function rimz(pi) {
+  const usageBySession = new Map();
+  const costBySession = new Map();
+  const verdictBySession = new Map();
+  const nameBySession = new Map();
+  const messagePushBySession = new Map();
+  const runAgents = new Map();
+  const runLabels = new Map();
+  let lastSessionId;
+  let latestWindows = [];
   const busUnsubscribers = [];
+
+  const recordUsage = (id, usage) => {
+    if (!id || usage == null) return;
+    const gauge = {
+      input: roundMaybe(usage.input),
+      output: roundMaybe(usage.output),
+      cacheRead: roundMaybe(usage.cacheRead),
+      cacheWrite: roundMaybe(usage.cacheWrite),
+    };
+    if (Object.values(gauge).some((value) => value != null)) {
+      usageBySession.set(id, gauge);
+    }
+  };
+
+  const addSessionCost = (id, usage) => {
+    const cost = numberMaybe(usage?.cost?.total);
+    if (id && cost != null && cost > 0) {
+      costBySession.set(id, (costBySession.get(id) ?? 0) + cost);
+    }
+  };
+
+  const usageFields = (id) => {
+    const gauge = usageBySession.get(id);
+    if (!gauge) return {};
+    return {
+      input_tokens: gauge.input,
+      output_tokens: gauge.output,
+      cache_read_input_tokens: gauge.cacheRead,
+      cache_write_input_tokens: gauge.cacheWrite,
+    };
+  };
+
+  const hydrateSession = (ctx) => {
+    const id = sessionId(ctx);
+    if (!id || costBySession.has(id)) return;
+    try {
+      const branch = ctx?.sessionManager?.getBranch?.();
+      if (!Array.isArray(branch) || branch.length === 0) return;
+      let cost = 0;
+      let lastUsage;
+      let name;
+      for (const entry of branch) {
+        if (entry?.type === "session_info" && typeof entry?.name === "string") {
+          name = entry.name;
+        }
+        const message = entry?.message;
+        if (message?.role !== "assistant") continue;
+        lastUsage = message.usage ?? lastUsage;
+        const messageCost = numberMaybe(message?.usage?.cost?.total);
+        if (messageCost != null && messageCost > 0) cost += messageCost;
+      }
+      if (cost > 0) costBySession.set(id, cost);
+      if (lastUsage) recordUsage(id, lastUsage);
+      if (name) nameBySession.set(id, name);
+    } catch {
+      // Older pi releases may not expose getBranch; enrichment stays sparse.
+    }
+  };
+
+  const updateWindows = (headers) => {
+    const map = headerMap(headers);
+    const capturedAt = nowSec();
+    const candidates = [
+      windowFromHeaders(map, "x-codex-primary", 300, capturedAt),
+      windowFromHeaders(map, "x-codex-secondary", 10080, capturedAt),
+      windowFromHeaders(map, "anthropic-ratelimit-unified-primary", 300, capturedAt),
+      windowFromHeaders(map, "anthropic-ratelimit-unified-secondary", 10080, capturedAt),
+      windowFromHeaders(map, "anthropic-ratelimit-unified-5h", 300, capturedAt),
+      windowFromHeaders(map, "anthropic-ratelimit-unified-7d", 10080, capturedAt),
+      windowFromHeaders(map, "anthropic-ratelimit-unified-five-hour", 300, capturedAt),
+      windowFromHeaders(map, "anthropic-ratelimit-unified-seven-day", 10080, capturedAt),
+    ].filter(Boolean);
+    if (candidates.length > 0) latestWindows = candidates;
+  };
+
   const thinkingLevel = () => {
     try {
       return pi.getThinkingLevel?.();
