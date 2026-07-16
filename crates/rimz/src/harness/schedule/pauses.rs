@@ -10,20 +10,14 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::store::atomic::{AtomicErr, write_temp_then_rename_cache};
-use crate::store::lock::{LockErr, WorkspaceLock};
+use super::overlay_store::{OverlayError, OverlayStore};
 use crate::store::paths::state_home;
 
-const NAME: &str = "loop-pauses.json";
-const LOCK_NAME: &str = "loop-pauses.lock";
+const STORE: OverlayStore = OverlayStore::new("loop-pauses.json", "loop-pauses.lock");
 
 #[derive(Debug, thiserror::Error)]
-pub enum PauseError {
-    #[error(transparent)]
-    Lock(#[from] LockErr),
-    #[error(transparent)]
-    Write(#[from] AtomicErr),
-}
+#[error(transparent)]
+pub struct PauseError(#[from] OverlayError);
 
 type Result<T> = std::result::Result<T, PauseError>;
 
@@ -36,11 +30,7 @@ pub struct PauseEntry {
 }
 
 pub fn path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(NAME)
-}
-
-fn lock_path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(LOCK_NAME)
+    STORE.path(state_root)
 }
 
 pub fn load() -> BTreeMap<String, PauseEntry> {
@@ -83,18 +73,17 @@ pub fn effective_last_fire(
 }
 
 fn load_from(state_root: &Path) -> BTreeMap<String, PauseEntry> {
-    let Ok(bytes) = std::fs::read(path(state_root)) else {
-        return BTreeMap::new();
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    STORE.load(state_root)
 }
 
 fn set_in(state_root: &Path, name: &str, entry: PauseEntry) -> Result<()> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut pauses = load_from(state_root);
-    pauses.insert(name.to_owned(), entry);
-    write_temp_then_rename_cache(&path(state_root), &pauses)?;
-    Ok(())
+    STORE
+        .mutate(state_root, |pauses| {
+            let changed = pauses.get(name) != Some(&entry);
+            pauses.insert(name.to_owned(), entry);
+            ((), changed)
+        })
+        .map_err(Into::into)
 }
 
 fn set_if_inactive_in(
@@ -103,50 +92,37 @@ fn set_if_inactive_in(
     entry: PauseEntry,
     now: Timestamp,
 ) -> Result<bool> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut pauses = load_from(state_root);
-    if pauses
-        .get(name)
-        .is_some_and(|current| is_active(current, now))
-    {
-        return Ok(false);
-    }
-    pauses.insert(name.to_owned(), entry);
-    write_temp_then_rename_cache(&path(state_root), &pauses)?;
-    Ok(true)
+    STORE
+        .mutate(state_root, |pauses| {
+            if pauses
+                .get(name)
+                .is_some_and(|current| is_active(current, now))
+            {
+                return (false, false);
+            }
+            let changed = pauses.get(name) != Some(&entry);
+            pauses.insert(name.to_owned(), entry);
+            (true, changed)
+        })
+        .map_err(Into::into)
 }
 
 fn remove_from(state_root: &Path, name: &str) -> Result<bool> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut pauses = load_from(state_root);
-    let removed = pauses.remove(name).is_some();
-    if removed {
-        write_temp_then_rename_cache(&path(state_root), &pauses)?;
-    }
-    Ok(removed)
+    STORE
+        .remove::<PauseEntry>(state_root, name)
+        .map_err(Into::into)
 }
 
 fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut pauses = load_from(state_root);
-    let Some(entry) = pauses.remove(old) else {
-        return Ok(false);
-    };
-    pauses.insert(new.to_owned(), entry);
-    write_temp_then_rename_cache(&path(state_root), &pauses)?;
-    Ok(true)
+    STORE
+        .rename::<PauseEntry>(state_root, old, new)
+        .map_err(Into::into)
 }
 
 fn prune_orphans_in(state_root: &Path, known: &BTreeSet<String>) -> Result<usize> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut pauses = load_from(state_root);
-    let before = pauses.len();
-    pauses.retain(|name, _| known.contains(name));
-    let removed = before - pauses.len();
-    if removed > 0 {
-        write_temp_then_rename_cache(&path(state_root), &pauses)?;
-    }
-    Ok(removed)
+    STORE
+        .prune_orphans::<PauseEntry>(state_root, known)
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -155,36 +131,6 @@ mod tests {
 
     fn ts(second: i64) -> Timestamp {
         Timestamp::from_second(second).expect("timestamp")
-    }
-
-    #[test]
-    fn missing_or_corrupt_file_loads_empty() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert!(load_from(dir.path()).is_empty());
-
-        std::fs::create_dir_all(dir.path().join("rimz")).expect("state dir");
-        std::fs::write(path(dir.path()), b"not json").expect("corrupt state");
-        assert!(load_from(dir.path()).is_empty());
-    }
-
-    #[test]
-    fn store_edits_round_trip() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let entry = PauseEntry {
-            until: Some(ts(20)),
-            strikes: Some(3),
-        };
-
-        set_in(dir.path(), "nightly", entry).expect("set");
-        assert_eq!(load_from(dir.path()).get("nightly"), Some(&entry));
-
-        assert!(rename_in(dir.path(), "nightly", "weekly").expect("rename"));
-        assert!(!rename_in(dir.path(), "missing", "other").expect("rename absent"));
-        assert_eq!(load_from(dir.path()).get("weekly"), Some(&entry));
-
-        assert!(remove_from(dir.path(), "weekly").expect("remove"));
-        assert!(!remove_from(dir.path(), "weekly").expect("remove absent"));
-        assert!(load_from(dir.path()).is_empty());
     }
 
     #[test]
@@ -206,25 +152,6 @@ mod tests {
         assert_eq!(load_from(dir.path()).get("nightly"), Some(&manual));
         assert!(set_if_inactive_in(dir.path(), "nightly", automatic, ts(20)).expect("ended pause"));
         assert_eq!(load_from(dir.path()).get("nightly"), Some(&automatic));
-    }
-
-    #[test]
-    fn prune_keeps_only_known_tasks() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        set_in(dir.path(), "keep", PauseEntry::default()).expect("set keep");
-        set_in(dir.path(), "gone", PauseEntry::default()).expect("set gone");
-
-        let removed = prune_orphans_in(
-            dir.path(),
-            &BTreeSet::from(["keep".to_owned(), "other".to_owned()]),
-        )
-        .expect("prune");
-
-        assert_eq!(removed, 1);
-        assert_eq!(
-            load_from(dir.path()).keys().collect::<Vec<_>>(),
-            vec!["keep"]
-        );
     }
 
     #[test]

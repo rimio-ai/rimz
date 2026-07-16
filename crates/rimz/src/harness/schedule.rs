@@ -19,6 +19,7 @@ pub mod catalog;
 pub mod config_edit;
 pub(crate) mod fire;
 pub mod instances;
+mod overlay_store;
 pub mod pauses;
 pub mod run_log;
 pub mod runner;

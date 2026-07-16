@@ -7,14 +7,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use super::overlay_store::{OverlayError, OverlayStore};
 use crate::config::TaskEntry;
 use crate::harness::schedule::run_log::{LoopRunRecord, LoopRunResult};
-use crate::store::atomic::{AtomicErr, write_temp_then_rename_cache};
-use crate::store::lock::{LockErr, WorkspaceLock};
 use crate::store::paths::state_home;
 
-const NAME: &str = "loop-strikes.json";
-const LOCK_NAME: &str = "loop-strikes.lock";
+const STORE: OverlayStore = OverlayStore::new("loop-strikes.json", "loop-strikes.lock");
 pub const DEFAULT_MAX_STRIKES: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,12 +23,8 @@ pub enum Signal {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum StrikesError {
-    #[error(transparent)]
-    Lock(#[from] LockErr),
-    #[error(transparent)]
-    Write(#[from] AtomicErr),
-}
+#[error(transparent)]
+pub struct StrikesError(#[from] OverlayError);
 
 type Result<T> = std::result::Result<T, StrikesError>;
 
@@ -78,11 +72,7 @@ pub fn threshold(entry: &TaskEntry) -> Option<u32> {
 }
 
 pub fn path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(NAME)
-}
-
-fn lock_path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(LOCK_NAME)
+    STORE.path(state_root)
 }
 
 pub fn load() -> BTreeMap<String, u32> {
@@ -106,64 +96,41 @@ pub fn prune_orphans(known: &BTreeSet<String>) -> Result<usize> {
 }
 
 fn load_from(state_root: &Path) -> BTreeMap<String, u32> {
-    let Ok(bytes) = std::fs::read(path(state_root)) else {
-        return BTreeMap::new();
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    STORE.load(state_root)
 }
 
 fn note_in(state_root: &Path, name: &str, signal: Signal) -> Result<u32> {
     if signal == Signal::Neutral {
         return Ok(load_from(state_root).get(name).copied().unwrap_or(0));
     }
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut strikes = load_from(state_root);
-    let (count, changed) = match signal {
-        Signal::Strike => {
-            let count = strikes.get(name).copied().unwrap_or(0).saturating_add(1);
-            strikes.insert(name.to_owned(), count);
-            (count, true)
-        }
-        Signal::Reset => (0, strikes.remove(name).is_some()),
-        Signal::Neutral => return Ok(strikes.get(name).copied().unwrap_or(0)),
-    };
-    if changed {
-        write_temp_then_rename_cache(&path(state_root), &strikes)?;
-    }
-    Ok(count)
+    STORE
+        .mutate::<u32, _>(state_root, |strikes| match signal {
+            Signal::Strike => {
+                let previous = strikes.get(name).copied().unwrap_or(0);
+                let count = previous.saturating_add(1);
+                strikes.insert(name.to_owned(), count);
+                (count, count != previous)
+            }
+            Signal::Reset => (0, strikes.remove(name).is_some()),
+            Signal::Neutral => (strikes.get(name).copied().unwrap_or(0), false),
+        })
+        .map_err(Into::into)
 }
 
 fn clear_from(state_root: &Path, name: &str) -> Result<bool> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut strikes = load_from(state_root);
-    let removed = strikes.remove(name).is_some();
-    if removed {
-        write_temp_then_rename_cache(&path(state_root), &strikes)?;
-    }
-    Ok(removed)
+    STORE.remove::<u32>(state_root, name).map_err(Into::into)
 }
 
 fn rename_in(state_root: &Path, old: &str, new: &str) -> Result<bool> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut strikes = load_from(state_root);
-    let Some(count) = strikes.remove(old) else {
-        return Ok(false);
-    };
-    strikes.insert(new.to_owned(), count);
-    write_temp_then_rename_cache(&path(state_root), &strikes)?;
-    Ok(true)
+    STORE
+        .rename::<u32>(state_root, old, new)
+        .map_err(Into::into)
 }
 
 fn prune_orphans_in(state_root: &Path, known: &BTreeSet<String>) -> Result<usize> {
-    let _guard = WorkspaceLock::acquire(&lock_path(state_root))?;
-    let mut strikes = load_from(state_root);
-    let before = strikes.len();
-    strikes.retain(|name, _| known.contains(name));
-    let removed = before - strikes.len();
-    if removed > 0 {
-        write_temp_then_rename_cache(&path(state_root), &strikes)?;
-    }
-    Ok(removed)
+    STORE
+        .prune_orphans::<u32>(state_root, known)
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -242,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn counter_round_trips_resets_and_tolerates_corruption() {
+    fn counter_round_trips_and_resets() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
             note_in(dir.path(), "nightly", Signal::Strike).expect("strike"),
@@ -258,29 +225,6 @@ mod tests {
             0
         );
         assert!(!load_from(dir.path()).contains_key("nightly"));
-
-        std::fs::write(path(dir.path()), b"not json").expect("corrupt state");
-        assert!(load_from(dir.path()).is_empty());
-    }
-
-    #[test]
-    fn rename_and_prune_preserve_known_counts() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        note_in(dir.path(), "old", Signal::Strike).expect("old strike");
-        note_in(dir.path(), "gone", Signal::Strike).expect("gone strike");
-        assert!(rename_in(dir.path(), "old", "new").expect("rename"));
-        assert!(!rename_in(dir.path(), "missing", "other").expect("missing"));
-
-        let removed = prune_orphans_in(
-            dir.path(),
-            &BTreeSet::from(["new".to_owned(), "other".to_owned()]),
-        )
-        .expect("prune");
-        assert_eq!(removed, 1);
-        assert_eq!(
-            load_from(dir.path()),
-            BTreeMap::from([("new".to_owned(), 1)])
-        );
     }
 
     #[test]
