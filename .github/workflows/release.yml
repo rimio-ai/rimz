@@ -20,6 +20,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Match ci.yml so the self-gate (`cargo xtask ci`) runs the suite in the same
+  # environment CI validated — live mux servers and terminal probes need TERM.
+  TERM: xterm-256color
   CARGO_HOME: /usr/local/cargo
   RUSTUP_HOME: /usr/local/rustup
   CARGO_TARGET_DIR: target/release-ci
