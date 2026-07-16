@@ -1,12 +1,5 @@
 use super::*;
 
-/// The agent handle's spans under the row's card emphasis, sharing the unread
-/// treatment with the lead glyph and description so the three move as one group:
-/// the normal tier wears the matching provider brand color, resolved from the
-/// agent kind, tying the card to the provider dashboard; the soft tier keeps
-/// that brand hue muted to the body tier, so a calm unselected card still reads
-/// as its provider; an unread row carries the chosen unread effect — a single
-/// styled span for blink/bright, one span per character for the flowing shimmer.
 /// The tone resolves from a matched provider panel, then the registered kind's
 /// descriptor brand, then mid-gray chrome for a kind with no registered
 /// descriptor.
@@ -27,6 +20,12 @@ pub(in crate::sidebar_pane::render) fn brand_tone(
         .unwrap_or_else(|| theme.component(Component::UnknownBrand))
 }
 
+/// The agent handle's spans under the row's card emphasis, sharing the unread
+/// treatment with the lead glyph and description so the three move as one group:
+/// the normal tier wears the matching provider brand color, while the soft tier
+/// keeps that hue muted to the body tier. An unread row carries the chosen
+/// effect as one styled span for blink/bright or one span per character for the
+/// flowing shimmer.
 pub(super) fn attention_name_spans(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
