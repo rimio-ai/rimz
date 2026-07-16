@@ -38,6 +38,7 @@ fn inject_lifecycle(
         worktree_branch: branch.map(ToOwned::to_owned),
         task: None,
         prompt: None,
+        description: None,
         transcript_path: None,
         origin: None,
         context_pct: None,

@@ -284,9 +284,9 @@ pub struct Transition {
     pub waiting_cleared: bool,
     /// A turn boundary opened or re-opened. Explicit starts stamp a fresh
     /// prompt boundary except when a prompt wakes a parked running row and
-    /// resumes the same logical turn; reconciled progress and auto-compaction
-    /// resumes stamp only when they enter `Running` from a non-running prior
-    /// state.
+    /// resumes the same logical turn. An answered ask also resumes the same
+    /// prompt boundary; other reconciled progress and auto-compaction resumes
+    /// stamp only when they enter `Running` from a non-running prior state.
     pub opened_turn: bool,
 }
 
@@ -374,7 +374,10 @@ fn opened_turn(
     matches!(signal, LifecycleSignal::TurnStarted)
         || (matches!(signal, LifecycleSignal::SubagentStarted) && status == AgentStatus::Running)
         || (status == AgentStatus::Running
-            && prior_status != Some(AgentStatus::Running)
+            && !matches!(
+                prior_status,
+                Some(AgentStatus::Running | AgentStatus::Waiting)
+            )
             && matches!(
                 signal,
                 LifecycleSignal::ToolUsed { .. }

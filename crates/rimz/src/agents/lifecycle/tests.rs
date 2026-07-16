@@ -154,7 +154,7 @@ fn parked_wake_and_answered_prompt_preserve_boundary_facts() {
         },
         state(AgentStatus::Running, TurnPhase::Acting, false),
     );
-    assert_eq!((answer.waiting_cleared, answer.opened_turn), (true, true));
+    assert_eq!((answer.waiting_cleared, answer.opened_turn), (true, false));
 }
 
 #[test]
@@ -200,6 +200,7 @@ fn keyed_wait_clears_only_for_the_matching_tool() {
         let transition = step(Some(&waiting), open_ask_key, &signal);
         assert_eq!(transition.next.status, AgentStatus::Running, "{label}");
         assert!(transition.waiting_cleared, "{label}");
+        assert!(!transition.opened_turn, "{label}");
     }
 }
 

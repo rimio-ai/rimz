@@ -1,6 +1,98 @@
 use super::*;
 
 #[test]
+fn answered_parent_ask_keeps_children_from_both_sides_of_the_tool_completion() {
+    let event = |at: i64, agent_id: &str, params: serde_json::Value| {
+        let mut params = params;
+        params["agent_id"] = serde_json::Value::String(agent_id.to_owned());
+        raw_lifecycle_at("qwen", at, params)
+    };
+    let child = |at: i64, id: &str, signal: serde_json::Value| {
+        event(
+            at,
+            id,
+            serde_json::json!({
+                "event_name": "Subagent",
+                "parent_agent_id": "parent",
+                "task": "general-purpose",
+                "signal": signal,
+            }),
+        )
+    };
+    let events = [
+        event(
+            1,
+            "parent",
+            serde_json::json!({
+                "event_name": "UserPromptSubmit",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+        event(
+            2,
+            "parent",
+            serde_json::json!({
+                "event_name": "PermissionRequest",
+                "signal": { "signal": "awaiting_input", "kind": "permission" },
+            }),
+        ),
+        child(
+            3,
+            "child-a",
+            serde_json::json!({ "signal": "subagent_started" }),
+        ),
+        child(
+            4,
+            "child-a",
+            serde_json::json!({ "signal": "subagent_stopped", "errored": false }),
+        ),
+        event(
+            5,
+            "parent",
+            serde_json::json!({
+                "event_name": "PostToolUse",
+                "signal": { "signal": "tool_used", "mutates": false, "edits": false },
+            }),
+        ),
+        child(
+            6,
+            "child-b",
+            serde_json::json!({ "signal": "subagent_started" }),
+        ),
+        child(
+            7,
+            "child-b",
+            serde_json::json!({ "signal": "subagent_stopped", "errored": false }),
+        ),
+        event(
+            8,
+            "parent",
+            serde_json::json!({
+                "event_name": "Stop",
+                "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+    let parent = agents
+        .iter()
+        .find(|agent| agent.agent_id == "parent")
+        .expect("parent");
+    assert_eq!(
+        parent.turn_started_at,
+        Some(Timestamp::from_second(epoch().as_second() + 1).unwrap())
+    );
+    let snapshot = room_with_agent_panes(agents);
+    let child_ids = row(&snapshot, "parent")
+        .sub_agents()
+        .iter()
+        .map(|child| child.id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(child_ids, BTreeSet::from(["child-a", "child-b"]));
+}
+
+#[test]
 fn same_type_children_keep_repeated_labels_and_exact_ids_through_reverse_stops() {
     let root = raw_lifecycle(
         "cursor",

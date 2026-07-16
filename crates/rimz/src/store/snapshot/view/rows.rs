@@ -30,6 +30,7 @@ pub(in crate::store::snapshot) fn row_from_agent(agent: &AgentState, now: Timest
             status,
             phase,
             task: agent.task.clone(),
+            first_prompt: agent.first_prompt.clone(),
             prompt: agent.prompt.clone(),
             description: agent.description.clone(),
             model: agent.model.clone(),

@@ -32,6 +32,64 @@ fn prompt_persists_past_stop_while_task_clears() {
         Some("fix auth flow"),
         "the latest prompt persists past the Stop"
     );
+    assert_eq!(agent.first_prompt.as_deref(), Some("fix auth flow"));
+}
+
+#[test]
+fn first_prompt_sets_once_and_skips_control_turns() {
+    let prompt = |value: &str| {
+        raw_lifecycle(
+            "claude",
+            serde_json::json!({
+                "event_name": "UserPromptSubmit",
+                "agent_id": "s1",
+                "signal": { "signal": "turn_started" },
+                "prompt": value,
+            }),
+        )
+    };
+    let agents = reduce_agent_states(&[
+        prompt("<task-notification>synthetic</task-notification>"),
+        prompt("stable first prompt"),
+        prompt("latest prompt"),
+    ]);
+
+    assert_eq!(
+        agents[0].first_prompt.as_deref(),
+        Some("stable first prompt")
+    );
+    assert_eq!(agents[0].prompt.as_deref(), Some("latest prompt"));
+}
+
+#[test]
+fn adapter_description_replaces_launch_label_and_carries_forward() {
+    let launch = raw_launch_with_description(
+        AgentLaunchState::Bound,
+        "s1",
+        "lucid-atlas",
+        None,
+        Some("launch label"),
+    );
+    let titled = raw_lifecycle(
+        "claude",
+        serde_json::json!({
+            "event_name": "Stop",
+            "agent_id": "s1",
+            "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false },
+            "description": "native title",
+        }),
+    );
+    let later = raw_lifecycle(
+        "claude",
+        serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "s1",
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[launch, titled, later]);
+    assert_eq!(agents[0].description.as_deref(), Some("native title"));
 }
 
 #[test]
@@ -98,4 +156,5 @@ fn launch_prompts_append_to_recent_prompt_history() {
         agents[0].recent_prompts,
         vec!["plan".to_owned(), "build".to_owned(), "verify".to_owned()]
     );
+    assert_eq!(agents[0].first_prompt.as_deref(), Some("plan"));
 }

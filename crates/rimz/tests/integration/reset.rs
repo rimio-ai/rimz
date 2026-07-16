@@ -218,6 +218,7 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
         worktree_branch: Some("main".to_owned()),
         task: None,
         prompt: None,
+        description: None,
         transcript_path: None,
         origin: None,
         context_pct: None,

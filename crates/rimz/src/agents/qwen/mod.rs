@@ -142,10 +142,10 @@ const QWEN_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "PermissionRequest",
     },
     plan_approval: ConcernCoverage::Wired {
-        via: "PermissionRequest:exit_plan_mode",
+        via: "PermissionRequest + PreToolUse:exit_plan_mode",
     },
     user_question: ConcernCoverage::Wired {
-        via: "PermissionRequest:ask_user_question",
+        via: "PermissionRequest + PreToolUse:ask_user_question",
     },
     answer: ConcernCoverage::Unsupported {
         reason: "native dialog answering not wired; answer in the pane",
@@ -275,6 +275,15 @@ const QWEN_HOOKS: &[HookRecord] = &[
         None
     ),
     hook_record!(
+        "PreToolUse",
+        Some("ask_user_question|exit_plan_mode"),
+        true,
+        true,
+        r#"{"tool_name":"ask_user_question","tool_use_id":"ask-1"}"#,
+        AgentHookClass::AwaitingUser,
+        Some(AskKind::Question)
+    ),
+    hook_record!(
         "PermissionRequest",
         None,
         true,
@@ -367,6 +376,9 @@ impl AgentAdapter for QwenAdapter {
                     .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref())
                     .unwrap_or(AskKind::Permission),
             ),
+            "PreToolUse" => self
+                .descriptor()
+                .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref()),
             _ => None,
         };
         classify_catalog_hook(QWEN_HOOKS, event_name, ask_kind)
@@ -402,6 +414,18 @@ impl AgentAdapter for QwenAdapter {
             serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode"}),
             AgentHookClass::AwaitingUser,
             Some(AskKind::PlanApproval),
+        ));
+        samples.push(ClassificationSample::new(
+            "PreToolUse",
+            serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode","tool_use_id":"plan-1"}),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::PlanApproval),
+        ));
+        samples.push(ClassificationSample::new(
+            "PreToolUse",
+            serde_json::json!({"session_id":"sess-1","tool_name":"run_shell_command","tool_use_id":"shell-1"}),
+            AgentHookClass::Lifecycle,
+            None,
         ));
         samples
     }
@@ -442,7 +466,7 @@ impl AgentAdapter for QwenAdapter {
         Ok(None)
     }
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        (event_name == "PermissionRequest")
+        matches!(event_name, "PermissionRequest" | "PreToolUse")
             .then(|| parse_tool_use(payload))
             .and_then(|tool| {
                 ask::question_detail(tool.tool_name.as_deref()?, tool.tool_input.as_ref()?)
@@ -450,7 +474,7 @@ impl AgentAdapter for QwenAdapter {
     }
 
     fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
-        if event_name != "PermissionRequest" {
+        if !matches!(event_name, "PermissionRequest" | "PreToolUse") {
             return None;
         }
         self.ask_question_detail(event_name, payload)
@@ -467,6 +491,16 @@ impl AgentAdapter for QwenAdapter {
         let signal = lifecycle_signal(self.descriptor(), event_name, payload)?;
         let (agent_id, parent_agent_id) = observation_identity(event_name, payload)?;
         let transcript_path = optional_payload_string(payload, &["transcript_path"]);
+        let subagent =
+            matches!(event_name, "SubagentStart" | "SubagentStop").then(|| parse_subagent(payload));
+        let subagent_meta = (event_name == "SubagentStop").then_some(()).and_then(|()| {
+            let child = subagent.as_ref()?;
+            payloads::read_subagent_meta(
+                transcript_path.as_deref()?,
+                child.common.common.session_id.as_deref()?,
+                child.common.agent_id.as_deref()?,
+            )
+        });
         let usage = matches!(event_name, "SessionStart" | "Stop")
             .then(|| transcript_path.as_deref().map(usage_from_transcript))
             .flatten()
@@ -486,15 +520,34 @@ impl AgentAdapter for QwenAdapter {
             .as_ref()
             .and_then(|value| value.common.model.clone())
             .or_else(|| optional_payload_string(payload, &["model"]))
-            .or_else(|| accepted_usage.and_then(|usage| usage.model.clone()));
+            .or_else(|| accepted_usage.and_then(|usage| usage.model.clone()))
+            .or_else(|| {
+                subagent_meta
+                    .as_ref()
+                    .and_then(|meta| meta.persisted_cli_flags.model.as_deref())
+                    .and_then(non_empty_trimmed)
+            });
         observation.prompt = (event_name == "UserPromptSubmit")
             .then(|| parse_user_prompt_submit(payload))
             .and_then(|value| sanitize_user_prompt(value.prompt.as_deref()));
-        observation.task = if matches!(event_name, "SubagentStart" | "SubagentStop") {
-            parse_subagent(payload).common.agent_type
+        observation.task = if let Some(subagent) = &subagent {
+            subagent.common.agent_type.clone().or_else(|| {
+                subagent_meta.as_ref().and_then(|meta| {
+                    meta.agent_type
+                        .as_deref()
+                        .and_then(non_empty_trimmed)
+                        .or_else(|| meta.subagent_name.as_deref().and_then(non_empty_trimmed))
+                })
+            })
         } else {
             sanitize_user_prompt(optional_payload_string(payload, &["task"]).as_deref())
         };
+        observation.description = usage.title.clone().or_else(|| {
+            subagent_meta
+                .as_ref()
+                .and_then(|meta| meta.description.as_deref())
+                .and_then(non_empty_trimmed)
+        });
         observation.context_pct = stop
             .as_ref()
             .and_then(|value| value.context_usage)
@@ -654,21 +707,35 @@ fn lifecycle_signal(
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: descriptor.tool_mutates(payload),
             edits: descriptor.tool_edits_files(payload),
-            native_key: None,
+            native_key: parse_tool_use(payload).tool_use_id,
         }),
         "PostToolUseFailure" => Some(LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
-            native_key: None,
+            native_key: parse_tool_use(payload).tool_use_id,
         }),
-        "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
-            kind: descriptor
-                .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref())
-                .unwrap_or(AskKind::Permission),
-            ask_id: None,
-            detail: None,
-            native_key: None,
-        }),
+        "PreToolUse" => {
+            let tool = parse_tool_use(payload);
+            descriptor
+                .blocking_tool_kind(tool.tool_name.as_deref())
+                .map(|kind| LifecycleSignal::AwaitingInput {
+                    kind,
+                    ask_id: None,
+                    detail: None,
+                    native_key: tool.tool_use_id,
+                })
+        }
+        "PermissionRequest" => {
+            let tool = parse_tool_use(payload);
+            Some(LifecycleSignal::AwaitingInput {
+                kind: descriptor
+                    .blocking_tool_kind(tool.tool_name.as_deref())
+                    .unwrap_or(AskKind::Permission),
+                ask_id: None,
+                detail: None,
+                native_key: tool.tool_use_id,
+            })
+        }
         "Stop" => {
             let stop = parse_stop(payload);
             Some(LifecycleSignal::TurnEnded {
@@ -790,6 +857,7 @@ struct TranscriptUsage {
     output_tokens: Option<u64>,
     model: Option<String>,
     context_window: Option<u64>,
+    title: Option<String>,
 }
 
 fn usage_from_transcript(path: &str) -> TranscriptUsage {
@@ -797,6 +865,7 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
         return TranscriptUsage::default();
     };
     let folded = payloads::fold_transcript(&text);
+    let title = folded.latest_active_custom_title().map(ToOwned::to_owned);
     if let Some(record) = folded.latest_active_assistant_with_usage() {
         let usage = record
             .usage_metadata
@@ -812,10 +881,12 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
             output_tokens: prompt_tokens.map(|_| usage.output()),
             model: record.model.clone().filter(|value| !value.is_empty()),
             context_window: record.context_window_size,
+            title,
         };
     }
     TranscriptUsage {
         total_tokens: Some(0),
+        title,
         ..TranscriptUsage::default()
     }
 }

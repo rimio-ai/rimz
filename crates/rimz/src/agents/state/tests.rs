@@ -55,6 +55,7 @@ fn legacy_agent_pid_deserializes_to_runtime_owner() {
 fn activity_description_prefers_rich_context_then_fallbacks() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     agent.prompt = Some("latest prompt".to_owned());
+    agent.first_prompt = Some("first prompt".to_owned());
     agent.task = Some("live task".to_owned());
     agent.description = Some("launch label".to_owned());
     agent.context = Some(AgentContext {
@@ -71,6 +72,8 @@ fn activity_description_prefers_rich_context_then_fallbacks() {
     agent.description = None;
     assert_eq!(agent.activity_description(), Some("live task"));
     agent.task = None;
+    assert_eq!(agent.activity_description(), Some("first prompt"));
+    agent.first_prompt = None;
     assert_eq!(agent.activity_description(), Some("latest prompt"));
 }
 
@@ -78,6 +81,7 @@ fn activity_description_prefers_rich_context_then_fallbacks() {
 fn activity_description_rejects_blank_and_control_text() {
     let mut agent = test_agent(AgentStatus::Running, 1_000);
     agent.task = Some(" \n\t".to_owned());
+    agent.first_prompt = Some("<system-reminder>synthetic</system-reminder>".to_owned());
     agent.prompt = Some("<task-notification>synthetic</task-notification> real prompt".to_owned());
 
     assert_eq!(agent.activity_description(), None);

@@ -23,6 +23,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         worktree_branch: Some("main".to_owned()),
         task: None,
         prompt: None,
+        description: None,
         transcript_path: None,
         origin: None,
         context_pct: None,

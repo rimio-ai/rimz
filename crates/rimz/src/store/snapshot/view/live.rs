@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use crate::agent_activity::AgentActivity;
-use crate::agents::state::append_recent_prompt;
+use crate::agents::state::{append_recent_prompt, usable_description};
 use crate::agents::{
     AgentState, AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
     ProviderCapacity, TurnPhase,
@@ -447,6 +447,9 @@ fn apply_local_lifecycle(
     state.phase = projection.phase;
     state.task = projection.native_prompt_detail.clone();
     if let Some(prompt) = projection.latest_prompt.as_deref() {
+        if state.first_prompt.is_none() && usable_description(prompt) {
+            state.first_prompt = Some(prompt.to_owned());
+        }
         state.prompt = Some(prompt.to_owned());
         append_recent_prompt(&mut state.recent_prompts, prompt);
     }
@@ -480,6 +483,7 @@ fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
         worktree_path: None,
         worktree_branch: None,
         task: None,
+        first_prompt: None,
         prompt: None,
         description: None,
         transcript_path: None,

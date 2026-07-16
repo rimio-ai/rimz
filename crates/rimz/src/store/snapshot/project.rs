@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
-use crate::agents::state::append_recent_prompt;
+use crate::agents::state::{append_recent_prompt, usable_description};
 use crate::agents::{AgentLifecycleObservation, LaunchParams};
 use crate::agents::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId};
@@ -474,6 +474,7 @@ fn carried_base(
         worktree_path: prior.and_then(|state| state.worktree_path.clone()),
         worktree_branch: prior.and_then(|state| state.worktree_branch.clone()),
         task: prior.and_then(|state| state.task.clone()),
+        first_prompt: prior.and_then(|state| state.first_prompt.clone()),
         prompt: prior.and_then(|state| state.prompt.clone()),
         description: prior.and_then(|state| state.description.clone()),
         transcript_path: prior.and_then(|state| state.transcript_path.clone()),
@@ -585,8 +586,12 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.worktree_path = worktree.path;
     state.worktree_branch = worktree.branch;
     state.task = prompt.task;
+    state.first_prompt = prompt.first_prompt;
     state.prompt = prompt.prompt;
     state.recent_prompts = prompt.recent_prompts;
+    if let Some(description) = &input.observation.description {
+        state.description = Some(description.clone());
+    }
     if let Some(transcript_path) = &input.observation.transcript_path {
         state.transcript_path = Some(transcript_path.clone());
     }
@@ -627,6 +632,14 @@ fn assemble_launch_state(
         .prompt
         .clone()
         .or_else(|| prior.and_then(|state| state.prompt.clone()));
+    if state.first_prompt.is_none()
+        && let Some(first_prompt) = payload
+            .prompt
+            .as_deref()
+            .filter(|prompt| usable_description(prompt))
+    {
+        state.first_prompt = Some(first_prompt.to_owned());
+    }
     if let Some(prompt) = payload
         .prompt
         .as_deref()
@@ -906,6 +919,7 @@ fn runtime_projection(
 
 struct PromptProjection {
     task: Option<String>,
+    first_prompt: Option<String>,
     prompt: Option<String>,
     recent_prompts: Vec<String>,
 }
@@ -922,12 +936,21 @@ fn prompt_projection(
         non_empty_string(observation.task.as_deref())
     };
     let event_prompt = observation.prompt.clone();
+    let first_prompt = prior
+        .and_then(|state| state.first_prompt.clone())
+        .or_else(|| {
+            event_prompt
+                .as_deref()
+                .filter(|prompt| usable_description(prompt))
+                .map(ToOwned::to_owned)
+        });
     let mut recent_prompts = prior.map(|p| p.recent_prompts.clone()).unwrap_or_default();
     if let Some(prompt) = event_prompt.as_deref().filter(|prompt| !prompt.is_empty()) {
         append_recent_prompt(&mut recent_prompts, prompt);
     }
     PromptProjection {
         task,
+        first_prompt,
         prompt: event_prompt.or_else(|| prior.and_then(|p| p.prompt.clone())),
         recent_prompts,
     }

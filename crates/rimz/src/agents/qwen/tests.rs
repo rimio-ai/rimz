@@ -23,8 +23,11 @@ fn classifies_native_asks_and_keeps_neutral_stdout_silent() {
         assert_eq!(classified.ask_kind, Some(ask_kind));
     }
     let pre_tool = adapter.classify_hook("PreToolUse", &json!({"tool_name":"ask_user_question"}));
-    assert_eq!(pre_tool.class, AgentHookClass::Unknown);
-    assert_eq!(pre_tool.ask_kind, None);
+    assert_eq!(pre_tool.class, AgentHookClass::AwaitingUser);
+    assert_eq!(pre_tool.ask_kind, Some(AskKind::Question));
+    let ordinary = adapter.classify_hook("PreToolUse", &json!({"tool_name":"run_shell_command"}));
+    assert_eq!(ordinary.class, AgentHookClass::Lifecycle);
+    assert_eq!(ordinary.ask_kind, None);
     insta::assert_debug_snapshot!(adapter.render_neutral("PermissionRequest").unwrap(), @"None");
 }
 
@@ -80,7 +83,7 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
     let path = dir.path().join("settings.json");
     fs::write(&path, r#"{"ui":{"statusLine":{"type":"command","command":"myline","refreshInterval":5}},"theme":"dark"}"#).unwrap();
     let report = install::MANAGED_SOURCE.install_into(&path).unwrap();
-    assert_eq!(report.installed_events.len(), 13);
+    assert_eq!(report.installed_events.len(), 14);
     assert!(install::MANAGED_SOURCE.installed_at(&path));
     assert!(install::MANAGED_SOURCE.managed_artifacts_at(&path));
     assert!(!install::MANAGED_SOURCE.upgrade_available_at(&path));
@@ -97,7 +100,23 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
             .and_then(Value::as_str),
         Some("myline")
     );
-    assert!(installed.pointer("/hooks/PreToolUse").is_none());
+    let pre_tool = installed
+        .pointer("/hooks/PreToolUse/0")
+        .and_then(Value::as_object)
+        .expect("managed PreToolUse hook");
+    assert_eq!(
+        pre_tool.get("matcher").and_then(Value::as_str),
+        Some("ask_user_question|exit_plan_mode")
+    );
+    assert_eq!(
+        pre_tool
+            .get("hooks")
+            .and_then(Value::as_array)
+            .and_then(|hooks| hooks.first())
+            .and_then(|hook| hook.get("async"))
+            .and_then(Value::as_bool),
+        None
+    );
     install::MANAGED_SOURCE.uninstall_from(&path).unwrap();
     assert!(!install::MANAGED_SOURCE.installed_at(&path));
     let restored: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -155,10 +174,14 @@ fn reinstall_reclaims_stale_managed_pre_tool_use_hook() {
         .pointer("/hooks/PreToolUse")
         .and_then(Value::as_array)
         .unwrap();
-    assert_eq!(pre_tool.len(), 1);
+    assert_eq!(pre_tool.len(), 2);
+    let matchers = pre_tool
+        .iter()
+        .filter_map(|entry| entry.get("matcher").and_then(Value::as_str))
+        .collect::<Vec<_>>();
     assert_eq!(
-        pre_tool[0].get("matcher").and_then(Value::as_str),
-        Some("custom_tool")
+        matchers,
+        ["custom_tool", "ask_user_question|exit_plan_mode"]
     );
 }
 
@@ -171,6 +194,14 @@ fn rejects_async_managed_blocking_hooks() {
         .install_into(&path)
         .unwrap_err()
         .to_string();
+    assert!(error.contains("async"));
+
+    fs::write(&path, format!(r#"{{"hooks":{{"PreToolUse":[{{"matcher":"ask_user_question|exit_plan_mode","_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}","async":true}}]}}]}}}}"#)).unwrap();
+    let error = install::MANAGED_SOURCE
+        .install_into(&path)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("PreToolUse"));
     assert!(error.contains("async"));
 }
 
@@ -216,6 +247,44 @@ fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
             }
         );
     }
+    assert_eq!(
+        adapter
+            .observe_lifecycle(
+                "PermissionRequest",
+                &json!({"session_id":"s1","tool_name":"ask_user_question","tool_use_id":"ask-1"})
+            )
+            .unwrap()
+            .signal,
+        LifecycleSignal::AwaitingInput {
+            kind: AskKind::Question,
+            ask_id: None,
+            detail: None,
+            native_key: Some("ask-1".to_owned()),
+        }
+    );
+    for (tool_name, kind, native_key) in [
+        ("ask_user_question", Some(AskKind::Question), Some("ask-1")),
+        (
+            "exit_plan_mode",
+            Some(AskKind::PlanApproval),
+            Some("plan-1"),
+        ),
+        ("run_shell_command", None, Some("shell-1")),
+    ] {
+        let observed = adapter.observe_lifecycle(
+            "PreToolUse",
+            &json!({"session_id":"s1","tool_name":tool_name,"tool_use_id":native_key}),
+        );
+        assert_eq!(
+            observed.map(|observation| observation.signal),
+            kind.map(|kind| LifecycleSignal::AwaitingInput {
+                kind,
+                ask_id: None,
+                detail: None,
+                native_key: native_key.map(ToOwned::to_owned),
+            })
+        );
+    }
 }
 
 #[test]
@@ -238,6 +307,13 @@ fn reads_gate_details_from_permission_requests() {
     assert_eq!(questions[0].question, "Which path?\nMore context");
     assert_eq!(
         adapter
+            .ask_question_detail("PreToolUse", &question)
+            .unwrap()[0]
+            .question,
+        "Which path?\nMore context"
+    );
+    assert_eq!(
+        adapter
             .ask_detail("PermissionRequest", &question)
             .as_deref(),
         Some("Which path?")
@@ -253,7 +329,10 @@ fn reads_gate_details_from_permission_requests() {
             .as_deref(),
         Some(r#"run_shell_command: {"command":"cargo xtask gate"}"#)
     );
-    assert_eq!(adapter.ask_detail("PreToolUse", &question), None);
+    assert_eq!(
+        adapter.ask_detail("PreToolUse", &question).as_deref(),
+        Some("Which path?")
+    );
 }
 
 #[test]
@@ -270,7 +349,7 @@ fn maps_lifecycle_context_background_and_subagents() {
     let tool = adapter
         .observe_lifecycle(
             "PostToolUse",
-            &json!({"session_id":"s1","tool_name":"write_file"}),
+            &json!({"session_id":"s1","tool_name":"write_file","tool_use_id":"write-1"}),
         )
         .unwrap();
     assert_eq!(
@@ -278,7 +357,7 @@ fn maps_lifecycle_context_background_and_subagents() {
         LifecycleSignal::ToolUsed {
             mutates: true,
             edits: true,
-            native_key: None,
+            native_key: Some("write-1".to_owned()),
         }
     );
     let parked = adapter.observe_lifecycle("Stop", &json!({"session_id":"s1","background_tasks":[{"status":"running"}],"context_usage":1.2,"context_limit":131072})).unwrap();
@@ -316,13 +395,17 @@ fn maps_lifecycle_context_background_and_subagents() {
 fn transcript_tail_and_statusline_supply_context() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s1.jsonl");
-    fs::write(&path, "{\"type\":\"assistant\",\"model\":\"qwen3\",\"contextWindowSize\":131072,\"usageMetadata\":{\"totalTokenCount\":420}}\n").unwrap();
+    fs::write(&path, "{\"uuid\":\"a1\",\"type\":\"assistant\",\"model\":\"qwen3\",\"contextWindowSize\":131072,\"usageMetadata\":{\"totalTokenCount\":420}}\n{\"uuid\":\"title-1\",\"parentUuid\":\"a1\",\"type\":\"system\",\"subtype\":\"custom_title\",\"systemPayload\":{\"customTitle\":\"Stable Qwen title\"}}\n").unwrap();
     let adapter = QwenAdapter;
     let observation = adapter
         .observe_lifecycle("Stop", &json!({"session_id":"s1","transcript_path":path}))
         .unwrap();
     assert_eq!(observation.total_tokens, Some(420));
     assert_eq!(observation.context_window, Some(131072));
+    assert_eq!(
+        observation.description.as_deref(),
+        Some("Stable Qwen title")
+    );
 
     let context = adapter.observe_context("qwen", &json!({
         "version":"0.19.10",
@@ -362,6 +445,47 @@ fn transcript_tail_and_statusline_supply_context() {
             .and_then(|cost| cost.total_lines_added),
         Some(12)
     );
+}
+
+#[test]
+fn subagent_stop_reads_model_and_description_from_meta_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("projects/project-a");
+    let transcript = project.join("chats/parent.jsonl");
+    let meta = project.join("subagents/parent/agent-child.meta.json");
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::create_dir_all(meta.parent().unwrap()).unwrap();
+    fs::write(&transcript, "").unwrap();
+    fs::write(
+        &meta,
+        r#"{
+            "agentId":"child",
+            "agentType":"general-purpose",
+            "subagentName":"general-purpose",
+            "description":"Inspect the lifecycle seam",
+            "createdAt":"2026-07-16T12:50:49.268Z",
+            "persistedCliFlags":{"model":"deepseek-v4-pro"}
+        }"#,
+    )
+    .unwrap();
+
+    let observation = QwenAdapter
+        .observe_lifecycle(
+            "SubagentStop",
+            &json!({
+                "session_id":"parent",
+                "agent_id":"child",
+                "agent_type":"general-purpose",
+                "transcript_path":transcript,
+            }),
+        )
+        .unwrap();
+    assert_eq!(observation.launch.model.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(
+        observation.description.as_deref(),
+        Some("Inspect the lifecycle seam")
+    );
+    assert_eq!(observation.task.as_deref(), Some("general-purpose"));
 }
 
 #[test]

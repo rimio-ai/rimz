@@ -31,9 +31,10 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
     // Codex has no statusline start time, so registration supplies elapsed.
     let mut bare = child_state("sess-root", "child-3", AgentStatus::Running, 5);
     bare.registered_at = Some(ago(5));
+    bare.description = Some("adapter task description".to_owned());
     let sub = sub_agent_from_state(&bare, now);
     assert_eq!(sub.phase, TurnPhase::Idle);
-    assert_eq!(sub.description, None);
+    assert_eq!(sub.description.as_deref(), Some("adapter task description"));
     assert_eq!(sub.total_tokens, None);
     assert_eq!(sub.elapsed_secs, Some(5));
     assert_eq!(sub.model, None);

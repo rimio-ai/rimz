@@ -489,6 +489,7 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
         prompt: Some(
             "trace the parser",
         ),
+        description: None,
         transcript_path: Some(
             "[session]/agents/agent-0/wire.jsonl",
         ),

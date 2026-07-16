@@ -39,6 +39,7 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
         worktree_branch: None,
         task: None,
         prompt: None,
+        description: None,
         transcript_path: None,
         origin: None,
         context_pct: None,

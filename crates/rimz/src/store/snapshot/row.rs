@@ -282,6 +282,10 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
     pub phase: TurnPhase,
     pub task: Option<String>,
+    /// The session's first usable user prompt, copied from `AgentState` as the
+    /// stable unnamed-session label ahead of the latest prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_prompt: Option<String>,
     /// The session's latest user prompt, carried forward from `AgentState`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -357,6 +361,7 @@ impl Default for AgentCard {
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             task: None,
+            first_prompt: None,
             prompt: None,
             description: None,
             model: None,
@@ -385,12 +390,14 @@ impl Default for AgentCard {
 
 impl AgentCard {
     /// One-line activity label for CLI and sidebar rows: rich session preview,
-    /// rich session name, launch description, live task, then latest prompt.
+    /// rich session name, launch description, live task, first prompt, then
+    /// latest prompt.
     pub fn activity_description(&self) -> Option<&str> {
         select_activity_description(
             self.context.as_ref(),
             self.description.as_deref(),
             self.task.as_deref(),
+            self.first_prompt.as_deref(),
             self.prompt.as_deref(),
         )
     }

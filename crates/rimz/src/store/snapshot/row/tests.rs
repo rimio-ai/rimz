@@ -158,6 +158,7 @@ fn agent_card_activity_description_matches_agent_state_precedence() {
         context: Some(context.clone()),
         description: Some("\u{0007}".to_owned()),
         task: Some(" ship\nwide ".to_owned()),
+        first_prompt: Some("first prompt".to_owned()),
         prompt: Some("latest prompt".to_owned()),
         ..AgentCard::default()
     };
@@ -165,6 +166,7 @@ fn agent_card_activity_description_matches_agent_state_precedence() {
     state.context = Some(context);
     state.description = card.description.clone();
     state.task = card.task.clone();
+    state.first_prompt = card.first_prompt.clone();
     state.prompt = card.prompt.clone();
 
     assert_eq!(card.activity_description(), state.activity_description());
@@ -177,6 +179,10 @@ fn agent_card_activity_description_matches_agent_state_precedence() {
 
     card.task = Some("<system-reminder>control</system-reminder>".to_owned());
     state.task = card.task.clone();
+    assert_eq!(card.activity_description(), Some("first prompt"));
+    assert_eq!(card.activity_description(), state.activity_description());
+    card.first_prompt = Some("<task-notification>control</task-notification>".to_owned());
+    state.first_prompt = card.first_prompt.clone();
     assert_eq!(card.activity_description(), Some("latest prompt"));
     assert_eq!(card.activity_description(), state.activity_description());
 }

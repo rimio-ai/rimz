@@ -95,12 +95,13 @@ pub(super) fn description_line(
 }
 
 /// The line-2 description: rich preview, then rich session/thread name, then
-/// launch description, task, and latest prompt. Codex maps app-server `preview`
-/// to the rich preview and app-server `name` to the rich name, so its concrete
-/// order is thread preview → thread name. The activity-bound `task` clears on
-/// idle, so the persisted prompt keeps an unnamed session labelled past its
-/// turn until it earns richer metadata. `None` when the session has nothing to
-/// show — the caller skips blank idle cards or paints an em dash.
+/// launch or adapter description, task, first prompt, and latest prompt. Codex
+/// maps app-server `preview` to the rich preview and app-server `name` to the
+/// rich name, so its concrete order is thread preview → thread name. The
+/// activity-bound `task` clears on idle, so the set-once first prompt keeps an
+/// unnamed session stably labelled until it earns richer metadata. `None` when
+/// the session has nothing to show — the caller skips blank idle cards or
+/// paints an em dash.
 pub(super) fn descriptor(row: &SidebarRow) -> Option<&str> {
     row.as_agent().and_then(AgentCard::activity_description)
 }

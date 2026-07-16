@@ -167,6 +167,10 @@ pub struct AgentLifecycleObservation {
     /// the turn ends, until a real session name exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Adapter-reported durable card label, such as a native session title or
+    /// a subagent task description. The reducer carries the latest value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The transcript path the agent names for this session, when the adapter
     /// has one. Carry-forward enrichment; readers use it for traceability and
     /// sidecar refresh hints, never as routing truth.
@@ -241,6 +245,7 @@ impl AgentLifecycleObservation {
             worktree_branch: None,
             task: None,
             prompt: None,
+            description: None,
             transcript_path: None,
             origin: None,
             context_pct: None,

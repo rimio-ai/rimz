@@ -789,6 +789,7 @@ fn idle_agent_row(
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             task: None,
+            first_prompt: None,
             prompt: None,
             description: None,
             model: default_model.map(ToOwned::to_owned),

@@ -478,6 +478,10 @@ pub struct AgentState {
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
     pub task: Option<String>,
+    /// The session's first usable user prompt. Set once and carried for the
+    /// whole session so an unnamed card has a stable label across later turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_prompt: Option<String>,
     /// The user's latest prompt, carried forward across events (unlike the
     /// activity-bound `task`). Labels an unnamed session on the sidebar until a
     /// real session name exists.
@@ -647,6 +651,8 @@ struct AgentStateWire {
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
     task: Option<String>,
+    #[serde(default)]
+    first_prompt: Option<String>,
     prompt: Option<String>,
     description: Option<String>,
     transcript_path: Option<String>,
@@ -716,6 +722,7 @@ impl From<AgentStateWire> for AgentState {
             worktree_path: wire.worktree_path,
             worktree_branch: wire.worktree_branch,
             task: wire.task,
+            first_prompt: wire.first_prompt,
             prompt: wire.prompt,
             description: wire.description,
             transcript_path: wire.transcript_path,
@@ -791,6 +798,7 @@ impl AgentState {
             worktree_path: None,
             worktree_branch: None,
             task: None,
+            first_prompt: None,
             prompt: None,
             description: None,
             transcript_path: None,
@@ -823,12 +831,14 @@ impl AgentState {
     }
 
     /// One-line activity label for CLI and sidebar rows: rich session preview,
-    /// rich session name, launch description, live task, then latest prompt.
+    /// rich session name, launch description, live task, first prompt, then
+    /// latest prompt.
     pub fn activity_description(&self) -> Option<&str> {
         select_activity_description(
             self.context.as_ref(),
             self.description.as_deref(),
             self.task.as_deref(),
+            self.first_prompt.as_deref(),
             self.prompt.as_deref(),
         )
     }
@@ -1076,6 +1086,7 @@ pub(crate) fn select_activity_description<'a>(
     context: Option<&'a AgentContext>,
     description: Option<&'a str>,
     task: Option<&'a str>,
+    first_prompt: Option<&'a str>,
     prompt: Option<&'a str>,
 ) -> Option<&'a str> {
     context
@@ -1088,6 +1099,7 @@ pub(crate) fn select_activity_description<'a>(
         })
         .or_else(|| description.filter(|value| usable_description(value)))
         .or_else(|| task.filter(|value| usable_description(value)))
+        .or_else(|| first_prompt.filter(|value| usable_description(value)))
         .or_else(|| prompt.filter(|value| usable_description(value)))
 }
 

@@ -201,6 +201,7 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
         worktree_branch: Some(branch.to_owned()),
         task: None,
         prompt: None,
+        description: None,
         transcript_path: None,
         origin: None,
         context_pct: None,

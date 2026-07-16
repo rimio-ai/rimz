@@ -57,14 +57,16 @@ The glyph, animation, and color for each are the canonical table in [the interfa
 | Lifetime | Rule | Fields |
 | --- | --- | --- |
 | **identity** | set once when the session registers, stable thereafter | `agent_id`, `kind`, `parent_agent_id`, `agent_pid` |
+| **set-once** | fills from the first usable observation and then stays stable | `first_prompt` |
 | **activity** | replaced by the latest event, and *clearing* it is meaningful: an idle agent has no `task` | `status`, `task`, `last_activity` |
-| **carry-forward** | persists until a newer value arrives; a missing value never resets it | `model`, `effort`, `context_pct`, `context_window`, `prompt`, `transcript_path`, `recent_prompts` |
+| **carry-forward** | persists until a newer value arrives; a missing value never resets it | `model`, `effort`, `context_pct`, `context_window`, `prompt`, `description`, `transcript_path`, `recent_prompts` |
 | **live-derived** | never stored in the store; computed at snapshot time from the live pane or git | `pane`, `worktree_path`, `worktree_branch` |
 | **transient heads** | opened and closed by signals, painted over the base status | the turn [phase](#turn-phase), the [compaction bracket](#the-compaction-bracket) (`compacting_since`; each close increments the durable `compaction_count`) |
 
 [`AgentLifecycleObservation`](../../../crates/rimz/src/agents/observation.rs) and [`AgentState`](../../../crates/rimz/src/agents/state.rs) are the field catalog; the lifetimes above are the rule those types do not state. Three rules earn a note:
 
 - A subagent's `task` is the one activity-lifetime exception: it holds the child's type (`Explore`, …) and carries forward as identity, so a finished child stays labeled when its `SubagentStop` omits the type.
+- `first_prompt` accepts the first user prompt that is neither blank nor a harness control turn. It labels an unnamed session ahead of the changing latest `prompt`; an adapter-emitted `description`, such as a native title or child task description, supersedes it through the normal carry-forward path.
 - The live-derived fields follow the pane, which knows its current cwd every tick, so `worktree_path` and `worktree_branch` track a `git checkout`. Pinning them at registration would be the branch-tracking bug ([Liveness and presence](#liveness-and-presence)).
 - `model` is stored **canonicalized**: a trailing capability tag is stripped (`claude-opus-4-8[1m]` → `claude-opus-4-8`). The tag rides only the fresh-launch payload; later events carry the bare id, so without canonicalization the carry-forward would flip `…[1m]` → `…` the first time a suffix-less event arrived. Canonicalizing at reduce time pins one stable label while the event log stays faithful to the raw payload.
 

@@ -1,13 +1,15 @@
 //! Typed, drift-tolerant Qwen Code hook payloads.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::hook_types::{BackgroundTask, CompactTrigger, HookEventCommon, SessionSource};
 use crate::agents::transcript_fs::{
-    deserialize_optional_object_lossy, deserialize_optional_u64_lossy,
+    deserialize_optional_object_lossy, deserialize_optional_string_lossy,
+    deserialize_optional_u64_lossy,
 };
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -39,6 +41,8 @@ pub struct QwenUserPromptSubmit {
 pub struct QwenToolUse {
     pub tool_name: Option<String>,
     pub tool_input: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub tool_use_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -101,6 +105,7 @@ pub struct TranscriptRecord {
     pub parent_uuid: Option<String>,
     pub session_id: Option<String>,
     pub r#type: Option<String>,
+    pub subtype: Option<String>,
     pub timestamp: Option<String>,
     pub cwd: Option<String>,
     pub model: Option<String>,
@@ -111,6 +116,15 @@ pub struct TranscriptRecord {
     pub message: TranscriptContent,
     pub is_sidechain: Option<bool>,
     pub agent_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_object_lossy")]
+    pub system_payload: Option<TranscriptSystemPayload>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TranscriptSystemPayload {
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
+    pub custom_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -201,6 +215,23 @@ impl FoldedTranscript {
                 && record.usage_metadata.is_some()
         })
     }
+
+    pub fn latest_active_custom_title(&self) -> Option<&str> {
+        self.active_root().rev().find_map(|record| {
+            if record.r#type.as_deref() != Some("system")
+                || record.subtype.as_deref() != Some("custom_title")
+            {
+                return None;
+            }
+            record
+                .system_payload
+                .as_ref()?
+                .custom_title
+                .as_deref()
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+        })
+    }
 }
 
 /// Parse complete JSONL and select the latest root record's UUID ancestry.
@@ -251,6 +282,51 @@ pub fn fold_transcript(text: &str) -> FoldedTranscript {
         physical,
         active_root,
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct QwenSubagentMeta {
+    pub description: Option<String>,
+    pub agent_type: Option<String>,
+    pub subagent_name: Option<String>,
+    pub persisted_cli_flags: QwenPersistedCliFlags,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct QwenPersistedCliFlags {
+    pub model: Option<String>,
+}
+
+pub fn read_subagent_meta(
+    transcript_path: &str,
+    session_id: &str,
+    agent_id: &str,
+) -> Option<QwenSubagentMeta> {
+    let project_dir = Path::new(transcript_path).parent()?.parent()?;
+    let session_id = sanitize_filename_component(session_id);
+    let agent_id = sanitize_filename_component(agent_id);
+    let path = project_dir
+        .join("subagents")
+        .join(session_id)
+        .join(format!("agent-{agent_id}.meta.json"));
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn sanitize_filename_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -344,6 +420,47 @@ mod tests {
                 .and_then(TranscriptUsage::live_total),
             Some(42)
         );
+    }
+
+    #[test]
+    fn transcript_fold_reads_only_the_active_custom_title() {
+        let folded = fold_transcript(
+            r#"{"uuid":"u1","type":"user"}
+{"uuid":"a1","parentUuid":"u1","type":"assistant"}
+{"uuid":"old-title","parentUuid":"a1","type":"system","subtype":"custom_title","systemPayload":{"customTitle":"Old title"}}
+{"uuid":"abandoned","parentUuid":"old-title","type":"system","subtype":"custom_title","systemPayload":{"customTitle":"Abandoned title"}}
+{"uuid":"rewind","parentUuid":"a1","type":"system","subtype":"rewind"}
+{"uuid":"active-title","parentUuid":"rewind","type":"system","subtype":"custom_title","systemPayload":{"customTitle":"Active title"}}
+{"uuid":"tail","parentUuid":"active-title","type":"assistant"}"#,
+        );
+
+        assert_eq!(folded.latest_active_custom_title(), Some("Active title"));
+    }
+
+    #[test]
+    fn subagent_meta_path_matches_qwen_runtime_layout_and_fails_soft() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects/project-a");
+        let transcript = project.join("chats/session.jsonl");
+        let meta = project.join("subagents/parent/agent-child_id.meta.json");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(meta.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "").unwrap();
+        std::fs::write(
+            &meta,
+            r#"{"agentType":"general-purpose","description":"Check auth","createdAt":"2026-07-16T12:50:49Z","persistedCliFlags":{"model":"deepseek-v4-pro"},"future":true}"#,
+        )
+        .unwrap();
+
+        let parsed =
+            read_subagent_meta(transcript.to_str().unwrap(), "parent", "child/id").unwrap();
+        assert_eq!(parsed.agent_type.as_deref(), Some("general-purpose"));
+        assert_eq!(parsed.description.as_deref(), Some("Check auth"));
+        assert_eq!(
+            parsed.persisted_cli_flags.model.as_deref(),
+            Some("deepseek-v4-pro")
+        );
+        assert!(read_subagent_meta("/missing/chats/s.jsonl", "parent", "child").is_none());
     }
 
     #[test]
