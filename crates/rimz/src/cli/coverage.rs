@@ -416,19 +416,21 @@ mod tests {
         );
 
         let pi = agent_cells(&matrix, "pi");
-        assert_eq!(count(&pi, MatrixCellState::Ok), 10);
-        assert_eq!(count(&pi, MatrixCellState::Partial), 2);
+        assert_eq!(count(&pi, MatrixCellState::Ok), 11);
+        assert_eq!(count(&pi, MatrixCellState::Partial), 1);
         assert_eq!(count(&pi, MatrixCellState::Absent), 4);
         // Pi's `agent_settled` marks final idle, while the stall window
         // reconstructs the missing idle-timeout nudge — partial, like Codex,
-        // not absent. Async extension subagents are partial because nicobailon
-        // foreground runs expose no bus events. `live$` is wired: the extension
-        // pushes a running dollar reconciled to the authoritative session spend
-        // sum every turn. Rich context is wired through immediate value-changing
-        // envelopes and throttled streaming updates.
+        // not absent. Subagents are wired: the rimz extension bridges pi's
+        // native `subagent_started`/`subagent_stopped` bus events in full;
+        // nicobailon foreground runs emit no bus lifecycle at all, an
+        // extension-side omission rather than an adapter gap. `live$` is wired:
+        // the extension pushes a running dollar reconciled to the authoritative
+        // session spend sum every turn. Rich context is wired through immediate
+        // value-changing envelopes and throttled streaming updates.
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Partial),
-            ["sub", "idle"]
+            ["idle"]
         );
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Absent),

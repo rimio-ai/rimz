@@ -167,9 +167,8 @@ const PI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
     compaction: ConcernCoverage::Wired {
         via: "session_before_compact/session_compact",
     },
-    subagents: ConcernCoverage::Partial {
-        via: "subagent extension bus events bridged by the rimz extension",
-        gap: "nicobailon foreground (non-async) runs surface only as the parent's running tool call",
+    subagents: ConcernCoverage::Wired {
+        via: "native subagent_started/subagent_stopped bus events bridged in full by the rimz extension",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
