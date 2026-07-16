@@ -191,7 +191,7 @@ A hook receives one JSON object on stdin. Every current hook payload contains:
 
 `SessionStart.source` is `startup`, `resume`, `clear`, or `compact`. Resume currently starts a replacement session under the hood, so do not assume the hook's new `session_id` equals the requested resume ID. `clear` and `/new` end the old session and establish a new one. `compact` is the only official hook-side close signal for a `PreCompact` bracket; Droid has no `PostCompact` hook.
 
-`SessionEnd.reason` is `clear`, `logout`, `prompt_input_exit`, or `other`. A clear/new transition produces a tombstone for the old ID followed by registration of the new ID. Pane/process liveness remains instance truth.
+`SessionEnd.reason` is `clear`, `logout`, `prompt_input_exit`, or `other`. A clear/new transition stamps the old ID ended, hiding its card while retaining its durable row, then registers the new ID. Pane/process liveness remains instance truth.
 
 `PreCompact.trigger` is `manual` or `auto`. `custom_instructions` carries the argument passed to `/compact` for manual compaction and is empty for automatic compaction. Map a following compact-source registration carefully: if its session ID changes, close/count compaction on the old session and register the replacement rather than applying `CompactionEnded` to an unseen ID.
 

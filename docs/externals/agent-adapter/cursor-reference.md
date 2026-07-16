@@ -212,7 +212,7 @@ Do not persist `user_email`, prompts, tool inputs, tool outputs, file contents, 
 | `postToolUseFailure` | a tool errors, times out, or is denied | `tool_name`, `tool_input`, `tool_use_id`, `cwd`, `error_message`, `failure_type`, `duration`, `is_interrupt` | heartbeat/diagnostic only; a tool failure is not necessarily turn death |
 | `afterAgentResponse` | the assistant produces its final visible response | `text` | safe assistant content only; never a turn boundary |
 | `stop` | the main agent loop ends | `status: completed | aborted | error`, input/output/cache token fields, `loop_count` | completed/error end the turn; aborted is an interruption |
-| `sessionEnd` | a conversation ends | `session_id`, `reason`, `duration_ms`, `is_background_agent`, `final_status`, optional `error_message` | `Ended` tombstone |
+| `sessionEnd` | a conversation ends | `session_id`, `reason`, `duration_ms`, `is_background_agent`, `final_status`, optional `error_message` | `Ended`; hide the card and retain the durable row for explicit resume |
 | `preCompact` | automatic or manual summarization begins | trigger and live context fields | `Compacting` plus `AgentContext` refresh |
 | `subagentStart` | before a Task subagent spawns | unique child ID, type, task, parent, call ID, model, parallel bit, optional branch | child `SubagentStarted` |
 | `subagentStop` | a subagent completes, errors, or aborts | child ID, parent ID, type, status, task, description, summary, metrics, modified files, transcript path | `SubagentStopped`; unknown status fails closed |

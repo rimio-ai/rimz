@@ -154,7 +154,7 @@ fn inspection_is_read_only_and_scopes_to_live_roster() {
 }
 
 #[test]
-fn recover_orders_death_tombstone_and_rebirth_then_consumes_roster() {
+fn recover_orders_death_ended_stamp_and_rebirth_then_consumes_roster() {
     let dir = tempfile::tempdir().expect("worktrees");
     let live = dir.path().join("live");
     let missing = dir.path().join("missing");
@@ -176,9 +176,9 @@ fn recover_orders_death_tombstone_and_rebirth_then_consumes_roster() {
     let events =
         String::from_utf8_lossy(&std::fs::read(&fixture.paths.events_log).unwrap()).into_owned();
     let death = events.find("session.death").expect("death");
-    let tombstone = events.find("rimz.worktree-gone").expect("tombstone");
+    let ended = events.find("rimz.worktree-gone").expect("ended stamp");
     let rebirth = events.find("session.rebirth").expect("rebirth");
-    assert!(death < tombstone && tombstone < rebirth, "{events}");
+    assert!(death < ended && ended < rebirth, "{events}");
     let marker: LastDeathMarker =
         serde_json::from_slice(&std::fs::read(&fixture.paths.last_death_marker).unwrap())
             .expect("marker");

@@ -356,7 +356,7 @@ fn materialize_recovery(
     let mut final_plan = ResumePlan {
         tabs: Vec::new(),
         skipped: planned.flat.skipped,
-        tombstone: planned.flat.tombstone,
+        agents_to_end: planned.flat.agents_to_end,
     };
     let mut tabs = Vec::new();
     for team in &planned.team {
@@ -391,7 +391,7 @@ fn materialize_recovery(
         }
     }
     if let Some(store) = store {
-        record_worktree_gone_tombstones(store, &paths.workspace_id, session_name, &final_plan);
+        record_worktree_gone_agents_ended(store, &paths.workspace_id, session_name, &final_plan);
     }
     final_plan
 }
@@ -467,13 +467,13 @@ fn empty_named_channel_tabs(paths: &StatePaths) -> Vec<ResumeTab> {
         .collect()
 }
 
-fn record_worktree_gone_tombstones(
+fn record_worktree_gone_agents_ended(
     store: &Store,
     workspace_id: &WorkspaceId,
     session_name: &str,
     plan: &ResumePlan,
 ) {
-    for (kind, agent_id) in &plan.tombstone {
+    for (kind, agent_id) in &plan.agents_to_end {
         let observation = crate::agents::AgentLifecycleObservation::new(
             Some(agent_id.clone()),
             crate::agents::LifecycleSignal::Ended,

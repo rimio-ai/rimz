@@ -148,7 +148,7 @@ The event vocabulary maps directly onto RimZ lifecycle signals:
 | `compaction_end` | `trigger?: auto | manual` | Close compaction and resume or rest according to the trigger. |
 | `subagent_start` | child `agent_id` | Register a child linked to the parent `session_id`. |
 | `subagent_end` | child `agent_id`, `errored?` | Resolve the child as success or failure. |
-| `session_end` | none | Tombstone the session. |
+| `session_end` | none | End the session, hide its card, and retain its durable row for explicit resume. |
 | `context` | shared fields plus normalized context fields | Merge rich display-only context without a lifecycle transition. |
 
 `context` also accepts the optional fields in the serialized [`AgentContext`](../../crates/rimz/src/agents/context.rs) shape, including `session_name`, `session_preview`, `model_id`, `model_display_name`, `thinking_enabled`, `output_style`, `vim_mode`, `agent_version`, `cost`, `tokens`, `rate_limits`, `pr`, and `account`. RimZ stamps `source` and `observed_at`; the shim omits them. Top-level `model`, token split, gauge, cost, and rate-limit fields normalize into the same shape.

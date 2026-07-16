@@ -641,7 +641,7 @@ fn rebirth_resume_skips_provisional_launch_placeholder() {
             reason: ResumeSkipReason::NoResumeSupport,
         }]
     );
-    assert!(plan.tombstone.is_empty());
+    assert!(plan.agents_to_end.is_empty());
 }
 
 #[test]
@@ -665,7 +665,7 @@ fn plan_resume_skips_agent_without_conversation() {
             reason: ResumeSkipReason::NoConversation,
         }]
     );
-    assert!(plan.tombstone.is_empty());
+    assert!(plan.agents_to_end.is_empty());
 }
 
 #[test]
@@ -808,7 +808,7 @@ fn stamps_a_missing_worktree_session_ended() {
     assert!(plan.tabs.is_empty());
     assert!(plan.skipped.is_empty());
     assert_eq!(
-        plan.tombstone,
+        plan.agents_to_end,
         vec![(AgentKind::new_unchecked("claude"), "a1".into())]
     );
 }

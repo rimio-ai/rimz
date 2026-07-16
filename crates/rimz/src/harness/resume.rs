@@ -214,7 +214,7 @@ pub struct ResumePlan {
     pub skipped: Vec<ResumeSkip>,
     /// Candidates whose worktree disappeared; the caller records these as
     /// durable end traces so they leave the next resume candidate set.
-    pub tombstone: Vec<(AgentKind, AgentSessionId)>,
+    pub agents_to_end: Vec<(AgentKind, AgentSessionId)>,
 }
 
 /// One cell in an explicit cohort resume spec, reduced to the matching fields
@@ -1208,7 +1208,7 @@ fn plan_resume_candidates(
         let channel = candidate_room_channel(project_root, &candidate);
         let label = build_label(&candidate.kind, channel.as_deref(), &candidate.cwd);
         if !worktree_exists(&candidate.cwd) {
-            plan.tombstone
+            plan.agents_to_end
                 .push((candidate.kind.clone(), candidate.session_id.clone()));
             continue;
         }

@@ -419,7 +419,7 @@ fn missing_worktree_candidate_is_stamped_ended_not_reported() {
     assert!(plan.tabs.is_empty());
     assert!(plan.skipped.is_empty());
     assert_eq!(
-        plan.tombstone,
+        plan.agents_to_end,
         vec![(
             rimz::ids::AgentKind::new_unchecked("claude"),
             "sess-claude".into()
