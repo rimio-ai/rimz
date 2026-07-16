@@ -143,26 +143,6 @@ impl ContextSeverity {
     }
 }
 
-/// A threshold-crossing an agent's observed state can trip — the typed shape a
-/// future notification or automation hook can inspect (an auto-compact policy
-/// matching `ContextSeverity { to: Amber, .. }` and sending `rimz pane send
-/// /compact`). Defined now so the seam is typed against the verdicts the
-/// snapshot already stamps ([`ContextSeverity`] on each row,
-/// [`AgentStatus::is_attention`] on the buckets); emission and handling are
-/// deliberately unbuilt — see the hook-readiness note in
-/// docs/internals/sidebar/sidebar.md.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AgentSignal {
-    /// The context meter crossed into a different severity tier.
-    ContextSeverity {
-        from: ContextSeverity,
-        to: ContextSeverity,
-    },
-    /// The agent entered an attention-class status.
-    Attention { status: AgentStatus },
-}
-
 /// Default window before a `running` agent with no activity is treated as
 /// stalled. The per-machine `[agents.attention] stalled_after_secs` setting
 /// overrides this for the live sidebar projection.

@@ -459,31 +459,6 @@ fn context_severity_honours_custom_and_misordered_bands() {
     );
 }
 
-/// Pins the signal's wire shape now, so the first emitter and handler
-/// build against a stable contract rather than re-negotiating it.
-#[test]
-fn agent_signal_serializes_to_a_tagged_wire_shape() {
-    assert_eq!(
-        serde_json::to_value(AgentSignal::ContextSeverity {
-            from: ContextSeverity::Yellow,
-            to: ContextSeverity::Amber,
-        })
-        .unwrap(),
-        serde_json::json!({
-            "kind": "context_severity",
-            "from": "yellow",
-            "to": "amber",
-        })
-    );
-    assert_eq!(
-        serde_json::to_value(AgentSignal::Attention {
-            status: AgentStatus::Waiting,
-        })
-        .unwrap(),
-        serde_json::json!({ "kind": "attention", "status": "waiting" })
-    );
-}
-
 #[test]
 fn attention_predicates_split_actionable_from_parked() {
     // The two intentional flavors: ranking spans the parked Paused,
