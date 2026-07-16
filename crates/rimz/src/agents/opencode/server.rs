@@ -2,9 +2,9 @@
 //!
 //! The in-process plugin owns the only discovery handle for a TUI launch's
 //! random-port server: `PluginInput.serverUrl`. The hook envelope carries that
-//! URL to `rimz opencode refresh-context`, and this module performs read-only,
-//! best-effort HTTP reads against it. Failures omit fields; they never fail the
-//! hook helper.
+//! URL to `rimz opencode refresh-context`, and this module owns the throttled,
+//! best-effort rich-context observation and merge policy. Failures omit fields;
+//! they never fail the hook helper. CLI code owns sidecar persistence and wakeups.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -17,8 +17,78 @@ use crate::agents::AgentContext;
 
 const TIMEOUT_SECS: u64 = 2;
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
+const REFRESH_THROTTLE_SECS: i64 = 20;
 const PASSWORD_ENV: &str = "OPENCODE_SERVER_PASSWORD";
 const USERNAME_ENV: &str = "OPENCODE_SERVER_USERNAME";
+
+/// Observe and merge provider-owned rich fields when the session's rich-data
+/// throttle is due. Push-owned lifecycle, usage, cost, and transcript fields
+/// remain sourced from `prior`.
+pub fn refresh_rich_context(
+    server_url: &str,
+    session_id: &str,
+    current_model: Option<&str>,
+    prior: Option<&AgentContext>,
+    rich_observed_at: Option<Timestamp>,
+    now: Timestamp,
+) -> Option<AgentContext> {
+    refresh_rich_context_with(
+        server_url,
+        session_id,
+        current_model,
+        prior,
+        rich_observed_at,
+        now,
+        observe,
+    )
+}
+
+fn refresh_rich_context_with(
+    server_url: &str,
+    session_id: &str,
+    current_model: Option<&str>,
+    prior: Option<&AgentContext>,
+    rich_observed_at: Option<Timestamp>,
+    now: Timestamp,
+    observe: impl FnOnce(&str, Option<&str>, Option<&str>, Timestamp) -> AgentContext,
+) -> Option<AgentContext> {
+    if rich_observed_at.is_some_and(|observed_at| {
+        now.as_second() - observed_at.as_second() < REFRESH_THROTTLE_SECS
+    }) {
+        return None;
+    }
+    let model_hint =
+        current_model.or_else(|| prior.and_then(|context| context.model_id.as_deref()));
+    let observed = observe(server_url, Some(session_id), model_hint, now);
+    merge_rich_context(prior, observed)
+}
+
+fn merge_rich_context(
+    prior: Option<&AgentContext>,
+    observed: AgentContext,
+) -> Option<AgentContext> {
+    if !has_rich_fields(&observed) {
+        return None;
+    }
+    let observed_at = observed.observed_at;
+    let mut context = prior
+        .cloned()
+        .unwrap_or_else(|| AgentContext::new("opencode", observed_at));
+    context.source = observed.source;
+    if observed.session_name.is_some() {
+        context.session_name = observed.session_name;
+    }
+    context.model_display_name = observed.model_display_name;
+    context.agent_version = observed.agent_version;
+    context.observed_at = observed_at;
+    Some(context)
+}
+
+fn has_rich_fields(context: &AgentContext) -> bool {
+    context.session_name.is_some()
+        || context.model_display_name.is_some()
+        || context.agent_version.is_some()
+}
 
 pub fn observe(
     server_url: &str,
@@ -244,7 +314,145 @@ fn nonempty_ref(value: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::{AgentCost, AgentTokenUsage};
     use serde_json::json;
+
+    fn rich_context(observed_at: Timestamp) -> AgentContext {
+        AgentContext {
+            session_name: Some("Fix auth".to_owned()),
+            model_display_name: Some("GPT-5".to_owned()),
+            agent_version: Some("1.17.9".to_owned()),
+            ..AgentContext::new("opencode", observed_at)
+        }
+    }
+
+    #[test]
+    fn rich_context_refresh_uses_rich_stamp_throttle() {
+        let now = Timestamp::from_second(1_700_000_050).unwrap();
+        let observations = std::cell::Cell::new(0);
+        let result = refresh_rich_context_with(
+            "http://127.0.0.1:1",
+            "sess-1",
+            None,
+            None,
+            Some(Timestamp::from_second(now.as_second() - REFRESH_THROTTLE_SECS + 1).unwrap()),
+            now,
+            |_, _, _, observed_at| {
+                observations.set(observations.get() + 1);
+                rich_context(observed_at)
+            },
+        );
+        assert!(result.is_none());
+        assert_eq!(observations.get(), 0);
+
+        let result = refresh_rich_context_with(
+            "http://127.0.0.1:1",
+            "sess-1",
+            None,
+            None,
+            Some(Timestamp::from_second(now.as_second() - REFRESH_THROTTLE_SECS).unwrap()),
+            now,
+            |_, _, _, observed_at| {
+                observations.set(observations.get() + 1);
+                rich_context(observed_at)
+            },
+        );
+        assert!(result.is_some());
+        assert_eq!(observations.get(), 1);
+    }
+
+    #[test]
+    fn rich_context_refresh_falls_back_to_prior_model() {
+        let now = Timestamp::from_second(1_700_000_050).unwrap();
+        let mut prior = AgentContext::new("opencode", now);
+        prior.model_id = Some("openai/gpt-5".to_owned());
+        let observed_model = std::cell::RefCell::new(None);
+
+        let result = refresh_rich_context_with(
+            "http://127.0.0.1:1",
+            "sess-1",
+            None,
+            Some(&prior),
+            None,
+            now,
+            |_, session_id, model_hint, observed_at| {
+                assert_eq!(session_id, Some("sess-1"));
+                *observed_model.borrow_mut() = model_hint.map(ToOwned::to_owned);
+                rich_context(observed_at)
+            },
+        );
+
+        assert!(result.is_some());
+        assert_eq!(observed_model.into_inner().as_deref(), Some("openai/gpt-5"));
+    }
+
+    #[test]
+    fn rich_context_merge_preserves_push_owned_fields() {
+        let push_at = Timestamp::from_second(1_700_000_000).unwrap();
+        let rich_at = Timestamp::from_second(1_700_000_050).unwrap();
+        let mut prior = AgentContext::new("opencode", push_at);
+        prior.session_name = Some("Existing name".to_owned());
+        prior.session_preview = Some("existing preview".to_owned());
+        prior.model_id = Some("gpt-5".to_owned());
+        prior.effort = Some("xhigh".to_owned());
+        prior.tokens = Some(AgentTokenUsage {
+            used_percentage: Some(25),
+            ..Default::default()
+        });
+        prior.cost = Some(AgentCost {
+            total_cost_usd: Some(0.42),
+            ..Default::default()
+        });
+
+        let merged = merge_rich_context(Some(&prior), rich_context(rich_at)).unwrap();
+
+        assert_eq!(merged.source, "opencode");
+        assert_eq!(merged.session_name.as_deref(), Some("Fix auth"));
+        assert_eq!(merged.session_preview.as_deref(), Some("existing preview"));
+        assert_eq!(merged.model_id.as_deref(), Some("gpt-5"));
+        assert_eq!(merged.effort.as_deref(), Some("xhigh"));
+        assert_eq!(
+            merged
+                .tokens
+                .as_ref()
+                .and_then(|tokens| tokens.used_percentage),
+            Some(25)
+        );
+        assert_eq!(
+            merged.cost.as_ref().and_then(|cost| cost.total_cost_usd),
+            Some(0.42)
+        );
+        assert_eq!(merged.model_display_name.as_deref(), Some("GPT-5"));
+        assert_eq!(merged.agent_version.as_deref(), Some("1.17.9"));
+        assert_eq!(merged.observed_at, rich_at);
+
+        let mut unnamed = rich_context(rich_at);
+        unnamed.session_name = None;
+        assert_eq!(
+            merge_rich_context(Some(&prior), unnamed)
+                .unwrap()
+                .session_name
+                .as_deref(),
+            Some("Existing name")
+        );
+    }
+
+    #[test]
+    fn empty_rich_observation_returns_no_update() {
+        let now = Timestamp::from_second(1_700_000_050).unwrap();
+        assert!(
+            refresh_rich_context_with(
+                "http://127.0.0.1:1",
+                "sess-1",
+                None,
+                None,
+                None,
+                now,
+                |_, _, _, observed_at| AgentContext::new("opencode", observed_at),
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn into_context_projects_server_bodies() {
