@@ -56,7 +56,7 @@ The glyph, animation, and color for each are the canonical table in [the interfa
 
 | Lifetime | Rule | Fields |
 | --- | --- | --- |
-| **identity** | set once when the session registers, stable thereafter | `agent_id`, `kind`, `parent_agent_id`, `agent_pid` |
+| **identity** | set once when the session registers, stable thereafter | `agent_id`, `kind`, `parent_agent_id`, `runtime_owner` |
 | **set-once** | fills from the first usable observation and then stays stable | `first_prompt` |
 | **activity** | replaced by the latest event, and *clearing* it is meaningful: an idle agent has no `task` | `status`, `task`, `last_activity` |
 | **carry-forward** | persists until a newer value arrives; a missing value never resets it | `model`, `effort`, `context_pct`, `context_window`, `prompt`, `description`, `transcript_path`, `recent_prompts` |

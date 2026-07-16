@@ -462,58 +462,18 @@ fn apply_local_lifecycle(
 }
 
 fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
-    AgentState {
-        agent_id: observation.session_id.clone(),
-        kind: observation.kind.clone(),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: None,
-        mode: None,
-        role: None,
-        team: None,
-        launch_group: None,
-        launch_ordinal: None,
-        channel: None,
-        ended_at: None,
-        status: AgentStatus::Idle,
-        phase: TurnPhase::Idle,
-        pane: None,
-        runtime_owner: None,
-        parent_agent_id: None,
-        worktree_path: None,
-        worktree_branch: None,
-        task: None,
-        first_prompt: None,
-        prompt: None,
-        description: None,
-        transcript_path: None,
-        origin: None,
-        recent_prompts: Vec::new(),
-        model: None,
-        effort: None,
-        budget: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        cache_read_input_tokens: None,
-        cache_write_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        context: None,
-        budget_park: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        open_ask: None,
-        compacting_since: None,
-        compaction_count: 0,
-        last_compact_command_tokens: None,
-        last_seen: observation.last_activity,
-        last_activity: observation.last_activity,
-        registered_at: Some(observation.created_at),
-    }
+    let status = match &observation.projection {
+        LocalSessionProjection::IdentityOnly => AgentStatus::Idle,
+        LocalSessionProjection::Lifecycle(projection) => projection.status,
+    };
+    let mut state = AgentState::seed(
+        observation.kind.clone(),
+        observation.session_id.clone(),
+        status,
+        observation.last_activity,
+    );
+    state.registered_at = Some(observation.created_at);
+    state
 }
 
 fn stamp_unread_rows(

@@ -448,62 +448,42 @@ fn carried_base(
     prior: Option<&AgentState>,
     event_ts: Timestamp,
 ) -> AgentState {
-    AgentState {
-        agent_id: agent_id.clone(),
-        kind: kind.clone(),
-        name: None,
-        name_explicit: false,
-        kind_ordinal: None,
-        profile: prior.and_then(|state| state.profile.clone()),
-        mode: prior.and_then(|state| state.mode),
-        role: prior.and_then(|state| state.role.clone()),
-        team: prior.and_then(|state| state.team.clone()),
-        launch_group: prior.and_then(|state| state.launch_group.clone()),
-        launch_ordinal: prior.and_then(|state| state.launch_ordinal),
-        channel: prior.and_then(|state| state.channel.clone()),
-        ended_at: None,
-        status: AgentStatus::Idle,
-        phase: lifecycle::TurnPhase::Idle,
-        pane: prior.and_then(|state| state.pane.clone()),
-        runtime_owner: prior.and_then(|state| state.runtime_owner.clone()),
-        parent_agent_id: prior.and_then(|state| state.parent_agent_id.clone()),
-        worktree_path: prior.and_then(|state| state.worktree_path.clone()),
-        worktree_branch: prior.and_then(|state| state.worktree_branch.clone()),
-        task: prior.and_then(|state| state.task.clone()),
-        first_prompt: prior.and_then(|state| state.first_prompt.clone()),
-        prompt: prior.and_then(|state| state.prompt.clone()),
-        description: prior.and_then(|state| state.description.clone()),
-        transcript_path: prior.and_then(|state| state.transcript_path.clone()),
-        origin: prior.and_then(|state| state.origin),
-        recent_prompts: prior
-            .map(|state| state.recent_prompts.clone())
-            .unwrap_or_default(),
-        model: prior.and_then(|state| state.model.clone()),
-        effort: prior.and_then(|state| state.effort.clone()),
-        budget: prior.and_then(|state| state.budget.clone()),
-        context_pct: prior.and_then(|state| state.context_pct),
-        context_window: prior.and_then(|state| state.context_window),
-        total_tokens: prior.and_then(|state| state.total_tokens),
-        cache_read_input_tokens: prior.and_then(|state| state.cache_read_input_tokens),
-        cache_write_input_tokens: prior.and_then(|state| state.cache_write_input_tokens),
-        fresh_input_tokens: prior.and_then(|state| state.fresh_input_tokens),
-        output_tokens: prior.and_then(|state| state.output_tokens),
-        context: None,
-        budget_park: None,
-        subagent_description: None,
-        subagent_started_at: None,
-        turn_started_at: None,
-        waiting_since: None,
-        open_ask: None,
-        compacting_since: None,
-        compaction_count: prior.map_or(0, |state| state.compaction_count),
-        last_compact_command_tokens: prior.and_then(|state| state.last_compact_command_tokens),
-        last_seen: event_ts,
-        last_activity: event_ts,
-        registered_at: prior
-            .and_then(|state| state.registered_at)
-            .or(Some(event_ts)),
+    let mut state = AgentState::seed(kind.clone(), agent_id.clone(), AgentStatus::Idle, event_ts);
+    if let Some(prior) = prior {
+        state.profile = prior.profile.clone();
+        state.mode = prior.mode;
+        state.role = prior.role.clone();
+        state.team = prior.team.clone();
+        state.launch_group = prior.launch_group.clone();
+        state.launch_ordinal = prior.launch_ordinal;
+        state.channel = prior.channel.clone();
+        state.pane = prior.pane.clone();
+        state.runtime_owner = prior.runtime_owner.clone();
+        state.parent_agent_id = prior.parent_agent_id.clone();
+        state.worktree_path = prior.worktree_path.clone();
+        state.worktree_branch = prior.worktree_branch.clone();
+        state.task = prior.task.clone();
+        state.first_prompt = prior.first_prompt.clone();
+        state.prompt = prior.prompt.clone();
+        state.description = prior.description.clone();
+        state.transcript_path = prior.transcript_path.clone();
+        state.origin = prior.origin;
+        state.recent_prompts = prior.recent_prompts.clone();
+        state.model = prior.model.clone();
+        state.effort = prior.effort.clone();
+        state.budget = prior.budget.clone();
+        state.context_pct = prior.context_pct;
+        state.context_window = prior.context_window;
+        state.total_tokens = prior.total_tokens;
+        state.cache_read_input_tokens = prior.cache_read_input_tokens;
+        state.cache_write_input_tokens = prior.cache_write_input_tokens;
+        state.fresh_input_tokens = prior.fresh_input_tokens;
+        state.output_tokens = prior.output_tokens;
+        state.compaction_count = prior.compaction_count;
+        state.last_compact_command_tokens = prior.last_compact_command_tokens;
+        state.registered_at = prior.registered_at.or(Some(event_ts));
     }
+    state
 }
 
 fn fold_launch_params(state: &mut AgentState, launch: &LaunchParams) {

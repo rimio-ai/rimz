@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn seed_sets_status_phase_clocks_and_empty_enrichment() {
+    let at = Timestamp::from_second(1_700_000_000).unwrap();
+    let running = AgentState::seed(
+        AgentKind::new_unchecked("claude"),
+        AgentSessionId::from("sess-running"),
+        AgentStatus::Running,
+        at,
+    );
+
+    assert_eq!(running.status, AgentStatus::Running);
+    assert_eq!(running.phase, TurnPhase::Reasoning);
+    assert_eq!(running.last_seen, at);
+    assert_eq!(running.last_activity, at);
+    assert_eq!(running.registered_at, Some(at));
+    assert!(running.name.is_none());
+    assert!(running.pane.is_none());
+    assert!(running.runtime_owner.is_none());
+    assert!(running.recent_prompts.is_empty());
+    assert!(running.context_pct.is_none());
+    assert!(running.context_window.is_none());
+    assert!(running.total_tokens.is_none());
+    assert!(running.context.is_none());
+    assert!(running.budget_park.is_none());
+    assert!(running.subagent_description.is_none());
+    assert!(running.open_ask.is_none());
+    assert_eq!(running.compaction_count, 0);
+
+    let waiting = AgentState::seed(
+        AgentKind::new_unchecked("codex"),
+        AgentSessionId::from("sess-waiting"),
+        AgentStatus::Waiting,
+        at,
+    );
+    assert_eq!(waiting.phase, TurnPhase::Idle);
+}
+
+#[test]
 fn logical_card_matches_exact_sessions_or_shared_stable_names() {
     let claude = AgentKind::new_unchecked("claude");
     let codex = AgentKind::new_unchecked("codex");

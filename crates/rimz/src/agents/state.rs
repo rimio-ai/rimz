@@ -768,26 +768,18 @@ fn is_zero_u32(n: &u32) -> bool {
 }
 
 impl AgentState {
-    pub fn card_ref(&self) -> AgentCardRef<'_> {
-        AgentCardRef::new(&self.kind, &self.agent_id, self.name.as_deref())
-    }
-
-    /// Whether this agent is inside the bounded compaction window.
-    pub fn is_compacting(&self, now: Timestamp) -> bool {
-        self.compacting_since
-            .is_some_and(|since| now.duration_since(since).as_secs() < COMPACTING_WINDOW_SECS)
-    }
-
-    /// Minimal test fixture with stable identity fields and empty enrichment.
-    #[cfg(any(test, feature = "testkit"))]
-    pub fn stub(kind: &str, id: &str, status: AgentStatus) -> Self {
-        let now = Timestamp::now();
+    pub(crate) fn seed(
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        status: AgentStatus,
+        at: Timestamp,
+    ) -> Self {
         Self {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked(kind),
-            name: Some(format!("{id}-name")),
+            agent_id,
+            kind,
+            name: None,
             name_explicit: false,
-            kind_ordinal: Some(1),
+            kind_ordinal: None,
             profile: None,
             mode: None,
             role: None,
@@ -833,10 +825,35 @@ impl AgentState {
             compacting_since: None,
             compaction_count: 0,
             last_compact_command_tokens: None,
-            last_seen: now,
-            last_activity: now,
-            registered_at: Some(now),
+            last_seen: at,
+            last_activity: at,
+            registered_at: Some(at),
         }
+    }
+
+    pub fn card_ref(&self) -> AgentCardRef<'_> {
+        AgentCardRef::new(&self.kind, &self.agent_id, self.name.as_deref())
+    }
+
+    /// Whether this agent is inside the bounded compaction window.
+    pub fn is_compacting(&self, now: Timestamp) -> bool {
+        self.compacting_since
+            .is_some_and(|since| now.duration_since(since).as_secs() < COMPACTING_WINDOW_SECS)
+    }
+
+    /// Minimal test fixture with stable identity fields and empty enrichment.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn stub(kind: &str, id: &str, status: AgentStatus) -> Self {
+        let now = Timestamp::now();
+        let mut state = Self::seed(
+            AgentKind::new_unchecked(kind),
+            AgentSessionId::from(id),
+            status,
+            now,
+        );
+        state.name = Some(format!("{id}-name"));
+        state.kind_ordinal = Some(1);
+        state
     }
 
     /// One-line activity label for CLI and sidebar rows: rich session preview,
