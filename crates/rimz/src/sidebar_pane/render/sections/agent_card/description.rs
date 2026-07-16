@@ -4,9 +4,9 @@ use super::*;
 /// a fixed-width ellipsis that grows `.  ` -> `.. ` -> `...`.
 const AWAITING_DOTS: [&str; 3] = [".  ", ".. ", "..."];
 
-/// Hold each dot frame across four base animation phases so the placeholder
-/// reads as calm motion on the breath grid.
-const AWAITING_DOT_STEP: u64 = 4;
+/// Hold each dot frame across ten base animation phases (~1 s at the default
+/// 100 ms grid, ~3 s per cycle) so the placeholder reads as a resting pulse.
+const AWAITING_DOT_STEP: u64 = 10;
 
 pub(super) fn awaiting_dots_frame(animation_phase: u64) -> &'static str {
     AWAITING_DOTS[((animation_phase / AWAITING_DOT_STEP) as usize) % AWAITING_DOTS.len()]
