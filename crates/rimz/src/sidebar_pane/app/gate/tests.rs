@@ -325,6 +325,37 @@ fn reject_holds_prior_frame_as_render_and_baseline() {
 }
 
 #[test]
+fn rejected_snapshot_then_failure_keeps_prior_frame_and_gate_episode() {
+    let ws = workspace();
+    let prior = agent_snapshot(&ws);
+    let computed = compute_next_state(
+        &ws,
+        None,
+        Ok(process_on(&ws, "terminal_9")),
+        Some(prior.clone()),
+        &Health::default(),
+    );
+    let (held, gate, rejected, _) =
+        apply_gate(computed, true, &prior, &GateState::default(), gate_now());
+    assert!(rejected);
+
+    let failed = compute_next_state(
+        &ws,
+        None,
+        Err("store not found".to_owned()),
+        held.last_snapshot,
+        &held.health,
+    );
+    let (failed, next_gate, rejected, released) =
+        apply_gate(failed, false, &held.snapshot, &gate, gate_now());
+
+    assert!(!rejected);
+    assert!(!released);
+    assert!(failed.snapshot.worktree_groups[0].rows[0].is_agent());
+    assert_eq!(next_gate, gate);
+}
+
+#[test]
 fn accept_carries_collapsed_spend_without_touching_roster() {
     let ws = workspace();
     let mut prior = spend_snapshot(&ws, Some(12.50), Some(7.25), Some(4.00), 50);

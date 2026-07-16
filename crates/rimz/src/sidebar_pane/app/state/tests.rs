@@ -73,6 +73,22 @@ fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<DiagEvent> {
         .collect()
 }
 
+fn notification_trace_events(root: &std::path::Path) -> Vec<crate::diag::notify::NotifyTraceEvent> {
+    let path = root.join("notify.log.jsonl");
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) => panic!("notification trace log: {err}"),
+    };
+    text.lines()
+        .map(|line| {
+            serde_json::from_str::<crate::diag::notify::NotifyTraceEnvelope>(line)
+                .expect("notification trace envelope")
+                .event
+        })
+        .collect()
+}
+
 fn row_snapshot(ws: &WorkspaceId, status: AgentStatus, focused: bool) -> SidebarSnapshot {
     row_snapshot_at(ws, status, focused, fixed_time(1_700_000_000))
 }
@@ -322,14 +338,32 @@ impl ApplyHarness {
     }
 
     fn apply_outcome(&mut self, outcome: FetchUpdate) -> ApplyOutcome {
+        self.apply_outcome_with_diag(outcome, &crate::diag::DiagSink::disabled())
+    }
+
+    fn apply_outcome_with_diag(
+        &mut self,
+        outcome: FetchUpdate,
+        diag: &crate::diag::DiagSink,
+    ) -> ApplyOutcome {
         self.state
-            .apply_fetch_outcome(
-                &self.config,
-                outcome,
-                std::time::Instant::now(),
-                &crate::diag::DiagSink::disabled(),
-            )
+            .apply_fetch_outcome(&self.config, outcome, std::time::Instant::now(), diag)
             .expect("apply fetch outcome")
+    }
+
+    fn fail(&mut self, reason: &str) -> ApplyOutcome {
+        self.fail_with_diag(reason, &crate::diag::DiagSink::disabled())
+    }
+
+    fn fail_with_diag(&mut self, reason: &str, diag: &crate::diag::DiagSink) -> ApplyOutcome {
+        self.apply_outcome_with_diag(
+            FetchUpdate::Failed {
+                error: reason.to_owned(),
+                role: FetchRole::Producer,
+                pane_frame: PaneFrame::Held,
+            },
+            diag,
+        )
     }
 }
 
@@ -583,6 +617,121 @@ fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
     assert!(!alert.is_active());
     assert!(alert.recovered_at.is_some());
     assert_eq!(recovered.health.failure_streak, 0);
+}
+
+#[test]
+fn accepted_final_then_failed_final_keeps_rendered_facts() {
+    let ws = workspace();
+    let (_dir, mut h) = ApplyHarness::new(&ws);
+    let mut accepted = row_snapshot(&ws, AgentStatus::Waiting, false);
+    accepted.worktree_groups[0].rows[0].unread = true;
+    append_agent_row(&mut accepted, "sess-2", "%2", AgentStatus::Running, false);
+
+    h.apply(accepted);
+    let rows = row_ids(&h.current);
+    let unread = h.current.rows().map(|row| row.unread).collect::<Vec<_>>();
+    let statuses = h.current.rows().map(|row| row.status()).collect::<Vec<_>>();
+    let gate_notice = h.ui.gate_notice.clone();
+
+    h.fail("store not found");
+
+    assert_eq!(row_ids(&h.current), rows);
+    assert_eq!(
+        h.current.rows().map(|row| row.unread).collect::<Vec<_>>(),
+        unread
+    );
+    assert_eq!(
+        h.current.rows().map(|row| row.status()).collect::<Vec<_>>(),
+        statuses
+    );
+    assert_eq!(h.health.failure_streak, 1);
+    assert_eq!(h.ui.gate_notice, gate_notice);
+}
+
+#[test]
+fn interim_success_does_not_recover_health_and_final_failure_advances_once() {
+    let ws = workspace();
+    let (_dir, mut h) = ApplyHarness::new(&ws);
+    h.health = degraded_health("snapshot failed: first");
+
+    h.apply_outcome(FetchUpdate::Snapshot {
+        snapshot: Box::new(row_snapshot(&ws, AgentStatus::Running, false)),
+        role: FetchRole::Producer,
+        phase: FetchPhase::Interim,
+        pane_frame: PaneFrame::Held,
+    });
+    assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES);
+    assert!(h.health.alert.as_ref().is_some_and(Alert::is_active));
+
+    h.fail("produce failed");
+
+    assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES + 1);
+    let alert = active_alert(&h.health);
+    assert!(alert.reason.contains("produce failed"));
+}
+
+#[test]
+fn focused_read_clear_failure_keeps_visible_state_but_duplicates_trace() {
+    let ws = workspace();
+    let (dir, runtime) = runtime_for(&ws);
+    let instance_id = SidebarInstanceId::new();
+    let mut h = ApplyHarness::for_runtime(&ws, runtime, instance_id.clone());
+    let diag = crate::diag::DiagSink::under(
+        dir.path().to_path_buf(),
+        ws.clone(),
+        "rimz-test",
+        Some(instance_id),
+    );
+    let mut focused = row_snapshot(&ws, AgentStatus::Waiting, true);
+    focused.worktree_groups[0].rows[0].unread = true;
+
+    h.apply_outcome_with_diag(
+        FetchUpdate::Snapshot {
+            snapshot: Box::new(focused),
+            role: FetchRole::Producer,
+            phase: FetchPhase::Final,
+            pane_frame: PaneFrame::Fresh,
+        },
+        &diag,
+    );
+    assert!(!row_unread(&h.current));
+    assert_eq!(
+        notification_trace_events(dir.path())
+            .iter()
+            .filter(|event| matches!(
+                event,
+                crate::diag::notify::NotifyTraceEvent::UnreadCleared { .. }
+            ))
+            .count(),
+        1
+    );
+
+    h.fail_with_diag("store not found", &diag);
+
+    assert!(!row_unread(&h.current));
+    assert_eq!(
+        notification_trace_events(dir.path())
+            .iter()
+            .filter(|event| matches!(
+                event,
+                crate::diag::notify::NotifyTraceEvent::UnreadCleared { .. }
+            ))
+            .count(),
+        2,
+        "known bug: failure restores the stale internal unread bit and clears it again"
+    );
+}
+
+#[test]
+fn cold_start_failure_uses_snapshot_builder_defaults() {
+    let ws = workspace();
+    let failed = fetch_failed(&ws, "store not found", None, &Health::default());
+    let expected = SidebarSnapshot::build_with_agents(ws, Vec::new(), failed.snapshot.now);
+
+    assert_eq!(
+        serde_json::to_value(&failed.snapshot).unwrap(),
+        serde_json::to_value(expected).unwrap()
+    );
 }
 
 #[test]
