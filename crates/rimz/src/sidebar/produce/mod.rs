@@ -23,14 +23,14 @@ mod metrics;
 mod panes;
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use crate::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use crate::sidebar::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
-use crate::sidebar::enrich::{FoldOpts, enrich, wired_default_models, wired_kinds};
+use crate::sidebar::enrich::{FoldOpts, WiredAgentProjection, enrich, wired_agent_projection};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::sidebar::refresh::{RefreshedLanes, refresh_heavy_lanes};
 use crate::sidebar::timing::unix_now_ms;
@@ -173,8 +173,7 @@ pub fn produce_resolution_snapshot(
         snapshot,
         frame,
         opts.exclude.as_ref(),
-        wired_kinds(),
-        wired_default_models(),
+        wired_agent_projection(),
     ))
 }
 
@@ -338,11 +337,10 @@ fn fold_resolution_frame(
     mut snapshot: SidebarSnapshot,
     frame: PaneFrame,
     exclude: Option<&PaneId>,
-    wired_kinds: Vec<String>,
-    wired_default_models: BTreeMap<String, String>,
+    wired: WiredAgentProjection,
 ) -> SidebarSnapshot {
-    snapshot.wired_kinds = wired_kinds;
-    snapshot.wired_default_models = wired_default_models;
+    snapshot.wired_kinds = wired.kinds;
+    snapshot.wired_default_models = wired.default_models;
     snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
     snapshot.panes_observed_at_ms = Some(frame.observed_at_ms);
     snapshot.with_live_panes(frame.to_pane_refs(), exclude)
@@ -555,8 +553,10 @@ mod tests {
             snapshot,
             frame,
             None,
-            vec!["codex".to_owned()],
-            BTreeMap::new(),
+            WiredAgentProjection {
+                kinds: vec!["codex".to_owned()],
+                default_models: std::collections::BTreeMap::new(),
+            },
         );
 
         let bound = snapshot

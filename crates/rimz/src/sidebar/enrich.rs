@@ -28,7 +28,7 @@ use super::refresh::accounts::{cached_accounts_for_snapshot, read_accounts_cache
 use super::refresh::credits::apply_credits_cache;
 use super::refresh::daemon_reap::read_codex_daemon_reap;
 use super::refresh::git_stats::{
-    DiffStatsCache, DiffStatsCacheEntry, git_backed_worktree_path, read_diff_stats_cache,
+    DiffStatsCache, DiffStatsCacheEntry, read_diff_stats_cache, worktree_group_path_fields,
 };
 use super::refresh::live_spend::{apply_live_day_spend, apply_live_today_spend};
 use super::refresh::pr::PrLink;
@@ -101,23 +101,28 @@ pub fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, n
 /// Project the cached git facts onto each worktree group: the diff stats shown
 /// on the header and the live branch label. Both are properties of the worktree
 /// *path*, not of any one agent, so they belong to the group — which also
-/// settles the shared-worktree "whose branch?" ambiguity. Only live-dir paths
-/// carry stats, so a stale entry for a now-missing worktree never resurfaces.
-/// Pure projection (no git subprocesses): the producer refreshes the cache
-/// first, a consumer projects whatever the elder last published. Channel
-/// marker checks use checkout metadata reads only.
+/// settles the shared-worktree "whose branch?" ambiguity. The producer
+/// validates checkout paths before refreshing their entries and publishes
+/// exact channel marker classifications; consumers project that cache without
+/// git subprocesses or checkout metadata reads.
 pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache) {
     for group in &mut snapshot.worktree_groups {
         if group.kind == SidebarWorktreeKind::Channel {
             group.worktree_backed = false;
         }
-        let Some(path) = git_backed_worktree_path(group) else {
+        let Some(path) = cached_git_backed_worktree_path(
+            group.kind,
+            &group.label,
+            &group.key,
+            &group.rows,
+            cache,
+        ) else {
             continue;
         };
         if group.kind == SidebarWorktreeKind::Channel {
             group.worktree_backed = true;
         }
-        let Some(entry) = cache.entries.get(&path).cloned() else {
+        let Some(entry) = cache.entries.get(path) else {
             continue;
         };
         group.pr_number = entry.from_pr;
@@ -163,21 +168,57 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
     }
 }
 
-pub fn project_pr_state_map(snapshot: &mut SidebarSnapshot, states: &BTreeMap<String, PrLink>) {
+fn cached_git_backed_worktree_path<'a>(
+    kind: SidebarWorktreeKind,
+    label: &str,
+    key: &'a str,
+    rows: &'a [crate::SidebarRow],
+    cache: &DiffStatsCache,
+) -> Option<&'a str> {
+    let path = worktree_group_path_fields(key, rows)?;
+    match kind {
+        SidebarWorktreeKind::Worktree => Some(path),
+        SidebarWorktreeKind::Channel => cache
+            .worktrees
+            .as_ref()?
+            .marker_names
+            .as_ref()?
+            .get(Path::new(path))
+            .is_some_and(|name| name == label)
+            .then_some(path),
+        SidebarWorktreeKind::Root | SidebarWorktreeKind::External => None,
+    }
+}
+
+pub fn project_pr_state_map(
+    snapshot: &mut SidebarSnapshot,
+    states: &BTreeMap<String, PrLink>,
+    diff_cache: &DiffStatsCache,
+) {
     for group in &mut snapshot.worktree_groups {
-        let Some(path) = git_backed_worktree_path(group) else {
+        let Some(path) = cached_git_backed_worktree_path(
+            group.kind,
+            &group.label,
+            &group.key,
+            &group.rows,
+            diff_cache,
+        ) else {
             continue;
         };
-        group.pr_state = states.get(&path).map(|link| link.state);
-        if let Some(number) = states.get(&path).and_then(|link| link.number) {
+        group.pr_state = states.get(path).map(|link| link.state);
+        if let Some(number) = states.get(path).and_then(|link| link.number) {
             group.pr_number = Some(number);
         }
     }
 }
 
-pub(crate) fn project_cached_pr_states(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths) {
+pub(crate) fn project_cached_pr_states(
+    snapshot: &mut SidebarSnapshot,
+    runtime: &RuntimePaths,
+    diff_cache: &DiffStatsCache,
+) {
     let cache = read_pr_state_cache(&runtime.pr_state_path());
-    project_pr_state_map(snapshot, &cache.states);
+    project_pr_state_map(snapshot, &cache.states, diff_cache);
 }
 
 pub(crate) fn classify_trunk_sync(
@@ -209,34 +250,32 @@ pub(crate) fn classify_trunk_sync(
 /// adapters already have a provider-store observation path, so their recognized
 /// panes render as identity-less idle agent cards until strict session binding
 /// supplies the provider identity. Environment, not store.
-pub fn wired_kinds() -> Vec<String> {
-    crate::agents::ADAPTERS
-        .iter()
-        .filter(|agent| {
-            let descriptor = agent.descriptor();
-            descriptor.capabilities.local_session_discovery
-                || (descriptor.has_wired_hook_install() && agent.hooks_installed())
-        })
-        .map(|agent| agent.descriptor().kind.to_owned())
-        .collect()
+#[derive(Debug, Default)]
+pub struct WiredAgentProjection {
+    pub(crate) kinds: Vec<String>,
+    pub(crate) default_models: BTreeMap<String, String>,
 }
 
-/// Launch-model defaults for agent-card-eligible adapters, used only for
-/// synthesized idle rows before a real session reports its model.
-pub fn wired_default_models() -> BTreeMap<String, String> {
-    crate::agents::ADAPTERS
-        .iter()
-        .filter(|agent| {
-            let descriptor = agent.descriptor();
-            descriptor.capabilities.local_session_discovery
-                || (descriptor.has_wired_hook_install() && agent.hooks_installed())
-        })
-        .filter_map(|agent| {
-            agent
-                .default_launch_model()
-                .map(|model| (agent.descriptor().kind.to_owned(), model))
-        })
-        .collect()
+/// Agent-card admission and launch defaults from one adapter traversal. Hook
+/// adapters evaluate their installed state once; default-model reads happen
+/// only after the adapter is admitted.
+pub fn wired_agent_projection() -> WiredAgentProjection {
+    let mut projection = WiredAgentProjection::default();
+    for agent in crate::agents::ADAPTERS {
+        let descriptor = agent.descriptor();
+        let wired = descriptor.capabilities.local_session_discovery
+            || (descriptor.has_wired_hook_install() && agent.hooks_installed());
+        if !wired {
+            continue;
+        }
+        projection.kinds.push(descriptor.kind.to_owned());
+        if let Some(model) = agent.default_launch_model() {
+            projection
+                .default_models
+                .insert(descriptor.kind.to_owned(), model);
+        }
+    }
+    projection
 }
 
 /// Producer-vs-consumer inputs for one fold. The spine stays single: producer
@@ -351,8 +390,9 @@ pub fn enrich(
 
     // Wiring state gates the live-pane fold (idle synthesis), so set it before
     // any pane-backed projection.
-    snapshot.wired_kinds = wired_kinds();
-    snapshot.wired_default_models = wired_default_models();
+    let wired = wired_agent_projection();
+    snapshot.wired_kinds = wired.kinds;
+    snapshot.wired_default_models = wired.default_models;
 
     // Bind caller-supplied provider-local observations before context/activity
     // enrichment. Discovery belongs to the room producer; every renderer keeps
@@ -487,9 +527,9 @@ pub fn enrich(
     );
     project_diff_stats(&mut folded, &diff_cache);
     if let Some(lanes) = lanes {
-        project_pr_state_map(&mut folded, &lanes.pr_states);
+        project_pr_state_map(&mut folded, &lanes.pr_states, &diff_cache);
     } else {
-        project_cached_pr_states(&mut folded, runtime);
+        project_cached_pr_states(&mut folded, runtime, &diff_cache);
     }
     snapshot = folded;
     // The fleet `value_tally` — the JSONL headline / month / trailing-year pile

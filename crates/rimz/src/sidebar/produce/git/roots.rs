@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::sidebar::refresh::git_stats::{WorktreeRootsCache, read_diff_stats_cache};
@@ -36,14 +37,25 @@ pub(in crate::sidebar::produce) fn project_group_roots(
         .worktrees
         .as_ref()
         .filter(|w| w.is_fresh(now_ms))
+        .filter(|w| w.marker_names.is_some())
         .filter(floor_ok)
     {
         return cached.roots.clone();
     }
     let roots = list_group_roots(project_root, root_class);
+    let marker_names = roots
+        .iter()
+        .filter_map(|root| {
+            crate::worktree::read_marker_from_checkout_metadata(root)
+                .ok()
+                .flatten()
+                .map(|marker| (root.clone(), marker.name))
+        })
+        .collect::<BTreeMap<_, _>>();
     cache.worktrees = Some(WorktreeRootsCache {
         refreshed_at_ms: now_ms,
         roots: roots.clone(),
+        marker_names: Some(marker_names),
     });
     if let Err(err) = atomic::write_temp_then_rename_cache(&cache_path, &cache) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar worktree-roots cache write failed");

@@ -51,6 +51,11 @@ pub struct DiffStatsCache {
 pub struct WorktreeRootsCache {
     pub refreshed_at_ms: u64,
     pub roots: Vec<PathBuf>,
+    /// Exact checkout-root to RimZ marker-name classifications. `None` marks a
+    /// cache written before classifications were published; `Some(empty)` is
+    /// a current enumeration with no marked roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker_names: Option<BTreeMap<PathBuf, String>>,
 }
 
 impl WorktreeRootsCache {
@@ -186,15 +191,18 @@ pub(crate) fn refresh_diff_stats_for(
 /// different subdirs of one checkout. A non-path key (`branch:…`, the
 /// `external` catch-all) falls back to the rows' shared path.
 pub(crate) fn worktree_group_path(group: &SidebarWorktreeGroup) -> Option<&str> {
-    group
-        .key
-        .split('\n')
+    worktree_group_path_fields(&group.key, &group.rows)
+}
+
+pub(crate) fn worktree_group_path_fields<'a>(
+    key: &'a str,
+    rows: &'a [crate::SidebarRow],
+) -> Option<&'a str> {
+    key.split('\n')
         .next()
         .filter(|key| Path::new(key).is_absolute())
         .or_else(|| {
-            group
-                .rows
-                .iter()
+            rows.iter()
                 .find_map(|row| row.worktree_path.as_deref())
                 .filter(|path| !path.is_empty())
         })

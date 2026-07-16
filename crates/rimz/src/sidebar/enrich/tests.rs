@@ -6,8 +6,8 @@ use crate::remote::link::{LinkStats, LinkStatsFile, LinkTier};
 use crate::sidebar::refresh::AccountsCache;
 use crate::sidebar::refresh::PrLink;
 use crate::sidebar::refresh::git_stats::{
-    DiffStatsCache, DiffStatsCacheEntry, focused_worktree_paths, hot_worktree_paths,
-    needed_worktree_paths,
+    DiffStatsCache, DiffStatsCacheEntry, WorktreeRootsCache, focused_worktree_paths,
+    hot_worktree_paths, needed_worktree_paths,
 };
 use crate::sidebar::refresh::{CodexDaemonReap, read_codex_daemon_reap, write_codex_daemon_reap};
 use crate::sidebar::test_support::{activity_row, pane, root_agent, worktree_group};
@@ -90,9 +90,9 @@ fn remote_control_badge_follows_enablement_and_probe_health() {
 
 #[test]
 fn provider_store_adapters_are_wired_for_identityless_idle_cards() {
-    let wired = wired_kinds();
-    assert!(wired.iter().any(|kind| kind == "antigravity"));
-    assert!(wired.iter().any(|kind| kind == "kiro"));
+    let wired = wired_agent_projection();
+    assert!(wired.kinds.iter().any(|kind| kind == "antigravity"));
+    assert!(wired.kinds.iter().any(|kind| kind == "kiro"));
 }
 
 fn diff_entry(
@@ -145,6 +145,17 @@ fn channel_group(label: &str, path: &Path) -> crate::SidebarWorktreeGroup {
     group.label = label.to_owned();
     group.kind = SidebarWorktreeKind::Channel;
     group
+}
+
+fn diff_cache_with_marker(path: &Path, name: &str) -> DiffStatsCache {
+    DiffStatsCache {
+        worktrees: Some(WorktreeRootsCache {
+            refreshed_at_ms: unix_now_ms(),
+            roots: vec![path.to_path_buf()],
+            marker_names: Some(BTreeMap::from([(path.to_path_buf(), name.to_owned())])),
+        }),
+        ..DiffStatsCache::default()
+    }
 }
 
 #[test]
@@ -217,7 +228,7 @@ fn pr_state_projection_uses_the_given_map() {
             number: Some(91),
         },
     );
-    project_pr_state_map(&mut snapshot, &states);
+    project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
         Some(crate::WorktreePrState::Closed)
@@ -225,7 +236,7 @@ fn pr_state_projection_uses_the_given_map() {
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(91));
 
     snapshot.worktree_groups[0].pr_number = Some(69);
-    project_pr_state_map(&mut snapshot, &BTreeMap::new());
+    project_pr_state_map(&mut snapshot, &BTreeMap::new(), &DiffStatsCache::default());
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
     assert_eq!(snapshot.worktree_groups[0].pr_number, Some(69));
 }
@@ -236,6 +247,8 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
     let worktree = dir.path().join("feature");
     std::fs::create_dir_all(&worktree).unwrap();
     write_worktree_marker(&worktree, "feature");
+    let diff_cache = diff_cache_with_marker(&worktree, "feature");
+    std::fs::remove_dir_all(worktree.join(".git")).unwrap();
     let mut snapshot = SidebarSnapshot::build(
         WorkspaceId::from_project_root(dir.path()),
         Vec::new(),
@@ -251,7 +264,7 @@ fn pr_state_projection_reaches_marked_worktree_channels() {
             number: Some(91),
         },
     );
-    project_pr_state_map(&mut snapshot, &states);
+    project_pr_state_map(&mut snapshot, &states, &diff_cache);
     assert_eq!(
         snapshot.worktree_groups[0].pr_state,
         Some(crate::WorktreePrState::Merged)
@@ -278,7 +291,7 @@ fn pr_state_projection_leaves_unmarked_channels_plain() {
             number: Some(91),
         },
     );
-    project_pr_state_map(&mut snapshot, &states);
+    project_pr_state_map(&mut snapshot, &states, &DiffStatsCache::default());
     assert_eq!(snapshot.worktree_groups[0].pr_state, None);
 }
 
@@ -295,11 +308,12 @@ fn diff_projection_keeps_worktree_channel_label_and_uses_live_branch() {
     );
     snapshot.worktree_groups = vec![channel_group("codex-resets", &worktree)];
 
-    let mut cache = DiffStatsCache::default();
+    let mut cache = diff_cache_with_marker(&worktree, "codex-resets");
     let mut entry = diff_entry(true, true, Some(true), 0, 0);
     entry.branch = Some("main".to_owned());
     entry.from_pr = Some(69);
     cache.entries.insert(worktree.display().to_string(), entry);
+    std::fs::remove_dir_all(worktree.join(".git")).unwrap();
 
     project_diff_stats(&mut snapshot, &cache);
 
@@ -317,7 +331,6 @@ fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
     let dir = tempfile::tempdir().unwrap();
     let worktree = dir.path().join("codex-resets");
     std::fs::create_dir_all(&worktree).unwrap();
-    write_worktree_marker(&worktree, "codex-resets");
     let mut snapshot = SidebarSnapshot::build(
         WorkspaceId::from_project_root(dir.path()),
         Vec::new(),
@@ -325,7 +338,10 @@ fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
     );
     snapshot.worktree_groups = vec![channel_group("codex-resets", &worktree)];
 
-    project_diff_stats(&mut snapshot, &DiffStatsCache::default());
+    project_diff_stats(
+        &mut snapshot,
+        &diff_cache_with_marker(&worktree, "codex-resets"),
+    );
 
     let group = &snapshot.worktree_groups[0];
     assert!(
@@ -336,7 +352,7 @@ fn diff_projection_marks_worktree_channel_before_git_facts_arrive() {
 }
 
 #[test]
-fn diff_projection_leaves_unmarked_channel_plain() {
+fn diff_projection_requires_an_exact_channel_marker_name() {
     let dir = tempfile::tempdir().unwrap();
     let worktree = dir.path().join("codex-resets");
     std::fs::create_dir_all(&worktree).unwrap();
@@ -348,7 +364,10 @@ fn diff_projection_leaves_unmarked_channel_plain() {
     snapshot.worktree_groups = vec![channel_group("codex-resets", &worktree)];
     snapshot.worktree_groups[0].worktree_backed = true;
 
-    project_diff_stats(&mut snapshot, &DiffStatsCache::default());
+    project_diff_stats(
+        &mut snapshot,
+        &diff_cache_with_marker(&worktree, "another-channel"),
+    );
 
     assert!(!snapshot.worktree_groups[0].worktree_backed);
 }

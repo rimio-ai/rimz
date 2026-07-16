@@ -327,6 +327,7 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     let cache = WorktreeRootsCache {
         refreshed_at_ms: 1_000,
         roots: Vec::new(),
+        marker_names: Some(Default::default()),
     };
     let ttl = WORKTREE_ROOTS_TTL.as_millis() as u64;
     assert!(cache.is_fresh(1_000 + ttl));
