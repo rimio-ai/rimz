@@ -1,7 +1,7 @@
 //! The fleet make-up line — the cockpit's status buckets.
 
-use crate::SidebarWorktreeGroup;
 use crate::agents::AgentStatus;
+use crate::{SidebarWorktreeGroup, WorktreePrState};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -325,5 +325,12 @@ pub(crate) fn unread_total(groups: &[SidebarWorktreeGroup]) -> usize {
         .iter()
         .flat_map(|group| &group.rows)
         .filter(|row| row.unread)
+        .count()
+}
+
+pub(in crate::sidebar_pane::render) fn open_pr_total(groups: &[SidebarWorktreeGroup]) -> usize {
+    groups
+        .iter()
+        .filter(|group| group.pr_state == Some(WorktreePrState::Open))
         .count()
 }

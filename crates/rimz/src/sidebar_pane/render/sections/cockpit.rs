@@ -49,21 +49,23 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
     pin_right(left, right, width)
 }
 
-/// The cockpit's second summary line: `¤ {live}` — the agents in the room right
-/// now, the glyph in the agents' own working clay — on the left, with headline
-/// fleet spend pinned to the right edge, counting up as a turn lands. The
-/// figure ticks toward the workspace tally's headline total via the shared
-/// [`TallyAnim`] roll — big decaying steps, then penny by penny onto the exact
-/// figure — and brightens for a beat the instant it settles (the W/M store
-/// rows below stay static). Always present — an empty room reads `¤ 0` with
-/// `$0.00` on the right edge. A tripped room cap switches the right edge to
-/// alarm-red local-day spend plus `of $CAP/day`, independent of the headline window.
-/// The steady unread count is a click-to-filter target and paints as a picked
-/// chip while the unread lens is active.
+/// The cockpit's second summary line: `¤ {live} ({unread}) {⊙ open-PRs}` — the
+/// agents in the room right now, the glyph in the agents' own working clay —
+/// on the left, with headline fleet spend pinned to the right edge, counting up
+/// as a turn lands. The steady unread count is a click-to-filter target and
+/// paints as a picked chip while the unread lens is active. The open-PR count
+/// uses the lane markers' PR-open tone and appears only when an agent lane's
+/// branch has an open PR. The figure ticks toward the workspace tally's
+/// headline total via the shared [`TallyAnim`] roll — big decaying steps, then
+/// penny by penny onto the exact figure — and brightens for a beat the instant
+/// it settles (the W/M store rows below stay static). Always present — an empty
+/// room reads `¤ 0` with `$0.00` on the right edge. A tripped room cap switches
+/// the right edge to alarm-red local-day spend plus `of $CAP/day`, independent
+/// of the headline window.
 pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     theme: &Theme,
     live_agents: usize,
-    unread: (usize, bool),
+    badges: (usize, bool, usize),
     spend: (f64, Option<&DailyBudgetView>),
     anim: &TallyAnim,
     phase: u64,
@@ -94,7 +96,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         &live_agents.to_string(),
     );
     let mut unread_range = None;
-    let (unread_agents, unread_picked) = unread;
+    let (unread_agents, unread_picked, open_prs) = badges;
     if unread_agents > 0 {
         // A steady tally, not a blink — the attention blink lives on the cards
         // and the make-up buckets; the cockpit count holds its attention tone.
@@ -110,6 +112,15 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         let end = spans_width(&left);
         let left_budget = width.saturating_sub(right_width + 1);
         unread_range = (end <= left_budget).then_some((start as u16, end as u16));
+    }
+    if open_prs > 0 {
+        left.push(Span::styled(" ".to_owned(), theme.body()));
+        left.extend(metric_spans(
+            theme,
+            theme.glyph(GlyphRole::WorktreePrOpen),
+            theme.component(Component::WorktreePrOpen),
+            &open_prs.to_string(),
+        ));
     }
     (pin_right(left, right, width), unread_range)
 }

@@ -16,7 +16,8 @@ use super::chrome::{
 use super::sections::{
     RowCtx, Tier, cockpit_spend_line, cockpit_summary_line, content_width,
     dashboard_panel_lines_with_footer, fleet_header_lines, fleet_size, fleet_store_lines,
-    fleet_total_lines, trim_spans_to_width, unread_total, worktree_group_lines_projected,
+    fleet_total_lines, open_pr_total, trim_spans_to_width, unread_total,
+    worktree_group_lines_projected,
 };
 use super::theme::Theme;
 use super::{
@@ -679,10 +680,10 @@ pub(super) fn top_lines(
     header.push(Line::from(""));
     // The cockpit summary, two lines: line 1 is `◎` sessions in the configured
     // headline window on the left with its token breakdown pinned right; line 2
-    // is `¤` live agents on the left with headline spend pinned right. The
-    // counts read from the live fleet and the JSONL `workspace_value_tally`'s
-    // headline window, so the cockpit reflects this room's sessions rather than
-    // account-global provider history.
+    // is `¤` live agents, unread agents, and open lane PRs on the left with
+    // headline spend pinned right. The counts read from the live fleet and the
+    // JSONL `workspace_value_tally`'s headline window, so the cockpit reflects
+    // this room's sessions rather than account-global provider history.
     let headline = snapshot
         .workspace_value_tally
         .as_ref()
@@ -696,6 +697,7 @@ pub(super) fn top_lines(
     // tally on a pre-overlay snapshot.
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
     let unread_agents = unread_total(&snapshot.worktree_groups);
+    let open_prs = open_pr_total(&snapshot.worktree_groups);
     let tripped = snapshot
         .fleet_budget
         .as_ref()
@@ -707,7 +709,7 @@ pub(super) fn top_lines(
     let (spend, unread_range) = cockpit_spend_line(
         theme,
         live_agents,
-        (unread_agents, unread_picked),
+        (unread_agents, unread_picked, open_prs),
         (today_usd, tripped),
         &ui.tally,
         ui.animation_phase,

@@ -618,6 +618,7 @@ fn make_up_buckets_pulse_only_while_unread() {
 #[test]
 fn render_cockpit_unread_count() {
     let mut snapshot = make_up_snapshot();
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
     snapshot
         .worktree_groups
         .iter_mut()
@@ -628,9 +629,46 @@ fn render_cockpit_unread_count() {
 
     let screen = snapshot_to_screen(&snapshot, 38, 20);
     assert!(
-        screen.lines().any(|line| line.contains("¤ 2 (1)")),
-        "live-agent summary carries unread count:\n{screen}"
+        screen.lines().any(|line| line.contains("¤ 2 (1) ⊙ 1")),
+        "live-agent summary carries unread and open-PR counts in order:\n{screen}"
     );
+}
+
+#[test]
+fn render_cockpit_counts_open_prs_including_finished_lanes() {
+    let mut snapshot = make_up_snapshot();
+    let mut merged = snapshot.worktree_groups[0].clone();
+    merged.key.push_str("-merged");
+    merged.label.push_str("-merged");
+    merged.pr_state = Some(crate::WorktreePrState::Merged);
+    merged.pr_number = Some(303);
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[0].pr_number = Some(101);
+    snapshot.worktree_groups[0].finished = true;
+    snapshot.worktree_groups[1].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[1].pr_number = Some(202);
+    snapshot.worktree_groups.push(merged);
+
+    let screen = snapshot_to_screen(&snapshot, 38, 20);
+    let spend = screen
+        .lines()
+        .find(|line| line.contains('¤'))
+        .expect("cockpit spend line");
+    assert!(spend.contains("⊙ 2"), "two open lane PRs count:\n{screen}");
+    assert!(
+        !spend.contains('#'),
+        "the aggregate omits lane PR numbers:\n{screen}"
+    );
+}
+
+#[test]
+fn render_cockpit_hides_zero_open_prs() {
+    let screen = snapshot_to_screen(&make_up_snapshot(), 38, 20);
+    let spend = screen
+        .lines()
+        .find(|line| line.contains('¤'))
+        .expect("cockpit spend line");
+    assert!(!spend.contains('⊙'), "zero open PRs stay hidden:\n{screen}");
 }
 
 /// The `↑ N need you` jump banner appears when the lead leaves the viewport and
