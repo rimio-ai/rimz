@@ -179,7 +179,7 @@ impl RoomContext {
             .ensure_dirs()
             .context("preparing adapter runtime directories")?;
         let mux_config = MultiplexerConfig::from(machine_config.as_ref());
-        let width = SidebarWidth::from_config(&machine_config.theme.display);
+        let width = SidebarWidth::from_config(&machine_config.theme);
         let detected_size = match sizing {
             RoomSizing::Birth => {
                 crate::mux::detect_terminal_size().or_else(crate::mux::client_size_from_env)

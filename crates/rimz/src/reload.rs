@@ -332,7 +332,7 @@ fn reconcile_live(
 
     // 4. Reconcile panes: keep each view's live sidebar, close duplicates and
     //    unresponsive ones, add to any working view left without one.
-    let width = SidebarWidth::from_config(&machine_config.theme.display);
+    let width = SidebarWidth::from_config(&machine_config.theme);
     let opts = SidebarPaneOptions {
         session_name: ws.session_name.clone(),
         workspace_id: ws.workspace_id.clone(),

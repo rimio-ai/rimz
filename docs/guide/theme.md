@@ -116,7 +116,7 @@ Two rules keep the palette honest: `alarm` red marks danger, and one warm `cauti
 | --- | --- |
 | `refresh_ms` | the animation/paint grid in milliseconds (clamped internally); data polling keeps its own cadence |
 | `pixel` | `auto` enables kitty-graphics pets and context meters when the terminal path supports them; `off` keeps both on their cell-rendered tiers |
-| `width_percent` | optional fixed sidebar share of each view (clamped to 10-90 at use); unset uses 30% above 240 columns and 25% at or below; applies at the next convergence unless a room-wide `a`/`d` selection is present |
+| `width_percent` | optional fixed sidebar share of each view (clamped to 10-90 at use); unset uses 30% above 240 columns or when pets are enabled, and 25% otherwise; applies at the next convergence unless a room-wide `a`/`d` selection is present |
 | `max_cols` | live cap on the configured sidebar share; applies at the next convergence, while room-wide `a`/`d` selections may exceed it |
 | `scrollbar` | `auto` shows the overflow indicator only while the view moves; `always` / `never` pin it |
 | `card_density` | `auto` keeps the standard card; `expanded` shows every card's subagents; `compact` trims resting cards |

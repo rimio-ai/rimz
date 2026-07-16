@@ -42,8 +42,8 @@ impl WidthPercent {
 }
 
 /// Resolve the canonical width for one live view: the room-runtime override
-/// verbatim when present, otherwise the explicit or width-keyed percentage
-/// capped at `max_cols`.
+/// verbatim when present, otherwise the configured percentage policy capped at
+/// `max_cols`.
 pub(crate) fn live_target_cols(
     width: SidebarWidth,
     width_override: Option<NonZeroU16>,
@@ -55,7 +55,7 @@ pub(crate) fn live_target_cols(
     )
 }
 
-/// Sidebar pane width: an explicit or width-keyed percentage of each live view,
+/// Sidebar pane width: the configured percentage policy for each live view,
 /// capped at `max_cols` columns (`theme.display.max_cols`).
 /// [`SidebarWidth::birth_size`] seeds panes whose view geometry is not yet
 /// known; once live, the canonical width is [`live_target_cols`] of the current
@@ -70,13 +70,19 @@ pub struct SidebarWidth {
 }
 
 impl SidebarWidth {
-    /// The width a machine config asks for: its explicit or width-keyed
-    /// percentage and column cap. Percentage bounds are enforced when used.
-    pub fn from_config(display: &crate::config::DisplayConfig) -> Self {
+    /// The width a machine config asks for: its explicit percentage, the wide
+    /// default when pets are enabled, or the width-keyed default, plus the
+    /// column cap. Percentage bounds are enforced when used.
+    pub fn from_config(theme: &crate::config::ThemeConfig) -> Self {
+        let display = &theme.display;
+        let percent = match display.width_percent {
+            Some(percent) => WidthPercent::Fixed(percent),
+            // The pet dashboard needs the wide default at any view width.
+            None if theme.pets.enabled => WidthPercent::Fixed(AUTO_WIDTH_WIDE_PERCENT),
+            None => WidthPercent::Auto,
+        };
         Self {
-            percent: display
-                .width_percent
-                .map_or(WidthPercent::Auto, WidthPercent::Fixed),
+            percent,
             max_cols: display.max_cols,
         }
     }
@@ -154,7 +160,7 @@ impl SidebarWidth {
 
 impl Default for SidebarWidth {
     fn default() -> Self {
-        Self::from_config(&crate::config::DisplayConfig::default())
+        Self::from_config(&crate::config::ThemeConfig::default())
     }
 }
 
@@ -232,23 +238,23 @@ mod tests {
 
     #[test]
     fn sidebar_width_uses_configured_percent_and_cap() {
-        let mut display = crate::config::DisplayConfig::default();
-        let width = SidebarWidth::from_config(&display);
+        let mut theme = crate::config::ThemeConfig::default();
+        let width = SidebarWidth::from_config(&theme);
         assert_eq!(width.percent, WidthPercent::Auto);
         assert_eq!(width.cap_cols(), 72);
         assert_eq!(width.target_cols(120), 30);
         assert_eq!(width.target_cols(300), 72);
 
-        display.width_percent = Some(25);
+        theme.display.width_percent = Some(25);
         let max = NonZeroU16::new(100).expect("nonzero");
-        display.max_cols = max;
-        let width = SidebarWidth::from_config(&display);
+        theme.display.max_cols = max;
+        let width = SidebarWidth::from_config(&theme);
         assert_eq!(width.percent, WidthPercent::Fixed(25));
         assert_eq!(width.max_cols, max);
         assert_eq!(width.target_cols(120), 30);
 
-        display.width_percent = Some(5);
-        let width = SidebarWidth::from_config(&display);
+        theme.display.width_percent = Some(5);
+        let width = SidebarWidth::from_config(&theme);
         assert_eq!(
             width.percent,
             WidthPercent::Fixed(5),
@@ -257,10 +263,26 @@ mod tests {
         assert_eq!(width.target_cols(120), 12);
         assert_eq!(width.birth_size(None).percent, 10);
 
-        display.width_percent = Some(95);
-        let width = SidebarWidth::from_config(&display);
+        theme.display.width_percent = Some(95);
+        let width = SidebarWidth::from_config(&theme);
         assert_eq!(width.target_cols(60), 54);
         assert_eq!(width.birth_size(None).percent, 90);
+    }
+
+    #[test]
+    fn pets_enabled_widens_the_automatic_default() {
+        let mut theme = crate::config::ThemeConfig::default();
+        theme.pets.enabled = true;
+
+        let width = SidebarWidth::from_config(&theme);
+        assert_eq!(width.percent, WidthPercent::Fixed(30));
+        assert_eq!(width.target_cols(120), 36);
+        assert_eq!(width.target_cols(300), 72);
+        assert_eq!(width.birth_size(None).percent, 30);
+
+        theme.display.width_percent = Some(20);
+        let width = SidebarWidth::from_config(&theme);
+        assert_eq!(width.percent, WidthPercent::Fixed(20));
     }
 
     #[test]

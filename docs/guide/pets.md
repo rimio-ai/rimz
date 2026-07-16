@@ -12,7 +12,7 @@ rimz config set theme.pets.pet rocky      # rimz list-pets previews every choice
   <br/><sub><code>rimz list-pets</code> in Ghostty: the built-in pets as crisp pixels.</sub>
 </p>
 
-Everything on this page is the `[theme.pets]` table in `~/.config/rimz/theme.toml`; the rest of the sidebar's appearance — palettes, glyphs, animations — is the [theming guide](./theme.md). A pet is pure display: it changes what the dashboard paints, never what an agent can do.
+Everything on this page is the `[theme.pets]` table in `~/.config/rimz/theme.toml`; the rest of the sidebar's appearance — palettes, glyphs, animations — is the [theming guide](./theme.md). Enabling pets widens the automatic sidebar default to 30%; an explicit `theme.display.width_percent` still wins. A pet is pure display: it changes what the dashboard paints, never what an agent can do.
 
 ```toml
 [theme.pets]
