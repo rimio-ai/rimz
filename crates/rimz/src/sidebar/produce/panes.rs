@@ -1025,7 +1025,12 @@ fn validate_frame_for_publish(
         PublishVerdict::Publish => {
             if publish {
                 emit_pane_count_drop(diag, prior.as_ref(), &frame, now_ms);
-                publish_frame(runtime, cache_path, &frame);
+                publish_frame(
+                    runtime,
+                    cache_path,
+                    &frame,
+                    crate::sidebar::events::PaneFramePublicationKind::Topology,
+                );
             }
             Ok(frame)
         }
@@ -1038,7 +1043,12 @@ fn validate_frame_for_publish(
                     // frame missing only that pane is still usable room truth.
                     FrameRejectReason::MissingOwnPane => {
                         if publish {
-                            publish_frame(runtime, cache_path, &frame);
+                            publish_frame(
+                                runtime,
+                                cache_path,
+                                &frame,
+                                crate::sidebar::events::PaneFramePublicationKind::Topology,
+                            );
                         }
                         Ok(frame)
                     }
@@ -1254,7 +1264,12 @@ fn refresh_cached_metrics(
             .unwrap_or(frame);
             if super::metrics::enrich_pane_metrics(&mut latest, session, runtime) {
                 annotate_elevated_agents(&mut latest, &crate::proc::elevated_in_pane_agent);
-                publish_frame(runtime, cache_path, &latest);
+                publish_frame(
+                    runtime,
+                    cache_path,
+                    &latest,
+                    crate::sidebar::events::PaneFramePublicationKind::Metrics,
+                );
             }
             latest
         }
@@ -1296,7 +1311,12 @@ fn apply_presence_sample_and_publish(
     cache_path: &Path,
 ) {
     if apply_presence_sample(frame, sample) {
-        publish_frame(runtime, cache_path, frame);
+        publish_frame(
+            runtime,
+            cache_path,
+            frame,
+            crate::sidebar::events::PaneFramePublicationKind::Presence,
+        );
     }
 }
 
@@ -1366,10 +1386,17 @@ fn refresh_cached_presence(
     }
 }
 
-fn publish_frame(runtime: &crate::RuntimePaths, cache_path: &Path, frame: &PaneFrame) {
+fn publish_frame(
+    runtime: &crate::RuntimePaths,
+    cache_path: &Path,
+    frame: &PaneFrame,
+    publication: crate::sidebar::events::PaneFramePublicationKind,
+) {
     if let Err(err) = atomic::write_temp_then_rename_cache(cache_path, frame) {
         tracing::warn!(path = %cache_path.display(), error = %err, "sidebar snapshot cache write failed");
-    } else if let Err(err) = crate::store::wakeup::wake_sidebars_pane_frame_published(runtime) {
+    } else if let Err(err) =
+        crate::store::wakeup::wake_sidebars_pane_frame_published(runtime, publication)
+    {
         tracing::debug!(error = %err, "sidebar pane-frame publication wakeup failed");
     }
 }

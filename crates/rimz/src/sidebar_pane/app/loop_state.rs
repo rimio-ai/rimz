@@ -359,23 +359,22 @@ impl LoopState {
         &mut self,
         fetch: &mut FetchDispatcher,
         request: FetchRequest,
+        defer_for: Duration,
     ) {
         if self.identity_free_fetch_immediate() {
             self.request_now_merging_pending(fetch, request, true);
         } else {
-            self.defer_fetch(request);
+            self.defer_fetch(request, Instant::now() + defer_for);
         }
     }
 
-    fn defer_fetch(&mut self, request: FetchRequest) {
+    fn defer_fetch(&mut self, request: FetchRequest, due_at: Instant) {
         if let Some(pending) = &mut self.pending_fetch {
             pending.request.merge(request);
+            pending.due_at = pending.due_at.min(due_at);
             return;
         }
-        self.pending_fetch = Some(PendingFetch {
-            due_at: Instant::now() + crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
-            request,
-        });
+        self.pending_fetch = Some(PendingFetch { due_at, request });
     }
 
     /// Dispatch an immediate fetch after absorbing any clamp-deferred request.
@@ -638,11 +637,30 @@ impl LoopState {
                     self.run_width_control(config, terminal);
                 }
             }
-            // The producer published a fresh shared pane frame: fold it from
-            // cache immediately; consumers stay read-only and the producer's
-            // own receipt is cheap because the frame is just-published.
-            SidebarEvent::PaneFramePublished => {
-                self.request_now_merging_pending(fetch, FetchRequest::pane_frame_published(), true);
+            // A watched renderer and the producer fold every publication now.
+            // Hidden consumers coalesce topology and metrics to the cadence of
+            // the changed input, while presence remains immediate because it
+            // establishes whether the tab is watched.
+            SidebarEvent::PaneFramePublished { publication } => {
+                use crate::sidebar::events::PaneFramePublicationKind;
+
+                match publication {
+                    PaneFramePublicationKind::Presence => self.request_now_merging_pending(
+                        fetch,
+                        FetchRequest::pane_frame_published(),
+                        true,
+                    ),
+                    PaneFramePublicationKind::Topology => self.request_or_defer_identity_free(
+                        fetch,
+                        FetchRequest::pane_frame_published(),
+                        crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
+                    ),
+                    PaneFramePublicationKind::Metrics => self.request_or_defer_identity_free(
+                        fetch,
+                        FetchRequest::pane_frame_published(),
+                        crate::sidebar::timing::UNWATCHED_METRICS_FOLD_CLAMP,
+                    ),
+                }
             }
             event @ SidebarEvent::Notify { .. } => {
                 self.handle_notification(config, terminal, event, diag);
@@ -667,6 +685,7 @@ impl LoopState {
                     } else {
                         FetchRequest::default()
                     },
+                    crate::sidebar::timing::UNWATCHED_FOLD_CLAMP,
                 );
             }
         }

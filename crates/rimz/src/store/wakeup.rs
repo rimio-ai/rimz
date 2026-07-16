@@ -157,8 +157,11 @@ pub fn broadcast_sidebar_event(
 
 /// Broadcast a typed `PaneFramePublished` event to every fresh, protocol-current
 /// sidebar after the producer publishes a fresh shared pane frame.
-pub fn wake_sidebars_pane_frame_published(rt: &RuntimePaths) -> Result<usize> {
-    broadcast_sidebar_event(rt, None, SidebarEvent::PaneFramePublished)
+pub fn wake_sidebars_pane_frame_published(
+    rt: &RuntimePaths,
+    publication: crate::sidebar::events::PaneFramePublicationKind,
+) -> Result<usize> {
+    broadcast_sidebar_event(rt, None, SidebarEvent::PaneFramePublished { publication })
 }
 
 /// Apply the wakeup fanout freshness filter over the shared sidebar heartbeat

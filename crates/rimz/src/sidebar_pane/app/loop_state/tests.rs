@@ -224,6 +224,10 @@ fn event_envelope(ws: &WorkspaceId, event: SidebarEvent) -> SidebarEventEnvelope
     )
 }
 
+fn pane_publication(publication: crate::sidebar::events::PaneFramePublicationKind) -> SidebarEvent {
+    SidebarEvent::PaneFramePublished { publication }
+}
+
 fn hide_consumer(state: &mut LoopState, ws: &WorkspaceId) {
     state.current = animating_agent_snapshot(ws);
     state.current.own_view = Some(own_view(false, false));
@@ -712,7 +716,7 @@ fn unwatched_consumer_coalesces_identity_free_fetches_until_clamp_deadline() {
 }
 
 #[test]
-fn pane_frame_published_absorbs_deferred_unwatched_fetch() {
+fn repeated_hidden_metrics_publications_fold_once_at_the_background_deadline() {
     let ws = workspace();
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane));
@@ -721,45 +725,28 @@ fn pane_frame_published_absorbs_deferred_unwatched_fetch() {
     let mut terminal = fixed_terminal();
     let (mut fetch, request_rx) = fetch_dispatcher();
 
-    for event in [
-        SidebarEvent::StoreDelta {
-            event_method: None,
-            agent_signal: None,
-        },
-        SidebarEvent::PanesChanged,
-    ] {
+    for _ in 0..3 {
         state
             .on_event(
                 &config,
                 &mut fetch,
                 &mut terminal,
-                event_envelope(&ws, event),
+                event_envelope(
+                    &ws,
+                    pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
+                ),
                 Instant::now(),
                 &crate::diag::DiagSink::disabled(),
             )
-            .expect("defer identity-free event");
+            .expect("defer metrics publication");
     }
-    assert!(state.pending_fetch.is_some());
-
-    state
-        .on_event(
-            &config,
-            &mut fetch,
-            &mut terminal,
-            event_envelope(&ws, SidebarEvent::PaneFramePublished),
-            Instant::now(),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .expect("published pane frame folds");
-
+    assert!(request_rx.try_recv().is_err());
+    let pending = state.pending_fetch.as_mut().expect("one deferred fetch");
     assert!(
-        request_rx
-            .try_recv()
-            .expect("one merged publish fetch")
-            .is_producer_fresh_panes(),
-        "the merged fetch preserves the deferred freshness requirement"
+        pending.due_at.saturating_duration_since(Instant::now())
+            <= crate::sidebar::timing::UNWATCHED_METRICS_FOLD_CLAMP
     );
-    assert!(state.pending_fetch.is_none());
+    pending.due_at = Instant::now() - Duration::from_millis(1);
 
     let runtime_dir = tempfile::TempDir::new().expect("runtime tempdir");
     let runtime = RuntimePaths::under(ws.clone(), runtime_dir.path()).expect("runtime");
@@ -780,12 +767,116 @@ fn pane_frame_published_absorbs_deferred_unwatched_fetch() {
                 tick: Duration::from_secs(60),
             },
         )
-        .expect("maintenance finds no deferred echo");
+        .expect("maintenance folds due metrics");
 
     assert!(
-        request_rx.try_recv().is_err(),
-        "the absorbed nudge must not fire a second fetch"
+        request_rx.try_recv().is_ok(),
+        "the metrics burst emits one fetch at its deadline"
     );
+    assert!(request_rx.try_recv().is_err());
+    assert!(state.pending_fetch.is_none());
+}
+
+#[test]
+fn topology_and_store_publications_shorten_a_metrics_deadline() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+
+    for shorter in [
+        pane_publication(crate::sidebar::events::PaneFramePublicationKind::Topology),
+        SidebarEvent::StoreDelta {
+            event_method: None,
+            agent_signal: None,
+        },
+    ] {
+        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+        hide_consumer(&mut state, &ws);
+        let (mut fetch, request_rx) = fetch_dispatcher();
+        state
+            .on_event(
+                &config,
+                &mut fetch,
+                &mut terminal,
+                event_envelope(
+                    &ws,
+                    pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
+                ),
+                Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
+            .expect("defer metrics publication");
+        let metrics_due = state.pending_fetch.expect("metrics pending").due_at;
+
+        state
+            .on_event(
+                &config,
+                &mut fetch,
+                &mut terminal,
+                event_envelope(&ws, shorter),
+                Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
+            .expect("shorter publication");
+        let shortened = state.pending_fetch.expect("shortened pending fetch");
+        assert!(shortened.due_at < metrics_due);
+
+        state
+            .on_event(
+                &config,
+                &mut fetch,
+                &mut terminal,
+                event_envelope(&ws, SidebarEvent::PanesChanged),
+                Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
+            .expect("stronger topology request");
+        let merged = state.pending_fetch.expect("merged pending fetch");
+        assert_eq!(merged.due_at, shortened.due_at);
+        assert!(merged.request.is_producer_fresh_panes());
+        assert!(request_rx.try_recv().is_err());
+    }
+}
+
+#[test]
+fn watched_metrics_and_hidden_presence_publications_fold_immediately() {
+    let ws = workspace();
+    let own_pane = pane("terminal_1", "tab_0", false).pane_id;
+    let config = serve_config(&ws);
+    let mut terminal = fixed_terminal();
+
+    for (publication, watched) in [
+        (
+            crate::sidebar::events::PaneFramePublicationKind::Metrics,
+            true,
+        ),
+        (
+            crate::sidebar::events::PaneFramePublicationKind::Presence,
+            false,
+        ),
+    ] {
+        let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
+        hide_consumer(&mut state, &ws);
+        if watched {
+            state.current.viewed_panes = vec![pane("terminal_9", "tab_0", false).pane_id];
+        }
+        let (mut fetch, request_rx) = fetch_dispatcher();
+
+        state
+            .on_event(
+                &config,
+                &mut fetch,
+                &mut terminal,
+                event_envelope(&ws, pane_publication(publication)),
+                Instant::now(),
+                &crate::diag::DiagSink::disabled(),
+            )
+            .expect("immediate publication");
+
+        assert!(request_rx.try_recv().is_ok());
+        assert!(state.pending_fetch.is_none());
+    }
 }
 
 #[test]
@@ -939,7 +1030,10 @@ fn absorbed_deferred_fetch_forces_follow_up_while_in_flight() {
     let (mut fetch, request_rx) = fetch_dispatcher();
     fetch.request(FetchRequest::default(), false);
     request_rx.try_recv().expect("initial in-flight fetch");
-    state.defer_fetch(FetchRequest::producer_fresh_panes());
+    state.defer_fetch(
+        FetchRequest::producer_fresh_panes(),
+        Instant::now() + Duration::from_secs(3),
+    );
 
     state.request_now_merging_pending(&mut fetch, FetchRequest::default(), false);
 
@@ -994,7 +1088,7 @@ fn watched_renderer_and_elder_fetch_identity_free_events_immediately() {
 }
 
 #[test]
-fn focus_resume_flushes_pending_unwatched_fetch() {
+fn focus_resume_flushes_pending_metrics_fetch() {
     let ws = workspace();
     let own_pane = pane("terminal_1", "tab_0", false).pane_id;
     let (_dir, mut state) = loop_state_with_own_pane(&ws, Some(own_pane.clone()));
@@ -1010,15 +1104,12 @@ fn focus_resume_flushes_pending_unwatched_fetch() {
             &mut terminal,
             event_envelope(
                 &ws,
-                SidebarEvent::StoreDelta {
-                    event_method: None,
-                    agent_signal: None,
-                },
+                pane_publication(crate::sidebar::events::PaneFramePublicationKind::Metrics),
             ),
             Instant::now(),
             &crate::diag::DiagSink::disabled(),
         )
-        .expect("defer store delta");
+        .expect("defer metrics publication");
     assert!(state.pending_fetch.is_some());
 
     state

@@ -224,6 +224,11 @@ pub const METRICS_FOCUSED_SAMPLE_TTL: Duration = Duration::from_secs(1);
 /// regardless of produce rate.
 pub const METRICS_BACKGROUND_SAMPLE_TTL: Duration = Duration::from_secs(3);
 
+/// Maximum extra staleness a hidden consumer accepts for metrics-only pane
+/// publications. The consumer folds on the same cadence that produces the
+/// underlying background samples.
+pub const UNWATCHED_METRICS_FOLD_CLAMP: Duration = METRICS_BACKGROUND_SAMPLE_TTL;
+
 /// How long the producer trusts a published fleet-spending walk before
 /// re-walking every provider's transcript tree. Spend is display-only (the
 /// eased odometer roll absorbs the step) and the walk — discovery readdirs,

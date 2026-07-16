@@ -110,7 +110,12 @@ pub enum SidebarEvent {
     /// The room-runtime absolute width target changed. Renderers re-read the
     /// atomically replaced override file and converge only their own pane.
     WidthTargetChanged,
-    PaneFramePublished,
+    PaneFramePublished {
+        /// The producer-side change written into the shared pane frame. Older
+        /// publishers omitted this field, which safely decodes as topology.
+        #[serde(default)]
+        publication: PaneFramePublicationKind,
+    },
     Notify {
         title: String,
         body: String,
@@ -133,6 +138,16 @@ pub enum SidebarEvent {
     /// Reload request. Current renderers also accept [`RELOAD_CONTROL_WORD`] so
     /// reload survives sidebar-event envelope version skew.
     Reload,
+}
+
+/// Which producer-owned input changed in a published pane frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneFramePublicationKind {
+    #[default]
+    Topology,
+    Metrics,
+    Presence,
 }
 
 fn default_recheck_unread() -> bool {
@@ -273,7 +288,7 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
         | SidebarEvent::PanesChanged
         | SidebarEvent::StoreDelta { .. }
         | SidebarEvent::WidthTargetChanged
-        | SidebarEvent::PaneFramePublished
+        | SidebarEvent::PaneFramePublished { .. }
         | SidebarEvent::Notify { .. }
         | SidebarEvent::Reload => None,
     }
@@ -327,7 +342,15 @@ mod tests {
                 agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
             },
             SidebarEvent::WidthTargetChanged,
-            SidebarEvent::PaneFramePublished,
+            SidebarEvent::PaneFramePublished {
+                publication: PaneFramePublicationKind::Topology,
+            },
+            SidebarEvent::PaneFramePublished {
+                publication: PaneFramePublicationKind::Metrics,
+            },
+            SidebarEvent::PaneFramePublished {
+                publication: PaneFramePublicationKind::Presence,
+            },
             SidebarEvent::Notify {
                 title: "RimZ: claude needs you".to_owned(),
                 body: "claude sess-1 is waiting for input".to_owned(),
@@ -345,6 +368,19 @@ mod tests {
             assert_eq!(decoded, expected);
             assert!(decoded.is_current_version());
         }
+    }
+
+    #[test]
+    fn legacy_pane_frame_publication_decodes_as_topology() {
+        let decoded: SidebarEvent =
+            serde_json::from_str(r#"{"kind":"pane_frame_published"}"#).unwrap();
+
+        assert_eq!(
+            decoded,
+            SidebarEvent::PaneFramePublished {
+                publication: PaneFramePublicationKind::Topology,
+            }
+        );
     }
 
     #[test]
