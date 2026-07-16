@@ -738,15 +738,15 @@ fn schedule_style<T, E>(parsed: std::result::Result<&T, &E>) -> anstyle::Style {
     }
 }
 
-struct ActionWords<'a> {
-    subject: &'a str,
+struct ActionWords {
+    subject: String,
     base: &'static str,
     third_person: &'static str,
     progressive: &'static str,
     untouched: &'static str,
 }
 
-fn action_words(entry: &TaskEntry) -> Option<ActionWords<'_>> {
+fn action_words(entry: &TaskEntry) -> Option<ActionWords> {
     match TaskAction::from_entry("display", entry).ok()? {
         TaskAction::Spawn(subject) => Some(ActionWords {
             subject,
@@ -756,7 +756,7 @@ fn action_words(entry: &TaskEntry) -> Option<ActionWords<'_>> {
             untouched: "not started",
         }),
         TaskAction::Deliver(target) => Some(ActionWords {
-            subject: &target.handle,
+            subject: target.handle,
             base: "wake",
             third_person: "wakes",
             progressive: "waking",
