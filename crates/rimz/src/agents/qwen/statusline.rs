@@ -126,18 +126,22 @@ impl ModelTokens {
     }
 }
 
+fn strip_provider_decoration(model: &str) -> &str {
+    let model = model.trim();
+    model
+        .strip_prefix('[')
+        .and_then(|rest| rest.find(']').map(|end| rest[end + 1..].trim_start()))
+        .filter(|suffix| !suffix.is_empty())
+        .unwrap_or(model)
+}
+
 fn model_display_name(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
-        let original = value.trim();
-        if original.is_empty() {
+        let model = strip_provider_decoration(&value);
+        if model.is_empty() {
             return None;
         }
-        let undecorated = original
-            .strip_prefix('[')
-            .and_then(|rest| rest.find(']').map(|end| rest[end + 1..].trim_start()))
-            .filter(|suffix| !suffix.is_empty())
-            .unwrap_or(original);
-        Some(display_model(undecorated))
+        Some(display_model(model))
     })
 }
 
@@ -145,16 +149,13 @@ impl StatuslinePayload {
     pub(crate) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
         let mut total_cost_usd = 0.0;
         for (model, metrics) in &self.metrics.models {
-            let model = model.trim();
-            if model.is_empty() {
-                continue;
-            }
             let Some(usage) = metrics.tokens.session_usage() else {
                 continue;
             };
-            let Some(price) = prices.price(model) else {
+            if usage.is_zero() {
                 continue;
-            };
+            }
+            let price = prices.price(strip_provider_decoration(model))?;
             let cost = price.cost(
                 usage.input_tokens.unwrap_or(0),
                 usage.displayed_output_tokens(),
@@ -163,9 +164,10 @@ impl StatuslinePayload {
                 usage.cache_read_input_tokens.unwrap_or(0),
                 false,
             );
-            if cost.is_finite() {
-                total_cost_usd += cost;
+            if !cost.is_finite() {
+                return None;
             }
+            total_cost_usd += cost;
         }
         (total_cost_usd.is_finite() && total_cost_usd > 0.0).then(|| AgentCost {
             total_cost_usd: Some(total_cost_usd),

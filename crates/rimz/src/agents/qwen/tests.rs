@@ -366,7 +366,7 @@ fn statusline_context_occupancy_preserves_zero_absence_and_malformed_values() {
 }
 
 #[test]
-fn statusline_cost_prices_each_routed_model_independently() {
+fn statusline_cost_prices_every_decorated_routed_model() {
     let prices = PriceBook::from_litellm_json(
         r#"{
             "model-a": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002, "cache_read_input_token_cost": 0.0000001},
@@ -377,15 +377,46 @@ fn statusline_cost_prices_each_routed_model_independently() {
         "model": {"display_name": "model-a"},
         "metrics": {
             "models": {
-                "model-a": {"tokens": {"prompt": 100, "total": 120, "cached": 40}},
-                "model-b": {"tokens": {"prompt": 10, "total": 15, "cached": 2}},
-                "unknown": {"tokens": {"prompt": 1_000_000, "total": 2_000_000}}
+                "[Provider A] model-a": {"tokens": {"prompt": 100, "total": 120, "cached": 40}},
+                "model-b": {"tokens": {"prompt": 10, "total": 15, "cached": 2}}
             }
         }
     });
     let cost = QwenAdapter.context_cost(&payload, &prices).unwrap();
     assert_eq!(cost.coverage, CostCoverage::Session);
     assert!((cost.total_cost_usd.unwrap() - 0.000_286).abs() < 1e-15);
+}
+
+#[test]
+fn statusline_cost_requires_every_material_bucket_to_be_priceable() {
+    let prices = PriceBook::from_litellm_json(
+        r#"{
+            "model-a": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000002}
+        }"#,
+    );
+    let partial = json!({
+        "metrics": {
+            "models": {
+                "model-a": {"tokens": {"prompt": 100, "total": 120}},
+                "unknown": {"tokens": {"prompt": 1, "total": 2}}
+            }
+        }
+    });
+    assert_eq!(QwenAdapter.context_cost(&partial, &prices), None);
+
+    let complete = json!({
+        "metrics": {
+            "models": {
+                "model-a": {"tokens": {"prompt": 100, "total": 120}},
+                "unknown-zero": {"tokens": {"prompt": 0, "total": 0}},
+                "empty": {"tokens": {}},
+                "malformed": true
+            }
+        }
+    });
+    let cost = QwenAdapter.context_cost(&complete, &prices).unwrap();
+    assert_eq!(cost.coverage, CostCoverage::Session);
+    assert!((cost.total_cost_usd.unwrap() - 0.000_14).abs() < 1e-15);
 }
 
 #[test]
