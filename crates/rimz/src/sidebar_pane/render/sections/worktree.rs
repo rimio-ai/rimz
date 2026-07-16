@@ -506,7 +506,7 @@ fn pr_state_marker(state: WorktreePrState) -> (GlyphRole, Component) {
 
 /// The trunk marker glyph and tone, by descending priority: a live local
 /// rebase/merge (`⟳`), then the forge PR verdict (merged `✓` / closed `✕` /
-/// open `⊙`), then the local trunk relationship (merged `✓` / pristine `≡` /
+/// open `⑃`), then the local trunk relationship (merged `✓` / pristine `≡` /
 /// diverged branch `⑂`). `None` for the trunk worktree itself (`trunk_sync`
 /// `None`), whose header keeps the plain cluster.
 fn trunk_marker(group: &SidebarWorktreeGroup) -> Option<(GlyphRole, Component)> {

@@ -136,7 +136,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::WorktreeTrunkEqual => "≡",
         GlyphRole::WorktreeTrunkBranch => "⑂",
         GlyphRole::WorktreeTrunkMerge => "✓",
-        GlyphRole::WorktreePrOpen => "⊙",
+        GlyphRole::WorktreePrOpen => "⑃",
         GlyphRole::WorktreePrClosed => "✕",
         GlyphRole::WorktreeReconciling => "⟳",
         GlyphRole::WorktreeExpand => "▸",

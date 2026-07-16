@@ -629,7 +629,7 @@ fn render_cockpit_unread_count() {
 
     let screen = snapshot_to_screen(&snapshot, 38, 20);
     assert!(
-        screen.lines().any(|line| line.contains("¤ 2 (1) ⊙ 1")),
+        screen.lines().any(|line| line.contains("¤ 2 (1) ⑃ 1")),
         "live-agent summary carries unread and open-PR counts in order:\n{screen}"
     );
 }
@@ -654,7 +654,7 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
         .lines()
         .find(|line| line.contains('¤'))
         .expect("cockpit spend line");
-    assert!(spend.contains("⊙ 2"), "two open lane PRs count:\n{screen}");
+    assert!(spend.contains("⑃ 2"), "two open lane PRs count:\n{screen}");
     assert!(
         !spend.contains('#'),
         "the aggregate omits lane PR numbers:\n{screen}"
@@ -668,7 +668,7 @@ fn render_cockpit_hides_zero_open_prs() {
         .lines()
         .find(|line| line.contains('¤'))
         .expect("cockpit spend line");
-    assert!(!spend.contains('⊙'), "zero open PRs stay hidden:\n{screen}");
+    assert!(!spend.contains('⑃'), "zero open PRs stay hidden:\n{screen}");
 }
 
 /// The `↑ N need you` jump banner appears when the lead leaves the viewport and

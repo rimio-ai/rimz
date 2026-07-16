@@ -315,7 +315,7 @@ fn render_pr_merged_pristine_worktree_uses_merge_glyphs() {
 fn render_pristine_worktree_pr_state_outranks_equal_marker() {
     let mut snapshot = pristine_worktree_with_pr_state(Some(crate::WorktreePrState::Open));
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
-    assert!(rendered.contains("⊙ main"), "header:\n{rendered}");
+    assert!(rendered.contains("⑃ main"), "header:\n{rendered}");
     assert!(!rendered.contains("≡ main"), "header:\n{rendered}");
 
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
@@ -381,7 +381,7 @@ fn render_merged_worktree_pr_open_or_closed_outranks_merge_marker() {
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
     assert!(
-        rendered.contains("⊙ main"),
+        rendered.contains("⑃ main"),
         "open PR outranks local merge:\n{rendered}"
     );
     assert!(
@@ -527,7 +527,7 @@ fn render_trunk_worktree_pr_state_keeps_plain_cluster() {
     assert!(rendered.contains("⇡2"), "header:\n{rendered}");
     assert!(rendered.contains("+3 -1"), "header:\n{rendered}");
     assert!(
-        !rendered.contains("⊙ main"),
+        !rendered.contains("⑃ main"),
         "trunk worktree keeps the plain cluster:\n{rendered}"
     );
 }
@@ -601,7 +601,7 @@ fn render_diverged_worktree_uses_pr_state_marker() {
 
     let rendered = snapshot_to_screen(&snapshot, 42, 14);
     assert!(rendered.contains("⇡2"), "header:\n{rendered}");
-    assert!(rendered.contains("⊙ main"), "header:\n{rendered}");
+    assert!(rendered.contains("⑃ main"), "header:\n{rendered}");
 
     snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Closed);
     let rendered = snapshot_to_screen(&snapshot, 42, 14);

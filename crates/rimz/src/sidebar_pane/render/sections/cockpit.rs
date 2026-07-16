@@ -49,7 +49,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
     pin_right(left, right, width)
 }
 
-/// The cockpit's second summary line: `¤ {live} ({unread}) {⊙ open-PRs}` — the
+/// The cockpit's second summary line: `¤ {live} ({unread}) {⑃ open-PRs}` — the
 /// agents in the room right now, the glyph in the agents' own working clay —
 /// on the left, with headline fleet spend pinned to the right edge, counting up
 /// as a turn lands. The steady unread count is a click-to-filter target and
