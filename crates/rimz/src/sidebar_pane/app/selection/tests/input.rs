@@ -436,7 +436,6 @@ fn other_key_is_noop_when_help_is_closed() {
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = UiState {
-        unread_focus: Some("agent-lead".to_owned()),
         selected_index: 1,
         scroll_offset: 6,
         ..Default::default()
@@ -445,10 +444,6 @@ fn other_key_is_noop_when_help_is_closed() {
     let outcome = handle_key(KeyAction::Other, &mut ui, &snapshot);
 
     assert_eq!(outcome, InputOutcome::default());
-    assert!(
-        ui.unread_focus.is_some(),
-        "unbound keys should not count as sidebar engagement when help is closed"
-    );
     assert_eq!(ui.selected_index, 1);
     assert_eq!(ui.scroll_offset, 6);
 }
@@ -650,7 +645,7 @@ fn mark_keys_ignore_process_rows() {
     assert_eq!(outcome, InputOutcome::default());
 }
 #[test]
-fn the_unread_snap_overrides_selection_follow_to_the_top() {
+fn a_fresh_unread_lead_never_steals_the_viewport_from_the_selection() {
     use crate::agents::AgentStatus;
     // A tall room: a lead actionable unread row, then nine calm rows.
     let ws = workspace();
@@ -695,7 +690,8 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
         pr_number: None,
     }];
 
-    // Selecting the last row scrolls the short viewport down, off the lead.
+    // Selecting the last row keeps it visible in the short viewport while the
+    // fresh unread lead stays reachable through the jump banner.
     let mut ui = UiState {
         selected_index: 9,
         ..Default::default()
@@ -705,15 +701,6 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
         render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 40, 15).scroll_offset;
     assert!(
         following > 0,
-        "following the bottom selection scrolls down off the lead unread row",
-    );
-
-    // Arming the snap returns the viewport to the top to reveal the lead, even
-    // though the selection still sits at the bottom.
-    ui.unread_focus = Some("agent-lead".to_owned());
-    let snapped = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 40, 15).scroll_offset;
-    assert_eq!(
-        snapped, 0,
-        "the unread snap overrides selection-follow and reaches the top",
+        "a fresh unread lead must not displace the bottom selection",
     );
 }

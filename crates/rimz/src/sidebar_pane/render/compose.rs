@@ -484,11 +484,7 @@ fn resolve_scroll_offset(
     if ui.manual_scroll.is_some() {
         return offset;
     }
-    let resolved = if let Some(target) = unread_focus_ordinal(roster, ui) {
-        // A freshly-arrived actionable unread drives auto-follow even when the
-        // selected row sits elsewhere.
-        auto_scroll_to_selection(scroll_map, target, offset, viewport)
-    } else if ui.focus_group_reveal
+    let resolved = if ui.focus_group_reveal
         && let Some(group_first) = selected_group_first_ordinal(roster, ui.selected_index)
     {
         auto_scroll_reveal_group(scroll_map, group_first, ui.selected_index, offset, viewport)
@@ -590,13 +586,6 @@ pub(super) fn auto_scroll_reveal_group(
 fn selected_group_first_ordinal(roster: &VisibleRoster<'_>, selected: usize) -> Option<usize> {
     let group = roster.group_containing(selected)?;
     (group.source().kind != SidebarWorktreeKind::External).then(|| group.range().start)
-}
-
-/// The visible-row ordinal of the armed unread-focus row, the auto-scroll target
-/// that outranks the selection. `None` when no snap is armed or the make-up filter
-/// hides the row, leaving the viewport to follow the selection.
-fn unread_focus_ordinal(roster: &VisibleRoster<'_>, ui: &UiState) -> Option<usize> {
-    roster.ordinal_of_id(ui.unread_focus.as_deref()?)
 }
 
 /// The `↑ N need you` jump banner, toned by the lead's status (`failed` the

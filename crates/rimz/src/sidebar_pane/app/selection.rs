@@ -4,7 +4,7 @@
 
 use crate::ids::PaneId;
 use crate::mux::WidthAdjust;
-use crate::{SidebarSnapshot, lead_unread_row, triage_key};
+use crate::{SidebarSnapshot, triage_key};
 
 use crate::sidebar_pane::render::HitTarget;
 use crate::sidebar_pane::render::{
@@ -196,10 +196,6 @@ pub(super) fn handle_key(
     if action == KeyAction::Other {
         return InputOutcome::default();
     }
-    // Any keystroke is engagement: dismiss the unread snap so navigation follows
-    // the selection again. A still-unanswered lead is one keystroke away on the
-    // jump banner, and a genuinely new unread re-arms the snap on its next fold.
-    ui.unread_focus = None;
     match action {
         KeyAction::WidthNarrower => InputOutcome::width(WidthAdjust::Narrower),
         KeyAction::WidthWider => InputOutcome::width(WidthAdjust::Wider),
@@ -307,9 +303,6 @@ pub(super) fn handle_mouse_click(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
-    // A click is engagement: dismiss the unread snap (the jump banner click below
-    // is itself a click, so it lands on the lead before the snap would re-arm).
-    ui.unread_focus = None;
     match ui.interactions.target_at(column, row) {
         Some(HitTarget::ProviderTab(kind)) => {
             pick_dashboard_tab(ui, snapshot, kind);
@@ -344,9 +337,6 @@ pub(super) fn handle_mouse_click(
 /// Overshoot is fine: the draw clamps the offset to the zone and writes the
 /// effective value back.
 pub(super) fn handle_scroll(down: bool, ui: &mut UiState) -> InputOutcome {
-    // A wheel tick is engagement: dismiss the unread snap and let the manual pin
-    // own the viewport.
-    ui.unread_focus = None;
     pin_manual_scroll(ui);
     ui.scroll_offset = if down {
         ui.scroll_offset.saturating_add(SCROLL_STEP)
@@ -545,7 +535,6 @@ pub(super) fn reconcile_selection(
     reconcile_filter_and_baseline(ui, snapshot, derived);
     reconcile_browse_and_selection(ui, snapshot);
     reconcile_dashboard(ui, snapshot);
-    reconcile_unread_focus(ui, snapshot);
 }
 
 fn reconcile_filter_and_baseline(
@@ -611,19 +600,6 @@ fn reconcile_dashboard(ui: &mut UiState, snapshot: &SidebarSnapshot) {
         if derived_moved || tab_gone {
             ui.dashboard_tab = None;
         }
-    }
-}
-
-fn reconcile_unread_focus(ui: &mut UiState, snapshot: &SidebarSnapshot) {
-    let lead = lead_unread_row(&snapshot.worktree_groups).map(|row| row.id.clone());
-    if lead != ui.last_lead_unread {
-        if lead.is_some() && ui.manual_scroll.is_none() {
-            ui.unread_focus = lead.clone();
-        }
-        ui.last_lead_unread = lead.clone();
-    }
-    if ui.unread_focus.is_some() && ui.unread_focus != lead {
-        ui.unread_focus = None;
     }
 }
 
