@@ -44,7 +44,7 @@ copilot help providers
 
 Use **command hooks** as the lifecycle and decision seam. They are local, session-scoped, carry the session ID and cwd on every event, expose synchronous permission decisions, and preserve Copilot's stock interactive UI. This matches RimZ's existing pane-first contract.
 
-Use the **custom statusline command** for live context, model, duration, token enrichment, and a locally priced session estimate, with file-exported OTel as the fallback when the managed command is absent or unhealthy. The statusline is the selected lighter UI-owned transport; GitHub documents its session-JSON stdin contract, while the field schema remains version-pinned compatibility evidence. OTel has a published schema but is asynchronous telemetry and remains enrichment rather than lifecycle truth. Account usage, historical spend, and authoritative provider dollars stay unsupported; AI credits, the internal response, and official billing endpoints below do not establish an adapter-grade USD ledger.
+Use the **custom statusline command** for live context, model, duration, token enrichment, and a locally priced session estimate, with file-exported OTel as the fallback when the managed command is absent or unhealthy. The statusline is the selected lighter UI-owned transport; GitHub documents its session-JSON stdin contract, while the field schema remains version-pinned compatibility evidence. OTel has a published schema but is asynchronous telemetry and remains enrichment rather than lifecycle truth. Use the bounded internal account response only for plan and named monthly allowance bars. Historical spend and authoritative provider dollars stay unsupported; AI credits and official billing endpoints below do not establish an adapter-grade USD ledger.
 
 Use **`-i, --interactive <prompt>`** for RimZ prompt-seeded panes and supervised runs: it submits the initial prompt while preserving the stock interactive UI, native asks, and the hook-driven completion path shared with other adapters. Native `-p` prompt mode is a future alternative if RimZ adds a process-output supervised backend. Evaluate **ACP** when RimZ needs structured streaming, permission requests, or session control for a supervised run. Do not replace the interactive pane with ACP: ACP changes RimZ from observing the user's stock CLI into hosting the agent protocol itself.
 
@@ -59,7 +59,7 @@ The candidate transport matrix is:
 | compaction end | OTel `session.compaction_complete`, or derived next activity | no native post-compact hook |
 | subagents | child `userPromptSubmitted` / `agentStop` joined to parent `subagent.started` | no child tool/permission hooks; token totals stay on the parent |
 | model, effort, context | managed custom statusline in `settings.json` | metadata-only OTel when the managed setting is absent or unhealthy |
-| plan and account usage | no supported adapter transport | internal response and official billing endpoints remain unimplemented research |
+| account plan and quota | bounded internal account response | named monthly Chat/AIC and genuine premium allowances only; no 5h/7d or dollar ledger |
 | tokens, estimated dollars, and duration/line counters | managed custom statusline | cumulative totals use the currently resolved model; premium-request billing remains unmodeled |
 | session resume | `--resume`, `--continue`, `--session-id` | session ID is present in hooks |
 | authentication | environment and `copilot login` | no documented machine-readable auth-status command |
@@ -136,15 +136,17 @@ Use the native camelCase names for a new adapter. They cover every event and avo
 
 Every documented payload carries `sessionId`, `timestamp`, and `cwd` (or `session_id`, ISO `timestamp`, and `cwd`). Unlike Claude and Codex, the common payload has no model, effort, permission mode, or transcript path; only selected events add `transcriptPath`.
 
+A Copilot CLI 1.0.71 live capture also emitted pre/post tool detail as `toolCalls: [{name, args}]`, with `args` appearing as either an object or JSON-encoded string. The batch can contain `ask_user` beside other calls. Selecting or dismissing that ask emitted `postToolUse` before the next assistant output, making the post-tool edge the immediate answer-completion signal even though `ask_user` is non-mutating.
+
 ### Events an adapter should wire
 
 | Event | Fires | Event-specific camelCase fields | RimZ use |
 | --- | --- | --- | --- |
 | `sessionStart` | new or resumed session begins | `source: "startup" \| "resume" \| "new"`, `initialPrompt?` | prompt-seeded duplicate turn edge or promptless start/resume identity |
 | `userPromptSubmitted` | user submits a prompt | `prompt` | turn start |
-| `preToolUse` | before every tool | `toolName`, `toolArgs` | proof of work; classify `ask_user`; optional blocking policy |
-| `postToolUse` | tool succeeds | `toolName`, `toolArgs`, `toolResult: { resultType: "success", textResultForLlm }` | silent activity / audit |
-| `postToolUseFailure` | tool fails | `toolName`, `toolArgs`, `error` | activity and error evidence |
+| `preToolUse` | before every tool | documented `toolName`, `toolArgs`; observed 1.0.71 `toolCalls: [{name, args}]` | proof of work; classify `ask_user`; optional blocking policy |
+| `postToolUse` | tool succeeds | singular/batched tool detail, `toolResult: { resultType: "success", textResultForLlm }` | completed tool/answer boundary plus activity classification |
+| `postToolUseFailure` | tool fails | singular/batched tool detail, `error` | completed tool boundary plus error evidence |
 | `permissionRequest` | before permission rules, session approvals, auto decisions, and UI prompt | official docs describe matching and decisions but do not publish a distinct input shape beyond `toolName` matching | synchronous awaiting-user decision channel |
 | `agentStop` | main agent finishes a turn | `transcriptPath`, `stopReason: "end_turn"` | turn completed |
 | `subagentStart` | a non-`general-purpose` subagent starts | `transcriptPath`, `agentName`, `agentDisplayName?`, `agentDescription?` | child start; upstream publishes no child instance ID |
@@ -339,7 +341,7 @@ User setting `statusLine` runs a command that receives **session JSON on stdin**
 
 The footer can display model/effort, directory, branch, context window, quota, agent, AI used, code changes, username, sandbox, yolo state, and custom content. This proves the TUI maintains the main enrichment values, but the official docs do not publish the statusline input fields, update triggers, timeout, environment, exit handling, ANSI rules, or command-chaining semantics.
 
-A sanitized 1.0.70 capture observed stable top-level `session_id`, `version`, `model`, `context_window`, `cost`, and `ai_used` objects. After one auto-model turn, `model` was `{id: "auto", display_name: "Auto → gpt-5-mini"}` and `context_window` added `current_context_tokens`, `displayed_context_limit`, and `current_context_used_percentage`, while its nominal `context_window_size`, `used_percentage`, `remaining_percentage`, and `remaining_tokens` stayed null. A 1.0.71 compatibility check retained the transport and added latest-call plus cumulative token fields; the pinned fixture reports `total_input_tokens = 82,000`, exactly `7,000` cache-write + `69,000` cache-read + `6,000` fresh input, while the live capture reports `92,641 = 34,784` cache-write + `57,824` cache-read + `33` fresh input.
+A sanitized 1.0.70 capture observed stable top-level `session_id`, `version`, `model`, `context_window`, `cost`, and `ai_used` objects. After one auto-model turn, `model` was `{id: "auto", display_name: "Auto → gpt-5-mini"}` and `context_window` added `current_context_tokens`, `displayed_context_limit`, and `current_context_used_percentage`, while its nominal `context_window_size`, `used_percentage`, `remaining_percentage`, and `remaining_tokens` stayed null. A 1.0.71 compatibility check retained the transport and added latest-call plus cumulative token fields; the pinned fixture reports `total_input_tokens = 82,000`, exactly `7,000` cache-write + `69,000` cache-read + `6,000` fresh input, while the live capture reports `92,641 = 34,784` cache-write + `57,824` cache-read + `33` fresh input. RimZ normalizes an auto display's rightmost arrow target before publishing model identity or pricing, and retains literal `auto` only when no valid concrete target exists.
 
 RimZ selects `$COPILOT_HOME/settings.json` as the transport and installs `RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source copilot`. `displayed_context_limit` wins over `context_window_size`, `current_context_used_percentage` wins over `used_percentage`, and `current_context_tokens` publishes the occupied-window scalar and derives a missing fill against a positive selected denominator. `current_usage` is latest-call composition; the cumulative session split subtracts cache creation and cache reads from `total_input_tokens` to publish fresh input. The feed prices the normalized cumulative split at the concrete `model.id`, or at the resolved arrow target in an `Auto → …` display label, and merges a positive finite estimate into the session sidecar. `total_tokens`, `last_call_input_tokens`, `ai_used`, premium requests, and remote state stay outside the normalized mapping.
 
@@ -469,9 +471,9 @@ Supported tokens are fine-grained PATs with the **Copilot Requests** permission,
 
 The official CLI command list has no `copilot auth status --json` equivalent. `/user show`, `/user list`, and `/user switch` are interactive slash commands. Captured `$COPILOT_HOME/config.json` state exposes the non-secret current identity as `lastLoggedInUser: {host, login}` and the known identity list as `loggedInUsers: [{host, login}]`. RimZ uses the last valid identity, falling back to the first valid list entry, and qualifies enterprise identities as `login@host` so equal logins on different hosts remain distinct.
 
-Model only these identity fields. Leave keychain entries and `config.json` token fields such as `copilotTokens` untouched and unmodeled. Presence of an environment variable is not proof that the token is valid or that the account has an enabled Copilot CLI policy.
+Model only these identity fields for displayed login discovery. Leave keychain entries untouched and `config.json` token fields such as `copilotTokens` read-only; the bounded account-usage compatibility query may select the exact active `<host>:<login>` token without promoting its presence into account identity. Presence of an environment variable is not proof that the token is valid or that the account has an enabled Copilot CLI policy.
 
-### Account-usage research
+### Account-usage compatibility surface
 
 #### Undocumented account-usage response
 
@@ -479,7 +481,7 @@ Model only these identity fields. Leave keychain entries and `config.json` token
 
 The response can expose `copilot_plan`, `token_based_billing`, `quota_reset_date`, modern `quota_snapshots`, and legacy `monthly_quotas` plus `limited_user_quotas`. Premium interactions and Chat may report an explicit percentage, entitlement and remaining counts, or unlimited state; reset dates appear as RFC 3339 timestamps or calendar dates. Business responses may carry zero-entitlement placeholders and no usable quota while still providing the plan.
 
-RimZ does not call this endpoint or publish its plan and quotas. The response lacks the temporal semantics and captured provider-exhaustion lifecycle required for budget pace, priming, supervised runs, and reliable reset recovery, so it remains unsupported compatibility evidence.
+RimZ calls this endpoint through its bounded direct account-query lane and publishes only `copilot_plan`, Chat/AIC, and genuine `premium_interactions`. It prefers usable modern data per scope and fills an absent scope from legacy fields, excludes `completions`, suppresses zero-entitlement placeholders, and treats explicit unlimited state as lifted. These are durationless named monthly quotas: the response supplies no 5h/7d semantics, so the readings remain outside budget pace, priming, roll-forward, auto-continue, and provider-capacity policy. Statusline `ai_used` is session-only context and cannot reconstruct this account allowance.
 
 #### Official billing usage endpoints
 
@@ -513,7 +515,7 @@ The hooks-first adapter implements the lifecycle, transcript correlation, select
 7. Extend OTel only after shared-file interactive concurrency, cumulative-versus-turn replacement, `github.copilot.cost` units, subagent span identity, compaction close, and long-running flush behavior are pinned.
 8. Confirm process names, argv, parent/child tree, cwd, and environment stamping under normal, resume, remote, `-p`, ACP, worktree, and auto-update/restart paths for PID attribution.
 9. Keep the two-file hook/statusline install reversible across provider schema changes; strict writes reject JSONC while read-only health and pass-through discovery tolerate it.
-10. Keep coverage honest: Context Usage and Rich Context are wired through the statusline with OTel fallback; subagents and realtime cost are partial; plan, quota, historical spend, and remote control remain unsupported until their own sources are proven.
+10. Keep coverage honest: Context Usage and Rich Context are wired through the statusline with OTel fallback and the bounded named-quota query; subagents and realtime cost are partial; plan-approval lifecycle, historical spend, official billing, and remote control remain unsupported until their own sources are proven.
 
 The expected initial lifecycle mapping is:
 
@@ -521,7 +523,8 @@ The expected initial lifecycle mapping is:
 sessionStart(initial)   -> duplicate PromptSubmitted edge
 sessionStart(promptless)-> SessionStarted / SessionResumed
 userPromptSubmitted     -> PromptSubmitted
-preToolUse              -> ToolStarted (proof of work)
+preToolUse              -> ToolStarted or AwaitingUser (batched/singular proof of work)
+postToolUse[/Failure]   -> ToolCompleted (immediate answer completion included)
 permissionRequest       -> AwaitingUser (permission)
 preToolUse(ask_user)    -> AwaitingUser (question, if payload is sufficient)
 agentStop               -> TurnCompleted
