@@ -72,20 +72,70 @@ Verify which build is actually running before trusting absolute numbers. Frames 
 
 ## Capture one producer and one hidden consumer
 
-Make process selection part of the evidence instead of choosing the busiest two PIDs. Build one inventory from exact argv slots, worker environment, heartbeat identity, producer ordering, and the published client view; then attach tools only to one proven producer and one consumer whose own tab is not viewed. Treat an absent heartbeat, missing pane-to-tab match, or unknown client view as `unknown`, never as proof that a renderer is hidden.
-
-Start a capture in a temporary directory and keep every raw input there. The inventory below uses the full `RIMZ_SIDEBAR_INSTANCE_ID` rather than the heartbeat filename's short display id; UUIDv7 instance strings sort by birth, and the lexically oldest current-protocol instance in each workspace is the elected producer.
+Start with the whole RimZ process family, then drill into one producer and one demonstrably hidden consumer. Set private permissions before reading argv, environment, or traces: these can contain project paths and command text. Keep the capture directory uncommitted, distill only the relevant measurements into the implementation report, then remove the directory.
 
 ```bash
+umask 077
+export LC_ALL=C
+for cmd in awk column cp date grep head jq mktemp perf pgrep readlink rg rimz rm rustfilt sed sha256sum sleep sort stat strace sysctl tail tee timeout tr; do
+  command -v "$cmd" >/dev/null || { printf 'missing required command: %s\n' "$cmd" >&2; exit 1; }
+done
+
 capture=$(mktemp -d /tmp/rimz-fleet-profile.XXXXXX)
-raw=$capture/inventory.raw.tsv
-printf 'pid\tthreads\tworkspace\tprotocol\tinstance\tmux\tpane\twatch\tfocused\tbuild\texe\n' > "$raw"
+family=$capture/process-family.tsv
+printf 'pid\trole\tthreads\tpss_kib\tuss_kib\targv\n' > "$family"
+
+while read -r pid; do
+  { mapfile -d '' -t argv < "/proc/$pid/cmdline"; } 2>/dev/null || continue
+  [[ ${argv[0]##*/} == rimz ]] || continue
+  env_lines=$({ tr '\0' '\n' < "/proc/$pid/environ"; } 2>/dev/null) || env_lines=
+  if [[ ${argv[1]-} == sidebar && ${argv[2]-} == serve ]]; then
+    if grep -q '^RIMZ_SIDEBAR_WORKER=' <<< "$env_lines"; then role=sidebar-worker; else role=sidebar-supervisor; fi
+  elif [[ ${argv[1]-} == agents && ${argv[2]-} == exec ]]; then
+    role=agents-exec
+  elif [[ ${argv[1]-} == stats ]]; then
+    role=stats
+    for arg in "${argv[@]:2}"; do [[ $arg == --hold ]] && role=daemon-content; done
+  elif [[ ${argv[1]-} == daemon && ${argv[2]-} == content ]]; then
+    role=daemon-content
+  elif [[ ${argv[1]-} == loop && ${argv[2]-} == watch ]]; then
+    role=loop-watch
+  elif [[ ${argv[1]-} == remote && ${argv[2]-} == link-stats ]]; then
+    role=remote-link-stats
+  else
+    role=${argv[1]-rimz}
+    [[ -n ${argv[2]-} ]] && role="$role ${argv[2]}"
+  fi
+  threads=$(awk '/^Threads:/{print $2}' "/proc/$pid/status" 2>/dev/null) || continue
+  memory=$(awk '/^Pss:/{pss=$2} /^Private_(Clean|Dirty|Hugetlb):/{uss+=$2} END{print pss+0, uss+0}' "/proc/$pid/smaps_rollup" 2>/dev/null) || continue
+  read -r pss uss <<< "$memory"
+  printf -v command '%q ' "${argv[@]}"
+  command=${command% }
+  command=${command//$'\t'/ }
+  command=${command//$'\n'/ }
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$role" "$threads" "$pss" "$uss" "$command" >> "$family"
+done < <(pgrep -x rimz)
+
+{
+  printf 'role\tprocesses\tpss_kib\tuss_kib\n'
+  awk -F '\t' 'NR>1 {count[$2]++; pss[$2]+=$4; uss[$2]+=$5} END {for (role in count) print role, count[role], pss[role], uss[role]}' OFS=$'\t' "$family" | sort
+} > "$capture/process-family-by-role.tsv"
+column -ts $'\t' "$family"
+column -ts $'\t' "$capture/process-family-by-role.tsv"
+```
+
+The family table is the fast budget check: it retains every readable exact-`rimz` process, classifies the known long-lived roles, and leaves any unfamiliar command under its first two argv words. It records thread count plus PSS and USS per PID and sums those proportional/private measures by role; summed RSS is deliberately absent because it double-counts shared mappings.
+
+Build the sidebar inventory from the same capture. The full `RIMZ_SIDEBAR_INSTANCE_ID` sorts by UUIDv7 birth, and the lexically oldest fresh instance within each workspace/protocol is the elected producer. Heartbeat workspace/instance fields must agree with the environment and derived path before the row is admitted. Missing, stale, unreadable, mismatched, and unknown-watch rows stay out of the selection rather than becoming false hidden consumers.
+
+```bash
+raw=$capture/sidebar.raw.tsv
+printf 'pid\tthreads\tworkspace\tprotocol\tinstance\tmux\tsession\tpane\twatch\tfocused\tbuild\texe\n' > "$raw"
 now=$(date +%s)
 
-for f in /proc/[0-9]*/cmdline; do
-  mapfile -d '' -t argv < "$f" 2>/dev/null || continue
+while read -r pid; do
+  { mapfile -d '' -t argv < "/proc/$pid/cmdline"; } 2>/dev/null || continue
   [[ ${argv[0]##*/} == rimz && ${argv[1]-} == sidebar && ${argv[2]-} == serve ]] || continue
-  pid=${f#/proc/}; pid=${pid%/cmdline}
   env_lines=$({ tr '\0' '\n' < "/proc/$pid/environ"; } 2>/dev/null) || continue
   grep -q '^RIMZ_SIDEBAR_WORKER=' <<< "$env_lines" || continue
   workspace=$(sed -n 's/^RIMZ_WORKSPACE_ID=//p' <<< "$env_lines" | head -1)
@@ -95,41 +145,54 @@ for f in /proc/[0-9]*/cmdline; do
   runtime=${runtime:-/run/user/$(id -u)}
   heartbeat=$runtime/rimz/$workspace/heartbeat/sidebar.$instance.json
   snapshot=$runtime/rimz/$workspace/snapshot.json
-  [[ -r $heartbeat ]] || continue
+  [[ -r $heartbeat && -r $snapshot ]] || continue
   heartbeat_mtime=$(stat -c %Y "$heartbeat")
   (( now - heartbeat_mtime <= 5 )) || continue # SIDEBAR_HEARTBEAT_TTL
-  protocol=$(jq -r '.protocol_version' "$heartbeat")
-  mux=$(jq -r '.mux' "$heartbeat")
-  pane=$(jq -r '.pane_id // "-"' "$heartbeat")
-  build=$(jq -r '.build // "-"' "$heartbeat")
-  focused=$(jq -r '.focused_pane // "-"' "$snapshot" 2>/dev/null || printf '%s' unknown)
+  fields=$(jq -er '[.workspace_id,.instance_id,.protocol_version,.mux,.session_name,(.pane_id // "-"),(.build // "-")] | @tsv' "$heartbeat" 2>/dev/null) || continue
+  IFS=$'\t' read -r heartbeat_workspace heartbeat_instance protocol mux session pane build <<< "$fields"
+  [[ $heartbeat_workspace == "$workspace" && $heartbeat_instance == "$instance" ]] || continue
+  focused=$(jq -er '.focused_pane // "-"' "$snapshot" 2>/dev/null) || continue
   watch=unknown
-  if [[ $pane != - && -r $snapshot ]]; then
-    watch=$(jq -r --arg pane "$pane" '
+  if [[ $pane != - ]]; then
+    watch=$(jq -er --arg pane "$pane" '
       . as $frame
       | ([.tabs[]? | select(any(.panes[]?; .pane_id == $pane)) | .panes[]?.pane_id]) as $tab_panes
       | if ($tab_panes | length) == 0 then "unknown"
         elif any($frame.viewed_panes[]?; . as $viewed | $tab_panes | index($viewed)) then "watched"
         else "hidden" end
-    ' "$snapshot")
+    ' "$snapshot" 2>/dev/null) || continue
   fi
+  [[ $watch != unknown ]] || continue
   threads=$(awk '/^Threads:/{print $2}' "/proc/$pid/status")
   exe=$(readlink "/proc/$pid/exe" 2>/dev/null || printf '%s' unreadable)
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$threads" "$workspace" "$protocol" "$instance" "$mux" "$pane" "$watch" "$focused" "$build" "$exe" >> "$raw"
-done
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$threads" "$workspace" "$protocol" "$instance" "$mux" "$session" "$pane" "$watch" "$focused" "$build" "$exe" >> "$raw"
+done < <(pgrep -x rimz)
 
 {
-  printf 'pid\tthreads\tworkspace\tprotocol\tinstance\trole\tmux\tpane\twatch\tfocused\tbuild\texe\n'
-  tail -n +2 "$raw" | sort -t $'\t' -k3,3 -k4,4 -k5,5 | awk -F '\t' 'BEGIN{OFS=FS} {key=$3 FS $4; role=(key!=prior ? "producer" : "consumer"); prior=key; print $1,$2,$3,$4,$5,role,$6,$7,$8,$9,$10,$11}'
-} > "$capture/inventory.tsv"
-column -ts $'\t' "$capture/inventory.tsv"
+  printf 'pid\tthreads\tworkspace\tprotocol\tinstance\trole\tmux\tsession\tpane\twatch\tfocused\tbuild\texe\n'
+  tail -n +2 "$raw" | sort -t $'\t' -k3,3 -k4,4 -k5,5 | awk -F '\t' 'BEGIN{OFS=FS} {key=$3 FS $4; role=(key!=prior ? "producer" : "consumer"); prior=key; print $1,$2,$3,$4,$5,role,$6,$7,$8,$9,$10,$11,$12}'
+} > "$capture/sidebar.tsv"
+column -ts $'\t' "$capture/sidebar.tsv"
 ```
 
-The `watch` derivation mirrors renderer policy: find the heartbeat's pane in the published tab topology, then ask whether any attached client's `viewed_panes` entry belongs to that tab. Preserve `.focused_pane` separately as a consistency check. Pick a `role=producer` row and a `role=consumer,watch=hidden` row from the same workspace/protocol; an `unknown` row stays out of the comparison.
+The `watch` derivation mirrors renderer policy: find the heartbeat pane's tab in published topology, then ask whether any attached client's `viewed_panes` entry belongs to that tab. Preserve `.focused_pane` as a consistency check. Select `producer` and `consumer,hidden` rows from the same workspace/protocol, set their PIDs below, and take the room fields from the producer row.
 
-Write a manifest before attaching. Record the date, fixed sample durations, backend, workspace id, selected PIDs and thread counts, instance ids and roles, watch verdict, heartbeat/pane/metrics/store/sidecar timestamps, heartbeat protocol and pane-cache build ids, and whether `/proc/<pid>/exe` ends in ` (deleted)`. Count room shape from the same capture: tabs and viewed/focused panes from the published `snapshot.json`, agents from `rimz sidebar snapshot --json --no-produce`, and live renderers from `inventory.tsv`. Copy the exact selected `/proc/<pid>/exe` inode into the capture directory and record its SHA-256 before symbols disappear; use that artifact and build id for every profiler report.
+```bash
+producer=PID_FROM_SIDEBAR_TSV
+consumer=HIDDEN_PID_FROM_SIDEBAR_TSV
+IFS=$'\t' read -r workspace mux session < <(awk -F '\t' -v pid="$producer" 'BEGIN{OFS=FS} NR>1 && $1==pid {print $3,$7,$8}' "$capture/sidebar.tsv")
 
-Measure scheduler CPU and proportional memory over the same fixed window. Save `utime`/`stime` and `smaps_rollup` for both PIDs at each endpoint, sleep once, then sample both again; divide each tick delta by `getconf CLK_TCK` and the elapsed seconds for cores. Report `Pss` from `smaps_rollup`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`; aggregate PSS rather than RSS across workers because shared mappings make summed RSS double-count memory. Compare memory only on newly started workers after at least two producer refresh cycles: glibc arenas retain historical high-water allocations, so an old process does not answer what the changed steady state allocates.
+rimz sidebar snapshot --json --no-produce --workspace-id "$workspace" --mux "$mux" --session-name "$session" > "$capture/sidebar-snapshot.json"
+for role in producer consumer; do
+  pid=${!role}
+  cp --dereference "/proc/$pid/exe" "$capture/rimz-$role"
+  sha256sum "$capture/rimz-$role"
+done > "$capture/binaries.sha256"
+```
+
+Write the manifest before any long attach. Record date, fixed durations, backend, workspace/tab/agent counts, selected PIDs and thread counts, full instances and roles, watched/focused state, heartbeat/pane/metrics/store/sidecar timestamps, heartbeat protocol and pane-cache build ids, and whether each `/proc/<pid>/exe` readlink ends in ` (deleted)`. The selected-room command above prevents a shell in another checkout from silently inspecting the wrong workspace; the dereferenced copies preserve replaced/deleted inodes for the symfs workflow below.
+
+Measure scheduler CPU and proportional memory over the same fixed window. Save `utime`/`stime` and `smaps_rollup` for both PIDs at each endpoint, sleep once, then sample both again; divide each tick delta by `getconf CLK_TCK` and elapsed seconds for cores. Report `Pss` from `smaps_rollup`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`. Compare memory only on newly started workers after at least two producer refresh cycles because glibc arenas retain historical high-water allocations.
 
 ```bash
 secs=12
@@ -145,17 +208,27 @@ for pid in "$producer" "$consumer"; do
 done
 ```
 
-Correlate publications before opening a CPU profiler. Record timestamp sequences for `snapshot.json`, `metrics-sample.json`, the durable store checkpoint/log, and the runtime sidecar directories, then compare them with the consumer's `PaneFramePublished` datagrams and snapshot reads. The datagram's topology, metrics, or presence intent names the changed lane: hidden topology and store work may dispatch once per one-second clamp, hidden metrics once per three-second background window, and presence dispatches immediately. Count actual snapshot opens or diagnostic fold records rather than wake datagrams when deriving fold rate, because several pending events can merge into one fetch at the earliest deadline.
+Correlate publications before opening a CPU profiler. Record timestamp sequences for `snapshot.json`, `metrics-sample.json`, the durable store checkpoint/log, and runtime sidecar directories, then compare them with the consumer's `PaneFramePublished` datagrams and snapshot reads. The datagram's topology, metrics, or presence intent names the changed lane: hidden topology and store work may dispatch once per one-second clamp, hidden metrics once per three-second background window, and presence dispatches immediately. Count actual snapshot opens or diagnostic fold records rather than wake datagrams when deriving fold rate because pending events merge at the earliest deadline.
 
-Pair an all-syscall summary with a short timestamped path trace. Run these sequentially because two ptrace clients cannot attach to the same worker; `-f -c` ranks syscall classes, while `-ff -ttt -e trace=%file,process,recvfrom -s 512` separates worker threads/children, preserves `execve` outcomes, exposes publication payloads, and identifies the exact repeated paths. Check consumer traces explicitly for `.git`, `rimz-worktree.json`, provider configuration, `agent_context`/`subagent_context`, read marks, messages, budget/auto-continue sidecars, and failed `execve`; classify each path by topology, metrics, store, or sidecar mtime before proposing a cache.
+Run every ptrace/perf client sequentially. Capture a producer summary and process/exec trace first, then the consumer summary and timestamped per-thread path trace; this preserves the diagnostic split between producer fork/exec/cache work and consumer fold/file work. The consumer path trace also exposes publication payloads. Check it explicitly for `.git`, `rimz-worktree.json`, provider configuration, `agent_context`/`subagent_context`, read marks, messages, budget/auto-continue sidecars, and failed `execve`.
 
 ```bash
+sysctl kernel.perf_event_paranoid kernel.yama.ptrace_scope | tee "$capture/kernel-profile-policy.txt"
+timeout "$secs" strace -f -c -p "$producer" -o "$capture/producer.syscalls.txt"
+timeout 4s strace -ff -ttt -s 512 -e trace=process,execve -p "$producer" -o "$capture/producer.process"
 timeout "$secs" strace -f -c -p "$consumer" -o "$capture/consumer.syscalls.txt"
 timeout 4s strace -ff -ttt -s 512 -e trace=%file,process,recvfrom -p "$consumer" -o "$capture/consumer.file"
 rg -n '\.git|rimz-worktree\.json|agent_context|subagent_context|read-marks|messages|budget|auto-continue|execve' "$capture"/consumer.file*
+
+perf record --call-graph fp -p "$producer" -o "$capture/producer.perf.data" -- sleep "$secs"
+perf record --call-graph fp -p "$consumer" -o "$capture/consumer.perf.data" -- sleep "$secs"
+perf report -i "$capture/producer.perf.data" --stdio --no-children | rustfilt > "$capture/producer.perf.flat.txt"
+perf report -i "$capture/producer.perf.data" --stdio | rustfilt > "$capture/producer.perf.callgraph.txt"
+perf report -i "$capture/consumer.perf.data" --stdio --no-children | rustfilt > "$capture/consumer.perf.flat.txt"
+perf report -i "$capture/consumer.perf.data" --stdio | rustfilt > "$capture/consumer.perf.callgraph.txt"
 ```
 
-> **Capture pitfalls.** Preflight `kernel.perf_event_paranoid` and ptrace permissions before promising `perf` or live attach; use sudo only under the operator's policy. Build with `cargo xtask profile-build` so frame-pointer call graphs resolve. Copy deleted executable inodes and retain their build ids. Read `pidstat -t` thread totals instead of the process-main-thread row. Aggregate PSS and computed USS instead of summing RSS. Keep shell counters out of pipeline/subshell scope, and inspect the generated files before trusting an aggregation. Write every trace under the temporary capture directory and preserve the exact binary beside it.
+> **Capture pitfalls.** Check `kernel.perf_event_paranoid` and `kernel.yama.ptrace_scope` before attaching; ptrace and perf commands may require `sudo` under the operator's policy. A failed attach is a failed measurement, so record it and do not silently substitute another tool. Build with `cargo xtask profile-build` for frame-pointer call graphs. Copy deleted executable inodes and retain build ids. Read `pidstat -t` thread totals instead of the process-main-thread row. Aggregate PSS and computed USS instead of summed RSS. Keep shell counters out of pipeline/subshell scope, inspect generated files before trusting an aggregation, and keep raw captures out of git. After the implementation report contains the distilled results, remove the private directory with `rm -rf -- "$capture"`.
 
 ## Symbols from a replaced binary
 
