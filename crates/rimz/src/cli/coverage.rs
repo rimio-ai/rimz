@@ -487,15 +487,15 @@ mod tests {
 
         let antigravity = agent_cells(&matrix, "antigravity");
         assert_eq!(count(&antigravity, MatrixCellState::Ok), 5);
-        assert_eq!(count(&antigravity, MatrixCellState::Partial), 5);
-        assert_eq!(count(&antigravity, MatrixCellState::Absent), 6);
+        assert_eq!(count(&antigravity, MatrixCellState::Partial), 6);
+        assert_eq!(count(&antigravity, MatrixCellState::Absent), 5);
         assert_eq!(
             agent_labels(&matrix, "antigravity", MatrixCellState::Partial),
-            ["perm", "ask", "end", "idle", "live$"]
+            ["perm", "ask", "sub", "end", "idle", "live$"]
         );
         assert_eq!(
             agent_labels(&matrix, "antigravity", MatrixCellState::Absent),
-            ["plan", "answer", "compact", "sub", "spend", "remote"]
+            ["plan", "answer", "compact", "spend", "remote"]
         );
     }
 
@@ -564,7 +564,7 @@ mod tests {
                 MatrixCellState::Partial, // kimi
                 MatrixCellState::Ok,      // pi
                 MatrixCellState::Ok,      // opencode
-                MatrixCellState::Absent,  // antigravity
+                MatrixCellState::Partial, // antigravity
                 MatrixCellState::Absent,  // cursor
                 MatrixCellState::Absent,  // droid
                 MatrixCellState::Absent,  // kiro

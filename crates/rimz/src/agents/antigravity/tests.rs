@@ -7,6 +7,9 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::path::Path;
 const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
+const CHILD_ALPHA: &str = "22222222-2222-4222-8222-222222222222";
+const CHILD_BETA: &str = "33333333-3333-4333-8333-333333333333";
+const NESTED_CHILD: &str = "44444444-4444-4444-8444-444444444444";
 const AT_09: &str = "2026-07-13T23:23:09Z";
 const AT_10: &str = "2026-07-13T23:23:10Z";
 const AT_11: &str = "2026-07-13T23:23:11Z";
@@ -507,6 +510,262 @@ fn transcript_questions_project_and_clear_native_waits() {
         assert_eq!(state.phase, TurnPhase::Idle);
         assert!(state.native_prompt_detail.is_none() && state.waiting_since.is_none());
     }
+}
+
+#[test]
+fn invoke_subagent_results_pair_ordered_child_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let parent = write_subagent_fixture(
+        dir.path(),
+        SESSION_ID,
+        include_str!("tests/fixtures/subagents_two_children.jsonl"),
+    );
+    for child in [CHILD_ALPHA, CHILD_BETA] {
+        write_transcript_named(
+            dir.path(),
+            child,
+            "transcript.jsonl",
+            include_str!("tests/fixtures/transcript_full.jsonl"),
+        );
+    }
+
+    let alpha = session::correlate_subagent_under(
+        dir.path(),
+        &parent,
+        SESSION_ID,
+        &workspace,
+        CHILD_ALPHA,
+        &workspace,
+    )
+    .unwrap();
+    let beta = session::correlate_subagent_under(
+        dir.path(),
+        &parent,
+        SESSION_ID,
+        &workspace,
+        CHILD_BETA,
+        &workspace,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            alpha.type_name.as_str(),
+            alpha.role.as_str(),
+            alpha.prompt.as_str()
+        ),
+        (
+            "explore",
+            "Protocol researcher",
+            "Inspect the adapter parser."
+        )
+    );
+    assert_eq!(
+        (
+            beta.type_name.as_str(),
+            beta.role.as_str(),
+            beta.prompt.as_str()
+        ),
+        (
+            "review",
+            "Lifecycle reviewer",
+            "Inspect the lifecycle reducer."
+        )
+    );
+}
+
+#[test]
+fn nested_child_relation_uses_its_immediate_parent_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let parent = write_subagent_fixture(
+        dir.path(),
+        CHILD_ALPHA,
+        include_str!("tests/fixtures/subagent_nested_child.jsonl"),
+    );
+    write_transcript_named(
+        dir.path(),
+        NESTED_CHILD,
+        "transcript.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
+
+    let nested = session::correlate_subagent_under(
+        dir.path(),
+        &parent,
+        CHILD_ALPHA,
+        &workspace,
+        NESTED_CHILD,
+        &workspace,
+    )
+    .unwrap();
+    assert_eq!(nested.type_name, "explore");
+    assert_eq!(nested.role, "Nested researcher");
+    assert_eq!(nested.prompt, "Trace the nested call.");
+}
+
+#[test]
+fn subagent_correlation_rejects_unsafe_identity_uri_and_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    let other_workspace = dir.path().join("other-workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::create_dir(&other_workspace).unwrap();
+    let fixture = include_str!("tests/fixtures/subagents_two_children.jsonl");
+    let parent = write_subagent_fixture(dir.path(), SESSION_ID, fixture);
+    for child in [CHILD_ALPHA, CHILD_BETA] {
+        write_transcript_named(
+            dir.path(),
+            child,
+            "transcript.jsonl",
+            include_str!("tests/fixtures/transcript_full.jsonl"),
+        );
+    }
+    let correlate = |path: &Path, parent_id: &str, child_workspace: &Path| {
+        session::correlate_subagent_under(
+            dir.path(),
+            path,
+            parent_id,
+            &workspace,
+            CHILD_ALPHA,
+            child_workspace,
+        )
+    };
+    assert!(correlate(&parent, CHILD_ALPHA, &workspace).is_none());
+    assert!(correlate(&parent, SESSION_ID, &other_workspace).is_none());
+
+    let escaped = rewrite_subagent_result(fixture, |content| {
+        content.replace(
+            &format!("brain/{CHILD_ALPHA}/.system_generated/logs/transcript.jsonl"),
+            &format!("brain/{CHILD_BETA}/.system_generated/logs/transcript.jsonl"),
+        )
+    });
+    let escaped_parent = write_subagent_fixture(dir.path(), SESSION_ID, &escaped);
+    assert!(correlate(&escaped_parent, SESSION_ID, &workspace).is_none());
+
+    let remote = rewrite_subagent_result(fixture, |content| {
+        content.replacen("__HOME_URI__", "https://example.invalid", 1)
+    });
+    let remote_parent = write_subagent_fixture(dir.path(), SESSION_ID, &remote);
+    assert!(correlate(&remote_parent, SESSION_ID, &workspace).is_none());
+}
+
+#[test]
+fn subagent_correlation_rejects_torn_mismatched_and_duplicate_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    for child in [CHILD_ALPHA, CHILD_BETA] {
+        write_transcript_named(
+            dir.path(),
+            child,
+            "transcript.jsonl",
+            include_str!("tests/fixtures/transcript_full.jsonl"),
+        );
+    }
+    let fixture = include_str!("tests/fixtures/subagents_two_children.jsonl");
+    let assert_rejected = |fixture: &str| {
+        let parent = write_subagent_fixture(dir.path(), SESSION_ID, fixture);
+        assert!(
+            session::correlate_subagent_under(
+                dir.path(),
+                &parent,
+                SESSION_ID,
+                &workspace,
+                CHILD_ALPHA,
+                &workspace,
+            )
+            .is_none()
+        );
+    };
+    let mismatched = rewrite_subagent_result(fixture, |content| {
+        content
+            .split_once(&format!("{{\n  \"conversationId\": \"{CHILD_BETA}\""))
+            .map(|(before, _)| before.to_owned())
+            .unwrap()
+    });
+    assert_rejected(&mismatched);
+    let extra = rewrite_subagent_result(fixture, |content| {
+        format!(
+            "{content}\n{{\"conversationId\":\"extra-child\",\"logAbsoluteUri\":\"file:///tmp/extra.jsonl\"}}"
+        )
+    });
+    assert_rejected(&extra);
+    let duplicate = fixture.replace(CHILD_BETA, CHILD_ALPHA);
+    assert_rejected(&duplicate);
+    let malformed = rewrite_subagent_result(fixture, |content| {
+        content.replacen("\"logAbsoluteUri\"", "\"missingLogUri\"", 1)
+    });
+    assert_rejected(&malformed);
+
+    let parent = write_subagent_fixture(dir.path(), SESSION_ID, fixture);
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&parent)
+        .unwrap();
+    write!(file, "\n{{\"step_index\":3").unwrap();
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &parent,
+            SESSION_ID,
+            &workspace,
+            CHILD_ALPHA,
+            &workspace,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn subagent_correlation_does_not_scan_beyond_the_transcript_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    write_transcript_named(
+        dir.path(),
+        CHILD_ALPHA,
+        "transcript.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
+    write_transcript_named(
+        dir.path(),
+        CHILD_BETA,
+        "transcript.jsonl",
+        include_str!("tests/fixtures/transcript_full.jsonl"),
+    );
+    let mut records = include_str!("tests/fixtures/subagents_two_children.jsonl")
+        .lines()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    records.insert(
+        2,
+        json!({
+            "step_index": 99,
+            "source": "SYSTEM",
+            "type": "CHECKPOINT",
+            "status": "DONE",
+            "created_at": AT_12,
+            "content": "x".repeat(70 * 1024),
+        })
+        .to_string(),
+    );
+    let parent = write_subagent_fixture(dir.path(), SESSION_ID, &records.join("\n"));
+    assert!(std::fs::metadata(&parent).unwrap().len() > 64 * 1024);
+    assert!(
+        session::correlate_subagent_under(
+            dir.path(),
+            &parent,
+            SESSION_ID,
+            &workspace,
+            CHILD_ALPHA,
+            &workspace,
+        )
+        .is_none()
+    );
 }
 #[test]
 fn discovery_prefers_full_transcripts_and_cache_for_fresh_pairing_only() {
@@ -1110,6 +1369,32 @@ fn write_transcript(home: &Path, session_id: &str) -> std::path::PathBuf {
         "transcript_full.jsonl",
         include_str!("tests/fixtures/transcript_full.jsonl"),
     )
+}
+fn write_subagent_fixture(home: &Path, session_id: &str, fixture: &str) -> std::path::PathBuf {
+    let home_uri = url::Url::from_directory_path(home).unwrap().to_string();
+    write_transcript_named(
+        home,
+        session_id,
+        "transcript_full.jsonl",
+        &fixture.replace("__HOME_URI__", home_uri.trim_end_matches('/')),
+    )
+}
+fn rewrite_subagent_result(fixture: &str, rewrite: impl FnOnce(&str) -> String) -> String {
+    let mut records = fixture
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let result = records
+        .iter_mut()
+        .find(|record| record.get("type").and_then(Value::as_str) == Some("INVOKE_SUBAGENT"))
+        .unwrap();
+    let content = result.get("content").and_then(Value::as_str).unwrap();
+    result["content"] = Value::String(rewrite(content));
+    records
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 fn state_after(home: &Path, workspace: &Path, ending: Vec<String>) -> LocalSessionState {
     let mut lines = vec![user_record(0, AT_09, "start")];

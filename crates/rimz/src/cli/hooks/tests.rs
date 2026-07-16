@@ -7,6 +7,7 @@ use rimz::ids::AgentSessionId;
 use rimz::ids::{MuxName, PaneId};
 use rimz::pane::{PaneRef, RuntimeOwnerKind};
 use rimz::store::runtime::process_owner;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn id(raw: &str) -> PaneId {
     PaneId::from_parts(MuxName::Zellij, raw)
@@ -79,6 +80,112 @@ fn hooks_test_globals() -> crate::cli::GlobalFlags {
         root: None,
         color: crate::cli::ColorWhen::Never,
     }
+}
+
+#[derive(Default)]
+struct CorrelationTestAdapter {
+    correlation_calls: AtomicUsize,
+}
+
+impl rimz::agents::AgentAdapter for CorrelationTestAdapter {
+    fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
+        rimz::agents::AntigravityAdapter.descriptor()
+    }
+
+    fn classify_hook(
+        &self,
+        event_name: &str,
+        payload: &serde_json::Value,
+    ) -> rimz::agents::ClassifiedHook {
+        rimz::agents::AntigravityAdapter.classify_hook(event_name, payload)
+    }
+
+    fn render_neutral(&self, event_name: &str) -> rimz::agents::Result<Option<serde_json::Value>> {
+        rimz::agents::AntigravityAdapter.render_neutral(event_name)
+    }
+
+    fn observe_lifecycle(
+        &self,
+        event_name: &str,
+        payload: &serde_json::Value,
+    ) -> Option<AgentLifecycleObservation> {
+        let mut observation =
+            rimz::agents::AntigravityAdapter.observe_lifecycle(event_name, payload)?;
+        observation.pane_id = Some(id("terminal_77"));
+        Some(observation)
+    }
+
+    fn correlate_subagent(
+        &self,
+        input: rimz::agents::SubagentCorrelationInput<'_>,
+    ) -> Option<rimz::agents::SubagentCorrelation> {
+        self.correlation_calls.fetch_add(1, Ordering::Relaxed);
+        let child = input.child_agent_id.as_str();
+        let parent = input.parent_agent_id.as_str();
+        let matches = match child {
+            "child-clean" | "child-failed" | "child-parked" | "child-recovered" => parent == "root",
+            "nested-child" => parent == "child-clean",
+            "ambiguous-child" => {
+                matches!(parent, "ambiguous-parent-a" | "ambiguous-parent-b")
+            }
+            "cycle-child" => parent == "cycle-parent",
+            _ => false,
+        };
+        matches.then(|| rimz::agents::SubagentCorrelation {
+            agent_name: Some(format!("name-{child}")),
+            role: Some(format!("role-{child}")),
+            task: Some(format!("task-{child}")),
+            prompt: Some(format!("prompt-{child}")),
+        })
+    }
+}
+
+fn antigravity_payload(agent_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "conversationId": agent_id,
+        "workspacePaths": ["/tmp/hooks-test"],
+        "transcriptPath": format!("/tmp/{agent_id}.jsonl"),
+    })
+}
+
+fn feed_antigravity(
+    store: &rimz::Store,
+    adapter: &dyn rimz::agents::AgentAdapter,
+    event_name: &str,
+    payload: serde_json::Value,
+) {
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        store,
+        adapter,
+        event_name,
+        &payload,
+        Some(std::process::id()),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+}
+
+fn seed_subagent_candidate(store: &rimz::Store, agent_id: &str, parent_id: &str) {
+    let mut candidate = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(agent_id)),
+        LifecycleSignal::SubagentStarted,
+    );
+    candidate.parent_agent_id = Some(AgentSessionId::from(parent_id));
+    candidate.agent_name = Some(agent_id.to_owned());
+    candidate.task = Some("seeded candidate".to_owned());
+    candidate.pane_id = Some(id("terminal_77"));
+    candidate.worktree_path = Some("/tmp/hooks-test".to_owned());
+    candidate.transcript_path = Some(format!("/tmp/{agent_id}.jsonl"));
+    store
+        .append_agent_lifecycle(rimz::store::AgentLifecycleIntent {
+            session_name: "hooks-test",
+            agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+            event_name: "seed-candidate",
+            observation: &candidate,
+            transition: None,
+        })
+        .unwrap();
 }
 
 fn launch_identity_env(
@@ -296,6 +403,161 @@ fn subagent_launch_identity_is_not_inherited_from_parent_env() {
     assert_eq!(observed.launch.profile, None);
     assert_eq!(observed.launch.model, None);
     assert_eq!(observed.launch.effort, None);
+}
+
+#[test]
+fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() {
+    let (_dir, store) = hooks_test_store();
+    let adapter = CorrelationTestAdapter::default();
+    let mut root = antigravity_payload("root");
+    root["invocationNum"] = serde_json::json!(0);
+    root["modelName"] = serde_json::json!("parent-model");
+    feed_antigravity(&store, &adapter, "PreInvocation", root);
+
+    let mut clean = antigravity_payload("child-clean");
+    clean["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", clean.clone());
+    let calls_after_start = adapter.correlation_calls.load(Ordering::Relaxed);
+    let child = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|state| state.agent_id == "child-clean")
+        .unwrap();
+    assert_eq!(child.parent_agent_id.as_deref(), Some("root"));
+    assert_eq!(child.name.as_deref(), Some("name-child-clean"));
+    assert_eq!(child.role.as_deref(), Some("role-child-clean"));
+    assert_eq!(child.task.as_deref(), Some("task-child-clean"));
+    assert_eq!(child.prompt.as_deref(), Some("prompt-child-clean"));
+    assert_eq!(child.status, rimz::agents::AgentStatus::Running);
+    assert!(child.profile.is_none() && child.team.is_none());
+    assert!(child.model.is_none() && child.effort.is_none());
+
+    feed_antigravity(&store, &adapter, "PostToolUse:observed", clean.clone());
+    let mut clean_stop = clean;
+    clean_stop["fullyIdle"] = serde_json::json!(true);
+    clean_stop["terminationReason"] = serde_json::json!("model_stop");
+    feed_antigravity(&store, &adapter, "Stop", clean_stop);
+    assert_eq!(
+        adapter.correlation_calls.load(Ordering::Relaxed),
+        calls_after_start,
+        "a persisted child relation must skip later transcript correlation"
+    );
+    let child = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|state| state.agent_id == "child-clean")
+        .unwrap();
+    assert_eq!(child.status, rimz::agents::AgentStatus::Success);
+    assert_eq!(child.parent_agent_id.as_deref(), Some("root"));
+
+    let mut failed = antigravity_payload("child-failed");
+    failed["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", failed.clone());
+    failed["fullyIdle"] = serde_json::json!(true);
+    failed["terminationReason"] = serde_json::json!("max_steps_exceeded");
+    feed_antigravity(&store, &adapter, "Stop", failed);
+
+    let mut parked = antigravity_payload("child-parked");
+    parked["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", parked.clone());
+    parked["fullyIdle"] = serde_json::json!(false);
+    parked["terminationReason"] = serde_json::json!("model_stop");
+    feed_antigravity(&store, &adapter, "Stop", parked.clone());
+    let parked_state = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|state| state.agent_id == "child-parked")
+        .unwrap();
+    assert_eq!(parked_state.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(parked_state.phase, rimz::agents::TurnPhase::Parked);
+    parked["fullyIdle"] = serde_json::json!(true);
+    feed_antigravity(&store, &adapter, "Stop", parked);
+
+    let mut recovered = antigravity_payload("child-recovered");
+    recovered["fullyIdle"] = serde_json::json!(true);
+    recovered["terminationReason"] = serde_json::json!("model_stop");
+    feed_antigravity(&store, &adapter, "Stop", recovered);
+
+    let mut nested = antigravity_payload("nested-child");
+    nested["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", nested);
+
+    let mut uncorrelated = antigravity_payload("unrelated-root");
+    uncorrelated["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", uncorrelated);
+
+    let agents = store.snapshot_cached().unwrap().agents;
+    let state = |id: &str| agents.iter().find(|state| state.agent_id == id).unwrap();
+    assert_eq!(
+        state("child-failed").status,
+        rimz::agents::AgentStatus::Failed
+    );
+    assert_eq!(
+        state("child-parked").status,
+        rimz::agents::AgentStatus::Success
+    );
+    assert_eq!(
+        state("child-recovered").status,
+        rimz::agents::AgentStatus::Success
+    );
+    assert_eq!(
+        state("child-recovered").parent_agent_id.as_deref(),
+        Some("root")
+    );
+    assert_eq!(
+        state("nested-child").parent_agent_id.as_deref(),
+        Some("root")
+    );
+    assert_eq!(state("unrelated-root").parent_agent_id, None);
+}
+
+#[test]
+fn ambiguous_and_cyclic_antigravity_parent_candidates_stay_roots() {
+    let (_dir, store) = hooks_test_store();
+    let adapter = CorrelationTestAdapter::default();
+    for root_id in ["root", "other-root"] {
+        let mut payload = antigravity_payload(root_id);
+        payload["invocationNum"] = serde_json::json!(0);
+        feed_antigravity(&store, &adapter, "PreInvocation", payload);
+    }
+    seed_subagent_candidate(&store, "ambiguous-parent-a", "root");
+    seed_subagent_candidate(&store, "ambiguous-parent-b", "root");
+    let mut ambiguous = antigravity_payload("ambiguous-child");
+    ambiguous["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", ambiguous);
+    assert_eq!(
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|state| state.agent_id == "ambiguous-child")
+            .unwrap()
+            .parent_agent_id,
+        None
+    );
+
+    seed_subagent_candidate(&store, "cycle-parent", "cycle-child");
+    let mut cyclic = antigravity_payload("cycle-child");
+    cyclic["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", cyclic);
+    assert_eq!(
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .find(|state| state.agent_id == "cycle-child")
+            .unwrap()
+            .parent_agent_id,
+        None
+    );
 }
 
 #[test]

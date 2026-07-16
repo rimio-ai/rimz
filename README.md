@@ -287,9 +287,9 @@ Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and
 |-------------|-----------------|:-----:|:----:|:-------:|:-------:|:---:|:---------:|
 | Claude Code | 🟢 Supported     |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
 | Codex       | 🟢 Supported     |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
-| Pi          | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ✗  |     ✗     |
+| Pi          | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ✗  |     ◐     |
 | OpenCode    | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
-| Antigravity | ⚪ Experimental  |   ◐   |  ◐   |    ◐    |    ●    |  ◐  |     ✗     |
+| Antigravity | ⚪ Experimental  |   ◐   |  ◐   |    ◐    |    ●    |  ◐  |     ◐     |
 | Copilot     | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ✗     |
 | Droid       | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
 | Cursor      | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ✗  |     ✗     |
@@ -298,7 +298,7 @@ Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and
 | Qwen        | ⚪ Experimental  |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ●     |
 | Kimi        | ⚪ Experimental  |   ●   |  ●   |    ●    |    ●    |  ●  |     ◐     |
 
-<sub>● full · ◐ partial · ✗ the native CLI lacks the capability</sub>
+<sub>● full · ◐ partial · ✗ unsupported by the RimZ adapter</sub>
 
 What each column covers:
 

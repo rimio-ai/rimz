@@ -26,7 +26,8 @@ use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, LocalSessionObservation, Result,
-    TranscriptMessage,
+    SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, TranscriptMessage,
+    non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -154,8 +155,9 @@ const ANTIGRAVITY_COVERAGE: IntegrationCoverage = IntegrationCoverage {
     compaction: ConcernCoverage::Unsupported {
         reason: "no documented compaction command, event, or transcript marker",
     },
-    subagents: ConcernCoverage::Unsupported {
-        reason: "verified local records expose no stable child identity and parent relation",
+    subagents: ConcernCoverage::Partial {
+        via: "child hooks joined to ordered invoke_subagent parent transcript results",
+        gap: "the parent-result transcript shape is live-verified rather than a documented stable wire contract",
     },
     background_parking: ConcernCoverage::Wired {
         via: "Stop.fullyIdle parks a clean foreground stop while background work remains",
@@ -205,11 +207,13 @@ const ANTIGRAVITY_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
         via: "statusline tool_confirmation_pending marker + pulled transcript questions",
         gap: "read-only attention projection, not a durable AwaitingInput lifecycle signal",
     },
-    subagent_started: HookCoverage::Absent {
-        reason: "no verified child identity relation",
+    subagent_started: HookCoverage::Derived {
+        via: "child PreInvocation joined to its parent's invoke_subagent transcript result",
+        gap: "the parent-result transcript shape is live-verified rather than documented",
     },
-    subagent_stopped: HookCoverage::Absent {
-        reason: "no verified child identity relation",
+    subagent_stopped: HookCoverage::Derived {
+        via: "child Stop joined to its parent's invoke_subagent transcript result",
+        gap: "the parent-result transcript shape is live-verified rather than documented",
     },
     compacting: HookCoverage::Absent {
         reason: "no compaction signal",
@@ -330,6 +334,44 @@ impl AgentAdapter for AntigravityAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         observe_lifecycle_with_prompt_reader(event_name, payload, session::latest_prompt)
+    }
+
+    fn correlate_subagent(
+        &self,
+        input: SubagentCorrelationInput<'_>,
+    ) -> Option<SubagentCorrelation> {
+        let (child_id, parent_id) = match resolve_subagent_identity(
+            self.descriptor().kind,
+            "transcript_correlation",
+            Some(input.child_agent_id.as_str()),
+            Some(input.parent_agent_id.as_str()),
+            &Value::Null,
+        ) {
+            SubagentIdentity::Resolved {
+                agent_id,
+                parent_agent_id,
+            } => (agent_id, parent_agent_id),
+            SubagentIdentity::Quarantined => return None,
+        };
+        let parent_transcript = input
+            .parent_transcript_path
+            .map(Path::to_path_buf)
+            .or_else(|| session::transcript_for_session(parent_id.as_str()))?;
+        let correlated = session::correlate_subagent(
+            &parent_transcript,
+            parent_id.as_str(),
+            input.parent_workspace?,
+            child_id.as_str(),
+            input.child_workspace?,
+        )?;
+        let role = non_empty_trimmed(&correlated.role);
+        let prompt = sanitize_user_prompt(Some(&correlated.prompt));
+        Some(SubagentCorrelation {
+            agent_name: non_empty_trimmed(&correlated.type_name),
+            role: role.clone(),
+            task: role.or_else(|| prompt.clone()),
+            prompt,
+        })
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {

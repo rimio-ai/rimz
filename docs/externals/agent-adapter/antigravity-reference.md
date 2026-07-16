@@ -44,7 +44,7 @@ The initial RimZ integration target is **Antigravity CLI**, because it owns a st
 
 ## Adapter feasibility at a glance
 
-Antigravity exposes enough official surface for a useful adapter, plus a version-sensitive private local service observed in a running CLI. The landed adapter owns process/launch/resume, validated local conversation discovery, transcript history and question waits, safe command hooks, custom-statusline context and live API-rate estimates, background parking, supervised completion, and read-only account/quota enrichment. Policy-changing pre-tool decisions, artifact waits, stable child identities, credits, provider-history/account spend, and remote control remain outside the verified boundary.
+Antigravity exposes enough official surface for a useful adapter, plus a version-sensitive private local service observed in a running CLI. The landed adapter owns process/launch/resume, validated local conversation discovery, transcript history and question waits, safe command hooks, derived child identity, custom-statusline context and live API-rate estimates, background parking, supervised completion, and read-only account/quota enrichment. Policy-changing pre-tool decisions, artifact waits, credits, provider-history/account spend, and remote control remain outside the verified boundary.
 
 | RimZ need | Antigravity surface | Verdict |
 | --- | --- | --- |
@@ -60,8 +60,8 @@ Antigravity exposes enough official surface for a useful adapter, plus a version
 | Plan/artifact review wait | statusline `artifacts` and artifact-review UI | schema/status enum incomplete; derived after capture |
 | Model and context | custom statusline `model` and `context_window` | direct live enrichment landed |
 | Background tasks | `Stop.fullyIdle`; statusline arrays remain identity-poor | native foreground parking, no task rows |
-| Subagents | statusline `subagents`; tool calls for define/invoke/manage | visible, but documented child entries omit conversation IDs |
-| Transcript/history | official hook path plus captured 1.1.1 text records | basic root user/assistant history landed; all other records remain unknown |
+| Subagents | stable child hook `conversationId`; ordered parent `invoke_subagent` request/result transcript records | partial derived identity; the result record is live-verified rather than documented |
+| Transcript/history | official hook path plus captured 1.1.2 text, question, and subagent records | root user/assistant history plus bounded typed child correlation landed |
 | Durable conversation store | 1.1.1 changelog says SQLite is the CLI conversation format | format known, schema and authoritative path unpublished |
 | Compaction | no documented hook, command, or marker | unsupported until verified |
 | Account identity | statusline `email` and `plan_tier`; private local `GetUserStatus` | direct live plus version-sensitive idle enrichment; treat email as private |
@@ -73,7 +73,7 @@ Antigravity exposes enough official surface for a useful adapter, plus a version
 | Structured answer | native TUI keys and artifact/question panels | pane-send fallback; no out-of-band answer API |
 | Remote control | no CLI remote-control host documented | unsupported |
 
-The current adapter combines installed command hooks and a wrapped custom statusline with the workspace conversation cache and validated JSONL history. Spend, permission/question/artifact waits, subagent rows, compaction, fork, and structured answers stay disabled until their verification items pass.
+The current adapter combines installed command hooks and a wrapped custom statusline with the workspace conversation cache and validated JSONL history. Derived subagent rows join stable child hook IDs to their candidate parent's validated transcript; the statusline roster remains display-only. Spend, permission/question/artifact waits, compaction, fork, and structured answers stay disabled until their verification items pass.
 
 ## Launch and process surface
 
@@ -362,7 +362,7 @@ Treat every field as optional, validate finite nonnegative numbers, and prefer u
 
 ### Release-example drift
 
-The pinned official 1.1.1 statusline example reads `artifact_count` and `task_count`, while the living schema documents `artifacts[]` and `background_tasks[]`. The script reads `subagents[]` as documented. RimZ's landed context parser ignores those drifting identity-poor fields and tolerates additive keys; task, artifact, and child-row claims wait for stable identities and enums.
+The pinned official 1.1.1 statusline example reads `artifact_count` and `task_count`, while the living schema documents `artifacts[]` and `background_tasks[]`. The script reads `subagents[]` as documented. RimZ's landed context parser ignores those drifting identity-poor fields and tolerates additive keys; task and artifact claims wait for stable identities and enums, while child identity comes from hooks plus transcripts instead.
 
 ### Lifecycle projection
 
@@ -446,13 +446,16 @@ Antigravity supports nested asynchronous subagents and non-agent background task
 
 The parent can call `define_subagent`, `invoke_subagent`, `send_message`, and `manage_subagents`. The `/agents` panel shows identifier, role, status (`running`, `done`, `killed`, or `error` in the published prose), and current step. Nested descendants and their tool confirmations relay to the root conversation in CLI 1.1.1.
 
-The statusline schema exposes active subagents with `name`, `role`, and `status`, but it does not document a child `conversationId`, parent ID, start time, task text, token usage, or terminal result identity. The tagged example only counts the array. `invoke_subagent` inputs describe requested children but do not carry the provider-assigned IDs returned after spawn.
+The statusline schema exposes active subagents with `name`, `role`, and `status`, but it does not document a child `conversationId`, parent ID, start time, task text, token usage, or terminal result identity. The tagged example only counts the array, so RimZ keeps that roster out of identity.
 
-Keep RimZ `subagents` capability off until one of these is proven:
+A live 1.1.2 two-child run resolves the stable relation through hooks and transcripts:
 
-- child hook callbacks carry their own `conversationId` and a recoverable parent identity;
-- the real statusline entry contains an undocumented stable child ID and parent relation;
-- a documented transcript/store relation supplies stable IDs without polling private implementation state.
+- Every child receives the ordinary command hooks with its own stable `conversationId`, first workspace path, and dedicated transcript path. Child hooks do not carry a parent ID.
+- Before either child's first hook, the parent appends a completed `MODEL` / `PLANNER_RESPONSE` record whose `invoke_subagent.args.Subagents[]` entries carry `Prompt`, `Role`, `TypeName`, and optional `Workspace` in request order.
+- The following completed `MODEL` / `INVOKE_SUBAGENT` record contains consecutive JSON objects in `content`, one per requested child in the same order. Each object carries `conversationId` and a `file:` `logAbsoluteUri` naming that child's transcript beneath `brain/<conversationId>`.
+- `manage_subagents(Action=list)` returns the same child IDs after completion but no lifecycle state. Child `PreInvocation`, tool, and `Stop` hooks remain lifecycle authority.
+
+RimZ therefore joins only bounded same-kind, same-pane parent candidates. It pairs the planner request and result by transcript order, pairs their arrays by provider order, validates counts, unique child IDs, canonical transcript URIs, and requested/inherited workspace, and accepts exactly one candidate. A nested candidate flattens to its already-established root parent. Malformed, torn, unsafe, ambiguous, self-referential, cyclic, or workspace-mismatched evidence leaves the relation unclaimed. This is partial support because hooks and the subagent product are official while the parent-result transcript shape remains an observed 1.1.2 implementation wire.
 
 Background shell work appears through `run_command` with `RunPersistent`, `manage_task`, the `/tasks` panel, and the statusline task surface. `Stop.fullyIdle` is enough to keep a clean foreground completion parked while work remains. Rich per-task rows wait for the array/count drift and stable task IDs to be captured.
 
@@ -480,12 +483,15 @@ A stock root conversation confirms `transcript.jsonl` and `transcript_full.jsonl
 | `status` | string status enum |
 | `created_at` | RFC 3339 timestamp |
 | `content` | optional string |
+| `tool_calls` | optional array of typed tool call objects |
 
 The captured simple text turn contains `USER_EXPLICIT` / `USER_INPUT` / `DONE` with visible user content, `MODEL` / `PLANNER_RESPONSE` / `DONE` with visible assistant content, and `SYSTEM` `CONVERSATION_HISTORY`/`CHECKPOINT` records that stay internal. Provider-authored user content may wrap the request in exact `<USER_REQUEST>...</USER_REQUEST>` tags followed by `<ADDITIONAL_METADATA>` and settings blocks; only the request body is user-visible.
 
 The captured native question turn adds `tool_calls` to a completed `MODEL` / `PLANNER_RESPONSE` record. `transcript_full.jsonl` carries `ask_question.args.questions` as a JSON array of typed question objects; `transcript.jsonl` carries the same array as a JSON-encoded string. The first nonblank `question` is sufficient to project a native waiting card at the record timestamp; answer state remains inside the TUI.
 
-The landed parser accepts only those two visible source/type pairs, ignores system and unknown records, tolerates malformed complete lines, and retains a torn final line for the next incremental read. Ordinary completed planner responses supply partial pulled turn completion; the validated `ask_question` shape supplies a read-only question wait. These records do not prove failure, cancel, compaction, subagent, or historical spend semantics. Re-capture those before broadening the parser.
+The captured two-child turn adds the ordered `invoke_subagent` planner request and `INVOKE_SUBAGENT` result described above. The result's prose-wrapped consecutive JSON objects are parsed with the `serde_json` stream deserializer; no string extraction supplies identity. Each returned `logAbsoluteUri` must resolve to a validated direct child transcript beneath the canonical CLI brain directory before the request metadata can label that child.
+
+The visible-history parser accepts only the two visible source/type pairs, ignores system and unknown records, tolerates malformed complete lines, and retains a torn final line for the next incremental read. Ordinary completed planner responses supply partial pulled turn completion; the validated `ask_question` shape supplies a read-only question wait. The separate fail-closed subagent correlation parser consumes only the captured request/result shapes from a bounded tail. These records do not prove failure, cancel, compaction, or historical spend semantics. Re-capture those before broadening the parser.
 
 The official CLI changelog adds a second persistence fact:
 
@@ -697,7 +703,7 @@ Run the remaining probes with a temporary HOME and throwaway Git workspace again
 
 - Expand the post-tool matcher fixture when Google publishes new tool names; retain non-overlap among edit, generic-mutation, and observed-only sets.
 - Capture every `Stop.terminationReason`, provider-limit/network error text, `fullyIdle` combination, and statusline state before/after Stop.
-- Inspect the hook-provided transcript with append, tool use, question, artifact, error, cancel, resume, rewind, clear, fork, and subagent activity; define a parser only from stable fixtures.
+- Re-capture the two-child and nested-child request/result order, returned fields, workspace behavior, and child hook timing whenever the supported Antigravity version changes.
 - Re-capture the observed SQLite `user_version`, tables, columns, indexes, `.db-wal` behavior, and blob encodings; map conversation IDs to rows and test concurrent writes, rewind, fork/import, and retention before claiming history, parentage, or spend.
 - Search for a real compaction command/event/record in the supported release; otherwise leave smart compaction unavailable.
 
@@ -711,4 +717,4 @@ Run the remaining probes with a temporary HOME and throwaway Git workspace again
 
 ### Conformance target
 
-The landed descriptor claims only what the current fixtures prove: lazy pulled registration; interactive launch; exact resume; model preset; ask/auto/plan/yolo launch mappings; basic text transcript history and streaming; partial pulled text-turn state; safe hook-driven lifecycle/tool/wait signals; live context; supervised runs; and private-service account/quota enrichment. Cumulative session/account spend, credits, native fork, compaction, remote control, structured answers, and subagent rows remain unsupported. Promote each capability in the same commit that adds its typed parser, fixture, mapping, and conformance case.
+The landed descriptor claims only what the current fixtures prove: lazy pulled registration; interactive launch; exact resume; model preset; ask/auto/plan/yolo launch mappings; basic text transcript history and streaming; partial pulled text-turn state; safe hook-driven lifecycle/tool/wait signals; derived subagent rows from the hook/transcript join; live context; supervised runs; and private-service account/quota enrichment. Cumulative session/account spend, credits, native fork, compaction, remote control, and structured answers remain unsupported. Promote each capability in the same commit that adds its typed parser, fixture, mapping, and conformance case.

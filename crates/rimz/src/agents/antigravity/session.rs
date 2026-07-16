@@ -7,11 +7,13 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+use url::Url;
 
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
-    TranscriptMessage, TranscriptRole, read_transcript_tail, sanitize_user_prompt,
+    TranscriptMessage, TranscriptRole, read_transcript_tail, read_transcript_tail_with_status,
+    sanitize_user_prompt,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -43,6 +45,57 @@ struct ToolCall {
 struct ToolCallArgs {
     #[serde(default, deserialize_with = "deserialize_questions")]
     questions: Vec<ToolQuestion>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CorrelatedSubagent {
+    pub type_name: String,
+    pub role: String,
+    pub prompt: String,
+}
+
+#[derive(Deserialize)]
+struct CorrelationRecord {
+    #[serde(rename = "step_index")]
+    _step_index: u64,
+    source: String,
+    #[serde(rename = "type")]
+    record_type: String,
+    status: String,
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct InvokeSubagentCall {
+    args: InvokeSubagentArgs,
+}
+
+#[derive(Deserialize)]
+struct InvokeSubagentArgs {
+    #[serde(rename = "Subagents")]
+    subagents: Vec<InvokeSubagentSpec>,
+}
+
+#[derive(Clone, Deserialize)]
+struct InvokeSubagentSpec {
+    #[serde(rename = "Prompt")]
+    prompt: String,
+    #[serde(rename = "Role")]
+    role: String,
+    #[serde(rename = "TypeName")]
+    type_name: String,
+    #[serde(rename = "Workspace")]
+    workspace: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct InvokeSubagentResult {
+    #[serde(rename = "conversationId")]
+    conversation_id: String,
+    #[serde(rename = "logAbsoluteUri")]
+    log_absolute_uri: String,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +187,92 @@ pub(super) fn latest_prompt_under(home: &Path, path: &Path, session_id: &str) ->
     valid_transcript_under(home, path, session_id).then_some(())?;
     let lines = read_transcript_tail(path)?;
     fold(&lines).latest_prompt
+}
+
+pub(super) fn correlate_subagent(
+    parent_transcript: &Path,
+    parent_id: &str,
+    parent_workspace: &Path,
+    child_id: &str,
+    child_workspace: &Path,
+) -> Option<CorrelatedSubagent> {
+    let home = home()?;
+    correlate_subagent_under(
+        &home,
+        parent_transcript,
+        parent_id,
+        parent_workspace,
+        child_id,
+        child_workspace,
+    )
+}
+
+pub(super) fn correlate_subagent_under(
+    home: &Path,
+    parent_transcript: &Path,
+    parent_id: &str,
+    parent_workspace: &Path,
+    child_id: &str,
+    child_workspace: &Path,
+) -> Option<CorrelatedSubagent> {
+    valid_transcript_under(home, parent_transcript, parent_id).then_some(())?;
+    valid_conversation_id(child_id).then_some(())?;
+    let parent_workspace = fs::canonicalize(parent_workspace).ok()?;
+    let child_workspace = fs::canonicalize(child_workspace).ok()?;
+    let tail = read_transcript_tail_with_status(parent_transcript)?;
+    (!tail.torn_suffix).then_some(())?;
+
+    let mut pending = std::collections::VecDeque::<Vec<InvokeSubagentSpec>>::new();
+    let mut seen_ids = std::collections::BTreeSet::<String>::new();
+    let mut matched = Vec::new();
+    for line in tail.text.lines().filter(|line| !line.trim().is_empty()) {
+        let record = serde_json::from_str::<CorrelationRecord>(line).ok()?;
+        if record.source == "MODEL"
+            && record.record_type == "PLANNER_RESPONSE"
+            && record.status == "DONE"
+        {
+            for call in record.tool_calls {
+                if call.get("name").and_then(Value::as_str) != Some("invoke_subagent") {
+                    continue;
+                }
+                let call = serde_json::from_value::<InvokeSubagentCall>(call).ok()?;
+                validate_subagent_specs(&call.args.subagents)?;
+                pending.push_back(call.args.subagents);
+            }
+            continue;
+        }
+        if record.source != "MODEL" || record.record_type != "INVOKE_SUBAGENT" {
+            continue;
+        }
+        (record.status == "DONE").then_some(())?;
+        let specs = pending.pop_front()?;
+        let results = parse_invoke_subagent_results(record.content.as_deref()?, specs.len())?;
+        for (spec, result) in specs.into_iter().zip(results) {
+            let result_id = result.conversation_id.trim();
+            valid_conversation_id(result_id).then_some(())?;
+            seen_ids.insert(result_id.to_owned()).then_some(())?;
+            let log_path = file_uri_path(&result.log_absolute_uri)?;
+            valid_transcript_under(home, &log_path, result_id).then_some(())?;
+            if result_id != child_id {
+                continue;
+            }
+            let expected_workspace = match spec.workspace.as_deref() {
+                Some(path) => fs::canonicalize(Path::new(path.trim())).ok()?,
+                None => parent_workspace.clone(),
+            };
+            (child_workspace == expected_workspace).then_some(())?;
+            matched.push(CorrelatedSubagent {
+                type_name: spec.type_name.trim().to_owned(),
+                role: spec.role.trim().to_owned(),
+                prompt: spec.prompt.trim().to_owned(),
+            });
+        }
+    }
+    pending.is_empty().then_some(())?;
+    let [matched] = matched.as_slice() else {
+        return None;
+    };
+    Some(matched.clone())
 }
 
 pub(super) fn resumed_session_id(cmdline: &str) -> Option<AgentSessionId> {
@@ -388,6 +527,44 @@ fn parse_records(lines: &str) -> impl Iterator<Item = TranscriptRecord> + '_ {
     lines
         .lines()
         .filter_map(|line| serde_json::from_str::<TranscriptRecord>(line).ok())
+}
+
+fn validate_subagent_specs(specs: &[InvokeSubagentSpec]) -> Option<()> {
+    (!specs.is_empty()).then_some(())?;
+    specs
+        .iter()
+        .all(|spec| {
+            !(spec.prompt.trim().is_empty() && spec.role.trim().is_empty())
+                && spec
+                    .workspace
+                    .as_deref()
+                    .is_none_or(|workspace| !workspace.trim().is_empty())
+        })
+        .then_some(())
+}
+
+fn parse_invoke_subagent_results(
+    content: &str,
+    expected: usize,
+) -> Option<Vec<InvokeSubagentResult>> {
+    (expected > 0).then_some(())?;
+    let start = content.find('{')?;
+    let objects = &content[start..];
+    let mut stream =
+        serde_json::Deserializer::from_str(objects).into_iter::<InvokeSubagentResult>();
+    let mut results = Vec::with_capacity(expected);
+    for _ in 0..expected {
+        results.push(stream.next()?.ok()?);
+    }
+    let trailing = objects.get(stream.byte_offset()..)?.trim_start();
+    (!trailing.contains('{')).then_some(())?;
+    Some(results)
+}
+
+fn file_uri_path(uri: &str) -> Option<PathBuf> {
+    let uri = Url::parse(uri.trim()).ok()?;
+    (uri.scheme() == "file").then_some(())?;
+    uri.to_file_path().ok()
 }
 
 fn normalize_user_content(value: Option<&str>) -> Option<String> {

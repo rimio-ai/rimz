@@ -94,7 +94,10 @@ pub use lifecycle::{
 pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use managed_source::ManagedSource;
-pub use observation::{AgentLifecycleObservation, LaunchParams, SessionOrigin};
+pub use observation::{
+    AgentLifecycleObservation, LaunchParams, SessionOrigin, SubagentCorrelation,
+    SubagentCorrelationInput,
+};
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub(crate) use payload::{
     CONTROL_TAG_PREFIXES, classify_agent_hook, non_empty_trimmed, optional_payload_string,
@@ -116,7 +119,7 @@ pub use state::{
 pub(crate) use state::{display_turn_error, effective_turn_error_class};
 pub use transcript::{TranscriptMessage, TranscriptPage, TranscriptPosition, TranscriptRole};
 pub use transcript_fs::read_transcript_lines;
-pub(crate) use transcript_fs::read_transcript_tail;
+pub(crate) use transcript_fs::{read_transcript_tail, read_transcript_tail_with_status};
 
 pub use amp::AmpAdapter;
 pub use antigravity::AntigravityAdapter;
@@ -822,6 +825,17 @@ pub trait AgentAdapter: Send + Sync {
         _event_name: &str,
         _payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
+        None
+    }
+
+    /// Correlate one identity-bearing hook with one pane-local candidate
+    /// parent through provider-owned durable records. The shared hook path
+    /// bounds and disambiguates candidates; adapters with no such relation
+    /// source abstain.
+    fn correlate_subagent(
+        &self,
+        _input: SubagentCorrelationInput<'_>,
+    ) -> Option<SubagentCorrelation> {
         None
     }
 

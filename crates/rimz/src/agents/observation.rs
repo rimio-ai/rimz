@@ -7,6 +7,8 @@
 //! payload-overrides-transcript pattern for the context gauge — so the
 //! per-adapter code carries only its provider-specific mapping.
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -70,6 +72,29 @@ pub struct LaunchParams {
     /// The reducer derives it when the event omits it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
+}
+
+/// One provider-neutral parent candidate for a hook whose own session id may
+/// belong to a subagent. The hook path supplies only already-observed durable
+/// identity and pane-local paths; the adapter decides whether its native
+/// transcript proves the child relation.
+#[derive(Clone, Copy, Debug)]
+pub struct SubagentCorrelationInput<'a> {
+    pub child_agent_id: &'a AgentSessionId,
+    pub child_workspace: Option<&'a Path>,
+    pub parent_agent_id: &'a AgentSessionId,
+    pub parent_workspace: Option<&'a Path>,
+    pub parent_transcript_path: Option<&'a Path>,
+}
+
+/// Display metadata recovered together with a provider-validated child
+/// relation. Durable parent identity remains the hook path's responsibility.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SubagentCorrelation {
+    pub agent_name: Option<String>,
+    pub role: Option<String>,
+    pub task: Option<String>,
+    pub prompt: Option<String>,
 }
 
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native

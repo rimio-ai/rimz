@@ -1,6 +1,9 @@
 //! Lifecycle observation ingestion and transition checks.
 
 use super::*;
+use rimz::agents::SubagentCorrelationInput;
+
+const MAX_SUBAGENT_PARENT_CANDIDATES: usize = 64;
 
 pub(super) fn record_lifecycle_observation(
     workspace: &ResolvedWorkspace,
@@ -20,7 +23,8 @@ pub(super) fn record_lifecycle_observation(
         }
         attach_agent_owner(agent.descriptor().kind, owner_pid, &mut observation);
         attach_agent_pane(&mut observation);
-        if observation.agent_name.is_none() {
+        correlate_subagent_observation(workspace, store, agent, &mut observation);
+        if observation.parent_agent_id.is_none() && observation.agent_name.is_none() {
             observation.agent_name = agent_identity_env(
                 &observation,
                 rimz::harness::run::ENV_AGENT_NAME,
@@ -104,6 +108,139 @@ pub(super) fn record_lifecycle_observation(
         });
     }
     None
+}
+
+fn correlate_subagent_observation(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    observation: &mut AgentLifecycleObservation,
+) {
+    if observation.parent_agent_id.is_some() {
+        return;
+    }
+    if !matches!(
+        observation.signal,
+        LifecycleSignal::TurnStarted
+            | LifecycleSignal::TurnEnded { .. }
+            | LifecycleSignal::ToolUsed { .. }
+    ) {
+        return;
+    }
+    let Some(child_id) = observation.agent_id.as_ref() else {
+        return;
+    };
+    let snapshot = match store.snapshot_cached() {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            debug!(
+                kind = agent.descriptor().kind,
+                child_id = child_id.as_str(),
+                error = %err,
+                "lifecycle: skipped subagent correlation because the prior rollup was unreadable",
+            );
+            return;
+        }
+    };
+    if let Some(parent_id) = snapshot
+        .agents
+        .iter()
+        .find(|state| state.kind.as_str() == agent.descriptor().kind && state.agent_id == *child_id)
+        .and_then(|state| state.parent_agent_id.clone())
+        .filter(|parent_id| parent_id != child_id)
+    {
+        observation.parent_agent_id = Some(parent_id);
+        normalize_correlated_subagent_signal(observation);
+        return;
+    }
+    if !matches!(
+        observation.signal,
+        LifecycleSignal::TurnStarted
+            | LifecycleSignal::TurnEnded {
+                parked_on_background: false,
+                ..
+            }
+    ) {
+        return;
+    }
+    let (Some(pane_id), Some(child_workspace)) = (
+        observation.pane_id.as_ref(),
+        observation.worktree_path.as_deref().map(Path::new),
+    ) else {
+        return;
+    };
+    let mut candidates = snapshot
+        .agents
+        .iter()
+        .filter(|state| {
+            state.kind.as_str() == agent.descriptor().kind
+                && state.agent_id != *child_id
+                && state
+                    .pane
+                    .as_ref()
+                    .is_some_and(|pane| pane.pane_id == *pane_id)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|state| std::cmp::Reverse(state.last_activity));
+    if candidates.len() > MAX_SUBAGENT_PARENT_CANDIDATES {
+        debug!(
+            kind = agent.descriptor().kind,
+            child_id = child_id.as_str(),
+            candidates = candidates.len(),
+            "lifecycle: skipped subagent correlation because the pane-local parent set exceeded its bound",
+        );
+        return;
+    }
+
+    let mut matched = candidates.into_iter().filter_map(|candidate| {
+        let correlation = agent.correlate_subagent(SubagentCorrelationInput {
+            child_agent_id: child_id,
+            child_workspace: Some(child_workspace),
+            parent_agent_id: &candidate.agent_id,
+            parent_workspace: Some(
+                candidate
+                    .worktree_path
+                    .as_deref()
+                    .map(Path::new)
+                    .unwrap_or(&workspace.worktree_root),
+            ),
+            parent_transcript_path: candidate.transcript_path.as_deref().map(Path::new),
+        })?;
+        let root_parent = candidate
+            .parent_agent_id
+            .as_ref()
+            .unwrap_or(&candidate.agent_id)
+            .clone();
+        (root_parent != *child_id).then_some((root_parent, correlation))
+    });
+    let Some((parent_id, correlation)) = matched.next() else {
+        return;
+    };
+    if matched.next().is_some() {
+        debug!(
+            kind = agent.descriptor().kind,
+            child_id = child_id.as_str(),
+            "lifecycle: ambiguous pane-local subagent parents — correlation quarantined",
+        );
+        return;
+    }
+    observation.parent_agent_id = Some(parent_id);
+    observation.agent_name = correlation.agent_name;
+    observation.launch.role = correlation.role;
+    observation.task = correlation.task;
+    observation.prompt = correlation.prompt;
+    normalize_correlated_subagent_signal(observation);
+}
+
+fn normalize_correlated_subagent_signal(observation: &mut AgentLifecycleObservation) {
+    observation.signal = match observation.signal {
+        LifecycleSignal::TurnStarted => LifecycleSignal::SubagentStarted,
+        LifecycleSignal::TurnEnded {
+            errored,
+            parked_on_background: false,
+        } => LifecycleSignal::SubagentStopped { errored },
+        ref signal => signal.clone(),
+    };
 }
 
 /// Fold this observation's signal onto the prior rollup state through the shared
