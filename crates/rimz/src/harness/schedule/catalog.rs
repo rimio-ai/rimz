@@ -60,7 +60,7 @@ pub struct LoadedTask {
 }
 
 impl LoadedTask {
-    pub fn action(&self, name: &str) -> Result<TaskAction<'_>, super::TaskActionErr> {
+    pub fn action(&self, name: &str) -> Result<TaskAction, super::TaskActionErr> {
         TaskAction::from_entry(name, &self.entry)
     }
 }
@@ -255,7 +255,7 @@ impl TaskCatalog {
                     continue;
                 }
             };
-            match delivery_target_alive(&task.entry, target) {
+            match delivery_target_alive(&task.entry, &target) {
                 Ok(true) => {}
                 Ok(false) => {
                     catalog.consume_scheduled(&name)?;

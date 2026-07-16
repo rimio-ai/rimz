@@ -81,10 +81,16 @@ fn append_stopped_record(
         .as_millisecond()
         .saturating_sub(info.started_at.as_millisecond());
     let duration_ms = u64::try_from(elapsed).unwrap_or(0);
-    let mut record = LoopRunOutcome::cancellation(run.map(|record| record.run_id.to_string()))
-        .record(name, LoopRunMode::Scheduled, duration_ms);
+    let mut record = LoopRunRecord::new(
+        name,
+        LoopRunResult::Canceled,
+        LoopRunMode::Scheduled,
+        duration_ms,
+    );
     record.mode = None;
-    run_log::record_transition(name, entry, record);
+    record.error = Some("stopped by rimz loop stop".to_owned());
+    record.run_id = run.map(|record| record.run_id.to_string());
+    run_log::record_transition(name, entry, &record);
 }
 
 fn write_stopped(name: &str, run: Option<&RunRecord>, signaled: bool) -> std::io::Result<()> {

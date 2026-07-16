@@ -28,10 +28,10 @@ pub mod strikes;
 pub use fire::last_stamps;
 
 /// Executable action encoded by one loop task entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TaskAction<'a> {
-    Spawn(&'a str),
-    Deliver(&'a TaskTarget),
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TaskAction {
+    Spawn(String),
+    Deliver(TaskTarget),
     CheckOnly,
 }
 
@@ -74,8 +74,8 @@ pub enum TaskActionErr {
     MissingAction { name: String },
 }
 
-impl<'a> TaskAction<'a> {
-    pub fn from_entry(name: &str, entry: &'a TaskEntry) -> Result<Self, TaskActionErr> {
+impl TaskAction {
+    pub fn from_entry(name: &str, entry: &TaskEntry) -> Result<Self, TaskActionErr> {
         if entry.verify.is_some() && entry.agent.is_none() {
             return Err(TaskActionErr::VerifyWithoutAgent {
                 name: name.to_owned(),
@@ -92,8 +92,8 @@ impl<'a> TaskAction<'a> {
             });
         }
         match (entry.agent.as_deref(), entry.wake.as_ref()) {
-            (Some(agent), None) if !agent.trim().is_empty() => Ok(Self::Spawn(agent)),
-            (None, Some(target)) => Ok(Self::Deliver(target)),
+            (Some(agent), None) if !agent.trim().is_empty() => Ok(Self::Spawn(agent.to_owned())),
+            (None, Some(target)) => Ok(Self::Deliver(target.clone())),
             (None, None) if entry.check.is_some() => Ok(Self::CheckOnly),
             (Some(_), Some(_)) => Err(TaskActionErr::ConflictingActions {
                 name: name.to_owned(),
@@ -104,7 +104,7 @@ impl<'a> TaskAction<'a> {
         }
     }
 
-    pub fn subject(self) -> &'a str {
+    pub fn subject(&self) -> &str {
         match self {
             Self::Spawn(spec) => spec,
             Self::Deliver(target) => &target.handle,
@@ -112,12 +112,16 @@ impl<'a> TaskAction<'a> {
         }
     }
 
-    pub const fn kind(self) -> TaskActionKind {
+    pub const fn kind(&self) -> TaskActionKind {
         match self {
             Self::Spawn(_) => TaskActionKind::Spawn,
             Self::Deliver(_) => TaskActionKind::Deliver,
             Self::CheckOnly => TaskActionKind::CheckOnly,
         }
+    }
+
+    pub const fn is_check_only(&self) -> bool {
+        matches!(self, Self::CheckOnly)
     }
 }
 

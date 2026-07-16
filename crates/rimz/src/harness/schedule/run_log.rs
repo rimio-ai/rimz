@@ -14,7 +14,7 @@ use jiff::{Timestamp, Zoned};
 use serde::{Deserialize, Serialize};
 
 use crate::config::TaskEntry;
-use crate::harness::run::{RunRecord, RunStatus};
+use crate::harness::run::RunStatus;
 use crate::harness::schedule::{pauses, strikes};
 use crate::store::paths::state_home;
 
@@ -25,256 +25,14 @@ const ERROR_CAP: usize = 2 * 1024;
 const LAST_MESSAGE_CAP: usize = 2 * 1024;
 pub const COST_WINDOW: usize = 10;
 
-/// Terminal loop execution facts. Rendering-only detail stays alongside the
-/// durable fields so every exit path converts through one record builder.
-#[derive(Clone, Debug)]
-pub struct LoopRunOutcome {
-    result: LoopRunResult,
-    record_error: Option<String>,
-    check: Option<CheckRecord>,
-    check_duration_ms: Option<u64>,
-    run_id: Option<String>,
-    transcript_path: Option<String>,
-    failure_tail: Option<String>,
-    last_message: Option<String>,
-    target: Option<String>,
-    exit_code: Option<i32>,
-    cost_usd: Option<f64>,
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    skip_reason: Option<String>,
-    streamed: bool,
-}
-
-impl LoopRunOutcome {
-    fn new(result: LoopRunResult) -> Self {
-        Self {
-            result,
-            record_error: None,
-            check: None,
-            check_duration_ms: None,
-            run_id: None,
-            transcript_path: None,
-            failure_tail: None,
-            last_message: None,
-            target: None,
-            exit_code: None,
-            cost_usd: None,
-            input_tokens: None,
-            output_tokens: None,
-            skip_reason: None,
-            streamed: false,
-        }
-    }
-
-    pub fn completed(check: Option<CheckRecord>) -> Self {
-        Self::new(LoopRunResult::Completed).with_check(check)
-    }
-
-    pub fn terminal(result: LoopRunResult) -> Self {
-        Self::new(result)
-    }
-
-    pub fn check_result(result: LoopRunResult, check: CheckRecord, duration_ms: u64) -> Self {
-        Self::new(result)
-            .with_check(Some(check))
-            .with_check_duration(duration_ms)
-    }
-
-    pub fn from_run_record(record: RunRecord, check: Option<CheckRecord>, streamed: bool) -> Self {
-        let status = record.status;
-        Self::new(status.into())
-            .with_check(check)
-            .with_run_id(Some(record.run_id.to_string()))
-            .with_transcript_path(record.transcript_path)
-            .with_failure_tail(record.failure_tail)
-            .with_last_message(record.last_message)
-            .with_cost(record.cost_usd, record.input_tokens, record.output_tokens)
-            .with_exit_code(Some(status.exit_code()))
-            .with_streamed(streamed)
-    }
-
-    pub fn delivery(target: impl Into<String>, check: Option<CheckRecord>) -> Self {
-        Self::new(LoopRunResult::Delivered)
-            .with_target(Some(target.into()))
-            .with_check(check)
-    }
-
-    pub fn target_gone(target: impl Into<String>, check: Option<CheckRecord>) -> Self {
-        Self::new(LoopRunResult::TargetGone)
-            .with_target(Some(target.into()))
-            .with_check(check)
-    }
-
-    pub fn expiry() -> Self {
-        Self::new(LoopRunResult::Expired)
-    }
-
-    pub fn skipped_window(reason: impl Into<String>, check: Option<CheckRecord>) -> Self {
-        Self::new(LoopRunResult::SkippedWindow)
-            .with_skip_reason(Some(reason.into()))
-            .with_check(check)
-    }
-
-    pub fn gate_skip(result: LoopRunResult, reason: impl Into<String>) -> Self {
-        Self::new(result).with_record_error(Some(reason.into()))
-    }
-
-    pub fn overlap(reason: Option<String>) -> Self {
-        Self::new(LoopRunResult::Overlapped).with_record_error(reason)
-    }
-
-    pub fn cancellation(run_id: Option<String>) -> Self {
-        Self::new(LoopRunResult::Canceled)
-            .with_record_error(Some("stopped by rimz loop stop".to_owned()))
-            .with_run_id(run_id)
-    }
-
-    pub fn error(error: impl Into<String>) -> Self {
-        Self::new(LoopRunResult::Errored).with_record_error(Some(error.into()))
-    }
-
-    pub fn with_check(mut self, check: Option<CheckRecord>) -> Self {
-        self.check = check;
-        self
-    }
-
-    fn with_record_error(mut self, error: Option<String>) -> Self {
-        self.record_error = error;
-        self
-    }
-
-    pub fn with_check_duration(mut self, duration_ms: u64) -> Self {
-        self.check_duration_ms = Some(duration_ms);
-        self
-    }
-
-    pub fn with_run_id(mut self, run_id: Option<String>) -> Self {
-        self.run_id = run_id;
-        self
-    }
-
-    pub fn with_transcript_path(mut self, path: Option<String>) -> Self {
-        self.transcript_path = path;
-        self
-    }
-
-    pub fn with_failure_tail(mut self, tail: Option<String>) -> Self {
-        self.failure_tail = tail;
-        self
-    }
-
-    pub fn with_last_message(mut self, message: Option<String>) -> Self {
-        self.last_message = message;
-        self
-    }
-
-    pub fn with_target(mut self, target: Option<String>) -> Self {
-        self.target = target;
-        self
-    }
-
-    pub fn with_exit_code(mut self, exit_code: Option<i32>) -> Self {
-        self.exit_code = exit_code;
-        self
-    }
-
-    pub fn with_cost(
-        mut self,
-        cost_usd: Option<f64>,
-        input_tokens: Option<u64>,
-        output_tokens: Option<u64>,
-    ) -> Self {
-        self.cost_usd = cost_usd;
-        self.input_tokens = input_tokens;
-        self.output_tokens = output_tokens;
-        self
-    }
-
-    pub fn with_skip_reason(mut self, reason: Option<String>) -> Self {
-        self.skip_reason = reason;
-        self
-    }
-
-    pub fn with_streamed(mut self, streamed: bool) -> Self {
-        self.streamed = streamed;
-        self
-    }
-
-    pub const fn result(&self) -> LoopRunResult {
-        self.result
-    }
-
-    pub fn check(&self) -> Option<&CheckRecord> {
-        self.check.as_ref()
-    }
-
-    pub const fn check_duration_ms(&self) -> Option<u64> {
-        self.check_duration_ms
-    }
-
-    pub fn run_id(&self) -> Option<&str> {
-        self.run_id.as_deref()
-    }
-
-    pub fn transcript_path(&self) -> Option<&str> {
-        self.transcript_path.as_deref()
-    }
-
-    pub fn failure_tail(&self) -> Option<&str> {
-        self.failure_tail.as_deref()
-    }
-
-    pub fn last_message(&self) -> Option<&str> {
-        self.last_message.as_deref()
-    }
-
-    pub fn target(&self) -> Option<&str> {
-        self.target.as_deref()
-    }
-
-    pub const fn exit_code(&self) -> Option<i32> {
-        self.exit_code
-    }
-
-    pub const fn cost_usd(&self) -> Option<f64> {
-        self.cost_usd
-    }
-
-    pub const fn input_tokens(&self) -> Option<u64> {
-        self.input_tokens
-    }
-
-    pub const fn output_tokens(&self) -> Option<u64> {
-        self.output_tokens
-    }
-
-    pub fn skip_reason(&self) -> Option<&str> {
-        self.skip_reason.as_deref()
-    }
-
-    pub const fn streamed(&self) -> bool {
-        self.streamed
-    }
-
-    pub fn record(&self, task: &str, mode: LoopRunMode, duration_ms: u64) -> LoopRunRecord {
-        LoopRunRecord {
-            task: task.to_owned(),
-            at: Timestamp::now(),
-            result: self.result,
-            mode: Some(mode),
-            duration_ms: Some(duration_ms),
-            error: self.record_error.clone(),
-            check: self.check.clone(),
-            run_id: self.run_id.clone(),
-            transcript_path: self.transcript_path.clone(),
-            last_message: self.last_message.clone(),
-            target: self.target.clone(),
-            cost_usd: self.cost_usd,
-            input_tokens: self.input_tokens,
-            output_tokens: self.output_tokens,
-        }
-    }
+/// Output facts that are useful only while presenting one terminal fire.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoopRunPresentation {
+    pub check_duration_ms: Option<u64>,
+    pub failure_tail: Option<String>,
+    pub skip_reason: Option<String>,
+    pub streamed: bool,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,9 +43,9 @@ pub enum RunTransition {
 
 /// Append first, then update strike and pause overlays. Overlay failures stay
 /// best-effort because the terminal history row is durable truth.
-pub fn record_transition(name: &str, entry: &TaskEntry, record: LoopRunRecord) -> RunTransition {
-    append(&record);
-    let signal = strikes::classify(&record);
+pub fn record_transition(name: &str, entry: &TaskEntry, record: &LoopRunRecord) -> RunTransition {
+    append(record);
+    let signal = strikes::classify(record);
     let count = match strikes::note(name, signal) {
         Ok(count) => count,
         Err(err) => {
@@ -716,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_outcomes_keep_durable_and_presentation_fields_separate() {
+    fn terminal_records_keep_durable_and_presentation_fields_separate() {
         for result in [
             LoopRunResult::Completed,
             LoopRunResult::Failed,
@@ -731,8 +489,7 @@ mod tests {
             LoopRunResult::Errored,
             LoopRunResult::Canceled,
         ] {
-            let record =
-                LoopRunOutcome::terminal(result).record("matrix", LoopRunMode::Scheduled, 17);
+            let record = LoopRunRecord::new("matrix", result, LoopRunMode::Scheduled, 17);
             assert_eq!(record.task, "matrix");
             assert_eq!(record.result, result);
             assert_eq!(record.mode, Some(LoopRunMode::Scheduled));
@@ -758,19 +515,24 @@ mod tests {
             timed_out: false,
             output: "check output".to_owned(),
         };
-        let outcome = LoopRunOutcome::terminal(LoopRunResult::Failed)
-            .with_record_error(Some("durable error".to_owned()))
-            .with_check(Some(check.clone()))
-            .with_run_id(Some("run_1".to_owned()))
-            .with_transcript_path(Some("/tmp/transcript".to_owned()))
-            .with_failure_tail(Some("presentation tail".to_owned()))
-            .with_last_message(Some("last message".to_owned()))
-            .with_target(Some("@coder".to_owned()))
-            .with_exit_code(Some(7))
-            .with_cost(Some(1.25), Some(10), Some(20))
-            .with_skip_reason(Some("presentation skip".to_owned()))
-            .with_streamed(true);
-        let record = outcome.record("matrix", LoopRunMode::Manual, 19);
+        let mut record =
+            LoopRunRecord::new("matrix", LoopRunResult::Failed, LoopRunMode::Manual, 19);
+        record.error = Some("durable error".to_owned());
+        record.check = Some(check.clone());
+        record.run_id = Some("run_1".to_owned());
+        record.transcript_path = Some("/tmp/transcript".to_owned());
+        record.last_message = Some("last message".to_owned());
+        record.target = Some("@coder".to_owned());
+        record.cost_usd = Some(1.25);
+        record.input_tokens = Some(10);
+        record.output_tokens = Some(20);
+        let presentation = LoopRunPresentation {
+            failure_tail: Some("presentation tail".to_owned()),
+            skip_reason: Some("presentation skip".to_owned()),
+            streamed: true,
+            exit_code: Some(7),
+            ..LoopRunPresentation::default()
+        };
 
         assert_eq!(record.error.as_deref(), Some("durable error"));
         assert_eq!(record.check, Some(check));
@@ -782,10 +544,16 @@ mod tests {
             (record.cost_usd, record.input_tokens, record.output_tokens),
             (Some(1.25), Some(10), Some(20))
         );
-        assert_eq!(outcome.failure_tail(), Some("presentation tail"));
-        assert_eq!(outcome.exit_code(), Some(7));
-        assert_eq!(outcome.skip_reason(), Some("presentation skip"));
-        assert!(outcome.streamed());
+        assert_eq!(
+            presentation.failure_tail.as_deref(),
+            Some("presentation tail")
+        );
+        assert_eq!(presentation.exit_code, Some(7));
+        assert_eq!(
+            presentation.skip_reason.as_deref(),
+            Some("presentation skip")
+        );
+        assert!(presentation.streamed);
     }
 
     #[test]

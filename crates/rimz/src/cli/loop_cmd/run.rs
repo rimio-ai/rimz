@@ -6,7 +6,10 @@ const CHECK_SUMMARY_OUTPUT_CAP: usize = 4 * 1024;
 
 // ---- run --------------------------------------------------------------------
 
-type RunOutcome = LoopRunOutcome;
+struct RunSummary<'a> {
+    record: &'a LoopRunRecord,
+    presentation: &'a LoopRunPresentation,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProjectTrustDecision {
@@ -123,7 +126,7 @@ pub(super) fn run_one(
         }
     };
     present_finished(name, &entry, action_kind, mode, keep, &finished)?;
-    if let Some(code) = finished.outcome.exit_code() {
+    if let Some(code) = finished.presentation.exit_code {
         std::process::exit(code);
     }
     Ok(())
@@ -240,8 +243,8 @@ fn present_finished(
             if mode == LoopRunMode::Manual {
                 write_manual_verdict(
                     &mut ui::out(),
-                    finished.outcome.result(),
-                    &format!("{} — {reason}", finished.outcome.result().label()),
+                    finished.record.result,
+                    &format!("{} — {reason}", finished.record.result.label()),
                 )?;
             } else {
                 writeln!(ui::out(), "loop `{name}`: {reason}; skipping")?;
@@ -282,15 +285,11 @@ fn present_finished(
         | TaskFireNotice::PingWindow { .. }
         | TaskFireNotice::TargetGone { .. } => {}
     }
-    print_run_summary(
-        name,
-        entry,
-        action_kind,
-        finished.duration_ms,
-        mode,
-        keep,
-        &finished.outcome,
-    )
+    let summary = RunSummary {
+        record: &finished.record,
+        presentation: &finished.presentation,
+    };
+    print_run_summary(name, entry, action_kind, mode, keep, &summary)
 }
 
 fn execute_prepared_delivery(
@@ -376,27 +375,30 @@ fn print_run_summary(
     name: &str,
     entry: &TaskEntry,
     action_kind: TaskActionKind,
-    duration_ms: u64,
     mode: LoopRunMode,
     keep: bool,
-    outcome: &RunOutcome,
+    summary: &RunSummary<'_>,
 ) -> Result<()> {
     let mut out = ui::out();
-    match mode {
-        LoopRunMode::Manual => write_manual_run_summary(
-            &mut out,
-            name,
-            entry,
-            action_kind,
-            duration_ms,
-            keep,
-            outcome,
-        )?,
-        LoopRunMode::Scheduled => {
-            write_scheduled_run_summary(&mut out, name, entry, duration_ms, outcome)?;
-        }
-    }
+    write_run_summary(&mut out, name, entry, action_kind, mode, keep, summary)?;
     Ok(())
+}
+
+fn write_run_summary(
+    out: &mut impl Write,
+    name: &str,
+    entry: &TaskEntry,
+    action_kind: TaskActionKind,
+    mode: LoopRunMode,
+    keep: bool,
+    summary: &RunSummary<'_>,
+) -> std::io::Result<()> {
+    match mode {
+        LoopRunMode::Manual => {
+            write_manual_run_summary(out, name, entry, action_kind, keep, summary)
+        }
+        LoopRunMode::Scheduled => write_scheduled_run_summary(out, name, entry, summary),
+    }
 }
 
 fn write_manual_run_summary(
@@ -404,26 +406,27 @@ fn write_manual_run_summary(
     name: &str,
     entry: &TaskEntry,
     action_kind: TaskActionKind,
-    duration_ms: u64,
     keep: bool,
-    outcome: &RunOutcome,
+    summary: &RunSummary<'_>,
 ) -> std::io::Result<()> {
-    if outcome.result() == LoopRunResult::CheckSkipped {
+    let record = summary.record;
+    let duration_ms = record.duration_ms.unwrap_or_default();
+    if record.result == LoopRunResult::CheckSkipped {
         return write_check_skipped_summary(
             out,
             name,
             entry,
             duration_ms,
             LoopRunMode::Manual,
-            outcome,
+            summary,
         );
     }
-    if let Some((result, label)) = manual_early_verdict(outcome, duration_ms) {
+    if let Some((result, label)) = manual_early_verdict(summary, duration_ms) {
         return write_manual_verdict(out, result, &label);
     }
 
-    let result_mark = render::loop_result_mark(outcome.result());
-    let result_label = manual_result_label(action_kind, outcome);
+    let result_mark = render::loop_result_mark(record.result);
+    let result_label = manual_result_label(action_kind, summary);
     write!(
         out,
         "{}",
@@ -433,21 +436,19 @@ fn write_manual_run_summary(
         )
     )?;
     write!(out, " in {}", render::format_duration_ms(duration_ms))?;
-    if let Some(spend) = render::spend_segments(
-        outcome.cost_usd(),
-        outcome.input_tokens(),
-        outcome.output_tokens(),
-    ) {
+    if let Some(spend) =
+        render::spend_segments(record.cost_usd, record.input_tokens, record.output_tokens)
+    {
         write!(out, " · {spend}")?;
     }
     writeln!(out)?;
 
-    if is_spawn_failure(outcome.result()) && !action_kind.is_check_only() {
-        write_failure_forensics(out, name, outcome)?;
-    } else if outcome.result() == LoopRunResult::Completed && outcome.run_id().is_some() {
-        write_completion_detail(out, name, outcome)?;
+    if is_spawn_failure(record.result) && !action_kind.is_check_only() {
+        write_failure_forensics(out, name, summary)?;
+    } else if record.result == LoopRunResult::Completed && record.run_id.is_some() {
+        write_completion_detail(out, name, summary)?;
     }
-    if !is_spawn_failure(outcome.result()) && !keep && outcome.run_id().is_some() {
+    if !is_spawn_failure(record.result) && !keep && record.run_id.is_some() {
         writeln!(
             out,
             "{}",
@@ -460,16 +461,19 @@ fn write_manual_run_summary(
     Ok(())
 }
 
-fn manual_early_verdict(outcome: &RunOutcome, duration_ms: u64) -> Option<(LoopRunResult, String)> {
-    let label = match outcome.result() {
+fn manual_early_verdict(
+    summary: &RunSummary<'_>,
+    duration_ms: u64,
+) -> Option<(LoopRunResult, String)> {
+    let label = match summary.record.result {
         LoopRunResult::Expired => "deadline expired — task left in place".to_owned(),
         LoopRunResult::TargetGone => format!(
             "{} not alive — schedule left in place",
-            outcome.target().unwrap_or("target")
+            summary.record.target.as_deref().unwrap_or("target")
         ),
         LoopRunResult::SkippedWindow => {
             let mut label = format!("skipped in {}", render::format_duration_ms(duration_ms));
-            if let Some(reason) = outcome.skip_reason() {
+            if let Some(reason) = &summary.presentation.skip_reason {
                 label.push_str(" — ");
                 label.push_str(reason);
             }
@@ -477,7 +481,7 @@ fn manual_early_verdict(outcome: &RunOutcome, duration_ms: u64) -> Option<(LoopR
         }
         _ => return None,
     };
-    Some((outcome.result(), label))
+    Some((summary.record.result, label))
 }
 
 fn is_spawn_failure(result: LoopRunResult) -> bool {
@@ -494,23 +498,24 @@ fn write_scheduled_run_summary(
     out: &mut impl Write,
     name: &str,
     entry: &TaskEntry,
-    duration_ms: u64,
-    outcome: &RunOutcome,
+    summary: &RunSummary<'_>,
 ) -> std::io::Result<()> {
-    if outcome.result() == LoopRunResult::CheckSkipped {
+    let record = summary.record;
+    let duration_ms = record.duration_ms.unwrap_or_default();
+    if record.result == LoopRunResult::CheckSkipped {
         return write_check_skipped_summary(
             out,
             name,
             entry,
             duration_ms,
             LoopRunMode::Scheduled,
-            outcome,
+            summary,
         );
     }
-    let result_mark = render::loop_result_mark(outcome.result());
-    let exit_label = outcome_exit_label(outcome);
-    if is_spawn_failure(outcome.result()) {
-        let mut label = outcome.result().label().to_owned();
+    let result_mark = render::loop_result_mark(record.result);
+    let exit_label = outcome_exit_label(summary);
+    if is_spawn_failure(record.result) {
+        let mut label = record.result.label().to_owned();
         if let Some(exit_label) = exit_label.as_deref() {
             label.push(' ');
             label.push_str(exit_label);
@@ -521,17 +526,15 @@ fn write_scheduled_run_summary(
             ui::paint(result_mark.style.bold(), &label)
         )?;
         write!(out, " in {}", render::format_duration_ms(duration_ms))?;
-        if let Some(spend) = render::spend_segments(
-            outcome.cost_usd(),
-            outcome.input_tokens(),
-            outcome.output_tokens(),
-        ) {
+        if let Some(spend) =
+            render::spend_segments(record.cost_usd, record.input_tokens, record.output_tokens)
+        {
             write!(out, " · {spend}")?;
         }
         writeln!(out)?;
-        write_failure_forensics(out, name, outcome)?;
+        write_failure_forensics(out, name, summary)?;
     } else {
-        let result_label = success_result_label(outcome);
+        let result_label = success_result_label(record);
         write!(
             out,
             "loop `{name}`: {}",
@@ -541,36 +544,34 @@ fn write_scheduled_run_summary(
             write!(out, " {exit_label}")?;
         }
         write!(out, " in {}", render::format_duration_ms(duration_ms))?;
-        if let Some(spend) = render::spend_segments(
-            outcome.cost_usd(),
-            outcome.input_tokens(),
-            outcome.output_tokens(),
-        ) {
+        if let Some(spend) =
+            render::spend_segments(record.cost_usd, record.input_tokens, record.output_tokens)
+        {
             write!(out, " · {spend}")?;
         }
         writeln!(out)?;
-        if outcome.result() == LoopRunResult::Completed && outcome.run_id().is_some() {
-            write_completion_detail(out, name, outcome)?;
+        if record.result == LoopRunResult::Completed && record.run_id.is_some() {
+            write_completion_detail(out, name, summary)?;
         }
     }
     Ok(())
 }
 
-fn success_result_label(outcome: &RunOutcome) -> String {
-    match (outcome.result(), outcome.target()) {
+fn success_result_label(record: &LoopRunRecord) -> String {
+    match (record.result, record.target.as_deref()) {
         (LoopRunResult::Delivered, Some(target)) => format!("delivered to {target}"),
-        _ => outcome.result().label().to_owned(),
+        _ => record.result.label().to_owned(),
     }
 }
 
-fn manual_result_label(action_kind: TaskActionKind, outcome: &RunOutcome) -> String {
+fn manual_result_label(action_kind: TaskActionKind, summary: &RunSummary<'_>) -> String {
     if action_kind.is_check_only()
-        && let Some(check) = outcome.check()
+        && let Some(check) = &summary.record.check
     {
         return check_result_label(check);
     }
-    let mut label = success_result_label(outcome);
-    if let Some(exit_label) = outcome_exit_label(outcome) {
+    let mut label = success_result_label(summary.record);
+    if let Some(exit_label) = outcome_exit_label(summary) {
         label.push(' ');
         label.push_str(&exit_label);
     }
@@ -629,15 +630,20 @@ fn write_check_skipped_summary(
     entry: &TaskEntry,
     duration_ms: u64,
     mode: LoopRunMode,
-    outcome: &RunOutcome,
+    summary: &RunSummary<'_>,
 ) -> std::io::Result<()> {
-    let label = outcome
-        .check()
+    let label = summary
+        .record
+        .check
+        .as_ref()
         .map(check_result_label)
         .unwrap_or_else(|| "check skipped".to_owned());
-    let check_duration_ms = outcome.check_duration_ms().unwrap_or(duration_ms);
+    let check_duration_ms = summary
+        .presentation
+        .check_duration_ms
+        .unwrap_or(duration_ms);
     let duration = render::format_duration_ms(check_duration_ms);
-    let (glyph, style) = render::check_skip_display(outcome.check());
+    let (glyph, style) = render::check_skip_display(summary.record.check.as_ref());
     if mode == LoopRunMode::Manual {
         write!(
             out,
@@ -665,12 +671,12 @@ fn write_check_skipped_summary(
 fn write_failure_forensics(
     out: &mut impl Write,
     name: &str,
-    outcome: &RunOutcome,
+    summary: &RunSummary<'_>,
 ) -> std::io::Result<()> {
-    if let Some(tail) = outcome_failure_tail(outcome) {
+    if let Some(tail) = outcome_failure_tail(summary) {
         write_failure_tail(out, &tail)?;
     }
-    write_run_links(out, outcome)?;
+    write_run_links(out, summary.record)?;
     writeln!(
         out,
         "{}",
@@ -678,15 +684,15 @@ fn write_failure_forensics(
     )
 }
 
-fn write_run_links(out: &mut impl Write, outcome: &RunOutcome) -> std::io::Result<()> {
-    if let Some(run_id) = outcome.run_id() {
+fn write_run_links(out: &mut impl Write, record: &LoopRunRecord) -> std::io::Result<()> {
+    if let Some(run_id) = &record.run_id {
         writeln!(
             out,
             "{}",
             ui::paint(ui::palette::MUTED, &format!("  run: {run_id}"))
         )?;
     }
-    if let Some(transcript) = outcome.transcript_path() {
+    if let Some(transcript) = &record.transcript_path {
         writeln!(
             out,
             "{}",
@@ -699,10 +705,15 @@ fn write_run_links(out: &mut impl Write, outcome: &RunOutcome) -> std::io::Resul
 fn write_completion_detail(
     out: &mut impl Write,
     name: &str,
-    outcome: &RunOutcome,
+    summary: &RunSummary<'_>,
 ) -> std::io::Result<()> {
-    if !outcome.streamed() {
-        if let Some(message) = outcome.last_message().filter(|msg| !msg.trim().is_empty()) {
+    if !summary.presentation.streamed {
+        if let Some(message) = summary
+            .record
+            .last_message
+            .as_deref()
+            .filter(|msg| !msg.trim().is_empty())
+        {
             render::write_gutter_block(out, None, message)?;
         } else {
             writeln!(
@@ -715,32 +726,39 @@ fn write_completion_detail(
             )?;
         }
     }
-    write_run_links(out, outcome)
+    write_run_links(out, summary.record)
 }
 
-fn outcome_exit_label(outcome: &RunOutcome) -> Option<String> {
-    if let Some(exit) = outcome.exit_code() {
+fn outcome_exit_label(summary: &RunSummary<'_>) -> Option<String> {
+    if let Some(exit) = summary.presentation.exit_code {
         if exit == 0 {
             return None;
         }
         Some(format!("(exit {exit})"))
-    } else if let Some(exit) = outcome.check().and_then(|check| check.code) {
+    } else if let Some(exit) = summary.record.check.as_ref().and_then(|check| check.code) {
         Some(format!("(exit {exit})"))
-    } else if outcome.check().is_some_and(|check| check.timed_out) {
+    } else if summary
+        .record
+        .check
+        .as_ref()
+        .is_some_and(|check| check.timed_out)
+    {
         Some("(timeout)".to_owned())
     } else {
         None
     }
 }
 
-fn outcome_failure_tail(outcome: &RunOutcome) -> Option<String> {
-    if let Some(tail) = outcome
-        .failure_tail()
+fn outcome_failure_tail(summary: &RunSummary<'_>) -> Option<String> {
+    if let Some(tail) = summary
+        .presentation
+        .failure_tail
+        .as_deref()
         .filter(|tail| !tail.trim().is_empty())
     {
         return Some(tail.trim_end().to_owned());
     }
-    let check = outcome.check()?;
+    let check = summary.record.check.as_ref()?;
     if !check.timed_out && check.code == Some(0) {
         return None;
     }
@@ -756,6 +774,93 @@ fn write_failure_tail(out: &mut impl Write, tail: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RunOutcome {
+        record: LoopRunRecord,
+        presentation: LoopRunPresentation,
+    }
+
+    impl RunOutcome {
+        fn terminal(result: LoopRunResult) -> Self {
+            Self {
+                record: LoopRunRecord::new("test", result, LoopRunMode::Manual, 0),
+                presentation: LoopRunPresentation::default(),
+            }
+        }
+
+        fn completed(check: Option<CheckRecord>) -> Self {
+            Self::terminal(LoopRunResult::Completed).with_check(check)
+        }
+
+        fn check_result(result: LoopRunResult, check: CheckRecord, duration_ms: u64) -> Self {
+            let mut outcome = Self::terminal(result).with_check(Some(check));
+            outcome.presentation.check_duration_ms = Some(duration_ms);
+            outcome
+        }
+
+        fn delivery(target: &str, check: Option<CheckRecord>) -> Self {
+            let mut outcome = Self::terminal(LoopRunResult::Delivered).with_check(check);
+            outcome.record.target = Some(target.to_owned());
+            outcome
+        }
+
+        fn target_gone(target: &str, check: Option<CheckRecord>) -> Self {
+            let mut outcome = Self::terminal(LoopRunResult::TargetGone).with_check(check);
+            outcome.record.target = Some(target.to_owned());
+            outcome
+        }
+
+        fn expiry() -> Self {
+            Self::terminal(LoopRunResult::Expired)
+        }
+
+        fn with_check(mut self, check: Option<CheckRecord>) -> Self {
+            self.record.check = check;
+            self
+        }
+
+        fn with_exit_code(mut self, exit_code: Option<i32>) -> Self {
+            self.presentation.exit_code = exit_code;
+            self
+        }
+
+        fn with_run_id(mut self, run_id: Option<String>) -> Self {
+            self.record.run_id = run_id;
+            self
+        }
+
+        fn with_transcript_path(mut self, path: Option<String>) -> Self {
+            self.record.transcript_path = path;
+            self
+        }
+
+        fn with_failure_tail(mut self, tail: Option<String>) -> Self {
+            self.presentation.failure_tail = tail;
+            self
+        }
+
+        fn with_last_message(mut self, message: Option<String>) -> Self {
+            self.record.last_message = message;
+            self
+        }
+
+        fn with_cost(
+            mut self,
+            cost_usd: Option<f64>,
+            input_tokens: Option<u64>,
+            output_tokens: Option<u64>,
+        ) -> Self {
+            self.record.cost_usd = cost_usd;
+            self.record.input_tokens = input_tokens;
+            self.record.output_tokens = output_tokens;
+            self
+        }
+
+        fn with_streamed(mut self, streamed: bool) -> Self {
+            self.presentation.streamed = streamed;
+            self
+        }
+    }
 
     #[test]
     fn manual_tty_prompts_for_blocked_project_trust() {
@@ -828,23 +933,15 @@ mod tests {
         keep: bool,
         outcome: &RunOutcome,
     ) -> String {
+        let mut record = outcome.record.clone();
+        record.duration_ms = Some(duration_ms);
+        let summary = RunSummary {
+            record: &record,
+            presentation: &outcome.presentation,
+        };
         let mut out = Vec::new();
         let action_kind = TaskAction::from_entry(name, entry).unwrap().kind();
-        match mode {
-            LoopRunMode::Manual => write_manual_run_summary(
-                &mut out,
-                name,
-                entry,
-                action_kind,
-                duration_ms,
-                keep,
-                outcome,
-            ),
-            LoopRunMode::Scheduled => {
-                write_scheduled_run_summary(&mut out, name, entry, duration_ms, outcome)
-            }
-        }
-        .unwrap();
+        write_run_summary(&mut out, name, entry, action_kind, mode, keep, &summary).unwrap();
         String::from_utf8(out).unwrap()
     }
 
@@ -1161,19 +1258,6 @@ mod tests {
         assert_eq!(
             summary("nudge", &entry, 100, LoopRunMode::Manual, false, &expired,),
             "○ deadline expired — task left in place\n"
-        );
-    }
-
-    #[test]
-    fn outcome_record_copies_transcript_path() {
-        let outcome = RunOutcome::completed(None)
-            .with_transcript_path(Some("/tmp/rimz/session.jsonl".to_owned()));
-
-        let record = outcome.record("wake", LoopRunMode::Manual, 123);
-
-        assert_eq!(
-            record.transcript_path.as_deref(),
-            Some("/tmp/rimz/session.jsonl")
         );
     }
 }

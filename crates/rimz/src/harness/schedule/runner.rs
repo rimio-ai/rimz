@@ -1,9 +1,10 @@
 //! Loop-fire policy from ordered gates through one durable history transition.
 //!
 //! [`TaskFire`] owns checks, deadlines, task consumption, run locks, prompt and
-//! launch preparation, and terminal outcome mapping. CLI executes the prepared
+//! launch preparation, and terminal record mapping. CLI executes the prepared
 //! supervised-run or message effect and returns its typed result.
 
+use std::cell::OnceCell;
 use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -28,7 +29,8 @@ use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunOutcome, Super
 use crate::harness::schedule::TaskAction;
 use crate::harness::schedule::catalog::{self, TaskCatalog};
 use crate::harness::schedule::run_log::{
-    self, CheckRecord, LoopRunMode, LoopRunOutcome, LoopRunResult, RunTransition,
+    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
+    RunTransition,
 };
 use crate::harness::spec::{self as agents_spec, Cell, LayoutSpec};
 use crate::ids::WorkspaceId;
@@ -44,13 +46,6 @@ const CHECK_OUTPUT_CAP: usize = 16 * 1024;
 const TASK_TIMEOUT_UNITS: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)];
 
 #[derive(Clone, Debug)]
-enum OwnedTaskAction {
-    Spawn(String),
-    Deliver(TaskTarget),
-    CheckOnly,
-}
-
-#[derive(Clone, Debug)]
 pub enum TaskFireNotice {
     None,
     Gate { reason: String },
@@ -61,8 +56,8 @@ pub enum TaskFireNotice {
 
 #[derive(Clone, Debug)]
 pub struct TaskFireFinished {
-    pub outcome: LoopRunOutcome,
-    pub duration_ms: u64,
+    pub record: LoopRunRecord,
+    pub presentation: LoopRunPresentation,
     pub transition: RunTransition,
     pub notice: TaskFireNotice,
 }
@@ -120,12 +115,132 @@ struct FiredCheck {
     record: CheckRecord,
 }
 
+struct FireContext {
+    action: TaskAction,
+    root: PathBuf,
+    scope: Option<FireScope>,
+}
+
+struct FireScope {
+    kind: crate::ids::AgentKind,
+    workspace_id: WorkspaceId,
+    scope_runtime: RuntimePaths,
+    resolved: Option<ResolvedTaskSpec>,
+    capacity: OnceCell<Option<ProviderCapacity>>,
+    #[cfg(test)]
+    capacity_reads: std::cell::Cell<usize>,
+    #[cfg(test)]
+    capacity_runtime: Option<RuntimePaths>,
+}
+
+impl FireScope {
+    fn new(
+        kind: crate::ids::AgentKind,
+        workspace_id: WorkspaceId,
+        scope_runtime: RuntimePaths,
+        resolved: Option<ResolvedTaskSpec>,
+    ) -> Self {
+        Self {
+            kind,
+            workspace_id,
+            scope_runtime,
+            resolved,
+            capacity: OnceCell::new(),
+            #[cfg(test)]
+            capacity_reads: std::cell::Cell::new(0),
+            #[cfg(test)]
+            capacity_runtime: None,
+        }
+    }
+
+    fn capacity(&self) -> Result<Option<&ProviderCapacity>> {
+        if self.capacity.get().is_none() {
+            #[cfg(test)]
+            self.capacity_reads.set(self.capacity_reads.get() + 1);
+            #[cfg(test)]
+            let runtime = self.capacity_runtime.clone();
+            #[cfg(not(test))]
+            let runtime = None;
+            let runtime = runtime.map_or_else(
+                || RuntimePaths::under(self.workspace_id.clone(), &runtime_home()),
+                Ok,
+            )?;
+            let _ = self
+                .capacity
+                .set(ProviderCapacity::read(&runtime, self.kind.as_str()));
+        }
+        Ok(self.capacity.get().and_then(Option::as_ref))
+    }
+
+    fn surplus_gate(&self, entry: &TaskEntry, now: Timestamp) -> Result<Option<String>> {
+        if entry.surplus.is_none() && entry.surplus_after.is_none() {
+            return Ok(None);
+        }
+        Ok(surplus_gate_in(
+            entry,
+            self.kind.as_str(),
+            self.capacity()?
+                .and_then(|capacity| capacity.longest_window_surplus(now)),
+        ))
+    }
+
+    fn window_running(&self, longest: bool, now: Timestamp) -> Result<bool> {
+        Ok(self.capacity()?.and_then(|capacity| {
+            if longest {
+                capacity.longest_window_running(now)
+            } else {
+                capacity.shortest_window_running(now)
+            }
+        }) == Some(true))
+    }
+}
+
+impl FireContext {
+    fn resolve(entry: &TaskEntry, action: TaskAction) -> Result<Self> {
+        let root = entry.resolved_root();
+        if action.is_check_only() {
+            return Ok(Self {
+                action,
+                root,
+                scope: None,
+            });
+        }
+        let workspace = WorkspaceResolver::resolve(&root, None)?;
+        let workspace_id = workspace.workspace_id.clone();
+        let runtime = RuntimePaths::for_workspace(workspace_id.clone())?;
+        let scope = match &action {
+            TaskAction::Spawn(spec) => {
+                let resolved = resolve_task_spec(spec, &workspace)?;
+                FireScope::new(
+                    crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
+                    workspace_id,
+                    runtime,
+                    Some(resolved),
+                )
+            }
+            TaskAction::Deliver(target) => FireScope::new(
+                crate::ids::AgentKind::new_unchecked(target.kind.clone()),
+                workspace_id,
+                runtime,
+                None,
+            ),
+            TaskAction::CheckOnly => unreachable!("check-only context returned above"),
+        };
+        Ok(Self {
+            action,
+            root,
+            scope: Some(scope),
+        })
+    }
+}
+
 /// One loop fire from ordered gates through exactly one history transition.
 pub struct TaskFire<'a> {
     name: String,
     entry: TaskEntry,
     catalog: &'a TaskCatalog,
-    action: OwnedTaskAction,
+    action: Option<TaskAction>,
+    context: Option<FireContext>,
     mode: LoopRunMode,
     keep: bool,
     now: Timestamp,
@@ -155,16 +270,13 @@ impl<'a> TaskFire<'a> {
         started: Instant,
     ) -> Result<Self> {
         let name = name.into();
-        let action = match TaskAction::from_entry(&name, &entry)? {
-            TaskAction::Spawn(spec) => OwnedTaskAction::Spawn(spec.to_owned()),
-            TaskAction::Deliver(target) => OwnedTaskAction::Deliver(target.clone()),
-            TaskAction::CheckOnly => OwnedTaskAction::CheckOnly,
-        };
+        let action = TaskAction::from_entry(&name, &entry)?;
         Ok(Self {
             name,
             entry,
             catalog,
-            action,
+            action: Some(action),
+            context: None,
             mode,
             keep,
             now,
@@ -195,71 +307,20 @@ impl<'a> TaskFire<'a> {
     }
 
     pub fn prepare(&mut self) -> Result<TaskFirePlan> {
-        let zoned_now = self.now.to_zoned(self.config.time_zone());
-        if let Some(gate) =
-            run_log::daily_budget_gate(&state_home(), &self.name, &self.entry, &zoned_now)
-                .map_err(anyhow::Error::msg)?
-        {
-            let outcome = LoopRunOutcome::gate_skip(LoopRunResult::BudgetSkipped, gate.reason());
-            return Ok(TaskFirePlan::Done(self.record(
-                outcome,
-                TaskFireNotice::Gate {
-                    reason: gate.reason(),
-                },
-                Some(self.now),
-            )));
+        if let Some(done) = self.prepare_scope_gates()? {
+            return Ok(TaskFirePlan::Done(done));
         }
-        let scope = task_scope_target(&self.name, &self.entry)?;
-        if let Some((kind, workspace_id)) = &scope
-            && let Some(reason) = crate::harness::budget::scope_gate(
-                &RuntimePaths::for_workspace(workspace_id.clone())?,
-                kind,
-                &self.config,
-                self.now,
-            )
-        {
-            let outcome = LoopRunOutcome::gate_skip(LoopRunResult::BudgetSkipped, reason.clone());
-            return Ok(TaskFirePlan::Done(self.record(
-                outcome,
-                TaskFireNotice::Gate { reason },
-                Some(self.now),
-            )));
-        }
-        if let Some((kind, _)) = &scope
-            && let Some(reason) = surplus_gate(&self.entry, kind.as_str(), self.now)?
-        {
-            let outcome = LoopRunOutcome::gate_skip(LoopRunResult::SurplusSkipped, reason.clone());
-            return Ok(TaskFirePlan::Done(self.record(
-                outcome,
-                TaskFireNotice::Gate { reason },
-                Some(self.now),
-            )));
-        }
-
-        match acquire_run_lock(&self.name, &self.entry)? {
-            RunLockAttempt::Acquired(guard) => self.run_lock = Some(guard),
-            RunLockAttempt::Held(info) => {
-                let detail = info.map(|info| {
-                    format!(
-                        "previous run still active (pid {}, started {}) — skipped",
-                        info.pid,
-                        relative_age(info.started_at, Timestamp::now())
-                    )
-                });
-                return Ok(TaskFirePlan::Done(self.record(
-                    LoopRunOutcome::overlap(detail.clone()),
-                    TaskFireNotice::Overlap { detail },
-                    None,
-                )));
-            }
+        if let Some(done) = self.prepare_run_lock()? {
+            return Ok(TaskFirePlan::Done(done));
         }
 
         if deadline_expired_at(&self.entry, self.now) {
             if self.mode == LoopRunMode::Scheduled {
                 self.catalog.consume_scheduled(&self.name)?;
             }
-            return Ok(TaskFirePlan::Done(self.record(
-                LoopRunOutcome::expiry(),
+            return Ok(TaskFirePlan::Done(self.record_terminal(
+                LoopRunResult::Expired,
+                LoopRunPresentation::default(),
                 TaskFireNotice::None,
                 None,
             )));
@@ -270,11 +331,80 @@ impl<'a> TaskFire<'a> {
             return Ok(TaskFirePlan::Done(done));
         }
         let fired_check = fired_check.fire;
-        match self.action.clone() {
-            OwnedTaskAction::Spawn(spec) => self.prepare_spawn(spec, fired_check),
-            OwnedTaskAction::Deliver(target) => self.prepare_delivery(target, fired_check),
-            OwnedTaskAction::CheckOnly => {
+        match self
+            .context
+            .as_ref()
+            .context("loop task context missing after gates")?
+            .action
+            .clone()
+        {
+            TaskAction::Spawn(spec) => self.prepare_spawn(spec, fired_check),
+            TaskAction::Deliver(target) => self.prepare_delivery(target, fired_check),
+            TaskAction::CheckOnly => {
                 unreachable!("check-only action is completed by prepare_check")
+            }
+        }
+    }
+
+    fn prepare_scope_gates(&mut self) -> Result<Option<TaskFireFinished>> {
+        let zoned_now = self.now.to_zoned(self.config.time_zone());
+        if let Some(gate) =
+            run_log::daily_budget_gate(&state_home(), &self.name, &self.entry, &zoned_now)
+                .map_err(anyhow::Error::msg)?
+        {
+            return Ok(Some(
+                self.record_gate(LoopRunResult::BudgetSkipped, gate.reason()),
+            ));
+        }
+        let action = self
+            .action
+            .take()
+            .context("loop task action already prepared")?;
+        let context = FireContext::resolve(&self.entry, action)?;
+        if let Some(scope) = &context.scope
+            && let Some(reason) = crate::harness::budget::scope_gate(
+                &scope.scope_runtime,
+                &scope.kind,
+                &self.config,
+                self.now,
+            )
+        {
+            return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
+        }
+        if let Some(scope) = &context.scope
+            && let Some(reason) = scope.surplus_gate(&self.entry, self.now)?
+        {
+            return Ok(Some(
+                self.record_gate(LoopRunResult::SurplusSkipped, reason),
+            ));
+        }
+        self.context = Some(context);
+        Ok(None)
+    }
+
+    fn prepare_run_lock(&mut self) -> Result<Option<TaskFireFinished>> {
+        match acquire_run_lock(&self.name, &self.entry)? {
+            RunLockAttempt::Acquired(guard) => {
+                self.run_lock = Some(guard);
+                Ok(None)
+            }
+            RunLockAttempt::Held(info) => {
+                let detail = info.map(|info| {
+                    format!(
+                        "previous run still active (pid {}, started {}) — skipped",
+                        info.pid,
+                        relative_age(info.started_at, Timestamp::now())
+                    )
+                });
+                Ok(Some(self.record_terminal_with(
+                    LoopRunResult::Overlapped,
+                    LoopRunPresentation::default(),
+                    TaskFireNotice::Overlap {
+                        detail: detail.clone(),
+                    },
+                    None,
+                    |record| record.error = detail.clone(),
+                )))
             }
         }
     }
@@ -284,35 +414,57 @@ impl<'a> TaskFire<'a> {
             .pending
             .take()
             .context("loop task has no prepared effect to finish")?;
-        let (outcome, notice) = match (pending, effect) {
+        match (pending, effect) {
             (PendingEffect::Spawn { check, stream }, TaskFireEffect::Spawn(outcome)) => {
-                finish_spawn_effect(outcome, check, stream)
+                let mut record = self.terminal_record(LoopRunResult::Completed);
+                let (presentation, notice) =
+                    finish_spawn_effect(&mut record, outcome, check, stream);
+                Ok(self.finish_record(record, presentation, notice, None))
             }
-            (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered) => (
-                LoopRunOutcome::delivery(target.handle, check),
-                TaskFireNotice::None,
-            ),
+            (PendingEffect::Deliver { target, check }, TaskFireEffect::Delivered) => {
+                let handle = target.handle;
+                Ok(self.record_terminal_with(
+                    LoopRunResult::Delivered,
+                    LoopRunPresentation::default(),
+                    TaskFireNotice::None,
+                    None,
+                    |record| {
+                        record.target = Some(handle);
+                        record.check = check;
+                    },
+                ))
+            }
             (PendingEffect::Deliver { target, check }, TaskFireEffect::TargetGone) => {
                 if self.mode == LoopRunMode::Scheduled {
                     self.catalog.consume_scheduled(&self.name)?;
                 }
                 let handle = target.handle;
-                (
-                    LoopRunOutcome::target_gone(handle.clone(), check),
-                    TaskFireNotice::TargetGone { handle },
-                )
+                Ok(self.record_terminal_with(
+                    LoopRunResult::TargetGone,
+                    LoopRunPresentation::default(),
+                    TaskFireNotice::TargetGone {
+                        handle: handle.clone(),
+                    },
+                    None,
+                    |record| {
+                        record.target = Some(handle.clone());
+                        record.check = check;
+                    },
+                ))
             }
             _ => anyhow::bail!("loop task effect does not match its prepared plan"),
-        };
-        Ok(self.record(outcome, notice, None))
+        }
     }
 
     pub fn finish_error(&mut self, err: &anyhow::Error) -> TaskFireFinished {
         self.pending = None;
-        self.record(
-            LoopRunOutcome::error(format!("{err:#}")),
+        let error = format!("{err:#}");
+        self.record_terminal_with(
+            LoopRunResult::Errored,
+            LoopRunPresentation::default(),
             TaskFireNotice::None,
             None,
+            |record| record.error = Some(error),
         )
     }
 
@@ -329,23 +481,37 @@ impl<'a> TaskFire<'a> {
         )?;
         let duration_ms = elapsed_millis(check_started);
         let record = check_record(&outcome);
-        if matches!(self.action, OwnedTaskAction::CheckOnly) {
+        if self
+            .context
+            .as_ref()
+            .is_some_and(|context| context.action.is_check_only())
+        {
             if self.mode == LoopRunMode::Scheduled && catalog::is_ephemeral(&self.entry) {
                 self.catalog.consume_scheduled(&self.name)?;
             }
             let result = check_only_result(&outcome);
-            let finished = self.record(
-                LoopRunOutcome::check_result(result, record, duration_ms),
+            let finished = self.record_terminal_with(
+                result,
+                LoopRunPresentation {
+                    check_duration_ms: Some(duration_ms),
+                    ..LoopRunPresentation::default()
+                },
                 TaskFireNotice::None,
                 None,
+                |run| run.check = Some(record),
             );
             return Ok(PreparedCheck::done(finished));
         }
         if !polarity_fires(self.entry.on, &outcome) {
-            let finished = self.record(
-                LoopRunOutcome::check_result(LoopRunResult::CheckSkipped, record, duration_ms),
+            let finished = self.record_terminal_with(
+                LoopRunResult::CheckSkipped,
+                LoopRunPresentation {
+                    check_duration_ms: Some(duration_ms),
+                    ..LoopRunPresentation::default()
+                },
                 TaskFireNotice::None,
                 None,
+                |run| run.check = Some(record),
             );
             return Ok(PreparedCheck::done(finished));
         }
@@ -367,30 +533,78 @@ impl<'a> TaskFire<'a> {
         spec: String,
         fired_check: Option<FiredCheck>,
     ) -> Result<TaskFirePlan> {
-        let resolved = preflight_task(&self.entry)?;
         let is_ping = agents_spec::virtual_ping_shape(&spec);
-        if is_ping {
-            let window_running = if self.entry.every.as_deref() == Some("reset") {
-                reset_window_already_running(&self.entry, resolved.kind())?
-            } else {
-                window_already_running(&self.entry, resolved.kind())?
-            };
-            if window_running {
-                let check = fired_check.as_ref().map(|check| check.record.clone());
-                let outcome = LoopRunOutcome::skipped_window(
-                    format!("{} budget window already counting down", resolved.kind()),
-                    check,
-                );
-                return Ok(TaskFirePlan::Done(self.record(
-                    outcome,
-                    TaskFireNotice::PingWindow {
-                        kind: resolved.kind().to_owned(),
-                    },
-                    None,
-                )));
-            }
+        if let Some(done) = self.prepare_spawn_preflight(&spec, fired_check.as_ref())? {
+            return Ok(TaskFirePlan::Done(done));
         }
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
+        let request = self.compile_spawn_request(spec, prompt, is_ping)?;
+        self.consume_ephemeral()?;
+        let check = fired_check.as_ref().map(|check| check.record.clone());
+        let stream = self.mode == LoopRunMode::Manual;
+        self.pending = Some(PendingEffect::Spawn {
+            check: check.clone(),
+            stream,
+        });
+        Ok(TaskFirePlan::Spawn(PreparedSpawn {
+            root: self.context_root()?,
+            request,
+            stream,
+        }))
+    }
+
+    fn prepare_spawn_preflight(
+        &mut self,
+        spec: &str,
+        fired_check: Option<&FiredCheck>,
+    ) -> Result<Option<TaskFireFinished>> {
+        let (kind, window_running) = {
+            let context = self
+                .context
+                .as_ref()
+                .context("loop task context missing for spawn")?;
+            let scope = context
+                .scope
+                .as_ref()
+                .context("loop spawn context missing provider scope")?;
+            let resolved = scope
+                .resolved
+                .as_ref()
+                .context("loop spawn context missing resolved task spec")?;
+            preflight_resolved_task(spec, resolved)?;
+            let is_ping = agents_spec::virtual_ping_shape(spec);
+            (
+                resolved.kind().to_owned(),
+                is_ping
+                    && scope.window_running(
+                        self.entry.every.as_deref() == Some("reset"),
+                        Timestamp::now(),
+                    )?,
+            )
+        };
+        if !window_running {
+            return Ok(None);
+        }
+        let check = fired_check.map(|check| check.record.clone());
+        let reason = format!("{kind} budget window already counting down");
+        Ok(Some(self.record_terminal_with(
+            LoopRunResult::SkippedWindow,
+            LoopRunPresentation {
+                skip_reason: Some(reason),
+                ..LoopRunPresentation::default()
+            },
+            TaskFireNotice::PingWindow { kind },
+            None,
+            |record| record.check = check,
+        )))
+    }
+
+    fn compile_spawn_request(
+        &self,
+        spec: String,
+        prompt: String,
+        is_ping: bool,
+    ) -> Result<SupervisedRunRequest> {
         let system_prompt_file = self
             .entry
             .system_prompt_file
@@ -432,12 +646,7 @@ impl<'a> TaskFire<'a> {
             .as_deref()
             .map(str::parse::<crate::harness::budget::BudgetSpec>)
             .transpose()?;
-        if self.mode == LoopRunMode::Scheduled && catalog::is_ephemeral(&self.entry) {
-            self.catalog.consume_scheduled(&self.name)?;
-        }
-        let check = fired_check.as_ref().map(|check| check.record.clone());
-        let stream = self.mode == LoopRunMode::Manual;
-        let request = SupervisedRunRequest {
+        Ok(SupervisedRunRequest {
             spec,
             prompt,
             description: None,
@@ -462,16 +671,7 @@ impl<'a> TaskFire<'a> {
             loop_zone: self.mode == LoopRunMode::Scheduled,
             loop_task: Some(self.name.clone()),
             passthrough: Vec::new(),
-        };
-        self.pending = Some(PendingEffect::Spawn {
-            check: check.clone(),
-            stream,
-        });
-        Ok(TaskFirePlan::Spawn(PreparedSpawn {
-            root: self.entry.resolved_root(),
-            request,
-            stream,
-        }))
+        })
     }
 
     fn prepare_delivery(
@@ -485,25 +685,44 @@ impl<'a> TaskFire<'a> {
                 self.catalog.consume_scheduled(&self.name)?;
             }
             let handle = target.handle;
-            return Ok(TaskFirePlan::Done(self.record(
-                LoopRunOutcome::target_gone(handle.clone(), check),
-                TaskFireNotice::TargetGone { handle },
+            return Ok(TaskFirePlan::Done(self.record_terminal_with(
+                LoopRunResult::TargetGone,
+                LoopRunPresentation::default(),
+                TaskFireNotice::TargetGone {
+                    handle: handle.clone(),
+                },
                 None,
+                |record| {
+                    record.target = Some(handle);
+                    record.check = check;
+                },
             )));
         }
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
-        if self.mode == LoopRunMode::Scheduled && catalog::is_ephemeral(&self.entry) {
-            self.catalog.consume_scheduled(&self.name)?;
-        }
+        self.consume_ephemeral()?;
         self.pending = Some(PendingEffect::Deliver {
             target: target.clone(),
             check: check.clone(),
         });
         Ok(TaskFirePlan::Deliver(PreparedDelivery {
-            root: self.entry.resolved_root(),
+            root: self.context_root()?,
             target,
             prompt,
         }))
+    }
+
+    fn consume_ephemeral(&self) -> Result<()> {
+        if self.mode == LoopRunMode::Scheduled && catalog::is_ephemeral(&self.entry) {
+            self.catalog.consume_scheduled(&self.name)?;
+        }
+        Ok(())
+    }
+
+    fn context_root(&self) -> Result<PathBuf> {
+        self.context
+            .as_ref()
+            .map(|context| context.root.clone())
+            .context("loop task context missing after gates")
     }
 
     fn resolve_effect_prompt(&self, fired_check: Option<&FiredCheck>) -> Result<String> {
@@ -514,25 +733,64 @@ impl<'a> TaskFire<'a> {
         })
     }
 
-    fn record(
+    fn terminal_record(&self, result: LoopRunResult) -> LoopRunRecord {
+        LoopRunRecord::new(&self.name, result, self.mode, elapsed_millis(self.started))
+    }
+
+    fn record_gate(&mut self, result: LoopRunResult, reason: String) -> TaskFireFinished {
+        self.record_terminal_with(
+            result,
+            LoopRunPresentation::default(),
+            TaskFireNotice::Gate {
+                reason: reason.clone(),
+            },
+            Some(self.now),
+            |record| record.error = Some(reason),
+        )
+    }
+
+    fn record_terminal(
         &mut self,
-        outcome: LoopRunOutcome,
+        result: LoopRunResult,
+        presentation: LoopRunPresentation,
+        notice: TaskFireNotice,
+        at: Option<Timestamp>,
+    ) -> TaskFireFinished {
+        let record = self.terminal_record(result);
+        self.finish_record(record, presentation, notice, at)
+    }
+
+    fn record_terminal_with(
+        &mut self,
+        result: LoopRunResult,
+        presentation: LoopRunPresentation,
+        notice: TaskFireNotice,
+        at: Option<Timestamp>,
+        update: impl FnOnce(&mut LoopRunRecord),
+    ) -> TaskFireFinished {
+        let mut record = self.terminal_record(result);
+        update(&mut record);
+        self.finish_record(record, presentation, notice, at)
+    }
+
+    fn finish_record(
+        &mut self,
+        mut record: LoopRunRecord,
+        presentation: LoopRunPresentation,
         notice: TaskFireNotice,
         at: Option<Timestamp>,
     ) -> TaskFireFinished {
         // Construction and effect completion are linear; reaching this twice
         // is an internal state-machine violation, not a recoverable input.
         assert!(!self.finished, "loop task history transition written once");
-        let duration_ms = elapsed_millis(self.started);
-        let mut record = outcome.record(&self.name, self.mode, duration_ms);
         if let Some(at) = at {
             record.at = at;
         }
-        let transition = run_log::record_transition(&self.name, &self.entry, record);
+        let transition = run_log::record_transition(&self.name, &self.entry, &record);
         self.finished = true;
         TaskFireFinished {
-            outcome,
-            duration_ms,
+            record,
+            presentation,
             transition,
             notice,
         }
@@ -540,23 +798,42 @@ impl<'a> TaskFire<'a> {
 }
 
 fn finish_spawn_effect(
+    record: &mut LoopRunRecord,
     effect: SupervisedRunOutcome,
     check: Option<CheckRecord>,
     stream: bool,
-) -> (LoopRunOutcome, TaskFireNotice) {
+) -> (LoopRunPresentation, TaskFireNotice) {
+    record.check = check;
     match effect {
-        SupervisedRunOutcome::Record(record) => (
-            LoopRunOutcome::from_run_record(*record, check, stream),
-            TaskFireNotice::None,
-        ),
-        SupervisedRunOutcome::Background => {
-            (LoopRunOutcome::completed(check), TaskFireNotice::None)
+        SupervisedRunOutcome::Record(run) => {
+            let run = *run;
+            let status = run.status;
+            record.result = status.into();
+            record.run_id = Some(run.run_id.to_string());
+            record.transcript_path = run.transcript_path;
+            record.last_message = run.last_message;
+            record.cost_usd = run.cost_usd;
+            record.input_tokens = run.input_tokens;
+            record.output_tokens = run.output_tokens;
+            (
+                LoopRunPresentation {
+                    failure_tail: run.failure_tail,
+                    streamed: stream,
+                    exit_code: Some(status.exit_code()),
+                    ..LoopRunPresentation::default()
+                },
+                TaskFireNotice::None,
+            )
         }
-        SupervisedRunOutcome::BudgetExceeded { reason } => (
-            LoopRunOutcome::gate_skip(LoopRunResult::BudgetSkipped, reason.clone())
-                .with_check(check),
-            TaskFireNotice::Gate { reason },
-        ),
+        SupervisedRunOutcome::Background => (LoopRunPresentation::default(), TaskFireNotice::None),
+        SupervisedRunOutcome::BudgetExceeded { reason } => {
+            record.result = LoopRunResult::BudgetSkipped;
+            record.error = Some(reason.clone());
+            (
+                LoopRunPresentation::default(),
+                TaskFireNotice::Gate { reason },
+            )
+        }
     }
 }
 
@@ -677,25 +954,12 @@ pub fn preflight_entry(
         TaskAction::Spawn(spec) => {
             let resolved = resolved
                 .with_context(|| format!("missing resolved loop task spec for `{spec}`"))?;
-            preflight_resolved_task(spec, resolved)?;
+            preflight_resolved_task(&spec, resolved)?;
         }
         TaskAction::Deliver(target) => preflight_kind(&target.kind)?,
         TaskAction::CheckOnly => {}
     }
     Ok(())
-}
-
-pub fn preflight_task(entry: &TaskEntry) -> Result<ResolvedTaskSpec> {
-    let root = entry.resolved_root();
-    let workspace = WorkspaceResolver::resolve(&root, None)
-        .with_context(|| format!("resolving project root at {}", root.display()))?;
-    let spec = entry
-        .agent
-        .as_deref()
-        .context("loop task is missing `agent`")?;
-    let resolved = resolve_task_spec(spec, &workspace)?;
-    preflight_resolved_task(spec, &resolved)?;
-    Ok(resolved)
 }
 
 fn preflight_resolved_task(spec: &str, resolved: &ResolvedTaskSpec) -> Result<()> {
@@ -796,24 +1060,6 @@ fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
-}
-
-pub fn task_scope_target(
-    name: &str,
-    entry: &TaskEntry,
-) -> Result<Option<(crate::ids::AgentKind, WorkspaceId)>> {
-    let workspace = WorkspaceResolver::resolve(entry.resolved_root(), None)?;
-    match TaskAction::from_entry(name, entry)? {
-        TaskAction::Spawn(spec) => Ok(Some((
-            crate::ids::AgentKind::new_unchecked(resolve_task_spec(spec, &workspace)?.kind),
-            workspace.workspace_id,
-        ))),
-        TaskAction::Deliver(target) => Ok(Some((
-            crate::ids::AgentKind::new_unchecked(target.kind.clone()),
-            workspace.workspace_id,
-        ))),
-        TaskAction::CheckOnly => Ok(None),
-    }
 }
 
 /// Newest durable supervised run still active for one loop task.
@@ -1259,42 +1505,6 @@ pub fn tail_output(bytes: &[u8], cap: usize) -> String {
     String::from_utf8_lossy(&bytes[start..]).into_owned()
 }
 
-/// Whether `entry`'s provider already has a budget window counting down, read
-/// from the shared account-scoped cache. The window state is account-scoped, so
-/// the entry's workspace is resolved only to reach this user's runtime root.
-pub fn window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
-    let runtime = entry_runtime(entry)?;
-    Ok(window_already_running_in(&runtime, kind, Timestamp::now()))
-}
-
-fn window_already_running_in(runtime: &RuntimePaths, kind: &str, now: Timestamp) -> bool {
-    ProviderCapacity::read(runtime, kind).and_then(|capacity| capacity.shortest_window_running(now))
-        == Some(true)
-}
-
-/// Whether `entry`'s provider already has its longest budget window counting
-/// down, read from the shared account-scoped cache.
-pub fn reset_window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
-    let runtime = entry_runtime(entry)?;
-    Ok(ProviderCapacity::read(&runtime, kind)
-        .and_then(|capacity| capacity.longest_window_running(Timestamp::now()))
-        == Some(true))
-}
-
-/// Decide whether a task's provider-window surplus gate keeps this fire closed.
-pub fn surplus_gate(entry: &TaskEntry, kind: &str, now: Timestamp) -> Result<Option<String>> {
-    if entry.surplus.is_none() && entry.surplus_after.is_none() {
-        return Ok(None);
-    }
-    let runtime = entry_runtime(entry)?;
-    Ok(surplus_gate_in(
-        entry,
-        kind,
-        ProviderCapacity::read(&runtime, kind)
-            .and_then(|capacity| capacity.longest_window_surplus(now)),
-    ))
-}
-
 fn surplus_gate_in(
     entry: &TaskEntry,
     kind: &str,
@@ -1423,7 +1633,14 @@ mod tests {
             output: "guard failed".to_owned(),
         };
 
-        let (outcome, notice) = finish_spawn_effect(
+        let mut record = LoopRunRecord::new(
+            "nightly",
+            LoopRunResult::Completed,
+            LoopRunMode::Scheduled,
+            12,
+        );
+        let (presentation, notice) = finish_spawn_effect(
+            &mut record,
             SupervisedRunOutcome::BudgetExceeded {
                 reason: "room budget reached".to_owned(),
             },
@@ -1431,15 +1648,10 @@ mod tests {
             true,
         );
 
-        assert_eq!(outcome.result(), LoopRunResult::BudgetSkipped);
-        assert_eq!(outcome.check(), Some(&check));
-        assert_eq!(
-            outcome
-                .record("nightly", LoopRunMode::Scheduled, 12)
-                .error
-                .as_deref(),
-            Some("room budget reached")
-        );
+        assert_eq!(record.result, LoopRunResult::BudgetSkipped);
+        assert_eq!(record.check.as_ref(), Some(&check));
+        assert_eq!(record.error.as_deref(), Some("room budget reached"));
+        assert_eq!(presentation, LoopRunPresentation::default());
         assert!(matches!(
             notice,
             TaskFireNotice::Gate { reason } if reason == "room budget reached"
@@ -1467,7 +1679,15 @@ mod tests {
             .expect("runtime paths");
         runtime.ensure_dirs().expect("runtime dirs");
         let now = Timestamp::from_second(1_000_000).expect("now");
-        assert!(!window_already_running_in(&runtime, "claude", now));
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let mut cold = FireScope::new(
+            crate::ids::AgentKind::new_unchecked("claude"),
+            workspace_id.clone(),
+            runtime.clone(),
+            None,
+        );
+        cold.capacity_runtime = Some(runtime.clone());
+        assert!(!cold.window_running(false, now).expect("cold window"));
 
         let cache = crate::agents::account::RateLimitsCache {
             entries: std::collections::BTreeMap::from([(
@@ -1491,7 +1711,23 @@ mod tests {
             &cache,
         )
         .expect("rate-limit cache");
-        assert!(window_already_running_in(&runtime, "claude", now));
+        let mut active = FireScope::new(
+            crate::ids::AgentKind::new_unchecked("claude"),
+            workspace_id,
+            runtime.clone(),
+            None,
+        );
+        active.capacity_runtime = Some(runtime);
+        let entry = TaskEntry {
+            surplus: Some("0.5".to_owned()),
+            ..TaskEntry::default()
+        };
+        assert_eq!(
+            active.surplus_gate(&entry, now).expect("surplus gate"),
+            None
+        );
+        assert!(active.window_running(false, now).expect("active window"));
+        assert_eq!(active.capacity_reads.get(), 1);
     }
 
     #[test]

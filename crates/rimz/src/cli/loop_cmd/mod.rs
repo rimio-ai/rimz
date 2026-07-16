@@ -28,7 +28,8 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use rimz::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use rimz::harness::run::RunRecord;
 use rimz::harness::schedule::run_log::{
-    self, CheckRecord, LoopRunMode, LoopRunOutcome, LoopRunRecord, LoopRunResult, RunTransition,
+    self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult,
+    RunTransition,
 };
 use rimz::harness::schedule::runner::{
     CheckEcho, ResolvedTaskSpec, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
