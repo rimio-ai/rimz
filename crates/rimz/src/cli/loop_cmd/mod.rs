@@ -325,6 +325,68 @@ fn load_task(name: &str, globals: &GlobalFlags) -> Result<Option<(TaskEntry, Tas
         .map(|task| (task.entry.clone(), task.source)))
 }
 
+fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
+    RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
+}
+
+fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
+    if entry.every.as_deref() != Some("reset") {
+        return None;
+    }
+    let kind = entry
+        .agent
+        .as_deref()
+        .and_then(rimz::harness::spec::ping_kind)?;
+    window_reset_at(entry, kind).ok().flatten()
+}
+
+fn observe_task_timing(
+    name: &str,
+    entry: &TaskEntry,
+    blocked: Option<TrustState>,
+    stamps: &BTreeMap<String, Timestamp>,
+    pause: Option<&PauseEntry>,
+    now_zoned: &jiff::Zoned,
+) -> schedule::TaskTiming {
+    let last_fire = stamps.get(name).copied();
+    let active_pause = pause.is_some_and(|pause| pauses::is_active(pause, now_zoned.timestamp()));
+    let valid_reset_shape = entry.cron.is_none()
+        && entry.at.is_none()
+        && entry.every.as_deref() == Some("reset")
+        && entry
+            .agent
+            .as_deref()
+            .and_then(rimz::harness::spec::ping_kind)
+            .is_some();
+    let window_reset =
+        (blocked.is_none() && !active_pause && last_fire.is_some() && valid_reset_shape)
+            .then(|| window_reset_for(entry))
+            .flatten();
+    schedule::TaskTiming::evaluate(
+        name,
+        entry,
+        blocked,
+        last_fire,
+        pause,
+        now_zoned,
+        window_reset,
+    )
+}
+
+fn task_next_fire_text(
+    name: &str,
+    entry: &TaskEntry,
+    pause: Option<&PauseEntry>,
+    now: Timestamp,
+) -> Option<String> {
+    let runtime = runtime_for_root(&entry.resolved_root())?;
+    let stamps = schedule::last_stamps(&runtime);
+    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
+    observe_task_timing(name, entry, None, &stamps, pause, &now_zoned)
+        .next_timestamp()
+        .map(|next| ui::rel_until(next, now))
+}
+
 fn finish_project_mutation(
     out: &mut impl Write,
     project_root: &Path,
@@ -350,12 +412,9 @@ fn finish_project_mutation(
 }
 
 fn block_untrusted_project_task(name: &str, entry: &TaskEntry, source: TaskSource) -> Result<()> {
-    let TaskSource::Project { state } = source else {
+    let Some(state) = source.blocked_state() else {
         return Ok(());
     };
-    if state == TrustState::Trusted {
-        return Ok(());
-    }
     bail!(
         "loop task `{name}` is blocked — project trust is {state}\nconfigured in {path}\n{fix}",
         path = project_config_path(&entry.root).display(),

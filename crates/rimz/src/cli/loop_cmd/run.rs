@@ -135,7 +135,7 @@ fn gate_project_trust(
     source: TaskSource,
     mode: LoopRunMode,
 ) -> Result<()> {
-    let TaskSource::Project { state } = source else {
+    let Some(state) = source.blocked_state() else {
         return Ok(());
     };
     match project_trust_decision(state, mode, std::io::stdin().is_terminal()) {

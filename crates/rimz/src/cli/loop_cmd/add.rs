@@ -375,7 +375,7 @@ pub(super) fn resume(name: &str, globals: &GlobalFlags) -> Result<()> {
     strikes::clear(name)?;
     let mut out = ui::out();
     write!(out, "loop `{name}`: resumed")?;
-    if let Some(next) = render::task_next_fire_text(name, &entry, Some(&resumed), now) {
+    if let Some(next) = task_next_fire_text(name, &entry, Some(&resumed), now) {
         write!(out, " · next {next}")?;
     }
     writeln!(out)?;

@@ -486,6 +486,122 @@ fn blocked_project_rendering_names_the_gate_and_fix() {
     );
 }
 
+fn interval_timing(
+    blocked: Option<TrustState>,
+    last_fire: Option<Timestamp>,
+    pause: Option<&PauseEntry>,
+    now: Timestamp,
+) -> schedule::TaskTiming {
+    schedule::TaskTiming::evaluate(
+        "task",
+        &TaskEntry {
+            agent: Some("claude".to_owned()),
+            every: Some("15m".to_owned()),
+            ..TaskEntry::default()
+        },
+        blocked,
+        last_fire,
+        pause,
+        &now.to_zoned(jiff::tz::TimeZone::UTC),
+        None,
+    )
+}
+
+#[test]
+fn task_timing_maps_to_existing_list_and_watch_labels() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let manual = PauseEntry {
+        until: None,
+        strikes: None,
+    };
+    let strikes = PauseEntry {
+        until: None,
+        strikes: Some(3),
+    };
+    let timed = PauseEntry {
+        until: Timestamp::from_second(10_300).ok(),
+        strikes: None,
+    };
+    let cases = [
+        (
+            interval_timing(Some(TrustState::Stale), None, None, now),
+            RowState::Blocked,
+            "blocked · trust",
+        ),
+        (
+            interval_timing(None, None, Some(&manual), now),
+            RowState::Paused,
+            "paused",
+        ),
+        (
+            interval_timing(None, None, Some(&strikes), now),
+            RowState::Paused,
+            "paused · 3 strikes",
+        ),
+        (
+            interval_timing(None, None, Some(&timed), now),
+            RowState::Paused,
+            "paused · in 5m",
+        ),
+        (
+            interval_timing(None, Timestamp::from_second(8_800).ok(), None, now),
+            RowState::Due,
+            "due",
+        ),
+        (
+            interval_timing(None, Timestamp::from_second(9_400).ok(), None, now),
+            RowState::Upcoming(Timestamp::from_second(10_300).unwrap()),
+            "5m",
+        ),
+        (
+            schedule::TaskTiming::evaluate(
+                "task",
+                &TaskEntry::default(),
+                None,
+                Some(now),
+                None,
+                &now.to_zoned(jiff::tz::TimeZone::UTC),
+                None,
+            ),
+            RowState::NeverRun,
+            "—",
+        ),
+        (
+            interval_timing(None, None, None, now),
+            RowState::NeverRun,
+            "—",
+        ),
+    ];
+    for (timing, state, label) in cases {
+        assert_eq!(row_state_for_timing(&timing), state);
+        assert_eq!(timing_next_text(&timing, now), label);
+    }
+
+    let upcoming = interval_timing(None, Timestamp::from_second(9_400).ok(), None, now);
+    let mut table = ui::Table::new(["NEXT"]);
+    table.row([next_cell(&upcoming, now)]);
+    let mut out = Vec::new();
+    table.render(&mut out).unwrap();
+    assert!(String::from_utf8(out).unwrap().contains("in 5m"));
+}
+
+#[test]
+fn show_headline_keeps_blocked_before_pause() {
+    let now = Timestamp::from_second(10_000).unwrap();
+    let pause = PauseEntry {
+        until: None,
+        strikes: Some(3),
+    };
+    let timing = interval_timing(Some(TrustState::Untrusted), None, Some(&pause), now);
+    let mut out = Vec::new();
+
+    write_show_headline(&mut out, "task", &timing, now).unwrap();
+
+    let out = anstream::adapter::strip_str(&String::from_utf8(out).unwrap()).to_string();
+    assert!(out.contains("next blocked · trust"), "{out}");
+    assert!(!out.contains("paused"), "{out}");
+}
+
 #[test]
 fn run_status_merges_failed_check_exit() {
     let mut failed = record(10, LoopRunResult::Failed);

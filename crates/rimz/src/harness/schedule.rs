@@ -289,6 +289,89 @@ impl ParsedSchedule {
     }
 }
 
+/// One task's parsed schedule and current display timing classification.
+#[derive(Debug)]
+pub struct TaskTiming {
+    parsed: Result<ParsedSchedule, ScheduleErr>,
+    state: TaskTimingState,
+    active_pause: Option<pauses::PauseEntry>,
+}
+
+/// Current schedule state before CLI presentation and live run-lock overlays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskTimingState {
+    Blocked(crate::trust::TrustState),
+    Paused(pauses::PauseEntry),
+    Invalid,
+    Unarmed,
+    Upcoming(Timestamp),
+    Due(Timestamp),
+    NoOccurrence,
+}
+
+impl TaskTiming {
+    pub fn evaluate(
+        name: &str,
+        entry: &TaskEntry,
+        blocked: Option<crate::trust::TrustState>,
+        last_fire: Option<Timestamp>,
+        pause: Option<&pauses::PauseEntry>,
+        now: &Zoned,
+        window_reset: Option<Timestamp>,
+    ) -> Self {
+        let parsed = parse_schedule(name, entry);
+        let active_pause = pause
+            .filter(|pause| pauses::is_active(pause, now.timestamp()))
+            .copied();
+        let state = if let Some(state) = blocked {
+            TaskTimingState::Blocked(state)
+        } else if let Some(pause) = active_pause {
+            TaskTimingState::Paused(pause)
+        } else {
+            match (&parsed, last_fire) {
+                (Err(_), _) => TaskTimingState::Invalid,
+                (Ok(_), None) => TaskTimingState::Unarmed,
+                (Ok(parsed), Some(last_fire)) => {
+                    let effective_last_fire =
+                        pauses::effective_last_fire(last_fire, pause, now.timestamp());
+                    match parsed
+                        .schedule
+                        .next_after(effective_last_fire, now, window_reset)
+                    {
+                        Some(next) if next <= now.timestamp() => TaskTimingState::Due(next),
+                        Some(next) => TaskTimingState::Upcoming(next),
+                        None => TaskTimingState::NoOccurrence,
+                    }
+                }
+            }
+        };
+        Self {
+            parsed,
+            state,
+            active_pause,
+        }
+    }
+
+    pub const fn state(&self) -> TaskTimingState {
+        self.state
+    }
+
+    pub fn parsed(&self) -> Result<&ParsedSchedule, &ScheduleErr> {
+        self.parsed.as_ref()
+    }
+
+    pub const fn active_pause(&self) -> Option<pauses::PauseEntry> {
+        self.active_pause
+    }
+
+    pub const fn next_timestamp(&self) -> Option<Timestamp> {
+        match self.state {
+            TaskTimingState::Upcoming(next) | TaskTimingState::Due(next) => Some(next),
+            _ => None,
+        }
+    }
+}
+
 /// Validate a schedule name: non-empty and limited to a filesystem- and
 /// shell-safe charset.
 pub fn validate_name(name: &str) -> Result<(), ScheduleErr> {
@@ -989,6 +1072,186 @@ mod tests {
 
     fn seconds_before(ts: Timestamp, seconds: i64) -> Timestamp {
         Timestamp::from_second(ts.as_second() - seconds).expect("shifted timestamp")
+    }
+
+    #[test]
+    fn task_timing_classifies_runtime_schedule_edges() {
+        let now = zdt(2026, 6, 24, 8, 10, 0);
+        let interval = entry(None, Some("15m"), None);
+        assert!(matches!(
+            TaskTiming::evaluate(
+                "task",
+                &interval,
+                None,
+                Some(seconds_before(now.timestamp(), 10 * 60)),
+                None,
+                &now,
+                None,
+            )
+            .state(),
+            TaskTimingState::Upcoming(_)
+        ));
+        assert!(matches!(
+            TaskTiming::evaluate(
+                "task",
+                &interval,
+                None,
+                Some(seconds_before(now.timestamp(), 20 * 60)),
+                None,
+                &now,
+                None,
+            )
+            .state(),
+            TaskTimingState::Due(_)
+        ));
+        assert_eq!(
+            TaskTiming::evaluate("task", &interval, None, None, None, &now, None).state(),
+            TaskTimingState::Unarmed
+        );
+
+        let reset = reset_entry(Some("claude-ping"));
+        assert_eq!(
+            TaskTiming::evaluate(
+                "task",
+                &reset,
+                None,
+                Some(seconds_before(now.timestamp(), 60)),
+                None,
+                &now,
+                None,
+            )
+            .state(),
+            TaskTimingState::NoOccurrence
+        );
+
+        let invalid = entry(None, None, None);
+        assert_eq!(
+            TaskTiming::evaluate(
+                "task",
+                &invalid,
+                None,
+                Some(now.timestamp()),
+                None,
+                &now,
+                None,
+            )
+            .state(),
+            TaskTimingState::Invalid
+        );
+    }
+
+    #[test]
+    fn task_timing_precedence_is_blocked_then_pause_then_schedule() {
+        let now = zdt(2026, 6, 24, 8, 10, 0);
+        let invalid = entry(None, None, None);
+        let manual = pauses::PauseEntry {
+            until: None,
+            strikes: Some(3),
+        };
+        assert_eq!(
+            TaskTiming::evaluate(
+                "task",
+                &invalid,
+                Some(crate::trust::TrustState::Stale),
+                None,
+                Some(&manual),
+                &now,
+                None,
+            )
+            .state(),
+            TaskTimingState::Blocked(crate::trust::TrustState::Stale)
+        );
+        assert_eq!(
+            TaskTiming::evaluate("task", &invalid, None, None, Some(&manual), &now, None).state(),
+            TaskTimingState::Paused(manual)
+        );
+
+        let timed = pauses::PauseEntry {
+            until: now
+                .timestamp()
+                .checked_add(SignedDuration::from_secs(5 * 60))
+                .ok(),
+            strikes: None,
+        };
+        assert_eq!(
+            TaskTiming::evaluate("task", &invalid, None, None, Some(&timed), &now, None).state(),
+            TaskTimingState::Paused(timed)
+        );
+    }
+
+    #[test]
+    fn task_timing_uses_expired_pause_as_last_fire_edge() {
+        let now = zdt(2026, 6, 24, 8, 10, 0);
+        let interval = entry(None, Some("15m"), None);
+        let pause = pauses::PauseEntry {
+            until: Some(seconds_before(now.timestamp(), 5 * 60)),
+            strikes: None,
+        };
+        let timing = TaskTiming::evaluate(
+            "task",
+            &interval,
+            None,
+            Some(seconds_before(now.timestamp(), 20 * 60)),
+            Some(&pause),
+            &now,
+            None,
+        );
+        assert_eq!(
+            timing.state(),
+            TaskTimingState::Upcoming(
+                now.timestamp()
+                    .checked_add(SignedDuration::from_secs(10 * 60))
+                    .expect("next interval")
+            )
+        );
+    }
+
+    #[test]
+    fn task_timing_due_matches_schedule_rules_at_occurrence_edges() {
+        let now = zdt(2026, 6, 24, 8, 10, 0);
+        let reset = seconds_before(now.timestamp(), 60);
+        for (name, entry, last_fire, window_reset) in [
+            (
+                "calendar",
+                entry(Some("08:10"), None, None),
+                seconds_before(now.timestamp(), 60),
+                None,
+            ),
+            (
+                "interval",
+                entry(None, Some("15m"), None),
+                seconds_before(now.timestamp(), 15 * 60),
+                None,
+            ),
+            (
+                "cron",
+                entry(None, None, Some("10 8 * * *")),
+                seconds_before(now.timestamp(), 60),
+                None,
+            ),
+            (
+                "reset",
+                reset_entry(Some("claude-ping")),
+                seconds_before(now.timestamp(), 60),
+                Some(reset),
+            ),
+        ] {
+            let parsed = parse_schedule(name, &entry).expect("parsed schedule");
+            assert!(parsed.schedule.due(last_fire, &now, window_reset), "{name}");
+            assert!(matches!(
+                TaskTiming::evaluate(
+                    name,
+                    &entry,
+                    None,
+                    Some(last_fire),
+                    None,
+                    &now,
+                    window_reset,
+                )
+                .state(),
+                TaskTimingState::Due(_)
+            ));
+        }
     }
 
     fn reset_entry(agent: Option<&str>) -> TaskEntry {

@@ -8,11 +8,68 @@ const WATCH_NARROW: usize = 44;
 const WATCH_WIDE: usize = 68;
 
 struct ListRowContext<'a> {
-    pauses: &'a BTreeMap<String, PauseEntry>,
     stats: &'a BTreeMap<String, run_log::LoopRunStats>,
-    stamps: &'a BTreeMap<String, Timestamp>,
-    now_zoned: &'a jiff::Zoned,
     now: Timestamp,
+}
+
+struct ObservedTask<'a> {
+    name: &'a str,
+    entry: &'a TaskEntry,
+    source: TaskSource,
+    timing: schedule::TaskTiming,
+}
+
+struct ObservedTaskGroup<'a> {
+    root: PathBuf,
+    room_is_open: bool,
+    tasks: Vec<ObservedTask<'a>>,
+}
+
+fn grouped_tasks<'a>(
+    tasks: &'a BTreeMap<String, (TaskEntry, TaskSource)>,
+    pauses: &BTreeMap<String, PauseEntry>,
+    now_zoned: &jiff::Zoned,
+) -> Vec<ObservedTaskGroup<'a>> {
+    let mut entries_by_root: BTreeMap<PathBuf, Vec<(&str, &TaskEntry, TaskSource)>> =
+        BTreeMap::new();
+    for (name, (entry, source)) in tasks {
+        entries_by_root
+            .entry(entry.resolved_root())
+            .or_default()
+            .push((name, entry, *source));
+    }
+    entries_by_root
+        .into_iter()
+        .map(|(root, entries)| {
+            let runtime = runtime_for_root(&root);
+            let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
+            let stamps = runtime
+                .as_ref()
+                .map(schedule::last_stamps)
+                .unwrap_or_default();
+            let tasks = entries
+                .into_iter()
+                .map(|(name, entry, source)| ObservedTask {
+                    name,
+                    entry,
+                    source,
+                    timing: observe_task_timing(
+                        name,
+                        entry,
+                        source.blocked_state(),
+                        &stamps,
+                        pauses.get(name),
+                        now_zoned,
+                    ),
+                })
+                .collect();
+            ObservedTaskGroup {
+                root,
+                room_is_open,
+                tasks,
+            }
+        })
+        .collect()
 }
 
 // ---- list -------------------------------------------------------------------
@@ -29,38 +86,21 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let mut blocked_count = 0;
-    let mut groups: BTreeMap<PathBuf, Vec<(&String, &TaskEntry, TaskSource)>> = BTreeMap::new();
-    for (name, (entry, source)) in &tasks {
-        let root = entry.resolved_root();
-        groups.entry(root).or_default().push((name, entry, *source));
-    }
-    for (idx, (root, entries)) in groups.into_iter().enumerate() {
-        let runtime = runtime_for_root(&root);
-        let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
-        let stamps = runtime
-            .as_ref()
-            .map(rimz::harness::schedule::last_stamps)
-            .unwrap_or_default();
+    let groups = grouped_tasks(&tasks, &pause_entries, &now_zoned);
+    for (idx, group) in groups.into_iter().enumerate() {
         if idx > 0 {
             writeln!(out)?;
         }
-        write_root_heading(&mut out, &root, room_is_open)?;
+        write_root_heading(&mut out, &group.root, group.room_is_open)?;
         let mut table = ui::Table::new([
             "NAME", "TASK", "SOURCE", "SCHEDULE", "LAST", "STATUS", "COST", "NEXT",
         ])
         .right(&[6])
         .indent(2);
-        let context = ListRowContext {
-            pauses: &pause_entries,
-            stats: &stats,
-            stamps: &stamps,
-            now_zoned: &now_zoned,
-            now,
-        };
-        for (name, entry, source) in entries {
-            let blocked_state = blocked_project_state(source);
-            blocked_count += usize::from(blocked_state.is_some());
-            table.row(task_row(name, entry, source, blocked_state, &context));
+        let context = ListRowContext { stats: &stats, now };
+        for task in group.tasks {
+            blocked_count += usize::from(task.source.blocked_state().is_some());
+            table.row(task_row(&task, &context));
         }
         table.render(&mut out)?;
     }
@@ -71,44 +111,30 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-fn task_row(
-    name: &str,
-    entry: &TaskEntry,
-    source: TaskSource,
-    blocked_state: Option<TrustState>,
-    context: &ListRowContext<'_>,
-) -> Vec<ui::Cell> {
-    let parsed = schedule::parse_schedule(name, entry);
-    let when = match &parsed {
+fn task_row(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> Vec<ui::Cell> {
+    let when = match task.timing.parsed() {
         Ok(schedule) => schedule.describe(),
         Err(err) => format!("invalid: {err}"),
     };
-    let next = next_cell(
-        name,
-        entry,
-        blocked_state,
-        &parsed,
-        context.pauses.get(name),
-        context,
-    );
+    let next = next_cell(&task.timing, context.now);
     let (last, status) = context
         .stats
-        .get(name)
+        .get(task.name)
         .map(|stats| last_run_cells(stats, context.now))
         .unwrap_or_else(|| (ui::cell("-").dash(), ui::cell("-").dash()));
     let cost = list_cost_label(
-        entry,
+        task.entry,
         context
             .stats
-            .get(name)
+            .get(task.name)
             .map_or(0.0, |stats| stats.spend_today_usd),
     )
     .map(ui::cell)
     .unwrap_or_else(|| ui::cell("-").dash());
     vec![
-        ui::cell(name).fg(ui::palette::ACCENT),
-        ui::cell(task_subject(entry)),
-        source_cell(source),
+        ui::cell(task.name).fg(ui::palette::ACCENT),
+        ui::cell(task_subject(task.entry)),
+        source_cell(task.source),
         ui::cell(when),
         last,
         status,
@@ -117,53 +143,26 @@ fn task_row(
     ]
 }
 
-fn next_cell(
-    name: &str,
-    entry: &TaskEntry,
-    blocked_state: Option<TrustState>,
-    parsed: &std::result::Result<schedule::ParsedSchedule, schedule::ScheduleErr>,
-    pause: Option<&PauseEntry>,
-    context: &ListRowContext<'_>,
-) -> ui::Cell {
-    if let Some(state) = blocked_state {
-        return blocked_next_cell(state);
-    }
-    match pause.filter(|entry| pauses::is_active(entry, context.now)) {
-        Some(PauseEntry {
+fn next_cell(timing: &schedule::TaskTiming, now: Timestamp) -> ui::Cell {
+    match timing.state() {
+        schedule::TaskTimingState::Blocked(state) => blocked_next_cell(state),
+        schedule::TaskTimingState::Paused(PauseEntry {
             until: None,
             strikes: Some(strikes),
         }) => ui::cell(format!("paused · {strikes} strikes")).fg(ui::palette::MUTED),
-        Some(PauseEntry {
+        schedule::TaskTimingState::Paused(PauseEntry {
             until: None,
             strikes: None,
         }) => ui::cell("paused").fg(ui::palette::MUTED),
-        Some(PauseEntry {
+        schedule::TaskTimingState::Paused(PauseEntry {
             until: Some(until), ..
-        }) => ui::cell(format!("paused · {}", ui::rel_until(*until, context.now)))
-            .fg(ui::palette::MUTED),
-        None => parsed
-            .as_ref()
-            .ok()
-            .and_then(|parsed| {
-                next_fire_text(
-                    name,
-                    &parsed.schedule,
-                    context.stamps,
-                    pause,
-                    context.now_zoned,
-                    context.now,
-                    window_reset_for(entry),
-                )
-            })
-            .map(ui::cell)
-            .unwrap_or_else(|| ui::cell("-").dash()),
-    }
-}
-
-fn blocked_project_state(source: TaskSource) -> Option<TrustState> {
-    match source {
-        TaskSource::Project { state } if state != TrustState::Trusted => Some(state),
-        _ => None,
+        }) => ui::cell(format!("paused · {}", ui::rel_until(until, now))).fg(ui::palette::MUTED),
+        schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
+            ui::cell(ui::rel_until(next, now))
+        }
+        schedule::TaskTimingState::Invalid
+        | schedule::TaskTimingState::Unarmed
+        | schedule::TaskTimingState::NoOccurrence => ui::cell("-").dash(),
     }
 }
 
@@ -173,7 +172,7 @@ fn blocked_next_cell(state: TrustState) -> ui::Cell {
 
 fn source_cell(source: TaskSource) -> ui::Cell {
     let cell = ui::cell(source_label(source));
-    match blocked_project_state(source) {
+    match source.blocked_state() {
         Some(state) => cell.fg(ui::status::trust(state)),
         None => cell,
     }
@@ -252,40 +251,19 @@ fn render_watch_frame(out: &mut impl Write, project_root: Option<&Path>, hold: b
     let pause_entries = pauses::load();
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
-    let mut entries_by_root: BTreeMap<PathBuf, Vec<(&String, &TaskEntry, TaskSource)>> =
-        BTreeMap::new();
-    for (name, (entry, source)) in &tasks {
-        entries_by_root
-            .entry(entry.resolved_root())
-            .or_default()
-            .push((name, entry, *source));
-    }
-
-    let mut groups = Vec::new();
-    for (root, entries) in entries_by_root {
-        let runtime = runtime_for_root(&root);
-        let room_is_open = runtime.as_ref().is_some_and(fresh_sidebar_present);
-        let stamps = runtime
-            .as_ref()
-            .map(rimz::harness::schedule::last_stamps)
-            .unwrap_or_default();
-        let context = ListRowContext {
-            pauses: &pause_entries,
-            stats: &stats,
-            stamps: &stamps,
-            now_zoned: &now_zoned,
-            now,
-        };
-        let mut rows = Vec::new();
-        for (name, entry, source) in entries {
-            rows.push(watch_row_model(name, entry, source, &context));
-        }
-        groups.push(WatchGroup {
-            root,
-            room_is_open,
-            rows,
-        });
-    }
+    let context = ListRowContext { stats: &stats, now };
+    let groups = grouped_tasks(&tasks, &pause_entries, &now_zoned)
+        .into_iter()
+        .map(|group| WatchGroup {
+            root: group.root,
+            room_is_open: group.room_is_open,
+            rows: group
+                .tasks
+                .into_iter()
+                .map(|task| watch_row_model(&task, &context))
+                .collect(),
+        })
+        .collect::<Vec<_>>();
     let (cols, rows) = rimz::mux::detect_terminal_size().unwrap_or((80, 24));
     render_dashboard(
         out,
@@ -327,44 +305,18 @@ struct WatchGroup {
     rows: Vec<WatchRow>,
 }
 
-fn watch_row_model(
-    name: &str,
-    entry: &TaskEntry,
-    source: TaskSource,
-    context: &ListRowContext<'_>,
-) -> WatchRow {
-    let parsed = schedule::parse_schedule(name, entry);
-    let pause = context
-        .pauses
-        .get(name)
-        .filter(|pause| pauses::is_active(pause, context.now));
-    let blocked = blocked_project_state(source).is_some();
-    let next_ts = parsed.as_ref().ok().and_then(|parsed| {
-        next_fire_timestamp(
-            name,
-            &parsed.schedule,
-            context.stamps,
-            context.pauses.get(name),
-            context.now_zoned,
-            context.now,
-            window_reset_for(entry),
-        )
-    });
-    let running = matches!(probe_run_lock(name, entry), Ok(RunLockState::Held(_)));
+fn watch_row_model(task: &ObservedTask<'_>, context: &ListRowContext<'_>) -> WatchRow {
+    let next_ts = task.timing.next_timestamp();
+    let running = matches!(
+        probe_run_lock(task.name, task.entry),
+        Ok(RunLockState::Held(_))
+    );
     let state = if running {
         RowState::Running
-    } else if blocked {
-        RowState::Blocked
-    } else if pause.is_some() {
-        RowState::Paused
-    } else if next_ts.is_some_and(|next| next <= context.now) {
-        RowState::Due
-    } else if let Some(next) = next_ts {
-        RowState::Upcoming(next)
     } else {
-        RowState::NeverRun
+        row_state_for_timing(&task.timing)
     };
-    let (glyph, glyph_style, failed, last_text, status_text) = context.stats.get(name).map_or(
+    let (glyph, glyph_style, failed, last_text, status_text) = context.stats.get(task.name).map_or(
         (
             "○",
             ui::palette::FAINT,
@@ -385,23 +337,14 @@ fn watch_row_model(
     );
     let next_text = match state {
         RowState::Running => "running now".to_owned(),
-        RowState::Paused => pause.map_or_else(
-            || "paused".to_owned(),
-            |pause| match pause.until {
-                Some(until) => format!("paused · {}", ui::rel_until(until, context.now)),
-                None => pause.strikes.map_or_else(
-                    || "paused".to_owned(),
-                    |strikes| format!("paused · {strikes} strikes"),
-                ),
-            },
-        ),
+        RowState::Paused => timing_next_text(&task.timing, context.now),
         RowState::Blocked => "blocked · trust".to_owned(),
         RowState::Due => "due".to_owned(),
         RowState::Upcoming(next) => ui::until_label(next, context.now),
         RowState::NeverRun => "—".to_owned(),
     };
     WatchRow {
-        name: name.to_owned(),
+        name: task.name.to_owned(),
         glyph,
         glyph_style,
         state,
@@ -413,17 +356,38 @@ fn watch_row_model(
     }
 }
 
-fn next_fire_timestamp(
-    name: &str,
-    schedule: &schedule::Schedule,
-    stamps: &BTreeMap<String, Timestamp>,
-    pause: Option<&PauseEntry>,
-    now_zoned: &jiff::Zoned,
-    now: Timestamp,
-    window_reset: Option<Timestamp>,
-) -> Option<Timestamp> {
-    let stamp = pauses::effective_last_fire(*stamps.get(name)?, pause, now);
-    schedule.next_after(stamp, now_zoned, window_reset)
+fn row_state_for_timing(timing: &schedule::TaskTiming) -> RowState {
+    match timing.state() {
+        schedule::TaskTimingState::Blocked(_) => RowState::Blocked,
+        schedule::TaskTimingState::Paused(_) => RowState::Paused,
+        schedule::TaskTimingState::Due(_) => RowState::Due,
+        schedule::TaskTimingState::Upcoming(next) => RowState::Upcoming(next),
+        schedule::TaskTimingState::Invalid
+        | schedule::TaskTimingState::Unarmed
+        | schedule::TaskTimingState::NoOccurrence => RowState::NeverRun,
+    }
+}
+
+fn timing_next_text(timing: &schedule::TaskTiming, now: Timestamp) -> String {
+    match timing.state() {
+        schedule::TaskTimingState::Blocked(_) => "blocked · trust".to_owned(),
+        schedule::TaskTimingState::Paused(PauseEntry {
+            until: Some(until), ..
+        }) => format!("paused · {}", ui::rel_until(until, now)),
+        schedule::TaskTimingState::Paused(PauseEntry {
+            until: None,
+            strikes: Some(strikes),
+        }) => format!("paused · {strikes} strikes"),
+        schedule::TaskTimingState::Paused(PauseEntry {
+            until: None,
+            strikes: None,
+        }) => "paused".to_owned(),
+        schedule::TaskTimingState::Due(_) => "due".to_owned(),
+        schedule::TaskTimingState::Upcoming(next) => ui::until_label(next, now),
+        schedule::TaskTimingState::Invalid
+        | schedule::TaskTimingState::Unarmed
+        | schedule::TaskTimingState::NoOccurrence => "—".to_owned(),
+    }
 }
 
 fn render_dashboard(
@@ -830,11 +794,10 @@ fn check_on_label(on: CheckOn) -> &'static str {
 }
 
 fn source_label(source: TaskSource) -> String {
-    match source {
-        TaskSource::Project { state } if state != TrustState::Trusted => {
-            format!("project · {}", state.as_str())
-        }
-        _ => source.label().to_owned(),
+    if let Some(state) = source.blocked_state() {
+        format!("project · {}", state.as_str())
+    } else {
+        source.label().to_owned()
     }
 }
 
@@ -939,56 +902,6 @@ fn display_path(path: &Path) -> String {
     ui::home_relative(path.to_string_lossy().as_ref())
 }
 
-fn runtime_for_root(root: &Path) -> Option<RuntimePaths> {
-    RuntimePaths::for_workspace(WorkspaceId::from_project_root(root)).ok()
-}
-
-fn next_fire_text(
-    name: &str,
-    schedule: &schedule::Schedule,
-    stamps: &BTreeMap<String, Timestamp>,
-    pause: Option<&PauseEntry>,
-    now_zoned: &jiff::Zoned,
-    now: Timestamp,
-    window_reset: Option<Timestamp>,
-) -> Option<String> {
-    let next = next_fire_timestamp(name, schedule, stamps, pause, now_zoned, now, window_reset)?;
-    Some(ui::rel_until(next, now))
-}
-
-pub(super) fn task_next_fire_text(
-    name: &str,
-    entry: &TaskEntry,
-    pause: Option<&PauseEntry>,
-    now: Timestamp,
-) -> Option<String> {
-    let root = entry.resolved_root();
-    let runtime = runtime_for_root(&root)?;
-    let stamps = rimz::harness::schedule::last_stamps(&runtime);
-    let parsed = schedule::parse_schedule(name, entry).ok()?;
-    let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    next_fire_text(
-        name,
-        &parsed.schedule,
-        &stamps,
-        pause,
-        &now_zoned,
-        now,
-        window_reset_for(entry),
-    )
-}
-
-fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
-    if entry.every.as_deref() != Some("reset") {
-        return None;
-    }
-    let kind = entry
-        .agent
-        .as_deref()
-        .and_then(rimz::harness::spec::ping_kind)?;
-    window_reset_at(entry, kind).ok().flatten()
-}
-
 fn has_agent_runs_section(entry: &TaskEntry) -> bool {
     entry.check.is_some() && (entry.agent.is_some() || entry.wake.is_some())
 }
@@ -1003,28 +916,17 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         .as_ref()
         .map(rimz::harness::schedule::last_stamps)
         .unwrap_or_default();
-    let blocked_state = blocked_project_state(source);
-    let parsed = schedule::parse_schedule(&args.name, &entry);
     let now = Timestamp::now();
     let pause = pauses::load().remove(&args.name);
-    let active_pause = pause.as_ref().filter(|entry| pauses::is_active(entry, now));
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
-    let window_reset = window_reset_for(&entry);
-    let next = if blocked_state.is_none() {
-        parsed.as_ref().ok().and_then(|parsed| {
-            next_fire_text(
-                &args.name,
-                &parsed.schedule,
-                &stamps,
-                pause.as_ref(),
-                &now_zoned,
-                now,
-                window_reset,
-            )
-        })
-    } else {
-        None
-    };
+    let timing = observe_task_timing(
+        &args.name,
+        &entry,
+        source.blocked_state(),
+        &stamps,
+        pause.as_ref(),
+        &now_zoned,
+    );
     let records = run_log::task_records(&state_home(), &args.name);
     let show_agent_runs = has_agent_runs_section(&entry);
     let lock_state = probe_run_lock(&args.name, &entry).ok();
@@ -1035,15 +937,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
     };
 
     let mut out = ui::out();
-    write_show_headline(
-        &mut out,
-        &args.name,
-        &parsed,
-        blocked_state,
-        active_pause,
-        next.as_deref(),
-        now,
-    )?;
+    write_show_headline(&mut out, &args.name, &timing, now)?;
     if let Some((verdict, style)) = verdict_line(&records, now) {
         writeln!(out, "  {}", ui::paint(style, &verdict))?;
     }
@@ -1055,7 +949,7 @@ pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {
         &records,
         ShowFactsContext {
             now_zoned: &now_zoned,
-            is_paused: active_pause.is_some(),
+            is_paused: timing.active_pause().is_some(),
             lock_state: lock_state.as_ref(),
             active_run: active_run.as_ref(),
             full_spend: !show_agent_runs,
@@ -1133,13 +1027,10 @@ pub(super) fn logs(args: LogsArgs, globals: &GlobalFlags) -> Result<()> {
 fn write_show_headline(
     out: &mut impl Write,
     name: &str,
-    parsed: &std::result::Result<schedule::ParsedSchedule, schedule::ScheduleErr>,
-    blocked_state: Option<TrustState>,
-    active_pause: Option<&PauseEntry>,
-    next: Option<&str>,
+    timing: &schedule::TaskTiming,
     now: Timestamp,
 ) -> std::io::Result<()> {
-    let schedule_text = match parsed {
+    let schedule_text = match timing.parsed() {
         Ok(parsed) => parsed.describe(),
         Err(err) => format!("invalid: {err}"),
     };
@@ -1147,41 +1038,40 @@ fn write_show_headline(
         out,
         "{} — {}",
         ui::paint(ui::palette::ACCENT.bold(), name),
-        ui::paint(schedule_style(parsed.as_ref()), &schedule_text)
+        ui::paint(schedule_style(timing.parsed()), &schedule_text)
     )?;
-    match blocked_state {
-        Some(state) => write!(
+    match timing.state() {
+        schedule::TaskTimingState::Blocked(state) => write!(
             out,
             " · next {}",
             ui::paint(ui::status::trust(state), "blocked · trust")
         )?,
-        None => match active_pause {
-            Some(PauseEntry {
-                until: None,
-                strikes: Some(strikes),
-            }) => write!(
-                out,
-                " · paused after {strikes} strikes — resume with `rimz loop resume {}`",
-                name
-            )?,
-            Some(PauseEntry {
-                until: None,
-                strikes: None,
-            }) => write!(out, " · paused")?,
-            Some(PauseEntry {
-                until: Some(until), ..
-            }) => write!(out, " · paused, resumes {}", pause_until_text(*until, now))?,
-            None => {
-                if let Some(next) = next {
-                    write!(out, " · next {next}")?;
-                }
-            }
-        },
+        schedule::TaskTimingState::Paused(PauseEntry {
+            until: None,
+            strikes: Some(strikes),
+        }) => write!(
+            out,
+            " · paused after {strikes} strikes — resume with `rimz loop resume {}`",
+            name
+        )?,
+        schedule::TaskTimingState::Paused(PauseEntry {
+            until: None,
+            strikes: None,
+        }) => write!(out, " · paused")?,
+        schedule::TaskTimingState::Paused(PauseEntry {
+            until: Some(until), ..
+        }) => write!(out, " · paused, resumes {}", pause_until_text(until, now))?,
+        schedule::TaskTimingState::Upcoming(next) | schedule::TaskTimingState::Due(next) => {
+            write!(out, " · next {}", ui::rel_until(next, now))?;
+        }
+        schedule::TaskTimingState::Invalid
+        | schedule::TaskTimingState::Unarmed
+        | schedule::TaskTimingState::NoOccurrence => {}
     }
     writeln!(out)?;
     if matches!(
-        active_pause,
-        Some(PauseEntry {
+        timing.state(),
+        schedule::TaskTimingState::Paused(PauseEntry {
             until: None,
             strikes: None,
         })
@@ -1209,7 +1099,7 @@ fn write_show_facts(
 ) -> std::io::Result<()> {
     let root = entry.resolved_root();
     let room_is_open = room_open(&root);
-    let blocked_state = blocked_project_state(source);
+    let blocked_state = source.blocked_state();
     let strike_count = strikes::load().get(name).copied().unwrap_or(0);
     let run_id = context.active_run.map(|record| record.run_id.as_str());
     let active = match context.lock_state {

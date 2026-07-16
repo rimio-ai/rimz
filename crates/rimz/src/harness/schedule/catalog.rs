@@ -29,6 +29,13 @@ pub enum TaskSource {
 }
 
 impl TaskSource {
+    pub const fn blocked_state(self) -> Option<TrustState> {
+        match self {
+            Self::Project { state } if !matches!(state, TrustState::Trusted) => Some(state),
+            _ => None,
+        }
+    }
+
     pub const fn label(self) -> &'static str {
         match self {
             Self::Config => "machine",
