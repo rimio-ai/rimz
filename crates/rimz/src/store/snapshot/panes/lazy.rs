@@ -355,9 +355,7 @@ impl<'a> HookPaneRecoveryContext<'a> {
             return false;
         };
         if descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest {
-            return !self.prior_agents.iter().any(|agent| {
-                agent.kind == *self.kind && agent.agent_id == *self.agent_id && agent.pane.is_some()
-            });
+            return !self.already_stamped();
         }
         descriptor.capabilities.daemon_hooked_sessions
             && !self
