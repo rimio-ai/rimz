@@ -99,7 +99,8 @@ Read that as: ready for personal, daily use today; for production workflows that
 
 ```sh
 # 1 — Install
-cargo install --locked rimz                 # or Homebrew (see Install)
+brew install rimio-ai/rimz/rimz             # Homebrew
+cargo install --locked rimz                 # or Cargo, from crates.io
 
 # 2 — Open the room
 cd ~/code/query-engine
@@ -145,7 +146,8 @@ rimz agents planner         # your profile: model, effort, system prompt
 ```sh
 rimz agents claude,codex -w feat-a             # two agents, side by side
 rimz agents planner,coder+reviewer -w feat-b   # profiles compose like kinds
-rimz agents 'vim,codex+term' -w feat-c         # editor | agent stacked over a shell
+rimz agents 'vim,codex+term' -w feat-c         # editor | agent tiled over a shell
+rimz agents 'claude/codex/gemini' -w feat-d    # three agents in one stacked pane (Zellij only)
 rimz agents codex --from-pr 42                 # worktree checked out from a pull request
 ```
 
@@ -161,15 +163,22 @@ rimz agents forge -w feat-complex   # planner, coder, reviewer on one feature
 **Message agents like teammates.** Every agent answers to a [handle](./docs/guide/messaging.md), named by kind, profile, or team role: `@codex` reaches the one in your channel, `@codex#feat-a` reaches across the workspace. Every message becomes a durable record, so it lands: parked at the turn boundary by default, `--steer` to interrupt the live turn now, `--schedule` to deliver later. The same command serves you, your scripts, and the agents themselves, which use it to talk to each other.
 
 ```sh
-rimz message @claude "add coverage for the expiry edge cases"      # parks at the turn boundary
-rimz message @planner "draft the implementation plan"              # by profile or team role
+# Park at the next turn boundary — address by kind, profile, or team role
+rimz message @claude "add coverage for the expiry edge cases"
+rimz message @planner "draft the implementation plan"
 rimz message @coder --after @planner "planner's done — read plan.md and start"
-rimz message @coder --wait "did the migration land? one line"       # print the reply from this agent's context
-rimz message @all --wait --json "status? one line"                   # gather a labeled reply map from the whole channel
-rimz message --steer @claude "stop: the parser test comes first"   # lands now
-rimz message --schedule 60m @codex#feat-b "run the smoke test"     # lands in an hour
-git diff main | rimz message @reviewer --stdin "review this"       # instruction plus stdin context
-rimz message @all "summarize what changed at the next boundary"    # the whole channel
+
+# Ask and print the reply from the agent's own context
+rimz message @coder --wait "did the migration land? one line"
+rimz message @all --wait --json "status? one line"     # a labeled reply map for the whole channel
+
+# Interrupt the live turn, or schedule for later
+rimz message --steer @claude "stop: the parser test comes first"
+rimz message --schedule 60m @codex#feat-b "run the smoke test"
+
+# Pipe context in, or broadcast to everyone
+git diff main | rimz message @reviewer --stdin "review this"
+rimz message @all "summarize what changed at the next boundary"
 ```
 
 ### Automate the routine
@@ -177,21 +186,34 @@ rimz message @all "summarize what changed at the next boundary"    # the whole c
 **Script an agent like any CLI.** [`rimz agents -p`](./docs/guide/scripting.md) is `claude -p` with one grammar for every agent that can run headless: one supervised turn, one exit code a script or CI job branches on, and swapping the provider behind a pipeline is a one-word change. The turn still runs in a real pane you can watch, answer, and steer while the pipeline waits on it.
 
 ```sh
+# One supervised turn, one exit code, one JSON result to branch on
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
-cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause'   # stdin appends to the prompt
 
-rimz agents claude "Run the migration audit." -p --bg       # returns now, prints the run's name
-rimz agents wait swift-otter --stream                       # block on it later, tail the answer
-rimz agents wait otter fox --any                            # race agents; first to finish wins, prints its name
+# stdin appends to the prompt
+cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause'
+
+# Fire in the background; it returns now and prints the run's name
+rimz agents claude "Run the migration audit." -p --bg
+
+# Block on that run later and tail the answer
+rimz agents wait swift-otter --stream
+
+# Race several runs; the first to finish wins and prints its name
+rimz agents wait otter fox --any
 ```
 
 **Run the fleet on a schedule.** [`rimz loop`](./docs/guide/loops.md) fires agent turns on a clock: daily at a set time, on an interval, from a cron line, or once after a delay. Add `--check` and the task becomes a watchdog, running the script first and waking the agent only on its result. A `<kind>-ping` task primes budget windows: a lowest-effort turn starts the provider's window on your clock and skips when one is already counting down. Switch on [auto-continue and smart compaction](#configuration) and the loop runs hands-off; add `--budget 20/day` to bound what hands-off work costs.
 
 ```sh
-rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00  # prime the 5h window
-rimz loop add nudge --wake @planner --prompt "resume the review" --in 30m           # one-shot wake
+# Prime the provider's 5h budget window each weekday morning
+rimz loop add morning --agent claude-ping --prompt ping --every weekday --at 07:00
+
+# One-shot wake after a delay
+rimz loop add nudge --wake @planner --prompt "resume the review" --in 30m
+
+# Watchdog: run the check first, wake the agent only on failure
 rimz loop add watchdog --check "cargo test" --on fail \
-    --agent codex --prompt "fix the failing test" --every 15m                       # watch, then wake
+    --agent codex --prompt "fix the failing test" --every 15m
 ```
 
 ### Step away
@@ -215,16 +237,16 @@ Both are off by default, and setting one back to `false` undoes it. The [remote 
 
 ## Install
 
-`cargo`, from crates.io:
-
-```sh
-cargo install --locked rimz
-```
-
 `homebrew`:
 
 ```sh
 brew install rimio-ai/rimz/rimz
+```
+
+`cargo`, from crates.io:
+
+```sh
+cargo install --locked rimz
 ```
 
 Prebuilt binaries and building from source are in the [installation guide](./docs/guide/installation.md).
@@ -281,13 +303,17 @@ The [documentation index](./docs/README.md) maps the whole set. Highlights:
 
 ## Agent compatibility matrix
 
-Twelve agents ship built in. **Claude Code and Codex are the daily drivers** and give the best experience today. **Pi and OpenCode are in alpha** — wired end to end and close behind. Every other agent is **experimental**: wired and tested against its documented surface, but not yet dogfooded enough by the author, so expect the occasional bug and please [report what you hit](https://github.com/rimio-ai/rimz/issues). Any of them still mostly just works: the CLI runs stock in your terminal and the official apps stay untouched.
+**Claude Code and Codex are the daily drivers** and give the best experience today.
+
+**Pi and OpenCode are in alpha** — wired end to end and close behind.
+
+Every other agent is **experimental**: wired and tested against its documented surface, but not yet dogfooded enough by the author, so expect the occasional bug and please [report what you hit](https://github.com/rimio-ai/rimz/issues). Any of them still mostly just works: the CLI runs stock in your terminal and the official apps stay untouched.
 
 | Agent       | Status          | State | Live | History | Account | Ask | Subagents |
 |-------------|-----------------|:-----:|:----:|:-------:|:-------:|:---:|:---------:|
 | Claude Code | 🟢 Supported     |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
 | Codex       | 🟢 Supported     |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
-| Pi          | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ✗  |     ◐     |
+| Pi          | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
 | OpenCode    | 🟡 Alpha         |   ●   |  ●   |    ●    |    ●    |  ●  |     ●     |
 | Antigravity | ⚪ Experimental  |   ◐   |  ◐   |    ◐    |    ●    |  ◐  |     ◐     |
 | Copilot     | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ◐    |  ●  |     ✗     |
