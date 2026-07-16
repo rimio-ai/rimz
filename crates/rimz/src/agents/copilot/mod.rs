@@ -8,6 +8,7 @@
 //! metadata-only OTel chat spans as the fallback when that bridge is unhealthy.
 
 mod account;
+mod account_usage;
 mod install;
 mod otel;
 mod paths;
@@ -647,6 +648,14 @@ impl AgentAdapter for CopilotAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
+    }
+
+    fn probe_account_usage(&self) -> crate::agents::AccountUsageProbe {
+        account_usage::probe_usage()
+    }
+
+    fn account_usage_identity(&self) -> Option<crate::agents::AccountUsageIdentity> {
+        Some(account_usage::account_usage_identity())
     }
 }
 

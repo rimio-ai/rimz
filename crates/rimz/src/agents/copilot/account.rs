@@ -74,7 +74,7 @@ fn normalized_identity(identity: LoginIdentity) -> Option<String> {
     }
 }
 
-fn normalized_host(raw: &str) -> Option<String> {
+pub(super) fn normalized_host(raw: &str) -> Option<String> {
     let authority_and_path = if let Some((scheme, rest)) = raw.split_once("://") {
         matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https").then_some(rest)?
     } else {
