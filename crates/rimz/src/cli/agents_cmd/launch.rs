@@ -1,7 +1,9 @@
 //! Interactive launch orchestration and presentation.
 
 use super::*;
-use crate::cli::{machine_config, open_store, record_workspace};
+use crate::cli::{machine_config, open_store};
+
+use super::placement::{PlacementErrors, PlacementRequest};
 
 pub(super) fn launch_layout(
     args: AgentsArgs,
@@ -233,66 +235,31 @@ pub(super) fn launch_layout(
         },
         launch_batch.identities(),
     )?;
-    let direction = rimz::mux::detect_terminal_size()
-        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
-        .unwrap_or_default();
-    let (open_result, what): (Result<()>, &str) = match placement {
-        Placement::NewTab => (
-            backend
-                .open_tab(&TabOptions {
-                    session_name: workspace.session_name.clone(),
-                    title,
-                    cwd: cwd.clone(),
-                    panes,
-                    focus: !args.bg,
-                    dock_sidebar: true,
-                    sidebar,
-                })
-                .map_err(Into::into),
-            "opening agent tab",
-        ),
-        Placement::NewPane => (
-            backend
-                .split_pane(SplitPaneOptions {
-                    session_name: None,
-                    target_view_id: None,
-                    target_pane_id: own_pane_id(mux),
-                    cwd: Some(cwd.to_string_lossy().into_owned()),
-                    command: Some(single_pane_argv(&panes)?),
-                    title: None,
-                    env: rimz::room::pane_identity_env(
-                        &workspace,
-                        room_channel.as_deref(),
-                        !worktree_launch,
-                    ),
-                    stacked: false,
-                    direction,
-                    focus: !args.bg,
-                })
-                .map_err(Into::into),
-            "splitting the agent into a new pane",
-        ),
-        Placement::SamePane => {
-            // exec replaces this process with the wrapper, which binds the pane
-            // and direct-execs the agent in place; returns only on failure.
-            let argv = single_pane_argv(&panes)?;
-            let err = exec_wrapper_in_place(
-                &argv,
-                rimz::room::pane_identity_env(
-                    &workspace,
-                    room_channel.as_deref(),
-                    !worktree_launch,
-                ),
-                &cwd,
-            );
-            (Err(err), "running the agent in the current pane")
-        }
-    };
-    if let Err(err) = open_result {
-        let _ = store.fail_agent_launch_batch(&launch_batch);
-        return Err(err).context(what);
-    }
-    Ok(())
+    super::placement::execute(
+        backend,
+        &store,
+        &launch_batch,
+        PlacementRequest {
+            placement,
+            mux,
+            session_name: workspace.session_name.clone(),
+            cwd,
+            title,
+            panes,
+            sidebar,
+            identity_env: rimz::room::pane_identity_env(
+                &workspace,
+                room_channel.as_deref(),
+                !worktree_launch,
+            ),
+            background: args.bg,
+            errors: PlacementErrors {
+                new_tab: "opening agent tab",
+                new_pane: "splitting the agent into a new pane",
+                same_pane: "running the agent in the current pane",
+            },
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -372,8 +339,6 @@ fn launch_resume_layout(
     )?;
     let backend = room.backend();
     rimz::room::require_live_session(backend, &workspace.session_name)?;
-    record_workspace(workspace)?;
-
     let launch_requests = fresh_resume_launch_requests(
         &layout,
         &plan,
@@ -414,57 +379,33 @@ fn launch_resume_layout(
         },
         launch_batch.identities(),
     )?;
-    let direction = rimz::mux::detect_terminal_size()
-        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
-        .unwrap_or_default();
-    let (open_result, what): (Result<()>, &str) = match placement {
-        Placement::NewTab => (
-            backend
-                .open_tab(&TabOptions {
-                    session_name: workspace.session_name.clone(),
-                    title,
-                    cwd: cwd.clone(),
-                    panes,
-                    focus: !args.bg,
-                    dock_sidebar: true,
-                    sidebar,
-                })
-                .map_err(Into::into),
-            "opening agent tab",
-        ),
-        Placement::NewPane => (
-            backend
-                .split_pane(SplitPaneOptions {
-                    session_name: None,
-                    target_view_id: None,
-                    target_pane_id: own_pane_id(mux),
-                    cwd: Some(cwd.to_string_lossy().into_owned()),
-                    command: Some(single_pane_argv(&panes)?),
-                    title: None,
-                    env: rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
-                    stacked: false,
-                    direction,
-                    focus: !args.bg,
-                })
-                .map_err(Into::into),
-            "splitting the agent into a new pane",
-        ),
-        Placement::SamePane => {
-            report_cohort_resume(&plan);
-            let argv = single_pane_argv(&panes)?;
-            let err = exec_wrapper_in_place(
-                &argv,
-                rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
-                &cwd,
-            );
-            (Err(err), "running the agent in the current pane")
-        }
-    };
-    if let Err(err) = open_result {
-        let _ = store.fail_agent_launch_batch(&launch_batch);
-        return Err(err).context(what);
+    if in_place {
+        report_cohort_resume(&plan);
     }
-    report_cohort_resume(&plan);
+    super::placement::execute(
+        backend,
+        &store,
+        &launch_batch,
+        PlacementRequest {
+            placement,
+            mux,
+            session_name: workspace.session_name.clone(),
+            cwd,
+            title,
+            panes,
+            sidebar,
+            identity_env: rimz::room::pane_identity_env(workspace, channel.as_deref(), false),
+            background: args.bg,
+            errors: PlacementErrors {
+                new_tab: "opening agent tab",
+                new_pane: "splitting the agent into a new pane",
+                same_pane: "running the agent in the current pane",
+            },
+        },
+    )?;
+    if !in_place {
+        report_cohort_resume(&plan);
+    }
     Ok(())
 }
 
@@ -561,42 +502,6 @@ fn report_cohort_resume(plan: &rimz::harness::resume::CohortResumePlan) {
             }
         }
     }
-}
-
-/// The one pane command of an in-pane launch (the resolver guarantees a single
-/// cell before this is reached).
-fn single_pane_argv(panes: &LayoutPanes) -> Result<Vec<String>> {
-    panes
-        .columns
-        .first()
-        .and_then(|column| column.panes.first())
-        .map(|pane| pane.argv.clone())
-        .context("in-pane launch produced no pane command")
-}
-
-#[cfg(unix)]
-pub(super) fn exec_wrapper_in_place(
-    argv: &[String],
-    env: BTreeMap<String, String>,
-    cwd: &Path,
-) -> anyhow::Error {
-    use std::os::unix::process::CommandExt;
-
-    let Some((program, rest)) = argv.split_first() else {
-        return anyhow::anyhow!("in-place launch produced no command");
-    };
-    let mut command = Command::new(program);
-    command.args(rest).envs(&env).current_dir(cwd);
-    command.exec().into()
-}
-
-#[cfg(not(unix))]
-pub(super) fn exec_wrapper_in_place(
-    _argv: &[String],
-    _env: BTreeMap<String, String>,
-    _cwd: &Path,
-) -> anyhow::Error {
-    anyhow::anyhow!("in-place launch is only supported on Unix")
 }
 
 pub(super) fn interactive_permission_mode_from_flags(

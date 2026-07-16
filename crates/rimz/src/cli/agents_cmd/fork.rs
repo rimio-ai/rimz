@@ -3,6 +3,8 @@
 use super::*;
 use crate::cli::{machine_config, open_store};
 
+use super::placement::{PlacementErrors, PlacementRequest};
+
 #[derive(Debug, Args)]
 pub(super) struct ForkArgs {
     /// Existing live or stopped agent to fork.
@@ -149,7 +151,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
     );
     let panes = LayoutPanes {
         columns: vec![LayoutColumn {
-            panes: vec![PaneCmd { argv: argv.clone() }],
+            panes: vec![PaneCmd { argv }],
             stacked: false,
         }],
     };
@@ -158,56 +160,34 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&seed.cwd, Vec::new(), None);
-    let direction = rimz::mux::detect_terminal_size()
-        .map(|(cols, rows)| rimz::mux::split_along_longer_edge(cols, rows))
-        .unwrap_or_default();
-    let (open_result, what): (Result<()>, &str) = match placement {
-        Placement::NewTab => (
-            backend
-                .open_tab(&TabOptions {
-                    session_name: workspace.session_name.clone(),
-                    title,
-                    cwd: seed.cwd.clone(),
-                    panes,
-                    focus: !args.bg,
-                    dock_sidebar: true,
-                    sidebar,
-                })
-                .map_err(Into::into),
-            "opening agent fork tab",
-        ),
-        Placement::NewPane => (
-            backend
-                .split_pane(SplitPaneOptions {
-                    session_name: None,
-                    target_view_id: None,
-                    target_pane_id: own_pane_id(mux),
-                    cwd: Some(seed.cwd.to_string_lossy().into_owned()),
-                    command: Some(argv.clone()),
-                    title: None,
-                    env: rimz::room::pane_identity_env(&workspace, channel.as_deref(), false),
-                    stacked: false,
-                    direction,
-                    focus: !args.bg,
-                })
-                .map_err(Into::into),
-            "splitting the agent fork into a new pane",
-        ),
-        Placement::SamePane => {
-            report_fork(&seed, &source_name, &launch.name);
-            let err = exec_wrapper_in_place(
-                &argv,
-                rimz::room::pane_identity_env(&workspace, channel.as_deref(), false),
-                &seed.cwd,
-            );
-            (Err(err), "running the agent fork in the current pane")
-        }
-    };
-    if let Err(err) = open_result {
-        let _ = store.fail_agent_launch_batch(&launch_batch);
-        return Err(err).context(what);
+    let in_place = placement == Placement::SamePane;
+    if in_place {
+        report_fork(&seed, &source_name, &launch.name);
     }
-    report_fork(&seed, &source_name, &launch.name);
+    super::placement::execute(
+        backend,
+        &store,
+        &launch_batch,
+        PlacementRequest {
+            placement,
+            mux,
+            session_name: workspace.session_name.clone(),
+            cwd: seed.cwd.clone(),
+            title,
+            panes,
+            sidebar,
+            identity_env: rimz::room::pane_identity_env(&workspace, channel.as_deref(), false),
+            background: args.bg,
+            errors: PlacementErrors {
+                new_tab: "opening agent fork tab",
+                new_pane: "splitting the agent fork into a new pane",
+                same_pane: "running the agent fork in the current pane",
+            },
+        },
+    )?;
+    if !in_place {
+        report_fork(&seed, &source_name, &launch.name);
+    }
     Ok(())
 }
 

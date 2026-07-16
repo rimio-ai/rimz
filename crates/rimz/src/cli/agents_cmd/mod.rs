@@ -10,6 +10,7 @@ mod history;
 pub(in crate::cli) mod launch;
 mod list;
 mod logs;
+mod placement;
 mod reconcile;
 mod refresh;
 mod refresh_usage;
@@ -46,7 +47,7 @@ use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::harness::spec::{Cell, LayoutSpec};
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::{DeliveryGate, gate_open};
-use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
+use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, SplitPaneOptions, own_pane_id};
 use rimz::room::{RoomContext, RoomSizing};
 use rimz::store::{
     AgentLaunchBatch, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AgentLaunchScope,
