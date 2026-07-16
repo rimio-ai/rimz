@@ -1,6 +1,6 @@
 # Agent support
 
-RimZ watches the coding agents you already run — Claude Code, Codex, and the alpha and experimental set (Pi, OpenCode, Antigravity, Copilot, Droid, Cursor, Amp, Kiro, Qwen Code, and Kimi) — through one uniform adapter each. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it, all through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
+RimZ watches the coding agents you already run — Claude Code, Codex, and the alpha and experimental set (Pi, OpenCode, Antigravity, Copilot, Droid, Cursor, Amp, Kiro, Qwen Code, Kimi, and Grok Build) — through one uniform adapter each. An adapter translates that agent's own hooks, transcripts, and APIs into the vocabulary the rest of RimZ speaks, so `rimz agents` launches, `rimz message` steers, and `rimz agents … -p` scripts every built-in that exposes it, all through the same boundary. It reads what the agent does and classifies it; you answer in the agent's own UI, the CLI runs stock, and the official web, desktop, and mobile apps keep working untouched. The boundary in depth is [the agent model](../internals/agents/model.md).
 
 Read the support level honestly. **Claude Code and Codex are the supported daily drivers** — wired end to end and run constantly. **Pi and OpenCode are alpha**, close behind the daily drivers; the remaining agents are experimental, wired against their documented hook and transcript surface and covered by tests but not yet dogfooded enough by the author. Treat alpha and experimental integrations as best-effort: run them anyway, since they mostly just work, and please report the bugs you hit. Support tier tracks lived confidence, not mechanical breadth — an early-tier agent can still wire up a wide surface, as the matrix below shows.
 
@@ -31,6 +31,7 @@ One row per agent, ordered by support tier — Claude and Codex, then the alpha 
 | Kiro | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ |
 | Qwen | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ◐ | ✓ | ✓ | ◐ | ✗ |
 | Kimi | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ◐ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ |
+| Grok | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ✓ | ◐ | ✓ | ◐ | ◐ | ✓ | ✓ | ✗ |
 
 <sub>✓ wired · ◐ partial (derived) · ✗ unsupported. Run `rimz coverage` for the live grid with the exact reason printed on every ◐ and ✗ cell.</sub>
 
@@ -48,6 +49,7 @@ The gaps you will actually feel, per agent. Each agent's [mapping doc](#per-agen
 - **Droid** misses the same ask wire, but RimZ derives the waiting card from the transcript's active `AskUser` call; the answer still happens in Droid's pane. Its locally priced session total reaches the card and live budgets the way Cursor's does, while provider dollars, historical spend, and quota stay unavailable.
 - **Kiro** did not execute its documented hooks under verification, so RimZ pulls its lifecycle from Kiro's local session store instead. A pending tool approval still marks the card waiting, but `rimz asks` and `rimz answer` do not claim it; context is percentage-only, and hook install and supervised `-p` runs are unsupported.
 - **Kimi** joins `SubagentStart` and `SubagentStop` previews to validated child entries in `state.json` and their `wire.jsonl` records, namespacing Kimi's per-session child counters before creating nested rows. Resumed children and ambiguous concurrent starts expose no start-time identity and therefore appear only when the response-side Stop match becomes unique. Child-fired session `Stop` hooks are suppressed while the main wire is provably mid-step, so the parent stays running until its own final Stop.
+- **Grok** installs only passive global hooks, normalizes Grok's snake_case event values before lifecycle dispatch, and leaves every permission decision in the native TUI. Its rewind-aware `updates.jsonl` fold supplies full history, child lifecycle, active context, and exact completed-turn dollars; live mid-turn cost and account quota windows remain unavailable. Ask uses `--permission-mode default`, Auto uses `--permission-mode auto`, Yolo uses `--yolo`, and Plan intentionally adds no argv because `/plan` is interactive rather than an enforced launch posture.
 
 ## The lifecycle hook surface
 
@@ -67,6 +69,7 @@ Under the concern matrix sits the raw event surface: the eleven lifecycle signal
 | Kiro | ◐ local store | ◐ `turn_start` | ◐ `turn_end` | ◐ tool records | ◐ pending interaction | ✗ | ✗ | ✗ | ✗ | ◐ derived | ◐ derived |
 | Qwen | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 | Kimi | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `PermissionRequest` | ◐ `SubagentStart` + durable child join | ◐ `SubagentStop` + durable child join | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
+| Grok | `SessionStart` | `UserPromptSubmit` | `Stop` | `PostToolUse` | `Notification` | `SubagentStart` | `SubagentStop` | `PreCompact` | `PostCompact` | `SessionEnd` | ◐ derived |
 
 `lost` — an agent's mux-session dying out from under it — has no native event in any built-in, because an agent's own hooks stop firing exactly when the thing that would report the death is gone. RimZ derives it from the `rimz exec` launch wrapper instead. Where `ended` is derived (Codex, OpenCode, Antigravity, Amp, Kiro), the same pane-liveness-and-reaper path clears the row on the next snapshot tick rather than at the instant of exit.
 
@@ -88,6 +91,7 @@ The detail for each agent — its full coverage rationale, permission-mode mappi
 | Kiro CLI | [kiro.md](../internals/agents/kiro.md) | [kiro-reference.md](../externals/agent-adapter/kiro-reference.md) |
 | Qwen Code | [qwen.md](../internals/agents/qwen.md) | [qwen-reference.md](../externals/agent-adapter/qwen-reference.md) |
 | Kimi | [kimi.md](../internals/agents/kimi.md) | [kimi-reference.md](../externals/agent-adapter/kimi-reference.md) |
+| Grok Build | [grok.md](../internals/agents/grok.md) | [grok-reference.md](../externals/agent-adapter/grok-reference.md) |
 
 ## Versions
 

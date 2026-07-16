@@ -70,11 +70,13 @@ Hooks are how a running agent reports to the room: turn starts and ends, permiss
 
 ```sh
 rimz hooks install --dry-run    # per-agent summary plus a unified diff; writes nothing
-rimz hooks install              # every detected installable agent (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, qwen)
+rimz hooks install              # every detected installable agent (claude, codex, amp, copilot, kimi, pi, opencode, antigravity, cursor, droid, qwen, grok)
 rimz hooks install claude       # one agent kind
 ```
 
 Structured installs preserve existing user hooks, and whole-file Pi and OpenCode integrations replace only a file carrying RimZ's first-line `_rimz_managed` ownership marker; an unmarked file remains user-owned and installation refuses to overwrite it. Each report names every file it edits and the undo (`rimz hooks uninstall [AGENT]`). For agents with a statusline, RimZ wraps the command so the sidebar reads live context, and restores yours on uninstall. Cursor shows and commits its hook file and CLI statusline config as one rollback-safe two-file operation. The first `rimz` run and interactive `rimz setup` compare marked whole-file integrations with the source embedded in the running RimZ build, include stale sources in the same summarized consent prompt as missing hooks, and point to `rimz hooks install --dry-run` for exact diffs. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix. Command detail is in [the hooks CLI](../reference/cli/hooks-trust.md#agent-hooks).
+
+Grok installs one passive global JSON file at `${GROK_HOME:-~/.grok}/hooks/rimz.json`. It preserves unrelated Grok hooks and leaves the blocking `PreToolUse` decision channel to the native TUI.
 
 Newly-born rooms also give direct Copilot launches a private metadata-only OTel file under that workspace's runtime directory, with message-content capture disabled. A room that was already alive when RimZ gained this support keeps its original environment; rebirth it after install or upgrade before expecting a plain `copilot` typed in the work shell to show model and token composition.
 

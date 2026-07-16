@@ -330,6 +330,7 @@ Every other agent is **experimental**: wired and tested against its documented s
 | Kiro        | ⚪ Experimental  |   ●   |  ◐   |    ◐    |    ✗    |  ◐  |     ✗     |
 | Qwen        | ⚪ Experimental  |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ●     |
 | Kimi        | ⚪ Experimental  |   ●   |  ●   |    ●    |    ●    |  ●  |     ◐     |
+| Grok        | ⚪ Experimental  |   ●   |  ◐   |    ●    |    ◐    |  ●  |     ●     |
 
 <sub>● full · ◐ partial · ✗ unsupported by the RimZ adapter</sub>
 

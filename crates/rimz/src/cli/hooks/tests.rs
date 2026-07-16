@@ -1137,3 +1137,18 @@ fn recovered_binding_preserves_prior_owner_when_agent_process_is_unknown() {
     assert_eq!(observation.pane_stamp.as_ref(), Some(&pane));
     assert_eq!(observation.runtime_owner.as_ref(), Some(&existing_owner));
 }
+
+#[test]
+fn ingress_accepts_camelcase_field_and_dispatches_the_canonical_event() {
+    let payload = serde_json::json!({
+        "hookEventName": "session_start",
+        "sessionId": "session-1"
+    });
+    let classified = super::classify_ingress(&rimz::agents::GrokAdapter, None, &payload);
+    assert_eq!(classified.event_name, "SessionStart");
+    assert_eq!(classified.class, rimz::agents::AgentHookClass::Lifecycle);
+
+    let explicit =
+        super::classify_ingress(&rimz::agents::GrokAdapter, Some("post_tool_use"), &payload);
+    assert_eq!(explicit.event_name, "PostToolUse");
+}

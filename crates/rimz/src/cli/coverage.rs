@@ -345,7 +345,8 @@ mod tests {
                 "cursor",
                 "droid",
                 "kiro",
-                "qwen"
+                "qwen",
+                "grok"
             ]
         );
         assert_eq!(matrix.rows.len(), IntegrationConcern::ALL.len());
@@ -485,6 +486,19 @@ mod tests {
             ["answer", "remote"]
         );
 
+        let grok = agent_cells(&matrix, "grok");
+        assert_eq!(count(&grok, MatrixCellState::Ok), 10);
+        assert_eq!(count(&grok, MatrixCellState::Partial), 3);
+        assert_eq!(count(&grok, MatrixCellState::Absent), 3);
+        assert_eq!(
+            agent_labels(&matrix, "grok", MatrixCellState::Partial),
+            ["idle", "live$", "rich"]
+        );
+        assert_eq!(
+            agent_labels(&matrix, "grok", MatrixCellState::Absent),
+            ["answer", "bg", "remote"]
+        );
+
         let antigravity = agent_cells(&matrix, "antigravity");
         assert_eq!(count(&antigravity, MatrixCellState::Ok), 5);
         assert_eq!(count(&antigravity, MatrixCellState::Partial), 6);
@@ -528,7 +542,8 @@ mod tests {
                 "cursor",
                 "droid",
                 "kiro",
-                "qwen"
+                "qwen",
+                "grok"
             ]
         );
         assert_eq!(matrix.rows.len(), LifecycleSignalKind::ALL.len());
@@ -549,6 +564,7 @@ mod tests {
                 MatrixCellState::Ok,      // droid
                 MatrixCellState::Partial, // kiro
                 MatrixCellState::Ok,      // qwen
+                MatrixCellState::Ok,      // grok
             ]
         );
         assert!(cell_detail(&matrix, ended, "codex").contains("SessionEnd hook"));
@@ -569,6 +585,7 @@ mod tests {
                 MatrixCellState::Absent,  // droid
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
+                MatrixCellState::Ok,      // grok
             ]
         );
 
@@ -588,6 +605,7 @@ mod tests {
                 MatrixCellState::Absent,  // droid
                 MatrixCellState::Absent,  // kiro
                 MatrixCellState::Ok,      // qwen
+                MatrixCellState::Ok,      // grok
             ]
         );
     }

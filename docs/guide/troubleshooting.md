@@ -116,6 +116,8 @@ The install is additive, so your existing hooks stay, and `rimz doctor` reports 
 
 Kiro CLI 2.12.1 v3 is the exception: RimZ reads its stock local session store and binds only validated sessions to live panes. A validated newborn session becomes an idle agent card before its first prompt when the pane process proves the current incarnation; missing, stale, or ambiguous identity remains a process row. Hook installation stays unsupported; `rimz hooks uninstall kiro` still removes a legacy RimZ-owned hook file.
 
+Grok reads hooks from `${GROK_HOME:-~/.grok}/hooks/rimz.json`. Run `rimz hooks install --dry-run grok` to inspect the global merge; the installed set deliberately excludes blocking `PreToolUse`, so permission decisions remain in Grok's own pane.
+
 ### A card went quiet after a config edit
 
 If a card stops updating after you hand-edited an agent's config, the RimZ-managed hook block was likely disturbed. Re-run `rimz hooks install --dry-run` to see the current diff, then `rimz hooks install` to restore the block. Some agents gate hooks behind their own trust prompt; when one reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix in the `HOOKS` row.

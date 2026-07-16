@@ -95,6 +95,91 @@ fn kiro_hook_install_refuses_and_legacy_uninstall_still_cleans_up() {
 }
 
 #[test]
+fn grok_global_hooks_preserve_user_config_and_route_camelcase_events_neutrally() {
+    let env = Env::new();
+    let path = env.agent_config_path("grok");
+    std::fs::create_dir_all(path.parent().expect("Grok hooks parent"))
+        .expect("mkdir Grok hooks parent");
+    std::fs::write(
+        &path,
+        r#"{"theme":"user-theme","hooks":{"Custom":[{"command":"user-hook"}]}}"#,
+    )
+    .expect("write user Grok hooks");
+
+    env.install_agent_hooks("grok");
+    assert!(env.agent_hooks_installed("grok"));
+    let installed: Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read Grok hooks")).expect("JSON");
+    assert_eq!(installed["theme"], "user-theme");
+    assert_eq!(installed["hooks"]["Custom"][0]["command"], "user-hook");
+    assert!(installed["hooks"].get("PreToolUse").is_none());
+    assert_eq!(
+        installed["hooks"]["SessionStart"][0]["hooks"][0]["timeout"],
+        4
+    );
+
+    let run = |payload: Value| {
+        let output = env.run_installed_hook("grok", &payload.to_string());
+        assert_hook_succeeded_neutral("grok", output);
+    };
+    run(json!({
+        "hookEventName": "session_start",
+        "sessionId": "session-grok-1",
+        "cwd": env.project_root,
+        "source": "new"
+    }));
+    run(json!({
+        "hookEventName": "user_prompt_submit",
+        "sessionId": "session-grok-1",
+        "prompt": "inspect the durable branch"
+    }));
+    run(json!({
+        "hookEventName": "notification",
+        "sessionId": "session-grok-1",
+        "notificationType": "permission_prompt",
+        "message": "Plan approval requested"
+    }));
+    let waiting = env.snapshot_json();
+    assert_eq!(waiting["agents"][0]["kind"], "grok");
+    assert_eq!(waiting["agents"][0]["status"], "waiting");
+    assert_eq!(waiting["agents"][0]["open_ask"]["kind"], "plan_approval");
+
+    run(json!({
+        "hookEventName": "post_tool_use",
+        "sessionId": "session-grok-1",
+        "toolName": "apply_patch",
+        "toolUseId": "tool-1"
+    }));
+    run(json!({
+        "hookEventName": "stop",
+        "sessionId": "session-grok-1",
+        "reason": "end_turn"
+    }));
+    assert_eq!(env.snapshot_json()["agents"][0]["status"], "success");
+    run(json!({
+        "hookEventName": "session_end",
+        "sessionId": "session-grok-1"
+    }));
+    assert_eq!(env.snapshot_json()["agents"].as_array().unwrap().len(), 0);
+
+    let out = env
+        .rimz()
+        .args(["hooks", "uninstall", "grok"])
+        .output()
+        .expect("uninstall Grok hooks");
+    assert!(
+        out.status.success(),
+        "Grok uninstall stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let restored: Value =
+        serde_json::from_slice(&std::fs::read(path).expect("read restored hooks")).expect("JSON");
+    assert_eq!(restored["theme"], "user-theme");
+    assert_eq!(restored["hooks"]["Custom"][0]["command"], "user-hook");
+    assert!(restored["hooks"].get("SessionStart").is_none());
+}
+
+#[test]
 fn session_start_hooks_write_lifecycle_rows() {
     for (source, payload, expected_id, expected_fields) in [
         (

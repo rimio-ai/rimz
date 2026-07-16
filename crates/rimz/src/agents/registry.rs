@@ -14,6 +14,7 @@ use super::copilot::CopilotAdapter;
 use super::cursor::CursorAdapter;
 use super::descriptor::AgentDescriptor;
 use super::droid::DroidAdapter;
+use super::grok::GrokAdapter;
 use super::kimi::KimiAdapter;
 use super::kiro::KiroAdapter;
 use super::opencode::OpencodeAdapter;
@@ -39,6 +40,7 @@ pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[
     &DroidAdapter,
     &KiroAdapter,
     &QwenAdapter,
+    &GrokAdapter,
 ];
 
 /// Every built-in and valid machine-tier plugin adapter, in display order.

@@ -1,6 +1,6 @@
 # Grok Build protocol reference
 
-> The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md) and the account/spend contract is [providers.md](../../internals/agents/providers.md). This document describes the upstream surface for a Grok Build adapter; it does not claim that `AgentKind::Grok` or an internal Grok mapping has landed.
+> The agent-agnostic lifecycle contract is [model.md](../../internals/agents/model.md), the landed mapping is [grok.md](../../internals/agents/grok.md), and the account/spend contract is [providers.md](../../internals/agents/providers.md). This document remains the upstream protocol reference.
 
 This is the single home for the **Grok Build upstream protocol surface** RimZ can bind to: native lifecycle hooks, their JSON envelope and decision schema, durable session sidecars, structured headless output, Agent Client Protocol (ACP), authentication, and billing extensions. It mirrors the open-source Grok Build tree and its bundled user guide at the pinned revision below so a contributor can refresh it when upstream moves.
 
@@ -165,7 +165,7 @@ The pinned tree's compatibility table maps `Bash` to `run_terminal_command`, whi
 
 ### Common input envelope
 
-All event names serialize in snake_case inside a camelCase envelope:
+All event names serialize in snake_case inside a camelCase envelope. Hook configuration keys use PascalCase, so one integration crosses three distinct naming conventions:
 
 ```json
 {
@@ -190,6 +190,8 @@ All event names serialize in snake_case inside a camelCase envelope:
 `transcriptPath` points to `updates.jsonl` only after that file exists. Treat it as an optional discovery hint and derive the same directory from `sessionId` plus cwd when necessary.
 
 `toolInput` and `toolResult` are each capped at 128 KiB of serialized JSON. An oversized value becomes a truncated string and its paired `*Truncated` field is true.
+
+The hook envelope's `timestamp` is RFC3339 text. Persisted `updates.jsonl` envelopes use numeric Unix seconds, while nested metadata clocks such as `agentTimestampMs` use Unix milliseconds; parse these as distinct wire types.
 
 ### Event catalog and payloads
 
@@ -320,6 +322,50 @@ Each line is a durable update envelope:
 Every current ordinary ACP update carries `_meta.totalTokens`, a monotonically allocated `eventId`, and `agentTimestampMs`. `promptId`, stream/turn clocks, update descriptors, and replay/chunk fields are conditional. Extension updates carry event IDs but do not necessarily carry `totalTokens`.
 
 For live context, scan backward for the last parseable `params._meta.totalTokens`; it is the estimated active context, not cumulative usage. Bound the tail read, tolerate unknown update types, and ignore a torn final JSONL record after a crash. Rewind markers define the live branch, so transcript rendering must apply Grok's rewind semantics rather than concatenate every historic line.
+
+`user_message_chunk` carries `_meta.promptIndex` on the update. The extension record `rewind_marker` carries `target_prompt_index`; it rewinds the logical branch to that prompt boundary while retaining the physical JSONL bytes. A consumer must truncate its folded messages, token samples, and completed turns before applying later records.
+
+The durable exact-cost record is an `_x.ai/session/update` whose update has `sessionUpdate: "turn_completed"`:
+
+```json
+{
+  "timestamp": 1784203201,
+  "method": "_x.ai/session/update",
+  "params": {
+    "sessionId": "019e...",
+    "update": {
+      "sessionUpdate": "turn_completed",
+      "prompt_id": "prompt-1",
+      "stop_reason": "end_turn",
+      "agent_result": "Done",
+      "usage": {
+        "inputTokens": 51000,
+        "cachedReadTokens": 41000,
+        "outputTokens": 1893,
+        "reasoningTokens": 412,
+        "totalTokens": 52893,
+        "modelCalls": 7,
+        "apiDurationMs": 47000,
+        "costUsdTicks": 126890500,
+        "costIsPartial": false,
+        "usageIsIncomplete": false,
+        "modelUsage": {
+          "grok-build": {
+            "inputTokens": 51000,
+            "cachedReadTokens": 41000,
+            "outputTokens": 1893,
+            "reasoningTokens": 412,
+            "costUsdTicks": 126890500,
+            "costIsPartial": false
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`inputTokens` is the full input including `cachedReadTokens`; subtract the cache category for uncached input. `outputTokens` already includes reasoning. `costUsdTicks` uses 10,000,000,000 ticks per USD. Missing, negative, partial, or incomplete cost is unknown rather than zero. Per-model rows may leave an aggregate residual, so sum trusted rows and reconcile only against the trusted aggregate.
 
 ### `signals.json`
 

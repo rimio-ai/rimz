@@ -19,7 +19,9 @@ use tracing::{debug, warn};
 use super::{GlobalFlags, open_store};
 use rimz::Store;
 use rimz::agents::lifecycle::{self as agent_lifecycle, LifecycleSignal, TransitionKind};
-use rimz::agents::{AgentAdapter, AgentHookClass, AgentLifecycleObservation, adapter_by_kind};
+use rimz::agents::{
+    AgentAdapter, AgentHookClass, AgentLifecycleObservation, ClassifiedHook, adapter_by_kind,
+};
 use rimz::ids::{MuxName, PaneId};
 use rimz::store::{AgentLifecycleIntent, AgentLifecycleOutcome};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
@@ -71,12 +73,12 @@ enum HooksSubcmd {
         /// Preview the hook config diff without writing files.
         #[arg(long)]
         dry_run: bool,
-        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `qwen`). Omit to install every detected agent.
+        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `qwen`, `grok`). Omit to install every detected agent.
         agent: Option<String>,
     },
     /// Remove the adapter's RimZ-managed hook block.
     Uninstall {
-        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `kiro`, `qwen`). Omit to remove every RimZ-managed hook set.
+        /// Agent name (`claude`, `codex`, `amp`, `copilot`, `kimi`, `pi`, `opencode`, `antigravity`, `droid`, `kiro`, `qwen`, `grok`). Omit to remove every RimZ-managed hook set.
         agent: Option<String>,
     },
 }
@@ -172,15 +174,6 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
     } else {
         serde_json::from_str(&buf).context("parsing hook payload")?
     };
-    let event_name = event
-        .or_else(|| {
-            payload
-                .get("hook_event_name")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "unknown".to_owned());
-
     let agent = match adapter_by_kind(&source) {
         Ok(agent) => agent,
         Err(err)
@@ -194,19 +187,20 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
         }
         Err(err) => return Err(err.into()),
     };
-    let classified = agent.classify_hook(&event_name, &payload);
+    let classified = classify_ingress(agent, event.as_deref(), &payload);
+    let event_name = classified.event_name;
 
     if classified.class != AgentHookClass::AwaitingUser {
         handle_lifecycle_hook(
             &workspace,
             &store,
             agent,
-            &event_name,
+            event_name.as_str(),
             &payload,
             normalized_owner_pid,
             globals,
         )?;
-        return emit_neutral(agent, &event_name);
+        return emit_neutral(agent, event_name.as_str());
     }
 
     if agent.descriptor().capabilities.native_ask_ui {
@@ -214,13 +208,31 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             &workspace,
             &store,
             agent,
-            &event_name,
+            event_name.as_str(),
             &payload,
             normalized_owner_pid,
             globals,
         )?;
     }
-    emit_neutral(agent, &event_name)
+    emit_neutral(agent, event_name.as_str())
+}
+
+fn classify_ingress(
+    agent: &dyn AgentAdapter,
+    explicit_event: Option<&str>,
+    payload: &Value,
+) -> ClassifiedHook {
+    let event_name = explicit_event
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            payload
+                .get("hook_event_name")
+                .or_else(|| payload.get("hookEventName"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    agent.classify_hook(&event_name, payload)
 }
 
 fn participant_start_path(source: &str, cursor_project_dir: Option<&OsStr>) -> PathBuf {

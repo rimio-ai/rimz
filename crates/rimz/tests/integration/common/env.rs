@@ -184,6 +184,9 @@ impl Env {
             .env_remove("RUST_LOG")
             .env_remove("COPILOT_HOME")
             .env_remove("COPILOT_OTEL_FILE_EXPORTER_PATH")
+            .env_remove("GROK_HOME")
+            .env_remove("RIMZ_GROK_HOOKS")
+            .env_remove("XAI_API_KEY")
             .current_dir(&self.project_root);
         cmd
     }
@@ -285,6 +288,7 @@ impl Env {
                 .join("extensions")
                 .join("rimz.ts"),
             "qwen" => self.home_root.join(".qwen").join("settings.json"),
+            "grok" => self.home_root.join(".grok/hooks/rimz.json"),
             other => panic!("unknown agent `{other}`"),
         }
     }
@@ -323,7 +327,7 @@ impl Env {
         };
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
-            "claude" | "pi" | "qwen" => text.contains("_rimz_managed"),
+            "claude" | "pi" | "qwen" | "grok" => text.contains("_rimz_managed"),
             "copilot" => {
                 text.contains("_rimz_managed")
                     && std::fs::read_to_string(self.copilot_settings_path()).is_ok_and(|settings| {
