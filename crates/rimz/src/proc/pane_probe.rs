@@ -311,438 +311,180 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn elevation_wrapper_gate_reads_the_entrypoint() {
-        assert!(command_starts_with_elevation_wrapper("sudo su"));
-        assert!(command_starts_with_elevation_wrapper(
-            "/usr/bin/doas claude"
-        ));
-        assert!(command_starts_with_elevation_wrapper("su -"));
-        assert!(!command_starts_with_elevation_wrapper("claude"));
-        assert!(!command_starts_with_elevation_wrapper("zsh"));
+    fn elevation_wrapper_gate_matches_supported_entrypoints() {
+        for (command, expected) in [
+            ("sudo su", true),
+            ("/usr/bin/doas claude", true),
+            ("su -", true),
+            ("claude", false),
+            ("zsh", false),
+        ] {
+            assert_eq!(command_starts_with_elevation_wrapper(command), expected);
+        }
     }
 
     #[test]
-    fn elevated_agent_scan_detects_foreign_uid_descendant_past_sudo_su() {
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "sudo su", &[21]),
-            ProcNode::new(21, 0, "-bash", &[22]),
-            ProcNode::new(
-                22,
-                0,
-                "node /opt/node_modules/@anthropic-ai/claude-code/cli.js",
-                &[],
-            )
-            .with_comm("node"),
-        ]);
+    fn elevated_agent_scan_requires_wrapper_and_foreign_uid() {
+        const CLAUDE_NODE: &str = "node /opt/node_modules/@anthropic-ai/claude-code/cli.js";
+        let cases = [
+            (
+                chain([
+                    (10, "zsh"),
+                    (20, "sudo su"),
+                    (21, "-bash"),
+                    (22, CLAUDE_NODE),
+                ])
+                .uids([21, 22], 0)
+                .comm(22, "node"),
+                Some(("claude", 0)),
+            ),
+            (
+                chain([(10, "zsh"), (20, "sudo su"), (21, "-bash"), (22, "")])
+                    .uids([21, 22], 0)
+                    .comm(22, "claude"),
+                Some(("claude", 0)),
+            ),
+            (
+                chain([(10, "zsh"), (20, "sudo -u root claude")]).uids([20], 0),
+                Some(("claude", 0)),
+            ),
+            (chain([(10, "zsh"), (20, "sudo su"), (21, "claude")]), None),
+            (chain([(10, "zsh"), (20, "claude")]).uids([20], 0), None),
+        ];
 
-        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
-
-        assert_eq!(elevated.kind.as_str(), "claude");
-        assert_eq!(elevated.uid, 0);
+        for (fixture, expected) in cases {
+            let actual = fixture.elevated_agent(10, 1_000);
+            assert_eq!(
+                actual
+                    .as_ref()
+                    .map(|agent| (agent.kind.as_str(), agent.uid)),
+                expected
+            );
+        }
     }
 
     #[test]
-    fn elevated_agent_scan_can_fall_back_to_precise_comm() {
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "sudo su", &[21]),
-            ProcNode::new(21, 0, "-bash", &[22]),
-            ProcNode::new(22, 0, "", &[]).with_comm("claude"),
-        ]);
-
-        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
-
-        assert_eq!(elevated.kind.as_str(), "claude");
-        assert_eq!(elevated.uid, 0);
-    }
-
-    #[test]
-    fn elevated_agent_scan_detects_direct_sudo_agent() {
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 0, "sudo -u root claude", &[]),
-        ]);
-
-        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
-
-        assert_eq!(elevated.kind.as_str(), "claude");
-        assert_eq!(elevated.uid, 0);
-    }
-
-    #[test]
-    fn elevated_agent_scan_ignores_same_uid_and_non_wrapper_paths() {
-        let same_uid = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "sudo su", &[21]),
-            ProcNode::new(21, 1_000, "claude", &[]),
-        ]);
-        assert_eq!(same_uid.elevated_agent(10, 1_000), None);
-
-        let no_wrapper = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 0, "claude", &[]),
-        ]);
-        assert_eq!(no_wrapper.elevated_agent(10, 1_000), None);
-    }
-
-    #[test]
-    fn in_pane_agent_process_walks_wrapper_shell_chain() {
-        let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
+    fn requested_agent_process_finds_exact_supported_cli() {
+        let start = timestamp("2026-06-30T11:18:03Z");
         let cwd = PathBuf::from("/home/marvin/.local/share/chezmoi");
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "chezmoi cd", &[30]),
-            ProcNode::new(30, 1_000, "/bin/zsh", &[40]),
-            ProcNode::new(40, 1_000, "codex", &[]),
-        ]);
-
-        let found = in_pane_agent_process_for_root_with(
-            "codex",
-            10,
-            &|pid| fixture.cmdline(pid),
-            &|pid| fixture.children(pid),
-            &|pid| (pid == 40).then_some(start),
-            &|pid| (pid == 40).then_some(cwd.clone()),
-        );
-
-        assert_eq!(
-            found,
-            Some(InPaneAgentProcess {
-                pid: 40,
-                started_at: start,
-                cwd: Some(cwd)
-            })
-        );
-    }
-
-    #[test]
-    fn hosted_agent_process_finds_outer_qwen_cli_in_one_walk() {
-        let start: jiff::Timestamp = "2026-07-01T10:00:00Z".parse().unwrap();
-        let cwd = PathBuf::from("/repo/qwen");
-        let qwen = "node --expose-gc /home/u/.local/lib/qwen-code/lib/cli.js";
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, qwen, &[30]),
-            ProcNode::new(30, 1_000, qwen, &[]),
-        ]);
-        let cmdline_reads = std::cell::RefCell::new(Vec::new());
-        let child_reads = std::cell::RefCell::new(Vec::new());
-
-        let found = hosted_agent_process_for_root_with(
-            10,
-            &|pid| {
-                cmdline_reads.borrow_mut().push(pid);
-                fixture.cmdline(pid)
-            },
-            &|pid| {
-                child_reads.borrow_mut().push(pid);
-                fixture.children(pid)
-            },
-            &|pid| (pid == 20).then_some(start),
-            &|pid| (pid == 20).then_some(cwd.clone()),
-        );
-
-        assert_eq!(
-            found,
-            Some(HostedAgentProcess {
-                kind: AgentKind::new_unchecked("qwen"),
-                pid: 20,
-                started_at: start,
-                cwd: Some(cwd),
-            })
-        );
-        assert_eq!(*cmdline_reads.borrow(), vec![10, 20]);
-        assert_eq!(*child_reads.borrow(), vec![10]);
-    }
-
-    #[test]
-    fn kind_specific_probe_accepts_eager_qwen() {
-        let start: jiff::Timestamp = "2026-07-01T10:00:00Z".parse().unwrap();
-        let fixture = ProcFixture::new([ProcNode::new(10, 1_000, "qwen", &[])]);
-
-        assert_eq!(
-            in_pane_agent_process_for_root_with(
-                "qwen",
-                10,
-                &|pid| fixture.cmdline(pid),
-                &|pid| fixture.children(pid),
-                &|_| Some(start),
-                &|_| None,
-            ),
-            Some(InPaneAgentProcess {
-                pid: 10,
-                started_at: start,
-                cwd: None,
-            })
-        );
-    }
-
-    #[test]
-    fn hosted_agent_process_abstains_without_complete_linear_proof() {
-        let branch = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20, 30]),
-            ProcNode::new(20, 1_000, "qwen", &[]),
-            ProcNode::new(30, 1_000, "make", &[]),
-        ]);
-        let deep = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[11]),
-            ProcNode::new(11, 1_000, "zsh", &[12]),
-            ProcNode::new(12, 1_000, "zsh", &[13]),
-            ProcNode::new(13, 1_000, "zsh", &[14]),
-            ProcNode::new(14, 1_000, "zsh", &[15]),
-            ProcNode::new(15, 1_000, "zsh", &[16]),
-            ProcNode::new(16, 1_000, "zsh", &[17]),
-            ProcNode::new(17, 1_000, "zsh", &[18]),
-            ProcNode::new(18, 1_000, "zsh", &[19]),
-            ProcNode::new(19, 1_000, "qwen", &[]),
-        ]);
-        let unreadable = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "qwen", &[]).with_unreadable_cmdline(),
-        ]);
-
-        for fixture in [&branch, &deep, &unreadable] {
-            assert_eq!(
-                hosted_agent_process_for_root_with(
-                    10,
-                    &|pid| fixture.cmdline(pid),
-                    &|pid| fixture.children(pid),
-                    &|_| panic!("indeterminate proof must not read process starts"),
-                    &|_| panic!("indeterminate proof must not read cwds"),
-                ),
-                None
-            );
-        }
-    }
-
-    #[test]
-    fn hosted_agent_process_rejects_shared_runtimes_and_codex_daemons() {
-        let start: jiff::Timestamp = "2026-07-01T10:00:00Z".parse().unwrap();
-        for command in ["node", "codex app-server", "codex remote-control start"] {
-            let fixture = ProcFixture::new([ProcNode::new(10, 1_000, command, &[])]);
-            assert_eq!(
-                hosted_agent_process_for_root_with(
-                    10,
-                    &|pid| fixture.cmdline(pid),
-                    &|pid| fixture.children(pid),
-                    &|_| Some(start),
-                    &|_| None,
-                ),
-                None,
-                "{command}"
-            );
-        }
-
-        let qwen = ProcFixture::new([ProcNode::new(10, 1_000, "qwen", &[])]);
-        assert_eq!(
-            hosted_agent_process_for_root_with(
-                10,
-                &|pid| qwen.cmdline(pid),
-                &|pid| qwen.children(pid),
-                &|_| None,
-                &|_| panic!("startless proof must not read cwd"),
-            ),
-            None,
-            "a classified CLI without a process start is not proven live"
-        );
-    }
-
-    #[test]
-    fn in_pane_agent_process_abstains_on_branching_tree() {
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20, 30]),
-            ProcNode::new(20, 1_000, "codex", &[]),
-            ProcNode::new(30, 1_000, "make", &[]),
-        ]);
-
-        assert_eq!(
-            in_pane_agent_process_for_root_with(
+        let cases = [
+            (
                 "codex",
-                10,
-                &|pid| fixture.cmdline(pid),
-                &|pid| fixture.children(pid),
-                &|_| panic!("branching tree must not read process starts"),
-                &|_| panic!("branching tree must not read cwds"),
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn hosted_agent_absent_detects_clean_linear_trees_without_agent() {
-        let bare = ProcFixture::new([ProcNode::new(10, 1_000, "zsh", &[])]);
-        assert!(bare.hosted_absent("codex", 10));
-
-        let wrapped = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "chezmoi cd", &[30]),
-            ProcNode::new(30, 1_000, "/bin/zsh", &[]),
-        ]);
-        assert!(wrapped.hosted_absent("codex", 10));
-    }
-
-    #[test]
-    fn hosted_agent_absent_abstains_when_agent_may_be_present() {
-        let wrapper_with_codex = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "chezmoi cd", &[30]),
-            ProcNode::new(30, 1_000, "/bin/zsh", &[40]),
-            ProcNode::new(40, 1_000, "codex", &[]),
-        ]);
-        assert!(!wrapper_with_codex.hosted_absent("codex", 10));
-
-        let codex_with_child = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "codex", &[30]),
-            ProcNode::new(30, 1_000, "bash", &[]),
-        ]);
-        assert!(!codex_with_child.hosted_absent("codex", 10));
-
-        let branch = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20, 30]),
-            ProcNode::new(20, 1_000, "codex", &[]),
-            ProcNode::new(30, 1_000, "make", &[]),
-        ]);
-        assert!(!branch.hosted_absent("codex", 10));
-    }
-
-    #[test]
-    fn hosted_agent_absent_abstains_on_indeterminate_scans() {
-        assert!(!hosted_agent_absent_under_root_with(
-            "codex",
-            10,
-            &|_| None,
-            &|pid| panic!("unreadable cmdline must not descend into {pid}"),
-        ));
-
-        let deep = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[11]),
-            ProcNode::new(11, 1_000, "zsh", &[12]),
-            ProcNode::new(12, 1_000, "zsh", &[13]),
-            ProcNode::new(13, 1_000, "zsh", &[14]),
-            ProcNode::new(14, 1_000, "zsh", &[15]),
-            ProcNode::new(15, 1_000, "zsh", &[16]),
-            ProcNode::new(16, 1_000, "zsh", &[17]),
-            ProcNode::new(17, 1_000, "zsh", &[18]),
-            ProcNode::new(18, 1_000, "zsh", &[19]),
-            ProcNode::new(19, 1_000, "zsh", &[]),
-        ]);
-        assert!(!deep.hosted_absent("codex", 10));
-
-        let eager = ProcFixture::new([ProcNode::new(10, 1_000, "qwen", &[])]);
-        assert!(!eager.hosted_absent("qwen", 10));
-
-        let unknown = ProcFixture::new([ProcNode::new(10, 1_000, "unknown", &[])]);
-        assert!(!unknown.hosted_absent("unknown", 10));
-    }
-
-    #[test]
-    fn in_pane_agent_process_and_absent_probe_are_mutually_exclusive() {
-        let start: jiff::Timestamp = "2026-06-30T11:18:03Z".parse().unwrap();
-        let cases = vec![
-            (
-                "direct present",
-                ProcFixture::new([ProcNode::new(10, 1_000, "codex", &[])]),
-                false,
+                chain([
+                    (10, "zsh"),
+                    (20, "chezmoi cd"),
+                    (30, "/bin/zsh"),
+                    (40, "codex"),
+                ])
+                .live(40, start, Some(&cwd)),
+                Some((40, start, Some(cwd.clone()))),
             ),
             (
-                "wrapper present",
-                ProcFixture::new([
-                    ProcNode::new(10, 1_000, "zsh", &[20]),
-                    ProcNode::new(20, 1_000, "codex", &[]),
-                ]),
-                false,
+                "qwen",
+                chain([(10, "qwen")]).live(10, start, None),
+                Some((10, start, None)),
             ),
             (
-                "clean absent",
-                ProcFixture::new([ProcNode::new(10, 1_000, "zsh", &[])]),
-                false,
-            ),
-            (
-                "branch indeterminate",
-                ProcFixture::new([
-                    ProcNode::new(10, 1_000, "zsh", &[20, 30]),
-                    ProcNode::new(20, 1_000, "codex", &[]),
-                    ProcNode::new(30, 1_000, "make", &[]),
-                ]),
-                true,
-            ),
-            (
-                "unreadable indeterminate",
-                ProcFixture::new([
-                    ProcNode::new(10, 1_000, "zsh", &[20]),
-                    ProcNode::new(20, 1_000, "codex", &[]).with_unreadable_cmdline(),
-                ]),
-                true,
-            ),
-            (
-                "depth indeterminate",
-                ProcFixture::new([
-                    ProcNode::new(10, 1_000, "zsh", &[11]),
-                    ProcNode::new(11, 1_000, "zsh", &[12]),
-                    ProcNode::new(12, 1_000, "zsh", &[13]),
-                    ProcNode::new(13, 1_000, "zsh", &[14]),
-                    ProcNode::new(14, 1_000, "zsh", &[15]),
-                    ProcNode::new(15, 1_000, "zsh", &[16]),
-                    ProcNode::new(16, 1_000, "zsh", &[17]),
-                    ProcNode::new(17, 1_000, "zsh", &[18]),
-                    ProcNode::new(18, 1_000, "zsh", &[19]),
-                    ProcNode::new(19, 1_000, "zsh", &[]),
-                ]),
-                true,
+                "codex",
+                chain([(10, "zsh"), (20, "codex"), (30, "make")]).branch(10, [20, 30]),
+                None,
             ),
         ];
 
-        for (name, fixture, indeterminate) in cases {
-            let present = in_pane_agent_process_for_root_with(
-                "codex",
-                10,
-                &|pid| fixture.cmdline(pid),
-                &|pid| fixture.children(pid),
-                &|pid| fixture.nodes.contains_key(&pid).then_some(start),
-                &|_| None,
-            );
-            let absent = fixture.hosted_absent("codex", 10);
-            assert!(
-                !(present.is_some() && absent),
-                "{name}: present={present:?} absent={absent}"
-            );
-            if indeterminate {
-                assert_eq!(present, None, "{name}");
-                assert!(!absent, "{name}");
-            }
+        for (kind, fixture, expected) in cases {
+            let actual = fixture
+                .in_pane_agent(kind, 10)
+                .map(|process| (process.pid, process.started_at, process.cwd));
+            assert_eq!(actual, expected);
         }
     }
 
+    #[test]
+    fn hosted_agent_process_finds_outermost_qwen_cli() {
+        let start = timestamp("2026-07-01T10:00:00Z");
+        let cwd = PathBuf::from("/repo/qwen");
+        let qwen = "node --expose-gc /home/u/.local/lib/qwen-code/lib/cli.js";
+        let fixture = chain([(10, "zsh"), (20, qwen), (30, qwen)])
+            .live(20, start, Some(&cwd))
+            .live(30, start, None);
+
+        let found = fixture.hosted_agent(10).expect("outer Qwen CLI");
+        assert_eq!(found.kind.as_str(), "qwen");
+        assert_eq!(
+            (found.pid, found.started_at, found.cwd),
+            (20, start, Some(cwd))
+        );
+    }
+
+    #[test]
+    fn hosted_agent_process_requires_complete_live_proof() {
+        let start = timestamp("2026-07-01T10:00:00Z");
+        let cases = [
+            chain([(10, "zsh"), (20, "qwen"), (30, "make")]).branch(10, [20, 30]),
+            chain([(10, "zsh"), (20, "qwen")]).unreadable(20),
+            ProcFixture::depth_bound(),
+            chain([(10, "codex app-server")]).live(10, start, None),
+            chain([(10, "qwen")]),
+        ];
+
+        for fixture in cases {
+            assert_eq!(fixture.hosted_agent(10), None);
+        }
+    }
+
+    #[test]
+    fn hosted_agent_absence_is_a_three_state_proof() {
+        let start = timestamp("2026-06-30T11:18:03Z");
+        let cases = [
+            (
+                "codex",
+                chain([(10, "zsh"), (20, "chezmoi cd"), (30, "/bin/zsh")]),
+                (false, true),
+            ),
+            (
+                "codex",
+                chain([(10, "zsh"), (20, "chezmoi cd"), (30, "codex")]).live(30, start, None),
+                (true, false),
+            ),
+            (
+                "codex",
+                chain([(10, "zsh"), (20, "codex"), (30, "make")]).branch(10, [20, 30]),
+                (false, false),
+            ),
+            (
+                "codex",
+                chain([(10, "zsh"), (20, "codex")]).unreadable(20),
+                (false, false),
+            ),
+            ("codex", ProcFixture::depth_bound(), (false, false)),
+            ("unknown", chain([(10, "unknown")]), (false, false)),
+        ];
+
+        for (kind, fixture, expected) in cases {
+            let actual = (
+                fixture.in_pane_agent(kind, 10).is_some(),
+                fixture.hosted_absent(kind, 10),
+            );
+            assert_eq!(actual, expected);
+        }
+    }
+
+    fn timestamp(value: &str) -> jiff::Timestamp {
+        value.parse().unwrap()
+    }
+
+    fn chain<const N: usize>(nodes: [(u32, &'static str); N]) -> ProcFixture {
+        ProcFixture::chain(nodes)
+    }
+
+    #[derive(Default)]
     struct ProcNode {
-        pid: u32,
         uid: u32,
         comm: Option<&'static str>,
         cmdline: Option<&'static str>,
-        children: &'static [u32],
-    }
-
-    impl ProcNode {
-        const fn new(pid: u32, uid: u32, cmdline: &'static str, children: &'static [u32]) -> Self {
-            Self {
-                pid,
-                uid,
-                comm: None,
-                cmdline: Some(cmdline),
-                children,
-            }
-        }
-
-        const fn with_comm(mut self, comm: &'static str) -> Self {
-            self.comm = Some(comm);
-            self
-        }
-
-        const fn with_unreadable_cmdline(mut self) -> Self {
-            self.cmdline = None;
-            self
-        }
+        children: Vec<u32>,
+        started_at: Option<jiff::Timestamp>,
+        cwd: Option<PathBuf>,
     }
 
     struct ProcFixture {
@@ -750,23 +492,89 @@ mod tests {
     }
 
     impl ProcFixture {
-        fn new(nodes: impl IntoIterator<Item = ProcNode>) -> Self {
-            Self {
-                nodes: nodes.into_iter().map(|node| (node.pid, node)).collect(),
+        fn chain(nodes: impl IntoIterator<Item = (u32, &'static str)>) -> Self {
+            let entries = nodes.into_iter().collect::<Vec<_>>();
+            let mut nodes = entries
+                .iter()
+                .map(|&(pid, command)| {
+                    (
+                        pid,
+                        ProcNode {
+                            uid: 1_000,
+                            cmdline: Some(command),
+                            ..ProcNode::default()
+                        },
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            for pair in entries.windows(2) {
+                nodes.get_mut(&pair[0].0).unwrap().children.push(pair[1].0);
             }
+            Self { nodes }
+        }
+
+        fn depth_bound() -> Self {
+            Self::chain((10..=19).map(|pid| (pid, "zsh")))
+        }
+
+        fn uids(mut self, pids: impl IntoIterator<Item = u32>, uid: u32) -> Self {
+            for pid in pids {
+                self.nodes.get_mut(&pid).unwrap().uid = uid;
+            }
+            self
+        }
+
+        fn comm(mut self, pid: u32, comm: &'static str) -> Self {
+            self.nodes.get_mut(&pid).unwrap().comm = Some(comm);
+            self
+        }
+
+        fn unreadable(mut self, pid: u32) -> Self {
+            self.nodes.get_mut(&pid).unwrap().cmdline = None;
+            self
+        }
+
+        fn branch(mut self, pid: u32, children: impl IntoIterator<Item = u32>) -> Self {
+            self.nodes.get_mut(&pid).unwrap().children = children.into_iter().collect();
+            self
+        }
+
+        fn live(mut self, pid: u32, started_at: jiff::Timestamp, cwd: Option<&Path>) -> Self {
+            let node = self.nodes.get_mut(&pid).unwrap();
+            node.started_at = Some(started_at);
+            node.cwd = cwd.map(Path::to_path_buf);
+            self
         }
 
         fn cmdline(&self, pid: u32) -> Option<String> {
-            self.nodes
-                .get(&pid)
-                .and_then(|node| node.cmdline.map(str::to_owned))
+            self.nodes.get(&pid)?.cmdline.map(str::to_owned)
         }
 
         fn children(&self, pid: u32) -> Vec<u32> {
             self.nodes
                 .get(&pid)
-                .map(|node| node.children.to_vec())
-                .unwrap_or_default()
+                .map_or_else(Vec::new, |node| node.children.clone())
+        }
+
+        fn in_pane_agent(&self, kind: &str, root: u32) -> Option<InPaneAgentProcess> {
+            in_pane_agent_process_for_root_with(
+                kind,
+                root,
+                &|pid| self.cmdline(pid),
+                &|pid| self.children(pid),
+                &|pid| self.nodes.get(&pid)?.started_at,
+                &|pid| self.nodes.get(&pid)?.cwd.clone(),
+            )
+        }
+
+        fn hosted_agent(&self, root: u32) -> Option<HostedAgentProcess> {
+            hosted_agent_process_for_root_with(
+                root,
+                &|pid| self.cmdline(pid),
+                &|pid| self.children(pid),
+                &|pid| self.nodes.get(&pid)?.started_at,
+                &|pid| self.nodes.get(&pid)?.cwd.clone(),
+            )
         }
 
         fn hosted_absent(&self, kind: &str, root: u32) -> bool {
@@ -781,11 +589,7 @@ mod tests {
                 own_uid,
                 &|pid| self.children(pid),
                 &|pid| self.cmdline(pid),
-                &|pid| {
-                    self.nodes
-                        .get(&pid)
-                        .and_then(|node| node.comm.map(str::to_owned))
-                },
+                &|pid| self.nodes.get(&pid)?.comm.map(str::to_owned),
                 &|pid| self.nodes.get(&pid).map(|node| node.uid),
             )
         }
