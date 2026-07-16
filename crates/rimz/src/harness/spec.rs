@@ -93,6 +93,10 @@ pub struct AgentCell {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "layout IR keeps agent cells inline and avoids one allocation per launch"
+)]
 pub enum Cell {
     Agent(AgentCell),
     Command { argv: Vec<String> },

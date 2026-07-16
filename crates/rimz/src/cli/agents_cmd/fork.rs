@@ -143,7 +143,6 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 name_explicit: launch.name_explicit,
                 launch_id: Some(launch.agent_id.as_str()),
                 params: Some(&launch.launch),
-                ..rimz::harness::launch::ExecIdentity::default()
             },
         },
     );

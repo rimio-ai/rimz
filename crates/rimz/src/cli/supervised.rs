@@ -150,7 +150,6 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
                 name_explicit: args.agent_name_explicit,
                 launch_id: args.launch_id.map(rimz::ids::AgentSessionId::as_str),
                 params: Some(args.launch),
-                ..rimz::harness::launch::ExecIdentity::default()
             },
         },
     );

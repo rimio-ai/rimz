@@ -469,6 +469,10 @@ fn feasible_or_new(target: Placement, single_cell: bool, has_launching_pane: boo
 }
 
 /// Compile one launch request per agent cell in layout order.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one explicit identity-allocation boundary without a duplicate launch DTO"
+)]
 pub fn launch_identity_requests(
     layout: &LayoutSpec,
     explicit_name: Option<&str>,
