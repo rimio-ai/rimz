@@ -90,6 +90,8 @@ Cursor exposes these interactive session operations:
 | rewind | `/rewind` | restores an earlier message in the same session; no hook identity contract is published |
 | create empty chat | `agent create-chat` | returns a chat ID; output schema is undocumented |
 
+Live capture against Cursor CLI `2026.07.09-a3815c0` shows that `/clear` fires no hook: neither `sessionEnd` for the old conversation nor `sessionStart` for the new one. The next `beforeSubmitPrompt` carries the new `conversation_id` in the same process and pane. When that process exits, `sessionEnd` reports only the conversation ID that the process started with, so later conversations receive no native end event.
+
 `agent ls`, `agent --resume`, and `/resume` can browse chats across workspaces in current releases. A resumed conversation may therefore report workspace roots different from the pane's launch cwd. Bind by the stamped pane/session relationship first and treat hook `workspace_roots` as context, not as the owner identity.
 
 The docs publish no parent-conversation field for `/fork`, no structured list output for `agent ls`, and no stable public local chat-store schema. The version-pinned subsets below support transient Ask detection and exact subagent lifecycle only; they do not establish session restoration or supersession semantics.

@@ -157,20 +157,24 @@ mod tests {
     use crate::ids::{MuxName, PaneId};
     use crate::pane::{PaneRef, RuntimeOwner};
 
-    fn conversation_pair(status: AgentStatus) -> (AgentState, AgentState) {
+    fn conversation_pair(
+        kind: &str,
+        status: AgentStatus,
+        newer_origin: Option<SessionOrigin>,
+    ) -> (AgentState, AgentState) {
         let older_at = Timestamp::UNIX_EPOCH;
         let newer_at = older_at + std::time::Duration::from_secs(1);
         let pane = PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"));
         let owner = RuntimeOwner::new(RuntimeOwnerKind::Agent, "agy", 42, Some("start".to_owned()));
-        let mut older = crate::testkit::agent_state("antigravity", "older", older_at);
+        let mut older = crate::testkit::agent_state(kind, "older", older_at);
         older.status = status;
         older.pane = Some(pane.clone());
         older.runtime_owner = Some(owner.clone());
         older.origin = Some(SessionOrigin::Fresh);
-        let mut newer = crate::testkit::agent_state("antigravity", "newer", newer_at);
+        let mut newer = crate::testkit::agent_state(kind, "newer", newer_at);
         newer.pane = Some(pane);
         newer.runtime_owner = Some(owner);
-        newer.origin = Some(SessionOrigin::Fresh);
+        newer.origin = newer_origin;
         (older, newer)
     }
 
@@ -181,7 +185,8 @@ mod tests {
             AgentStatus::Waiting,
             AgentStatus::Paused,
         ] {
-            let (older, newer) = conversation_pair(status);
+            let (older, newer) =
+                conversation_pair("antigravity", status, Some(SessionOrigin::Fresh));
             assert!(!same_process_conversation_supersedes(&older, &newer));
             assert!(!cleared_conversation_supersedes(&older, &newer));
             assert!(!supersedes(&older, &newer));
@@ -190,15 +195,31 @@ mod tests {
 
     #[test]
     fn resting_session_death_still_follows_latest_conversation() {
-        let (older, newer) = conversation_pair(AgentStatus::Success);
+        let (older, newer) = conversation_pair(
+            "antigravity",
+            AgentStatus::Success,
+            Some(SessionOrigin::Fresh),
+        );
         assert!(same_process_conversation_supersedes(&older, &newer));
         assert!(cleared_conversation_supersedes(&older, &newer));
         assert!(supersedes(&older, &newer));
     }
 
     #[test]
+    fn cursor_clear_without_session_start_follows_latest_conversation() {
+        let (older, newer) = conversation_pair("cursor", AgentStatus::Success, None);
+        assert!(same_process_conversation_supersedes(&older, &newer));
+        assert!(supersedes(&older, &newer));
+        assert!(!cleared_conversation_supersedes(&older, &newer));
+    }
+
+    #[test]
     fn mid_turn_session_death_still_yields_to_a_relaunched_process() {
-        let (older, mut newer) = conversation_pair(AgentStatus::Running);
+        let (older, mut newer) = conversation_pair(
+            "antigravity",
+            AgentStatus::Running,
+            Some(SessionOrigin::Fresh),
+        );
         newer.runtime_owner = Some(RuntimeOwner::new(
             RuntimeOwnerKind::Agent,
             "agy",
