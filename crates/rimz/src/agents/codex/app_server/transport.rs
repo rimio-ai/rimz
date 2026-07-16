@@ -436,7 +436,14 @@ mod tests {
             let _ = server.read().unwrap();
             thread::sleep(Duration::from_millis(80));
         });
-        let mut transport = WsTransport::from_stream(client, Duration::from_millis(20)).unwrap();
+        let mut transport = WsTransport::from_stream(client, Duration::from_secs(1)).unwrap();
+        let response_timeout = Duration::from_millis(20);
+        transport
+            .ws
+            .get_mut()
+            .set_read_timeout(Some(response_timeout))
+            .unwrap();
+        transport.deadline = Instant::now() + response_timeout;
 
         let err = transport.request("slow", Value::Null).unwrap_err();
         assert!(matches!(err, AppServerErr::Timeout));
