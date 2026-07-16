@@ -4,7 +4,7 @@ use super::runs_lookup::{agent_name, newest_run_by_ref};
 use crate::cli::render;
 
 pub(super) fn wait_agent(
-    mut references: Vec<String>,
+    references: Vec<String>,
     any: bool,
     timeout: Option<Duration>,
     stream_output: bool,
@@ -15,92 +15,175 @@ pub(super) fn wait_agent(
     if stream_output && references.len() > 1 {
         bail!("--stream tails one target; wait on a single reference");
     }
-    if references.len() == 1 && !any {
-        let reference = references
-            .pop()
-            .ok_or_else(|| anyhow::anyhow!("wait requires a reference"))?;
-        return wait_one(reference, timeout, stream_output, from_start, json, globals);
-    }
-
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let store = crate::cli::open_store(&workspace)?;
-    wait_multi(&store, &workspace, references, any, timeout, json)
-}
-
-fn wait_one(
-    reference: String,
-    timeout: Option<Duration>,
-    stream_output: bool,
-    from_start: bool,
-    json: bool,
-    globals: &GlobalFlags,
-) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let store = crate::cli::open_store(&workspace)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let current_channel = crate::cli::current_channel(&workspace);
-    let target = resolve_wait_target(&store, &snapshot, &reference, current_channel.as_deref())?;
-    if let WaitTarget::Run { run_id, .. } = &target {
-        let run = rimz::harness::run::load(store.paths(), run_id)?;
-        return wait_run_record(&store, &run, timeout, stream_output, from_start, json);
-    }
     if stream_output {
-        return wait_interactive_agent_stream(
-            &store,
-            &reference,
-            current_channel.as_deref(),
-            timeout,
-            from_start,
-            json,
-        );
+        let reference = references.first().context("wait requires a reference")?;
+        let target = resolve_wait_target(&store, &snapshot, reference, current_channel.as_deref())?;
+        return match target {
+            WaitTarget::Run { run_id, .. } => {
+                let run = rimz::harness::run::load(store.paths(), &run_id)?;
+                wait_run_stream(&store, &run, timeout, from_start, json)
+            }
+            WaitTarget::Agent { reference, kind } => wait_interactive_agent_stream(
+                &store,
+                &reference,
+                &kind,
+                snapshot,
+                current_channel.as_deref(),
+                timeout,
+                from_start,
+                json,
+            ),
+        };
     }
-    let deadline = timeout.map(|duration| Instant::now() + duration);
+
+    let targets = references
+        .iter()
+        .map(|reference| {
+            resolve_wait_target(&store, &snapshot, reference, current_channel.as_deref())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let single = targets.len() == 1 && !any;
+    let mut waits = WaitSet::new(
+        targets,
+        if any { JoinMode::Any } else { JoinMode::All },
+        timeout,
+    );
     loop {
-        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-        let Some(outcome) =
-            poll_target(&store, Some(&snapshot), &target, current_channel.as_deref())?
-        else {
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        match waits.poll(&store, current_channel.as_deref())? {
+            WaitPoll::Pending { settled } => {
+                if !single {
+                    report_settled_disappearances(&waits, &settled)?;
+                }
+                if !single && !json {
+                    print_settled_statuses(&waits, &settled)?;
+                }
+            }
+            WaitPoll::Settled { selected, settled } => {
+                if single {
+                    let outcome = waits
+                        .outcome(selected)
+                        .context("settled wait without outcome")?;
+                    if matches!(&outcome.payload, TerminalPayload::Disappeared) {
+                        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+                        crate::cli::resolve_agent_one(
+                            &snapshot,
+                            waits.targets[selected].name(),
+                            None,
+                            current_channel.as_deref(),
+                        )?;
+                    }
+                    print_single_outcome(outcome, json)?;
+                    std::process::exit(outcome.exit_code());
+                }
+                if waits.mode == JoinMode::Any {
+                    let outcome = waits
+                        .outcome(selected)
+                        .context("settled wait without outcome")?;
+                    report_disappearance(&waits.targets[selected], outcome)?;
+                    if json {
+                        print_wait_json(std::iter::once(outcome))?;
+                    } else {
+                        writeln!(render::out(), "{}", outcome.name)?;
+                        print_wait_status(&mut render::err(), outcome)?;
+                    }
+                    std::process::exit(outcome.exit_code());
+                }
+                report_settled_disappearances(&waits, &settled)?;
+                if !json {
+                    print_settled_statuses(&waits, &settled)?;
+                } else {
+                    print_wait_json(waits.outcomes.iter().flatten())?;
+                }
+                std::process::exit(waits.all_exit_code());
+            }
+            WaitPoll::TimedOut { settled } => {
+                if !single {
+                    report_settled_disappearances(&waits, &settled)?;
+                }
+                if !single && !json {
+                    print_settled_statuses(&waits, &settled)?;
+                } else if !single {
+                    print_timeout_json(&waits)?;
+                }
                 std::process::exit(RunStatus::TimedOut.exit_code());
             }
-            std::thread::sleep(Duration::from_millis(500));
-            continue;
-        };
-        if outcome.disappeared {
-            crate::cli::resolve_agent_one(&snapshot, &reference, None, current_channel.as_deref())?;
-            return Ok(());
         }
-        if json {
-            supervised::output::print_json(
-                outcome
-                    .agent
-                    .as_ref()
-                    .context("agent wait outcome without agent state")?,
-            )?;
-        }
-        std::process::exit(outcome.entry.exit);
+        std::thread::sleep(Duration::from_millis(500));
     }
 }
 
 enum WaitTarget {
-    Run { run_id: rimz::RunId, name: String },
-    Agent { reference: String },
+    Run {
+        run_id: rimz::RunId,
+        name: String,
+    },
+    Agent {
+        reference: String,
+        kind: rimz::ids::AgentKind,
+    },
 }
 
 impl WaitTarget {
     fn name(&self) -> &str {
         match self {
             Self::Run { name, .. } => name,
-            Self::Agent { reference } => reference,
+            Self::Agent { reference, .. } => reference,
         }
     }
 }
 
 struct TargetOutcome {
     name: String,
-    entry: WaitEntryJson,
-    agent: Option<AgentState>,
-    disappeared: bool,
+    payload: TerminalPayload,
+}
+
+enum TerminalPayload {
+    Run(RunRecord),
+    Agent(AgentState),
+    Disappeared,
+}
+
+impl TargetOutcome {
+    fn entry(&self) -> WaitEntryJson {
+        match &self.payload {
+            TerminalPayload::Run(record) => WaitEntryJson::new(
+                record.status,
+                record.cost_usd,
+                record.transcript_path.clone(),
+                (record.status == RunStatus::Failed)
+                    .then(|| record.failure_tail.clone())
+                    .flatten(),
+            ),
+            TerminalPayload::Agent(agent) => WaitEntryJson::new(
+                if agent.status == rimz::agents::AgentStatus::Failed {
+                    RunStatus::Failed
+                } else {
+                    RunStatus::Completed
+                },
+                agent
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.cost.as_ref())
+                    .and_then(|cost| cost.total_cost_usd),
+                agent.transcript_path.clone(),
+                None,
+            ),
+            TerminalPayload::Disappeared => WaitEntryJson::new(
+                RunStatus::Failed,
+                None,
+                None,
+                Some("agent disappeared while waiting".to_owned()),
+            ),
+        }
+    }
+
+    fn exit_code(&self) -> i32 {
+        self.entry().exit
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -158,6 +241,10 @@ fn resolve_wait_target(
     }
     Ok(WaitTarget::Agent {
         reference: reference.to_owned(),
+        kind: live_agent
+            .context("resolved wait agent without state")?
+            .kind
+            .clone(),
     })
 }
 
@@ -173,167 +260,133 @@ fn poll_target(
             if !record.status.is_terminal() {
                 return Ok(None);
             }
-            let status = record.status;
             Ok(Some(TargetOutcome {
                 name: name.clone(),
-                entry: WaitEntryJson::new(
-                    status,
-                    record.cost_usd,
-                    record.transcript_path,
-                    if status == RunStatus::Failed {
-                        record.failure_tail
-                    } else {
-                        None
-                    },
-                ),
-                agent: None,
-                disappeared: false,
+                payload: TerminalPayload::Run(record),
             }))
         }
-        WaitTarget::Agent { reference } => {
+        WaitTarget::Agent { reference, .. } => {
             let snapshot = agent_snapshot.context("pending agent target without snapshot")?;
             match crate::cli::resolve_agent_one(snapshot, reference, None, current_channel) {
                 Ok(agent) => {
-                    let status = if gate_open(DeliveryGate::Done, agent.status) {
-                        Some(RunStatus::Completed)
-                    } else if agent.status == rimz::agents::AgentStatus::Failed {
-                        Some(RunStatus::Failed)
-                    } else {
-                        None
-                    };
-                    Ok(status.map(|status| TargetOutcome {
+                    let terminal = gate_open(DeliveryGate::Done, agent.status)
+                        || agent.status == rimz::agents::AgentStatus::Failed;
+                    Ok(terminal.then(|| TargetOutcome {
                         name: agent_name(agent).to_owned(),
-                        entry: WaitEntryJson::new(
-                            status,
-                            agent
-                                .context
-                                .as_ref()
-                                .and_then(|context| context.cost.as_ref())
-                                .and_then(|cost| cost.total_cost_usd),
-                            agent.transcript_path.clone(),
-                            None,
-                        ),
-                        agent: Some(agent.clone()),
-                        disappeared: false,
+                        payload: TerminalPayload::Agent(agent.clone()),
                     }))
                 }
                 Err(_) => Ok(Some(TargetOutcome {
                     name: reference.clone(),
-                    entry: WaitEntryJson::new(
-                        RunStatus::Failed,
-                        None,
-                        None,
-                        Some("agent disappeared while waiting".to_owned()),
-                    ),
-                    agent: None,
-                    disappeared: true,
+                    payload: TerminalPayload::Disappeared,
                 })),
             }
         }
     }
 }
 
-fn wait_multi(
-    store: &rimz::Store,
-    workspace: &rimz::ResolvedWorkspace,
-    references: Vec<String>,
-    any: bool,
-    timeout: Option<Duration>,
-    json: bool,
-) -> Result<()> {
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let current_channel = crate::cli::current_channel(workspace);
-    let targets = references
-        .iter()
-        .map(|reference| {
-            resolve_wait_target(store, &snapshot, reference, current_channel.as_deref())
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let deadline = timeout.map(|duration| Instant::now() + duration);
-    let mut outcomes: Vec<Option<TargetOutcome>> = std::iter::repeat_with(|| None)
-        .take(targets.len())
-        .collect();
-    loop {
-        let agent_snapshot = targets
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JoinMode {
+    Any,
+    All,
+}
+
+struct WaitSet {
+    targets: Vec<WaitTarget>,
+    outcomes: Vec<Option<TargetOutcome>>,
+    deadline: Option<Instant>,
+    mode: JoinMode,
+}
+
+enum WaitPoll {
+    Pending {
+        settled: Vec<usize>,
+    },
+    Settled {
+        selected: usize,
+        settled: Vec<usize>,
+    },
+    TimedOut {
+        settled: Vec<usize>,
+    },
+}
+
+impl WaitSet {
+    fn new(targets: Vec<WaitTarget>, mode: JoinMode, timeout: Option<Duration>) -> Self {
+        let outcomes = std::iter::repeat_with(|| None)
+            .take(targets.len())
+            .collect();
+        Self {
+            targets,
+            outcomes,
+            deadline: timeout.map(|duration| Instant::now() + duration),
+            mode,
+        }
+    }
+
+    fn poll(&mut self, store: &rimz::Store, current_channel: Option<&str>) -> Result<WaitPoll> {
+        let agent_snapshot = self
+            .targets
             .iter()
-            .zip(&outcomes)
+            .zip(&self.outcomes)
             .any(|(target, outcome)| {
                 outcome.is_none() && matches!(target, WaitTarget::Agent { .. })
             })
             .then(|| store.snapshot_cached().context("reading agent snapshot"))
             .transpose()?;
 
-        for (index, target) in targets.iter().enumerate() {
-            if outcomes[index].is_some() {
+        let mut settled = Vec::new();
+        for (index, target) in self.targets.iter().enumerate() {
+            if self.outcomes[index].is_some() {
                 continue;
             }
-            let Some(outcome) = poll_target(
-                store,
-                agent_snapshot.as_ref(),
-                target,
-                current_channel.as_deref(),
-            )?
+            let Some(outcome) =
+                poll_target(store, agent_snapshot.as_ref(), target, current_channel)?
             else {
                 continue;
             };
-            if outcome.disappeared {
-                writeln!(
-                    render::err(),
-                    "{}: agent disappeared while waiting",
-                    target.name()
-                )?;
+            self.outcomes[index] = Some(outcome);
+            settled.push(index);
+            if self.mode == JoinMode::Any {
+                return Ok(WaitPoll::Settled {
+                    selected: index,
+                    settled,
+                });
             }
-            if any {
-                if json {
-                    print_wait_json(std::iter::once(&outcome))?;
-                } else {
-                    writeln!(render::out(), "{}", outcome.name)?;
-                    print_wait_status(&mut render::err(), &outcome)?;
-                }
-                std::process::exit(outcome.entry.exit);
-            }
-            if !json {
-                print_wait_status(&mut render::out(), &outcome)?;
-            }
-            outcomes[index] = Some(outcome);
         }
 
-        if outcomes.iter().all(Option::is_some) {
-            let exit_code = outcomes
-                .iter()
-                .flatten()
-                .find(|outcome| outcome.entry.status != RunStatus::Completed)
-                .map_or(0, |outcome| outcome.entry.exit);
-            if json {
-                print_wait_json(outcomes.iter().flatten())?;
-            }
-            std::process::exit(exit_code);
+        if self.outcomes.iter().all(Option::is_some) {
+            return Ok(WaitPoll::Settled {
+                selected: 0,
+                settled,
+            });
         }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            if json {
-                for (target, outcome) in targets.iter().zip(&mut outcomes) {
-                    if outcome.is_some() {
-                        continue;
-                    }
-                    *outcome = Some(TargetOutcome {
-                        name: target.name().to_owned(),
-                        entry: WaitEntryJson::new(RunStatus::TimedOut, None, None, None),
-                        agent: None,
-                        disappeared: false,
-                    });
-                }
-                print_wait_json(outcomes.iter().flatten())?;
-            }
-            std::process::exit(RunStatus::TimedOut.exit_code());
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Ok(WaitPoll::TimedOut { settled });
         }
-        std::thread::sleep(Duration::from_millis(500));
+        Ok(WaitPoll::Pending { settled })
+    }
+
+    fn outcome(&self, index: usize) -> Option<&TargetOutcome> {
+        self.outcomes.get(index)?.as_ref()
+    }
+
+    fn all_exit_code(&self) -> i32 {
+        self.outcomes
+            .iter()
+            .flatten()
+            .find(|outcome| outcome.entry().status != RunStatus::Completed)
+            .map_or(0, TargetOutcome::exit_code)
     }
 }
 
 fn print_wait_json<'a>(outcomes: impl IntoIterator<Item = &'a TargetOutcome>) -> Result<()> {
     let entries = outcomes
         .into_iter()
-        .map(|outcome| (outcome.name.as_str(), &outcome.entry))
+        .map(|outcome| (outcome.name.as_str(), outcome.entry()))
         .collect::<BTreeMap<_, _>>();
     let mut out = render::out();
     serde_json::to_writer(&mut out, &entries)?;
@@ -343,29 +396,95 @@ fn print_wait_json<'a>(outcomes: impl IntoIterator<Item = &'a TargetOutcome>) ->
 }
 
 fn print_wait_status(out: &mut impl Write, outcome: &TargetOutcome) -> std::io::Result<()> {
+    let entry = outcome.entry();
     writeln!(
         out,
         "{} {}",
         render::paint(render::palette::ACCENT, &outcome.name),
         render::paint(
-            render::status::run(outcome.entry.status),
-            supervised::output::status_label(outcome.entry.status)
+            render::status::run(entry.status),
+            supervised::output::status_label(entry.status)
         ),
     )
+}
+
+fn print_single_outcome(outcome: &TargetOutcome, json: bool) -> Result<()> {
+    match &outcome.payload {
+        TerminalPayload::Run(record) if json => supervised::output::print_json(record),
+        TerminalPayload::Run(record) => {
+            let mut stdout = render::out();
+            let mut stderr = render::err();
+            supervised::output::print_run_output(record, &mut stdout, &mut stderr)
+        }
+        TerminalPayload::Agent(agent) if json => supervised::output::print_json(agent),
+        TerminalPayload::Agent(_) | TerminalPayload::Disappeared => Ok(()),
+    }
+}
+
+fn report_disappearance(target: &WaitTarget, outcome: &TargetOutcome) -> Result<()> {
+    if matches!(&outcome.payload, TerminalPayload::Disappeared) {
+        writeln!(
+            render::err(),
+            "{}: agent disappeared while waiting",
+            target.name()
+        )?;
+    }
+    Ok(())
+}
+
+fn report_settled_disappearances(waits: &WaitSet, settled: &[usize]) -> Result<()> {
+    for &index in settled {
+        let outcome = waits
+            .outcome(index)
+            .context("settled wait without outcome")?;
+        report_disappearance(&waits.targets[index], outcome)?;
+    }
+    Ok(())
+}
+
+fn print_settled_statuses(waits: &WaitSet, settled: &[usize]) -> Result<()> {
+    let mut out = render::out();
+    for &index in settled {
+        let outcome = waits
+            .outcome(index)
+            .context("settled wait without outcome")?;
+        print_wait_status(&mut out, outcome)?;
+    }
+    Ok(())
+}
+
+fn print_timeout_json(waits: &WaitSet) -> Result<()> {
+    let entries = waits
+        .targets
+        .iter()
+        .zip(&waits.outcomes)
+        .map(|(target, outcome)| match outcome {
+            Some(outcome) => (outcome.name.as_str(), outcome.entry()),
+            None => (
+                target.name(),
+                WaitEntryJson::new(RunStatus::TimedOut, None, None, None),
+            ),
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut out = render::out();
+    serde_json::to_writer(&mut out, &entries)?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
 }
 
 fn wait_interactive_agent_stream(
     store: &rimz::Store,
     reference: &str,
+    kind: &rimz::ids::AgentKind,
+    mut snapshot: rimz::SidebarSnapshot,
     current_channel: Option<&str>,
     timeout: Option<Duration>,
     from_start: bool,
     json: bool,
 ) -> Result<()> {
-    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-    let agent = crate::cli::resolve_agent_one(&snapshot, reference, None, current_channel)?;
-    let adapter = rimz::agents::find_adapter(agent.kind.as_str())
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent.kind))?;
+    let adapter = rimz::agents::find_adapter(kind.as_str())
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     let mut cursor = rimz::agents::transcript::TranscriptCursor::new(from_start);
     let mut stdout = render::out();
     let mut stderr = render::err();
@@ -377,7 +496,6 @@ fn wait_interactive_agent_stream(
     };
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
-        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
         let agent = crate::cli::resolve_agent_one(&snapshot, reference, None, current_channel)?;
         for text in cursor.messages(
             agent.transcript_path.as_deref(),
@@ -402,6 +520,7 @@ fn wait_interactive_agent_stream(
             std::process::exit(RunStatus::TimedOut.exit_code());
         }
         std::thread::sleep(Duration::from_millis(500));
+        snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     }
 }
 
@@ -416,53 +535,32 @@ fn interactive_live_status(agent: &AgentState) -> rimz::harness::run::RunLiveSta
     }
 }
 
-fn wait_run_record(
+fn wait_run_stream(
     store: &rimz::Store,
     run: &RunRecord,
     timeout: Option<Duration>,
-    stream_output: bool,
     from_start: bool,
     json: bool,
 ) -> Result<()> {
     let adapter = rimz::agents::find_adapter(run.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", run.kind))?;
-    if stream_output {
-        let mut stdout = render::out();
-        let mut stderr = render::err();
-        let mut json_stdout = std::io::stdout().lock();
-        let mut sink = if json {
-            supervised::output::StreamSink::ndjson(&mut json_stdout)
-        } else {
-            supervised::output::StreamSink::text(&mut stdout, &mut stderr)
-        };
-        match supervised::stream::stream_attached_run(
-            store,
-            &run.run_id,
-            adapter,
-            from_start,
-            timeout,
-            &mut sink,
-        )? {
-            Some(record) => std::process::exit(record.status.exit_code()),
-            None => std::process::exit(RunStatus::TimedOut.exit_code()),
-        }
-    }
-    let deadline = timeout.map(|duration| Instant::now() + duration);
-    loop {
-        let current = rimz::harness::run::load(store.paths(), &run.run_id)?;
-        if current.status.is_terminal() {
-            if json {
-                supervised::output::print_json(&current)?;
-            } else {
-                let mut stdout = render::out();
-                let mut stderr = render::err();
-                supervised::output::print_run_output(&current, &mut stdout, &mut stderr)?;
-            }
-            std::process::exit(current.status.exit_code());
-        }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            std::process::exit(RunStatus::TimedOut.exit_code());
-        }
-        std::thread::sleep(Duration::from_millis(500));
+    let mut stdout = render::out();
+    let mut stderr = render::err();
+    let mut json_stdout = std::io::stdout().lock();
+    let mut sink = if json {
+        supervised::output::StreamSink::ndjson(&mut json_stdout)
+    } else {
+        supervised::output::StreamSink::text(&mut stdout, &mut stderr)
+    };
+    match supervised::stream::stream_attached_run(
+        store,
+        &run.run_id,
+        adapter,
+        from_start,
+        timeout,
+        &mut sink,
+    )? {
+        Some(record) => std::process::exit(record.status.exit_code()),
+        None => std::process::exit(RunStatus::TimedOut.exit_code()),
     }
 }
