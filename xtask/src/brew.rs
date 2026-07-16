@@ -1,5 +1,5 @@
 //! Homebrew tap formula generator. Renders the tap's `rimz.rb` from the dist
-//! `SHA256SUMS`, reading the asset base URL, homepage, and output path
+//! `SHA256SUMS`, reading the version, asset base URL, homepage, and output path
 //! from the environment so `main.rs` arg-parsing stays untouched. The release
 //! workflow fills those inputs from `${GITHUB_SERVER_URL}` at CI time, so the
 //! concrete release host is never committed to this repo — it lives only in the
@@ -18,6 +18,7 @@ const INTEL_ARCHIVE: &str = "rimz-x86_64-apple-darwin.tar.gz";
 
 /// Render the tap formula from the dist checksums and the `RIMZ_BREW_*` inputs.
 pub(crate) fn brew_formula(root: &Path) -> Result<()> {
+    let version = required_env("RIMZ_BREW_VERSION")?;
     let base_url = required_env("RIMZ_BREW_BASE_URL")?;
     let homepage = required_env("RIMZ_BREW_HOMEPAGE")?;
     let out = PathBuf::from(required_env("RIMZ_BREW_OUT")?);
@@ -27,6 +28,7 @@ pub(crate) fn brew_formula(root: &Path) -> Result<()> {
         .with_context(|| format!("reading {}", checksums_path.display()))?;
 
     let formula = render_formula(&FormulaInputs {
+        intel_version: strip_leading_v(&version),
         homepage: &homepage,
         base_url: base_url.trim_end_matches('/'),
         arm_sha: &parse_digest(&checksums, ARM_ARCHIVE)?,
@@ -40,6 +42,7 @@ fn required_env(key: &str) -> Result<String> {
 }
 
 struct FormulaInputs<'a> {
+    intel_version: &'a str,
     homepage: &'a str,
     base_url: &'a str,
     arm_sha: &'a str,
@@ -58,6 +61,11 @@ fn parse_digest(checksums: &str, archive: &str) -> Result<String> {
         .with_context(|| format!("SHA256SUMS has no entry for {archive}"))
 }
 
+/// Strip the `v` tag prefix; the release URL already carries the full tag.
+fn strip_leading_v(version: &str) -> &str {
+    version.strip_prefix('v').unwrap_or(version)
+}
+
 fn render_formula(inputs: &FormulaInputs<'_>) -> String {
     format!(
         r#"class Rimz < Formula
@@ -72,6 +80,7 @@ fn render_formula(inputs: &FormulaInputs<'_>) -> String {
     end
     on_intel do
       url "{base_url}/rimz-x86_64-apple-darwin.tar.gz"
+      version "{intel_version}"
       sha256 "{intel_sha}"
     end
   end
@@ -87,6 +96,7 @@ end
 "#,
         homepage = inputs.homepage,
         base_url = inputs.base_url,
+        intel_version = inputs.intel_version,
         arm_sha = inputs.arm_sha,
         intel_sha = inputs.intel_sha,
     )
@@ -120,14 +130,24 @@ c33333333333333333333333333333333333333333333333333333333333333c  rimz-x86_64-un
     }
 
     #[test]
-    fn render_formula_carries_both_urls_shas_and_license() {
+    fn strip_leading_v_is_optional() {
+        assert_eq!(strip_leading_v("v1.2.3"), "1.2.3");
+        assert_eq!(strip_leading_v("1.2.3"), "1.2.3");
+    }
+
+    #[test]
+    fn render_formula_carries_both_urls_shas_license_and_intel_version() {
         let formula = render_formula(&FormulaInputs {
+            intel_version: "1.2.3",
             homepage: "https://host.example/rimz/rimz",
             base_url: "https://host.example/rimz/rimz/releases/download/v1.2.3",
             arm_sha: "aaaa",
             intel_sha: "bbbb",
         });
         assert!(formula.contains("license \"MIT\""));
+        assert!(formula.contains("on_intel do\n      url"));
+        assert!(formula.contains("version \"1.2.3\""));
+        assert_eq!(formula.matches("version \"").count(), 1);
         assert!(formula.contains("homepage \"https://host.example/rimz/rimz\""));
         assert!(formula.contains(
             "url \"https://host.example/rimz/rimz/releases/download/v1.2.3/rimz-aarch64-apple-darwin.tar.gz\""

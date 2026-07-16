@@ -217,6 +217,7 @@ jobs:
 
           git -c "http.extraheader=${auth_header}" clone --depth 1 "$tap_url" "$tap_dir"
 
+          RIMZ_BREW_VERSION="${GITHUB_REF_NAME}" \
           RIMZ_BREW_BASE_URL="${GITHUB_SERVER_URL}/${owner}/${repo}/releases/download/${GITHUB_REF_NAME}" \
           RIMZ_BREW_HOMEPAGE="${GITHUB_SERVER_URL}/${owner}/${repo}" \
           RIMZ_BREW_OUT="${tap_dir}/Formula/rimz.rb" \
