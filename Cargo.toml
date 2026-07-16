@@ -10,7 +10,7 @@ repository = "https://github.com/rimio-ai/rimz"
 # bundled sqlite) uses the cfg_select! macro, stable since Rust 1.95 — above the
 # let-chains/dep-declared 1.88. Verify with `cargo +1.95 check --locked`.
 rust-version = "1.95"
-version = "0.2.0"
+version = "0.3.0"
 
 [workspace.lints.clippy]
 # Stdout is the protocol surface. Library code must use `tracing`; legal
