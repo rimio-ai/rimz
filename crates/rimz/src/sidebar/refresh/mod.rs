@@ -40,10 +40,7 @@ pub use sessions::{
     ForcedSessionRefresh, force_refresh_session_context, refresh_session_transcript_context,
     refresh_session_transcript_context_from_watch,
 };
-pub use usage::{
-    complete_realtime_account_usage, merge_account_usage_if_due, publish_account_usage_snapshot,
-    refresh_claimed_account_usage,
-};
+pub use usage::{complete_realtime_account_usage, refresh_claimed_account_usage};
 
 use self::accounts::produce_accounts;
 use self::daemon_reap::refresh_codex_daemon_reap_cache;

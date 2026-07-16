@@ -277,29 +277,44 @@ pub fn complete_realtime_account_usage(
     oauth_enabled: bool,
     realtime: Option<AccountUsageSnapshot>,
 ) -> bool {
+    complete_realtime_account_usage_with(
+        runtime,
+        kind,
+        oauth_enabled,
+        realtime,
+        merge_account_usage_if_due,
+    )
+}
+
+fn complete_realtime_account_usage_with(
+    runtime: &RuntimePaths,
+    kind: &str,
+    oauth_enabled: bool,
+    realtime: Option<AccountUsageSnapshot>,
+    complete_direct: impl FnOnce(&RuntimePaths, &str, bool) -> bool,
+) -> bool {
     let decision = account_usage_completion_decision(oauth_enabled, realtime.as_ref());
     let mut wrote = false;
-    if decision.publish_realtime {
+    if decision.publish_realtime
+        && let Some(realtime) = realtime
+    {
         wrote |= publish_account_usage_snapshot(
             runtime,
             kind,
             ProviderAccountScope::KindWide,
-            realtime
-                .as_ref()
-                .expect("publish decision requires realtime usage")
-                .clone(),
+            realtime,
             true,
         );
     }
     if decision.run_direct {
-        wrote |= merge_account_usage_if_due(runtime, kind, decision.merge_direct_windows);
+        wrote |= complete_direct(runtime, kind, decision.merge_direct_windows);
     }
     wrote
 }
 
 /// Claim and execute a direct read in-process. Codex synchronous refresh paths
 /// use this instead of maintaining a separate cadence.
-pub fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> bool {
+fn merge_account_usage_if_due(runtime: &RuntimePaths, kind: &str, merge_windows: bool) -> bool {
     let Some(adapter) = crate::agents::find_adapter(kind) else {
         return false;
     };
@@ -350,7 +365,7 @@ fn complete_direct_account_usage(
 
 /// Publish one normalized realtime snapshot. Credits and optional windows keep
 /// their owning locks and no provider call runs while either lock is held.
-pub fn publish_account_usage_snapshot(
+fn publish_account_usage_snapshot(
     runtime: &RuntimePaths,
     kind: &str,
     scope: ProviderAccountScope,
@@ -549,6 +564,115 @@ mod tests {
                 run_direct: true,
                 merge_direct_windows: true,
             }
+        );
+    }
+
+    fn account_usage_runtime() -> (tempfile::TempDir, RuntimePaths) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+        runtime.ensure_dirs().unwrap();
+        (dir, runtime)
+    }
+
+    fn usage_windows(percent: u8) -> AgentRateLimits {
+        AgentRateLimits {
+            windows: vec![RateLimitWindow {
+                duration_mins: Some(300),
+                used_percentage: Some(percent),
+                source: crate::agents::context::WindowSource::Authoritative,
+                ..Default::default()
+            }],
+        }
+    }
+
+    #[test]
+    fn account_usage_completion_publishes_complete_realtime_without_fallback() {
+        let (_dir, runtime) = account_usage_runtime();
+        let mut realtime = complete_realtime();
+        realtime.rate_limits = Some(usage_windows(12));
+
+        let wrote = complete_realtime_account_usage_with(
+            &runtime,
+            "codex",
+            true,
+            Some(realtime),
+            |_, _, _| unreachable!("complete realtime usage needs no direct fallback"),
+        );
+
+        assert!(wrote);
+        let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
+        assert_eq!(credits.entries["codex"].plan.as_deref(), Some("pro"));
+        assert_eq!(
+            read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["codex"]
+                .limits
+                .windows[0]
+                .used_percentage,
+            Some(12)
+        );
+    }
+
+    #[test]
+    fn account_usage_completion_combines_realtime_credits_with_direct_windows() {
+        let (_dir, runtime) = account_usage_runtime();
+        let realtime = AccountUsageSnapshot {
+            plan: Some("pro".to_owned()),
+            ..Default::default()
+        };
+
+        let wrote = complete_realtime_account_usage_with(
+            &runtime,
+            "codex",
+            true,
+            Some(realtime),
+            |runtime, kind, merge_windows| {
+                assert!(merge_windows);
+                publish_account_usage_snapshot(
+                    runtime,
+                    kind,
+                    ProviderAccountScope::KindWide,
+                    AccountUsageSnapshot {
+                        rate_limits: Some(usage_windows(34)),
+                        ..Default::default()
+                    },
+                    merge_windows,
+                )
+            },
+        );
+
+        assert!(wrote);
+        let credits = super::super::credits::read_credits_cache(&runtime.shared_credits_path());
+        assert_eq!(credits.entries["codex"].plan.as_deref(), Some("pro"));
+        assert_eq!(
+            read_rate_limits_cache(&runtime.shared_rate_limits_path()).entries["codex"]
+                .limits
+                .windows[0]
+                .used_percentage,
+            Some(34)
+        );
+    }
+
+    #[test]
+    fn account_usage_completion_offline_skips_publication_and_probe() {
+        let (_dir, runtime) = account_usage_runtime();
+        let called = std::cell::Cell::new(false);
+        let wrote = complete_realtime_account_usage_with(
+            &runtime,
+            "codex",
+            false,
+            Some(complete_realtime()),
+            |_, _, _| {
+                called.set(true);
+                true
+            },
+        );
+
+        assert!(!wrote);
+        assert!(!called.get());
+        assert!(
+            !super::super::credits::read_credits_cache(&runtime.shared_credits_path())
+                .entries
+                .contains_key("codex")
         );
     }
 

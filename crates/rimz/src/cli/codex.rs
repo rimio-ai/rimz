@@ -164,55 +164,34 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     // the per-user daemon then a cold-spawn when it isn't up.
     let broker_socket = runtime.codex_app_server_socket_path();
     let oauth_enabled = !agents::credits::oauth_usage_offline();
-    let Some(enrichment) =
-        codex::refresh_app_server_enrichment(Some(session_id), model, Some(&broker_socket))
-    else {
-        let oauth_wrote = oauth_enabled
-            && rimz::sidebar::refresh::merge_account_usage_if_due(&runtime, "codex", true);
-        // App-server unreachable / nothing to record. Transcript context, if it
-        // changed, was already written above.
-        if wrote || oauth_wrote {
-            let _ = rimz::store::wakeup::wake_sidebars(&runtime);
-        }
-        return Ok(());
-    };
-    let realtime_plan = enrichment
-        .context
-        .account
+    let enrichment =
+        codex::refresh_app_server_enrichment(Some(session_id), model, Some(&broker_socket));
+    let realtime = enrichment
         .as_ref()
-        .and_then(|account| account.plan.clone());
-    if oauth_enabled
-        && (realtime_plan.is_some()
-            || enrichment.extra_credits.is_some()
-            || enrichment.reset_credits.is_some())
-    {
-        rimz::sidebar::refresh::publish_account_usage_snapshot(
-            &runtime,
-            "codex",
-            rimz::ProviderAccountScope::KindWide,
-            rimz::AccountUsageSnapshot {
-                plan: realtime_plan.clone(),
-                rate_limits: enrichment.context.rate_limits.clone(),
-                extra_credits: enrichment.extra_credits.clone(),
-                reset_credits: enrichment.reset_credits.clone(),
-            },
-            true,
-        );
+        .map(|enrichment| rimz::AccountUsageSnapshot {
+            plan: enrichment
+                .context
+                .account
+                .as_ref()
+                .and_then(|account| account.plan.clone()),
+            rate_limits: enrichment.context.rate_limits.clone(),
+            extra_credits: enrichment.extra_credits.clone(),
+            reset_credits: enrichment.reset_credits.clone(),
+        });
+    wrote |= rimz::sidebar::refresh::complete_realtime_account_usage(
+        &runtime,
+        "codex",
+        oauth_enabled,
+        realtime,
+    );
+    if let Some(enrichment) = enrichment {
+        codex::merge_app_server_context(&runtime, session_id, enrichment.context)
+            .context("writing app-server agent-context sidecar")?;
+        wrote = true;
     }
-    if oauth_enabled
-        && (realtime_plan.is_none()
-            || enrichment.extra_credits.is_none()
-            || enrichment.context.rate_limits.is_none())
-    {
-        rimz::sidebar::refresh::merge_account_usage_if_due(
-            &runtime,
-            "codex",
-            enrichment.context.rate_limits.is_none(),
-        );
+    if wrote {
+        let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     }
-    codex::merge_app_server_context(&runtime, session_id, enrichment.context)
-        .context("writing app-server agent-context sidecar")?;
-    let _ = rimz::store::wakeup::wake_sidebars(&runtime);
     Ok(())
 }
 
