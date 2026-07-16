@@ -293,6 +293,21 @@ fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
         "live group still renders:\n{screen}"
     );
 
+    let expanded = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            expanded_groups: std::collections::BTreeSet::from(["/repo/merged-pod".to_owned()]),
+            ..Default::default()
+        },
+        54,
+        30,
+    );
+    assert!(
+        expanded.contains("finished-one") && expanded.contains("finished-two"),
+        "expanding the finished group reveals its member rows:\n{expanded}"
+    );
+
     let filtered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
