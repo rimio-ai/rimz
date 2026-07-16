@@ -201,22 +201,9 @@ fn process_rows_dim_a_step_below_agent_cards() {
         let snapshot =
             snapshot_with(vec![claude]).with_live_panes(vec![stamped, shell, build], None);
 
-        let mut lines = Vec::new();
-        let mut map = Vec::new();
-        let mut more_hits = Vec::new();
-        let mut row_index = 0;
         let cost_rolls = CostRolls::default();
         let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
-        worktree_group_lines(
-            &ctx,
-            &snapshot.worktree_groups[0],
-            false,
-            &mut row_index,
-            None,
-            &mut lines,
-            &mut map,
-            &mut more_hits,
-        );
+        let lines = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
 
         let span_style = |content: &str| {
             lines
@@ -262,22 +249,9 @@ fn active_process_rows_use_the_configured_working_animation_style() {
         None,
     );
 
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
-    let mut row_index = 0;
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
-    worktree_group_lines(
-        &ctx,
-        &snapshot.worktree_groups[0],
-        false,
-        &mut row_index,
-        None,
-        &mut lines,
-        &mut map,
-        &mut more_hits,
-    );
+    let lines = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
 
     let lead = lines
         .iter()

@@ -32,6 +32,7 @@ impl HitRegion {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn whole_line(line: usize, target: HitTarget) -> Self {
         Self::line(line, 0..u16::MAX, target)
     }
@@ -74,6 +75,10 @@ impl FrameInteractions {
         Some((first, rows.fold(first, |_, row| row)))
     }
 
+    pub(crate) fn row_map(&self) -> &[Option<usize>] {
+        &self.row_by_line
+    }
+
     #[cfg(test)]
     pub(crate) fn row_at_line(&self, line: usize) -> Option<usize> {
         self.row_by_line.get(line).copied().flatten()
@@ -108,22 +113,12 @@ impl FrameInteractions {
         &self.regions
     }
 
-    fn translated(self, rows: usize, columns: u16) -> Self {
-        let mut row_by_line = vec![None; rows];
-        row_by_line.extend(self.row_by_line);
-        let regions = self
-            .regions
-            .into_iter()
-            .map(|region| HitRegion {
-                rows: region.rows.start.saturating_add(rows)..region.rows.end.saturating_add(rows),
-                columns: region.columns.start.saturating_add(columns)
-                    ..region.columns.end.saturating_add(columns),
-                target: region.target,
-            })
-            .collect();
-        Self {
-            row_by_line,
-            regions,
+    fn translate(&mut self, rows: usize, columns: u16) {
+        for region in &mut self.regions {
+            region.rows =
+                region.rows.start.saturating_add(rows)..region.rows.end.saturating_add(rows);
+            region.columns = region.columns.start.saturating_add(columns)
+                ..region.columns.end.saturating_add(columns);
         }
     }
 
@@ -152,10 +147,10 @@ impl FrameInteractions {
 
     fn append(&mut self, other: Self) {
         let row_offset = self.row_by_line.len();
-        let translated = other.translated(row_offset, 0);
-        self.row_by_line
-            .extend(translated.row_by_line.into_iter().skip(row_offset));
-        self.regions.extend(translated.regions);
+        let mut other = other;
+        other.translate(row_offset, 0);
+        self.row_by_line.extend(other.row_by_line);
+        self.regions.extend(other.regions);
     }
 }
 
@@ -194,36 +189,94 @@ impl RenderedBlock {
             }
         }
         block.interactions.regions = regions;
+        block.assert_shape();
         block
     }
 
-    pub(crate) fn push_row(&mut self, line: Line<'static>, ordinal: usize) {
+    pub(crate) fn push(&mut self, line: Line<'static>, ordinal: Option<usize>) {
         self.lines.push(line);
-        self.interactions.row_by_line.push(Some(ordinal));
+        self.interactions.row_by_line.push(ordinal);
+        self.assert_shape();
+    }
+
+    pub(crate) fn push_row(&mut self, line: Line<'static>, ordinal: usize) {
+        self.push(line, Some(ordinal));
     }
 
     pub(crate) fn push_inert(&mut self, line: Line<'static>) {
-        self.lines.push(line);
-        self.interactions.row_by_line.push(None);
+        self.push(line, None);
+    }
+
+    pub(crate) fn push_with_regions(
+        &mut self,
+        line: Line<'static>,
+        ordinal: Option<usize>,
+        regions: impl IntoIterator<Item = (Range<u16>, HitTarget)>,
+    ) {
+        let row = self.lines.len();
+        self.push(line, ordinal);
+        self.interactions.regions.extend(
+            regions
+                .into_iter()
+                .map(|(columns, target)| HitRegion::line(row, columns, target)),
+        );
+        self.assert_shape();
+    }
+
+    pub(crate) fn push_target(&mut self, line: Line<'static>, target: HitTarget) {
+        self.push_with_regions(line, None, [(0..u16::MAX, target)]);
+    }
+
+    pub(crate) fn extend_inert(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
+        for line in lines {
+            self.push_inert(line);
+        }
+    }
+
+    pub(crate) fn map_lines(&mut self, mut map: impl FnMut(Line<'static>) -> Line<'static>) {
+        for line in &mut self.lines {
+            *line = map(std::mem::take(line));
+        }
+        self.assert_shape();
     }
 
     pub(crate) fn translate_columns(&mut self, columns: u16) {
-        self.interactions = std::mem::take(&mut self.interactions).translated(0, columns);
+        self.interactions.translate(0, columns);
     }
 
     pub(crate) fn append(&mut self, other: Self) {
         self.interactions.append(other.interactions);
         self.lines.extend(other.lines);
+        self.assert_shape();
     }
 
     pub(crate) fn window(mut self, start: usize, len: usize) -> Self {
         let end = start.saturating_add(len).min(self.lines.len());
         self.lines.truncate(end);
         self.lines.drain(..start.min(end));
-        Self {
+        let block = Self {
             lines: self.lines,
             interactions: self.interactions.windowed(start, len),
+        };
+        block.assert_shape();
+        block
+    }
+
+    #[cfg(test)]
+    pub(crate) fn offset_row_ordinals(&mut self, offset: usize) {
+        for ordinal in self.interactions.row_by_line.iter_mut().flatten() {
+            *ordinal += offset;
         }
+    }
+
+    fn assert_shape(&self) {
+        debug_assert_eq!(self.lines.len(), self.interactions.row_by_line.len());
+        debug_assert!(
+            self.interactions
+                .regions
+                .iter()
+                .all(|region| region.rows.end <= self.lines.len())
+        );
     }
 }
 

@@ -85,23 +85,18 @@ fn held_visible_rows_stay_visible_past_the_cap_and_update_more_count() {
     assert!(visible.contains(&"idle-8"));
     assert_eq!(visible.len(), 7);
 
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let roster = crate::sidebar_pane::view::VisibleRoster::single(&group, None, false, Some(&held));
-    worktree_group_lines_projected(
-        &ctx,
-        &roster,
-        &roster.groups()[0],
-        None,
-        &mut lines,
-        &mut map,
-        &mut more_hits,
-    );
+    let lines = worktree_group_lines_projected(WorktreeRenderContext {
+        row: &ctx,
+        roster: &roster,
+        group: &roster.groups()[0],
+        meter_pixels: None,
+    })
+    .lines;
     let texts = lines
         .iter()
         .map(|line| {
@@ -126,23 +121,18 @@ fn expanded_group_keeps_less_control_when_hold_makes_all_rows_visible() {
         .map(|row| row.id.clone())
         .collect::<HashSet<_>>();
 
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
     let roster = crate::sidebar_pane::view::VisibleRoster::single(&group, None, true, Some(&held));
-    worktree_group_lines_projected(
-        &ctx,
-        &roster,
-        &roster.groups()[0],
-        None,
-        &mut lines,
-        &mut map,
-        &mut more_hits,
-    );
+    let block = worktree_group_lines_projected(WorktreeRenderContext {
+        row: &ctx,
+        roster: &roster,
+        group: &roster.groups()[0],
+        meter_pixels: None,
+    });
+    let lines = block.lines;
     let texts = lines
         .iter()
         .map(|line| {
@@ -157,7 +147,7 @@ fn expanded_group_keeps_less_control_when_hold_makes_all_rows_visible() {
         texts.iter().any(|line| line.contains("− less")),
         "expanded group collapse control follows natural hidden tail: {texts:?}"
     );
-    assert_eq!(more_hits.len(), 1);
+    assert_eq!(block.interactions.regions().len(), 1);
 }
 
 #[test]
@@ -228,24 +218,14 @@ fn finished_group_collapses_unread_success_until_revealed() {
         .expect("agent row")
         .total_tokens = Some(1_000);
 
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
-    let mut row_index = 0;
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, 54, 0, 0, &cost_rolls);
-    worktree_group_lines(
-        &ctx,
-        &group,
-        false,
-        &mut row_index,
-        None,
-        &mut lines,
-        &mut map,
-        &mut more_hits,
-    );
+    let block = worktree_group_block(&ctx, &group, false, None);
+    let map = block.interactions.row_map();
+    let more_hits = block.interactions.regions();
+    let lines = block.lines;
     let texts = lines
         .iter()
         .map(|line| {
@@ -550,9 +530,6 @@ fn held_member_reveals_the_whole_finished_roster() {
     finished.finished = true;
     let held = HashSet::from(["coder".to_owned()]);
 
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
@@ -567,15 +544,14 @@ fn held_member_reveals_the_whole_finished_roster() {
             .collect::<Vec<_>>(),
         ["planner", "coder", "reviewer"]
     );
-    worktree_group_lines_projected(
-        &ctx,
-        &roster,
-        &roster.groups()[0],
-        None,
-        &mut lines,
-        &mut map,
-        &mut more_hits,
-    );
+    let block = worktree_group_lines_projected(WorktreeRenderContext {
+        row: &ctx,
+        roster: &roster,
+        group: &roster.groups()[0],
+        meter_pixels: None,
+    });
+    let map = block.interactions.row_map();
+    let lines = block.lines;
     let texts = lines
         .iter()
         .map(|line| {
@@ -733,25 +709,13 @@ fn render_group_at_width(
     expanded: bool,
     width: usize,
 ) -> (Vec<String>, Vec<Option<usize>>, Vec<HitRegion>) {
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
-    let mut row_index = 0;
     let snapshot = snapshot_with(Vec::new());
     let theme = Theme::fixed(true);
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(&snapshot, &theme, width, 0, 0, &cost_rolls);
-    worktree_group_lines(
-        &ctx,
-        group,
-        expanded,
-        &mut row_index,
-        None,
-        &mut lines,
-        &mut map,
-        &mut more_hits,
-    );
-    let texts = lines
+    let block = worktree_group_block(&ctx, group, expanded, None);
+    let texts = block
+        .lines
         .iter()
         .map(|line| {
             line.spans
@@ -760,7 +724,11 @@ fn render_group_at_width(
                 .collect::<String>()
         })
         .collect();
-    (texts, map, more_hits)
+    (
+        texts,
+        block.interactions.row_map().to_vec(),
+        block.interactions.regions().to_vec(),
+    )
 }
 
 fn roster_receipt(texts: &[String]) -> &str {

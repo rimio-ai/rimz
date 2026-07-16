@@ -158,23 +158,9 @@ fn rendered_group_lines_with(
     theme: &Theme,
     phase: u64,
 ) -> Vec<Line<'static>> {
-    let mut row_index = 0;
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(snapshot, theme, 54, 0, phase, &cost_rolls);
-    worktree_group_lines(
-        &ctx,
-        &snapshot.worktree_groups[0],
-        false,
-        &mut row_index,
-        None,
-        &mut lines,
-        &mut map,
-        &mut more_hits,
-    );
-    lines
+    worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines
 }
 
 /// A theme config pinning the unread effect to `blink`, so a test reads one

@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use super::chrome::abbreviate_under;
 use super::sections::{
-    RowCtx, Tier, content_width, dashboard_panel_lines_with_footer, fleet_header_lines,
-    fleet_store_lines, reset_expiry_heat_amount, worktree_group_lines,
+    DashboardContext, RowCtx, Tier, WorktreeRenderContext, content_width, dashboard_block,
+    fleet_header_lines, fleet_store_lines, reset_expiry_heat_amount,
     worktree_group_lines_projected,
 };
 use crate::sidebar_pane::pixel::meter::MeterPixels;
@@ -54,26 +54,81 @@ fn provider_panel_lines(
     theme: &Theme,
     providers: &[crate::SidebarProviderPanel],
     active_kind: Option<&str>,
-    tabbed: bool,
+    mode: DashboardMode,
     width: usize,
     zones: &crate::config::BudgetBarConfig,
     now: Timestamp,
 ) -> (Vec<Line<'static>>, Vec<HitRegion>) {
-    let active_tab = active_kind.map(str::to_owned);
-    let (lines, hits) = dashboard_panel_lines_with_footer(
+    let block = provider_dashboard_block(
         theme,
         providers,
-        active_tab.as_ref(),
-        tabbed,
+        active_kind,
+        mode,
         None,
         None,
-        false,
         None,
         width,
         zones,
         now,
     );
-    (lines, hits)
+    let hits = block.interactions.regions().to_vec();
+    (block.lines, hits)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn provider_dashboard_block(
+    theme: &Theme,
+    providers: &[crate::SidebarProviderPanel],
+    active_provider: Option<&str>,
+    mode: DashboardMode,
+    fleet_tally: Option<&crate::SpendTally>,
+    pet: Option<&crate::sidebar_pane::pets::PetView>,
+    folded_footer: Option<super::chrome::FooterParts>,
+    width: usize,
+    zones: &crate::config::BudgetBarConfig,
+    now: Timestamp,
+) -> RenderedBlock {
+    dashboard_block(DashboardContext {
+        theme,
+        providers,
+        active_provider,
+        mode,
+        fleet_tally,
+        pet,
+        folded_footer,
+        width,
+        zones,
+        now,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn provider_dashboard_parts(
+    theme: &Theme,
+    providers: &[crate::SidebarProviderPanel],
+    active_provider: Option<&str>,
+    mode: DashboardMode,
+    fleet_tally: Option<&crate::SpendTally>,
+    pet: Option<&crate::sidebar_pane::pets::PetView>,
+    folded_footer: Option<super::chrome::FooterParts>,
+    width: usize,
+    zones: &crate::config::BudgetBarConfig,
+    now: Timestamp,
+) -> (Vec<Line<'static>>, Vec<HitRegion>) {
+    let block = provider_dashboard_block(
+        theme,
+        providers,
+        active_provider,
+        mode,
+        fleet_tally,
+        pet,
+        folded_footer,
+        width,
+        zones,
+        now,
+    );
+    let hits = block.interactions.regions().to_vec();
+    (block.lines, hits)
 }
 
 fn provider_tab_kind(hit: &HitRegion) -> &str {
@@ -393,24 +448,30 @@ fn group_lines_at_width(
     selected_index: usize,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let mut row_index = 0;
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut more_hits = Vec::new();
     let cost_rolls = CostRolls::default();
     let ctx = test_row_ctx(snapshot, theme, width, selected_index, 0, &cost_rolls);
-    worktree_group_lines(
-        &ctx,
-        &snapshot.worktree_groups[0],
-        false,
-        &mut row_index,
-        None,
-        &mut lines,
-        &mut map,
-        &mut more_hits,
+    let block = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None);
+    assert_eq!(
+        block.interactions.line_count(),
+        block.lines.len(),
+        "map stays in lockstep with lines"
     );
-    assert_eq!(map.len(), lines.len(), "map stays in lockstep with lines");
-    lines
+    block.lines
+}
+
+fn worktree_group_block<'render, 'snapshot>(
+    ctx: &'render RowCtx<'snapshot>,
+    group: &'snapshot crate::SidebarWorktreeGroup,
+    expanded: bool,
+    meter_pixels: Option<&'render mut MeterPixels>,
+) -> RenderedBlock {
+    let roster = VisibleRoster::single(group, None, expanded, None);
+    worktree_group_lines_projected(WorktreeRenderContext {
+        row: ctx,
+        group: &roster.groups()[0],
+        roster: &roster,
+        meter_pixels,
+    })
 }
 
 fn line_texts(lines: &[Line<'static>]) -> Vec<String> {
@@ -547,7 +608,7 @@ fn metered_bar_rows(theme: &Theme, panel: &crate::SidebarProviderPanel) -> Vec<L
         theme,
         std::slice::from_ref(panel),
         None,
-        false,
+        DashboardMode::Stacked,
         30,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -606,7 +667,7 @@ fn stats_line(theme: &Theme, panel: &crate::SidebarProviderPanel) -> String {
         theme,
         std::slice::from_ref(panel),
         None,
-        false,
+        DashboardMode::Stacked,
         52,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),

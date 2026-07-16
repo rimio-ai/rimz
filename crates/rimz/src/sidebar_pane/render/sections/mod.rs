@@ -38,13 +38,12 @@ pub(super) use fleet::{fleet_header_lines, fleet_size, open_pr_total};
 pub(crate) use fleet::{open_pr_rows_total, status_total, unread_total};
 #[cfg(test)]
 pub(super) use process::proc_stats_spans;
-pub(super) use provider::dashboard_panel_lines_with_footer;
+pub(crate) use provider::DashboardMode;
 #[cfg(test)]
 pub(in crate::sidebar_pane::render) use provider::reset_expiry_heat_amount;
+pub(super) use provider::{DashboardContext, dashboard_block};
 pub(super) use provider::{fleet_store_lines, fleet_total_lines};
-#[cfg(test)]
-pub(super) use worktree::worktree_group_lines;
-pub(super) use worktree::worktree_group_lines_projected;
+pub(super) use worktree::{WorktreeRenderContext, worktree_group_lines_projected};
 
 pub(in crate::sidebar_pane::render) struct RowCtx<'a> {
     pub(in crate::sidebar_pane::render) theme: &'a Theme,

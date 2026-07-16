@@ -67,7 +67,9 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
 use self::animation::ResolvedAnimations;
-pub(crate) use self::sections::{open_pr_rows_total, status_total, unread_total};
+pub(crate) use self::sections::{
+    DashboardMode, open_pr_rows_total, status_total, unread_total,
+};
 use self::theme::Theme;
 
 #[cfg(test)]
@@ -413,14 +415,23 @@ fn dashboard_has_tab(snapshot: &SidebarSnapshot, kind: &str) -> bool {
 /// the pet overlay rides one provider block at a time; without pets, a single
 /// provider keeps the historical bare block.
 pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
+    dashboard_mode(snapshot) != DashboardMode::Stacked
+}
+
+pub(crate) fn dashboard_mode(snapshot: &SidebarSnapshot) -> DashboardMode {
     if snapshot.theme.pets.enabled {
-        return true;
+        return DashboardMode::Pet;
     }
-    snapshot
+    if snapshot
         .theme
         .display
         .provider_tabs
         .tabs(snapshot.providers.len())
+    {
+        DashboardMode::Tabbed
+    } else {
+        DashboardMode::Stacked
+    }
 }
 
 pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) -> bool {

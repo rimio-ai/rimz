@@ -680,23 +680,9 @@ fn truecolor_context_bar_collects_pixel_spec_and_other_themes_fall_back() {
     let snapshot = snapshot_with(vec![codex]);
 
     let render = |theme: &Theme, pixels: &mut MeterPixels| {
-        let mut lines = Vec::new();
-        let mut map = Vec::new();
-        let mut more_hits = Vec::new();
-        let mut row_index = 0;
         let cost_rolls = CostRolls::default();
         let ctx = test_row_ctx(&snapshot, theme, 44, 0, 0, &cost_rolls);
-        worktree_group_lines(
-            &ctx,
-            &snapshot.worktree_groups[0],
-            false,
-            &mut row_index,
-            Some(pixels),
-            &mut lines,
-            &mut map,
-            &mut more_hits,
-        );
-        lines
+        worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, Some(pixels)).lines
     };
 
     let mut pixels = MeterPixels::new(0x120000);
@@ -797,22 +783,9 @@ fn calm_context_bar_orders_segments_left_to_right() {
     let theme = Theme::fixed(false);
     let bar_styles_for = |agent: crate::agents::AgentState| {
         let snapshot = snapshot_with(vec![agent]);
-        let mut lines = Vec::new();
-        let mut map = Vec::new();
-        let mut more_hits = Vec::new();
-        let mut row_index = 0;
         let cost_rolls = CostRolls::default();
         let ctx = test_row_ctx(&snapshot, &theme, 44, 0, 0, &cost_rolls);
-        worktree_group_lines(
-            &ctx,
-            &snapshot.worktree_groups[0],
-            false,
-            &mut row_index,
-            None,
-            &mut lines,
-            &mut map,
-            &mut more_hits,
-        );
+        let lines = worktree_group_block(&ctx, &snapshot.worktree_groups[0], false, None).lines;
         // Identify segments by foreground: the selected card's band lays a bg
         // behind every span, orthogonal to which composition accent the segment
         // paints.

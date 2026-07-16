@@ -24,7 +24,7 @@ fn provider_bars_share_one_front_and_end_column() {
                 &theme,
                 &panels,
                 Some(panel.kind.as_str()),
-                true,
+                DashboardMode::Tabbed,
                 30,
                 &crate::config::BudgetBarConfig::default(),
                 fixed_now(),

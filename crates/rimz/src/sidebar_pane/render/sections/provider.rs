@@ -18,7 +18,7 @@ use crate::sidebar_pane::render::labels::{
 };
 use crate::sidebar_pane::render::layout::{clip, pad_line_to, spans_width, text_width};
 use crate::sidebar_pane::render::theme::{Component, Theme};
-use crate::sidebar_pane::render::{HitRegion, HitTarget};
+use crate::sidebar_pane::render::{HitTarget, RenderedBlock};
 
 use super::{pin_right, trim_spans_to_width};
 
@@ -415,7 +415,7 @@ fn spend_token_spans(
 /// The pinned per-provider dashboard. In stacked mode every account paints its
 /// own block — the dashboard's top hairline, then each provider header and
 /// brand/budget/spend body separated from the next by a blank row. In
-/// tabbed mode the top hairline becomes a [tab rail](provider_tab_rail) — each
+/// tabbed mode the top hairline becomes a tab rail — each
 /// account set into the rule, the active one a brand-filled bold chip — over
 /// the active provider's block alone, so the budgets read one account at a time;
 /// the header then drops the name the rail carries and sits beside the emblem's
@@ -424,187 +424,170 @@ fn spend_token_spans(
 /// unmetered API-key account shows one `api` budget row. The bars share one start
 /// and one end column across every block, so the dashboard reads as one aligned
 /// grid.
-#[allow(clippy::too_many_arguments)]
-pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
-    theme: &Theme,
-    providers: &[SidebarProviderPanel],
-    active_tab: Option<&String>,
-    tabbed: bool,
-    fleet_tally: Option<&SpendTally>,
-    pet: Option<&PetView>,
-    pets_enabled: bool,
-    folded_footer: Option<super::super::chrome::FooterParts>,
-    width: usize,
-    zones: &BudgetBarConfig,
-    now: Timestamp,
-) -> (Vec<Line<'static>>, Vec<HitRegion>) {
-    let mut lines = Vec::new();
-    let first = providers.first();
-    if first.is_none() && !pets_enabled {
-        return (lines, Vec::new());
-    }
-    if first.is_none() {
-        return (super::pets::pet_panel_lines(pet, theme, width), Vec::new());
-    }
-    if !tabbed {
-        let mut blocks = Vec::new();
-        for (index, panel) in providers.iter().enumerate() {
-            if index == 0 {
-                blocks.push(super::super::hairline_rule(theme, width));
-            } else {
-                blocks.push(Line::from(""));
-            }
-            blocks.extend(single_block_lines(theme, panel, width, zones, now));
-        }
-        return (blocks, Vec::new());
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DashboardMode {
+    Stacked,
+    Tabbed,
+    Pet,
+}
+
+impl DashboardMode {
+    pub(crate) fn owns_store(self, providers_present: bool) -> bool {
+        self == Self::Pet && providers_present
     }
 
-    let active_kind = active_tab
-        .filter(|kind| providers.iter().any(|panel| panel.kind == kind.as_str()))
-        .cloned()
-        .or_else(|| first.map(|panel| panel.kind.clone()))
-        .unwrap_or_default();
-    let (rail, hits) = provider_tab_rail(theme, providers, &active_kind, width);
-    let active = providers
-        .iter()
-        .find(|panel| panel.kind == active_kind)
-        .or(first);
-    lines.push(rail);
-    if let Some(active) = active {
-        if pets_enabled {
-            if let Some(pet_w) = pet_column_width(theme, pet)
-                && pet_w + PET_COLUMN_GAP < width
-            {
-                let block_w = width.saturating_sub(pet_w + PET_COLUMN_GAP);
-                lines.push(provider_pet_caption_line(theme, pet, width));
-                let block = active_provider_block_lines(
-                    theme,
-                    active,
-                    block_w,
-                    zones,
-                    now,
-                    ActiveProviderBlockOptions {
-                        fleet_tally,
-                        allow_wide: false,
-                        include_totals: true,
-                        folded_footer: None,
-                    },
-                );
-                let pet_lines = super::pets::dashboard_pet_grid_lines(pet, theme, pet_w);
-                let footer_rows = usize::from(folded_footer.is_some());
-                let block_rows = block.len() + footer_rows;
-                let pet_rows = pet_lines.len();
-                let rows = block_rows.max(pet_rows);
-                let pet_top = rows.saturating_sub(pet_rows);
-                let footer = folded_footer
-                    .clone()
-                    .map(|footer| folded_footer_line(footer, block_w));
-                let layout = ProviderPetZipLayout {
-                    pet_top,
-                    rows,
-                    block_w,
-                    pet_w,
-                    width,
-                };
-                lines.extend(zip_provider_pet_lines(block, pet_lines, footer, layout));
-                return (lines, hits);
-            } else {
-                // A blank line below the rail sets the tabs apart from the active
-                // account's tall spend block when the pet column is unavailable.
-                lines.push(Line::from(""));
-                lines.extend(active_provider_block_lines(
-                    theme,
-                    active,
-                    width,
-                    zones,
-                    now,
-                    ActiveProviderBlockOptions {
-                        fleet_tally,
-                        allow_wide: false,
-                        include_totals: true,
-                        folded_footer: folded_footer.clone(),
-                    },
-                ));
-            }
-        } else {
-            // A blank line below the rail sets the tabs apart from the active
-            // account's main block, matching the cockpit's breathing room.
-            lines.push(Line::from(""));
-            lines.extend(active_provider_block_lines(
-                theme,
-                active,
-                width,
-                zones,
-                now,
-                ActiveProviderBlockOptions {
-                    fleet_tally: None,
-                    allow_wide: true,
-                    include_totals: false,
-                    folded_footer: None,
-                },
+    fn tabbed(self) -> bool {
+        self != Self::Stacked
+    }
+
+    fn allow_wide(self) -> bool {
+        self != Self::Pet
+    }
+}
+
+pub(in crate::sidebar_pane::render) struct DashboardContext<'a> {
+    pub(in crate::sidebar_pane::render) theme: &'a Theme,
+    pub(in crate::sidebar_pane::render) providers: &'a [SidebarProviderPanel],
+    pub(in crate::sidebar_pane::render) active_provider: Option<&'a str>,
+    pub(in crate::sidebar_pane::render) mode: DashboardMode,
+    pub(in crate::sidebar_pane::render) fleet_tally: Option<&'a SpendTally>,
+    pub(in crate::sidebar_pane::render) pet: Option<&'a PetView>,
+    pub(in crate::sidebar_pane::render) folded_footer: Option<super::super::chrome::FooterParts>,
+    pub(in crate::sidebar_pane::render) width: usize,
+    pub(in crate::sidebar_pane::render) zones: &'a BudgetBarConfig,
+    pub(in crate::sidebar_pane::render) now: Timestamp,
+}
+
+pub(in crate::sidebar_pane::render) fn dashboard_block(
+    context: DashboardContext<'_>,
+) -> RenderedBlock {
+    let mut output = RenderedBlock::default();
+    let Some(first) = context.providers.first() else {
+        if context.mode == DashboardMode::Pet {
+            output.extend_inert(super::pets::pet_panel_lines(
+                context.pet,
+                context.theme,
+                context.width,
             ));
         }
+        return output;
+    };
+
+    if context.mode == DashboardMode::Stacked {
+        for (index, panel) in context.providers.iter().enumerate() {
+            output.push_inert(if index == 0 {
+                super::super::hairline_rule(context.theme, context.width)
+            } else {
+                Line::from("")
+            });
+            output.extend_inert(provider_block_lines(&context, panel, context.width, None));
+        }
+        return output;
     }
-    (lines, hits)
+
+    let active_kind = context
+        .active_provider
+        .filter(|kind| context.providers.iter().any(|panel| panel.kind == **kind))
+        .unwrap_or(first.kind.as_str());
+    let active = context
+        .providers
+        .iter()
+        .find(|panel| panel.kind == active_kind)
+        .unwrap_or(first);
+    output.append(provider_tab_rail(
+        context.theme,
+        context.providers,
+        active_kind,
+        context.width,
+    ));
+
+    if context.mode == DashboardMode::Pet
+        && let Some(pet_w) = pet_column_width(context.theme, context.pet)
+        && pet_w + PET_COLUMN_GAP < context.width
+    {
+        let block_w = context.width.saturating_sub(pet_w + PET_COLUMN_GAP);
+        output.push_inert(provider_pet_caption_line(
+            context.theme,
+            context.pet,
+            context.width,
+        ));
+        let block = provider_block_lines(&context, active, block_w, None);
+        let pet_lines = super::pets::dashboard_pet_grid_lines(context.pet, context.theme, pet_w);
+        let footer_rows = usize::from(context.folded_footer.is_some());
+        let block_rows = block.len() + footer_rows;
+        let pet_rows = pet_lines.len();
+        let rows = block_rows.max(pet_rows);
+        let footer = context
+            .folded_footer
+            .clone()
+            .map(|footer| folded_footer_line(footer, block_w));
+        output.extend_inert(zip_provider_pet_lines(
+            block,
+            pet_lines,
+            footer,
+            ProviderPetZipLayout {
+                pet_top: rows.saturating_sub(pet_rows),
+                rows,
+                block_w,
+                pet_w,
+                width: context.width,
+            },
+        ));
+        return output;
+    }
+
+    // A blank line below the rail sets tabs apart from the active account.
+    output.push_inert(Line::from(""));
+    output.extend_inert(provider_block_lines(
+        &context,
+        active,
+        context.width,
+        context.folded_footer.clone(),
+    ));
+    output
 }
 
-fn single_block_lines(
-    theme: &Theme,
+fn provider_block_lines(
+    context: &DashboardContext<'_>,
     panel: &SidebarProviderPanel,
     width: usize,
-    zones: &BudgetBarConfig,
-    now: Timestamp,
-) -> Vec<Line<'static>> {
-    let layout = ProviderLayout::for_width(width, true);
-    let mut lines = vec![provider_header_line(
-        theme,
-        panel,
-        width,
-        false,
-        layout.inline_art(),
-        now,
-    )];
-    if layout == ProviderLayout::Wide {
-        // Wide stacked blocks keep the historical identity/body breathing room.
-        let crest = art_crest_row(panel)
-            .filter(|_| width >= PROVIDER_ART_MIN_WIDTH)
-            .map(|row| pad_line_to(Line::from(art_row_spans(theme, panel, row)), width))
-            .unwrap_or_else(|| Line::from(""));
-        lines.push(crest);
-    }
-    lines.extend(provider_body_lines(theme, panel, width, layout, zones, now));
-    lines
-}
-
-struct ActiveProviderBlockOptions<'a> {
-    fleet_tally: Option<&'a SpendTally>,
-    allow_wide: bool,
-    include_totals: bool,
     folded_footer: Option<super::super::chrome::FooterParts>,
-}
-
-fn active_provider_block_lines(
-    theme: &Theme,
-    panel: &SidebarProviderPanel,
-    width: usize,
-    zones: &BudgetBarConfig,
-    now: Timestamp,
-    options: ActiveProviderBlockOptions<'_>,
 ) -> Vec<Line<'static>> {
-    let layout = ProviderLayout::for_width(width, options.allow_wide);
+    let layout = ProviderLayout::for_width(width, context.mode.allow_wide());
     let mut lines = vec![provider_header_line(
-        theme,
+        context.theme,
         panel,
         width,
-        true,
+        context.mode.tabbed(),
         layout.inline_art(),
-        now,
+        context.now,
     )];
-    lines.extend(provider_body_lines(theme, panel, width, layout, zones, now));
-    if options.include_totals {
-        lines.extend(total_spend_lines(theme, options.fleet_tally, width, layout));
+    if context.mode == DashboardMode::Stacked && layout == ProviderLayout::Wide {
+        // Wide stacked blocks keep the historical identity/body breathing room.
+        lines.push(
+            art_crest_row(panel)
+                .filter(|_| width >= PROVIDER_ART_MIN_WIDTH)
+                .map(|row| pad_line_to(Line::from(art_row_spans(context.theme, panel, row)), width))
+                .unwrap_or_else(|| Line::from("")),
+        );
     }
-    if let Some(footer) = options.folded_footer {
+    lines.extend(provider_body_lines(
+        context.theme,
+        panel,
+        width,
+        layout,
+        context.zones,
+        context.now,
+    ));
+    if context.mode == DashboardMode::Pet {
+        lines.extend(total_spend_lines(
+            context.theme,
+            context.fleet_tally,
+            width,
+            layout,
+        ));
+    }
+    if let Some(footer) = folded_footer {
         lines.push(folded_footer_line(footer, width));
     }
     lines
@@ -704,15 +687,14 @@ fn zip_provider_pet_lines(
 /// its footprint first so the selected block always has a visible chip. The
 /// hit map stays in lockstep with the frame however many kinds register or
 /// however narrow the pane.
-/// Returns the line plus one typed [`HitRegion`] per rendered tab (line index
-/// 0, columns over the full edge-to-edge footprint, so the click target holds
-/// still too) for the mouse hit-test.
+/// Returns one block containing the rail and its typed tab regions, with every
+/// click target spanning the full edge-to-edge footprint.
 fn provider_tab_rail(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
     active_kind: &str,
     width: usize,
-) -> (Line<'static>, Vec<HitRegion>) {
+) -> RenderedBlock {
     let rail = theme.body();
     let hairline = theme.glyph(GlyphRole::ChromeHairline).to_owned();
     let fill = |cells: usize| Span::styled(hairline.repeat(cells), rail);
@@ -791,8 +773,7 @@ fn provider_tab_rail(
             ));
             spans.push(fill(1));
         }
-        hits.push(HitRegion::line(
-            0,
+        hits.push((
             col as u16..(col + cells).min(width) as u16,
             HitTarget::ProviderTab(panel.kind.clone()),
         ));
@@ -802,7 +783,9 @@ fn provider_tab_rail(
     if col < width {
         spans.push(fill(width - col));
     }
-    (Line::from(trim_spans_to_width(spans, width)), hits)
+    let mut block = RenderedBlock::default();
+    block.push_with_regions(Line::from(trim_spans_to_width(spans, width)), None, hits);
+    block
 }
 
 /// Width of the tab rail's leading stub and inter-tab gaps.

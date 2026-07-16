@@ -1,4 +1,18 @@
 use super::*;
+
+#[test]
+fn dashboard_mode_is_selected_once_from_display_and_pet_settings() {
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.providers = two_provider_panels();
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
+    assert_eq!(dashboard_mode(&snapshot), DashboardMode::Stacked);
+
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
+    assert_eq!(dashboard_mode(&snapshot), DashboardMode::Tabbed);
+
+    snapshot.theme.pets.enabled = true;
+    assert_eq!(dashboard_mode(&snapshot), DashboardMode::Pet);
+}
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
@@ -27,7 +41,7 @@ fn copilot_crest_rides_tabbed_header_without_growing_the_block() {
         &theme,
         &[copilot],
         None,
-        true,
+        DashboardMode::Tabbed,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -36,7 +50,7 @@ fn copilot_crest_rides_tabbed_header_without_growing_the_block() {
         &theme,
         &[claude],
         None,
-        true,
+        DashboardMode::Tabbed,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -58,7 +72,7 @@ fn copilot_crest_uses_wide_stacked_spacer() {
         &theme,
         &[copilot_panel()],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -83,7 +97,7 @@ fn copilot_art_spans_use_catalog_tints_over_the_brand_tone() {
         &theme,
         &[copilot_panel()],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -117,7 +131,7 @@ fn copilot_art_stays_out_of_narrow_headers() {
         &theme,
         &[copilot_panel()],
         None,
-        true,
+        DashboardMode::Tabbed,
         33,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -194,7 +208,7 @@ fn render_provider_dashboard_marks_a_down_rc_host_in_alarm_color() {
         &theme,
         &[panel],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -221,7 +235,7 @@ fn provider_healthy_daily_cap_stays_quiet_on_headline_spend() {
         &theme,
         &panels[..1],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -247,7 +261,7 @@ fn provider_tripped_daily_cap_renders_against_account_day_spend() {
         &theme,
         &panels[..1],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -266,7 +280,7 @@ fn ledgerless_provider_renders_placeholder_stats_row() {
         &theme,
         &[antigravity],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -283,7 +297,7 @@ fn ledgerless_provider_renders_placeholder_stats_row() {
         &theme,
         &[accounted],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -305,7 +319,7 @@ fn render_provider_dashboard_pins_empty_state_template() {
         &theme,
         &[claude],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -395,7 +409,7 @@ fn render_provider_dashboard_shows_codex_reset_credit_header() {
         &theme,
         &[codex],
         None,
-        false,
+        DashboardMode::Stacked,
         54,
         &crate::config::BudgetBarConfig::default(),
         fixed_now(),
@@ -425,7 +439,7 @@ fn render_provider_dashboard_hides_reset_credit_header_when_not_actionable() {
             &theme,
             &[panel],
             None,
-            false,
+            DashboardMode::Stacked,
             54,
             &crate::config::BudgetBarConfig::default(),
             fixed_now(),
@@ -471,14 +485,13 @@ fn render_pets_dashboard_body_uses_pet_view() {
         active_track: "idle",
     };
 
-    let (lines, hits) = dashboard_panel_lines_with_footer(
+    let (lines, hits) = provider_dashboard_parts(
         &theme,
         &[],
         None,
-        true,
+        DashboardMode::Pet,
         None,
         Some(&pet),
-        true,
         None,
         24,
         &crate::config::BudgetBarConfig::default(),
@@ -509,14 +522,13 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
         active_track: "ask",
     };
 
-    let (lines, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = provider_dashboard_parts(
         &theme,
         &[],
         None,
-        true,
+        DashboardMode::Pet,
         None,
         Some(&pet),
-        true,
         None,
         24,
         &crate::config::BudgetBarConfig::default(),
@@ -548,14 +560,13 @@ fn render_provider_dashboard_pixel_pet_renders_placeholder_clusters() {
     };
     let active = "claude".to_owned();
 
-    let (lines, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = provider_dashboard_parts(
         &theme,
         &providers,
         Some(&active),
-        true,
+        DashboardMode::Pet,
         None,
         Some(&pet),
-        true,
         None,
         66,
         &crate::config::BudgetBarConfig::default(),
@@ -658,14 +669,13 @@ fn render_provider_dashboard_pixel_pet_keeps_total_spacer_row() {
     };
     let active = "claude".to_owned();
 
-    let (lines, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = provider_dashboard_parts(
         &theme,
         &providers,
         Some(&active),
-        true,
+        DashboardMode::Pet,
         None,
         Some(&pet),
-        true,
         None,
         66,
         &crate::config::BudgetBarConfig::default(),
@@ -736,14 +746,13 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
     };
     let active = "claude".to_owned();
 
-    let (lines, hits) = dashboard_panel_lines_with_footer(
+    let (lines, hits) = provider_dashboard_parts(
         &theme,
         &providers,
         Some(&active),
-        true,
+        DashboardMode::Pet,
         Some(&fleet),
         Some(&pet),
-        true,
         None,
         52,
         &crate::config::BudgetBarConfig::default(),
@@ -880,14 +889,13 @@ fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
     };
     let active = "claude".to_owned();
 
-    let (lines, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = provider_dashboard_parts(
         &theme,
         &providers,
         Some(&active),
-        true,
+        DashboardMode::Pet,
         None,
         Some(&pet),
-        true,
         None,
         66,
         &crate::config::BudgetBarConfig::default(),
@@ -922,14 +930,13 @@ fn render_provider_dashboard_pet_caption_uses_full_width() {
     };
     let active = "claude".to_owned();
 
-    let (lines, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = provider_dashboard_parts(
         &theme,
         &providers,
         Some(&active),
-        true,
+        DashboardMode::Pet,
         None,
         Some(&pet),
-        true,
         None,
         66,
         &crate::config::BudgetBarConfig::default(),
@@ -955,14 +962,13 @@ fn render_provider_dashboard_without_pet_uses_main_stats_body() {
     providers[0].plan = Some("Claude Max Enterprise".to_owned());
     let active = "claude".to_owned();
 
-    let (lines, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = provider_dashboard_parts(
         &theme,
         &providers,
         Some(&active),
-        true,
+        DashboardMode::Tabbed,
         None,
         None,
-        false,
         None,
         52,
         &crate::config::BudgetBarConfig::default(),
@@ -989,14 +995,13 @@ fn render_provider_dashboard_narrow_hides_io_tokens_and_version() {
     providers[0].plan = Some("Claude Max Enterprise".to_owned());
     let active = "claude".to_owned();
 
-    let (lines, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = provider_dashboard_parts(
         &theme,
         &providers,
         Some(&active),
-        true,
+        DashboardMode::Pet,
         None,
         None,
-        true,
         None,
         38,
         &crate::config::BudgetBarConfig::default(),

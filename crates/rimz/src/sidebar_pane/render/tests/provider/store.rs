@@ -159,14 +159,13 @@ fn render_fleet_store_keeps_zero_rows_for_missing_or_zero_tally() {
 
     let panel = provider_panel("claude", "Claude", 173, true, true, Some((25, 40)));
     let active = panel.kind.clone();
-    let (lines, _) = dashboard_panel_lines_with_footer(
+    let (lines, _) = provider_dashboard_parts(
         &theme,
         std::slice::from_ref(&panel),
         Some(&active),
-        true,
+        DashboardMode::Pet,
         None,
         None,
-        true,
         None,
         40,
         &crate::config::BudgetBarConfig::default(),

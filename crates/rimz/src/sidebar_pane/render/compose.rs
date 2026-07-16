@@ -14,15 +14,15 @@ use super::chrome::{
     truth_notice_lines,
 };
 use super::sections::{
-    CockpitBadges, RowCtx, Tier, cockpit_spend_line, cockpit_summary_line, content_width,
-    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_size, fleet_store_lines,
-    fleet_total_lines, open_pr_total, trim_spans_to_width, unread_total,
+    CockpitBadges, DashboardContext, RowCtx, Tier, WorktreeRenderContext, cockpit_spend_line,
+    cockpit_summary_line, content_width, dashboard_block, fleet_header_lines, fleet_size,
+    fleet_store_lines, fleet_total_lines, open_pr_total, trim_spans_to_width, unread_total,
     worktree_group_lines_projected,
 };
 use super::theme::Theme;
 use super::{
-    Alert, BodyFilter, FrameInteractions, HitRegion, HitTarget, RenderedBlock, UiState,
-    active_dashboard_tab, cockpit_spend_target, dashboard_present, dashboard_tabbed, labels,
+    Alert, BodyFilter, DashboardMode, FrameInteractions, HitRegion, HitTarget, RenderedBlock,
+    UiState, active_dashboard_tab, cockpit_spend_target, dashboard_mode, dashboard_present, labels,
 };
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
@@ -93,7 +93,7 @@ pub(crate) fn compose_lines_with_meter(
         ui.held_visible(),
     );
     let mut top = top_lines(snapshot, ui, cells, theme);
-    let (scroll, scroll_map, scroll_more_hits) = scroll_lines(
+    let scroll = scroll_lines(
         snapshot,
         ui,
         &roster,
@@ -118,26 +118,19 @@ pub(crate) fn compose_lines_with_meter(
         .sum::<usize>()
         .min(height);
 
-    let scroll_len = scroll.len();
+    let scroll_len = scroll.lines.len();
     let layout = plan_zones(ZoneInputs {
         snapshot,
         ui,
         roster: &roster,
-        scroll_map: &scroll_map,
+        scroll_map: scroll.interactions.row_map(),
         scroll_len,
         top_len: top.lines.len(),
         height,
         bottom_height,
     });
     insert_unread_banner(layout.show_banner, snapshot, theme, &mut top);
-    let scroll_block = visible_scroll_block(
-        (scroll, scroll_map, scroll_more_hits),
-        snapshot,
-        ui,
-        theme,
-        cells,
-        layout,
-    );
+    let scroll_block = visible_scroll_block(scroll, snapshot, ui, theme, cells, layout);
 
     let mut frame = top.window(0, layout.top_shown);
     frame.append(scroll_block);
@@ -237,31 +230,28 @@ fn insert_unread_banner(
     let status = lead.status().unwrap_or(AgentStatus::Waiting);
     let separator = top.lines.last().cloned().unwrap_or_default();
     let mut with_banner = std::mem::take(top).window(0, at);
-    with_banner.append(RenderedBlock::from_parts(
-        vec![pad_chrome(unread_banner_line(theme, status, count))],
-        vec![None],
-        vec![HitRegion::whole_line(0, HitTarget::UnreadBanner)],
-    ));
+    with_banner.push_target(
+        pad_chrome(unread_banner_line(theme, status, count)),
+        HitTarget::UnreadBanner,
+    );
     with_banner.push_inert(separator);
     *top = with_banner;
 }
 
 fn visible_scroll_block(
-    parts: (Vec<Line<'static>>, Vec<Option<usize>>, Vec<HitRegion>),
+    scroll: RenderedBlock,
     snapshot: &SidebarSnapshot,
     ui: &UiState,
     theme: &Theme,
     cells: usize,
     layout: ZoneLayout,
 ) -> RenderedBlock {
-    let (scroll, map, regions) = parts;
-    let scroll_len = scroll.len();
+    let scroll_len = scroll.lines.len();
     let end = layout
         .offset
         .saturating_add(layout.viewport)
         .min(scroll_len);
-    let mut block = RenderedBlock::from_parts(scroll, map, regions)
-        .window(layout.offset, end.saturating_sub(layout.offset));
+    let mut block = scroll.window(layout.offset, end.saturating_sub(layout.offset));
     let overflow = scroll_len > layout.viewport && layout.viewport > 0;
     let show_bar = match snapshot.theme.display.scrollbar {
         ScrollbarMode::Always => true,
@@ -295,12 +285,6 @@ fn visible_scroll_block(
 /// aside and the alert speaks alone. Every chrome line is gutter-padded so it
 /// breathes in the same one-cell frame as the body.
 #[derive(Clone, Copy)]
-struct DashboardPlan {
-    tabbed: bool,
-    owns_store: bool,
-}
-
-#[derive(Clone, Copy)]
 enum BottomCorner {
     FleetTotal,
     FleetStore,
@@ -311,7 +295,7 @@ enum BottomCorner {
 /// chrome before rendering any lines.
 struct BottomPlan {
     alert_active: bool,
-    dashboard: Option<DashboardPlan>,
+    dashboard: Option<DashboardMode>,
     folded_footer: bool,
     corner: BottomCorner,
     truth_notice: bool,
@@ -326,18 +310,13 @@ fn plan_bottom_chrome(
     ui: &UiState,
 ) -> BottomPlan {
     let alert_active = alert.is_some_and(Alert::is_active);
-    let dashboard = dashboard_present(snapshot, alert_active).then(|| {
-        let tabbed = dashboard_tabbed(snapshot);
-        DashboardPlan {
-            tabbed,
-            owns_store: tabbed && !snapshot.providers.is_empty() && snapshot.theme.pets.enabled,
-        }
-    });
-    let folded_footer = dashboard.is_some_and(|dashboard| dashboard.owns_store)
+    let dashboard = dashboard_present(snapshot, alert_active).then(|| dashboard_mode(snapshot));
+    let owns_store = dashboard.is_some_and(|mode| mode.owns_store(!snapshot.providers.is_empty()));
+    let folded_footer = owns_store
         && snapshot.truth_degraded.is_none()
         && ui.gate_notice.is_none()
         && alert.is_none();
-    let corner = if alert_active || dashboard.is_some_and(|dashboard| dashboard.owns_store) {
+    let corner = if alert_active || owns_store {
         BottomCorner::None
     } else if dashboard.is_some() {
         BottomCorner::FleetTotal
@@ -368,30 +347,24 @@ pub(super) fn build_bottom_chrome(
     let folded_footer = plan
         .folded_footer
         .then(|| footer_parts(snapshot, theme, inner));
-    if let Some(dashboard) = plan.dashboard {
+    if let Some(mode) = plan.dashboard {
         // The pinned separator lifts the dashboard off the cards. It is part
         // of bottom chrome, so the viewport reserves it before windowing.
         bottom.push_inert(Line::from(""));
         let active_tab = active_dashboard_tab(snapshot, ui);
-        let (panel_lines, panel_hits) = dashboard_panel_lines_with_footer(
+        let mut panel = dashboard_block(DashboardContext {
             theme,
-            &snapshot.providers,
-            active_tab.as_ref(),
-            dashboard.tabbed,
-            snapshot.value_tally.as_ref(),
-            ui.pet.as_ref(),
-            snapshot.theme.pets.enabled,
-            folded_footer.clone(),
-            inner,
-            &snapshot.theme.display.budget_bar,
-            snapshot.now,
-        );
-        let panel_len = panel_lines.len();
-        let mut panel = RenderedBlock::from_parts(
-            panel_lines.into_iter().map(pad_chrome).collect(),
-            vec![None; panel_len],
-            panel_hits,
-        );
+            providers: &snapshot.providers,
+            active_provider: active_tab.as_deref(),
+            mode,
+            fleet_tally: snapshot.value_tally.as_ref(),
+            pet: ui.pet.as_ref(),
+            folded_footer: folded_footer.clone(),
+            width: inner,
+            zones: &snapshot.theme.display.budget_bar,
+            now: snapshot.now,
+        });
+        panel.map_lines(pad_chrome);
         panel.translate_columns(1);
         bottom.append(panel);
     }
@@ -459,9 +432,7 @@ pub(super) fn build_bottom_chrome(
 }
 
 fn append_inert_lines(block: &mut RenderedBlock, lines: impl IntoIterator<Item = Line<'static>>) {
-    for line in lines {
-        block.push_inert(line);
-    }
+    block.extend_inert(lines);
 }
 
 /// One draw's lines, typed interactions, and resolved zone positions.
@@ -807,10 +778,8 @@ pub(super) fn scroll_lines(
     width: usize,
     theme: &Theme,
     mut meter_pixels: Option<&mut MeterPixels>,
-) -> (Vec<Line<'static>>, Vec<Option<usize>>, Vec<HitRegion>) {
-    let mut lines = Vec::new();
-    let mut map: Vec<Option<usize>> = Vec::new();
-    let mut more_hits = Vec::new();
+) -> RenderedBlock {
+    let mut block = RenderedBlock::default();
 
     if !snapshot.worktree_groups.is_empty() {
         let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
@@ -837,23 +806,19 @@ pub(super) fn scroll_lines(
                 continue;
             }
             if emitted {
-                lines.push(Line::from(""));
-                map.push(None);
+                block.push_inert(Line::from(""));
             }
             emitted = true;
-            worktree_group_lines_projected(
-                &ctx,
+            block.append(worktree_group_lines_projected(WorktreeRenderContext {
+                row: &ctx,
                 roster,
                 group,
-                meter_pixels.as_deref_mut(),
-                &mut lines,
-                &mut map,
-                &mut more_hits,
-            );
+                meter_pixels: meter_pixels.as_deref_mut(),
+            }));
         }
     }
 
-    (lines, map, more_hits)
+    block
 }
 
 /// Append structural (non-row) lines, tagging each map slot `None` and opening
