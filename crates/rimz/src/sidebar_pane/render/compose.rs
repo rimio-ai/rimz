@@ -827,10 +827,11 @@ pub(super) fn scroll_lines(
         };
         // A group the make-up filter empties is skipped whole — header,
         // rows, and separator — so the filtered body holds only worktrees
-        // with a matching row; the external catch-all is just another group.
+        // with a matching row. A finished pod whose collapse hides every row
+        // still renders its header and `+K done` toggle.
         let mut emitted = false;
         for group in roster.groups() {
-            if group.is_empty() {
+            if group.is_empty() && group.hidden_count() == 0 {
                 continue;
             }
             if emitted {

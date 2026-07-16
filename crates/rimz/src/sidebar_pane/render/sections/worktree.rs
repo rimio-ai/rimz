@@ -31,8 +31,8 @@ use super::{Gutter, RowCtx, content_width, with_gutter};
 /// the value *before* `row_index` advances, matching `app::visible_rows()`:
 /// both consume one [`VisibleRoster`], so ordinals stay 1:1 under capping,
 /// expansion, and make-up filters. The caller skips a group the filter empties;
-/// the more/less line is filter-suppressed because a narrowed body is already
-/// uncapped.
+/// a finished pod the collapse empties still renders its header and toggle. The
+/// more/less line is filter-suppressed because a narrowed body is already uncapped.
 pub(in crate::sidebar_pane::render) fn worktree_group_lines_projected(
     ctx: &RowCtx<'_>,
     roster: &VisibleRoster<'_>,

@@ -254,6 +254,66 @@ fn finished_group_collapses_unread_success_until_revealed() {
 }
 
 #[test]
+fn body_keeps_collapsed_finished_group_until_filter_empties_it() {
+    let mut finished_rows = vec![
+        agent_row("finished-one", AgentStatus::Success),
+        agent_row("finished-two", AgentStatus::Success),
+    ];
+    finished_rows[0].name = "finished-one".to_owned();
+    finished_rows[1].name = "finished-two".to_owned();
+    let mut finished = group(finished_rows);
+    finished.key = "/repo/merged-pod".to_owned();
+    finished.label = "merged-pod".to_owned();
+    finished.finished = true;
+
+    let mut live_row = agent_row("live-row", AgentStatus::Running);
+    live_row.name = "live-runner".to_owned();
+    let mut live = group(vec![live_row]);
+    live.key = "/repo/live-pod".to_owned();
+    live.label = "live-pod".to_owned();
+
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.worktree_groups = vec![finished, live];
+
+    let screen = snapshot_to_screen(&snapshot, 54, 30);
+    assert!(
+        screen.contains("merged-pod"),
+        "finished header remains:\n{screen}"
+    );
+    assert!(
+        screen.contains("+2 done"),
+        "finished toggle remains:\n{screen}"
+    );
+    assert!(
+        !screen.contains("finished-one") && !screen.contains("finished-two"),
+        "finished member rows remain collapsed:\n{screen}"
+    );
+    assert!(
+        screen.contains("live-runner"),
+        "live group still renders:\n{screen}"
+    );
+
+    let filtered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            make_up_filter: Some(BodyFilter::Status(AgentStatus::Running)),
+            ..Default::default()
+        },
+        54,
+        30,
+    );
+    assert!(
+        !filtered.contains("merged-pod") && !filtered.contains("+2 done"),
+        "a filter-empty finished group is skipped whole:\n{filtered}"
+    );
+    assert!(
+        filtered.contains("live-runner"),
+        "the matching live group remains:\n{filtered}"
+    );
+}
+
+#[test]
 fn finished_group_toggle_carries_the_member_cost_receipt() {
     let total = 0.42 + 0.58;
     let mut finished = group(vec![
