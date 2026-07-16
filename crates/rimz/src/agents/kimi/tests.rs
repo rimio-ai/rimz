@@ -241,6 +241,291 @@ fn session_index_resolves_valid_main_wire_and_rejects_escape() {
 }
 
 #[test]
+fn subagent_start_join_matches_unique_and_swarm_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    std::fs::create_dir_all(session.join("agents/main")).unwrap();
+    let first = session.join("agents/agent-0");
+    std::fs::write(
+        session.join("state.json"),
+        serde_json::to_vec(&json!({
+            "agents": {
+                "main": {"homedir": session.join("agents/main"), "type": "main", "parentAgentId": null},
+                "agent-0": {"homedir": first, "type": "sub", "parentAgentId": "main", "swarmItem": "parser"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let matched = subagents::resolve_start(&session, Some("inspect the parser")).unwrap();
+    assert_eq!(matched.id, "agent-0");
+    assert_eq!(matched.task.as_deref(), Some("inspect the parser"));
+
+    let second = session.join("agents/agent-1");
+    std::fs::write(
+        session.join("state.json"),
+        serde_json::to_vec(&json!({
+            "agents": {
+                "agent-0": {"homedir": first, "type": "sub", "parentAgentId": "main", "swarmItem": "parser"},
+                "agent-1": {"homedir": second, "type": "sub", "parentAgentId": "main", "swarmItem": "renderer"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        subagents::resolve_start(&session, Some("inspect the renderer"))
+            .unwrap()
+            .id,
+        "agent-1"
+    );
+    assert!(subagents::resolve_start(&session, Some("inspect code")).is_none());
+}
+
+#[test]
+fn subagent_start_join_retries_the_queued_state_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    std::fs::create_dir_all(session.join("agents/main")).unwrap();
+    std::fs::write(session.join("state.json"), r#"{"agents":{}}"#).unwrap();
+    let write_session = session.clone();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let child = write_session.join("agents/agent-0");
+        std::fs::write(
+            write_session.join("state.json"),
+            serde_json::to_vec(&json!({
+                "agents": {
+                    "agent-0": {"homedir": child, "type": "sub", "parentAgentId": "main"}
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    });
+
+    assert_eq!(
+        subagents::resolve_start(&session, Some("inspect parser"))
+            .unwrap()
+            .id,
+        "agent-0"
+    );
+    writer.join().unwrap();
+}
+
+#[test]
+fn subagent_stop_join_requires_a_unique_response_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    let first = session.join("agents/agent-0");
+    let second = session.join("agents/agent-1");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(
+        session.join("state.json"),
+        serde_json::to_vec(&json!({
+            "agents": {
+                "agent-0": {"homedir": first, "type": "sub", "parentAgentId": "main"},
+                "agent-1": {"homedir": second, "type": "sub", "parentAgentId": "main"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_child_wire(
+        &first.join("wire.jsonl"),
+        "inspect parser",
+        "Done: parser",
+        "explore",
+    );
+    write_child_wire(
+        &second.join("wire.jsonl"),
+        "inspect renderer",
+        "Done: renderer",
+        "coder",
+    );
+
+    let matched = subagents::resolve_stop(&session, Some("Done: renderer")).unwrap();
+    assert_eq!(matched.id, "agent-1");
+    assert_eq!(matched.task.as_deref(), Some("inspect renderer"));
+    assert_eq!(matched.profile.as_deref(), Some("coder"));
+    assert!(subagents::resolve_stop(&session, Some("Done:")).is_none());
+    assert!(subagents::resolve_stop(&session, None).is_none());
+
+    std::fs::write(
+        session.join("state.json"),
+        serde_json::to_vec(&json!({
+            "agents": {
+                "agent-0": {"homedir": first, "type": "sub", "parentAgentId": "main"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        subagents::resolve_stop(&session, Some(" ")).unwrap().id,
+        "agent-0"
+    );
+}
+
+#[test]
+fn main_turn_mid_step_is_fail_open_and_closes_at_step_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    let main = session.join("agents/main/wire.jsonl");
+    std::fs::create_dir_all(main.parent().unwrap()).unwrap();
+    assert!(!subagents::main_turn_mid_step(&session));
+    std::fs::write(
+        &main,
+        "{\"type\":\"llm.request\",\"time\":1,\"kind\":\"loop\"}\n",
+    )
+    .unwrap();
+    assert!(subagents::main_turn_mid_step(&session));
+    std::fs::write(
+        &main,
+        concat!(
+            "{\"type\":\"llm.request\",\"time\":1,\"kind\":\"loop\"}\n",
+            "{\"type\":\"context.append_loop_event\",\"time\":2,\"event\":{\"type\":\"step.end\",\"uuid\":\"s1\"}}\n"
+        ),
+    )
+    .unwrap();
+    assert!(!subagents::main_turn_mid_step(&session));
+}
+
+#[test]
+fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    let child = session.join("agents/agent-0");
+    std::fs::create_dir_all(session.join("agents/main")).unwrap();
+    std::fs::write(
+        session.join("state.json"),
+        serde_json::to_vec(&json!({
+            "agents": {
+                "agent-0": {"homedir": child, "type": "sub", "parentAgentId": "main"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let start_payload = json!({
+        "session_id": "session-1",
+        "cwd": "/workspace",
+        "agent_name": "explore",
+        "prompt": "trace the parser"
+    });
+    let mut start = KimiAdapter
+        .observe_subagent_lifecycle(
+            "SubagentStart",
+            &start_payload,
+            &payloads::parse(&start_payload),
+            &session,
+        )
+        .unwrap();
+    start.transcript_path = Some("[session]/agents/agent-0/wire.jsonl".to_owned());
+    insta::assert_debug_snapshot!(start, @r###"
+    AgentLifecycleObservation {
+        agent_id: Some(
+            AgentSessionId(
+                "session-1:agent-0",
+            ),
+        ),
+        agent_name: Some(
+            "explore",
+        ),
+        launch: LaunchParams {
+            profile: None,
+            mode: None,
+            role: None,
+            model: None,
+            effort: None,
+            budget: None,
+            team: None,
+            launch_group: None,
+            launch_ordinal: None,
+            channel: None,
+            kind_ordinal: None,
+        },
+        signal: SubagentStarted,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        worktree_path: Some(
+            "/workspace",
+        ),
+        worktree_branch: None,
+        task: Some(
+            "trace the parser",
+        ),
+        prompt: Some(
+            "trace the parser",
+        ),
+        transcript_path: Some(
+            "[session]/agents/agent-0/wire.jsonl",
+        ),
+        origin: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        turn_error: None,
+        cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        pane_id: None,
+        pane_stamp: None,
+        parent_agent_id: Some(
+            AgentSessionId(
+                "session-1",
+            ),
+        ),
+    }
+    "###);
+
+    std::fs::create_dir_all(&child).unwrap();
+    write_child_wire(
+        &child.join("wire.jsonl"),
+        "trace the parser",
+        "Parser traced",
+        "explore",
+    );
+    let stop_payload = json!({
+        "session_id": "session-1",
+        "agent_name": "explore",
+        "response": "Parser traced"
+    });
+    let stop = KimiAdapter
+        .observe_subagent_lifecycle(
+            "SubagentStop",
+            &stop_payload,
+            &payloads::parse(&stop_payload),
+            &session,
+        )
+        .unwrap();
+    assert_eq!(stop.agent_id.as_deref(), Some("session-1:agent-0"));
+    assert_eq!(stop.parent_agent_id.as_deref(), Some("session-1"));
+    assert_eq!(stop.task.as_deref(), Some("trace the parser"));
+    assert_eq!(
+        stop.signal,
+        LifecycleSignal::SubagentStopped { errored: false }
+    );
+}
+
+fn write_child_wire(path: &Path, prompt: &str, response: &str, profile: &str) {
+    std::fs::write(
+        path,
+        format!(
+            "{{\"type\":\"config.update\",\"profileName\":{profile}}}\n{{\"type\":\"turn.prompt\",\"input\":[{{\"type\":\"text\",\"text\":{prompt}}}],\"origin\":{{\"kind\":\"system_trigger\"}}}}\n{{\"type\":\"context.append_loop_event\",\"event\":{{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{{\"type\":\"text\",\"text\":{response}}}}}}}\n{{\"type\":\"context.append_loop_event\",\"event\":{{\"type\":\"step.end\",\"uuid\":\"s1\"}}}}\n",
+            profile = serde_json::to_string(profile).unwrap(),
+            prompt = serde_json::to_string(prompt).unwrap(),
+            response = serde_json::to_string(response).unwrap(),
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
 fn usage_records_drive_context_spend_and_additive_scopes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sessions/wd/s1/agents/main/wire.jsonl");

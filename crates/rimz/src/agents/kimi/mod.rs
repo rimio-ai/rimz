@@ -5,6 +5,7 @@ mod install;
 pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod spend;
+mod subagents;
 mod transcript;
 pub mod wire;
 
@@ -13,6 +14,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
+use tracing::debug;
 
 use super::context::{AgentCurrentUsage, AgentTokenUsage};
 use super::descriptor::{
@@ -169,8 +171,8 @@ const KIMI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "PreCompact/PostCompact",
     },
     subagents: ConcernCoverage::Partial {
-        via: "parent activity hooks",
-        gap: "hooks carry no child identity; Wire child rows are deferred",
+        via: "SubagentStart/Stop + state.json/wire join",
+        gap: "resumed subagents and ambiguous starts surface only at stop",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "background parking is not mapped",
@@ -217,12 +219,12 @@ const KIMI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
         event: "PermissionRequest",
     },
     subagent_started: HookCoverage::Derived {
-        via: "parent activity only",
-        gap: "child identity is absent from hooks",
+        via: "native hook + durable state.json/wire join",
+        gap: "resumed subagents and ambiguous starts have no start-time identity",
     },
     subagent_stopped: HookCoverage::Derived {
-        via: "parent activity only",
-        gap: "child identity is absent from hooks",
+        via: "native hook + durable state.json/wire join",
+        gap: "ambiguous response matches are quarantined",
     },
     compacting: HookCoverage::Native {
         event: "PreCompact",
@@ -335,13 +337,13 @@ impl AgentAdapter for KimiAdapter {
             ),
             ClassificationSample::new(
                 "SubagentStart",
-                serde_json::json!({"session_id":"s","agent_name":"coder"}),
+                serde_json::json!({"session_id":"s","agent_name":"coder","prompt":"inspect the parser"}),
                 AgentHookClass::Lifecycle,
                 None,
             ),
             ClassificationSample::new(
                 "SubagentStop",
-                serde_json::json!({"session_id":"s","agent_name":"coder"}),
+                serde_json::json!({"session_id":"s","agent_name":"coder","response":"done"}),
                 AgentHookClass::Lifecycle,
                 None,
             ),
@@ -433,6 +435,35 @@ impl AgentAdapter for KimiAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         let parsed = payloads::parse(payload);
+        let session_dir = matches!(event_name, "SubagentStart" | "SubagentStop" | "Stop")
+            .then(|| {
+                wire::session_dir(
+                    parsed.session_id.as_deref()?,
+                    parsed.cwd.as_deref().map(Path::new),
+                )
+            })
+            .flatten();
+        if matches!(event_name, "SubagentStart" | "SubagentStop") {
+            return self.observe_subagent_lifecycle(
+                event_name,
+                payload,
+                &parsed,
+                session_dir.as_deref()?,
+            );
+        }
+        if event_name == "Stop"
+            && session_dir.as_deref().is_some_and(|session_dir| {
+                subagents::has_subagents(session_dir) && subagents::main_turn_mid_step(session_dir)
+            })
+        {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                kind = self.descriptor().kind,
+                session_id = parsed.session_id.as_deref().unwrap_or(""),
+                "suppressed child-fired Kimi Stop while the main wire was mid-step",
+            );
+            return None;
+        }
         let signal = match event_name {
             "SessionStart" => LifecycleSignal::Registered,
             "UserPromptSubmit" => LifecycleSignal::TurnStarted,
@@ -644,6 +675,56 @@ impl AgentAdapter for KimiAdapter {
             credentials_stamp: oauth_usage::credentials_stamp(),
             ..Default::default()
         })
+    }
+}
+
+impl KimiAdapter {
+    fn observe_subagent_lifecycle(
+        &self,
+        event_name: &str,
+        payload: &Value,
+        parsed: &payloads::KimiHookPayload,
+        session_dir: &Path,
+    ) -> Option<AgentLifecycleObservation> {
+        let matched = match event_name {
+            "SubagentStart" => subagents::resolve_start(session_dir, parsed.prompt.as_deref()),
+            "SubagentStop" => subagents::resolve_stop(session_dir, parsed.response.as_deref()),
+            _ => return None,
+        };
+        let Some(matched) = matched else {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                kind = self.descriptor().kind,
+                event = event_name,
+                session_id = parsed.session_id.as_deref().unwrap_or(""),
+                "quarantined Kimi subagent hook without a unique durable child match",
+            );
+            return None;
+        };
+        let session_id = parsed.session_id.as_deref()?.trim();
+        if session_id.is_empty() {
+            return None;
+        }
+        let signal = match event_name {
+            "SubagentStart" => LifecycleSignal::SubagentStarted,
+            "SubagentStop" => LifecycleSignal::SubagentStopped { errored: false },
+            _ => return None,
+        };
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from(format!("{session_id}:{}", matched.id))),
+            signal,
+        )
+        .with_worktree_from_payload(payload);
+        observation.parent_agent_id = Some(AgentSessionId::from(session_id));
+        observation.agent_name = parsed
+            .agent_name
+            .as_deref()
+            .and_then(non_empty_trimmed)
+            .or(matched.profile);
+        observation.task = sanitize_user_prompt(matched.task.as_deref());
+        observation.prompt = observation.task.clone();
+        observation.transcript_path = Some(matched.transcript_path.to_string_lossy().into_owned());
+        Some(observation)
     }
 }
 

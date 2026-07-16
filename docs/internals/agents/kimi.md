@@ -20,8 +20,10 @@ RimZ installs additive `[[hooks]]` entries in `${KIMI_CODE_HOME:-~/.kimi-code}/c
 | `PreToolUse` for `AskUserQuestion` | `awaiting_input(Question)` |
 | `PermissionResult` | non-mutating answer edge that clears the native wait |
 | every `PostToolUse` / `PostToolUseFailure` | `tool_used`; successful `Write` and `Edit` set edit proof, successful `Bash` sets mutation proof, and failure clears a native wait without claiming mutation |
-| `Stop` / `StopFailure` | clean / errored `turn_ended` |
+| `Stop` / `StopFailure` | clean / errored `turn_ended`; suppress a child-fired `Stop` only while valid child metadata exists and the main wire is mid-step |
 | `Interrupt` | clean `turn_ended`; settle the row to idle |
+| `SubagentStart` | derived `subagent_started` after joining the new child in `state.json.agents` to its wire |
+| `SubagentStop` | derived `subagent_stopped` after matching the response preview to one child wire |
 | `PreCompact` / `PostCompact` | `compacting` / `compaction_ended` with `manual` or `auto` trigger |
 | `SessionEnd` | `ended` |
 
@@ -50,7 +52,7 @@ The current tail mapper consumes:
 - every additive `usage.record` for spend, with only explicit turn scope supplying the current-turn split;
 - nonzero `step.end.usage`, `context.clear`, and `context.apply_compaction.tokensAfter` as ordered context-fill boundaries.
 
-The durable log also exposes permission, compaction-bracket, tool-snapshot, and child-agent records. Keep answered-ask recovery, tool replay, and child-row joins deferred until their consumers can preserve those facts without guessing.
+The durable log also exposes permission, compaction-bracket, tool-snapshot, and child-agent records. The child-row join consumes child prompts, assistant responses, and profile updates; keep answered-ask recovery and tool replay deferred until their consumers can preserve those facts without guessing.
 
 Clean turn end, open approvals, open questions, retry waits, and live status snapshots are not complete durable-record facts. Hooks own those lifecycle edges; pane/process liveness reconciles missed delivery.
 
@@ -80,9 +82,13 @@ Binary discovery currently identifies an adapter from executable names and insta
 
 ## Subagents and background work
 
-`SubagentStart` and `SubagentStop` refresh parent activity immediately but carry only the profile name and truncated prompt/response. Exact child rows require joining `state.json.agents` with `agents/<agent-id>/wire.jsonl`; the session map supplies child id, parent id, agent type, and home directory. Keep `sub` partial until that join and child liveness land.
+`SubagentStart` and `SubagentStop` carry the profile name and a 500-character prompt or response preview, but no child id. RimZ parses `state.json.agents`, keeps validated `type: "sub"` homes under the resolved session directory, and joins each hook to `agents/<agent-id>/wire.jsonl`. Child rollup ids are namespaced as `<session-id>:<agent-id>` so Kimi's per-session `agent-0` counters stay distinct, while the root `session_id` remains the durable parent link.
 
-Background task state lives under the session's `tasks/` tree, and terminal status reaches the root through `Notification`. A clean `Stop` does not include the active-task set. Keep `bg` unsupported until the adapter joins durable task state and can prove that the parent parked while work remains in flight. Main-session transcript and cost deliberately exclude `agents/<child>/wire.jsonl`; child-inclusive history and spend require the same state-map join as exact subagent rows.
+A new-child Start matches entries whose wire has no `turn.prompt` yet. The awaited hook can race Kimi's queued `state.json` write, so a missing candidate is retried with bounded backoff for at most 250 ms; concurrent candidates use `swarmItem` text from the prompt preview, and an unresolved ambiguity is quarantined instead of folded onto the parent. Stop matches a unique child whose final assistant text begins with the response preview, then carries the child's first prompt as its task. A Stop without a preview resolves only when the session has exactly one child. Stop is create-on-miss, so a missed Start still materializes a settled child row.
+
+Resumed children already have `turn.prompt` before their awaited Start hook, and the hook exposes no resume id; ambiguous new-child Starts likewise have no exact identity. Those starts surface only when the response-side Stop join becomes unique, so `sub` remains partial. A child turn also fires a session-shaped `Stop`; RimZ suppresses it only when validated child metadata exists and the main wire's newest `llm.request` has no following `step.end`. Unreadable metadata or wires fail open, and the genuine main Stop follows its final durable `step.end` and settles the parent normally.
+
+Background task state lives under the session's `tasks/` tree, and terminal status reaches the root through `Notification`. A clean `Stop` does not include the active-task set. Keep `bg` unsupported until the adapter joins durable task state and can prove that the parent parked while work remains in flight. Main-session transcript and cost deliberately exclude `agents/<child>/wire.jsonl`; child-inclusive history and spend remain separate from the lifecycle-only child join.
 
 ## Launch and supervised runs
 

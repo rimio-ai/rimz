@@ -126,7 +126,15 @@ pub(super) fn normalize(records: &[WireRecord]) -> Vec<TranscriptMessage> {
 }
 
 pub(super) fn latest_assistant(lines: &str) -> Option<String> {
-    let messages = parse_messages(lines);
+    let records = lines
+        .lines()
+        .filter_map(|line| serde_json::from_str::<WireRecord>(line).ok())
+        .collect::<Vec<_>>();
+    latest_assistant_from_records(&records)
+}
+
+pub(super) fn latest_assistant_from_records(records: &[WireRecord]) -> Option<String> {
+    let messages = normalize(records);
     let latest_user = messages
         .iter()
         .rposition(|message| message.role == TranscriptRole::User);
