@@ -381,6 +381,20 @@ fn pi_answer_plan_rejects_unavailable_or_mismatched_answers() {
             .to_string()
             .contains("only for questionnaire asks")
     );
+    assert!(
+        PiAdapter
+            .answer_plan(
+                AskKind::Question,
+                &[ask_question(2, false, false)],
+                &[AskReply {
+                    picks: vec![0],
+                    text: Some("Custom".to_owned()),
+                }],
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("cannot combine picks and text")
+    );
 }
 
 fn ask_question(option_count: usize, multi_select: bool, has_option_previews: bool) -> AskQuestion {
