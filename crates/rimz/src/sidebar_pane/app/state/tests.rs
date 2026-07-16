@@ -452,7 +452,7 @@ fn diagnostics_scope_group_migrations_to_elder_only() {
         &consumer_sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
-            incoming_snapshot: &next,
+            incoming_panes_produced_at_ms: next.panes_produced_at_ms,
             next_snapshot: &next,
             prev_health: &Health::default(),
             next_health: &active_health,
@@ -495,7 +495,7 @@ fn diagnostics_scope_group_migrations_to_elder_only() {
         &elder_sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
-            incoming_snapshot: &next,
+            incoming_panes_produced_at_ms: next.panes_produced_at_ms,
             next_snapshot: &next,
             prev_health: &Health::default(),
             next_health: &Health::default(),
@@ -1049,7 +1049,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
         &sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
-            incoming_snapshot: &prev,
+            incoming_panes_produced_at_ms: prev.panes_produced_at_ms,
             next_snapshot: &prev,
             prev_health: &Health::default(),
             next_health: &Health {
@@ -1069,7 +1069,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
         &sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
-            incoming_snapshot: &incoming,
+            incoming_panes_produced_at_ms: incoming.panes_produced_at_ms,
             next_snapshot: &prev,
             prev_health: &Health::default(),
             next_health: &Health::default(),
@@ -1086,7 +1086,7 @@ fn diagnostics_record_fetch_and_gate_transitions() {
         &sink,
         FetchDiagnostics {
             prev_snapshot: &prev,
-            incoming_snapshot: &prev,
+            incoming_panes_produced_at_ms: prev.panes_produced_at_ms,
             next_snapshot: &prev,
             prev_health: &Health::default(),
             next_health: &Health::default(),

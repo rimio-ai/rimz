@@ -113,7 +113,7 @@ pub(super) struct ApplyOutcome {
 
 pub(super) struct FetchDiagnostics<'a> {
     pub(super) prev_snapshot: &'a SidebarSnapshot,
-    pub(super) incoming_snapshot: &'a SidebarSnapshot,
+    pub(super) incoming_panes_produced_at_ms: Option<u64>,
     pub(super) next_snapshot: &'a SidebarSnapshot,
     pub(super) prev_health: &'a Health,
     pub(super) next_health: &'a Health,
@@ -129,7 +129,7 @@ pub(super) struct FetchDiagnostics<'a> {
 pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchDiagnostics<'_>) {
     let FetchDiagnostics {
         prev_snapshot,
-        incoming_snapshot,
+        incoming_panes_produced_at_ms,
         next_snapshot,
         prev_health,
         next_health,
@@ -151,7 +151,7 @@ pub(super) fn emit_diagnostics(diag: &crate::diag::DiagSink, diagnostics: FetchD
         diag.emit(crate::diag::record::DiagEvent::GateHold {
             rule,
             prev_produced_at_ms: prev_snapshot.panes_produced_at_ms,
-            incoming_produced_at_ms: incoming_snapshot.panes_produced_at_ms,
+            incoming_produced_at_ms: incoming_panes_produced_at_ms,
             reject_streak: next_gate.reject_streak,
         });
     } else if next_gate.rule.is_none()

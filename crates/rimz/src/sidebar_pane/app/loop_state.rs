@@ -1421,9 +1421,6 @@ impl LoopState {
         let fetch_was_ok = application.snapshot.is_ok();
         let fetch_failure = application.snapshot.as_ref().err().cloned();
         let final_for_request = application.phase == FetchPhase::Final;
-        let prev_good = self.current.clone();
-        let prev_health = self.health.clone();
-        let prev_gate = self.gate.clone();
         let mut computed = compute_next_state(
             &config.workspace_id,
             None,
@@ -1438,19 +1435,19 @@ impl LoopState {
             // frameless/status-only fast fold that precedes it.
             computed.health = self.health.clone();
         }
-        let incoming_snapshot = computed.snapshot.clone();
+        let incoming_panes_produced_at_ms = computed.snapshot.panes_produced_at_ms;
         let now = Timestamp::now();
         let (state, next_gate, rejected, released_via_escape_hatch) =
-            apply_gate(computed, fetch_was_ok, &prev_good, &self.gate, now);
+            apply_gate(computed, fetch_was_ok, &self.current, &self.gate, now);
         emit_diagnostics(
             diag,
             FetchDiagnostics {
-                prev_snapshot: &prev_good,
-                incoming_snapshot: &incoming_snapshot,
+                prev_snapshot: &self.current,
+                incoming_panes_produced_at_ms,
                 next_snapshot: &state.snapshot,
-                prev_health: &prev_health,
+                prev_health: &self.health,
                 next_health: &state.health,
-                prev_gate: &prev_gate,
+                prev_gate: &self.gate,
                 next_gate: &next_gate,
                 fetch_failure,
                 rejected,
@@ -1459,11 +1456,11 @@ impl LoopState {
                 now,
             },
         );
-        self.install_fetch_state(state, next_gate);
+        let prev_good = self.install_fetch_state(state, next_gate);
         (prev_good, rejected, now)
     }
 
-    fn install_fetch_state(&mut self, state: RenderState, next_gate: GateState) {
+    fn install_fetch_state(&mut self, state: RenderState, next_gate: GateState) -> SidebarSnapshot {
         self.gate = next_gate;
         self.ui.gate_notice = self.gate.rule.map(|rule| render::GateNotice { rule });
         if let Some(alert) = state
@@ -1476,7 +1473,7 @@ impl LoopState {
         }
         self.last_snapshot = state.last_snapshot;
         self.health = state.health;
-        self.current = state.snapshot;
+        std::mem::replace(&mut self.current, state.snapshot)
     }
 
     fn sweep_read_receipts(
