@@ -28,14 +28,14 @@ pub enum WidthPercent {
 }
 
 impl WidthPercent {
-    /// Resolve the policy for a known view width, or use the wide branch when
+    /// Resolve the policy for a known view width, using the narrow branch when
     /// geometry is unavailable.
     pub fn resolve(self, view_cols: Option<u64>) -> u16 {
         match self {
             Self::Fixed(percent) => percent.clamp(10, 90),
             Self::Auto => match view_cols {
-                Some(cols) if cols <= AUTO_WIDTH_BREAKPOINT_COLS => AUTO_WIDTH_NARROW_PERCENT,
-                _ => AUTO_WIDTH_WIDE_PERCENT,
+                Some(cols) if cols > AUTO_WIDTH_BREAKPOINT_COLS => AUTO_WIDTH_WIDE_PERCENT,
+                _ => AUTO_WIDTH_NARROW_PERCENT,
             },
         }
     }
@@ -99,7 +99,7 @@ impl SidebarWidth {
     /// `max_cols` — as columns for tmux and as a percentage spelling for
     /// Zellij layouts. An unknown width (`None` — launch outside a tty)
     /// resolves to the bare cap with the explicit percentage or the automatic
-    /// policy's wide fallback.
+    /// policy's narrow fallback.
     pub fn birth_size(self, detected_cols: Option<u16>) -> BirthSize {
         let fallback_percent = self.percent.resolve(None);
         match detected_cols {
@@ -169,8 +169,27 @@ pub struct BirthSize {
     pub cols: NonZeroU16,
     /// The verdict as a share of the probed width (rounded to nearest, ≥ 1%)
     /// — the unknown-geometry spelling; the configured percentage when no
-    /// terminal was probed; automatic policy uses its wide fallback.
+    /// terminal was probed; automatic policy uses its narrow fallback.
     pub percent: u16,
+}
+
+/// Carries the connecting client's terminal `<cols>x<rows>` across SSH for a
+/// remote room birth that has no pty of its own.
+pub const CLIENT_SIZE_ENV: &str = "RIMZ_CLIENT_SIZE";
+
+fn parse_client_size(value: &str) -> Option<(u16, u16)> {
+    let (cols, rows) = value.split_once('x')?;
+    let cols = cols.parse::<u16>().ok().filter(|cols| *cols > 0)?;
+    let rows = rows.parse::<u16>().ok().filter(|rows| *rows > 0)?;
+    Some((cols, rows))
+}
+
+/// The connecting client's terminal size shipped across SSH, when valid.
+pub fn client_size_from_env() -> Option<(u16, u16)> {
+    std::env::var(CLIENT_SIZE_ENV)
+        .ok()
+        .as_deref()
+        .and_then(parse_client_size)
 }
 
 /// Whether a live sidebar's drift warrants repair toward the canonical width.
@@ -274,9 +293,9 @@ mod tests {
         // The percentage spelling never rounds below 1%, however wide the view.
         assert_eq!(width.birth_size(Some(7300)), birth(72, 1));
         // Unknown width (no tty, or a zero-width probe) resolves to the bare
-        // cap with the wide fallback percentage for unknown-geometry panes.
-        assert_eq!(width.birth_size(None), birth(72, 30));
-        assert_eq!(width.birth_size(Some(0)), birth(72, 30));
+        // cap with the narrow fallback percentage for unknown-geometry panes.
+        assert_eq!(width.birth_size(None), birth(72, 25));
+        assert_eq!(width.birth_size(Some(0)), birth(72, 25));
     }
 
     #[test]
@@ -294,7 +313,7 @@ mod tests {
         );
         assert_eq!(
             width.birth_size_with_override(None, Some(cols)),
-            BirthSize { cols, percent: 30 },
+            BirthSize { cols, percent: 25 },
         );
         assert_eq!(
             width.birth_size_with_override(Some(120), None),
@@ -357,5 +376,23 @@ mod tests {
         assert_eq!(split_along_longer_edge(121, 60), SplitDirection::Right);
         assert_eq!(split_along_longer_edge(80, 60), SplitDirection::Down);
         assert_eq!(split_along_longer_edge(120, 60), SplitDirection::Down);
+    }
+
+    #[test]
+    fn client_size_parser_accepts_only_nonzero_u16_pairs() {
+        assert_eq!(parse_client_size("120x40"), Some((120, 40)));
+        for invalid in [
+            "junk",
+            "120",
+            "120x",
+            "x40",
+            "0x40",
+            "120x0",
+            "65536x40",
+            "120x65536",
+            "120x40x20",
+        ] {
+            assert_eq!(parse_client_size(invalid), None, "{invalid}");
+        }
     }
 }

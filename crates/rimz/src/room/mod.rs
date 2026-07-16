@@ -100,7 +100,7 @@ fn pane_identity_env_with_ambient(
 /// Terminal sizing policy for room operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RoomSizing {
-    /// Probe once for a room/session or gallery birth.
+    /// Resolve one terminal-size seed for a room/session or gallery birth.
     Birth,
     /// Leave view sizing unknown for a tab opened inside a live room.
     OrdinaryTab,
@@ -181,7 +181,9 @@ impl RoomContext {
         let mux_config = MultiplexerConfig::from(machine_config.as_ref());
         let width = SidebarWidth::from_config(&machine_config.theme.display);
         let detected_size = match sizing {
-            RoomSizing::Birth => crate::mux::detect_terminal_size(),
+            RoomSizing::Birth => {
+                crate::mux::detect_terminal_size().or_else(crate::mux::client_size_from_env)
+            }
             RoomSizing::OrdinaryTab => None,
         };
         let extra_env = crate::agents::registry::room_env(&runtime);

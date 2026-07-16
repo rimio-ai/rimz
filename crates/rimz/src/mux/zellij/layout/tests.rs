@@ -247,8 +247,8 @@ fn session_layout_seeds_template_and_birth_from_probed_width() {
         .and_then(|section| section.split("\n    tab").next())
         .expect("layout carries a new_tab_template");
     assert!(
-        new_tab_template.contains(r#"size="30%""#),
-        "an unprobed launch keeps the unknown-geometry wide fallback:\n{layout}",
+        new_tab_template.contains(r#"size="25%""#),
+        "an unprobed launch uses the unknown-geometry narrow fallback:\n{layout}",
     );
 }
 
@@ -291,7 +291,7 @@ fn background_view_layout_renders_content_and_stacked_daemons() {
         "content and loop panes carry stable title identity:\n{layout}",
     );
     assert!(
-        layout.contains(r#"pane size="30%" split_direction="horizontal""#),
+        layout.contains(r#"pane size="25%" split_direction="horizontal""#),
         "daemon hosts stack in a right column at the sidebar birth width:\n{layout}",
     );
     assert!(layout.contains("pane focus=true"), "{layout}");
@@ -554,7 +554,7 @@ fn session_layout_leads_daemon_tab_with_three_column_daemon_view() {
         "content stays sizeless so it absorbs the middle column:\n{layout}",
     );
     assert!(
-        layout.contains(r#"pane size="30%" split_direction="horizontal""#),
+        layout.contains(r#"pane size="25%" split_direction="horizontal""#),
         "daemon hosts stack in a right column at the sidebar birth width:\n{layout}",
     );
     assert!(

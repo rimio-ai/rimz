@@ -17,6 +17,7 @@ fn attach_plan(
         mux,
         term,
         truecolor,
+        client_size: None,
     })
 }
 
@@ -475,7 +476,30 @@ fn ssh_attach_plan_compiles_session_path_flags_control_and_term() {
                 case.name
             );
         }
+        assert!(
+            !snippet.contains(crate::mux::CLIENT_SIZE_ENV),
+            "{} has no client-size export: {snippet}",
+            case.name,
+        );
     }
+}
+
+#[test]
+fn ssh_attach_plan_exports_client_size_when_present() {
+    let plan = SshAttachPlan::new(SshAttachOptions {
+        target: parse("dev-box:query-engine"),
+        no_resume: false,
+        mux: None,
+        term: TermPlan::Keep,
+        truecolor: false,
+        client_size: Some((180, 50)),
+    });
+    let snippet = plan.initial().plain().args.pop().expect("snippet");
+
+    assert!(
+        snippet.contains("export RIMZ_CLIENT_SIZE=180x50; exec rimz"),
+        "{snippet}",
+    );
 }
 
 #[test]

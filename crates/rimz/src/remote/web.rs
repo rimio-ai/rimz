@@ -7,13 +7,15 @@ use crate::mux::CommandSpec;
 use crate::web::WebEngine;
 
 use super::{
-    RemoteSpec, RemoteTarget, quote_remote_path, remote_exec_snippet, sh_quote, ssh_program,
+    RemoteSpec, RemoteTarget, client_size_env_setup, quote_remote_path, remote_exec_snippet,
+    sh_quote, ssh_program,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WebPrepOptions {
     pub confirm_resume: bool,
     pub no_resume: bool,
+    pub client_size: Option<(u16, u16)>,
 }
 
 pub fn web_prep_spec(target: &RemoteTarget, options: WebPrepOptions) -> CommandSpec {
@@ -30,7 +32,11 @@ pub fn web_prep_spec(target: &RemoteTarget, options: WebPrepOptions) -> CommandS
             format!("{flags} --session {}", sh_quote(name))
         }
     };
-    one_shot_spec(target, &format!("rimz web {rimz_args}"))
+    one_shot_spec(
+        target,
+        &format!("rimz web {rimz_args}"),
+        options.client_size,
+    )
 }
 
 pub fn web_token_ensure_spec(target: &RemoteTarget, engine: WebEngine) -> CommandSpec {
@@ -38,7 +44,7 @@ pub fn web_token_ensure_spec(target: &RemoteTarget, engine: WebEngine) -> Comman
         WebEngine::Zellij => "zellij",
         WebEngine::Ttyd => "tmux",
     };
-    one_shot_spec(target, &format!("rimz --mux {mux} web token ensure"))
+    one_shot_spec(target, &format!("rimz --mux {mux} web token ensure"), None)
 }
 
 pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16) -> CommandSpec {
@@ -61,19 +67,23 @@ pub fn web_tunnel_spec(target: &RemoteTarget, local_port: u16, remote_port: u16)
         .args(["--", target.ssh_destination().as_str()])
 }
 
-fn one_shot_spec(target: &RemoteTarget, rimz: &str) -> CommandSpec {
+fn one_shot_spec(
+    target: &RemoteTarget,
+    rimz: &str,
+    client_size: Option<(u16, u16)>,
+) -> CommandSpec {
     CommandSpec::new(ssh_program())
         .args(["-o", "ConnectTimeout=10", "--"])
         .arg(target.ssh_destination().as_str())
-        .arg(web_snippet(target, rimz))
+        .arg(web_snippet(target, rimz, client_size))
 }
 
-fn web_snippet(target: &RemoteTarget, rimz: &str) -> String {
-    remote_exec_snippet(
-        target.host_display(),
-        "export TERM=xterm-256color; export COLORTERM=truecolor; ",
-        rimz,
-    )
+fn web_snippet(target: &RemoteTarget, rimz: &str, client_size: Option<(u16, u16)>) -> String {
+    let env_setup = format!(
+        "export TERM=xterm-256color; export COLORTERM=truecolor; {}",
+        client_size_env_setup(client_size),
+    );
+    remote_exec_snippet(target.host_display(), &env_setup, rimz)
 }
 
 #[cfg(test)]
@@ -91,6 +101,7 @@ mod tests {
             WebPrepOptions {
                 confirm_resume: true,
                 no_resume: true,
+                client_size: Some((180, 50)),
             },
         );
         assert_eq!(session.args[0..3], ["-o", "ConnectTimeout=10", "--"]);
@@ -103,7 +114,7 @@ mod tests {
         );
         assert!(
             session.args[4].contains(
-                "export TERM=xterm-256color; export COLORTERM=truecolor; exec rimz web open"
+                "export TERM=xterm-256color; export COLORTERM=truecolor; export RIMZ_CLIENT_SIZE=180x50; exec rimz web open"
             ),
             "{}",
             session.args[4]
@@ -153,6 +164,11 @@ mod tests {
             spec.args[4].ends_with("exec rimz --mux tmux web token ensure"),
             "{}",
             spec.args[4]
+        );
+        assert!(
+            !spec.args[4].contains(crate::mux::CLIENT_SIZE_ENV),
+            "the token one-shot does not birth a room: {}",
+            spec.args[4],
         );
     }
 }

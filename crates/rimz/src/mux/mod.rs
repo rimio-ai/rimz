@@ -30,8 +30,8 @@ pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub use selection::auto_detect_backend;
 pub use tmux::TmuxBackend;
 pub use width::{
-    BirthSize, SidebarWidth, WidthAdjust, WidthPercent, detect_terminal_size,
-    split_along_longer_edge,
+    BirthSize, CLIENT_SIZE_ENV, SidebarWidth, WidthAdjust, WidthPercent, client_size_from_env,
+    detect_terminal_size, split_along_longer_edge,
 };
 pub use zellij::ZellijBackend;
 
@@ -257,11 +257,12 @@ pub struct SessionOptions {
     pub extra_env: std::collections::BTreeMap<String, String>,
     pub cwd: PathBuf,
     pub config: crate::config::MultiplexerConfig,
-    /// The invoking terminal's `(cols, rows)`, when launch ran in one
-    /// ([`detect_terminal_size`]). tmux sizes a detached birth with `-x`/`-y`
-    /// so a fixed sidebar width is correct before the client attaches; `None`
-    /// leaves the backend's default geometry. Zellij ignores it (a background
-    /// session adopts the client size on attach).
+    /// The birth's terminal `(cols, rows)`, detected locally
+    /// ([`detect_terminal_size`]) or shipped by a connecting SSH client. tmux
+    /// sizes a detached birth with `-x`/`-y` so a fixed sidebar width is
+    /// correct before the client attaches; `None` leaves the backend's default
+    /// geometry. Zellij ignores it (a background session adopts the client
+    /// size on attach).
     pub detected_size: Option<(u16, u16)>,
     /// The launching terminal advertises 24-bit color ([`crate::tui::truecolor`]).
     /// When true, the tmux birth stamps `COLORTERM=truecolor` into the session

@@ -20,7 +20,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::ids::MuxName;
-use crate::mux::CommandSpec;
+use crate::mux::{CLIENT_SIZE_ENV, CommandSpec};
 
 /// Binary override for tests (`tests/fixtures/ssh-trace`), mirroring
 /// `RIMZ_ZELLIJ_BIN` — the single chokepoint every ssh invocation resolves
@@ -272,6 +272,7 @@ pub struct SshAttachOptions {
     pub mux: Option<MuxName>,
     pub term: TermPlan,
     pub truecolor: bool,
+    pub client_size: Option<(u16, u16)>,
 }
 
 /// Compiles initial and retry SSH attempts without exposing reconnect flags or
@@ -452,12 +453,19 @@ fn guarded_snippet(options: &SshAttachOptions, phase: AttemptPhase) -> String {
     if options.truecolor {
         env_setup.push_str("export COLORTERM=truecolor; ");
     }
+    env_setup.push_str(&client_size_env_setup(options.client_size));
     env_setup.push_str(&options.term.remote_setup());
     remote_exec_snippet(
         options.target.host_display(),
         &env_setup,
         &format!("{rimz} -- {arg}"),
     )
+}
+
+pub(crate) fn client_size_env_setup(client_size: Option<(u16, u16)>) -> String {
+    client_size.map_or_else(String::new, |(cols, rows)| {
+        format!("export {CLIENT_SIZE_ENV}={cols}x{rows}; ")
+    })
 }
 
 pub(crate) fn remote_exec_snippet(

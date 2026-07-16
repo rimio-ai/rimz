@@ -202,13 +202,17 @@ enum TunnelFlow {
     Done,
 }
 
-pub(super) fn run_remote_web(remote: &RemoteConnect) -> Result<()> {
+pub(super) fn run_remote_web(
+    remote: &RemoteConnect,
+    client_size: Option<(u16, u16)>,
+) -> Result<()> {
     let prep = run_web_prep(
         &rimz::remote::web::web_prep_spec(
             &remote.target,
             rimz::remote::web::WebPrepOptions {
                 confirm_resume: std::io::stdin().is_terminal(),
                 no_resume: remote.no_resume,
+                client_size,
             },
         ),
         "preparing remote web access",

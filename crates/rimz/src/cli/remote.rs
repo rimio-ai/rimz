@@ -352,6 +352,7 @@ fn connect(
 fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
     // The local nesting block does not apply: a remote room inside a local
     // pane is a legitimate shape (the remote rimz checks its own env).
+    let client_size = rimz::mux::detect_terminal_size();
     match attach_action(
         mode,
         std::io::stdin().is_terminal(),
@@ -369,6 +370,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 mux: remote.mux,
                 term,
                 truecolor: rimz::tui::truecolor(),
+                client_size,
             });
             let plain_spec = plan.initial().plain();
             supervisor::print_remote_command(&plain_spec);
@@ -383,7 +385,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 )
             })?;
             if remote.web.enabled {
-                return web::run_remote_web(&remote);
+                return web::run_remote_web(&remote, client_size);
             }
             let term = remote_term_plan();
             let plan = SshAttachPlan::new(SshAttachOptions {
@@ -392,6 +394,7 @@ fn attach_remote(remote: RemoteConnect, mode: AttachMode) -> Result<()> {
                 mux: remote.mux,
                 term,
                 truecolor: rimz::tui::truecolor(),
+                client_size,
             });
             if remote.reconnect {
                 let control = rimz::remote::link::validated_control_path()
