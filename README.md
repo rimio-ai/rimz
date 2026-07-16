@@ -224,8 +224,7 @@ cargo install --locked rimz
 `homebrew`:
 
 ```sh
-brew tap rimio-ai/homebrew-rimz
-brew install rimz
+brew install rimio-ai/rimz/rimz
 ```
 
 Prebuilt binaries and building from source are in the [installation guide](./docs/guide/installation.md).

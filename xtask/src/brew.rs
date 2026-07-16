@@ -72,6 +72,7 @@ fn render_formula(inputs: &FormulaInputs<'_>) -> String {
   desc "Routes your attention across a fleet of coding agents"
   homepage "{homepage}"
   version "{version}"
+  license "MIT"
 
   on_macos do
     on_arm do
@@ -144,6 +145,7 @@ c33333333333333333333333333333333333333333333333333333333333333c  rimz-x86_64-un
             intel_sha: "bbbb",
         });
         assert!(formula.contains("version \"1.2.3\""));
+        assert!(formula.contains("license \"MIT\""));
         assert!(formula.contains("homepage \"https://host.example/rimz/rimz\""));
         assert!(formula.contains(
             "url \"https://host.example/rimz/rimz/releases/download/v1.2.3/rimz-aarch64-apple-darwin.tar.gz\""

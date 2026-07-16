@@ -83,13 +83,17 @@ jobs:
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           cargo xtask dist
 
-      - name: Publish crate
+      - name: Publish crate when configured
         if: ${{ github.event_name == 'push' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::notice::CARGO_REGISTRY_TOKEN is not configured; skipping crates.io publish"
+            exit 0
+          fi
           version="$(cargo pkgid -p rimz | sed 's/.*#//')"
           if curl -fsS -H 'User-Agent: rimz-release' "https://crates.io/api/v1/crates/rimz/${version}" >/dev/null; then
             echo "rimz ${version} already published"
@@ -118,8 +122,8 @@ jobs:
             # The release body is the runtime-generated place the concrete tap
             # host is allowed to appear; it is built from ${GITHUB_SERVER_URL},
             # never hardcoded in tracked source. The 4-space indent renders the
-            # commands as a code block in the release notes.
-            release_body="$(printf 'Release %s at %s.\n\nInstall with Homebrew:\n\n    brew tap %s\n    brew install %s\n' \
+            # command as a code block in the release notes.
+            release_body="$(printf 'Release %s at %s.\n\nInstall with Homebrew:\n\n    brew install %s/%s\n' \
               "${GITHUB_REF_NAME}" "${release_commit}" "${tap}" "${GITHUB_REPOSITORY#*/}")"
           else
             # workflow_run (CI green on the default branch) or manual dispatch:
