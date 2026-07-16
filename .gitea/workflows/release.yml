@@ -1,10 +1,9 @@
 name: Release
 
-# Release is downstream of CI. The rolling `latest-main` build publishes only
-# after the CI workflow finishes successfully on the default branch, so a red
-# commit never reaches the release page. `workflow_run` (Gitea >= 1.25) lets the
-# release key off CI's result instead of re-running the gate, so CI runs once
-# per commit. Version tags cut their own gated release on demand.
+# Release is downstream of CI. The rolling `latest-main` build publishes after
+# the CI workflow finishes successfully on the default branch, so a red commit
+# never reaches the release page. Version tags cut their own gated private
+# mirror on demand; GitHub owns the public release channels.
 on:
   workflow_dispatch:
   push:
@@ -14,12 +13,21 @@ on:
     types: [completed]
     branches: [main, master]
 
+# Release API writes for one identity run in order. Tag releases keep their own
+# group; workflow-run and manual rolling builds share `latest-main`.
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref || 'latest-main' }}
+  cancel-in-progress: false
+
 permissions:
   code: write
   releases: write
 
 env:
   CARGO_TERM_COLOR: always
+  # Match ci.yml when a release commit has no existing CI verdict and needs the
+  # fallback self-gate.
+  TERM: xterm-256color
   CARGO_HOME: /usr/local/cargo
   RUSTUP_HOME: /usr/local/rustup
   CARGO_TARGET_DIR: target/release-ci
@@ -31,7 +39,8 @@ jobs:
   release:
     name: build and publish dist archives
     runs-on: [linux_amd64, debian-13]
-    timeout-minutes: 30
+    # Covers the 30-minute CI-verdict wait budget plus the dist build.
+    timeout-minutes: 60
     # The rimz-ci image keeps the release container on the same warm baseline as
     # CI: Rust, gate plugins, cargo-vet, Python, tmux, Zellij, mold, zig,
     # cargo-zigbuild, rcodesign, and gh are baked once by ci-image.yml.
@@ -44,8 +53,8 @@ jobs:
         username: ${{ vars.RIMZ_CI_REGISTRY_USER }}
         password: ${{ secrets.REGISTRY_PULL_TOKEN }}
     # A `workflow_run` fires for every CI conclusion; gate on success so only a
-    # green default-branch build publishes. Tag pushes and manual dispatches run
-    # the gate themselves (the `cargo xtask ci` step below) before publishing.
+    # green default-branch build publishes. Tag pushes and manual dispatches use
+    # the exact release commit's CI verdict before falling back to a self-gate.
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Assert running in the rimz-ci image
@@ -61,6 +70,9 @@ jobs:
           # event's own ref.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
+      - name: Trust checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -68,10 +80,76 @@ jobs:
           prefix-key: "rimz-release"
           cache-bin: false
 
-      # Self-gate: tag and manual-dispatch releases re-run the full gate on the
-      # release commit. The `workflow_run` path already passed CI, so it skips.
-      - name: Gate on CI
+      # Self-gate: tag and manual-dispatch releases ride on CI's verdict for
+      # the exact release commit. CI (checks + externals + full tests) is a
+      # strict superset of `cargo xtask ci` (checks + full tests), so a green
+      # CI run makes the re-test redundant. A CI run still in flight is awaited;
+      # a red CI refuses the release; a commit CI never saw falls back to the
+      # full self-gate below. The `workflow_run` path already passed CI.
+      - name: Await CI verdict for this commit
         if: ${{ github.event_name != 'workflow_run' }}
+        id: ci_verdict
+        env:
+          TOKEN: ${{ secrets.GITEA_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse 'HEAD^{commit}')"
+          python_bin="$(command -v python3 || command -v python)"
+          runs_url="${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${commit}&limit=100"
+          # Wait budget for an in-flight CI run; past it, self-gate instead.
+          deadline="$(( $(date +%s) + 30 * 60 ))"
+          while :; do
+            if response="$(curl -fsS -H "Authorization: token ${TOKEN}" "$runs_url")"; then
+              verdict="$(printf '%s' "$response" | "$python_bin" -c '
+          import json
+          import sys
+
+          runs = json.load(sys.stdin).get("workflow_runs", [])
+          ci_runs = [
+              run for run in runs
+              if (run.get("path") or "").split("@", 1)[0].endswith("ci.yml")
+          ]
+          if not ci_runs:
+              print("none none")
+          else:
+              run = max(ci_runs, key=lambda item: int(item.get("id") or 0))
+              print(run.get("status") or "unknown", run.get("conclusion") or "pending")
+          ')"
+            else
+              verdict="unknown unknown"
+            fi
+            run_status="${verdict% *}"
+            conclusion="${verdict#* }"
+            case "$run_status" in
+              none|unknown)
+                echo "no CI verdict available for ${commit} (${run_status}); running the self-gate"
+                echo "green=false" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              completed)
+                if [ "$conclusion" = "success" ]; then
+                  echo "CI green on ${commit}; skipping the self-gate"
+                  echo "green=true" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "::error::CI concluded '${conclusion}' on ${commit} - a red commit never releases"
+                exit 1
+                ;;
+              *)
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "CI still ${run_status} on ${commit} past the wait budget; running the self-gate"
+                  echo "green=false" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "CI ${run_status} on ${commit}; waiting for its verdict"
+                sleep 30
+                ;;
+            esac
+          done
+
+      - name: Gate on CI
+        if: ${{ github.event_name != 'workflow_run' && steps.ci_verdict.outputs.green != 'true' }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           cargo xtask ci
@@ -87,7 +165,6 @@ jobs:
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          owner="${GITHUB_REPOSITORY%/*}"
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             # The push trigger is tags-only, so this is a `v*` version tag.
             release_tag="${GITHUB_REF_NAME}"
@@ -95,12 +172,8 @@ jobs:
             release_prerelease=false
             release_rolling=false
             release_commit="${GITHUB_SHA}"
-            # The release body is the runtime-generated place the concrete tap
-            # host is allowed to appear; it is built from ${GITHUB_SERVER_URL},
-            # never hardcoded in tracked source. The 4-space indent renders the
-            # commands as a code block in the release notes.
-            release_body="$(printf 'Release %s at %s.\n\nInstall with Homebrew:\n\n    brew tap %s/rimz %s/%s/homebrew-rimz\n    brew install %s/rimz/rimz\n' \
-              "${GITHUB_REF_NAME}" "${release_commit}" "${owner}" "${GITHUB_SERVER_URL}" "${owner}" "${owner}")"
+            release_body="$(printf 'Private build mirror for %s at %s.\n\nPublic downloads and install channels: https://github.com/rimio-ai/rimz/releases/tag/%s\n' \
+              "${GITHUB_REF_NAME}" "${release_commit}" "${GITHUB_REF_NAME}")"
           else
             # workflow_run (CI green on the default branch) or manual dispatch:
             # the rolling build published under a moving `latest-main` tag.
@@ -202,12 +275,14 @@ jobs:
             local artifact="$1"
             local asset_name="$2"
             local asset_id
-            asset_id="$(printf '%s' "$assets_json" | "$python_bin" -c 'import json, sys; name = sys.argv[1]; print(next((str(asset["id"]) for asset in json.load(sys.stdin) if asset.get("name") == name), ""))' "$asset_name")"
-            if [ -n "$asset_id" ]; then
+            # Clear every prior asset with this name so an older concurrent
+            # publisher cannot leave duplicates behind.
+            while IFS= read -r asset_id; do
+              [ -n "$asset_id" ] || continue
               curl -fsS -X DELETE \
                 -H "$auth_header" \
                 "${releases_url}/${release_id}/assets/${asset_id}" >/dev/null
-            fi
+            done < <(printf '%s' "$assets_json" | "$python_bin" -c 'import json, sys; name = sys.argv[1]; print(*(asset["id"] for asset in json.load(sys.stdin) if asset.get("name") == name), sep="\n")' "$asset_name")
             curl -fsS -X POST \
               -H "$auth_header" \
               -F "attachment=@${artifact}" \
@@ -219,38 +294,3 @@ jobs:
             upload_artifact "${dist_dir}/${asset_name}" "$asset_name"
           done < "${dist_dir}/SHA256SUMS"
           upload_artifact "${dist_dir}/SHA256SUMS" SHA256SUMS
-
-      # Tags only: the rolling `latest-main` prerelease never touches the tap.
-      # The push trigger is tags-only in this workflow, so `event_name == push`
-      # selects real `v*` releases.
-      - name: Publish Homebrew tap formula
-        if: ${{ github.event_name == 'push' }}
-        env:
-          TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
-        shell: bash
-        run: |
-          export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
-          set -euo pipefail
-          owner="${GITHUB_REPOSITORY%/*}"
-          repo="${GITHUB_REPOSITORY#*/}"
-          tap_url="${GITHUB_SERVER_URL}/${owner}/homebrew-rimz.git"
-          tap_dir="$(mktemp -d)"
-          auth_header="Authorization: token ${TOKEN}"
-
-          git -c "http.extraheader=${auth_header}" clone --depth 1 "$tap_url" "$tap_dir"
-
-          RIMZ_BREW_VERSION="${GITHUB_REF_NAME}" \
-          RIMZ_BREW_BASE_URL="${GITHUB_SERVER_URL}/${owner}/${repo}/releases/download/${GITHUB_REF_NAME}" \
-          RIMZ_BREW_HOMEPAGE="${GITHUB_SERVER_URL}/${owner}/${repo}" \
-          RIMZ_BREW_OUT="${tap_dir}/Formula/rimz.rb" \
-            cargo xtask brew-formula
-
-          git -C "$tap_dir" config user.name "gitea-actions"
-          git -C "$tap_dir" config user.email "actions@rimio.ai"
-          git -C "$tap_dir" add Formula/rimz.rb
-          if git -C "$tap_dir" diff --cached --quiet; then
-            echo "formula already up to date"
-          else
-            git -C "$tap_dir" commit -m "rimz ${GITHUB_REF_NAME}"
-            git -C "$tap_dir" -c "http.extraheader=${auth_header}" push origin HEAD
-          fi
