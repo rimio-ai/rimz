@@ -10,7 +10,7 @@ use crate::agents::{
     settings_json::{self, PendingWrite},
 };
 
-use super::{COPILOT_MANAGED_SOURCE, RIMZ_STATUS_LINE_MARKER, STATUS_LINE, WIRED_EVENTS};
+use super::{COPILOT_HOOKS, COPILOT_MANAGED_SOURCE, RIMZ_STATUS_LINE_MARKER, STATUS_LINE};
 
 const AGENT: &str = "copilot";
 
@@ -225,9 +225,9 @@ fn read_jsonc_object(path: &Path) -> Option<Map<String, Value>> {
 }
 
 fn event_names() -> Vec<String> {
-    WIRED_EVENTS
+    COPILOT_HOOKS
         .iter()
-        .map(|event| (*event).to_owned())
+        .map(|hook| hook.event.to_owned())
         .collect()
 }
 

@@ -17,8 +17,8 @@ use crate::agents::{
 };
 
 use super::{
-    HOOK_TIMEOUT_SECS, INSTALLED_EVENT_LABELS, POST_TOOL_EDIT_MATCHER, POST_TOOL_MUTATING_MATCHER,
-    POST_TOOL_OBSERVED_MATCHER, RIMZ_HOOK_MARKER, RIMZ_STATUS_LINE_MARKER, STATUS_LINE_COMMAND,
+    ANTIGRAVITY_HOOKS, HOOK_TIMEOUT_SECS, RIMZ_HOOK_MARKER, RIMZ_STATUS_LINE_MARKER,
+    STATUS_LINE_COMMAND,
 };
 
 const AGENT: &str = "antigravity";
@@ -137,17 +137,15 @@ pub(super) fn installed(hooks_path: &Path, settings_path: &Path) -> bool {
     let Some(rimz) = root.get(RIMZ_HOOK_NAME).and_then(Value::as_object) else {
         return false;
     };
-    let complete = canonical_handlers()
-        .into_iter()
-        .all(|(event, matcher, command)| {
-            rimz.get(event)
-                .and_then(Value::as_array)
-                .is_some_and(|entries| {
-                    entries
-                        .iter()
-                        .any(|entry| handler_matches(entry, matcher, command))
-                })
-        });
+    let complete = ANTIGRAVITY_HOOKS.iter().all(|entry| {
+        rimz.get(entry.config_event)
+            .and_then(Value::as_array)
+            .is_some_and(|entries| {
+                entries
+                    .iter()
+                    .any(|handler| handler_matches(handler, entry.config_matcher, entry.command))
+            })
+    });
     complete && statusline_managed_at(settings_path)
 }
 
@@ -174,9 +172,9 @@ pub(super) fn wrapped_statusline_command(settings_path: &Path) -> Option<String>
 }
 
 fn installed_event_names() -> Vec<String> {
-    INSTALLED_EVENT_LABELS
+    ANTIGRAVITY_HOOKS
         .iter()
-        .map(|event| (*event).to_owned())
+        .map(|entry| entry.hook.event.to_owned())
         .collect()
 }
 
@@ -194,15 +192,15 @@ fn hook_candidate(path: &Path) -> Result<Map<String, Value>> {
     }
 
     let mut rimz = Map::new();
-    for (event, matcher, command) in canonical_handlers() {
-        let entry = match matcher {
+    for hook in &ANTIGRAVITY_HOOKS {
+        let entry = match hook.config_matcher {
             Some(matcher) => json!({
                 "matcher": matcher,
-                "hooks": [command_handler(command)],
+                "hooks": [command_handler(hook.command)],
             }),
-            None => command_handler(command),
+            None => command_handler(hook.command),
         };
-        rimz.entry(event.to_owned())
+        rimz.entry(hook.config_event.to_owned())
             .or_insert_with(|| Value::Array(Vec::new()))
             .as_array_mut()
             .expect("fresh event array")
@@ -210,29 +208,6 @@ fn hook_candidate(path: &Path) -> Result<Map<String, Value>> {
     }
     root.insert(RIMZ_HOOK_NAME.to_owned(), Value::Object(rimz));
     Ok(root)
-}
-
-fn canonical_handlers() -> Vec<(&'static str, Option<&'static str>, &'static str)> {
-    vec![
-        ("PreInvocation", None, super::PRE_INVOCATION_COMMAND),
-        (
-            "PostToolUse",
-            Some(POST_TOOL_EDIT_MATCHER),
-            super::POST_TOOL_EDIT_COMMAND,
-        ),
-        (
-            "PostToolUse",
-            Some(POST_TOOL_MUTATING_MATCHER),
-            super::POST_TOOL_MUTATING_COMMAND,
-        ),
-        (
-            "PostToolUse",
-            Some(POST_TOOL_OBSERVED_MATCHER),
-            super::POST_TOOL_OBSERVED_COMMAND,
-        ),
-        ("PostInvocation", None, super::POST_INVOCATION_COMMAND),
-        ("Stop", None, super::STOP_COMMAND),
-    ]
 }
 
 fn command_handler(command: &str) -> Value {

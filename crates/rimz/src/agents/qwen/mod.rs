@@ -21,8 +21,6 @@ use self::payloads::{
     QwenStopError, parse_compact, parse_session_start, parse_stop, parse_stop_failure,
     parse_subagent, parse_tool_use, parse_user_prompt_submit,
 };
-#[cfg(test)]
-use super::AgentHookClass;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
@@ -220,132 +218,47 @@ const QWEN_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 
 const QWEN_HOOK_TIMEOUT_MS: u64 = 10_000;
 const QWEN_HOOKS: &[HookRecord] = &[
+    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "StopFailure", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "Notification", r#"{"session_id":"sess-1"}"#),
     hook_record!(
-        "SessionStart",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "SessionEnd",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "UserPromptSubmit",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "Stop",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "StopFailure",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "Notification",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
+        blocking,
         "PreToolUse",
-        Some("ask_user_question|exit_plan_mode"),
-        true,
-        true,
         r#"{"tool_name":"ask_user_question","tool_use_id":"ask-1"}"#,
-        AgentHookClass::AwaitingUser,
-        Some(AskKind::Question)
-    ),
+        AskKind::Question
+    )
+    .with_matcher("ask_user_question|exit_plan_mode")
+    .synchronous()
+    .with_lifecycle_fallback(),
     hook_record!(
+        blocking,
         "PermissionRequest",
-        None,
-        true,
-        true,
         r#"{"tool_name":"run_shell_command"}"#,
-        AgentHookClass::AwaitingUser,
-        Some(AskKind::Permission)
-    ),
+        AskKind::Permission
+    )
+    .synchronous()
+    .with_lifecycle_fallback(),
+    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"sess-1"}"#),
     hook_record!(
-        "PostToolUse",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
+        lifecycle,
         "PostToolUseFailure",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-1"}"#
     ),
     hook_record!(
+        lifecycle,
         "SubagentStart",
-        None,
-        true,
-        false,
-        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#
     ),
     hook_record!(
+        lifecycle,
         "SubagentStop",
-        None,
-        true,
-        false,
-        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"parent","agent_id":"child","agent_type":"review"}"#
     ),
-    hook_record!(
-        "PreCompact",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "PostCompact",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+    hook_record!(lifecycle, "PreCompact", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "PostCompact", r#"{"session_id":"sess-1"}"#),
 ];
 const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source qwen";
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source qwen";
@@ -386,23 +299,13 @@ impl AgentAdapter for QwenAdapter {
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        QWEN_HOOKS.iter().map(|hook| hook.event).collect()
+        super::hook_types::catalog_event_names(QWEN_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
-        let mut samples = QWEN_HOOKS
-            .iter()
-            .map(|hook| {
-                ClassificationSample::new(
-                    hook.event,
-                    serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
-                    hook.test_class,
-                    hook.test_ask,
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut samples = super::hook_types::catalog_classification_corpus(QWEN_HOOKS);
         samples.push(ClassificationSample::new(
             "PermissionRequest",
             serde_json::json!({"session_id":"sess-1","tool_name":"ask_user_question"}),

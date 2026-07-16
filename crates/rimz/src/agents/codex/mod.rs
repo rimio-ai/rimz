@@ -77,8 +77,6 @@ pub use self::transcript::{
     refine_turn_death_from_frame, refresh_transcript_context, session_origin,
     turn_death_needs_pane_confirmation,
 };
-#[cfg(test)]
-use super::AgentHookClass;
 use super::AskKind;
 use super::context::AgentContext;
 use super::descriptor::{
@@ -348,95 +346,61 @@ const CODEX_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 /// content gated by `[privacy] payload_mode`.
 const CODEX_HOOKS: &[HookRecord] = &[
     hook_record!(
+        lifecycle,
         "SessionStart",
-        Some("startup|resume|clear|compact"),
-        true,
-        false,
-        r#"{"session_id":"sess-1","source":"startup"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+        r#"{"session_id":"sess-1","source":"startup"}"#
+    )
+    .with_matcher("startup|resume|clear|compact"),
     hook_record!(
+        lifecycle,
         "UserPromptSubmit",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1","prompt":"fix auth"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-1","prompt":"fix auth"}"#
     ),
     hook_record!(
+        lifecycle,
         "SubagentStart",
-        Some(".*"),
-        true,
-        false,
-        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#
+    )
+    .with_matcher(".*"),
     hook_record!(
+        lifecycle,
         "SubagentStop",
-        Some(".*"),
-        true,
-        false,
-        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+        r#"{"session_id":"sess-parent","agent_id":"child-thread-1","agent_type":"review"}"#
+    )
+    .with_matcher(".*"),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#),
     hook_record!(
-        "Stop",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
+        blocking,
         "PermissionRequest",
-        Some(".*"),
-        false,
-        true,
         r#"{"session_id":"sess-1","tool_name":"shell"}"#,
-        AgentHookClass::AwaitingUser,
-        Some(AskKind::Permission)
-    ),
+        AskKind::Permission
+    )
+    .with_matcher(".*")
+    .synchronous(),
     hook_record!(
+        lifecycle,
         "PreToolUse",
-        Some(".*"),
-        true,
-        false,
-        r#"{"session_id":"sess-1","tool_name":"shell"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+        r#"{"session_id":"sess-1","tool_name":"shell"}"#
+    )
+    .with_matcher(".*"),
     hook_record!(
+        lifecycle,
         "PostToolUse",
-        Some(".*"),
-        true,
-        false,
-        r#"{"session_id":"sess-1","tool_name":"apply_patch"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+        r#"{"session_id":"sess-1","tool_name":"apply_patch"}"#
+    )
+    .with_matcher(".*"),
     hook_record!(
+        lifecycle,
         "PreCompact",
-        Some(".*"),
-        true,
-        false,
-        r#"{"session_id":"sess-1","trigger":"manual"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+        r#"{"session_id":"sess-1","trigger":"manual"}"#
+    )
+    .with_matcher(".*"),
     hook_record!(
+        lifecycle,
         "PostCompact",
-        Some(".*"),
-        true,
-        false,
-        r#"{"session_id":"sess-1","trigger":"manual"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+        r#"{"session_id":"sess-1","trigger":"manual"}"#
+    )
+    .with_matcher(".*"),
 ];
 
 /// Legacy config block written by older RimZ builds. Codex ignores this block;
@@ -498,24 +462,14 @@ impl AgentAdapter for CodexAdapter {
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        CODEX_HOOKS.iter().map(|hook| hook.event).collect()
+        super::hook_types::catalog_event_names(CODEX_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
 
-        let mut samples = CODEX_HOOKS
-            .iter()
-            .map(|hook| {
-                ClassificationSample::new(
-                    hook.event,
-                    serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
-                    hook.test_class,
-                    hook.test_ask,
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut samples = super::hook_types::catalog_classification_corpus(CODEX_HOOKS);
         samples.extend([ClassificationSample::new(
             "PreToolUse",
             serde_json::json!({ "session_id": "sess-1", "tool_name": "request_user_input" }),

@@ -5,29 +5,6 @@
 
 use serde_json::Value;
 
-use super::AskKind;
-
-use super::{AgentHookClass, ClassifiedHook};
-
-pub(crate) fn classify_agent_hook(
-    event_name: &str,
-    ask_kind: Option<AskKind>,
-    lifecycle_events: &[&str],
-) -> ClassifiedHook {
-    let class = if ask_kind.is_some() {
-        AgentHookClass::AwaitingUser
-    } else if lifecycle_events.contains(&event_name) {
-        AgentHookClass::Lifecycle
-    } else {
-        AgentHookClass::Unknown
-    };
-    ClassifiedHook {
-        class,
-        ask_kind,
-        event_name: event_name.to_owned(),
-    }
-}
-
 pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| payload.get(*key).and_then(Value::as_str))

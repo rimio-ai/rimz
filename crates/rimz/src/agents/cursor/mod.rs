@@ -25,11 +25,12 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
+use super::hook_types::{HookRecord, catalog_contains, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LocalSessionObservation, LocallyPricedTurnCost,
-    PriceBook, Result, SubagentIdentity, classify_agent_hook, locate_binary, non_empty_trimmed,
+    PriceBook, Result, SubagentIdentity, locate_binary, non_empty_trimmed,
     resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
@@ -202,19 +203,58 @@ const CURSOR_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     },
 };
 
-const LIFECYCLE_EVENTS: &[&str] = &[
-    "sessionStart",
-    "beforeSubmitPrompt",
-    "postToolUse",
-    "postToolUseFailure",
-    "afterAgentResponse",
-    "stop",
-    "sessionEnd",
-    "preCompact",
-    "subagentStart",
-    "subagentStop",
+pub(super) const CURSOR_HOOKS: &[HookRecord] = &[
+    hook_record!(
+        lifecycle,
+        "sessionStart",
+        r#"{"conversation_id":"c1","session_id":"c1","cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "beforeSubmitPrompt",
+        r#"{"conversation_id":"c1","prompt":"fix it","cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "postToolUse",
+        r#"{"conversation_id":"c1","tool_name":"Write","cwd":"/tmp","cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "postToolUseFailure",
+        r#"{"conversation_id":"c1","tool_name":"Shell","failure_type":"error","cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "afterAgentResponse",
+        r#"{"conversation_id":"c1","text":"done","cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "stop",
+        r#"{"conversation_id":"c1","status":"completed","cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "sessionEnd",
+        r#"{"conversation_id":"c1","reason":"quit","cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "preCompact",
+        r#"{"conversation_id":"c1","trigger":"manual","context_usage_percent":83.2,"context_window_size":200000,"cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "subagentStart",
+        r#"{"subagent_id":"child-1","parent_conversation_id":"c1","subagent_type":"generalPurpose","task":"inspect hooks","cursor_version":"1.7"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "subagentStop",
+        r#"{"subagent_id":"child-1","parent_conversation_id":"c1","subagent_type":"generalPurpose","status":"completed","cursor_version":"1.7"}"#
+    ),
 ];
-const WIRED_EVENTS: &[&str] = LIFECYCLE_EVENTS;
 pub(super) const RIMZ_HOOK_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source cursor";
 pub(super) const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source cursor";
@@ -255,79 +295,17 @@ impl AgentAdapter for CursorAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        classify_agent_hook(event_name, None, LIFECYCLE_EVENTS)
+        classify_catalog_hook(CURSOR_HOOKS, event_name, None)
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        WIRED_EVENTS.to_vec()
+        super::hook_types::catalog_event_names(CURSOR_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        use super::{AgentHookClass, ClassificationSample};
-        vec![
-            ClassificationSample::new(
-                "sessionStart",
-                test_json!({ "conversation_id": "c1", "session_id": "c1", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "beforeSubmitPrompt",
-                test_json!({ "conversation_id": "c1", "prompt": "fix it", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "postToolUse",
-                test_json!({ "conversation_id": "c1", "tool_name": "Write", "cwd": "/tmp", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "postToolUseFailure",
-                test_json!({ "conversation_id": "c1", "tool_name": "Shell", "failure_type": "error", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "afterAgentResponse",
-                test_json!({ "conversation_id": "c1", "text": "done", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "stop",
-                test_json!({ "conversation_id": "c1", "status": "completed", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "sessionEnd",
-                test_json!({ "conversation_id": "c1", "reason": "quit", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "preCompact",
-                test_json!({ "conversation_id": "c1", "trigger": "manual", "context_usage_percent": 83.2, "context_window_size": 200000, "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "subagentStart",
-                test_json!({ "subagent_id": "child-1", "parent_conversation_id": "c1", "subagent_type": "generalPurpose", "task": "inspect hooks", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "subagentStop",
-                test_json!({ "subagent_id": "child-1", "parent_conversation_id": "c1", "subagent_type": "generalPurpose", "status": "completed", "cursor_version": "1.7" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-        ]
+        super::hook_types::catalog_classification_corpus(CURSOR_HOOKS)
     }
 
     #[cfg(test)]
@@ -352,7 +330,7 @@ impl AgentAdapter for CursorAdapter {
     }
 
     fn render_neutral(&self, event_name: &str) -> Result<Option<Value>> {
-        Ok(LIFECYCLE_EVENTS.contains(&event_name).then(|| json!({})))
+        Ok(catalog_contains(CURSOR_HOOKS, event_name).then(|| json!({})))
     }
 
     fn observe_lifecycle(

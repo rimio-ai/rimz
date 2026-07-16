@@ -34,13 +34,14 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
+use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, LifecycleRefreshCtx,
-    RefreshSpawn, RefreshTrigger, Result, SubagentIdentity, classify_agent_hook,
-    resolve_subagent_identity, sanitize_user_prompt,
+    RefreshSpawn, RefreshTrigger, Result, SubagentIdentity, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -215,49 +216,77 @@ const OPENCODE_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     },
 };
 
-// The awaiting-user events (`permission_ask`, `question_ask`) are absent by
-// design: `classify_hook` hands their `AskKind` to `classify_agent_hook`, which
-// short-circuits to `AwaitingUser` before ever consulting this list. Native
-// replies and normalized session end remain lifecycle observations.
-const LIFECYCLE_EVENTS: &[&str] = &[
-    "session_created",
-    "chat_message",
-    "session_idle",
-    "session_error",
-    "tool_after",
-    "session_compacting",
-    "session_compacted",
-    "SubagentStart",
-    "SubagentStop",
-    "permission_replied",
-    "question_replied",
-    "question_rejected",
-    "session_ended",
-];
-
-const WIRED_EVENTS: &[&str] = &[
-    "session_created",
-    "chat_message",
-    "session_idle",
-    "session_error",
-    "tool_after",
-    "session_compacting",
-    "session_compacted",
-    "SubagentStart",
-    "SubagentStop",
-    "permission_ask",
-    "question_ask",
-    "permission_replied",
-    "question_replied",
-    "question_rejected",
-    "session_ended",
+const OPENCODE_HOOKS: &[HookRecord] = &[
+    hook_record!(
+        lifecycle,
+        "session_created",
+        r#"{"session_id":"ses_1","cwd":"/tmp/repo"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "chat_message",
+        r#"{"session_id":"ses_1","prompt":"fix auth"}"#
+    ),
+    hook_record!(lifecycle, "session_idle", r#"{"session_id":"ses_1"}"#),
+    hook_record!(
+        lifecycle,
+        "session_error",
+        r#"{"session_id":"ses_1","error_message":"boom"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "tool_after",
+        r#"{"session_id":"ses_1","tool_name":"bash"}"#
+    ),
+    hook_record!(lifecycle, "session_compacting", r#"{"session_id":"ses_1"}"#),
+    hook_record!(lifecycle, "session_compacted", r#"{"session_id":"ses_1"}"#),
+    hook_record!(
+        lifecycle,
+        "SubagentStart",
+        r#"{"session_id":"ses_child","parent_session_id":"ses_parent","prompt":"review auth"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "SubagentStop",
+        r#"{"session_id":"ses_child","parent_session_id":"ses_parent"}"#
+    ),
+    hook_record!(
+        blocking,
+        "permission_ask",
+        r#"{"session_id":"ses_1","tool_name":"bash"}"#,
+        AskKind::Permission
+    )
+    .synchronous(),
+    hook_record!(
+        blocking,
+        "question_ask",
+        r#"{"session_id":"ses_1","title":"Which database?"}"#,
+        AskKind::Question
+    )
+    .synchronous(),
+    hook_record!(
+        lifecycle,
+        "permission_replied",
+        r#"{"session_id":"ses_1","reply":"once"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "question_replied",
+        r#"{"session_id":"ses_1","answers":[["Postgres"]]}"#
+    ),
+    hook_record!(lifecycle, "question_rejected", r#"{"session_id":"ses_1"}"#),
+    hook_record!(
+        lifecycle,
+        "session_ended",
+        r#"{"session_id":"ses_1","reason":"deleted"}"#
+    ),
 ];
 
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
 const OPENCODE_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     "opencode",
     PLUGIN_SOURCE,
-    WIRED_EVENTS,
+    OPENCODE_HOOKS,
     "plugin",
     opencode_plugin_path,
     true,
@@ -280,123 +309,26 @@ impl AgentAdapter for OpencodeAdapter {
             }
             _ => None,
         };
-        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
+        classify_catalog_hook(OPENCODE_HOOKS, event_name, ask_kind)
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        WIRED_EVENTS.to_vec()
+        super::hook_types::catalog_event_names(OPENCODE_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
 
-        vec![
-            ClassificationSample::new(
-                "permission_ask",
-                json!({ "session_id": "ses_1", "tool_name": "bash" }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Permission),
-            ),
-            ClassificationSample::new(
-                "question_ask",
-                json!({ "session_id": "ses_1", "title": "Which database?" }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Question),
-            ),
-            ClassificationSample::new(
-                "session_created",
-                json!({ "session_id": "ses_1", "cwd": "/tmp/repo" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "chat_message",
-                json!({ "session_id": "ses_1", "prompt": "fix auth" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_idle",
-                json!({ "session_id": "ses_1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_idle",
-                json!({ "session_id": "ses_1", "plan_proposed": true }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::PlanApproval),
-            ),
-            ClassificationSample::new(
-                "session_error",
-                json!({ "session_id": "ses_1", "error_message": "boom" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "tool_after",
-                json!({ "session_id": "ses_1", "tool_name": "bash" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_compacting",
-                json!({ "session_id": "ses_1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_compacted",
-                json!({ "session_id": "ses_1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SubagentStart",
-                json!({
-                    "session_id": "ses_child",
-                    "parent_session_id": "ses_parent",
-                    "prompt": "review auth"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SubagentStop",
-                json!({
-                    "session_id": "ses_child",
-                    "parent_session_id": "ses_parent"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "permission_replied",
-                json!({ "session_id": "ses_1", "reply": "once" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "question_replied",
-                json!({ "session_id": "ses_1", "answers": [["Postgres"]] }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "question_rejected",
-                json!({ "session_id": "ses_1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_ended",
-                json!({ "session_id": "ses_1", "reason": "deleted" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-        ]
+        let mut samples = super::hook_types::catalog_classification_corpus(OPENCODE_HOOKS);
+        samples.push(ClassificationSample::new(
+            "session_idle",
+            json!({ "session_id": "ses_1", "plan_proposed": true }),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::PlanApproval),
+        ));
+        samples
     }
 
     #[cfg(test)]

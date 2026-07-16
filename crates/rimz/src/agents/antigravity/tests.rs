@@ -199,7 +199,7 @@ fn hook_install_round_trips_existing_and_absent_statuslines() {
         )
         .unwrap();
         let preview = install::preview(&hooks_path, &settings_path).unwrap();
-        assert_eq!(preview.planned_events, INSTALLED_EVENT_LABELS);
+        assert_eq!(preview.planned_events, ANTIGRAVITY_EVENT_NAMES);
         assert_eq!(preview.status_line_change, Some(change));
         assert!(!preview.files[0].candidate.contains("PreToolUse"));
         install::install(&hooks_path, &settings_path).unwrap();
@@ -237,7 +237,7 @@ fn hook_install_round_trips_existing_and_absent_statuslines() {
             install::uninstall(&hooks_path, &settings_path)
                 .unwrap()
                 .removed_events,
-            INSTALLED_EVENT_LABELS
+            ANTIGRAVITY_EVENT_NAMES
         );
         assert!(!install::managed(&hooks_path, &settings_path));
         let restored_hooks = read_json(&hooks_path);

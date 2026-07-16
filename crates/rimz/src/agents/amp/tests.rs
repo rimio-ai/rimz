@@ -211,9 +211,9 @@ fn install_preview_drift_and_uninstall_only_touch_managed_source() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("plugins/rimz.ts");
     let events = || {
-        WIRED_EVENTS
+        AMP_HOOKS
             .iter()
-            .map(|event| (*event).to_owned())
+            .map(|hook| hook.event.to_owned())
             .collect::<Vec<_>>()
     };
 

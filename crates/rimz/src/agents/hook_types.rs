@@ -18,40 +18,136 @@ pub(crate) struct HookRecord {
     #[cfg(test)]
     pub(crate) test_payload: &'static str,
     #[cfg(test)]
-    pub(crate) test_class: AgentHookClass,
-    #[cfg(test)]
     pub(crate) test_ask: Option<AskKind>,
 }
 
-macro_rules! hook_record {
-    ($event:literal, $matcher:expr, $lifecycle:expr, $sync:expr, $payload:literal, $class:expr, $ask:expr) => {
-        $crate::agents::hook_types::HookRecord {
-            event: $event,
-            matcher: $matcher,
-            lifecycle_fallback: $lifecycle,
-            synchronous: $sync,
+impl HookRecord {
+    pub(crate) const fn lifecycle(event: &'static str, _test_payload: &'static str) -> Self {
+        Self {
+            event,
+            matcher: None,
+            lifecycle_fallback: true,
+            synchronous: false,
             #[cfg(test)]
-            test_payload: $payload,
+            test_payload: _test_payload,
             #[cfg(test)]
-            test_class: $class,
-            #[cfg(test)]
-            test_ask: $ask,
+            test_ask: None,
         }
+    }
+
+    pub(crate) const fn blocking(
+        event: &'static str,
+        _test_payload: &'static str,
+        _test_ask: AskKind,
+    ) -> Self {
+        Self {
+            event,
+            matcher: None,
+            lifecycle_fallback: false,
+            synchronous: false,
+            #[cfg(test)]
+            test_payload: _test_payload,
+            #[cfg(test)]
+            test_ask: Some(_test_ask),
+        }
+    }
+
+    pub(crate) const fn with_matcher(mut self, matcher: &'static str) -> Self {
+        self.matcher = Some(matcher);
+        self
+    }
+
+    pub(crate) const fn synchronous(mut self) -> Self {
+        self.synchronous = true;
+        self
+    }
+
+    pub(crate) const fn with_lifecycle_fallback(mut self) -> Self {
+        self.lifecycle_fallback = true;
+        self
+    }
+
+    #[cfg(test)]
+    fn expected_class(self) -> AgentHookClass {
+        if self.test_ask.is_some() {
+            AgentHookClass::AwaitingUser
+        } else if self.lifecycle_fallback {
+            AgentHookClass::Lifecycle
+        } else {
+            AgentHookClass::Unknown
+        }
+    }
+}
+
+macro_rules! hook_record {
+    (lifecycle, $event:literal, $payload:literal) => {
+        $crate::agents::hook_types::HookRecord::lifecycle($event, $payload)
+    };
+    (blocking, $event:literal, $payload:literal, $ask:expr) => {
+        $crate::agents::hook_types::HookRecord::blocking($event, $payload, $ask)
     };
 }
 pub(crate) use hook_record;
+
+#[cfg(test)]
+pub(crate) fn catalog_event_names(hooks: &[HookRecord]) -> Vec<&'static str> {
+    hooks.iter().map(|hook| hook.event).collect()
+}
+
+pub(crate) fn catalog_contains(hooks: &[HookRecord], event_name: &str) -> bool {
+    hooks.iter().any(|hook| hook.event == event_name)
+}
+
+#[cfg(test)]
+pub(crate) const fn catalog_event_name_array<const N: usize>(
+    hooks: &[HookRecord; N],
+) -> [&'static str; N] {
+    let mut names = [""; N];
+    let mut index = 0;
+    while index < N {
+        names[index] = hooks[index].event;
+        index += 1;
+    }
+    names
+}
+
+#[cfg(test)]
+pub(crate) fn catalog_classification_corpus(
+    hooks: &[HookRecord],
+) -> Vec<super::ClassificationSample> {
+    hooks.iter().map(classification_sample).collect()
+}
+
+#[cfg(test)]
+pub(crate) fn classification_sample(hook: &HookRecord) -> super::ClassificationSample {
+    super::ClassificationSample::new(
+        hook.event,
+        serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
+        hook.expected_class(),
+        hook.test_ask,
+    )
+}
 
 pub(crate) fn classify_catalog_hook(
     hooks: &[HookRecord],
     event_name: &str,
     ask_kind: Option<AskKind>,
 ) -> ClassifiedHook {
+    classify_catalog_entry(
+        hooks.iter().find(|hook| hook.event == event_name),
+        event_name,
+        ask_kind,
+    )
+}
+
+pub(crate) fn classify_catalog_entry(
+    hook: Option<&HookRecord>,
+    event_name: &str,
+    ask_kind: Option<AskKind>,
+) -> ClassifiedHook {
     let class = if ask_kind.is_some() {
         AgentHookClass::AwaitingUser
-    } else if hooks
-        .iter()
-        .any(|hook| hook.event == event_name && hook.lifecycle_fallback)
-    {
+    } else if hook.is_some_and(|hook| hook.lifecycle_fallback) {
         AgentHookClass::Lifecycle
     } else {
         AgentHookClass::Unknown
@@ -148,5 +244,35 @@ mod tests {
         let t: BackgroundTask = serde_json::from_value(json!({})).unwrap();
         assert!(t.id.is_none());
         assert!(t.status.is_none());
+    }
+
+    #[test]
+    fn hook_catalog_records_derive_policy_and_event_names() {
+        const HOOKS: [HookRecord; 4] = [
+            hook_record!(lifecycle, "Start", r#"{}"#),
+            hook_record!(blocking, "Ask", r#"{}"#, AskKind::Question).synchronous(),
+            hook_record!(blocking, "Permission", r#"{}"#, AskKind::Permission)
+                .with_matcher("shell")
+                .synchronous()
+                .with_lifecycle_fallback(),
+            hook_record!(lifecycle, "Stop", r#"{}"#).with_matcher("done"),
+        ];
+        const NAMES: [&str; 4] = catalog_event_name_array(&HOOKS);
+
+        assert_eq!(NAMES, ["Start", "Ask", "Permission", "Stop"]);
+        assert_eq!(catalog_event_names(&HOOKS), NAMES);
+        assert!(catalog_contains(&HOOKS, "Permission"));
+        assert!(!catalog_contains(&HOOKS, "Unknown"));
+        assert_eq!(HOOKS[1].matcher, None);
+        assert!(HOOKS[1].synchronous);
+        assert_eq!(HOOKS[2].matcher, Some("shell"));
+        assert!(HOOKS[2].lifecycle_fallback);
+        assert_eq!(HOOKS[3].matcher, Some("done"));
+
+        let samples = catalog_classification_corpus(&HOOKS);
+        assert_eq!(samples[0].expected.class, AgentHookClass::Lifecycle);
+        assert_eq!(samples[1].expected.class, AgentHookClass::AwaitingUser);
+        assert_eq!(samples[2].expected.class, AgentHookClass::AwaitingUser);
+        assert_eq!(samples[2].expected.ask_kind, Some(AskKind::Permission));
     }
 }

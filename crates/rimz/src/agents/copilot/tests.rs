@@ -668,7 +668,7 @@ fn two_file_install_wraps_idempotently_and_restores_the_exact_json_value() {
             original: "printf user-status".to_owned(),
         })
     );
-    assert_eq!(preview.planned_events.len(), WIRED_EVENTS.len());
+    assert_eq!(preview.planned_events.len(), COPILOT_HOOKS.len());
 
     install::install(&hooks, &settings).unwrap();
     assert!(install::installed(&hooks, &settings));
@@ -866,7 +866,7 @@ fn embedded_hook_file_matches_the_declared_wire() {
     let document: Value = serde_json::from_str(HOOK_SOURCE).expect("valid hooks JSON");
     let hooks = document["hooks"].as_object().expect("hooks object");
     let actual: BTreeSet<_> = hooks.keys().map(String::as_str).collect();
-    let expected: BTreeSet<_> = WIRED_EVENTS.iter().copied().collect();
+    let expected: BTreeSet<_> = COPILOT_HOOKS.iter().map(|hook| hook.event).collect();
     assert_eq!(actual, expected);
     for (event, entries) in hooks {
         let entries = entries.as_array().expect("entry list");

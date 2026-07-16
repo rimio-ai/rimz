@@ -265,127 +265,62 @@ const CLAUDE_HOOK_TIMEOUT_SECS: u64 = 10;
 /// on-disk matchers left by users or older builds.
 const CLAUDE_HOOKS: &[HookRecord] = &[
     hook_record!(
+        lifecycle,
         "SessionStart",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1","source":"startup"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-1","source":"startup"}"#
     ),
+    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#),
     hook_record!(
-        "SessionEnd",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
+        lifecycle,
         "UserPromptSubmit",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1","prompt":"fix auth"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-1","prompt":"fix auth"}"#
     ),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#),
     hook_record!(
-        "Stop",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
+        lifecycle,
         "StopFailure",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1","error":"api_error"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-1","error":"api_error"}"#
     ),
+    hook_record!(lifecycle, "Notification", r#"{"session_id":"sess-1"}"#),
     hook_record!(
-        "Notification",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
+        blocking,
         "PermissionRequest",
-        None,
-        true,
-        true,
         r#"{"session_id":"sess-1","tool_name":"Bash"}"#,
-        AgentHookClass::AwaitingUser,
-        Some(AskKind::Permission)
-    ),
+        AskKind::Permission
+    )
+    .synchronous()
+    .with_lifecycle_fallback(),
     hook_record!(
+        lifecycle,
         "PreToolUse",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1","tool_name":"Bash"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-1","tool_name":"Bash"}"#
     ),
     hook_record!(
+        lifecycle,
         "PostToolUse",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1","tool_name":"Edit"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-1","tool_name":"Edit"}"#
     ),
     // Subagent lifecycle (Claude Code's Task-tool children, parity with Codex's
     // threads): `SubagentStart` registers a child row keyed by its `agent_id`,
     // `SubagentStop` returns it to idle. Both carry the parent root `session_id`.
     hook_record!(
+        lifecycle,
         "SubagentStart",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-parent","agent_id":"child-1","subagent_type":"Explore"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-parent","agent_id":"child-1","subagent_type":"Explore"}"#
     ),
     hook_record!(
+        lifecycle,
         "SubagentStop",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-parent","agent_id":"child-1","agent_type":"Explore"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-parent","agent_id":"child-1","agent_type":"Explore"}"#
     ),
     // Fires around context compaction (manual `/compact` or auto). Pre opens
     // the transient compacting head; Post carries the trigger bit when present,
     // while SessionStart(source=compact) is the reliable triggerless closer.
+    hook_record!(lifecycle, "PreCompact", r#"{"session_id":"sess-1"}"#),
     hook_record!(
-        "PreCompact",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
+        lifecycle,
         "PostCompact",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1","trigger":"manual"}"#,
-        AgentHookClass::Lifecycle,
-        None
+        r#"{"session_id":"sess-1","trigger":"manual"}"#
     ),
 ];
 
@@ -496,24 +431,14 @@ impl AgentAdapter for ClaudeAdapter {
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        CLAUDE_HOOKS.iter().map(|hook| hook.event).collect()
+        super::hook_types::catalog_event_names(CLAUDE_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
 
-        let mut samples = CLAUDE_HOOKS
-            .iter()
-            .map(|hook| {
-                ClassificationSample::new(
-                    hook.event,
-                    serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
-                    hook.test_class,
-                    hook.test_ask,
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut samples = super::hook_types::catalog_classification_corpus(CLAUDE_HOOKS);
         samples.extend([
             ClassificationSample::new(
                 "PermissionRequest",

@@ -11,7 +11,7 @@ use crate::agents::{
 };
 
 use super::{
-    RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, RIMZ_STATUS_LINE_MARKER, STATUS_LINE, WIRED_EVENTS,
+    CURSOR_HOOKS, RIMZ_HOOK_COMMAND, RIMZ_HOOK_MARKER, RIMZ_STATUS_LINE_MARKER, STATUS_LINE,
 };
 
 pub(super) fn cursor_hooks_path() -> Result<PathBuf> {
@@ -133,9 +133,9 @@ pub(super) fn hooks_installed_at(path: &Path) -> bool {
     let Some(hooks) = root.get("hooks").and_then(Value::as_object) else {
         return false;
     };
-    WIRED_EVENTS.iter().all(|event| {
+    CURSOR_HOOKS.iter().all(|hook_record| {
         hooks
-            .get(*event)
+            .get(hook_record.event)
             .and_then(Value::as_array)
             .is_some_and(|entries| entries.iter().any(entry_is_owned))
     })
@@ -191,14 +191,15 @@ fn install_candidate(path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
         agent: "cursor",
         reason: format!("expected `hooks` to be an object in {}", path.display()),
     })?;
-    for event in WIRED_EVENTS {
+    for hook_record in CURSOR_HOOKS {
         let entries = hooks
-            .entry((*event).to_owned())
+            .entry(hook_record.event.to_owned())
             .or_insert_with(|| Value::Array(Vec::new()));
         let entries = entries.as_array_mut().ok_or_else(|| AgentErr::Install {
             agent: "cursor",
             reason: format!(
-                "expected `hooks.{event}` to be an array in {}",
+                "expected `hooks.{}` to be an array in {}",
+                hook_record.event,
                 path.display()
             ),
         })?;
@@ -206,9 +207,9 @@ fn install_candidate(path: &Path) -> Result<(Map<String, Value>, Vec<String>)> {
     }
     Ok((
         root,
-        WIRED_EVENTS
+        CURSOR_HOOKS
             .iter()
-            .map(|event| (*event).to_owned())
+            .map(|hook| hook.event.to_owned())
             .collect(),
     ))
 }

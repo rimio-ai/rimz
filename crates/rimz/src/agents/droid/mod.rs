@@ -201,69 +201,13 @@ const DROID_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 
 const DROID_HOOK_TIMEOUT_SECS: u64 = 10;
 const DROID_HOOKS: &[HookRecord] = &[
-    hook_record!(
-        "SessionStart",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "UserPromptSubmit",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "PostToolUse",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "Notification",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "Stop",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "PreCompact",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
-    hook_record!(
-        "SessionEnd",
-        None,
-        true,
-        false,
-        r#"{"session_id":"sess-1"}"#,
-        AgentHookClass::Lifecycle,
-        None
-    ),
+    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "Notification", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "PreCompact", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"sess-1"}"#),
 ];
 const RIMZ_HOOK_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source droid";
 const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source droid";
@@ -282,22 +226,12 @@ impl AgentAdapter for DroidAdapter {
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        DROID_HOOKS.iter().map(|hook| hook.event).collect()
+        super::hook_types::catalog_event_names(DROID_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        let mut samples = DROID_HOOKS
-            .iter()
-            .map(|hook| {
-                super::ClassificationSample::new(
-                    hook.event,
-                    serde_json::from_str(hook.test_payload).expect("valid catalog payload"),
-                    hook.test_class,
-                    hook.test_ask,
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut samples = super::hook_types::catalog_classification_corpus(DROID_HOOKS);
         samples.push(super::ClassificationSample::new(
             "SessionStart",
             serde_json::json!({"session_id": "sess-1", "source": "compact"}),

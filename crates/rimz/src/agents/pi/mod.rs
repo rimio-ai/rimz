@@ -39,8 +39,6 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde_json::Value;
-#[cfg(test)]
-use serde_json::json;
 
 use super::AskKind;
 use super::context::{
@@ -51,14 +49,15 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
+use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, ClassifiedHook,
-    Result, SubagentIdentity, TranscriptMessage, agent_config_path, classify_agent_hook,
-    non_empty_trimmed, optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
+    Result, SubagentIdentity, TranscriptMessage, agent_config_path, non_empty_trimmed,
+    optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 use crate::transcript::{AskAnswer, AskQuestion};
@@ -241,50 +240,27 @@ const PI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     },
 };
 
-/// The non-blocking events the embedded extension forwards — the lifecycle
-/// channel, the single source of truth for classification. The selectors and
-/// context-update events are enrichment-only markers: they run the context
-/// merge without emitting a lifecycle signal. Mirrors the `pi.on(...)` registrations in
-/// [`extension.ts`](./extension.ts) (asserted by test).
-const LIFECYCLE_EVENTS: &[&str] = &[
-    "session_start",
-    "before_agent_start",
-    "agent_end",
-    "agent_settled",
-    "turn_end",
-    "after_provider_response",
-    "message_update",
-    "session_info_changed",
-    "tool_execution_end",
-    "model_select",
-    "thinking_level_select",
-    "session_before_compact",
-    "session_compact",
-    "session_shutdown",
-    "subagent_started",
-    "subagent_stopped",
-];
-
-/// Everything the extension wires, for the install/uninstall reports: the
-/// lifecycle set plus the blocking `tool_call` gate.
-const WIRED_EVENTS: &[&str] = &[
-    "session_start",
-    "before_agent_start",
-    "agent_end",
-    "agent_settled",
-    "turn_end",
-    "after_provider_response",
-    "message_update",
-    "session_info_changed",
-    "tool_execution_end",
-    "model_select",
-    "thinking_level_select",
-    "session_before_compact",
-    "session_compact",
-    "session_shutdown",
-    "subagent_started",
-    "subagent_stopped",
-    "tool_call",
+/// Everything the extension wires, in `pi.on(...)` registration order. Selector
+/// and context-update records remain lifecycle-classified enrichment markers.
+const PI_HOOKS: &[HookRecord] = &[
+    hook_record!(lifecycle, "session_start", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "before_agent_start", r#"{"session_id":"sess-1","prompt":"fix auth"}"#),
+    hook_record!(lifecycle, "agent_end", r#"{"session_id":"sess-1","stop_reason":"stop"}"#),
+    hook_record!(lifecycle, "agent_settled", r#"{"session_id":"sess-1","stop_reason":"stop"}"#),
+    hook_record!(lifecycle, "turn_end", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "after_provider_response", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "message_update", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "session_info_changed", r#"{"session_id":"sess-1","session_name":"Parser cleanup"}"#),
+    hook_record!(lifecycle, "tool_execution_end", r#"{"session_id":"sess-1","tool_call_id":"sibling-call","tool_name":"bash"}"#),
+    hook_record!(lifecycle, "model_select", r#"{"session_id":"sess-1","model":"gpt-5.5"}"#),
+    hook_record!(lifecycle, "thinking_level_select", r#"{"session_id":"sess-1","effort":"high"}"#),
+    hook_record!(lifecycle, "session_before_compact", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "session_compact", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "session_shutdown", r#"{"session_id":"sess-1"}"#),
+    hook_record!(lifecycle, "subagent_started", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session"}"#),
+    hook_record!(lifecycle, "subagent_stopped", r#"{"session_id":"sess-1","cwd":"/work/project","subagent_id":"run-1#0","subagent_label":"scout","subagent_source":"pi-session","errored":true,"total_tokens":1200}"#),
+    hook_record!(blocking, "tool_call", r#"{"session_id":"sess-1","tool_call_id":"ask-call","tool_name":"ask_user_question","tool_input":{"questions":[{"question":"Which route?","header":"Route","options":[{"label":"Safe","description":"Stage it"},{"label":"Fast","description":"Ship it"}]}]}}"#, AskKind::Question)
+        .synchronous(),
 ];
 
 /// The RimZ pi extension, embedded at compile time and written whole-file on
@@ -295,7 +271,7 @@ const EXTENSION_SOURCE: &str = include_str!("extension.ts");
 const PI_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     "pi",
     EXTENSION_SOURCE,
-    WIRED_EVENTS,
+    PI_HOOKS,
     "extension",
     pi_extension_path,
     true,
@@ -319,164 +295,28 @@ impl AgentAdapter for PiAdapter {
                 .blocking_tool_kind(payload.get("tool_name").and_then(Value::as_str))
         })
         .flatten();
-        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
+        classify_catalog_hook(PI_HOOKS, event_name, ask_kind)
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        WIRED_EVENTS.to_vec()
+        super::hook_types::catalog_event_names(PI_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        use super::{AgentHookClass, ClassificationSample};
-
-        vec![
-            ClassificationSample::new(
-                "tool_call",
-                json!({
-                    "session_id": "sess-1",
-                    "tool_call_id": "ask-call",
-                    "tool_name": "ask_user_question",
-                    "tool_input": {
-                        "questions": [{
-                            "question": "Which route?",
-                            "header": "Route",
-                            "options": [
-                                { "label": "Safe", "description": "Stage it" },
-                                { "label": "Fast", "description": "Ship it" }
-                            ]
-                        }]
-                    }
-                }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Question),
-            ),
-            ClassificationSample::new(
-                "session_start",
-                json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "subagent_started",
-                json!({
-                    "session_id": "sess-1",
-                    "cwd": "/work/project",
-                    "subagent_id": "run-1#0",
-                    "subagent_label": "scout",
-                    "subagent_source": "pi-session"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "subagent_stopped",
-                json!({
-                    "session_id": "sess-1",
-                    "cwd": "/work/project",
-                    "subagent_id": "run-1#0",
-                    "subagent_label": "scout",
-                    "subagent_source": "pi-session",
-                    "errored": true,
-                    "total_tokens": 1200
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "before_agent_start",
-                json!({ "session_id": "sess-1", "prompt": "fix auth" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "agent_end",
-                json!({ "session_id": "sess-1", "stop_reason": "stop" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "agent_settled",
-                json!({ "session_id": "sess-1", "stop_reason": "stop" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "turn_end",
-                json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "after_provider_response",
-                json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "message_update",
-                json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_info_changed",
-                json!({ "session_id": "sess-1", "session_name": "Parser cleanup" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "tool_execution_end",
-                json!({
-                    "session_id": "sess-1",
-                    "tool_call_id": "sibling-call",
-                    "tool_name": "bash"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "tool_execution_end",
-                json!({
-                    "session_id": "sess-1",
-                    "tool_call_id": "ask-call",
-                    "tool_name": "ask_user_question"
-                }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "model_select",
-                json!({ "session_id": "sess-1", "model": "gpt-5.5" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "thinking_level_select",
-                json!({ "session_id": "sess-1", "effort": "high" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_before_compact",
-                json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_compact",
-                json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "session_shutdown",
-                json!({ "session_id": "sess-1" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-        ]
+        let mut samples = super::hook_types::catalog_classification_corpus(PI_HOOKS);
+        samples.push(super::ClassificationSample::new(
+            "tool_execution_end",
+            serde_json::json!({
+                "session_id": "sess-1",
+                "tool_call_id": "ask-call",
+                "tool_name": "ask_user_question"
+            }),
+            super::AgentHookClass::Lifecycle,
+            None,
+        ));
+        samples
     }
 
     #[cfg(test)]

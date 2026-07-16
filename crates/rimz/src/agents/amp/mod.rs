@@ -13,8 +13,6 @@ mod transcript;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-#[cfg(test)]
-use serde_json::json;
 
 #[cfg(test)]
 use super::PresetErr;
@@ -23,13 +21,13 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
+use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::{
     AgentAdapter, AgentCost, AgentCurrentUsage, AgentErr, AgentLifecycleObservation,
     AgentTokenUsage, AskKind, ClassifiedHook, LocalContextRefresh, LocalContextRefreshCtx,
-    RefreshTrigger, Result, SessionOrigin, TranscriptStat, classify_agent_hook, non_empty_trimmed,
-    sanitize_user_prompt,
+    RefreshTrigger, Result, SessionOrigin, TranscriptStat, non_empty_trimmed, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 
@@ -71,7 +69,7 @@ static AMP_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["amp", "node"],
     bin_names: &["amp"],
     extra_bin_dirs: &[],
-    activity_events: &["session_start", "agent_start", "tool_result", "agent_end"],
+    activity_events: AMP_ACTIVITY_EVENTS,
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("amp"),
@@ -187,19 +185,41 @@ const AMP_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     },
 };
 
-const LIFECYCLE_EVENTS: &[&str] = &["session_start", "agent_start", "tool_result", "agent_end"];
-const WIRED_EVENTS: &[&str] = &[
-    "session_start",
-    "agent_start",
-    "tool_result",
-    "agent_end",
-    "permission_ask",
+const AMP_ACTIVITY_EVENTS: &[&str] = &["session_start", "agent_start", "tool_result", "agent_end"];
+const AMP_HOOKS: &[HookRecord] = &[
+    hook_record!(
+        lifecycle,
+        "session_start",
+        r#"{"session_id":"T-abc123","cwd":"/tmp/repo"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "agent_start",
+        r#"{"session_id":"T-abc123","prompt":"fix auth"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "tool_result",
+        r#"{"session_id":"T-abc123","tool_name":"apply_patch","status":"done","files_modified":true}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "agent_end",
+        r#"{"session_id":"T-abc123","status":"done"}"#
+    ),
+    hook_record!(
+        blocking,
+        "permission_ask",
+        r#"{"session_id":"T-abc123"}"#,
+        AskKind::Permission
+    )
+    .synchronous(),
 ];
 const PLUGIN_SOURCE: &str = include_str!("plugin.ts");
 const AMP_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     "amp",
     PLUGIN_SOURCE,
-    WIRED_EVENTS,
+    AMP_HOOKS,
     "plugin",
     amp_plugin_path,
     false,
@@ -215,50 +235,17 @@ impl AgentAdapter for AmpAdapter {
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
         let ask_kind = (event_name == "permission_ask").then_some(AskKind::Permission);
-        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
+        classify_catalog_hook(AMP_HOOKS, event_name, ask_kind)
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        WIRED_EVENTS.to_vec()
+        super::hook_types::catalog_event_names(AMP_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        use super::{AgentHookClass, ClassificationSample};
-
-        vec![
-            ClassificationSample::new(
-                "session_start",
-                json!({ "session_id": "T-abc123", "cwd": "/tmp/repo" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "agent_start",
-                json!({ "session_id": "T-abc123", "prompt": "fix auth" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "tool_result",
-                json!({ "session_id": "T-abc123", "tool_name": "apply_patch", "status": "done", "files_modified": true }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "agent_end",
-                json!({ "session_id": "T-abc123", "status": "done" }),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "permission_ask",
-                json!({ "session_id": "T-abc123" }),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Permission),
-            ),
-        ]
+        super::hook_types::catalog_classification_corpus(AMP_HOOKS)
     }
 
     #[cfg(test)]

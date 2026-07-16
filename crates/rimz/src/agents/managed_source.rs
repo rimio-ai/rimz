@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::store::atomic;
 
+use super::hook_types::HookRecord;
 use super::managed_json_hooks::ManagedJsonHookSpec;
 use super::{
     AgentErr, HookInstallFilePreview, HookInstallFileReport, HookInstallPreview, HookInstallReport,
@@ -17,7 +18,7 @@ pub(crate) const RIMZ_MANAGED_MARKER: &str = "_rimz_managed";
 enum ManagedSourceBackend {
     WholeFile {
         source: &'static str,
-        wired_events: &'static [&'static str],
+        catalog: &'static [HookRecord],
         artifact_noun: &'static str,
         upgradeable: bool,
     },
@@ -32,10 +33,10 @@ pub struct ManagedSource {
 }
 
 impl ManagedSource {
-    pub const fn new(
+    pub(crate) const fn new(
         agent: &'static str,
         source: &'static str,
-        wired_events: &'static [&'static str],
+        catalog: &'static [HookRecord],
         artifact_noun: &'static str,
         path: fn() -> Result<PathBuf>,
         upgradeable: bool,
@@ -45,7 +46,7 @@ impl ManagedSource {
             path,
             backend: ManagedSourceBackend::WholeFile {
                 source,
-                wired_events,
+                catalog,
                 artifact_noun,
                 upgradeable,
             },
@@ -215,13 +216,10 @@ impl ManagedSource {
     }
 
     fn installed_event_names(&self) -> Vec<String> {
-        let ManagedSourceBackend::WholeFile { wired_events, .. } = &self.backend else {
+        let ManagedSourceBackend::WholeFile { catalog, .. } = &self.backend else {
             return Vec::new();
         };
-        wired_events
-            .iter()
-            .map(|event| (*event).to_owned())
-            .collect()
+        catalog.iter().map(|hook| hook.event.to_owned()).collect()
     }
 }
 

@@ -1102,10 +1102,7 @@ fn install_preview_and_uninstall_only_own_managed_files() {
 }
 
 fn managed_event_names() -> Vec<String> {
-    WIRED_EVENTS
-        .iter()
-        .map(|event| (*event).to_owned())
-        .collect()
+    PI_HOOKS.iter().map(|hook| hook.event.to_owned()).collect()
 }
 
 #[test]
@@ -1147,8 +1144,9 @@ fn extension_source_wires_every_event() {
         !EXTENSION_SOURCE.contains("addSessionCost(sessionId(ctx), last?.usage"),
         "agent_end's last message is the final turn_end usage and must not add cost again"
     );
-    for event in WIRED_EVENTS {
-        let registered = match *event {
+    for hook in PI_HOOKS {
+        let event = hook.event;
+        let registered = match event {
             "subagent_started" | "subagent_stopped" => {
                 EXTENSION_SOURCE.contains(&format!("feedSubagent(\"{event}\""))
             }

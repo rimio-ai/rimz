@@ -31,6 +31,7 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
+use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
 use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
@@ -39,7 +40,7 @@ use super::{
     HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextRefresh,
     LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, SubagentCorrelation,
     SubagentCorrelationInput, SubagentIdentity, TranscriptMessage, TurnErrorClass,
-    classify_agent_hook, resolve_subagent_identity, sanitize_user_prompt,
+    resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -210,29 +211,62 @@ const COPILOT_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     },
 };
 
-const LIFECYCLE_EVENTS: &[&str] = &[
-    "sessionStart",
-    "userPromptSubmitted",
-    "preToolUse",
-    "postToolUse",
-    "postToolUseFailure",
-    "agentStop",
-    "preCompact",
-    "errorOccurred",
-    "sessionEnd",
-];
-
-const WIRED_EVENTS: &[&str] = &[
-    "sessionStart",
-    "userPromptSubmitted",
-    "preToolUse",
-    "postToolUse",
-    "postToolUseFailure",
-    "permissionRequest",
-    "agentStop",
-    "preCompact",
-    "errorOccurred",
-    "sessionEnd",
+pub(super) const COPILOT_HOOKS: &[HookRecord] = &[
+    hook_record!(
+        lifecycle,
+        "sessionStart",
+        r#"{"sessionId":"sess-1","source":"startup"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "userPromptSubmitted",
+        r#"{"sessionId":"sess-1","prompt":"fix auth"}"#
+    ),
+    hook_record!(
+        blocking,
+        "preToolUse",
+        r#"{"sessionId":"sess-1","toolName":"ask_user","toolArgs":{"question":"Proceed?"}}"#,
+        AskKind::Question
+    )
+    .synchronous()
+    .with_lifecycle_fallback(),
+    hook_record!(
+        lifecycle,
+        "postToolUse",
+        r#"{"sessionId":"sess-1","toolName":"edit"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "postToolUseFailure",
+        r#"{"sessionId":"sess-1","toolName":"bash","error":"failed"}"#
+    ),
+    hook_record!(
+        blocking,
+        "permissionRequest",
+        r#"{"sessionId":"sess-1","toolName":"bash"}"#,
+        AskKind::Permission
+    )
+    .synchronous(),
+    hook_record!(
+        lifecycle,
+        "agentStop",
+        r#"{"sessionId":"sess-1","stopReason":"end_turn"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "preCompact",
+        r#"{"sessionId":"sess-1","trigger":"auto"}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "errorOccurred",
+        r#"{"sessionId":"sess-1","recoverable":true,"error":{"message":"retry"}}"#
+    ),
+    hook_record!(
+        lifecycle,
+        "sessionEnd",
+        r#"{"sessionId":"sess-1","reason":"user_exit"}"#
+    ),
 ];
 
 // If Copilot starts rejecting unknown top-level keys, move the ownership
@@ -242,7 +276,7 @@ const HOOK_SOURCE: &str = include_str!("hooks.json");
 const COPILOT_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     "copilot",
     HOOK_SOURCE,
-    WIRED_EVENTS,
+    COPILOT_HOOKS,
     "hook file",
     paths::hooks_path,
     false,
@@ -286,86 +320,26 @@ impl AgentAdapter for CopilotAdapter {
         } else {
             None
         };
-        classify_agent_hook(event_name, ask_kind, LIFECYCLE_EVENTS)
+        classify_catalog_hook(COPILOT_HOOKS, event_name, ask_kind)
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        WIRED_EVENTS.to_vec()
+        super::hook_types::catalog_event_names(COPILOT_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
 
-        vec![
-            ClassificationSample::new(
-                "sessionStart",
-                json!({"sessionId":"sess-1","source":"startup"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "userPromptSubmitted",
-                json!({"sessionId":"sess-1","prompt":"fix auth"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "preToolUse",
-                json!({"sessionId":"sess-1","toolName":"ask_user","toolArgs":{"question":"Proceed?"}}),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Question),
-            ),
-            ClassificationSample::new(
-                "preToolUse",
-                json!({"sessionId":"sess-1","toolName":"bash"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "postToolUse",
-                json!({"sessionId":"sess-1","toolName":"edit"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "postToolUseFailure",
-                json!({"sessionId":"sess-1","toolName":"bash","error":"failed"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "permissionRequest",
-                json!({"sessionId":"sess-1","toolName":"bash"}),
-                AgentHookClass::AwaitingUser,
-                Some(AskKind::Permission),
-            ),
-            ClassificationSample::new(
-                "agentStop",
-                json!({"sessionId":"sess-1","stopReason":"end_turn"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "preCompact",
-                json!({"sessionId":"sess-1","trigger":"auto"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "errorOccurred",
-                json!({"sessionId":"sess-1","recoverable":true,"error":{"message":"retry"}}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "sessionEnd",
-                json!({"sessionId":"sess-1","reason":"user_exit"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-        ]
+        let mut samples = super::hook_types::catalog_classification_corpus(COPILOT_HOOKS);
+        samples.push(ClassificationSample::new(
+            "preToolUse",
+            json!({"sessionId":"sess-1","toolName":"bash"}),
+            AgentHookClass::Lifecycle,
+            None,
+        ));
+        samples
     }
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {

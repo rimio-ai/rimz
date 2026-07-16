@@ -17,18 +17,20 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde_json::Value;
 
+#[cfg(test)]
+use super::AgentHookClass;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationCoverage,
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability,
     SamePaneSessionPolicy, ThreadKey, ToolClassification,
 };
+use super::hook_types::{HookRecord, classify_catalog_entry, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
-    AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalSessionObservation, Result,
-    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity,
-    SubagentSpawnInput, TranscriptMessage, non_empty_trimmed, resolve_subagent_identity,
-    sanitize_user_prompt,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
+    HookInstallReport, HookUninstallReport, LocalSessionObservation, Result, SpawnedSubagent,
+    SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, SubagentSpawnInput,
+    TranscriptMessage, non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -39,31 +41,92 @@ const RIMZ_HOOK_MARKER: &str = "rimz hooks feed --source antigravity";
 const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source antigravity";
 const STATUS_LINE_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source antigravity";
-const PRE_INVOCATION_COMMAND: &str =
-    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PreInvocation";
-const POST_TOOL_EDIT_COMMAND: &str =
-    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:edit";
-const POST_TOOL_MUTATING_COMMAND: &str =
-    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:mutating";
-const POST_TOOL_OBSERVED_COMMAND: &str =
-    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:observed";
-const POST_INVOCATION_COMMAND: &str =
-    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostInvocation";
-const STOP_COMMAND: &str =
-    "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event Stop";
-const POST_TOOL_EDIT_MATCHER: &str =
-    "^(write_to_file|replace_file_content|multi_replace_file_content)$";
-const POST_TOOL_MUTATING_MATCHER: &str = "^run_command$";
-const POST_TOOL_OBSERVED_MATCHER: &str = "^(view_file|list_dir|find_by_name|grep_search|search_web|read_url_content|manage_task|schedule|list_permissions|ask_permission|invoke_subagent|define_subagent|send_message|manage_subagents|ask_question|generate_image)$";
-const INSTALLED_EVENT_LABELS: &[&str] = &[
-    "PreInvocation",
-    "PostToolUse:edit",
-    "PostToolUse:mutating",
-    "PostToolUse:observed",
-    "PostInvocation",
-    "Stop",
+
+pub(super) struct AntigravityHook {
+    pub(super) hook: HookRecord,
+    pub(super) config_event: &'static str,
+    pub(super) config_matcher: Option<&'static str>,
+    pub(super) command: &'static str,
+}
+
+pub(super) const ANTIGRAVITY_HOOKS: [AntigravityHook; 6] = [
+    AntigravityHook {
+        hook: hook_record!(
+            lifecycle,
+            "PreInvocation",
+            r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl","invocationNum":0}"#
+        ),
+        config_event: "PreInvocation",
+        config_matcher: None,
+        command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PreInvocation",
+    },
+    AntigravityHook {
+        hook: hook_record!(
+            lifecycle,
+            "PostToolUse:edit",
+            r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
+        ),
+        config_event: "PostToolUse",
+        config_matcher: Some("^(write_to_file|replace_file_content|multi_replace_file_content)$"),
+        command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:edit",
+    },
+    AntigravityHook {
+        hook: hook_record!(
+            lifecycle,
+            "PostToolUse:mutating",
+            r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
+        ),
+        config_event: "PostToolUse",
+        config_matcher: Some("^run_command$"),
+        command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:mutating",
+    },
+    AntigravityHook {
+        hook: hook_record!(
+            lifecycle,
+            "PostToolUse:observed",
+            r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
+        ),
+        config_event: "PostToolUse",
+        config_matcher: Some(
+            "^(view_file|list_dir|find_by_name|grep_search|search_web|read_url_content|manage_task|schedule|list_permissions|ask_permission|invoke_subagent|define_subagent|send_message|manage_subagents|ask_question|generate_image)$",
+        ),
+        command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostToolUse:observed",
+    },
+    AntigravityHook {
+        hook: hook_record!(
+            lifecycle,
+            "PostInvocation",
+            r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl"}"#
+        ),
+        config_event: "PostInvocation",
+        config_matcher: None,
+        command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event PostInvocation",
+    },
+    AntigravityHook {
+        hook: hook_record!(
+            lifecycle,
+            "Stop",
+            r#"{"conversationId":"11111111-1111-4111-8111-111111111111","workspacePaths":["/workspace/project"],"transcriptPath":"/tmp/transcript_full.jsonl","fullyIdle":true,"terminationReason":"model_stop"}"#
+        ),
+        config_event: "Stop",
+        config_matcher: None,
+        command: "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source antigravity --event Stop",
+    },
 ];
-const LIFECYCLE_EVENTS: &[&str] = INSTALLED_EVENT_LABELS;
+
+const fn antigravity_event_names<const N: usize>(
+    hooks: &[AntigravityHook; N],
+) -> [&'static str; N] {
+    let mut names = [""; N];
+    let mut index = 0;
+    while index < N {
+        names[index] = hooks[index].hook.event;
+        index += 1;
+    }
+    names
+}
+
+const ANTIGRAVITY_EVENT_NAMES: [&str; 6] = antigravity_event_names(&ANTIGRAVITY_HOOKS);
 
 static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "antigravity",
@@ -112,7 +175,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     process_names: &["agy"],
     bin_names: &["agy"],
     extra_bin_dirs: &[".local/bin"],
-    activity_events: INSTALLED_EVENT_LABELS,
+    activity_events: &ANTIGRAVITY_EVENT_NAMES,
     thread_key: ThreadKey::PerFile,
     launch: super::LaunchSpec {
         program: Some("agy"),
@@ -282,50 +345,33 @@ impl AgentAdapter for AntigravityAdapter {
     }
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        ClassifiedHook {
-            class: if LIFECYCLE_EVENTS.contains(&event_name) {
-                AgentHookClass::Lifecycle
-            } else {
-                AgentHookClass::Unknown
-            },
-            ask_kind: None,
-            event_name: event_name.to_owned(),
-        }
+        classify_catalog_entry(
+            ANTIGRAVITY_HOOKS
+                .iter()
+                .find(|entry| entry.hook.event == event_name)
+                .map(|entry| &entry.hook),
+            event_name,
+            None,
+        )
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        INSTALLED_EVENT_LABELS.to_vec()
+        ANTIGRAVITY_EVENT_NAMES.to_vec()
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
-        use super::ClassificationSample;
-        let common = serde_json::json!({
-            "conversationId": "11111111-1111-4111-8111-111111111111",
-            "workspacePaths": ["/workspace/project"],
-            "transcriptPath": "/tmp/transcript_full.jsonl",
-        });
-        INSTALLED_EVENT_LABELS
+        ANTIGRAVITY_HOOKS
             .iter()
-            .map(|event| {
-                let mut payload = common.clone();
-                if event.starts_with("PreInvocation") {
-                    payload["invocationNum"] = Value::from(0);
-                }
-                if *event == "Stop" {
-                    payload["fullyIdle"] = Value::Bool(true);
-                    payload["terminationReason"] = Value::String("model_stop".to_owned());
-                }
-                ClassificationSample::new(event, payload, AgentHookClass::Lifecycle, None)
-            })
+            .map(|entry| super::hook_types::classification_sample(&entry.hook))
             .collect()
     }
 
     fn render_neutral(&self, event_name: &str) -> Result<Option<Value>> {
         Ok(match event_name {
             "Stop" => Some(serde_json::json!({ "decision": "" })),
-            event if LIFECYCLE_EVENTS.contains(&event) => Some(serde_json::json!({})),
+            event if ANTIGRAVITY_EVENT_NAMES.contains(&event) => Some(serde_json::json!({})),
             _ => None,
         })
     }

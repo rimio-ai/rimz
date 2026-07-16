@@ -606,9 +606,9 @@ fn install_preview_and_uninstall_only_own_managed_files() {
 }
 
 fn managed_event_names() -> Vec<String> {
-    WIRED_EVENTS
+    OPENCODE_HOOKS
         .iter()
-        .map(|event| (*event).to_owned())
+        .map(|hook| hook.event.to_owned())
         .collect()
 }
 
@@ -648,7 +648,8 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("const hasMeasuredUsage ="));
     assert!(PLUGIN_SOURCE.contains("(value) => (value ?? 0) > 0"));
 
-    for event in WIRED_EVENTS {
+    for hook in OPENCODE_HOOKS {
+        let event = hook.event;
         assert!(
             PLUGIN_SOURCE.contains(event),
             "plugin source missing {event}"

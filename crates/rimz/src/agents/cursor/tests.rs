@@ -1475,13 +1475,13 @@ fn transcript_refresh_recovers_a_same_path_whole_file_rewrite() {
 
 #[test]
 fn every_wired_event_returns_cursor_neutral_json() {
-    let neutrals: Vec<_> = WIRED_EVENTS
+    let neutrals: Vec<_> = CURSOR_HOOKS
         .iter()
-        .map(|event| {
+        .map(|hook| {
             (
-                *event,
+                hook.event,
                 CursorAdapter
-                    .render_neutral(event)
+                    .render_neutral(hook.event)
                     .expect("neutral render")
                     .expect("wired neutral"),
             )
@@ -1618,7 +1618,7 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
 
     let report = install::install_into(&path, &config_path).expect("install");
     assert!(report.files.iter().all(|file| file.existed));
-    assert_eq!(report.installed_events.len(), WIRED_EVENTS.len());
+    assert_eq!(report.installed_events.len(), CURSOR_HOOKS.len());
     assert!(install::hooks_installed_at(&path));
     assert!(install::statusline_installed_at(&config_path));
     let once = std::fs::read_to_string(&path).unwrap();
@@ -1657,7 +1657,7 @@ fn hook_install_merges_idempotently_and_uninstalls_only_owned_entries() {
     assert_eq!(preview.files[0].candidate, once);
     assert_eq!(preview.files[1].candidate, config_once);
     let uninstall = install::uninstall_from(&path, &config_path).expect("uninstall");
-    assert_eq!(uninstall.removed_events.len(), WIRED_EVENTS.len());
+    assert_eq!(uninstall.removed_events.len(), CURSOR_HOOKS.len());
     assert!(!install::managed_artifacts_at(&path));
     let uninstalled: Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -1723,7 +1723,8 @@ fn legacy_hook_install_is_detected_and_repaired_additively() {
         candidate["hooks"]["futureEvent"][0]["command"],
         "future-user-hook"
     );
-    for event in WIRED_EVENTS {
+    for hook in CURSOR_HOOKS {
+        let event = hook.event;
         let entries = candidate["hooks"][event].as_array().unwrap();
         assert_eq!(
             entries
@@ -1733,7 +1734,7 @@ fn legacy_hook_install_is_detected_and_repaired_additively() {
             1,
             "{event}",
         );
-        if legacy_events.contains(event) {
+        if legacy_events.contains(&event) {
             assert!(
                 entries.iter().any(|entry| {
                     entry["command"] == Value::String(format!("user-{event}-hook"))

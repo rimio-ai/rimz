@@ -8,7 +8,7 @@ use crate::agents::{
 };
 use crate::store::atomic;
 
-use super::HOOK_EVENTS;
+use super::KIMI_HOOKS;
 
 pub(super) const RIMZ_HOOK_COMMAND: &str =
     "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source kimi";
@@ -51,18 +51,17 @@ fn candidate(path: &Path) -> Result<(toml::Table, Vec<String>)> {
         });
     }
     let array = hooks.as_array_mut().expect("array checked above");
-    for event in HOOK_EVENTS {
+    for hook_record in KIMI_HOOKS {
         let mut hook = toml::Table::new();
-        hook.insert("event".to_owned(), toml::Value::String((*event).to_owned()));
-        if matches!(
-            *event,
-            "PreToolUse"
-                | "PostToolUse"
-                | "PostToolUseFailure"
-                | "PermissionRequest"
-                | "PermissionResult"
-        ) {
-            hook.insert("matcher".to_owned(), toml::Value::String(".*".to_owned()));
+        hook.insert(
+            "event".to_owned(),
+            toml::Value::String(hook_record.event.to_owned()),
+        );
+        if let Some(matcher) = hook_record.matcher {
+            hook.insert(
+                "matcher".to_owned(),
+                toml::Value::String(matcher.to_owned()),
+            );
         }
         hook.insert(
             "command".to_owned(),
@@ -70,15 +69,19 @@ fn candidate(path: &Path) -> Result<(toml::Table, Vec<String>)> {
         );
         hook.insert(
             "timeout".to_owned(),
-            toml::Value::Integer(if *event == "SessionEnd" { 4 } else { 10 }),
+            toml::Value::Integer(if hook_record.event == "SessionEnd" {
+                4
+            } else {
+                10
+            }),
         );
         array.push(toml::Value::Table(hook));
     }
     Ok((
         root,
-        HOOK_EVENTS
+        KIMI_HOOKS
             .iter()
-            .map(|event| (*event).to_owned())
+            .map(|hook| hook.event.to_owned())
             .collect(),
     ))
 }
@@ -187,12 +190,12 @@ pub(super) fn installed(path: &Path) -> bool {
     let Some(hooks) = table.get("hooks").and_then(toml::Value::as_array) else {
         return false;
     };
-    HOOK_EVENTS.iter().all(|event| {
+    KIMI_HOOKS.iter().all(|hook_record| {
         hooks.iter().any(|value| {
             let Some(hook) = value.as_table() else {
                 return false;
             };
-            hook.get("event").and_then(toml::Value::as_str) == Some(event)
+            hook.get("event").and_then(toml::Value::as_str) == Some(hook_record.event)
                 && hook
                     .get("command")
                     .and_then(toml::Value::as_str)

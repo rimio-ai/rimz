@@ -22,11 +22,12 @@ use super::descriptor::{
     LifecycleCoverage, PlanLabel, RealtimeUsageChannel, RemoteControlCapability, ThreadKey,
     ToolClassification,
 };
+use super::hook_types::{HookRecord, classify_catalog_hook, hook_record};
 use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AgentTurnError, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LocalContextRefresh, LocalContextRefreshCtx,
-    RefreshTrigger, Result, TranscriptStat, TurnErrorClass, classify_agent_hook, non_empty_trimmed,
+    RefreshTrigger, Result, TranscriptStat, TurnErrorClass, non_empty_trimmed,
     sanitize_user_prompt,
 };
 #[cfg(test)]
@@ -34,42 +35,32 @@ use crate::harness::run::PermissionMode;
 use crate::ids::AgentSessionId;
 use crate::transcript::{AskOption, AskQuestion};
 
-pub const HOOK_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "PermissionRequest",
-    "PermissionResult",
-    "Stop",
-    "StopFailure",
-    "Interrupt",
-    "SessionEnd",
-    "SubagentStart",
-    "SubagentStop",
-    "PreCompact",
-    "PostCompact",
-    "Notification",
-];
-
-const WIRED_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "PermissionRequest",
-    "PermissionResult",
-    "Stop",
-    "StopFailure",
-    "Interrupt",
-    "SessionEnd",
-    "SubagentStart",
-    "SubagentStop",
-    "PreCompact",
-    "PostCompact",
-    "Notification",
+pub(super) const KIMI_HOOKS: &[HookRecord] = &[
+    hook_record!(lifecycle, "SessionStart", r#"{"session_id":"s"}"#),
+    hook_record!(lifecycle, "UserPromptSubmit", r#"{"session_id":"s","prompt":[{"type":"text","text":"fix"}]}"#),
+    hook_record!(blocking, "PreToolUse", r#"{"session_id":"s","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Continue?"}]}}"#, super::AskKind::Question)
+        .with_matcher(".*")
+        .synchronous()
+        .with_lifecycle_fallback(),
+    hook_record!(lifecycle, "PostToolUse", r#"{"session_id":"s","tool_name":"Write"}"#)
+        .with_matcher(".*"),
+    hook_record!(lifecycle, "PostToolUseFailure", r#"{"session_id":"s","tool_name":"Bash"}"#)
+        .with_matcher(".*"),
+    hook_record!(blocking, "PermissionRequest", r#"{"session_id":"s","tool_call_id":"r","tool_name":"Bash","action":"Run shell"}"#, super::AskKind::Permission)
+        .with_matcher(".*")
+        .synchronous()
+        .with_lifecycle_fallback(),
+    hook_record!(lifecycle, "PermissionResult", r#"{"session_id":"s","tool_call_id":"r","tool_name":"Bash","decision":"approved"}"#)
+        .with_matcher(".*"),
+    hook_record!(lifecycle, "Stop", r#"{"session_id":"s"}"#),
+    hook_record!(lifecycle, "StopFailure", r#"{"session_id":"s","error_type":"RuntimeError"}"#),
+    hook_record!(lifecycle, "Interrupt", r#"{"session_id":"s","turn_id":"t","reason":"cancelled"}"#),
+    hook_record!(lifecycle, "SessionEnd", r#"{"session_id":"s"}"#),
+    hook_record!(lifecycle, "SubagentStart", r#"{"session_id":"s","agent_name":"coder","prompt":"inspect the parser"}"#),
+    hook_record!(lifecycle, "SubagentStop", r#"{"session_id":"s","agent_name":"coder","response":"done"}"#),
+    hook_record!(lifecycle, "PreCompact", r#"{"session_id":"s","trigger":"manual"}"#),
+    hook_record!(lifecycle, "PostCompact", r#"{"session_id":"s","trigger":"auto"}"#),
+    hook_record!(lifecycle, "Notification", r#"{"session_id":"s","notification_type":"task.completed"}"#),
 ];
 
 static KIMI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
@@ -269,36 +260,19 @@ impl AgentAdapter for KimiAdapter {
             }
             _ => None,
         };
-        classify_agent_hook(event_name, ask, WIRED_EVENTS)
+        classify_catalog_hook(KIMI_HOOKS, event_name, ask)
     }
 
     #[cfg(test)]
     fn native_hook_events(&self) -> Vec<&'static str> {
-        WIRED_EVENTS.to_vec()
+        super::hook_types::catalog_event_names(KIMI_HOOKS)
     }
 
     #[cfg(test)]
     fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
         use super::{AgentHookClass, ClassificationSample};
-        vec![
-            ClassificationSample::new(
-                "SessionStart",
-                serde_json::json!({"session_id":"s"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "UserPromptSubmit",
-                serde_json::json!({"session_id":"s","prompt":[{"type":"text","text":"fix"}]}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PreToolUse",
-                serde_json::json!({"session_id":"s","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Continue?"}]}}),
-                AgentHookClass::AwaitingUser,
-                Some(super::AskKind::Question),
-            ),
+        let mut samples = super::hook_types::catalog_classification_corpus(KIMI_HOOKS);
+        samples.extend([
             ClassificationSample::new(
                 "PreToolUse",
                 serde_json::json!({"session_id":"s","tool_name":"ExitPlanMode"}),
@@ -306,90 +280,13 @@ impl AgentAdapter for KimiAdapter {
                 None,
             ),
             ClassificationSample::new(
-                "PostToolUse",
-                serde_json::json!({"session_id":"s","tool_name":"Write"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PostToolUseFailure",
-                serde_json::json!({"session_id":"s","tool_name":"Bash"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "Stop",
-                serde_json::json!({"session_id":"s"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "StopFailure",
-                serde_json::json!({"session_id":"s","error_type":"RuntimeError"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SessionEnd",
-                serde_json::json!({"session_id":"s"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SubagentStart",
-                serde_json::json!({"session_id":"s","agent_name":"coder","prompt":"inspect the parser"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "SubagentStop",
-                serde_json::json!({"session_id":"s","agent_name":"coder","response":"done"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PreCompact",
-                serde_json::json!({"session_id":"s","trigger":"manual"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PostCompact",
-                serde_json::json!({"session_id":"s","trigger":"auto"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "Notification",
-                serde_json::json!({"session_id":"s","notification_type":"task.completed"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "PermissionRequest",
-                serde_json::json!({"session_id":"s","tool_call_id":"r","tool_name":"Bash","action":"Run shell"}),
-                AgentHookClass::AwaitingUser,
-                Some(super::AskKind::Permission),
-            ),
-            ClassificationSample::new(
                 "PermissionRequest",
                 serde_json::json!({"session_id":"s","tool_call_id":"r","tool_name":"ExitPlanMode","action":"Exit plan mode"}),
                 AgentHookClass::AwaitingUser,
                 Some(super::AskKind::PlanApproval),
             ),
-            ClassificationSample::new(
-                "PermissionResult",
-                serde_json::json!({"session_id":"s","tool_call_id":"r","tool_name":"Bash","decision":"approved"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-            ClassificationSample::new(
-                "Interrupt",
-                serde_json::json!({"session_id":"s","turn_id":"t","reason":"cancelled"}),
-                AgentHookClass::Lifecycle,
-                None,
-            ),
-        ]
+        ]);
+        samples
     }
 
     #[cfg(test)]
