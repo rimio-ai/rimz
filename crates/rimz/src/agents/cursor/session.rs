@@ -1,4 +1,4 @@
-//! Version-pinned, read-only Cursor CLI local Ask discovery.
+//! Version-pinned, read-only Cursor CLI local wait discovery.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -26,6 +26,7 @@ const MAX_SESSIONS_PER_WORKSPACE: usize = 32;
 const MAX_META_BYTES: u64 = 64 * 1024;
 const MAX_STORE_META_HEX_BYTES: usize = 128 * 1024;
 const MAX_ROOT_BLOB_BYTES: usize = 2 * 1024 * 1024;
+const MAX_MESSAGE_BLOB_BYTES: usize = 256 * 1024;
 const MAX_PENDING_CALLS: usize = 64;
 const MAX_PENDING_JSON_BYTES: usize = 256 * 1024;
 const MAX_TOOL_CALL_ID_BYTES: usize = 512;
@@ -49,13 +50,33 @@ struct StoreMetadata {
     created_at: i64,
     latest_root_blob_id: String,
     #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    current_plan_uri: Option<String>,
+    #[serde(default)]
     subagent_info: Option<Value>,
 }
 
 #[derive(Clone, PartialEq, Message)]
 pub(super) struct ConversationStateStructure {
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    pub(super) message_ids: Vec<Vec<u8>>,
     #[prost(string, repeated, tag = "4")]
     pub(super) pending_tool_calls: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ConversationMessage {
+    role: String,
+    content: Vec<MessageContent>,
+}
+
+#[derive(Deserialize)]
+struct MessageContent {
+    #[serde(rename = "type")]
+    content_type: String,
+    #[serde(rename = "toolName")]
+    tool_name: String,
 }
 
 #[derive(Deserialize)]
@@ -104,7 +125,7 @@ struct CursorProviderOptions {
     pending_tool_call_started_at_ms: Option<i64>,
 }
 
-struct OpenAsk {
+struct OpenWait {
     detail: String,
     waiting_since: Timestamp,
 }
@@ -213,8 +234,14 @@ fn observation(
 
     let created_at = timestamp_ms(metadata.created_at_ms)?;
     let updated_at = timestamp_ms(metadata.updated_at_ms)?;
-    let open_ask = read_open_ask(&store_path, session_id, metadata.created_at_ms)?;
-    (open_ask.waiting_since >= created_at && open_ask.waiting_since <= updated_at).then_some(())?;
+    let open_wait = read_open_wait(
+        &store_path,
+        session_id,
+        metadata.created_at_ms,
+        metadata.updated_at_ms,
+    )?;
+    (open_wait.waiting_since >= created_at && open_wait.waiting_since <= updated_at)
+        .then_some(())?;
     let transcript_path = super::transcript::discover_under(&home.join("projects"), session_id)?;
 
     Some(LocalSessionObservation {
@@ -230,8 +257,8 @@ fn observation(
             status: AgentStatus::Waiting,
             phase: TurnPhase::Idle,
             latest_prompt: None,
-            native_prompt_detail: Some(open_ask.detail),
-            waiting_since: Some(open_ask.waiting_since),
+            native_prompt_detail: Some(open_wait.detail),
+            waiting_since: Some(open_wait.waiting_since),
             context_pct: None,
         }),
     })
@@ -247,7 +274,12 @@ fn validate_metadata(metadata: &ChatMetadata, workspace: &Path) -> bool {
         && crate::worktree::normalize_path_lexical(&metadata.cwd) == workspace
 }
 
-fn read_open_ask(store_path: &Path, session_id: &str, created_at_ms: i64) -> Option<OpenAsk> {
+fn read_open_wait(
+    store_path: &Path,
+    session_id: &str,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+) -> Option<OpenWait> {
     let connection = Connection::open_with_flags(
         store_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY
@@ -283,25 +315,71 @@ fn read_open_ask(store_path: &Path, session_id: &str, created_at_ms: i64) -> Opt
         && valid_blob_id(&store_metadata.latest_root_blob_id))
     .then_some(())?;
 
-    let blob: Vec<u8> = connection
+    let blob = read_blob(
+        &connection,
+        &store_metadata.latest_root_blob_id,
+        MAX_ROOT_BLOB_BYTES,
+    )?;
+    (hex::encode(Sha256::digest(&blob)) == store_metadata.latest_root_blob_id).then_some(())?;
+    let root = ConversationStateStructure::decode(blob.as_slice()).ok()?;
+    if let Some(open_ask) = parse_open_ask(&root.pending_tool_calls) {
+        return Some(open_ask);
+    }
+    root.pending_tool_calls.is_empty().then_some(())?;
+    read_open_plan_approval(
+        &connection,
+        &store_metadata,
+        &root.message_ids,
+        updated_at_ms,
+    )
+}
+
+fn read_blob(connection: &Connection, id: &str, max_bytes: usize) -> Option<Vec<u8>> {
+    connection
         .query_row(
             "SELECT length(data), data FROM blobs WHERE id = ?1",
-            [&store_metadata.latest_root_blob_id],
+            [id],
             |row| {
                 let bytes: i64 = row.get(0)?;
-                if !(0..=MAX_ROOT_BLOB_BYTES as i64).contains(&bytes) {
+                if !(0..=max_bytes as i64).contains(&bytes) {
                     return Err(rusqlite::Error::InvalidQuery);
                 }
                 row.get(1)
             },
         )
-        .ok()?;
-    (hex::encode(Sha256::digest(&blob)) == store_metadata.latest_root_blob_id).then_some(())?;
-    let root = ConversationStateStructure::decode(blob.as_slice()).ok()?;
-    parse_open_ask(&root.pending_tool_calls)
+        .ok()
 }
 
-fn parse_open_ask(pending: &[String]) -> Option<OpenAsk> {
+fn read_open_plan_approval(
+    connection: &Connection,
+    store_metadata: &StoreMetadata,
+    message_ids: &[Vec<u8>],
+    updated_at_ms: i64,
+) -> Option<OpenWait> {
+    (store_metadata.mode.as_deref() == Some("plan")
+        && store_metadata
+            .current_plan_uri
+            .as_deref()
+            .is_some_and(|uri| !uri.trim().is_empty()))
+    .then_some(())?;
+    let message_id = message_ids.last()?;
+    (message_id.len() == 32).then_some(())?;
+    let message_id = hex::encode(message_id);
+    let blob = read_blob(connection, &message_id, MAX_MESSAGE_BLOB_BYTES)?;
+    (hex::encode(Sha256::digest(&blob)) == message_id).then_some(())?;
+    let message = serde_json::from_slice::<ConversationMessage>(&blob).ok()?;
+    (message.role == "tool").then_some(())?;
+    let [content] = message.content.as_slice() else {
+        return None;
+    };
+    (content.content_type == "tool-result" && content.tool_name == "CreatePlan").then_some(())?;
+    Some(OpenWait {
+        detail: "Ready to build?".to_owned(),
+        waiting_since: timestamp_ms(updated_at_ms)?,
+    })
+}
+
+fn parse_open_ask(pending: &[String]) -> Option<OpenWait> {
     (pending.len() <= MAX_PENDING_CALLS).then_some(())?;
     let mut candidates = Vec::new();
     for raw in pending {
@@ -331,7 +409,7 @@ fn parse_open_ask(pending: &[String]) -> Option<OpenAsk> {
                 .cursor
                 .pending_tool_call_started_at_ms
                 .and_then(timestamp_ms)?;
-            candidates.push(OpenAsk {
+            candidates.push(OpenWait {
                 detail,
                 waiting_since,
             });

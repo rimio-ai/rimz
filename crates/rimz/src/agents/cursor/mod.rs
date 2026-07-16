@@ -2,8 +2,9 @@
 //!
 //! Cursor's native hooks expose session, turn, tool, child, exit, and
 //! compaction-open signals. A version-pinned local pending-call reader derives
-//! pane-only `AskQuestion` waits; permission, structured answers,
-//! machine-readable spend, and post-compaction events remain explicit gaps.
+//! pane-only `AskQuestion` and plan-approval waits; permission, structured
+//! answers, machine-readable spend, and post-compaction events remain explicit
+//! gaps.
 
 mod account;
 mod install;
@@ -113,8 +114,9 @@ const CURSOR_COVERAGE: IntegrationCoverage = IntegrationCoverage {
     permission: ConcernCoverage::Unsupported {
         reason: "no local permission hook; ACP-only",
     },
-    plan_approval: ConcernCoverage::Unsupported {
-        reason: "no local plan-approval hook; ACP-only",
+    plan_approval: ConcernCoverage::Partial {
+        via: "version-pinned local plan-proposal projection",
+        gap: "pane-only wait; no durable RimZ ask or safe answer API",
     },
     user_question: ConcernCoverage::Partial {
         via: "version-pinned local pending AskQuestion projection",
@@ -171,7 +173,7 @@ const CURSOR_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
         event: "postToolUse",
     },
     awaiting_input: HookCoverage::Derived {
-        via: "validated local pending AskQuestion state",
+        via: "validated local pending AskQuestion or open plan-proposal state",
         gap: "no native hook; pane-only wait and answer surface",
     },
     subagent_started: HookCoverage::Native {

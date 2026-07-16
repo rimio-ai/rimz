@@ -17,6 +17,7 @@ struct CursorAskFixture {
     session: PathBuf,
     session_id: String,
     created_at_ms: i64,
+    updated_at_ms: i64,
 }
 
 impl CursorAskFixture {
@@ -33,12 +34,13 @@ impl CursorAskFixture {
         let session = bucket.join(&session_id);
         std::fs::create_dir_all(&session).unwrap();
         let created_at_ms = 1_735_689_600_000;
+        let updated_at_ms = created_at_ms + 20_000;
         std::fs::write(
             session.join("meta.json"),
             serde_json::to_vec(&json!({
                 "schemaVersion": 1,
                 "createdAtMs": created_at_ms,
-                "updatedAtMs": created_at_ms + 20_000,
+                "updatedAtMs": updated_at_ms,
                 "hasConversation": true,
                 "cwd": workspace,
             }))
@@ -68,13 +70,41 @@ impl CursorAskFixture {
             session,
             session_id,
             created_at_ms,
+            updated_at_ms,
         };
         fixture.replace_pending(pending);
         fixture
     }
 
     fn replace_pending(&self, pending: Vec<Value>) {
+        self.replace_state(pending, Vec::new(), None, None);
+    }
+
+    fn replace_state(
+        &self,
+        pending: Vec<Value>,
+        messages: Vec<Vec<u8>>,
+        mode: Option<&str>,
+        plan_uri: Option<&str>,
+    ) -> Vec<Vec<u8>> {
+        let message_ids = messages
+            .iter()
+            .map(|message| Sha256::digest(message).to_vec())
+            .collect::<Vec<_>>();
+        self.write_state(pending, messages, message_ids.clone(), mode, plan_uri);
+        message_ids
+    }
+
+    fn write_state(
+        &self,
+        pending: Vec<Value>,
+        messages: Vec<Vec<u8>>,
+        message_ids: Vec<Vec<u8>>,
+        mode: Option<&str>,
+        plan_uri: Option<&str>,
+    ) {
         let root = session::ConversationStateStructure {
+            message_ids,
             pending_tool_calls: pending
                 .into_iter()
                 .map(|value| serde_json::to_string(&value).unwrap())
@@ -82,12 +112,18 @@ impl CursorAskFixture {
         }
         .encode_to_vec();
         let blob_id = hex::encode(Sha256::digest(&root));
-        let store_metadata = serde_json::to_vec(&json!({
+        let mut store_metadata = json!({
             "agentId": self.session_id,
             "createdAt": self.created_at_ms,
             "latestRootBlobId": blob_id,
-        }))
-        .unwrap();
+        });
+        if let Some(mode) = mode {
+            store_metadata["mode"] = json!(mode);
+        }
+        if let Some(plan_uri) = plan_uri {
+            store_metadata["currentPlanUri"] = json!(plan_uri);
+        }
+        let store_metadata = serde_json::to_vec(&store_metadata).unwrap();
         let connection = Connection::open(self.session.join("store.db")).unwrap();
         connection.execute("DELETE FROM blobs", []).unwrap();
         connection.execute("DELETE FROM meta", []).unwrap();
@@ -97,6 +133,15 @@ impl CursorAskFixture {
                 (&blob_id, &root),
             )
             .unwrap();
+        for message in messages {
+            let message_id = hex::encode(Sha256::digest(&message));
+            connection
+                .execute(
+                    "INSERT INTO blobs(id, data) VALUES (?1, ?2)",
+                    (&message_id, &message),
+                )
+                .unwrap();
+        }
         connection
             .execute(
                 "INSERT INTO meta(key, value) VALUES ('0', ?1)",
@@ -108,6 +153,22 @@ impl CursorAskFixture {
     fn observations(&self) -> Vec<crate::agents::LocalSessionObservation> {
         session::discover_under(&self.home, &self.workspace)
     }
+}
+
+fn message(value: Value) -> Vec<u8> {
+    serde_json::to_vec(&value).unwrap()
+}
+
+fn create_plan_message() -> Vec<u8> {
+    message(json!({
+        "role": "tool",
+        "content": [{
+            "type": "tool-result",
+            "toolCallId": "tool-call-1",
+            "toolName": "CreatePlan",
+            "result": "Plan file created at: /workspace/.cursor/plans/example.plan.md"
+        }]
+    }))
 }
 
 fn pending_ask(prompt: &str, run_async: bool, sentinel: Option<&str>) -> Value {
@@ -421,6 +482,207 @@ fn cursor_ask_projects_only_sanitized_pane_wait_truth() {
     assert!(!normalized.contains("private option"));
     assert!(!normalized.contains("tool-call-1"));
     assert!(!normalized.contains("store.db"));
+}
+
+#[test]
+fn cursor_plan_proposal_projects_pane_only_wait_truth() {
+    let fixture = CursorAskFixture::new(Vec::new());
+    fixture.replace_state(
+        Vec::new(),
+        vec![create_plan_message()],
+        Some("plan"),
+        Some("file:///workspace/.cursor/plans/example.plan.md"),
+    );
+
+    let observations = fixture.observations();
+    let [observation] = observations.as_slice() else {
+        panic!("expected one open plan approval observation");
+    };
+    let LocalSessionProjection::Lifecycle(state) = &observation.projection else {
+        panic!("Cursor plan approval must carry lifecycle display truth");
+    };
+    assert_eq!(state.status, AgentStatus::Waiting);
+    assert_eq!(state.phase, TurnPhase::Idle);
+    assert_eq!(
+        state.native_prompt_detail.as_deref(),
+        Some("Ready to build?")
+    );
+    assert_eq!(
+        state.waiting_since.map(jiff::Timestamp::as_millisecond),
+        Some(fixture.updated_at_ms)
+    );
+}
+
+#[test]
+fn cursor_pending_ask_takes_precedence_over_plan_proposal() {
+    let fixture = CursorAskFixture::new(Vec::new());
+    fixture.replace_state(
+        vec![pending_ask("Which direction?", false, None)],
+        vec![create_plan_message()],
+        Some("plan"),
+        Some("file:///workspace/.cursor/plans/example.plan.md"),
+    );
+
+    let observations = fixture.observations();
+    let [observation] = observations.as_slice() else {
+        panic!("expected one open Ask observation");
+    };
+    let LocalSessionProjection::Lifecycle(state) = &observation.projection else {
+        panic!("Cursor Ask must carry lifecycle display truth");
+    };
+    assert_eq!(
+        state.native_prompt_detail.as_deref(),
+        Some("Which direction?")
+    );
+    assert_eq!(
+        state.waiting_since.map(jiff::Timestamp::as_millisecond),
+        Some(1_735_689_610_000)
+    );
+}
+
+#[test]
+fn cursor_plan_proposal_fails_closed_on_gate_and_message_drift() {
+    const PLAN_URI: &str = "file:///workspace/.cursor/plans/example.plan.md";
+    let fixture = CursorAskFixture::new(Vec::new());
+
+    fixture.replace_state(
+        Vec::new(),
+        vec![create_plan_message()],
+        None,
+        Some(PLAN_URI),
+    );
+    assert!(fixture.observations().is_empty(), "mode is required");
+
+    fixture.replace_state(
+        Vec::new(),
+        vec![create_plan_message()],
+        Some("default"),
+        Some(PLAN_URI),
+    );
+    assert!(fixture.observations().is_empty(), "mode must be plan");
+
+    fixture.replace_state(Vec::new(), vec![create_plan_message()], Some("plan"), None);
+    assert!(
+        fixture.observations().is_empty(),
+        "currentPlanUri is required"
+    );
+
+    fixture.replace_state(
+        Vec::new(),
+        vec![create_plan_message()],
+        Some("plan"),
+        Some("  "),
+    );
+    assert!(
+        fixture.observations().is_empty(),
+        "currentPlanUri must be nonempty"
+    );
+
+    fixture.replace_state(Vec::new(), Vec::new(), Some("plan"), Some(PLAN_URI));
+    assert!(
+        fixture.observations().is_empty(),
+        "a last message is required"
+    );
+
+    fixture.replace_state(
+        Vec::new(),
+        vec![message(json!({
+            "role": "assistant",
+            "content": [{ "type": "text", "text": "The plan is approved." }]
+        }))],
+        Some("plan"),
+        Some(PLAN_URI),
+    );
+    assert!(
+        fixture.observations().is_empty(),
+        "a later assistant message supersedes the plan proposal"
+    );
+
+    fixture.replace_state(
+        Vec::new(),
+        vec![message(json!({
+            "role": "tool",
+            "content": [{
+                "type": "tool-result",
+                "toolName": "Shell",
+                "result": "done"
+            }]
+        }))],
+        Some("plan"),
+        Some(PLAN_URI),
+    );
+    assert!(
+        fixture.observations().is_empty(),
+        "the last result must be CreatePlan"
+    );
+
+    let message_ids = fixture.replace_state(
+        Vec::new(),
+        vec![create_plan_message()],
+        Some("plan"),
+        Some(PLAN_URI),
+    );
+    let message_id = hex::encode(&message_ids[0]);
+    let connection = Connection::open(fixture.session.join("store.db")).unwrap();
+    connection
+        .execute("DELETE FROM blobs WHERE id = ?1", [&message_id])
+        .unwrap();
+    drop(connection);
+    assert!(
+        fixture.observations().is_empty(),
+        "the last message blob must exist"
+    );
+
+    let message_ids = fixture.replace_state(
+        Vec::new(),
+        vec![create_plan_message()],
+        Some("plan"),
+        Some(PLAN_URI),
+    );
+    let message_id = hex::encode(&message_ids[0]);
+    let connection = Connection::open(fixture.session.join("store.db")).unwrap();
+    connection
+        .execute("UPDATE blobs SET data = X'00' WHERE id = ?1", [&message_id])
+        .unwrap();
+    drop(connection);
+    assert!(
+        fixture.observations().is_empty(),
+        "the last message hash must match its id"
+    );
+
+    fixture.replace_state(
+        Vec::new(),
+        vec![vec![b'x'; 256 * 1024 + 1]],
+        Some("plan"),
+        Some(PLAN_URI),
+    );
+    assert!(
+        fixture.observations().is_empty(),
+        "the last message must stay inside the byte bound"
+    );
+
+    fixture.replace_state(
+        Vec::new(),
+        vec![b"{".to_vec()],
+        Some("plan"),
+        Some(PLAN_URI),
+    );
+    assert!(
+        fixture.observations().is_empty(),
+        "the last message must be valid JSON"
+    );
+
+    fixture.write_state(
+        Vec::new(),
+        vec![create_plan_message()],
+        vec![vec![0; 31]],
+        Some("plan"),
+        Some(PLAN_URI),
+    );
+    assert!(
+        fixture.observations().is_empty(),
+        "the last message id must be a SHA-256 digest"
+    );
 }
 
 #[test]
