@@ -4,12 +4,15 @@
 //! synchronous permission/question gates. RimZ owns one whole hook file at
 //! `$COPILOT_HOME/hooks/rimz.json`; empty hook stdout preserves Copilot's native
 //! decision UI. Per-session events provide conversation history and optional
-//! metadata-only OTel chat spans provide the live model/token composition.
+//! decision UI. A reversible managed statusline supplies live context, with
+//! metadata-only OTel chat spans as the fallback when that bridge is unhealthy.
 
 mod account;
+mod install;
 mod otel;
 mod paths;
 pub(crate) mod payloads;
+mod statusline;
 mod transcript;
 
 use std::collections::BTreeMap;
@@ -28,10 +31,12 @@ use super::descriptor::{
 };
 use super::lifecycle::LifecycleSignal;
 use super::managed_source::ManagedSource;
+use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPolicy};
 use super::{
-    AgentAdapter, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
-    LocalContextRefresh, LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin,
-    TranscriptMessage, TurnErrorClass, classify_agent_hook, sanitize_user_prompt,
+    AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextRefresh,
+    LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, TranscriptMessage,
+    TurnErrorClass, classify_agent_hook, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -141,19 +146,17 @@ const COPILOT_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "agentStop + stall window",
         gap: "notification(agent_idle) is not wired",
     },
-    context_usage: ConcernCoverage::Partial {
-        via: "optional metadata-only OTel chat spans",
-        gap: "latest-call token composition has no context-window denominator",
+    context_usage: ConcernCoverage::Wired {
+        via: "statusline window/fill/current and cumulative token scopes",
     },
     realtime_cost: ConcernCoverage::Unsupported {
         reason: "OTel chat spans expose token counts but no authoritative session cost",
     },
-    rich_context: ConcernCoverage::Partial {
-        via: "optional metadata-only OTel chat spans",
-        gap: "no authoritative context-window denominator or session cost",
+    rich_context: ConcernCoverage::Wired {
+        via: "command statusline payload with metadata-only OTel fallback",
     },
     hook_install: ConcernCoverage::Wired {
-        via: "$COPILOT_HOME/hooks/rimz.json",
+        via: "$COPILOT_HOME/hooks/rimz.json + reversible settings.json statusline",
     },
     account_spend: ConcernCoverage::Unsupported {
         reason: "no authoritative account dollar ledger",
@@ -236,6 +239,17 @@ const COPILOT_MANAGED_SOURCE: ManagedSource = ManagedSource::new(
     paths::hooks_path,
     false,
 );
+
+const STATUS_LINE_COMMAND: &str = "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source copilot";
+const RIMZ_STATUS_LINE_MARKER: &str = "rimz statusline feed --source copilot";
+const STATUS_LINE: ManagedStatusLineSpec = ManagedStatusLineSpec {
+    key_path: &["statusLine"],
+    command: STATUS_LINE_COMMAND,
+    command_marker: RIMZ_STATUS_LINE_MARKER,
+    rendering_options: RenderingOptions::Only(&["padding"]),
+    wrap_policy: WrapPolicy::CommandMode,
+    required_for_install: true,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct CopilotAdapter;
@@ -510,24 +524,18 @@ impl AgentAdapter for CopilotAdapter {
         transcript::parse_messages(lines)
     }
 
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+        statusline::StatuslinePayload::parse(payload)?.into_context(source, Timestamp::now())
+    }
+
     fn local_context_refresh(
         &self,
         trigger: RefreshTrigger<'_>,
         ctx: &LocalContextRefreshCtx<'_>,
     ) -> Option<LocalContextRefresh> {
-        if let RefreshTrigger::Hook(event_name) = trigger
-            && !matches!(
-                event_name,
-                "sessionStart"
-                    | "userPromptSubmitted"
-                    | "postToolUse"
-                    | "postToolUseFailure"
-                    | "agentStop"
-            )
-        {
-            return None;
-        }
-        otel::refresh(ctx)
+        let statusline_installed =
+            paths::settings_path().is_ok_and(|path| install::statusline_installed(&path));
+        local_context_refresh_with_statusline(statusline_installed, trigger, ctx)
     }
 
     fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
@@ -561,9 +569,60 @@ impl AgentAdapter for CopilotAdapter {
         Some(&COPILOT_MANAGED_SOURCE)
     }
 
+    fn install_hooks(&self) -> Result<HookInstallReport> {
+        install::install(&paths::hooks_path()?, &paths::settings_path()?)
+    }
+
+    fn preview_hook_install(&self) -> Result<HookInstallPreview> {
+        install::preview(&paths::hooks_path()?, &paths::settings_path()?)
+    }
+
+    fn uninstall_hooks(&self) -> Result<HookUninstallReport> {
+        install::uninstall(&paths::hooks_path()?, &paths::settings_path()?)
+    }
+
+    fn hooks_installed(&self) -> bool {
+        paths::hooks_path()
+            .and_then(|hooks| Ok((hooks, paths::settings_path()?)))
+            .is_ok_and(|(hooks, settings)| install::installed(&hooks, &settings))
+    }
+
+    fn managed_hook_artifacts_present(&self) -> bool {
+        paths::hooks_path()
+            .and_then(|hooks| Ok((hooks, paths::settings_path()?)))
+            .is_ok_and(|(hooks, settings)| install::managed(&hooks, &settings))
+    }
+
+    fn wrapped_status_line_command(&self) -> Option<String> {
+        install::wrapped_statusline_command(&paths::settings_path().ok()?)
+    }
+
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
     }
+}
+
+fn local_context_refresh_with_statusline(
+    statusline_installed: bool,
+    trigger: RefreshTrigger<'_>,
+    ctx: &LocalContextRefreshCtx<'_>,
+) -> Option<LocalContextRefresh> {
+    if statusline_installed {
+        return None;
+    }
+    if let RefreshTrigger::Hook(event_name) = trigger
+        && !matches!(
+            event_name,
+            "sessionStart"
+                | "userPromptSubmitted"
+                | "postToolUse"
+                | "postToolUseFailure"
+                | "agentStop"
+        )
+    {
+        return None;
+    }
+    otel::refresh(ctx)
 }
 
 fn room_env_from(

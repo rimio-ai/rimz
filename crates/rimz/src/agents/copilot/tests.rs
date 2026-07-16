@@ -522,6 +522,227 @@ fn install_preview_reclaim_and_uninstall_own_only_marked_files() {
 }
 
 #[test]
+fn two_file_install_wraps_idempotently_and_restores_the_exact_json_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("hooks/rimz.json");
+    let settings = dir.path().join("settings.json");
+    let original_statusline = json!({
+        "type": "command",
+        "command": "printf user-status",
+        "padding": 0
+    });
+    std::fs::write(
+        &settings,
+        serde_json::to_string_pretty(&json!({
+            "theme": "dark",
+            "statusLine": original_statusline,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let preview = install::preview(&hooks, &settings).unwrap();
+    assert_eq!(preview.files.len(), 2);
+    assert_eq!(
+        preview.status_line_change,
+        Some(crate::agents::StatusLineChange::Wrapping {
+            original: "printf user-status".to_owned(),
+        })
+    );
+    assert_eq!(preview.planned_events.len(), WIRED_EVENTS.len());
+
+    install::install(&hooks, &settings).unwrap();
+    assert!(install::installed(&hooks, &settings));
+    assert!(install::managed(&hooks, &settings));
+    assert_eq!(
+        install::wrapped_statusline_command(&settings).as_deref(),
+        Some("printf user-status")
+    );
+    let installed: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(installed["theme"], "dark");
+    assert_eq!(installed["statusLine"]["command"], STATUS_LINE_COMMAND);
+    assert_eq!(installed["statusLine"]["padding"], 0);
+    assert_eq!(
+        installed["statusLine"]["_rimz_wrapped"],
+        original_statusline
+    );
+
+    let once = std::fs::read(&settings).unwrap();
+    install::install(&hooks, &settings).unwrap();
+    assert_eq!(std::fs::read(&settings).unwrap(), once);
+    let reinstalled: Value = serde_json::from_slice(&once).unwrap();
+    assert_eq!(
+        reinstalled["statusLine"]["_rimz_wrapped"], original_statusline,
+        "reinstall must not nest the managed wrapper"
+    );
+
+    install::uninstall(&hooks, &settings).unwrap();
+    assert!(!hooks.exists());
+    let restored: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(restored["theme"], "dark");
+    assert_eq!(restored["statusLine"], original_statusline);
+}
+
+#[test]
+fn partial_installs_are_detected_and_cleaned_independently() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("hooks/rimz.json");
+    let settings = dir.path().join("settings.json");
+
+    COPILOT_MANAGED_SOURCE.install_into(&hooks).unwrap();
+    std::fs::write(&settings, "{\"theme\":\"user\"}\n").unwrap();
+    assert!(!install::installed(&hooks, &settings));
+    assert!(install::managed(&hooks, &settings));
+    install::uninstall(&hooks, &settings).unwrap();
+    assert!(!hooks.exists());
+    assert_eq!(
+        std::fs::read_to_string(&settings).unwrap(),
+        "{\"theme\":\"user\"}\n"
+    );
+
+    install::install(&hooks, &settings).unwrap();
+    std::fs::remove_file(&hooks).unwrap();
+    assert!(!install::installed(&hooks, &settings));
+    assert!(install::managed(&hooks, &settings));
+    install::uninstall(&hooks, &settings).unwrap();
+    let restored: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(restored, json!({"theme":"user"}));
+}
+
+#[test]
+fn install_refuses_conflicts_and_strict_json_without_touching_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("rimz.json");
+    let settings = dir.path().join("settings.json");
+    std::fs::write(&hooks, "{\"version\":1}\n").unwrap();
+    let error = install::preview(&hooks, &settings).unwrap_err();
+    assert!(error.to_string().contains("unmarked user hook file"));
+    assert!(!settings.exists());
+
+    std::fs::remove_file(&hooks).unwrap();
+    for text in [
+        "{\"statusLine\":\"plain string\"}\n",
+        "{\"statusLine\":{\"type\":\"preset\",\"command\":\"user\"}}\n",
+        "{\"statusLine\":{\"type\":\"command\"}}\n",
+        "{\n // comment\n \"statusLine\": null\n}\n",
+        "{\"statusLine\": null,}\n",
+    ] {
+        std::fs::write(&settings, text).unwrap();
+        assert!(install::install(&hooks, &settings).is_err(), "{text}");
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), text);
+        assert!(!hooks.exists());
+    }
+}
+
+#[test]
+fn marker_recovery_does_not_wrap_rimz_recursively() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("hooks/rimz.json");
+    let settings = dir.path().join("settings.json");
+    std::fs::write(
+        &settings,
+        serde_json::to_vec(&json!({
+            "statusLine": {
+                "type": "command",
+                "command": format!("env X=1 {RIMZ_STATUS_LINE_MARKER}"),
+                "padding": 2
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    install::install(&hooks, &settings).unwrap();
+
+    let installed: Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(installed["statusLine"]["command"], STATUS_LINE_COMMAND);
+    assert_eq!(installed["statusLine"]["padding"], 2);
+    assert!(installed["statusLine"].get("_rimz_wrapped").is_none());
+    assert_eq!(install::wrapped_statusline_command(&settings), None);
+}
+
+#[test]
+fn read_only_statusline_probes_accept_later_jsonc_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let hooks = dir.path().join("hooks/rimz.json");
+    let settings = dir.path().join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"statusLine":{"type":"command","command":"printf user"}}"#,
+    )
+    .unwrap();
+    install::install(&hooks, &settings).unwrap();
+    let mut installed = std::fs::read_to_string(&settings).unwrap();
+    installed.insert_str(2, "// retained user comment\n");
+    installed = installed.replacen("\n}", ",\n}\n", 1);
+    std::fs::write(&settings, installed).unwrap();
+
+    assert!(install::statusline_installed(&settings));
+    assert_eq!(
+        install::wrapped_statusline_command(&settings).as_deref(),
+        Some("printf user")
+    );
+    assert!(install::uninstall(&hooks, &settings).is_err());
+    assert!(
+        hooks.exists(),
+        "strict uninstall fails before removing hooks"
+    );
+}
+
+#[test]
+fn two_file_transactions_roll_back_both_install_and_uninstall_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocked_parent = dir.path().join("blocked");
+    let hooks = blocked_parent.join("rimz.json");
+    let settings = dir.path().join("settings.json");
+    std::fs::write(&blocked_parent, "not a directory").unwrap();
+    assert!(install::install(&hooks, &settings).is_err());
+    assert!(
+        !settings.exists(),
+        "failed hook write restores absent settings"
+    );
+
+    std::fs::remove_file(&blocked_parent).unwrap();
+    install::install(&hooks, &settings).unwrap();
+    let installed_settings = std::fs::read(&settings).unwrap();
+    let error = install::uninstall_with(&hooks, &settings, |_| {
+        Err(AgentErr::Install {
+            agent: "copilot",
+            reason: "injected hook removal failure".to_owned(),
+        })
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("injected hook removal failure"));
+    assert_eq!(std::fs::read(&settings).unwrap(), installed_settings);
+    assert!(hooks.exists());
+}
+
+#[test]
+fn statusline_health_suppresses_otel_and_replacement_restores_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let otel = dir.path().join("otel.jsonl");
+    std::fs::write(&otel, include_str!("tests/fixtures/otel.jsonl")).unwrap();
+    let pricing = dir.path().join("pricing.json");
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "session-fixture",
+        model_hint: None,
+        current_transcript_path: None,
+        prior_transcript_path: otel.to_str(),
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &pricing,
+    };
+
+    assert!(
+        local_context_refresh_with_statusline(true, RefreshTrigger::Tick, &ctx).is_none(),
+        "a healthy statusline is the authoritative enrichment source"
+    );
+    let fallback = local_context_refresh_with_statusline(false, RefreshTrigger::Tick, &ctx)
+        .expect("missing or replaced statusline restores OTel");
+    assert_eq!(fallback.model_id.as_deref(), Some("gpt-5-mini"));
+    assert!(fallback.tokens.is_some());
+}
+
+#[test]
 fn embedded_hook_file_matches_the_declared_wire() {
     let document: Value = serde_json::from_str(HOOK_SOURCE).expect("valid hooks JSON");
     let hooks = document["hooks"].as_object().expect("hooks object");

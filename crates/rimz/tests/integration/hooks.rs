@@ -197,10 +197,59 @@ fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
         .expect("wait Copilot prompt");
     assert_hook_succeeded_neutral("copilot", out);
     assert_eq!(env.snapshot_json()["agents"][0]["status"], "running");
+    assert!(
+        env.agent_contexts().is_empty(),
+        "the healthy statusline suppresses sparse asynchronous OTel refresh"
+    );
+    let statusline = json!({
+        "session_id": session_id,
+        "session_name": "Integration session",
+        "version": "1.0.71",
+        "model": {
+            "id": "auto",
+            "display_name": "Auto → gpt-5-mini (1x) (medium)"
+        },
+        "context_window": {
+            "displayed_context_limit": 128000,
+            "current_context_used_percentage": 37.5,
+            "current_usage": {
+                "input_tokens": 6000,
+                "output_tokens": 900,
+                "cache_creation_input_tokens": 2000,
+                "cache_read_input_tokens": 40000
+            },
+            "total_input_tokens": 82000,
+            "total_output_tokens": 6100,
+            "total_cache_write_tokens": 7000,
+            "total_cache_read_tokens": 69000,
+            "total_reasoning_tokens": 1200
+        },
+        "cost": {
+            "total_duration_ms": 312000,
+            "total_api_duration_ms": 47000,
+            "total_lines_added": 42,
+            "total_lines_removed": 3,
+            "total_premium_requests": 4
+        },
+        "ai_used": {"formatted":"1.42"}
+    })
+    .to_string();
+    let statusline_out = env.run_statusline_feed("copilot", &statusline);
+    assert!(
+        statusline_out.status.success(),
+        "Copilot statusline stderr: {}",
+        String::from_utf8_lossy(&statusline_out.stderr)
+    );
+    assert!(statusline_out.stdout.is_empty());
     let contexts = env.agent_contexts();
     assert_eq!(contexts.len(), 1);
     assert_eq!(contexts[0].agent_id.as_str(), session_id);
-    assert_eq!(contexts[0].context.model_id.as_deref(), Some("gpt-5-mini"));
+    assert_eq!(contexts[0].context.model_id.as_deref(), Some("auto"));
+    assert_eq!(
+        contexts[0].context.model_display_name.as_deref(),
+        Some("Auto → gpt-5-mini (1x)")
+    );
+    assert_eq!(contexts[0].context.effort.as_deref(), Some("medium"));
     assert_eq!(
         contexts[0]
             .context
@@ -208,7 +257,31 @@ fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
             .as_ref()
             .and_then(|tokens| tokens.current_usage.as_ref())
             .and_then(|usage| usage.input_tokens),
-        Some(75)
+        Some(6000)
+    );
+    assert_eq!(
+        contexts[0]
+            .context
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.context_window_size),
+        Some(128_000)
+    );
+    assert_eq!(
+        contexts[0]
+            .context
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.used_percentage),
+        Some(38)
+    );
+    assert_eq!(
+        contexts[0]
+            .context
+            .cost
+            .as_ref()
+            .and_then(|cost| cost.total_cost_usd),
+        None
     );
 
     assert_hook_succeeded_neutral(
@@ -1016,6 +1089,11 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
         "agent_type": "default",
         "agent_transcript_path": child_rollout.to_string_lossy(),
     }));
+    assert_eq!(
+        std::fs::read(&parent_context_path).expect("parent context after child hooks"),
+        parent_context_before,
+        "child hooks never merge transcript data into the parent sidecar"
+    );
 
     let parsed = env.snapshot_json();
     let child = parsed["agents"]
@@ -1028,11 +1106,6 @@ fn codex_subagent_lifecycle_uses_child_agent_identity() {
     assert_eq!(child["name"], "Atlas");
     assert_eq!(child["task"], "research/explore_hooks");
     assert_eq!(child["parent_agent_id"], "sess-codex-parent");
-    assert_eq!(
-        std::fs::read(&parent_context_path).expect("parent context after child hooks"),
-        parent_context_before,
-        "child hooks never merge transcript data into the parent sidecar"
-    );
     let activity = rimz::agent_activity::read_all(&env.runtime_paths());
     assert!(
         activity

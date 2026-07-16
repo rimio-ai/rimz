@@ -1,0 +1,47 @@
+{
+  "cwd": "/home/example/project",
+  "session_id": "session-statusline-1",
+  "session_name": "Fixing auth retry",
+  "transcript_path": "/home/example/.copilot/session-state/session-statusline-1/events.jsonl",
+  "username": "example-user",
+  "version": "1.0.71",
+  "remote": { "connected": false },
+  "model": {
+    "id": "auto",
+    "display_name": "Auto → claude-sonnet-4.6 (1x) (medium)"
+  },
+  "context_window": {
+    "context_window_size": 200000,
+    "displayed_context_limit": 128000,
+    "current_context_tokens": 48600,
+    "current_context_used_percentage": 37.96875,
+    "used_percentage": 35,
+    "remaining_percentage": 65,
+    "remaining_tokens": 70000,
+    "total_tokens": 164100,
+    "last_call_input_tokens": 48000,
+    "last_call_output_tokens": 900,
+    "current_usage": {
+      "input_tokens": 6000,
+      "output_tokens": 900,
+      "cache_creation_input_tokens": 2000,
+      "cache_read_input_tokens": 40000
+    },
+    "total_input_tokens": 82000,
+    "total_output_tokens": 6100,
+    "total_cache_write_tokens": 7000,
+    "total_cache_read_tokens": 69000,
+    "total_reasoning_tokens": 1200
+  },
+  "cost": {
+    "total_duration_ms": 312000,
+    "total_api_duration_ms": 47000,
+    "total_premium_requests": 4,
+    "total_lines_added": 42,
+    "total_lines_removed": 3
+  },
+  "ai_used": {
+    "total_nano_aiu": 1420000000,
+    "formatted": "1.42"
+  }
+}

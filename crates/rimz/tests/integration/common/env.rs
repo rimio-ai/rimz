@@ -293,6 +293,10 @@ impl Env {
         self.home_root.join(".cursor").join("cli-config.json")
     }
 
+    pub fn copilot_settings_path(&self) -> PathBuf {
+        self.home_root.join(".copilot").join("settings.json")
+    }
+
     /// Wire an agent the way the user does: `rimz hooks install <source>`. The
     /// install wires the full lifecycle (prompt + tool events) so the journey
     /// can exercise every phase.
@@ -319,7 +323,13 @@ impl Env {
         };
         match source {
             "codex" => text.contains("rimz hooks feed --source codex"),
-            "claude" | "copilot" | "pi" | "qwen" => text.contains("_rimz_managed"),
+            "claude" | "pi" | "qwen" => text.contains("_rimz_managed"),
+            "copilot" => {
+                text.contains("_rimz_managed")
+                    && std::fs::read_to_string(self.copilot_settings_path()).is_ok_and(|settings| {
+                        settings.contains("rimz statusline feed --source copilot")
+                    })
+            }
             "cursor" => {
                 text.contains("rimz hooks feed --source cursor")
                     && std::fs::read_to_string(self.cursor_cli_config_path())

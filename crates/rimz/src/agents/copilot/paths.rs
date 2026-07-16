@@ -23,6 +23,14 @@ pub(super) fn hooks_path() -> Result<PathBuf> {
     )
 }
 
+pub(super) fn settings_path() -> Result<PathBuf> {
+    settings_path_from(
+        std::env::var_os("RIMZ_COPILOT_SETTINGS").as_deref(),
+        std::env::var_os("COPILOT_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+}
+
 pub(super) fn session_transcript_path(session_id: &str) -> Option<PathBuf> {
     session_transcript_path_from(copilot_home().as_deref(), session_id)
 }
@@ -83,6 +91,23 @@ pub(super) fn hooks_path_from(
         .ok_or_else(|| AgentErr::Install {
             agent: "copilot",
             reason: "$COPILOT_HOME and $HOME are not set; cannot resolve Copilot hooks".to_owned(),
+        })
+}
+
+pub(super) fn settings_path_from(
+    override_path: Option<&OsStr>,
+    copilot_home: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Result<PathBuf> {
+    if let Some(path) = non_empty_path(override_path) {
+        return Ok(path);
+    }
+    copilot_home_from(copilot_home, home)
+        .map(|home| home.join("settings.json"))
+        .ok_or_else(|| AgentErr::Install {
+            agent: "copilot",
+            reason: "$COPILOT_HOME and $HOME are not set; cannot resolve Copilot settings"
+                .to_owned(),
         })
 }
 
@@ -175,6 +200,24 @@ mod tests {
             PathBuf::from("/alt/copilot/hooks/rimz.json")
         );
         assert!(hooks_path_from(None, Some(OsStr::new("")), None).is_err());
+        assert_eq!(
+            settings_path_from(
+                Some(OsStr::new("/override/settings.json")),
+                Some(OsStr::new("/alt/copilot")),
+                None,
+            )
+            .unwrap(),
+            PathBuf::from("/override/settings.json")
+        );
+        assert_eq!(
+            settings_path_from(None, Some(OsStr::new("/alt/copilot")), None).unwrap(),
+            PathBuf::from("/alt/copilot/settings.json")
+        );
+        assert_eq!(
+            settings_path_from(None, None, Some(OsStr::new("/home/user"))).unwrap(),
+            PathBuf::from("/home/user/.copilot/settings.json")
+        );
+        assert!(settings_path_from(None, Some(OsStr::new("")), None).is_err());
     }
 
     #[test]

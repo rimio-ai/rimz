@@ -44,7 +44,7 @@ copilot help providers
 
 Use **command hooks** as the lifecycle and decision seam. They are local, session-scoped, carry the session ID and cwd on every event, expose synchronous permission decisions, and preserve Copilot's stock interactive UI. This matches RimZ's existing pane-first contract.
 
-Use the **custom statusline command** or **file-exported OTel** for live context, model, cost, and token enrichment. Statusline is the lighter UI-owned transport, but GitHub currently documents only that it receives session JSON, not that JSON's schema. OTel has a published schema and includes tokens, cost, model, session ID, compaction, errors, and subagents, but it is asynchronous telemetry and must remain enrichment rather than lifecycle truth. Copilot account usage stays unsupported; the internal response and official billing endpoints below are research rather than adapter transports.
+Use the **custom statusline command** for live context, model, duration, and token enrichment, with file-exported OTel as the fallback when the managed command is absent or unhealthy. The statusline is the selected lighter UI-owned transport; GitHub documents its session-JSON stdin contract, while the field schema remains version-pinned compatibility evidence. OTel has a published schema but is asynchronous telemetry and remains enrichment rather than lifecycle truth. Copilot dollar cost and account usage stay unsupported; AI credits, the internal response, and official billing endpoints below do not establish an adapter-grade USD ledger.
 
 Use **`-i, --interactive <prompt>`** for RimZ prompt-seeded panes and supervised runs: it submits the initial prompt while preserving the stock interactive UI, native asks, and the hook-driven completion path shared with other adapters. Native `-p` prompt mode is a future alternative if RimZ adds a process-output supervised backend. Evaluate **ACP** when RimZ needs structured streaming, permission requests, or session control for a supervised run. Do not replace the interactive pane with ACP: ACP changes RimZ from observing the user's stock CLI into hosting the agent protocol itself.
 
@@ -58,9 +58,9 @@ The candidate transport matrix is:
 | compaction start | `preCompact` | OTel has start and complete events; hooks have no post-compact event |
 | compaction end | OTel `session.compaction_complete`, or derived next activity | no native post-compact hook |
 | subagents | `subagentStart` / `subagentStop` | built-in `general-purpose` emits neither event |
-| model, effort, context | statusline if its captured schema is suitable | OTel plus config; footer display proves fields exist but is not a read API |
+| model, effort, context | managed custom statusline in `settings.json` | metadata-only OTel when the managed setting is absent or unhealthy |
 | plan and account usage | no supported adapter transport | internal response and official billing endpoints remain unimplemented research |
-| tokens, cost, AI units | OTel | session `events.jsonl` is undocumented |
+| tokens and non-dollar duration/line counters | managed custom statusline | OTel supplies latest-call tokens only; AI credits remain unmodeled |
 | session resume | `--resume`, `--continue`, `--session-id` | session ID is present in hooks |
 | authentication | environment and `copilot login` | no documented machine-readable auth-status command |
 | remote control | `--remote`, `/remote on`, `remoteSessions` | requires a GitHub-hosted repository and eligible account |
@@ -335,9 +335,15 @@ User setting `statusLine` runs a command that receives **session JSON on stdin**
 
 The footer can display model/effort, directory, branch, context window, quota, agent, AI used, code changes, username, sandbox, yolo state, and custom content. This proves the TUI maintains the main enrichment values, but the official docs do not publish the statusline input fields, update triggers, timeout, environment, exit handling, ANSI rules, or command-chaining semantics.
 
-A sanitized 1.0.70 capture observed stable top-level `session_id`, `version`, `model`, `context_window`, `cost`, and `ai_used` objects. After one auto-model turn, `model` was `{id: "auto", display_name: "Auto → gpt-5-mini"}` and `context_window` added `current_context_tokens`, `displayed_context_limit`, and `current_context_used_percentage`, while its nominal `context_window_size`, `used_percentage`, `remaining_percentage`, and `remaining_tokens` stayed null. The payload later added latest-call and cumulative token fields. This binds a candidate payload to lifecycle identity, but does not choose stable denominator semantics or prove a lossless wrapper under concurrent sessions, so RimZ leaves the Copilot statusline untouched.
+A sanitized 1.0.70 capture observed stable top-level `session_id`, `version`, `model`, `context_window`, `cost`, and `ai_used` objects. After one auto-model turn, `model` was `{id: "auto", display_name: "Auto → gpt-5-mini"}` and `context_window` added `current_context_tokens`, `displayed_context_limit`, and `current_context_used_percentage`, while its nominal `context_window_size`, `used_percentage`, `remaining_percentage`, and `remaining_tokens` stayed null. A 1.0.71 compatibility check retained the transport and added latest-call plus cumulative token fields.
 
-Before selecting this transport, complete the remaining capture matrix: tool execution, permission wait, `ask_user`, model/effort and context-tier changes, compaction, subagent, rate-limit warning, remote mode, concurrent sessions, and exact wrapper stdin/stdout/stderr/exit/timeout behavior. OTel remains the only selected structured enrichment schema until those gates pass.
+RimZ selects `$COPILOT_HOME/settings.json` as the transport and installs `RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source copilot`. `displayed_context_limit` wins over `context_window_size`, `current_context_used_percentage` wins over `used_percentage`, and a missing fill derives only from positive selected denominator plus `current_context_tokens`. `current_usage` is latest-call composition; the five `total_*` token categories are cumulative session counters and do not establish occupancy. `total_tokens`, `last_call_input_tokens`, `ai_used`, premium requests, and remote state stay outside the normalized mapping.
+
+The managed object retains rendering options such as `padding`, stores the complete prior statusline JSON value, and restores it on uninstall. The feed forwards the original stdin bytes to the wrapped command and forwards its stdout and exit status, preserving the user's rendered line. Hook readiness requires both this canonical statusline and the marked `$COPILOT_HOME/hooks/rimz.json`; either half remains a removable partial artifact.
+
+The public `copilot-hud` implementation provided compatibility evidence for the statusline field set and preference order. RimZ reimplements only the observed transport and normalization: it copies no plugin or source, creates no global state file, adds no Node or `jq` dependency, leaves managed `config.json` untouched, and does not set the obsolete `experimental` toggle used by older Copilot CLI releases.
+
+Remaining compatibility captures cover model/effort and context-tier changes, compaction, rate-limit warnings, remote mode, concurrent sessions, and provider timeout/stderr behavior. Those gaps bound enrichment fidelity; the statusline stays display-only and never replaces native hook lifecycle truth.
 
 ## OpenTelemetry
 
@@ -492,18 +498,18 @@ The official prerequisite says the cwd must be a Git repository hosted on GitHub
 
 ## Implementation footprints and open gaps
 
-The hooks-first adapter implements the lifecycle, transcript, and narrow OTel subset documented in [copilot.md](../../internals/agents/copilot.md). Version-pinned Copilot CLI 1.0.70 fixtures cover a clean prompt-mode turn, hook/system noise, final output, and metadata-only OTel; the remaining live-verification items follow.
+The hooks-first adapter implements the lifecycle, transcript, selected statusline, and narrow OTel fallback documented in [copilot.md](../../internals/agents/copilot.md). Version-pinned Copilot CLI 1.0.70 fixtures cover a clean prompt-mode turn, hook/system noise, final output, and metadata-only OTel; a sanitized 1.0.71 fixture pins the modern statusline field scopes. The remaining live-verification items follow.
 
 1. Install a user hook file containing every native camelCase event; prove discovery in interactive and `-p` modes, `disableAllHooks`, `COPILOT_HOME`, path quoting, cwd, environment inheritance, timeout, stderr, neutral stdout, and uninstall.
 2. Record hook payloads for new/resume/new-session switching, prompt, success/failure tool calls, every permission choice, `ask_user`, stop, errors, manual/auto compaction, all built-in subagents, simultaneous same-name subagents, and every session-end reason.
 3. Prove whether `permissionRequest` input contains permission kind, tool arguments, path/URL/command subject, or a stable request ID; the current official reference omits its input schema.
 4. Determine whether `preToolUse(ask_user)` carries the question/options and whether any hook output can answer it; otherwise map answers exclusively through pane send.
-5. Capture statusline input and invocation behavior, including chaining an existing command, before using it for `AgentContext`.
+5. Expand the selected statusline capture matrix across model/effort/context tiers, compaction, remote mode, concurrency, provider timeout, and stderr handling without promoting those display signals to lifecycle truth.
 6. Capture child and resumed `events.jsonl` shapes plus `--output-format=json`; keep the reader on guarded visible root messages until those identities are proven.
 7. Extend OTel only after shared-file interactive concurrency, cumulative-versus-turn replacement, `github.copilot.cost` units, subagent span identity, compaction close, and long-running flush behavior are pinned.
 8. Confirm process names, argv, parent/child tree, cwd, and environment stamping under normal, resume, remote, `-p`, ACP, worktree, and auto-update/restart paths for PID attribution.
-9. Decide whether RimZ owns a statusline wrapper; OTel stays user-opt-in unless a managed exporter path and its trust/privacy contract become product behavior.
-10. Keep coverage honest: transcript/history and the internal usage endpoint are captured compatibility, OTel model/token composition is partial enrichment, and plan/quota/cost/spend/subagent remain unsupported until their own sources are proven.
+9. Keep the two-file hook/statusline install reversible across provider schema changes; strict writes reject JSONC while read-only health and pass-through discovery tolerate it.
+10. Keep coverage honest: Context Usage and Rich Context are wired through the statusline with OTel fallback, while plan/quota/dollar cost/spend/subagent/remote control remain unsupported until their own sources are proven.
 
 The expected initial lifecycle mapping is:
 

@@ -24,7 +24,7 @@ One row per agent, ordered by support tier — Claude and Codex, then the alpha 
 | Pi | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ✗ | ✓ | ◐ | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
 | OpenCode | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ | ✓ | ✗ | ◐ | ◐ | ✓ | ◐ | ✓ | ✓ | ✓ | ✗ |
 | Antigravity | ✓ | ◐ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ | ◐ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ | ✗ |
-| Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ◐ | ✗ | ◐ | ✓ | ✗ | ✗ |
+| Copilot | ✓ | ✓ | ✗ | ✓ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ✗ | ✓ | ✓ | ✗ | ✗ |
 | Droid | ✓ | ✗ | ✗ | ◐ | ✗ | ✓ | ✗ | ✗ | ✓ | ✓ | ✓ | ◐ | ◐ | ✓ | ✗ | ✗ |
 | Cursor | ✓ | ✗ | ✗ | ✗ | ✗ | ◐ | ✗ | ✗ | ✓ | ◐ | ✓ | ◐ | ✓ | ✓ | ✗ | ✗ |
 | Amp | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ◐ | ◐ | ◐ | ◐ | ✗ | ✓ | ◐ | ✗ |
@@ -43,7 +43,7 @@ Claude Code is the reference integration and carries every concern natively; eac
 The gaps you will actually feel, per agent. Each agent's [mapping doc](#per-agent-mappings) carries the full rationale.
 
 - **Antigravity** keeps permissions and questions in its own UI: RimZ deliberately installs no permission hook, so an open prompt raises the waiting card and routes you to the pane, nothing more. Live model and context ride a wrapped statusline, and the account's `5h`/`7d` bars come from a read-only local service. Every Antigravity error stop is terminal, so a supervised run does not survive a provider limit and auto-continue never arms. `rimz hooks install antigravity --dry-run` previews the changes before consent, and uninstall restores the prior statusline.
-- **Copilot** reports its model and per-call token composition through a private, metadata-only telemetry file, but publishes no context-window size and no dollar figures: the card carries tokens without a fill gauge, and every spend surface stays absent.
+- **Copilot** reports model, effort, context-window fill, current-call composition, and cumulative session tokens through its wrapped statusline; metadata-only OTel remains the fallback when that bridge is absent or replaced. Install previews and manages both the hook file and `$COPILOT_HOME/settings.json`, restores a prior user statusline on uninstall, and leaves AI credits, dollar spend, subagents, and remote control unsupported.
 - **Cursor** has no native signal that a question is open, so it gets no waiting row or ask routing: answer prompts in its pane. Live context rides its statusline, and RimZ prices each generation locally; that running session total counts toward live agent and room [budgets](../guide/budget.md), while provider billing, account spend, and `rimz stats` stay unavailable. The install manages `~/.cursor/hooks.json` and the statusline in `~/.cursor/cli-config.json`, shows both diffs before consent, and restores the prior statusline on uninstall.
 - **Droid** misses the same ask wire, but RimZ derives the waiting card from the transcript's active `AskUser` call; the answer still happens in Droid's pane. Its locally priced session total reaches the card and live budgets the way Cursor's does, while provider dollars, historical spend, and quota stay unavailable.
 - **Kiro** did not execute its documented hooks under verification, so RimZ pulls its lifecycle from Kiro's local session store instead. A pending tool approval still marks the card waiting, but `rimz asks` and `rimz answer` do not claim it; context is percentage-only, and hook install and supervised `-p` runs are unsupported.
