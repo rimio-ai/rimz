@@ -20,14 +20,17 @@ pub(super) fn wait_agent(
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let current_channel = crate::cli::current_channel(&workspace);
     if stream_output {
+        let options = WaitStreamOptions {
+            timeout,
+            from_start,
+            json,
+        };
         return wait_stream_request(
             &store,
             snapshot,
             references.first().context("wait requires a reference")?,
             current_channel.as_deref(),
-            timeout,
-            from_start,
-            json,
+            options,
         );
     }
 
@@ -42,19 +45,24 @@ pub(super) fn wait_agent(
     )
 }
 
+#[derive(Clone, Copy)]
+struct WaitStreamOptions {
+    timeout: Option<Duration>,
+    from_start: bool,
+    json: bool,
+}
+
 fn wait_stream_request(
     store: &rimz::Store,
     snapshot: rimz::SidebarSnapshot,
     reference: &str,
     current_channel: Option<&str>,
-    timeout: Option<Duration>,
-    from_start: bool,
-    json: bool,
+    options: WaitStreamOptions,
 ) -> Result<()> {
     match resolve_wait_target(store, &snapshot, reference, current_channel)? {
         WaitTarget::Run { run_id, .. } => {
             let run = rimz::harness::run::load(store.paths(), &run_id)?;
-            wait_run_stream(store, &run, timeout, from_start, json)
+            wait_run_stream(store, &run, options)
         }
         WaitTarget::Agent { reference, kind } => wait_interactive_agent_stream(
             store,
@@ -62,9 +70,7 @@ fn wait_stream_request(
             &kind,
             snapshot,
             current_channel,
-            timeout,
-            from_start,
-            json,
+            options,
         ),
     }
 }
@@ -235,8 +241,8 @@ struct TargetOutcome {
 }
 
 enum TerminalPayload {
-    Run(RunRecord),
-    Agent(AgentState),
+    Run(Box<RunRecord>),
+    Agent(Box<AgentState>),
     Disappeared,
 }
 
@@ -355,7 +361,7 @@ fn poll_target(
             }
             Ok(Some(TargetOutcome {
                 name: name.clone(),
-                payload: TerminalPayload::Run(record),
+                payload: TerminalPayload::Run(Box::new(record)),
             }))
         }
         WaitTarget::Agent { reference, .. } => {
@@ -366,7 +372,7 @@ fn poll_target(
                         || agent.status == rimz::agents::AgentStatus::Failed;
                     Ok(terminal.then(|| TargetOutcome {
                         name: agent_name(agent).to_owned(),
-                        payload: TerminalPayload::Agent(agent.clone()),
+                        payload: TerminalPayload::Agent(Box::new(agent.clone())),
                     }))
                 }
                 Err(_) => Ok(Some(TargetOutcome {
@@ -572,22 +578,20 @@ fn wait_interactive_agent_stream(
     kind: &rimz::ids::AgentKind,
     mut snapshot: rimz::SidebarSnapshot,
     current_channel: Option<&str>,
-    timeout: Option<Duration>,
-    from_start: bool,
-    json: bool,
+    options: WaitStreamOptions,
 ) -> Result<()> {
     let adapter = rimz::agents::find_adapter(kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(from_start);
+    let mut cursor = rimz::agents::transcript::TranscriptCursor::new(options.from_start);
     let mut stdout = render::out();
     let mut stderr = render::err();
     let mut json_stdout = std::io::stdout().lock();
-    let mut sink = if json {
+    let mut sink = if options.json {
         supervised::output::StreamSink::ndjson(&mut json_stdout)
     } else {
         supervised::output::StreamSink::text(&mut stdout, &mut stderr)
     };
-    let deadline = timeout.map(|duration| Instant::now() + duration);
+    let deadline = options.timeout.map(|duration| Instant::now() + duration);
     loop {
         let agent = crate::cli::resolve_agent_one(&snapshot, reference, None, current_channel)?;
         for text in cursor.messages(
@@ -628,19 +632,13 @@ fn interactive_live_status(agent: &AgentState) -> rimz::harness::run::RunLiveSta
     }
 }
 
-fn wait_run_stream(
-    store: &rimz::Store,
-    run: &RunRecord,
-    timeout: Option<Duration>,
-    from_start: bool,
-    json: bool,
-) -> Result<()> {
+fn wait_run_stream(store: &rimz::Store, run: &RunRecord, options: WaitStreamOptions) -> Result<()> {
     let adapter = rimz::agents::find_adapter(run.kind.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", run.kind))?;
     let mut stdout = render::out();
     let mut stderr = render::err();
     let mut json_stdout = std::io::stdout().lock();
-    let mut sink = if json {
+    let mut sink = if options.json {
         supervised::output::StreamSink::ndjson(&mut json_stdout)
     } else {
         supervised::output::StreamSink::text(&mut stdout, &mut stderr)
@@ -649,8 +647,8 @@ fn wait_run_stream(
         store,
         &run.run_id,
         adapter,
-        from_start,
-        timeout,
+        options.from_start,
+        options.timeout,
         &mut sink,
     )? {
         Some(record) => std::process::exit(record.status.exit_code()),
