@@ -39,6 +39,102 @@ use validate::{PublishVerdict, frame_publish_verdict, pane_count, shrink_needs_v
 const SNAPSHOT_CACHE_WAIT_STEP: Duration = Duration::from_millis(20);
 const SNAPSHOT_CACHE_WAIT_STEPS: u32 = 10;
 
+/// Pane-frame cache policy for one production cycle. Paths, freshness,
+/// validation, election, publication, and wakeup stay coupled here so every
+/// topology, metrics, and presence arm makes the same decisions.
+struct PaneFrameCache<'a> {
+    runtime: &'a crate::RuntimePaths,
+    cache_path: PathBuf,
+    lock_path: PathBuf,
+    session: &'a str,
+    min_produced_at_ms: Option<u64>,
+    own_pane: Option<&'a PaneId>,
+    diag: &'a crate::diag::DiagSink,
+    ttl: Duration,
+}
+
+impl<'a> PaneFrameCache<'a> {
+    fn new(
+        runtime: &'a crate::RuntimePaths,
+        session: &'a str,
+        min_produced_at_ms: Option<u64>,
+        own_pane: Option<&'a PaneId>,
+        diag: &'a crate::diag::DiagSink,
+    ) -> Self {
+        Self {
+            cache_path: runtime.pane_frame_path(),
+            lock_path: runtime.root.join("snapshot.lock"),
+            ttl: effective_pane_ttl(
+                presence_stamp_age_ms(runtime),
+                published_frame_unwatched(runtime, session),
+            ),
+            runtime,
+            session,
+            min_produced_at_ms,
+            own_pane,
+            diag,
+        }
+    }
+
+    fn fresh(&self) -> Option<PaneFrame> {
+        let frame = fresh_snapshot_cache(
+            &self.cache_path,
+            self.session,
+            self.min_produced_at_ms,
+            self.ttl,
+        )?;
+        self.publishable_prior(frame)
+    }
+
+    fn elect(&self, fresh: impl Fn() -> Option<PaneFrame>) -> Coalesced<PaneFrame> {
+        single_flight::coalesce(
+            &self.lock_path,
+            SNAPSHOT_CACHE_WAIT_STEP,
+            SNAPSHOT_CACHE_WAIT_STEPS,
+            fresh,
+        )
+    }
+
+    fn prior(&self) -> Option<std::sync::Arc<PaneFrame>> {
+        read_snapshot_cache(&self.cache_path, self.session)
+    }
+
+    fn publishable_prior(&self, prior: PaneFrame) -> Option<PaneFrame> {
+        publishable_prior(prior, self.own_pane, self.diag)
+    }
+
+    fn validate_topology(
+        &self,
+        frame: PaneFrame,
+        prior: Option<PaneFrame>,
+        publish: bool,
+    ) -> Result<PaneFrame> {
+        validate_frame_for_publish(
+            frame,
+            prior,
+            self.own_pane,
+            self.diag,
+            publish,
+            self.runtime,
+            &self.cache_path,
+        )
+    }
+
+    fn publish(
+        &self,
+        frame: &PaneFrame,
+        publication: crate::sidebar::events::PaneFramePublicationKind,
+    ) {
+        publish_frame(self.runtime, &self.cache_path, frame, publication);
+    }
+}
+
+/// Mux-backed pane-frame assembly and confirm/carry repair for one cache cycle.
+struct PaneFrameProducer<'cache, 'a> {
+    cache: &'cache PaneFrameCache<'a>,
+    mux: MuxName,
+}
+
 /// Return a same-session cache entry younger than `ttl`, or `None` when it is
 /// absent, stale, for another session, or unreadable. The caller picks the TTL
 /// once per produce ([`effective_pane_ttl`]) — `SNAPSHOT_CACHE_TTL` in poll
@@ -510,6 +606,107 @@ fn annotate_elevated_agents(
     }
 }
 
+impl PaneFrameProducer<'_, '_> {
+    fn candidate(
+        &self,
+        enrich_metrics: bool,
+        min_topology_produced_at_ms: Option<u64>,
+        authoritative: bool,
+    ) -> Result<PaneFrame> {
+        let listing = match list_session_panes(
+            self.mux,
+            self.cache.session,
+            Some(self.cache.runtime.clone()),
+            self.cache.runtime.workspace_id.clone(),
+            min_topology_produced_at_ms,
+            None,
+            authoritative,
+        ) {
+            Ok(panes) => panes,
+            Err(err) => {
+                emit_mux_error(
+                    self.cache.diag,
+                    &self.cache.cache_path,
+                    self.cache.session,
+                    &err,
+                );
+                return Err(err);
+            }
+        };
+        let PaneListing {
+            panes,
+            observed_at_ms,
+            authoritative_focus,
+            client_view: pushed_client_view,
+        } = listing;
+        let panes = filter_foreign_session_panes(panes, self.cache.session, self.cache.diag);
+        let topology_anomalies = multi_focus_topology_anomalies(&panes);
+        let prior = self.cache.prior();
+        // Renderer paint gating depends on fresh client focus. Zellij's
+        // topology push carries it; backends without pushed presence fall back
+        // to a direct client sample.
+        let prior_client_view = || {
+            prior.as_ref().map_or_else(
+                || (Vec::new(), None),
+                |prior| (prior.viewed_panes.clone(), prior.presence),
+            )
+        };
+        let (viewed_panes, presence) = match pushed_client_view {
+            Some(client_view) => {
+                let presence = presence_sample_from_client_view(&client_view);
+                (client_view.viewed_panes, Some(presence))
+            }
+            None => match client_view(self.mux, self.cache.session) {
+                Ok(client_view) => {
+                    let presence = presence_sample_from_client_view(&client_view);
+                    (client_view.viewed_panes, Some(presence))
+                }
+                Err(_) if self.mux == MuxName::Zellij => prior_client_view(),
+                Err(_) => (Vec::new(), None),
+            },
+        };
+        let (mut frame, diagnostics) =
+            crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
+                panes,
+                produced_at_ms: unix_now_ms(),
+                observed_at_ms,
+                session_name: self.cache.session.to_owned(),
+                authoritative_focus,
+                client_viewed: &viewed_panes,
+                prior: prior.as_deref(),
+            });
+        frame.presence = presence;
+        emit_frame_diagnostics(self.cache.diag, diagnostics);
+        emit_topology_anomalies(self.cache.diag, &frame, topology_anomalies);
+        let hosted_carry_drops = repair_pane_frame(
+            &mut frame,
+            self.cache.runtime,
+            prior.as_deref(),
+            self.cache.session,
+            enrich_metrics,
+        );
+        emit_hosted_carry_dropped(self.cache.diag, hosted_carry_drops);
+        Ok(frame)
+    }
+
+    fn confirm_and_carry(
+        &self,
+        frame: PaneFrame,
+        prior: Option<&PaneFrame>,
+        enrich_metrics: bool,
+    ) -> Result<PaneFrame> {
+        confirm_and_carry_with(
+            frame,
+            prior,
+            self.cache.own_pane,
+            &|enrich, floor, authoritative| self.candidate(enrich, floor, authoritative),
+            self.cache.diag,
+            enrich_metrics,
+            self.cache.runtime,
+        )
+    }
+}
+
 /// Return the live pane frame for `session` — the pane list plus the pane-source
 /// observation stamp that event fusion orders against — sharing one mux roster
 /// read across every sidebar via a short-lived single-flight cache.
@@ -527,214 +724,48 @@ pub(super) fn cached_panes_or_produce(
     own_pane: Option<&PaneId>,
     diag: &crate::diag::DiagSink,
 ) -> Result<PaneFrame> {
-    let cache_path = runtime.pane_frame_path();
-
-    // Select the pane TTL once per call: event mode (EVENT_PANE_TTL) while a
-    // presence push channel is alive or the published frame is unwatched, else
-    // poll-mode SNAPSHOT_CACHE_TTL. Zellij's plugin and tmux's control-mode
-    // watch both write the stamp; tmux lapses to poll mode while the watch is
-    // absent or idle. Unwatched poll mode stretches to the event-mode cadence so
-    // detached/backgrounded sessions stop paying responsive pane polls. The
-    // fast path, the single-flight `fresh` closure, and the loser re-check all
-    // read this one Duration, so a loser never produces what the winner skipped.
-    let pane_ttl = effective_pane_ttl(
-        presence_stamp_age_ms(runtime),
-        published_frame_unwatched(runtime, session),
-    );
-
-    // One single-flight lock covers both arms: the slow path's full produce
-    // and the fast path's metrics-only refresh, so only one elected producer
-    // ever writes the shared caches.
-    let lock_path = runtime.root.join("snapshot.lock");
+    let cache = PaneFrameCache::new(runtime, session, min_pane_cache_ms, own_pane, diag);
+    let producer = PaneFrameProducer { cache: &cache, mux };
 
     // Fast path: a fresh same-session entry needs no mux work. Metrics still
     // have their own cadence, so refresh them from the cached topology when
     // due instead of waiting for the pane cache to expire.
-    if let Some(cache) = fresh_publishable_snapshot_cache(
-        &cache_path,
-        session,
-        min_pane_cache_ms,
-        pane_ttl,
-        own_pane,
-        diag,
-    ) {
-        let cache = refresh_cached_metrics(
-            cache,
-            runtime,
-            &cache_path,
-            &lock_path,
-            session,
-            min_pane_cache_ms,
-            pane_ttl,
-            own_pane,
-            diag,
-        );
-        return Ok(refresh_cached_presence(
-            cache,
-            runtime,
-            mux,
-            &cache_path,
-            &lock_path,
-            session,
-            min_pane_cache_ms,
-            pane_ttl,
-            own_pane,
-            diag,
-        ));
+    if let Some(cached) = cache.fresh() {
+        let frame = refresh_cached_metrics(cached, &cache);
+        return Ok(refresh_cached_presence(frame, &cache, mux));
     }
 
     // Slow path: elect one producer for this `(workspace, session)` refresh.
     // Losers read its write back; if it wedges, they fall back to an uncached
     // local produce rather than block.
-    let fresh = || {
-        fresh_publishable_snapshot_cache(
-            &cache_path,
-            session,
-            min_pane_cache_ms,
-            pane_ttl,
-            own_pane,
-            diag,
-        )
-    };
-    let produce_candidate = |enrich_metrics: bool,
-                             min_topology_produced_at_ms: Option<u64>,
-                             authoritative: bool|
-     -> Result<PaneFrame> {
-        let listing = match list_session_panes(
-            mux,
-            session,
-            Some(runtime.clone()),
-            runtime.workspace_id.clone(),
-            min_topology_produced_at_ms,
-            None,
-            authoritative,
-        ) {
-            Ok(panes) => panes,
-            Err(err) => {
-                emit_mux_error(diag, &cache_path, session, &err);
-                return Err(err);
-            }
-        };
-        let PaneListing {
-            panes,
-            observed_at_ms,
-            authoritative_focus,
-            client_view: pushed_client_view,
-        } = listing;
-        let panes = filter_foreign_session_panes(panes, session, diag);
-        let topology_anomalies = multi_focus_topology_anomalies(&panes);
-        let prior = read_snapshot_cache(&cache_path, session);
-        // Renderer paint gating depends on fresh client focus. Zellij's
-        // topology push carries it; backends without pushed presence fall back
-        // to a direct client sample.
-        let prior_client_view = || {
-            prior.as_ref().map_or_else(
-                || (Vec::new(), None),
-                |prior| (prior.viewed_panes.clone(), prior.presence),
-            )
-        };
-        let (viewed_panes, presence) = match pushed_client_view {
-            Some(client_view) => {
-                let presence = presence_sample_from_client_view(&client_view);
-                (client_view.viewed_panes, Some(presence))
-            }
-            None => match client_view(mux, session) {
-                Ok(client_view) => {
-                    let presence = presence_sample_from_client_view(&client_view);
-                    (client_view.viewed_panes, Some(presence))
-                }
-                Err(_) if mux == MuxName::Zellij => prior_client_view(),
-                Err(_) => (Vec::new(), None),
-            },
-        };
-        let (mut frame, diagnostics) =
-            crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
-                panes,
-                produced_at_ms: unix_now_ms(),
-                observed_at_ms,
-                session_name: session.to_owned(),
-                authoritative_focus,
-                client_viewed: &viewed_panes,
-                prior: prior.as_deref(),
-            });
-        frame.presence = presence;
-        emit_frame_diagnostics(diag, diagnostics);
-        emit_topology_anomalies(diag, &frame, topology_anomalies);
-        let hosted_carry_drops = repair_pane_frame(
-            &mut frame,
-            runtime,
-            prior.as_deref(),
-            session,
-            enrich_metrics,
-        );
-        emit_hosted_carry_dropped(diag, hosted_carry_drops);
-        Ok(frame)
-    };
-    match single_flight::coalesce(
-        &lock_path,
-        SNAPSHOT_CACHE_WAIT_STEP,
-        SNAPSHOT_CACHE_WAIT_STEPS,
-        fresh,
-    ) {
+    match cache.elect(|| cache.fresh()) {
         Coalesced::Shared(cache) => Ok(cache),
         // The producer wedged past the wait. Prefer any usable prior frame over
         // a second mux read. Without a prior, produce locally so a cold room
         // still has a chance to recover.
         Coalesced::ProduceLocal => {
-            let prior = read_snapshot_cache(&cache_path, session);
+            let prior = cache.prior();
             if let Some(prior) = prior
                 .as_ref()
-                .and_then(|prior| publishable_prior((**prior).clone(), own_pane, diag))
+                .and_then(|prior| cache.publishable_prior((**prior).clone()))
             {
                 return Ok(prior);
             }
-            let frame = produce_candidate(false, None, false)?;
-            let frame = confirm_and_carry(
-                frame,
-                prior.as_deref(),
-                own_pane,
-                &produce_candidate,
-                diag,
-                false,
-                runtime,
-            )?;
-            validate_frame_for_publish(
-                frame,
-                prior.as_ref().map(|prior| (**prior).clone()),
-                own_pane,
-                diag,
-                false,
-                runtime,
-                &cache_path,
-            )
+            let frame = producer.candidate(false, None, false)?;
+            let frame = producer.confirm_and_carry(frame, prior.as_deref(), false)?;
+            cache.validate_topology(frame, prior.as_ref().map(|prior| (**prior).clone()), false)
         }
         // We won: read the mux roster and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
-            let prior = read_snapshot_cache(&cache_path, session);
-            let frame = produce_candidate(true, None, false)?;
+            let prior = cache.prior();
+            let frame = producer.candidate(true, None, false)?;
             // A mid-tick mux race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, run the shared repaired-frame
             // ladder before publishing.
-            let frame = confirm_and_carry(
-                frame,
-                prior.as_deref(),
-                own_pane,
-                &produce_candidate,
-                diag,
-                true,
-                runtime,
-            )?;
-            validate_frame_for_publish(
-                frame,
-                prior.as_ref().map(|prior| (**prior).clone()),
-                own_pane,
-                diag,
-                true,
-                runtime,
-                &cache_path,
-            )
+            let frame = producer.confirm_and_carry(frame, prior.as_deref(), true)?;
+            cache.validate_topology(frame, prior.as_ref().map(|prior| (**prior).clone()), true)
         }
     }
 }
@@ -841,7 +872,7 @@ fn emit_topology_anomalies(
     }
 }
 
-fn confirm_and_carry(
+fn confirm_and_carry_with(
     frame: PaneFrame,
     prior: Option<&PaneFrame>,
     own_pane: Option<&PaneId>,
@@ -1059,18 +1090,6 @@ fn validate_frame_for_publish(
     }
 }
 
-fn fresh_publishable_snapshot_cache(
-    cache_path: &Path,
-    session: &str,
-    min_produced_at_ms: Option<u64>,
-    ttl: Duration,
-    own_pane: Option<&PaneId>,
-    diag: &crate::diag::DiagSink,
-) -> Option<PaneFrame> {
-    let cache = fresh_snapshot_cache(cache_path, session, min_produced_at_ms, ttl)?;
-    publishable_cached_frame(cache, own_pane, diag)
-}
-
 fn publishable_prior(
     frame: PaneFrame,
     own_pane: Option<&PaneId>,
@@ -1215,58 +1234,25 @@ fn excerpt(value: &str, max_bytes: usize) -> String {
 /// fresh pane listing; election rides the same snapshot lock as the full
 /// produce, so one process samples per window and a loser serves the shared
 /// write back.
-#[allow(clippy::too_many_arguments)]
-fn refresh_cached_metrics(
-    frame: PaneFrame,
-    runtime: &crate::RuntimePaths,
-    cache_path: &Path,
-    lock_path: &Path,
-    session: &str,
-    min_pane_cache_ms: Option<u64>,
-    pane_ttl: Duration,
-    own_pane: Option<&PaneId>,
-    diag: &crate::diag::DiagSink,
-) -> PaneFrame {
-    if !super::metrics::pane_metrics_due(&frame, runtime) {
+fn refresh_cached_metrics(frame: PaneFrame, cache: &PaneFrameCache<'_>) -> PaneFrame {
+    if !super::metrics::pane_metrics_due(&frame, cache.runtime) {
         return frame;
     }
     let fresh = || {
-        let cache = fresh_publishable_snapshot_cache(
-            cache_path,
-            session,
-            min_pane_cache_ms,
-            pane_ttl,
-            own_pane,
-            diag,
-        )?;
-        (!super::metrics::pane_metrics_due(&cache, runtime)).then_some(cache)
+        let frame = cache.fresh()?;
+        (!super::metrics::pane_metrics_due(&frame, cache.runtime)).then_some(frame)
     };
-    match single_flight::coalesce(
-        lock_path,
-        SNAPSHOT_CACHE_WAIT_STEP,
-        SNAPSHOT_CACHE_WAIT_STEPS,
-        fresh,
-    ) {
-        Coalesced::Shared(cache) => cache,
+    match cache.elect(fresh) {
+        Coalesced::Shared(frame) => frame,
         // A wedged producer must not block the visible tab. Keep rendering the
         // cached frame rather than writing shared metrics state outside the
         // elected producer path.
         Coalesced::ProduceLocal => frame,
         Coalesced::Produce(_guard) => {
-            let mut latest = fresh_publishable_snapshot_cache(
-                cache_path,
-                session,
-                min_pane_cache_ms,
-                pane_ttl,
-                own_pane,
-                diag,
-            )
-            .unwrap_or(frame);
-            if super::metrics::enrich_pane_metrics(&mut latest, session, runtime) {
+            let mut latest = cache.fresh().unwrap_or(frame);
+            if super::metrics::enrich_pane_metrics(&mut latest, cache.session, cache.runtime) {
                 annotate_elevated_agents(&mut latest, &crate::proc::elevated_in_pane_agent);
-                publish_frame(
-                    runtime,
-                    cache_path,
+                cache.publish(
                     &latest,
                     crate::sidebar::events::PaneFramePublicationKind::Metrics,
                 );
@@ -1307,13 +1293,10 @@ fn apply_presence_sample(frame: &mut PaneFrame, sample: PresenceSample) -> bool 
 fn apply_presence_sample_and_publish(
     frame: &mut PaneFrame,
     sample: PresenceSample,
-    runtime: &crate::RuntimePaths,
-    cache_path: &Path,
+    cache: &PaneFrameCache<'_>,
 ) {
     if apply_presence_sample(frame, sample) {
-        publish_frame(
-            runtime,
-            cache_path,
+        cache.publish(
             frame,
             crate::sidebar::events::PaneFramePublicationKind::Presence,
         );
@@ -1324,62 +1307,42 @@ fn apply_presence_sample_and_publish(
 /// topology-fresh cached frame. The publish keeps the frame's `produced_at_ms`,
 /// so a presence-only refresh never masquerades as a fresh pane listing; election
 /// rides the same snapshot lock as the full produce.
-#[allow(clippy::too_many_arguments)]
 fn refresh_cached_presence(
     frame: PaneFrame,
-    runtime: &crate::RuntimePaths,
+    cache: &PaneFrameCache<'_>,
     mux: MuxName,
-    cache_path: &Path,
-    lock_path: &Path,
-    session: &str,
-    min_pane_cache_ms: Option<u64>,
-    pane_ttl: Duration,
-    own_pane: Option<&PaneId>,
-    diag: &crate::diag::DiagSink,
 ) -> PaneFrame {
-    if !presence_sample_due(&frame, read_presence_probe_stamp(runtime), unix_now_ms()) {
+    if !presence_sample_due(
+        &frame,
+        read_presence_probe_stamp(cache.runtime),
+        unix_now_ms(),
+    ) {
         return frame;
     }
     let fresh = || {
-        let cache = fresh_publishable_snapshot_cache(
-            cache_path,
-            session,
-            min_pane_cache_ms,
-            pane_ttl,
-            own_pane,
-            diag,
-        )?;
-        (!presence_sample_due(&cache, read_presence_probe_stamp(runtime), unix_now_ms()))
-            .then_some(cache)
+        let frame = cache.fresh()?;
+        (!presence_sample_due(
+            &frame,
+            read_presence_probe_stamp(cache.runtime),
+            unix_now_ms(),
+        ))
+        .then_some(frame)
     };
-    match single_flight::coalesce(
-        lock_path,
-        SNAPSHOT_CACHE_WAIT_STEP,
-        SNAPSHOT_CACHE_WAIT_STEPS,
-        fresh,
-    ) {
-        Coalesced::Shared(cache) => cache,
+    match cache.elect(fresh) {
+        Coalesced::Shared(frame) => frame,
         // A wedged producer must not block the visible tab. Keep rendering the
         // cached frame rather than writing shared presence state outside the
         // elected producer path.
         Coalesced::ProduceLocal => frame,
         Coalesced::Produce(_guard) => {
-            let mut latest = fresh_publishable_snapshot_cache(
-                cache_path,
-                session,
-                min_pane_cache_ms,
-                pane_ttl,
-                own_pane,
-                diag,
-            )
-            .unwrap_or(frame);
+            let mut latest = cache.fresh().unwrap_or(frame);
             let probed_at_ms = unix_now_ms();
-            if let Err(err) = write_presence_probe_stamp(runtime, probed_at_ms) {
+            if let Err(err) = write_presence_probe_stamp(cache.runtime, probed_at_ms) {
                 tracing::debug!(error = %err, "tmux presence probe stamp write failed");
                 return latest;
             }
-            if let Some(sample) = sample_client_presence(mux, session) {
-                apply_presence_sample_and_publish(&mut latest, sample, runtime, cache_path);
+            if let Some(sample) = sample_client_presence(mux, cache.session) {
+                apply_presence_sample_and_publish(&mut latest, sample, cache);
             }
             latest
         }

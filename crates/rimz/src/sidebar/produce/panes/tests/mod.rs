@@ -263,13 +263,10 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
     let mut frame = frame_with_presence(Some(presence_sample(1, Some(1_000), 1_000)));
     let produced_at_ms = frame.produced_at_ms;
     atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
+    let diag = crate::diag::DiagSink::disabled();
+    let cache = PaneFrameCache::new(&runtime, "s", None, None, &diag);
 
-    apply_presence_sample_and_publish(
-        &mut frame,
-        presence_sample(1, Some(1_000), 2_000),
-        &runtime,
-        &cache_path,
-    );
+    apply_presence_sample_and_publish(&mut frame, presence_sample(1, Some(1_000), 2_000), &cache);
 
     let published: PaneFrame =
         serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
@@ -282,12 +279,7 @@ fn unchanged_presence_preserves_pane_frame_and_sends_no_wakeup() {
         std::io::ErrorKind::WouldBlock,
     );
 
-    apply_presence_sample_and_publish(
-        &mut frame,
-        presence_sample(2, Some(1_000), 3_000),
-        &runtime,
-        &cache_path,
-    );
+    apply_presence_sample_and_publish(&mut frame, presence_sample(2, Some(1_000), 3_000), &cache);
     let published: PaneFrame =
         serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
     assert_eq!(published.presence.unwrap().human_clients, 2);

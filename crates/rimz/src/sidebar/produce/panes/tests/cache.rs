@@ -220,48 +220,36 @@ fn producer_verification_trusts_event_carried_topology_without_topology_floor() 
 }
 
 #[test]
-fn fresh_publishable_snapshot_cache_rejects_invalid_cached_frames() {
+fn pane_frame_cache_rejects_invalid_cached_frames() {
     let dir = tempfile::tempdir().unwrap();
     let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
+    let runtime = crate::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/validated-cache")),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let diag = crate::diag::DiagSink::disabled();
+    let cache = PaneFrameCache::new(&runtime, "s", None, Some(&own), &diag);
 
-    let missing_own_path = dir.path().join("missing-own.json");
     let missing_own = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_2", Some("zsh"), Some("/repo"))],
         unix_now_ms(),
         "s",
     );
-    atomic::write_temp_then_rename_cache(&missing_own_path, &missing_own).unwrap();
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &missing_own).unwrap();
     assert!(
-        fresh_publishable_snapshot_cache(
-            &missing_own_path,
-            "s",
-            None,
-            SNAPSHOT_CACHE_TTL,
-            Some(&own),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .is_none(),
+        cache.fresh().is_none(),
         "a cache missing the renderer's own pane must not short-circuit produce"
     );
 
-    let valid_path = dir.path().join("valid.json");
     let valid = crate::sidebar::frame::assemble_frame(
         vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
         unix_now_ms(),
         "s",
     );
-    atomic::write_temp_then_rename_cache(&valid_path, &valid).unwrap();
-    assert!(
-        fresh_publishable_snapshot_cache(
-            &valid_path,
-            "s",
-            None,
-            SNAPSHOT_CACHE_TTL,
-            Some(&own),
-            &crate::diag::DiagSink::disabled(),
-        )
-        .is_some()
-    );
+    atomic::write_temp_then_rename_cache(&runtime.pane_frame_path(), &valid).unwrap();
+    assert!(cache.fresh().is_some());
 }
 
 #[test]
@@ -460,7 +448,7 @@ fn degraded_first_read_publishes_verified_repull_result() {
         );
         let calls = std::cell::Cell::new(0);
 
-        let repulled = confirm_and_carry(
+        let repulled = confirm_and_carry_with(
             raced,
             Some(&prior),
             None,
@@ -530,7 +518,7 @@ fn ambiguous_plain_process_absence_repull_matrix() {
         };
         let calls = std::cell::Cell::new(0);
 
-        let repulled = confirm_and_carry(
+        let repulled = confirm_and_carry_with(
             fresh,
             Some(&prior),
             None,
@@ -582,7 +570,7 @@ fn refuted_initial_carry_records_diagnostic() {
     let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
     let verified = prior.clone();
 
-    let repulled = confirm_and_carry(
+    let repulled = confirm_and_carry_with(
         fresh,
         Some(&prior),
         None,
@@ -649,7 +637,7 @@ fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
     let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
     let calls = std::cell::Cell::new(0);
 
-    let carried = confirm_and_carry(
+    let carried = confirm_and_carry_with(
         fresh.clone(),
         Some(&prior),
         None,
@@ -785,18 +773,10 @@ fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
     let frame = crate::sidebar::frame::assemble_frame(vec![pidded], produced_at_ms, "s");
     let cache_path = runtime.pane_frame_path();
     atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
+    let diag = crate::diag::DiagSink::disabled();
+    let cache = PaneFrameCache::new(&runtime, "s", None, None, &diag);
 
-    let refreshed = refresh_cached_metrics(
-        frame,
-        &runtime,
-        &cache_path,
-        &runtime.root.join("snapshot.lock"),
-        "s",
-        None,
-        SNAPSHOT_CACHE_TTL,
-        None,
-        &crate::diag::DiagSink::disabled(),
-    );
+    let refreshed = refresh_cached_metrics(frame, &cache);
 
     assert_eq!(refreshed.produced_at_ms, produced_at_ms);
     let published = read_snapshot_cache(&cache_path, "s").unwrap();
@@ -807,6 +787,42 @@ fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
     assert!(
         runtime.root.join("metrics-sample.json").exists(),
         "metrics refresh samples /proc and writes its own cache"
+    );
+}
+
+#[test]
+fn fresh_cache_hit_skips_election_mux_and_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::RuntimePaths::under(
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/fresh-frame")),
+        dir.path(),
+    )
+    .unwrap();
+    runtime.ensure_dirs().unwrap();
+    let cached = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
+        unix_now_ms(),
+        "s",
+    );
+    let path = runtime.pane_frame_path();
+    atomic::write_temp_then_rename_cache(&path, &cached).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    let returned = cached_panes_or_produce(
+        &runtime,
+        MuxName::Zellij,
+        "s",
+        None,
+        None,
+        &crate::diag::DiagSink::disabled(),
+    )
+    .expect("fresh frame bypasses unavailable mux");
+
+    assert_eq!(returned.produced_at_ms, cached.produced_at_ms);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "cache is not republished"
     );
 }
 
