@@ -142,10 +142,10 @@ const QWEN_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "PermissionRequest",
     },
     plan_approval: ConcernCoverage::Wired {
-        via: "PreToolUse:exit_plan_mode",
+        via: "PermissionRequest:exit_plan_mode",
     },
     user_question: ConcernCoverage::Wired {
-        via: "PreToolUse:ask_user_question",
+        via: "PermissionRequest:ask_user_question",
     },
     answer: ConcernCoverage::Unsupported {
         reason: "native dialog answering not wired; answer in the pane",
@@ -219,7 +219,6 @@ const QWEN_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
 };
 
 const QWEN_HOOK_TIMEOUT_MS: u64 = 10_000;
-const BLOCKING_TOOL_MATCHER: &str = "exit_plan_mode|ask_user_question";
 const QWEN_HOOKS: &[HookRecord] = &[
     hook_record!(
         "SessionStart",
@@ -283,15 +282,6 @@ const QWEN_HOOKS: &[HookRecord] = &[
         r#"{"tool_name":"run_shell_command"}"#,
         AgentHookClass::AwaitingUser,
         Some(AskKind::Permission)
-    ),
-    hook_record!(
-        "PreToolUse",
-        Some(BLOCKING_TOOL_MATCHER),
-        true,
-        true,
-        r#"{"tool_name":"ask_user_question"}"#,
-        AgentHookClass::AwaitingUser,
-        Some(AskKind::Question)
     ),
     hook_record!(
         "PostToolUse",
@@ -372,14 +362,11 @@ impl AgentAdapter for QwenAdapter {
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let ask_kind = match event_name {
-            "PermissionRequest" => self
-                .descriptor()
-                .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref())
-                .is_none()
-                .then_some(AskKind::Permission),
-            "PreToolUse" => self
-                .descriptor()
-                .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref()),
+            "PermissionRequest" => Some(
+                self.descriptor()
+                    .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref())
+                    .unwrap_or(AskKind::Permission),
+            ),
             _ => None,
         };
         classify_catalog_hook(QWEN_HOOKS, event_name, ask_kind)
@@ -405,16 +392,16 @@ impl AgentAdapter for QwenAdapter {
             })
             .collect::<Vec<_>>();
         samples.push(ClassificationSample::new(
-            "PreToolUse",
-            serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode"}),
+            "PermissionRequest",
+            serde_json::json!({"session_id":"sess-1","tool_name":"ask_user_question"}),
             AgentHookClass::AwaitingUser,
-            Some(AskKind::PlanApproval),
+            Some(AskKind::Question),
         ));
         samples.push(ClassificationSample::new(
             "PermissionRequest",
-            serde_json::json!({"session_id":"sess-1","tool_name":"ask_user_question"}),
-            AgentHookClass::Lifecycle,
-            None,
+            serde_json::json!({"session_id":"sess-1","tool_name":"exit_plan_mode"}),
+            AgentHookClass::AwaitingUser,
+            Some(AskKind::PlanApproval),
         ));
         samples
     }
@@ -455,7 +442,7 @@ impl AgentAdapter for QwenAdapter {
         Ok(None)
     }
     fn ask_question_detail(&self, event_name: &str, payload: &Value) -> Option<Vec<AskQuestion>> {
-        (event_name == "PreToolUse")
+        (event_name == "PermissionRequest")
             .then(|| parse_tool_use(payload))
             .and_then(|tool| {
                 ask::question_detail(tool.tool_name.as_deref()?, tool.tool_input.as_ref()?)
@@ -463,15 +450,13 @@ impl AgentAdapter for QwenAdapter {
     }
 
     fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
-        if event_name == "PermissionRequest" {
-            return ask::permission_detail(payload);
+        if event_name != "PermissionRequest" {
+            return None;
         }
-        self.ask_question_detail(event_name, payload)?
-            .first()?
-            .question
-            .lines()
-            .next()
-            .map(ToOwned::to_owned)
+        self.ask_question_detail(event_name, payload)
+            .and_then(|questions| questions.into_iter().next())
+            .and_then(|question| question.question.lines().next().map(ToOwned::to_owned))
+            .or_else(|| ask::permission_detail(payload))
     }
 
     fn observe_lifecycle(
@@ -657,22 +642,15 @@ fn lifecycle_signal(
                 LifecycleSignal::Registered
             },
         ),
-        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
-        "PreToolUse" => Some(
-            match descriptor.blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref()) {
-                Some(kind) => LifecycleSignal::AwaitingInput {
-                    kind,
-                    ask_id: None,
-                    detail: None,
-                    native_key: None,
-                },
-                None => LifecycleSignal::ToolUsed {
-                    mutates: false,
-                    edits: false,
-                    native_key: None,
-                },
-            },
-        ),
+        "UserPromptSubmit" => {
+            // Qwen fires this hook on internal continuations with an empty prompt;
+            // a real user prompt always carries text.
+            let prompt = parse_user_prompt_submit(payload).prompt;
+            prompt
+                .as_deref()
+                .is_none_or(|prompt| !prompt.trim().is_empty())
+                .then_some(LifecycleSignal::TurnStarted)
+        }
         "PostToolUse" => Some(LifecycleSignal::ToolUsed {
             mutates: descriptor.tool_mutates(payload),
             edits: descriptor.tool_edits_files(payload),
@@ -683,15 +661,14 @@ fn lifecycle_signal(
             edits: false,
             native_key: None,
         }),
-        "PermissionRequest" => descriptor
-            .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref())
-            .is_none()
-            .then_some(LifecycleSignal::AwaitingInput {
-                kind: AskKind::Permission,
-                ask_id: None,
-                detail: None,
-                native_key: None,
-            }),
+        "PermissionRequest" => Some(LifecycleSignal::AwaitingInput {
+            kind: descriptor
+                .blocking_tool_kind(parse_tool_use(payload).tool_name.as_deref())
+                .unwrap_or(AskKind::Permission),
+            ask_id: None,
+            detail: None,
+            native_key: None,
+        }),
         "Stop" => {
             let stop = parse_stop(payload);
             Some(LifecycleSignal::TurnEnded {

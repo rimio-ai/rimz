@@ -12,14 +12,19 @@ const REWOUND_SESSION: &str = include_str!("tests/fixtures/rewound-session.jsonl
 #[test]
 fn classifies_native_asks_and_keeps_neutral_stdout_silent() {
     let adapter = QwenAdapter;
-    let permission = adapter.classify_hook(
-        "PermissionRequest",
-        &json!({"tool_name":"run_shell_command"}),
-    );
-    assert_eq!(permission.class, AgentHookClass::AwaitingUser);
-    assert_eq!(permission.ask_kind, Some(AskKind::Permission));
-    let question = adapter.classify_hook("PreToolUse", &json!({"tool_name":"ask_user_question"}));
-    assert_eq!(question.ask_kind, Some(AskKind::Question));
+    for (tool_name, ask_kind) in [
+        ("ask_user_question", AskKind::Question),
+        ("exit_plan_mode", AskKind::PlanApproval),
+        ("run_shell_command", AskKind::Permission),
+    ] {
+        let classified =
+            adapter.classify_hook("PermissionRequest", &json!({"tool_name":tool_name}));
+        assert_eq!(classified.class, AgentHookClass::AwaitingUser);
+        assert_eq!(classified.ask_kind, Some(ask_kind));
+    }
+    let pre_tool = adapter.classify_hook("PreToolUse", &json!({"tool_name":"ask_user_question"}));
+    assert_eq!(pre_tool.class, AgentHookClass::Unknown);
+    assert_eq!(pre_tool.ask_kind, None);
     insta::assert_debug_snapshot!(adapter.render_neutral("PermissionRequest").unwrap(), @"None");
 }
 
@@ -75,7 +80,7 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
     let path = dir.path().join("settings.json");
     fs::write(&path, r#"{"ui":{"statusLine":{"type":"command","command":"myline","refreshInterval":5}},"theme":"dark"}"#).unwrap();
     let report = install::MANAGED_SOURCE.install_into(&path).unwrap();
-    assert_eq!(report.installed_events.len(), 14);
+    assert_eq!(report.installed_events.len(), 13);
     assert!(install::MANAGED_SOURCE.installed_at(&path));
     assert!(install::MANAGED_SOURCE.managed_artifacts_at(&path));
     assert!(!install::MANAGED_SOURCE.upgrade_available_at(&path));
@@ -92,18 +97,7 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
             .and_then(Value::as_str),
         Some("myline")
     );
-    assert_eq!(
-        installed
-            .pointer("/hooks/PreToolUse/0/hooks/0/timeout")
-            .and_then(Value::as_u64),
-        Some(10_000)
-    );
-    assert_eq!(
-        installed
-            .pointer("/hooks/PreToolUse/0/matcher")
-            .and_then(Value::as_str),
-        Some(BLOCKING_TOOL_MATCHER)
-    );
+    assert!(installed.pointer("/hooks/PreToolUse").is_none());
     install::MANAGED_SOURCE.uninstall_from(&path).unwrap();
     assert!(!install::MANAGED_SOURCE.installed_at(&path));
     let restored: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -143,6 +137,32 @@ fn installs_restores_and_leaves_preset_statusline_untouched() {
 }
 
 #[test]
+fn reinstall_reclaims_stale_managed_pre_tool_use_hook() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    fs::write(
+        &path,
+        format!(
+            r#"{{"hooks":{{"PreToolUse":[{{"matcher":"exit_plan_mode|ask_user_question","_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}"}}]}},{{"matcher":"custom_tool","hooks":[{{"type":"command","command":"custom-hook"}}]}}]}}}}"#
+        ),
+    )
+    .unwrap();
+
+    install::MANAGED_SOURCE.install_into(&path).unwrap();
+
+    let installed: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let pre_tool = installed
+        .pointer("/hooks/PreToolUse")
+        .and_then(Value::as_array)
+        .unwrap();
+    assert_eq!(pre_tool.len(), 1);
+    assert_eq!(
+        pre_tool[0].get("matcher").and_then(Value::as_str),
+        Some("custom_tool")
+    );
+}
+
+#[test]
 fn rejects_async_managed_blocking_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
@@ -152,18 +172,88 @@ fn rejects_async_managed_blocking_hooks() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("async"));
+}
 
-    fs::write(&path, format!(r#"{{"hooks":{{"PreToolUse":[{{"_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}","async":true}}]}}]}}}}"#)).unwrap();
-    let error = install::MANAGED_SOURCE
-        .install_into(&path)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("PreToolUse"));
+#[test]
+fn maps_prompts_and_permission_requests_to_lifecycle_signals() {
+    let adapter = QwenAdapter;
+    for prompt in ["", "  "] {
+        assert_eq!(
+            adapter.observe_lifecycle(
+                "UserPromptSubmit",
+                &json!({"session_id":"s1","prompt":prompt})
+            ),
+            None
+        );
+    }
+    for payload in [json!({"session_id":"s1","prompt":"fix the bug"}), json!({})] {
+        assert_eq!(
+            adapter
+                .observe_lifecycle("UserPromptSubmit", &payload)
+                .unwrap()
+                .signal,
+            LifecycleSignal::TurnStarted
+        );
+    }
+    for (tool_name, kind) in [
+        ("ask_user_question", AskKind::Question),
+        ("exit_plan_mode", AskKind::PlanApproval),
+        ("run_shell_command", AskKind::Permission),
+    ] {
+        assert_eq!(
+            adapter
+                .observe_lifecycle(
+                    "PermissionRequest",
+                    &json!({"session_id":"s1","tool_name":tool_name})
+                )
+                .unwrap()
+                .signal,
+            LifecycleSignal::AwaitingInput {
+                kind,
+                ask_id: None,
+                detail: None,
+                native_key: None,
+            }
+        );
+    }
+}
 
-    fs::write(&path, format!(r#"{{"hooks":{{"PreToolUse":[{{"matcher":"OtherTool","_rimz_managed":true,"hooks":[{{"type":"command","command":"{RIMZ_HOOK_COMMAND}","async":true}}]}}]}}}}"#)).unwrap();
-    install::MANAGED_SOURCE
-        .install_into(&path)
-        .expect("ordinary matcher mismatch is reclaimed, not rejected as a legacy broad hook");
+#[test]
+fn reads_gate_details_from_permission_requests() {
+    let adapter = QwenAdapter;
+    let question = json!({
+        "tool_name":"ask_user_question",
+        "tool_input":{
+            "questions":[{
+                "question":"Which path?\nMore context",
+                "options":[{"label":"Safe","description":"Keep the current behavior"}],
+                "multiSelect":false
+            }]
+        }
+    });
+    let questions = adapter
+        .ask_question_detail("PermissionRequest", &question)
+        .unwrap();
+    assert_eq!(questions.len(), 1);
+    assert_eq!(questions[0].question, "Which path?\nMore context");
+    assert_eq!(
+        adapter
+            .ask_detail("PermissionRequest", &question)
+            .as_deref(),
+        Some("Which path?")
+    );
+
+    let permission = json!({
+        "tool_name":"run_shell_command",
+        "tool_input":{"command":"cargo xtask gate"}
+    });
+    assert_eq!(
+        adapter
+            .ask_detail("PermissionRequest", &permission)
+            .as_deref(),
+        Some(r#"run_shell_command: {"command":"cargo xtask gate"}"#)
+    );
+    assert_eq!(adapter.ask_detail("PreToolUse", &question), None);
 }
 
 #[test]

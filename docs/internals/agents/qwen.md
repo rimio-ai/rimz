@@ -7,10 +7,9 @@ Qwen Code is a standalone, eagerly registered adapter. RimZ installs native hook
 | Native event | RimZ signal |
 | --- | --- |
 | `SessionStart` | register; `compact` closes compaction, while `startup` and `clear` mark fresh lineage |
-| `UserPromptSubmit` | turn started |
-| `PreToolUse` | plan/question wait for the two blocking tools; ordinary tool activity otherwise |
+| `UserPromptSubmit` | turn started; a present-but-blank prompt is an internal continuation and stays inside the current turn |
 | `PostToolUse` / `PostToolUseFailure` | completed tool activity |
-| `PermissionRequest` | permission wait unless the tool is already a plan/question gate |
+| `PermissionRequest` | permission wait; the plan/question gate tools classify as plan/question waits |
 | `Stop` / `StopFailure` | clean or failed turn end; pending `background_tasks` or `crons` keep the parent parked |
 | `SubagentStart` / `SubagentStop` | child bracket |
 | `PreCompact` / `PostCompact` | compaction bracket |
@@ -18,7 +17,7 @@ Qwen Code is a standalone, eagerly registered adapter. RimZ installs native hook
 
 The child id is `agent_id`, the parent is the hook's root `session_id`, and `agent_type` labels the child. This wires the native child bracket and renders the tree. Qwen warns that concurrent-agent hooks are registered at session scope rather than firing scope; live fixtures still need to pin concurrent delivery and parent correlation.
 
-Hook stdout stays empty on the neutral path. `PermissionRequest` and the `PreToolUse` matcher for `exit_plan_mode|ask_user_question` remain synchronous; narrowing the matcher keeps a RimZ subprocess off ordinary tool starts, whose completed activity arrives through `PostToolUse`. Install refuses a RimZ-managed blocking entry carrying `async: true`, reclaims owned entries by the `rimz hooks feed --source qwen` command marker, and leaves unrelated hooks intact.
+Hook stdout stays empty on the neutral path. Qwen presents gate dialogs in the tool-confirmation stage, which fires synchronous `PermissionRequest` with the tool's name and input; `PreToolUse` fires only at execution after the user has answered, so RimZ installs no `PreToolUse` hook and classifies both gates from `PermissionRequest`. Install refuses a RimZ-managed `PermissionRequest` entry carrying `async: true`, reclaims owned entries by the `rimz hooks feed --source qwen` command marker, and leaves unrelated hooks intact.
 
 ## Context and transcript
 
