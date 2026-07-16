@@ -71,6 +71,101 @@ fn fixture_now() -> Result<jiff::Timestamp> {
         .context("parsing sidebar fixture timestamp")
 }
 
+struct WorktreeGroupSpec {
+    key: &'static str,
+    label: &'static str,
+    rows: Vec<rimz::SidebarRow>,
+    diff_added: Option<u32>,
+    diff_removed: Option<u32>,
+    commits_ahead: Option<u32>,
+    commits_behind: Option<u32>,
+    clean: Option<bool>,
+    landed: Option<bool>,
+    trunk_sync: Option<rimz::WorktreeTrunkSync>,
+    pr_state: Option<rimz::WorktreePrState>,
+    pr_number: Option<u64>,
+}
+
+impl Default for WorktreeGroupSpec {
+    fn default() -> Self {
+        Self {
+            key: "",
+            label: "",
+            rows: Vec::new(),
+            diff_added: None,
+            diff_removed: None,
+            commits_ahead: None,
+            commits_behind: None,
+            clean: Some(false),
+            landed: Some(false),
+            trunk_sync: None,
+            pr_state: None,
+            pr_number: None,
+        }
+    }
+}
+
+fn worktree_group(spec: WorktreeGroupSpec) -> rimz::SidebarWorktreeGroup {
+    rimz::SidebarWorktreeGroup {
+        key: spec.key.to_owned(),
+        label: spec.label.to_owned(),
+        kind: rimz::SidebarWorktreeKind::Worktree,
+        status_counts: Vec::new(),
+        rows: spec.rows,
+        diff_added: spec.diff_added,
+        diff_removed: spec.diff_removed,
+        commits_ahead: spec.commits_ahead,
+        commits_behind: spec.commits_behind,
+        trunk: Some("main".to_owned()),
+        worktree_backed: false,
+        finished: false,
+        clean: spec.clean,
+        landed: spec.landed,
+        trunk_sync: spec.trunk_sync,
+        pr_state: spec.pr_state,
+        pr_number: spec.pr_number,
+    }
+}
+
+struct ProcessRowSpec {
+    id: &'static str,
+    name: &'static str,
+    pane: &'static str,
+    command: &'static str,
+    cwd: &'static str,
+    branch: &'static str,
+    state: rimz::ProcessState,
+    detail: Option<&'static str>,
+    cpu_pct: Option<u16>,
+    rss_kb: Option<u64>,
+    io_bps: Option<u64>,
+    last_activity: jiff::Timestamp,
+}
+
+fn process_row(spec: ProcessRowSpec) -> rimz::SidebarRow {
+    rimz::SidebarRow {
+        id: spec.id.to_owned(),
+        name: spec.name.to_owned(),
+        pane: Some(pane_ref(spec.pane, spec.command, spec.cwd, false)),
+        worktree_path: Some(spec.cwd.to_owned()),
+        worktree_branch: Some(spec.branch.to_owned()),
+        channel: None,
+        unread: false,
+        inactive: false,
+        archived: false,
+        attention_score: 0,
+        last_activity: spec.last_activity,
+        card: rimz::RowCard::Process(rimz::ProcessCard {
+            state: spec.state,
+            command_detail: spec.detail.map(ToOwned::to_owned),
+            cpu_pct: spec.cpu_pct,
+            rss_kb: spec.rss_kb,
+            io_bps: spec.io_bps,
+            ..rimz::ProcessCard::default()
+        }),
+    }
+}
+
 fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
     let claude = agent_row(
         AgentRowSpec {
@@ -120,72 +215,52 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         },
         now,
     );
-    let process = rimz::SidebarRow {
-        id: "process:cargo-nextest".to_owned(),
-        name: "cargo nextest".to_owned(),
-        pane: Some(pane_ref(
-            "terminal_24",
-            "cargo nextest run",
-            "/srv/code/query-engine",
-            false,
-        )),
-        worktree_path: Some("/srv/code/query-engine".to_owned()),
-        worktree_branch: Some("main".to_owned()),
-        channel: None,
-        unread: false,
-        inactive: false,
-        archived: false,
-        attention_score: 0,
+    let process = process_row(ProcessRowSpec {
+        id: "process:cargo-nextest",
+        name: "cargo nextest",
+        pane: "terminal_24",
+        command: "cargo nextest run",
+        cwd: "/srv/code/query-engine",
+        branch: "main",
+        state: rimz::ProcessState::Busy,
+        detail: Some("integration::backend::zellij"),
+        cpu_pct: Some(37),
+        rss_kb: Some(412_000),
+        io_bps: None,
         last_activity: now,
-        card: rimz::RowCard::Process(rimz::ProcessCard {
-            state: rimz::ProcessState::Busy,
-            command_detail: Some("integration::backend::zellij".to_owned()),
-            cpu_pct: Some(37),
-            rss_kb: Some(412_000),
-            ..rimz::ProcessCard::default()
-        }),
-    };
+    });
 
     snapshot.worktree_groups = vec![
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine".to_owned(),
-            label: "main".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine",
+            label: "main",
             rows: with_overflow(vec![claude, codex, process], 3, now),
             diff_added: Some(182),
             diff_removed: Some(47),
             commits_ahead: Some(3),
             commits_behind: Some(1),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/mux".to_owned(),
-            label: "zellij-health".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/mux",
+            label: "zellij-health",
             rows: vec![pi],
             diff_added: Some(14),
             diff_removed: Some(3),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-    ];
+    ]
+    .into_iter()
+    .map(worktree_group)
+    .collect();
     snapshot.value_tally = Some(spend_tally(9.42, 712_000, 8));
     snapshot.workspace_value_tally = Some(spend_tally(6.84, 481_000, 5));
     snapshot.today_spend_live_usd = Some(10.08);
@@ -270,32 +345,20 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         },
         now,
     );
-    let process = rimz::SidebarRow {
-        id: "process:cargo-nextest".to_owned(),
-        name: "cargo nextest".to_owned(),
-        pane: Some(pane_ref(
-            "terminal_33",
-            "cargo nextest run",
-            "/srv/code/query-engine",
-            false,
-        )),
-        worktree_path: Some("/srv/code/query-engine".to_owned()),
-        worktree_branch: Some("main".to_owned()),
-        channel: None,
-        unread: false,
-        inactive: false,
-        archived: false,
-        attention_score: 0,
+    let process = process_row(ProcessRowSpec {
+        id: "process:cargo-nextest",
+        name: "cargo nextest",
+        pane: "terminal_33",
+        command: "cargo nextest run",
+        cwd: "/srv/code/query-engine",
+        branch: "main",
+        state: rimz::ProcessState::Busy,
+        detail: Some("integration::backend"),
+        cpu_pct: Some(37),
+        rss_kb: Some(412_000),
+        io_bps: Some(8 * 1_048_576),
         last_activity: now,
-        card: rimz::RowCard::Process(rimz::ProcessCard {
-            state: rimz::ProcessState::Busy,
-            command_detail: Some("integration::backend".to_owned()),
-            cpu_pct: Some(37),
-            rss_kb: Some(412_000),
-            io_bps: Some(8 * 1_048_576),
-            ..rimz::ProcessCard::default()
-        }),
-    };
+    });
     let codex = agent_row(
         AgentRowSpec {
             id: "agent:codex:pricing",
@@ -456,106 +519,76 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         now,
     );
     snapshot.worktree_groups = vec![
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine".to_owned(),
-            label: "main".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine",
+            label: "main",
             rows: vec![claude, compacting, process],
             diff_added: Some(1840),
             diff_removed: Some(620),
             commits_ahead: Some(3),
             commits_behind: Some(1),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/pricing-refresh".to_owned(),
-            label: "pricing-refresh".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/pricing-refresh",
+            label: "pricing-refresh",
             rows: vec![codex],
             diff_added: Some(1180),
             diff_removed: Some(430),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/zellij-health".to_owned(),
-            label: "zellij-health".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/zellij-health",
+            label: "zellij-health",
             rows: vec![pi],
             diff_added: Some(760),
             diff_removed: Some(210),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/mux-merge".to_owned(),
-            label: "mux-merge".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/mux-merge",
+            label: "mux-merge",
             rows: vec![success, paused],
             diff_added: Some(0),
             diff_removed: Some(0),
             commits_ahead: Some(0),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
             clean: Some(true),
             landed: Some(true),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
             pr_state: Some(rimz::WorktreePrState::Merged),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/theme-tune".to_owned(),
-            label: "theme-tune".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/theme-tune",
+            label: "theme-tune",
             rows: vec![opencode_theme, claude_theme],
             diff_added: Some(1320),
             diff_removed: Some(540),
             commits_ahead: Some(2),
             commits_behind: Some(1),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/observer-lag".to_owned(),
-            label: "observer-lag".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/observer-lag",
+            label: "observer-lag",
             rows: vec![
                 opencode,
                 idle,
@@ -567,16 +600,15 @@ fn add_cockpit_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
             diff_removed: Some(360),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-    ];
+    ]
+    .into_iter()
+    .map(worktree_group)
+    .collect();
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
@@ -927,83 +959,62 @@ fn add_focus_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         now,
     );
     snapshot.worktree_groups = vec![
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/auth-router".to_owned(),
-            label: "feature/auth-router".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/auth-router",
+            label: "feature/auth-router",
             rows: vec![planner, coder, reviewer],
             diff_added: Some(1520),
             diff_removed: Some(470),
             commits_ahead: Some(2),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/rollout-guard".to_owned(),
-            label: "rollout-guard".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/rollout-guard",
+            label: "rollout-guard",
             rows: vec![rollout_coder, rollout_reviewer],
             diff_added: Some(1180),
             diff_removed: Some(390),
             commits_ahead: Some(2),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/ci-retry".to_owned(),
-            label: "ci-retry".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/ci-retry",
+            label: "ci-retry",
             rows: vec![ci_failed, pi_paused],
             diff_added: Some(880),
             diff_removed: Some(240),
             commits_ahead: Some(1),
             commits_behind: Some(1),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Reconciling),
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/token-budget".to_owned(),
-            label: "token-budget".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/token-budget",
+            label: "token-budget",
             rows: vec![architect_tokens, opencode_tokens, sre_tokens],
             diff_added: Some(1420),
             diff_removed: Some(520),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-    ];
+    ]
+    .into_iter()
+    .map(worktree_group)
+    .collect();
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
@@ -1105,32 +1116,20 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         now,
     );
     claude.unread = true;
-    let pnpm = rimz::SidebarRow {
-        id: "process:pnpm-serve".to_owned(),
-        name: "pnpm serve".to_owned(),
-        pane: Some(pane_ref(
-            "terminal_30",
-            "pnpm serve",
-            "/srv/code/query-engine",
-            false,
-        )),
-        worktree_path: Some("/srv/code/query-engine".to_owned()),
-        worktree_branch: Some("main".to_owned()),
-        channel: None,
-        unread: false,
-        inactive: false,
-        archived: false,
-        attention_score: 0,
+    let pnpm = process_row(ProcessRowSpec {
+        id: "process:pnpm-serve",
+        name: "pnpm serve",
+        pane: "terminal_30",
+        command: "pnpm serve",
+        cwd: "/srv/code/query-engine",
+        branch: "main",
+        state: rimz::ProcessState::Busy,
+        detail: Some("vite dev :5173"),
+        cpu_pct: Some(12),
+        rss_kb: Some(268_000),
+        io_bps: Some(450 * 1_024),
         last_activity: now,
-        card: rimz::RowCard::Process(rimz::ProcessCard {
-            state: rimz::ProcessState::Busy,
-            command_detail: Some("vite dev :5173".to_owned()),
-            cpu_pct: Some(12),
-            rss_kb: Some(268_000),
-            io_bps: Some(450 * 1_024),
-            ..rimz::ProcessCard::default()
-        }),
-    };
+    });
     let codex = agent_row(
         AgentRowSpec {
             id: "agent:codex:economy",
@@ -1307,102 +1306,77 @@ fn add_economy_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestam
         now,
     );
     snapshot.worktree_groups = vec![
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine".to_owned(),
-            label: "provider-store".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine",
+            label: "provider-store",
             rows: vec![opencode, claude, pnpm],
             diff_added: Some(1580),
             diff_removed: Some(520),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/pricing-refresh".to_owned(),
-            label: "pricing-refresh".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/pricing-refresh",
+            label: "pricing-refresh",
             rows: vec![codex],
             diff_added: Some(700),
             diff_removed: Some(210),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/cost-caps".to_owned(),
-            label: "cost-caps".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/cost-caps",
+            label: "cost-caps",
             rows: vec![pi, codex_idle],
             diff_added: Some(1120),
             diff_removed: Some(360),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/usage-alerts".to_owned(),
-            label: "usage-alerts".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/usage-alerts",
+            label: "usage-alerts",
             rows: vec![opencode_limit, pi_limit, claude_limit],
             diff_added: Some(1980),
             diff_removed: Some(740),
             commits_ahead: Some(2),
             commits_behind: Some(1),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/credit-store".to_owned(),
-            label: "credit-store".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/credit-store",
+            label: "credit-store",
             rows: vec![codex_credit, opencode_credit, claude_credit, pi_credit_idle],
             diff_added: Some(0),
             diff_removed: Some(0),
             commits_ahead: Some(0),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
             clean: Some(true),
             landed: Some(true),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Merged),
             pr_state: Some(rimz::WorktreePrState::Merged),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-    ];
+    ]
+    .into_iter()
+    .map(worktree_group)
+    .collect();
     let mut codex_panel = provider_panel(
         "codex",
         Some("0.135.0"),
@@ -1673,121 +1647,89 @@ fn add_reach_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         now,
     );
     snapshot.worktree_groups = vec![
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine".to_owned(),
-            label: "main".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine",
+            label: "main",
             rows: vec![claude],
             diff_added: Some(720),
             diff_removed: Some(160),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/remote-link".to_owned(),
-            label: "remote-link".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/remote-link",
+            label: "remote-link",
             rows: vec![codex, pi],
             diff_added: Some(1240),
             diff_removed: Some(380),
             commits_ahead: Some(1),
             commits_behind: Some(1),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/edge-cache".to_owned(),
-            label: "edge-cache".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/edge-cache",
+            label: "edge-cache",
             rows: vec![opencode, claude_idle],
             diff_added: Some(560),
             diff_removed: Some(140),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: None,
             pr_state: Some(rimz::WorktreePrState::Open),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/network-check".to_owned(),
-            label: "network-check".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/network-check",
+            label: "network-check",
             rows: vec![pi_netcheck, claude_netcheck_paused, claude_netcheck],
             diff_added: Some(1680),
             diff_removed: Some(610),
             commits_ahead: Some(1),
             commits_behind: Some(1),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/browser-reach".to_owned(),
-            label: "browser-reach".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/browser-reach",
+            label: "browser-reach",
             rows: vec![codex_web, pi_web],
             diff_added: Some(940),
             diff_removed: Some(280),
             commits_ahead: Some(1),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
-            clean: Some(false),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Diverged),
             pr_state: Some(rimz::WorktreePrState::Closed),
             pr_number: Some(91),
+            ..WorktreeGroupSpec::default()
         },
-        rimz::SidebarWorktreeGroup {
-            key: "/srv/code/query-engine/.rimz/worktrees/stats-relay".to_owned(),
-            label: "stats-relay".to_owned(),
-            kind: rimz::SidebarWorktreeKind::Worktree,
-            status_counts: Vec::new(),
+        WorktreeGroupSpec {
+            key: "/srv/code/query-engine/.rimz/worktrees/stats-relay",
+            label: "stats-relay",
             rows: vec![opencode_stats, claude_stats_idle],
             diff_added: Some(0),
             diff_removed: Some(0),
             commits_ahead: Some(0),
             commits_behind: Some(0),
-            trunk: Some("main".to_owned()),
-            worktree_backed: false,
-            finished: false,
             clean: Some(true),
-            landed: Some(false),
             trunk_sync: Some(rimz::WorktreeTrunkSync::Pristine),
             pr_state: None,
             pr_number: None,
+            ..WorktreeGroupSpec::default()
         },
-    ];
+    ]
+    .into_iter()
+    .map(worktree_group)
+    .collect();
     snapshot.providers = vec![
         provider_panel(
             "claude",
