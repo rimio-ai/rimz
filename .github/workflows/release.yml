@@ -17,6 +17,8 @@ permissions:
   contents: write
   id-token: write
   packages: read
+  # The self-gate skip reads this commit's CI runs before deciding to re-test.
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -35,7 +37,8 @@ jobs:
     name: build and publish dist archives
     runs-on: ubuntu-latest
     environment: release
-    timeout-minutes: 30
+    # Covers the 30-minute CI-verdict wait budget plus the dist build.
+    timeout-minutes: 60
     # The rimz-ci image keeps the release container on the same warm baseline as
     # CI: Rust, gate plugins, cargo-vet, Python, tmux, Zellij, mold, zig,
     # cargo-zigbuild, rcodesign, and gh are baked once by ci-image.yml.
@@ -89,10 +92,62 @@ jobs:
           prefix-key: "rimz-release"
           cache-bin: false
 
-      # Self-gate: tag and manual-dispatch releases re-run the full gate on the
-      # release commit. The `workflow_run` path already passed CI, so it skips.
-      - name: Gate on CI
+      # Self-gate: tag and manual-dispatch releases ride on CI's verdict for
+      # the exact release commit. CI (checks + externals + full tests) is a
+      # strict superset of `cargo xtask ci` (checks + full tests), so a green
+      # CI run makes the re-test redundant. A CI run still in flight — the
+      # commit and its tag usually push together — is awaited rather than
+      # raced; a red CI refuses the release; a commit CI never saw (an old or
+      # mid-push commit) falls back to the full self-gate below. The
+      # `workflow_run` path already passed CI, so it skips unconditionally.
+      - name: Await CI verdict for this commit
         if: ${{ github.event_name != 'workflow_run' }}
+        id: ci_verdict
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse 'HEAD^{commit}')"
+          # Wait budget for an in-flight CI run; past it, self-gate instead.
+          deadline="$(( $(date +%s) + 30 * 60 ))"
+          while :; do
+            verdict="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${commit}&per_page=1" \
+              --jq 'if (.workflow_runs | length) == 0 then "none none"
+                    else .workflow_runs[0] | "\(.status) \(.conclusion // "pending")" end' \
+              || echo "unknown unknown")"
+            run_status="${verdict% *}"
+            conclusion="${verdict#* }"
+            case "$run_status" in
+              none|unknown)
+                echo "no CI verdict available for ${commit} (${run_status}); running the self-gate"
+                echo "green=false" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              completed)
+                if [ "$conclusion" = "success" ]; then
+                  echo "CI green on ${commit}; skipping the self-gate"
+                  echo "green=true" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "::error::CI concluded '${conclusion}' on ${commit} - a red commit never releases"
+                exit 1
+                ;;
+              *)
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "CI still ${run_status} on ${commit} past the wait budget; running the self-gate"
+                  echo "green=false" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "CI ${run_status} on ${commit}; waiting for its verdict"
+                sleep 30
+                ;;
+            esac
+          done
+
+      - name: Gate on CI
+        if: ${{ github.event_name != 'workflow_run' && steps.ci_verdict.outputs.green != 'true' }}
         run: |
           export PATH="/usr/local/cargo/bin:/usr/local/bin:$PATH"
           cargo xtask ci
