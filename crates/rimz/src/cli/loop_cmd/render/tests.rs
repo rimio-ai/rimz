@@ -526,11 +526,11 @@ fn run_status_names_check_skipped_outcomes() {
     assert_eq!(status.style, ui::palette::WARN);
 
     assert_eq!(
-        loop_result_style(LoopRunResult::SkippedWindow),
+        loop_result_mark(LoopRunResult::SkippedWindow).style,
         ui::palette::MUTED
     );
     assert_eq!(
-        loop_result_style(LoopRunResult::SurplusSkipped),
+        loop_result_mark(LoopRunResult::SurplusSkipped).style,
         ui::palette::MUTED
     );
 }
@@ -611,8 +611,9 @@ fn run_result_marks_and_static_labels_cover_every_variant() {
     ];
 
     for (result, glyph, style, label) in cases {
-        assert_eq!(loop_result_glyph(result), glyph, "{result:?}");
-        assert_eq!(loop_result_style(result), style, "{result:?}");
+        let mark = loop_result_mark(result);
+        assert_eq!(mark.glyph, glyph, "{result:?}");
+        assert_eq!(mark.style, style, "{result:?}");
         assert_eq!(result.label(), label, "{result:?}");
         if result != LoopRunResult::CheckSkipped {
             let status = run_status(&record(10, result));

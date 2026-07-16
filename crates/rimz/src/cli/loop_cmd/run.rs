@@ -362,13 +362,11 @@ fn write_manual_verdict(
     result: LoopRunResult,
     label: &str,
 ) -> std::io::Result<()> {
+    let mark = render::loop_result_mark(result);
     writeln!(
         out,
         "{}",
-        ui::paint(
-            render::loop_result_style(result),
-            &format!("{} {label}", render::loop_result_glyph(result))
-        )
+        ui::paint(mark.style, &format!("{} {label}", mark.glyph))
     )
 }
 
@@ -426,17 +424,14 @@ fn write_manual_run_summary(
         return write_manual_verdict(out, result, &label);
     }
 
-    let result_style = render::loop_result_style(outcome.result());
+    let result_mark = render::loop_result_mark(outcome.result());
     let result_label = manual_result_label(entry, outcome);
     write!(
         out,
         "{}",
         ui::paint(
-            result_style,
-            &format!(
-                "{} {result_label}",
-                render::loop_result_glyph(outcome.result())
-            )
+            result_mark.style,
+            &format!("{} {result_label}", result_mark.glyph)
         )
     )?;
     write!(out, " in {}", render::format_duration_ms(duration_ms))?;
@@ -514,7 +509,7 @@ fn write_scheduled_run_summary(
             outcome,
         );
     }
-    let result_style = render::loop_result_style(outcome.result());
+    let result_mark = render::loop_result_mark(outcome.result());
     let exit_label = outcome_exit_label(outcome);
     if is_spawn_failure(outcome.result()) {
         let mut label = outcome.result().label().to_owned();
@@ -525,7 +520,7 @@ fn write_scheduled_run_summary(
         write!(
             out,
             "loop `{name}`: {}",
-            ui::paint(result_style.bold(), &label)
+            ui::paint(result_mark.style.bold(), &label)
         )?;
         write!(out, " in {}", render::format_duration_ms(duration_ms))?;
         if let Some(spend) = render::spend_segments(
@@ -542,7 +537,7 @@ fn write_scheduled_run_summary(
         write!(
             out,
             "loop `{name}`: {}",
-            ui::paint(result_style, &result_label)
+            ui::paint(result_mark.style, &result_label)
         )?;
         if let Some(exit_label) = exit_label.as_deref() {
             write!(out, " {exit_label}")?;

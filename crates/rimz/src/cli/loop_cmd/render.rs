@@ -1429,10 +1429,8 @@ struct RunStatusDisplay {
 
 fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
     let label = match record.result {
-        LoopRunResult::Completed => "completed".to_owned(),
-        LoopRunResult::Delivered => "delivered".to_owned(),
         LoopRunResult::Failed => {
-            let mut label = "failed".to_owned();
+            let mut label = record.result.label().to_owned();
             if let Some(exit) = failure_exit_label(record) {
                 label.push_str(" (");
                 label.push_str(&exit);
@@ -1440,27 +1438,20 @@ fn run_status(record: &LoopRunRecord) -> RunStatusDisplay {
             }
             label
         }
-        LoopRunResult::VerifyFailed => "verify failed".to_owned(),
-        LoopRunResult::TimedOut => "timed out".to_owned(),
-        LoopRunResult::BudgetExceeded => "budget exceeded".to_owned(),
-        LoopRunResult::BudgetSkipped => "budget skipped".to_owned(),
-        LoopRunResult::SurplusSkipped => "surplus skipped".to_owned(),
-        LoopRunResult::Errored => "error".to_owned(),
-        LoopRunResult::SkippedWindow => "skipped".to_owned(),
-        LoopRunResult::Expired => "expired".to_owned(),
-        LoopRunResult::Canceled => "canceled".to_owned(),
-        LoopRunResult::TargetGone => "target gone".to_owned(),
-        LoopRunResult::Overlapped => "overlapped".to_owned(),
         LoopRunResult::CheckSkipped => check_skipped_label(record).to_owned(),
+        result => result.label().to_owned(),
     };
-    let (glyph, style) = match record.result {
-        LoopRunResult::CheckSkipped => check_skip_display(record.check.as_ref()),
-        result => (loop_result_glyph(result), loop_result_style(result)),
+    let mark = match record.result {
+        LoopRunResult::CheckSkipped => {
+            let (glyph, style) = check_skip_display(record.check.as_ref());
+            ResultMark { glyph, style }
+        }
+        result => loop_result_mark(result),
     };
     RunStatusDisplay {
-        glyph,
+        glyph: mark.glyph,
         label,
-        style,
+        style: mark.style,
     }
 }
 
@@ -1559,42 +1550,30 @@ fn failure_note_visible(result: LoopRunResult) -> bool {
     )
 }
 
-pub(super) fn loop_result_style(result: LoopRunResult) -> anstyle::Style {
-    match result {
-        LoopRunResult::Completed | LoopRunResult::Delivered => ui::palette::GOOD,
-        LoopRunResult::Failed
-        | LoopRunResult::VerifyFailed
-        | LoopRunResult::TimedOut
-        | LoopRunResult::BudgetExceeded
-        | LoopRunResult::Errored => ui::palette::ALARM,
-        LoopRunResult::Expired
-        | LoopRunResult::Canceled
-        | LoopRunResult::TargetGone
-        | LoopRunResult::Overlapped
-        | LoopRunResult::BudgetSkipped => ui::palette::WARN,
-        LoopRunResult::SkippedWindow
-        | LoopRunResult::CheckSkipped
-        | LoopRunResult::SurplusSkipped => ui::palette::MUTED,
-    }
+#[derive(Clone, Copy)]
+pub(super) struct ResultMark {
+    pub(super) glyph: &'static str,
+    pub(super) style: anstyle::Style,
 }
 
-pub(super) fn loop_result_glyph(result: LoopRunResult) -> &'static str {
-    match result {
-        LoopRunResult::Completed | LoopRunResult::Delivered => "✓",
+pub(super) fn loop_result_mark(result: LoopRunResult) -> ResultMark {
+    let (glyph, style) = match result {
+        LoopRunResult::Completed | LoopRunResult::Delivered => ("✓", ui::palette::GOOD),
         LoopRunResult::Failed
         | LoopRunResult::VerifyFailed
         | LoopRunResult::TimedOut
         | LoopRunResult::BudgetExceeded
-        | LoopRunResult::Errored => "✗",
+        | LoopRunResult::Errored => ("✗", ui::palette::ALARM),
         LoopRunResult::Expired
         | LoopRunResult::Canceled
         | LoopRunResult::TargetGone
         | LoopRunResult::Overlapped
-        | LoopRunResult::SkippedWindow
-        | LoopRunResult::BudgetSkipped
-        | LoopRunResult::SurplusSkipped
-        | LoopRunResult::CheckSkipped => "○",
-    }
+        | LoopRunResult::BudgetSkipped => ("○", ui::palette::WARN),
+        LoopRunResult::SkippedWindow
+        | LoopRunResult::CheckSkipped
+        | LoopRunResult::SurplusSkipped => ("○", ui::palette::MUTED),
+    };
+    ResultMark { glyph, style }
 }
 
 pub(super) fn format_duration_ms(ms: u64) -> String {
