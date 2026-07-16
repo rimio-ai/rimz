@@ -31,7 +31,6 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
             ..SpendParse::default()
         };
     };
-    let configured = configured_model();
     let mut state: KimiSpendState = resume
         .and_then(|cursor| cursor.state.clone())
         .and_then(|value| serde_json::from_value(value).ok())
@@ -68,20 +67,13 @@ pub fn parse(path: &Path, resume: Option<&SpendCursor>, prices: &PriceBook) -> S
                     .and_then(|request| request.model.as_deref())
                     .filter(|model| prices.price(model).is_some())
                     .map(ToOwned::to_owned)
-            })
-            .or_else(|| {
-                configured
-                    .as_deref()
-                    .filter(|model| prices.price(model).is_some())
-                    .map(ToOwned::to_owned)
             });
         let unknown_label = state
             .request
             .as_ref()
             .and_then(|request| request.model_alias.as_deref())
             .map(wire::normalize_model_alias)
-            .or_else(|| non_empty(&record.model))
-            .or_else(|| configured.as_deref().map(wire::normalize_model_alias));
+            .or_else(|| non_empty(&record.model));
         let Some(model_label) = model.clone().or(unknown_label) else {
             continue;
         };
