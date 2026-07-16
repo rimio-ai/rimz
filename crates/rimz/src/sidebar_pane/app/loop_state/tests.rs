@@ -943,7 +943,14 @@ fn settled_native_width_adjustment_records_retargets_and_broadcasts() {
     state.width_control.set_suspended(true);
 
     state
-        .on_resize(&config, &runtime, &mut fetch, &mut terminal, Instant::now())
+        .on_resize(
+            &config,
+            &runtime,
+            &mut fetch,
+            &mut terminal,
+            Some(80),
+            Instant::now(),
+        )
         .expect("settle native width adjustment");
 
     let recorded = std::num::NonZeroU16::new(80).expect("nonzero width");

@@ -461,7 +461,8 @@ impl LoopState {
             // backstop poll runs there too.
             Wakeup::Tick => Ok(LoopFlow::Continue),
             Wakeup::Resize => {
-                self.on_resize(config, runtime, fetch, terminal, anim_start)?;
+                let settled_width = terminal.size().map(|s| s.width).ok();
+                self.on_resize(config, runtime, fetch, terminal, settled_width, anim_start)?;
                 Ok(LoopFlow::Continue)
             }
             Wakeup::Reload => Ok(self.handle_reload(config, fetch)),
@@ -794,12 +795,16 @@ impl LoopState {
         Ok(())
     }
 
+    /// `settled_width` is the pane width the resize settled at, probed once at
+    /// the dispatch site; taking it as data keeps this path independent of the
+    /// ambient terminal and lets tests drive it deterministically.
     pub(super) fn on_resize(
         &mut self,
         config: &ServeConfig,
         runtime: &RuntimePaths,
         fetch: &mut FetchDispatcher,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        settled_width: Option<u16>,
         anim_start: Instant,
     ) -> Result<()> {
         self.paint.refresh_caps(config.mux, &config.session_name);
@@ -808,7 +813,6 @@ impl LoopState {
         // flash. Hold the paint until the next fresh pane-frame fold carries
         // the sibling count. Before that first sibling observation, the grow is
         // startup sizing and the first frame should paint immediately.
-        let settled_width = terminal.size().map(|s| s.width).ok();
         let mut target_recorded = false;
         if let Some(pending) = self.width_adjust_pending {
             if pending.elapsed() <= WIDTH_ADJUST_PENDING_TIMEOUT
