@@ -24,9 +24,9 @@
 //! handler pi awaits. The `@juicesharp/rpiv-ask-user-question` extension draws
 //! the `ask_user_question` questionnaire in pi's pane; RimZ records that one
 //! blocking tool as a native question and returns neutral so pi can open its
-//! UI. Subagents and background tasks stay declared off
-//! (`docs/externals/agent-adapter/pi-reference.md`) and the absences render
-//! deliberately.
+//! UI. The managed extension also normalizes async child runs from the
+//! `pi-subagents` and `@tintinweb/pi-subagents` event buses into shared child
+//! lifecycle rows. Background tasks stay declared off.
 
 pub(crate) mod account;
 mod ask;
@@ -56,8 +56,8 @@ use super::observation::payload_context_pct;
 use super::pricing::PriceBook;
 use super::{
     AgentAdapter, AgentLifecycleObservation, AnswerPlanErr, AnswerStep, AskReply, ClassifiedHook,
-    Result, TranscriptMessage, agent_config_path, classify_agent_hook, non_empty_trimmed,
-    optional_payload_string, sanitize_user_prompt,
+    Result, SubagentIdentity, TranscriptMessage, agent_config_path, classify_agent_hook,
+    non_empty_trimmed, optional_payload_string, resolve_subagent_identity, sanitize_user_prompt,
 };
 use crate::ids::AgentSessionId;
 use crate::transcript::{AskAnswer, AskQuestion};
@@ -167,8 +167,9 @@ const PI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
     compaction: ConcernCoverage::Wired {
         via: "session_before_compact/session_compact",
     },
-    subagents: ConcernCoverage::Unsupported {
-        reason: "no subagent hook surface",
+    subagents: ConcernCoverage::Partial {
+        via: "subagent extension bus events bridged by the rimz extension",
+        gap: "nicobailon foreground (non-async) runs surface only as the parent's running tool call",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",
@@ -216,11 +217,11 @@ const PI_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
         event: "tool_execution_end",
     },
     awaiting_input: HookCoverage::Native { event: "tool_call" },
-    subagent_started: HookCoverage::Absent {
-        reason: "pi has no subagents",
+    subagent_started: HookCoverage::Native {
+        event: "subagent_started",
     },
-    subagent_stopped: HookCoverage::Absent {
-        reason: "pi has no subagents",
+    subagent_stopped: HookCoverage::Native {
+        event: "subagent_stopped",
     },
     compacting: HookCoverage::Native {
         event: "session_before_compact",
@@ -259,6 +260,8 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "session_before_compact",
     "session_compact",
     "session_shutdown",
+    "subagent_started",
+    "subagent_stopped",
 ];
 
 /// Everything the extension wires, for the install/uninstall reports: the
@@ -278,6 +281,8 @@ const WIRED_EVENTS: &[&str] = &[
     "session_before_compact",
     "session_compact",
     "session_shutdown",
+    "subagent_started",
+    "subagent_stopped",
     "tool_call",
 ];
 
@@ -348,6 +353,32 @@ impl AgentAdapter for PiAdapter {
             ClassificationSample::new(
                 "session_start",
                 json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "subagent_started",
+                json!({
+                    "session_id": "sess-1",
+                    "cwd": "/work/project",
+                    "subagent_id": "run-1#0",
+                    "subagent_label": "scout",
+                    "subagent_source": "pi-subagents"
+                }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "subagent_stopped",
+                json!({
+                    "session_id": "sess-1",
+                    "cwd": "/work/project",
+                    "subagent_id": "run-1#0",
+                    "subagent_label": "scout",
+                    "subagent_source": "pi-subagents",
+                    "errored": true,
+                    "total_tokens": 1200
+                }),
                 AgentHookClass::Lifecycle,
                 None,
             ),
@@ -488,6 +519,41 @@ impl AgentAdapter for PiAdapter {
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
+        if matches!(event_name, "subagent_started" | "subagent_stopped") {
+            let signal = match event_name {
+                "subagent_started" => LifecycleSignal::SubagentStarted,
+                "subagent_stopped" => LifecycleSignal::SubagentStopped {
+                    errored: payload
+                        .get("errored")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                },
+                _ => return None,
+            };
+            let (agent_id, parent_agent_id) = match resolve_subagent_identity(
+                self.descriptor().kind,
+                event_name,
+                payload.get("subagent_id").and_then(Value::as_str),
+                payload.get("session_id").and_then(Value::as_str),
+                payload,
+            ) {
+                SubagentIdentity::Resolved {
+                    agent_id,
+                    parent_agent_id,
+                } => (agent_id, parent_agent_id),
+                SubagentIdentity::Quarantined => return None,
+            };
+            let mut observation = AgentLifecycleObservation::new(Some(agent_id), signal)
+                .with_worktree_from_payload(payload);
+            observation.parent_agent_id = Some(parent_agent_id);
+            observation.task = optional_payload_string(payload, &["subagent_label"])
+                .and_then(|value| non_empty_trimmed(&value));
+            if event_name == "subagent_stopped" {
+                observation.total_tokens = payload.get("total_tokens").and_then(Value::as_u64);
+            }
+            return Some(observation);
+        }
+
         let parsed = payloads::parse_payload(payload);
         // The status decision lives in the shared `lifecycle::step` table —
         // here the adapter only names the intent. The native-event → signal
@@ -548,8 +614,6 @@ impl AgentAdapter for PiAdapter {
             "session_shutdown" => LifecycleSignal::Ended,
             _ => return None,
         };
-        // No subagents: every pi event keys on its own session id, no parent
-        // link, no quarantine path.
         let agent_id = optional_payload_string(payload, &["session_id"]).map(AgentSessionId::from);
         let mut observation =
             AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);

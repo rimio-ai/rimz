@@ -20,6 +20,9 @@ const costBySession = new Map();
 const verdictBySession = new Map();
 const nameBySession = new Map();
 const messagePushBySession = new Map();
+const runAgents = new Map();
+const runLabels = new Map();
+let lastSessionId;
 let latestWindows = [];
 
 const versionAtLeast = (version, floor) => {
@@ -164,6 +167,7 @@ const updateWindows = (headers) => {
 };
 
 export default function rimz(pi) {
+  const busUnsubscribers = [];
   const thinkingLevel = () => {
     try {
       return pi.getThinkingLevel?.();
@@ -180,6 +184,7 @@ export default function rimz(pi) {
   const envelope = (event, ctx, fields) => {
     const usage = ctx?.getContextUsage?.();
     const id = sessionId(ctx);
+    if (id) lastSessionId = id;
     return {
       hook_event_name: event,
       session_id: id,
@@ -217,6 +222,31 @@ export default function rimz(pi) {
       // Enrichment, never correctness: a missing rimz binary must not break pi.
     }
   };
+
+  const feedSubagent = (event, session, cwd, fields) => {
+    try {
+      const child = spawnRimz("ignore");
+      child.stdin.end(
+        JSON.stringify({
+          hook_event_name: event,
+          session_id: session,
+          cwd: cwd ?? process.cwd(),
+          ...fields,
+        }),
+      );
+    } catch {
+      // Enrichment, never correctness: a missing rimz binary must not break pi.
+    }
+  };
+
+  const text = (value) =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined;
+  const label = (...candidates) => candidates.map(text).find(Boolean)?.slice(0, 80);
+
+  const nicobailonRunErrored = (data, results) =>
+    data?.state === "paused"
+      ? false
+      : data?.success === false || results.some((result) => result?.status === "failed");
 
   const messageSignature = (ctx) => {
     const id = sessionId(ctx);
@@ -344,6 +374,13 @@ export default function rimz(pi) {
     }),
   );
   pi.on("session_shutdown", (ev, ctx) => {
+    for (const unsubscribe of busUnsubscribers.splice(0)) {
+      try {
+        unsubscribe();
+      } catch {
+        // Cleanup is best-effort; shutdown must continue.
+      }
+    }
     // A /reload tears down and re-registers the SAME session id; both
     // children are fire-and-forget, so a tombstone racing the re-register
     // could drop the fresh row. Skip the tombstone — the reloaded
@@ -361,6 +398,111 @@ export default function rimz(pi) {
     latestWindows = [];
     feed("session_shutdown", ctx, { reason: ev?.reason });
   });
+
+  busUnsubscribers.push(pi.events.on("subagent:async-started", (data) => {
+    const runId = text(data?.id);
+    const parentId = lastSessionId ?? text(data?.sessionId);
+    if (!runId || !parentId) return;
+    if (data?.mode === "parallel") {
+      const agents = Array.isArray(data?.agents) ? data.agents : [];
+      runAgents.set(runId, agents.length);
+      runLabels.delete(runId);
+      agents.forEach((agent, index) => {
+        const agentLabel = label(agent);
+        if (!agentLabel) return;
+        feedSubagent("subagent_started", parentId, data?.cwd, {
+          subagent_id: `${runId}#${index}`,
+          subagent_label: agentLabel,
+          subagent_source: "pi-subagents",
+        });
+      });
+      return;
+    }
+
+    runAgents.delete(runId);
+    const chain = Array.isArray(data?.chain) ? data.chain.map((item) => label(item)).filter(Boolean) : [];
+    const runLabel = label(data?.mode === "chain" ? chain.join(" → ") : undefined, data?.agent);
+    if (!runLabel) return;
+    runLabels.set(runId, runLabel);
+    feedSubagent("subagent_started", parentId, data?.cwd, {
+      subagent_id: runId,
+      subagent_label: runLabel,
+      subagent_source: "pi-subagents",
+    });
+  }));
+
+  busUnsubscribers.push(pi.events.on("subagent:async-complete", (data) => {
+    const runId = text(data?.runId) ?? text(data?.id);
+    const parentId = lastSessionId ?? text(data?.sessionId);
+    if (!runId || !parentId) return;
+    const results = Array.isArray(data?.results) ? data.results : [];
+    const runErrored = nicobailonRunErrored(data, results);
+    if (data?.mode === "parallel") {
+      const byIndex = new Map();
+      results.forEach((result, fallbackIndex) => {
+        const value = result?.index;
+        const index = value == null ? fallbackIndex : Number(value);
+        if (Number.isInteger(index) && index >= 0) byIndex.set(index, result);
+      });
+      const rememberedCount = runAgents.get(runId);
+      const indexes = rememberedCount == null
+        ? [...byIndex.keys()].sort((left, right) => left - right)
+        : Array.from({ length: rememberedCount }, (_, index) => index);
+      indexes.forEach((index) => {
+        const result = byIndex.get(index);
+        feedSubagent("subagent_stopped", parentId, data?.cwd, {
+          subagent_id: `${runId}#${index}`,
+          subagent_label: label(result?.agent, data?.agents?.[index], data?.agent, "subagent"),
+          subagent_source: "pi-subagents",
+          errored: data?.state === "paused" ? false : result ? result.status === "failed" : runErrored,
+        });
+      });
+      runAgents.delete(runId);
+      runLabels.delete(runId);
+      return;
+    }
+
+    const chain = Array.isArray(data?.chain) ? data.chain.map((item) => label(item)).filter(Boolean) : [];
+    feedSubagent("subagent_stopped", parentId, data?.cwd, {
+      subagent_id: runId,
+      subagent_label: label(runLabels.get(runId), data?.mode === "chain" ? chain.join(" → ") : undefined, data?.agent, results[0]?.agent, "subagent"),
+      subagent_source: "pi-subagents",
+      errored: runErrored,
+    });
+    runAgents.delete(runId);
+    runLabels.delete(runId);
+  }));
+
+  busUnsubscribers.push(pi.events.on("subagents:started", (data) => {
+    const childId = text(data?.id);
+    const childLabel = label(
+      [label(data?.type), label(data?.description)].filter(Boolean).join(": "),
+    );
+    if (!childId || !childLabel || !lastSessionId) return;
+    feedSubagent("subagent_started", lastSessionId, undefined, {
+      subagent_id: childId,
+      subagent_label: childLabel,
+      subagent_source: "tintinweb-subagents",
+    });
+  }));
+
+  for (const event of ["subagents:completed", "subagents:failed"]) {
+    busUnsubscribers.push(pi.events.on(event, (data) => {
+      const childId = text(data?.id);
+      const childLabel = label(
+        [label(data?.type), label(data?.description)].filter(Boolean).join(": "),
+      );
+      if (!childId || !childLabel || !lastSessionId) return;
+      const totalTokens = numberMaybe(data?.tokens?.total);
+      feedSubagent("subagent_stopped", lastSessionId, undefined, {
+        subagent_id: childId,
+        subagent_label: childLabel,
+        subagent_source: "tintinweb-subagents",
+        errored: event === "subagents:failed",
+        total_tokens: totalTokens == null ? undefined : Math.max(0, Math.round(totalTokens)),
+      });
+    }));
+  }
 
   // The blocking pre-tool gate. Pi awaits this handler, so rimz returns the
   // neutral no-op immediately. The ask_user_question tool is classified as a

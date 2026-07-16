@@ -417,21 +417,22 @@ mod tests {
 
         let pi = agent_cells(&matrix, "pi");
         assert_eq!(count(&pi, MatrixCellState::Ok), 10);
-        assert_eq!(count(&pi, MatrixCellState::Partial), 1);
-        assert_eq!(count(&pi, MatrixCellState::Absent), 5);
+        assert_eq!(count(&pi, MatrixCellState::Partial), 2);
+        assert_eq!(count(&pi, MatrixCellState::Absent), 4);
         // Pi's `agent_settled` marks final idle, while the stall window
         // reconstructs the missing idle-timeout nudge — partial, like Codex,
-        // not absent. `live$` is wired: the extension pushes a running dollar
-        // reconciled to the authoritative session spend sum every turn, so the
-        // figure is visually full. Rich context is wired through immediate
-        // value-changing envelopes and throttled streaming updates.
+        // not absent. Async extension subagents are partial because nicobailon
+        // foreground runs expose no bus events. `live$` is wired: the extension
+        // pushes a running dollar reconciled to the authoritative session spend
+        // sum every turn. Rich context is wired through immediate value-changing
+        // envelopes and throttled streaming updates.
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Partial),
-            ["idle"]
+            ["sub", "idle"]
         );
         assert_eq!(
             agent_labels(&matrix, "pi", MatrixCellState::Absent),
-            ["perm", "plan", "sub", "bg", "remote"]
+            ["perm", "plan", "bg", "remote"]
         );
 
         let cursor = agent_cells(&matrix, "cursor");
@@ -561,7 +562,7 @@ mod tests {
                 MatrixCellState::Absent,  // amp
                 MatrixCellState::Absent,  // copilot
                 MatrixCellState::Partial, // kimi
-                MatrixCellState::Absent,  // pi
+                MatrixCellState::Ok,      // pi
                 MatrixCellState::Ok,      // opencode
                 MatrixCellState::Absent,  // antigravity
                 MatrixCellState::Absent,  // cursor

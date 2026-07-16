@@ -863,6 +863,72 @@ fn pi_questionnaire_lifecycle_opens_only_with_ui_and_clears_on_completion() {
 }
 
 #[test]
+fn pi_observes_normalized_subagent_lifecycle() {
+    let started = PiAdapter
+        .observe_lifecycle(
+            "subagent_started",
+            &json!({
+                "session_id": "parent-1",
+                "cwd": "/work/project",
+                "subagent_id": "run-7#1",
+                "subagent_label": " reviewer ",
+                "subagent_source": "pi-subagents"
+            }),
+        )
+        .expect("started observation");
+    assert_eq!(started.agent_id.as_deref(), Some("run-7#1"));
+    assert_eq!(started.parent_agent_id.as_deref(), Some("parent-1"));
+    assert_eq!(started.signal, LifecycleSignal::SubagentStarted);
+    assert_eq!(started.task.as_deref(), Some("reviewer"));
+    assert_eq!(started.worktree_path.as_deref(), Some("/work/project"));
+    assert_eq!(started.total_tokens, None);
+
+    let stopped = PiAdapter
+        .observe_lifecycle(
+            "subagent_stopped",
+            &json!({
+                "session_id": "parent-1",
+                "cwd": "/work/project",
+                "subagent_id": "run-7#1",
+                "subagent_label": "reviewer",
+                "subagent_source": "tintinweb-subagents",
+                "errored": true,
+                "total_tokens": 1234
+            }),
+        )
+        .expect("stopped observation");
+    assert_eq!(stopped.agent_id.as_deref(), Some("run-7#1"));
+    assert_eq!(stopped.parent_agent_id.as_deref(), Some("parent-1"));
+    assert_eq!(
+        stopped.signal,
+        LifecycleSignal::SubagentStopped { errored: true }
+    );
+    assert_eq!(stopped.task.as_deref(), Some("reviewer"));
+    assert_eq!(stopped.total_tokens, Some(1234));
+}
+
+#[test]
+fn pi_quarantines_malformed_subagent_identity() {
+    for payload in [
+        json!({
+            "session_id": "parent-1",
+            "subagent_label": "missing child"
+        }),
+        json!({
+            "session_id": "same-id",
+            "subagent_id": "same-id",
+            "subagent_label": "same child and parent"
+        }),
+    ] {
+        assert_eq!(
+            PiAdapter.observe_lifecycle("subagent_started", &payload),
+            None,
+            "payload {payload}"
+        );
+    }
+}
+
+#[test]
 fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
     for (tool_name, expected) in [
         (
@@ -1056,6 +1122,9 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains("compaction_reason"));
     assert!(EXTENSION_SOURCE.contains("compaction_will_retry"));
     assert!(EXTENSION_SOURCE.contains("has_ui: ctx?.hasUI === true"));
+    assert!(EXTENSION_SOURCE.contains("lastSessionId ?? text(data?.sessionId)"));
+    assert!(EXTENSION_SOURCE.contains("busUnsubscribers.splice(0)"));
+    assert!(EXTENSION_SOURCE.contains("unsubscribe();"));
     assert!(EXTENSION_SOURCE.contains("tool_details:"));
     assert!(EXTENSION_SOURCE.contains("ev?.result?.details"));
     assert!(
@@ -1063,9 +1132,25 @@ fn extension_source_wires_every_event() {
         "agent_end's last message is the final turn_end usage and must not add cost again"
     );
     for event in WIRED_EVENTS {
+        let registered = match *event {
+            "subagent_started" | "subagent_stopped" => {
+                EXTENSION_SOURCE.contains(&format!("feedSubagent(\"{event}\""))
+            }
+            _ => EXTENSION_SOURCE.contains(&format!("pi.on(\"{event}\"")),
+        };
+        assert!(registered, "extension registers {event}",);
+    }
+    for event in [
+        "subagent:async-started",
+        "subagent:async-complete",
+        "subagents:started",
+        "subagents:completed",
+        "subagents:failed",
+    ] {
         assert!(
-            EXTENSION_SOURCE.contains(&format!("pi.on(\"{event}\"")),
-            "extension registers {event}",
+            EXTENSION_SOURCE.contains(&format!("pi.events.on(\"{event}\""))
+                || EXTENSION_SOURCE.contains(&format!("\"{event}\"")),
+            "extension subscribes to {event}",
         );
     }
     assert!(EXTENSION_SOURCE.contains("block: true"));

@@ -556,8 +556,8 @@ fn assert_coverage_honest(
     let descriptor = adapter.descriptor();
     let kind = descriptor.kind;
     // `Partial` and `Unsupported` generally assert no native signal carries
-    // the concern. Compaction is the multi-signal exception: a partial can
-    // combine a native opening edge with a derived close, cross-checked below.
+    // the concern. Compaction and subagents are the exceptions: a partial can
+    // expose only part of their multi-signal or multi-provider surface.
     let wired = coverage.is_wired();
     match concern {
         IntegrationConcern::TurnLifecycle => assert_eq!(
@@ -612,8 +612,19 @@ fn assert_coverage_honest(
             );
         }
         IntegrationConcern::Subagents => {
+            let observes_natively = [
+                LifecycleSignalKind::SubagentStarted,
+                LifecycleSignalKind::SubagentStopped,
+            ]
+            .into_iter()
+            .any(|signal| {
+                matches!(
+                    hook_coverage_for(adapter, signal),
+                    HookCoverage::Native { .. }
+                )
+            });
             assert_eq!(
-                wired,
+                observes_natively,
                 observes_subagent_lifecycle(adapter, samples),
                 "{kind} Subagents coverage must match observed subagent lifecycle samples"
             );
@@ -739,7 +750,10 @@ fn assert_hook_matches_concern(
     let kind = adapter.descriptor().kind;
     let hook = hook_coverage_for(adapter, signal_kind);
     let concern_coverage = coverage_for(adapter, concern);
-    let matches = if concern == IntegrationConcern::Compaction {
+    let matches = if matches!(
+        concern,
+        IntegrationConcern::Compaction | IntegrationConcern::Subagents
+    ) {
         matches!(
             (hook, concern_coverage),
             (
@@ -922,7 +936,7 @@ fn observes_subagent_lifecycle(
 ) -> bool {
     samples.iter().any(|sample| {
         sample.expected.class == AgentHookClass::Lifecycle
-            && sample.event_name.contains("Subagent")
+            && sample.event_name.to_ascii_lowercase().contains("subagent")
             && adapter
                 .observe_lifecycle(sample.event_name, &sample.payload)
                 .is_some_and(|obs| {

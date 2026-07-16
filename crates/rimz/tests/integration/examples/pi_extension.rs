@@ -84,8 +84,15 @@ const absentEvent = {};
 
 const {{ default: rimz }} = await import({});
 const handlers = new Map();
+const busHandlers = new Map();
 const pi = {{
   on: (event, handler) => handlers.set(event, handler),
+  events: {{
+    on: (event, handler) => {{
+      busHandlers.set(event, handler);
+      return () => busHandlers.delete(event);
+    }},
+  }},
   getThinkingLevel: () => "medium",
 }};
 const ctx = {{
@@ -116,7 +123,38 @@ handlers.get("agent_end")({{
     usage: {{ totalTokens: 20, cost: {{ total: 0.25 }} }},
   }}],
 }}, ctx);
+busHandlers.get("subagent:async-started")({{
+  id: "run-1",
+  sessionId: "/sessions/parent/session.jsonl",
+  mode: "parallel",
+  agents: ["scout", "reviewer"],
+  cwd: "/repo",
+}});
+busHandlers.get("subagent:async-complete")({{
+  runId: "run-1",
+  sessionId: "/sessions/parent/session.jsonl",
+  mode: "parallel",
+  results: [
+    {{ index: 0, agent: "scout", status: "completed" }},
+    {{ index: 1, agent: "reviewer", status: "failed" }},
+  ],
+  cwd: "/repo",
+}});
+busHandlers.get("subagents:started")({{
+  id: "tint-1",
+  type: "general-purpose",
+  description: "Check the parser",
+}});
+busHandlers.get("subagents:completed")({{
+  id: "tint-1",
+  type: "general-purpose",
+  description: "Check the parser",
+  tokens: {{ total: 77 }},
+}});
 handlers.get("session_shutdown")({{ reason: "quit" }}, ctx);
+if (busHandlers.size !== 0) {{
+  throw new Error(`shutdown kept ${{busHandlers.size}} bus subscriptions`);
+}}
 
 const readPayloads = async () => {{
   try {{
@@ -130,11 +168,11 @@ const readPayloads = async () => {{
 let payloads = [];
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
-  if (payloads.length >= 3) break;
+  if (payloads.length >= 9) break;
   await new Promise((resolve) => setTimeout(resolve, 20));
 }}
-if (payloads.length < 3) {{
-  throw new Error(`expected 3 forwarded payloads, got ${{payloads.length}}`);
+if (payloads.length < 9) {{
+  throw new Error(`expected 9 forwarded payloads, got ${{payloads.length}}`);
 }}
 const byEvent = Object.fromEntries(payloads.map((payload) => [payload.hook_event_name, payload]));
 const boundary = byEvent[boundaryEvent];
@@ -152,6 +190,24 @@ if (boundary.input_tokens !== 10 || boundary.cache_write_input_tokens !== 2) {{
 }}
 if ("total_cost_usd" in byEvent.session_shutdown) {{
   throw new Error(`shutdown kept cost: ${{JSON.stringify(byEvent.session_shutdown)}}`);
+}}
+const childStarts = payloads.filter((payload) => payload.hook_event_name === "subagent_started");
+const childStops = payloads.filter((payload) => payload.hook_event_name === "subagent_stopped");
+if (childStarts.length !== 3 || childStops.length !== 3) {{
+  throw new Error(`unexpected child fanout: ${{JSON.stringify({{ childStarts, childStops }})}}`);
+}}
+for (const child of [...childStarts, ...childStops]) {{
+  if (child.session_id !== "sess-1" || "model" in child || "total_cost_usd" in child) {{
+    throw new Error(`child payload is not lean or has the wrong parent: ${{JSON.stringify(child)}}`);
+  }}
+}}
+const reviewer = childStops.find((child) => child.subagent_id === "run-1#1");
+if (reviewer?.subagent_label !== "reviewer" || reviewer.errored !== true) {{
+  throw new Error(`parallel failure mapping was ${{JSON.stringify(reviewer)}}`);
+}}
+const tint = childStops.find((child) => child.subagent_id === "tint-1");
+if (tint?.subagent_label !== "general-purpose: Check the parser" || tint.total_tokens !== 77) {{
+  throw new Error(`tintinweb mapping was ${{JSON.stringify(tint)}}`);
 }}
 "#,
             serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),

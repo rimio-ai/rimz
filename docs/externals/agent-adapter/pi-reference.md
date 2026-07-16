@@ -25,6 +25,8 @@ Re-fetch these pages to refresh this mirror. Each `pi.dev/docs/latest/<page>` pa
 | Changelog | <https://github.com/earendil-works/pi/blob/v0.80.6/packages/coding-agent/CHANGELOG.md> |
 | Extension type definitions | npm [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) |
 | Structured questionnaire extension | npm [`@juicesharp/rpiv-ask-user-question` 1.20.0](https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question/v/1.20.0); [package source](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-ask-user-question) |
+| Async workflow subagents | [`pi-subagents` 0.34.0](https://github.com/nicobailon/pi-subagents/tree/v0.34.0) |
+| In-process subagents | [`@tintinweb/pi-subagents` 0.14.1](https://github.com/tintinweb/pi-subagents/tree/v0.14.1) |
 
 ## Integration surface — in-process extensions
 
@@ -128,6 +130,14 @@ RimZ consumes the questionnaire tool wire from [`@juicesharp/rpiv-ask-user-quest
 The tool finishes through `tool_execution_end.result = { content, details }`. `details` is `{ answers, cancelled, error? }`; each answer is `{ questionIndex, question, kind, answer, selected?, notes?, preview? }`, where `kind` is `option`, `custom`, `chat`, or `multi`, and `selected` carries multi-select labels. `cancelled: true` covers Esc/decline; headless `ctx.hasUI === false` returns `error: "no_ui"` with no answers. RimZ forwards `result.details` only for this tool.
 
 Focus starts at option zero and every automatic tab switch resets option, input, and submit focus to zero. Single-select Enter commits immediately for one question or advances to the next question; the appended Type something. row exists only when the question is neither multi-select nor preview-carrying. Multi-select uses Space to toggle options and Enter on the appended Next row to commit. Multiple questions add a final Submit tab whose initial choice is Submit.
+
+### `pi-subagents` async workflow lifecycle
+
+RimZ consumes the public bus events from [`pi-subagents` 0.34.0](https://github.com/nicobailon/pi-subagents/tree/v0.34.0). `subagent:async-started` carries `id`, parent `sessionId`, `mode`, `agent`, flattened `agents`, `chain`, `task`, and `cwd`; `subagent:async-complete` carries `runId` or `id`, parent `sessionId`, `mode`, `success`, `state`, `cwd`, and normalized `results[]` entries with `agent`, `status`, and `index`. The native `sessionId` is the full parent session-file path, so RimZ uses the current UUID cached by its own session handler for the normalized parent link and retains the path string only as a last-resort fallback. Foreground runs emit no matching lifecycle event. RimZ maps `parallel` to one normalized child per result index and maps `single` or `chain` to one child per run; nested children and control events stay outside the wire.
+
+### `@tintinweb/pi-subagents` per-agent lifecycle
+
+RimZ consumes the public bus events from [`@tintinweb/pi-subagents` 0.14.1](https://github.com/tintinweb/pi-subagents/tree/v0.14.1). `subagents:started` carries `id`, `type`, and `description`; `subagents:completed` and `subagents:failed` add terminal `status`, result or error detail, tool-use count, duration, and optional `tokens.{input,output,total}`. These bus payloads omit the parent session, so the RimZ extension associates them with the latest session id observed in the same Pi process and forwards only the child identity, label, outcome, optional total tokens, source tag, and cwd.
 
 ## Session JSONL
 
