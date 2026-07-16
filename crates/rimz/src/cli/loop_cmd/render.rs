@@ -739,13 +739,41 @@ fn schedule_style<T, E>(parsed: std::result::Result<&T, &E>) -> anstyle::Style {
     }
 }
 
+struct ActionWords<'a> {
+    subject: &'a str,
+    base: &'static str,
+    third_person: &'static str,
+    progressive: &'static str,
+    untouched: &'static str,
+}
+
+fn action_words(entry: &TaskEntry) -> Option<ActionWords<'_>> {
+    match TaskAction::from_entry("display", entry).ok()? {
+        TaskAction::Spawn(subject) => Some(ActionWords {
+            subject,
+            base: "start",
+            third_person: "starts",
+            progressive: "starting",
+            untouched: "not started",
+        }),
+        TaskAction::Deliver(target) => Some(ActionWords {
+            subject: &target.handle,
+            base: "wake",
+            third_person: "wakes",
+            progressive: "waking",
+            untouched: "not woken",
+        }),
+        TaskAction::CheckOnly => None,
+    }
+}
+
 fn check_summary(entry: &TaskEntry) -> Option<String> {
     let check = entry.check.as_ref()?;
-    if entry.agent.is_some() || entry.wake.is_some() {
+    if let Some(action) = action_words(entry) {
         Some(format!(
             "{check} ({} {} on {})",
-            action_third_person_verb(entry),
-            task_subject(entry),
+            action.third_person,
+            action.subject,
             check_on_label(entry.on.unwrap_or_default())
         ))
     } else {
@@ -754,15 +782,7 @@ fn check_summary(entry: &TaskEntry) -> Option<String> {
 }
 
 pub(super) fn task_run_rule(entry: &TaskEntry) -> String {
-    let action = if entry.agent.is_some() || entry.wake.is_some() {
-        Some(format!(
-            "{} {}",
-            action_base_verb(entry),
-            task_subject(entry)
-        ))
-    } else {
-        None
-    };
+    let action = action_words(entry).map(|words| format!("{} {}", words.base, words.subject));
     let mut rule = match (entry.check.is_some(), action) {
         (true, Some(action)) => format!(
             "check, then {action} on {}",
@@ -779,42 +799,24 @@ pub(super) fn task_run_rule(entry: &TaskEntry) -> String {
     rule
 }
 
-pub(super) fn action_progressive_verb(entry: &TaskEntry) -> &'static str {
-    if entry.agent.is_some() {
-        "starting"
-    } else {
-        "waking"
-    }
+pub(super) fn action_progressive_phrase(entry: &TaskEntry) -> String {
+    action_words(entry)
+        .map(|words| format!("{} {}", words.progressive, words.subject))
+        .unwrap_or_else(|| "running <invalid>".to_owned())
 }
 
 pub(super) fn check_skip_decision(entry: &TaskEntry) -> String {
-    let subject = task_subject(entry);
-    let untouched = if entry.agent.is_some() {
-        "not started"
-    } else {
-        "not woken"
+    let Some(action) = action_words(entry) else {
+        return "<invalid> unchanged".to_owned();
     };
     let condition = match entry.on.unwrap_or_default() {
         CheckOn::Fail => "fails",
         CheckOn::Success => "passes",
     };
-    format!("{subject} {untouched}; fires when the check {condition}")
-}
-
-fn action_base_verb(entry: &TaskEntry) -> &'static str {
-    if entry.agent.is_some() {
-        "start"
-    } else {
-        "wake"
-    }
-}
-
-fn action_third_person_verb(entry: &TaskEntry) -> &'static str {
-    if entry.agent.is_some() {
-        "starts"
-    } else {
-        "wakes"
-    }
+    format!(
+        "{} {}; fires when the check {condition}",
+        action.subject, action.untouched
+    )
 }
 
 fn check_on_label(on: CheckOn) -> &'static str {
@@ -934,7 +936,7 @@ fn display_path(path: &Path) -> String {
 }
 
 fn has_agent_runs_section(entry: &TaskEntry) -> bool {
-    entry.check.is_some() && (entry.agent.is_some() || entry.wake.is_some())
+    entry.check.is_some() && action_words(entry).is_some()
 }
 
 pub(super) fn show(args: ShowArgs, globals: &GlobalFlags) -> Result<()> {

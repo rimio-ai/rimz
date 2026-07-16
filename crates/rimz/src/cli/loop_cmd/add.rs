@@ -15,16 +15,15 @@ enum AddTaskAction {
     },
     Deliver {
         target: TaskTarget,
-        resolved: Option<ResolvedTaskSpec>,
     },
     CheckOnly,
 }
 
 impl AddTaskAction {
-    fn kind(&self) -> Option<&str> {
+    fn provider_kind(&self) -> Option<&str> {
         match self {
             Self::Spawn { resolved, .. } => Some(resolved.kind()),
-            Self::Deliver { target, .. } => Some(&target.kind),
+            Self::Deliver { target } => Some(&target.kind),
             Self::CheckOnly => None,
         }
     }
@@ -33,15 +32,15 @@ impl AddTaskAction {
 // ---- add / remove -----------------------------------------------------------
 
 pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
-    validate_add_args(&args)?;
+    let action_kind = validate_add_args(&args)?;
     let workspace = resolve_add_workspace(&args)?;
     let project_root = workspace.project_root.clone();
-    let action = resolve_add_action(&args, &workspace)?;
-    let action_kind = action.kind().map(ToOwned::to_owned);
+    let action = resolve_add_action(&args, &workspace, action_kind)?;
+    let provider_kind = action.provider_kind().map(ToOwned::to_owned);
     let (entry, resolved_for_preflight) = build_task_entry(&args, action, &project_root)?;
     // Validate the firing time before writing, so a bad `--at`/`--every` fails here.
     let parsed = schedule::parse_schedule(&args.name, &entry)?;
-    if entry.agent.is_some() || entry.wake.is_some() {
+    if action_kind.has_effect() {
         preflight_entry(&args.name, &entry, resolved_for_preflight.as_ref())?;
     }
     let catalog = TaskCatalog::load(Some(&project_root))?;
@@ -64,7 +63,7 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
         &args.name,
         &entry,
         &parsed,
-        action_kind.as_deref(),
+        provider_kind.as_deref(),
     )?;
     writeln!(
         out,
@@ -77,50 +76,67 @@ pub(super) fn add(args: AddArgs, _globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
-fn validate_add_args(args: &AddArgs) -> Result<()> {
+fn validate_add_args(args: &AddArgs) -> Result<TaskActionKind> {
     schedule::validate_name(&args.name)?;
-    if args.project && args.wake.is_some() {
-        bail!(
-            "--project tasks cannot use --wake; project config cannot pin a machine-local session"
-        );
+    let project_error = args.project.then(|| {
+        [
+            (
+                args.wake.is_some(),
+                "--project tasks cannot use --wake; project config cannot pin a machine-local session",
+            ),
+            (
+                args.until.is_some(),
+                "--project tasks cannot use --until; poll-until deadlines are machine state",
+            ),
+            (
+                args.every.is_none() && args.cron.is_none(),
+                "--project tasks must repeat; set --every or --cron",
+            ),
+        ]
+        .into_iter()
+        .find_map(|(invalid, message)| invalid.then_some(message))
+    });
+    if let Some(message) = project_error.flatten() {
+        bail!(message);
     }
-    if args.project && args.until.is_some() {
-        bail!("--project tasks cannot use --until; poll-until deadlines are machine state");
-    }
-    if args.project && (args.every.is_none() && args.cron.is_none()) {
-        bail!("--project tasks must repeat; set --every or --cron");
-    }
-    let agent_action_requested = args.agent.is_some() || args.wake.is_some();
-    if !agent_action_requested && args.check.is_none() {
-        bail!(
-            "loop task `{}` needs --agent, --wake, or --check",
-            args.name
-        );
-    }
+    let action_kind = args
+        .agent
+        .as_ref()
+        .map(|_| TaskActionKind::Spawn)
+        .or(args.wake.as_ref().map(|_| TaskActionKind::Deliver))
+        .or(args.check.as_ref().map(|_| TaskActionKind::CheckOnly))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "loop task `{}` needs --agent, --wake, or --check",
+                args.name
+            )
+        })?;
     if args.on.is_some() && args.check.is_none() {
         bail!("--on requires --check");
     }
-    if !agent_action_requested && (args.surplus.is_some() || args.surplus_after.is_some()) {
+    if !action_kind.has_effect() && (args.surplus.is_some() || args.surplus_after.is_some()) {
         bail!("--surplus and --surplus-after require --agent or --wake");
     }
     if args.max_attempts == Some(0) {
         bail!("--max-attempts must be at least 1");
     }
-    if args.until.is_some() {
-        if args.check.is_none() {
-            bail!("--until requires --check");
-        }
-        if args.every.is_none() {
-            bail!("--until requires --every");
-        }
-        if !agent_action_requested {
-            bail!("--until requires --agent or --wake");
-        }
-        if args.in_after.is_some() {
-            bail!("--until conflicts with --in");
-        }
+    let until_error = args.until.as_ref().and_then(|_| {
+        [
+            (args.check.is_none(), "--until requires --check"),
+            (args.every.is_none(), "--until requires --every"),
+            (
+                !action_kind.has_effect(),
+                "--until requires --agent or --wake",
+            ),
+            (args.in_after.is_some(), "--until conflicts with --in"),
+        ]
+        .into_iter()
+        .find_map(|(invalid, message)| invalid.then_some(message))
+    });
+    if let Some(message) = until_error {
+        bail!(message);
     }
-    Ok(())
+    Ok(action_kind)
 }
 
 fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
@@ -143,18 +159,12 @@ fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
 fn resolve_add_action(
     args: &AddArgs,
     workspace: &rimz::ResolvedWorkspace,
+    kind: TaskActionKind,
 ) -> Result<AddTaskAction> {
-    let target = match args.wake.as_deref() {
-        Some(address) => Some(resolve_delivery_target(workspace, args, address)?),
-        None => None,
-    };
-    let resolved = match args.agent.as_deref() {
-        Some(spec) => Some(resolve_task_spec(spec, workspace)?),
-        None => None,
-    };
-    let mut action = match (target, resolved) {
-        (Some(target), resolved) => AddTaskAction::Deliver { target, resolved },
-        (None, Some(resolved)) => {
+    let mut action = match kind {
+        TaskActionKind::Spawn => {
+            let spec = args.agent.as_deref().unwrap_or_default();
+            let resolved = resolve_task_spec(spec, workspace)?;
             let is_ping = args
                 .agent
                 .as_deref()
@@ -168,19 +178,22 @@ fn resolve_add_action(
                 mode: None,
             }
         }
-        (None, None) => AddTaskAction::CheckOnly,
+        TaskActionKind::Deliver => {
+            let address = args.wake.as_deref().unwrap_or_default();
+            AddTaskAction::Deliver {
+                target: resolve_delivery_target(workspace, args, address)?,
+            }
+        }
+        TaskActionKind::CheckOnly => AddTaskAction::CheckOnly,
     };
     if args.every.as_deref() == Some("reset")
         && !matches!(action, AddTaskAction::Spawn { is_ping: true, .. })
     {
         bail!("--every reset only applies to a `<kind>-ping` agent task");
     }
-    match &mut action {
-        AddTaskAction::Spawn { mode, .. } => {
-            *mode = args.mode.as_deref().map(parse_mode).transpose()?;
-        }
-        AddTaskAction::Deliver { .. } => reject_delivery_spawn_flags(args)?,
-        AddTaskAction::CheckOnly => reject_check_only_agent_flags(args)?,
+    reject_unsupported_action_flags(args, kind)?;
+    if let AddTaskAction::Spawn { mode, .. } = &mut action {
+        *mode = args.mode.as_deref().map(parse_mode).transpose()?;
     }
     Ok(action)
 }
@@ -267,9 +280,7 @@ fn build_task_entry(
             entry.system_prompt_file = args.system_prompt_file.clone();
             entry.timeout = args.timeout.clone();
         }
-        AddTaskAction::Deliver { target, resolved } => {
-            resolved_for_preflight = resolved;
-            entry.agent = args.agent.clone();
+        AddTaskAction::Deliver { target } => {
             entry.wake = Some(target);
             entry.timeout = uses_check_timeout.then(|| args.timeout.clone()).flatten();
         }
@@ -418,39 +429,12 @@ fn resolve_delivery_target(
     })
 }
 
-fn reject_delivery_spawn_flags(args: &AddArgs) -> Result<()> {
-    let mut flags = Vec::new();
-    if args.mode.is_some() {
-        flags.push("--mode");
-    }
-    if args.effort.is_some() {
-        flags.push("--effort");
-    }
-    if args.budget.is_some() {
-        flags.push("--budget");
-    }
-    if args.budget_per_day.is_some() {
-        flags.push("--budget-per-day");
-    }
-    if args.system_prompt_file.is_some() {
-        flags.push("--system-prompt-file");
-    }
-    if args.timeout.is_some() && args.check.is_none() {
-        flags.push("--timeout");
-    }
-    if flags.is_empty() {
+fn reject_unsupported_action_flags(args: &AddArgs, kind: TaskActionKind) -> Result<()> {
+    if kind.is_spawn() {
         return Ok(());
     }
-    bail!(
-        "`{}` uses --wake, so {} only apply to --agent tasks",
-        args.name,
-        flags.join(", ")
-    )
-}
-
-fn reject_check_only_agent_flags(args: &AddArgs) -> Result<()> {
     let mut flags = Vec::new();
-    if args.worktree.is_some() {
+    if kind.is_check_only() && args.worktree.is_some() {
         flags.push("--worktree");
     }
     if args.mode.is_some() {
@@ -468,8 +452,18 @@ fn reject_check_only_agent_flags(args: &AddArgs) -> Result<()> {
     if args.system_prompt_file.is_some() {
         flags.push("--system-prompt-file");
     }
+    if kind == TaskActionKind::Deliver && args.timeout.is_some() && args.check.is_none() {
+        flags.push("--timeout");
+    }
     if flags.is_empty() {
         return Ok(());
+    }
+    if kind == TaskActionKind::Deliver {
+        bail!(
+            "`{}` uses --wake, so {} only apply to --agent tasks",
+            args.name,
+            flags.join(", ")
+        );
     }
     bail!(
         "`{}` uses --check without an agent action, so {} only apply to --agent tasks",

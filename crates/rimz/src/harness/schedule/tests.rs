@@ -88,6 +88,50 @@ fn task_action_rejects_invalid_combinations() {
 }
 
 #[test]
+fn task_action_kind_predicates_cover_each_shape() {
+    let target = TaskTarget {
+        kind: "claude".to_owned(),
+        session: "sess".to_owned(),
+        handle: "@claude".to_owned(),
+    };
+    let cases = [
+        (
+            TaskEntry {
+                agent: Some("claude".to_owned()),
+                ..TaskEntry::default()
+            },
+            TaskActionKind::Spawn,
+            (true, true, false),
+        ),
+        (
+            TaskEntry {
+                wake: Some(target),
+                ..TaskEntry::default()
+            },
+            TaskActionKind::Deliver,
+            (true, false, false),
+        ),
+        (
+            TaskEntry {
+                check: Some("true".to_owned()),
+                ..TaskEntry::default()
+            },
+            TaskActionKind::CheckOnly,
+            (false, false, true),
+        ),
+    ];
+
+    for (entry, expected, predicates) in cases {
+        let kind = TaskAction::from_entry("task", &entry).unwrap().kind();
+        assert_eq!(kind, expected);
+        assert_eq!(
+            (kind.has_effect(), kind.is_spawn(), kind.is_check_only()),
+            predicates
+        );
+    }
+}
+
+#[test]
 fn surplus_gate_values_parse_and_reject_unsafe_inputs() {
     assert_eq!(parse_surplus("1.5x"), Ok(1.5));
     assert_eq!(parse_surplus(" 2X "), Ok(2.0));

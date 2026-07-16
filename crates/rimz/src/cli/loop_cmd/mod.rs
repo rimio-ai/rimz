@@ -37,7 +37,7 @@ use rimz::harness::schedule::runner::{
     run_lock_path, signal_run_lock_holder, tail_output, wait_for_run_lock_release, window_reset_at,
 };
 use rimz::harness::schedule::{
-    self, TaskAction,
+    self, TaskAction, TaskActionKind,
     catalog::{LoadedTask, TaskCatalog, TaskSource},
     pauses::{self, PauseEntry},
     strikes,

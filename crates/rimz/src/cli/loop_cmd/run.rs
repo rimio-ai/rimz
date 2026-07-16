@@ -43,7 +43,7 @@ pub(super) fn run_one(
     let entry = loaded.entry;
     let source = loaded.source;
     gate_project_trust(name, &entry, source, mode)?;
-    TaskAction::from_entry(name, &entry)?;
+    let action_kind = TaskAction::from_entry(name, &entry)?.kind();
     let started = Instant::now();
     if mode == LoopRunMode::Manual {
         write_manual_header(&mut ui::out(), name, &entry)?;
@@ -122,7 +122,7 @@ pub(super) fn run_one(
             finish_task_effect(&mut fire, effect, name, &entry)?
         }
     };
-    present_finished(name, &entry, mode, keep, &finished)?;
+    present_finished(name, &entry, action_kind, mode, keep, &finished)?;
     if let Some(code) = finished.outcome.exit_code() {
         std::process::exit(code);
     }
@@ -227,6 +227,7 @@ fn notify_loop_paused(name: &str, entry: &TaskEntry, count: u32) {
 fn present_finished(
     name: &str,
     entry: &TaskEntry,
+    action_kind: TaskActionKind,
     mode: LoopRunMode,
     keep: bool,
     finished: &rimz::harness::schedule::runner::TaskFireFinished,
@@ -284,6 +285,7 @@ fn present_finished(
     print_run_summary(
         name,
         entry,
+        action_kind,
         finished.duration_ms,
         mode,
         keep,
@@ -373,13 +375,23 @@ fn write_manual_verdict(
 fn print_run_summary(
     name: &str,
     entry: &TaskEntry,
+    action_kind: TaskActionKind,
     duration_ms: u64,
     mode: LoopRunMode,
     keep: bool,
     outcome: &RunOutcome,
 ) -> Result<()> {
     let mut out = ui::out();
-    write_run_summary(&mut out, name, entry, duration_ms, mode, keep, outcome)?;
+    write_run_summary(
+        &mut out,
+        name,
+        entry,
+        action_kind,
+        duration_ms,
+        mode,
+        keep,
+        outcome,
+    )?;
     Ok(())
 }
 
@@ -387,6 +399,7 @@ fn write_run_summary(
     out: &mut impl Write,
     name: &str,
     entry: &TaskEntry,
+    action_kind: TaskActionKind,
     duration_ms: u64,
     mode: LoopRunMode,
     keep: bool,
@@ -394,7 +407,7 @@ fn write_run_summary(
 ) -> std::io::Result<()> {
     match mode {
         LoopRunMode::Manual => {
-            write_manual_run_summary(out, name, entry, duration_ms, keep, outcome)
+            write_manual_run_summary(out, name, entry, action_kind, duration_ms, keep, outcome)
         }
         LoopRunMode::Scheduled => {
             write_scheduled_run_summary(out, name, entry, duration_ms, outcome)
@@ -406,6 +419,7 @@ fn write_manual_run_summary(
     out: &mut impl Write,
     name: &str,
     entry: &TaskEntry,
+    action_kind: TaskActionKind,
     duration_ms: u64,
     keep: bool,
     outcome: &RunOutcome,
@@ -425,7 +439,7 @@ fn write_manual_run_summary(
     }
 
     let result_mark = render::loop_result_mark(outcome.result());
-    let result_label = manual_result_label(entry, outcome);
+    let result_label = manual_result_label(action_kind, outcome);
     write!(
         out,
         "{}",
@@ -444,7 +458,7 @@ fn write_manual_run_summary(
     }
     writeln!(out)?;
 
-    if is_spawn_failure(outcome.result()) && !is_check_only(entry) {
+    if is_spawn_failure(outcome.result()) && !action_kind.is_check_only() {
         write_failure_forensics(out, name, outcome)?;
     } else if outcome.result() == LoopRunResult::Completed && outcome.run_id().is_some() {
         write_completion_detail(out, name, outcome)?;
@@ -565,8 +579,8 @@ fn success_result_label(outcome: &RunOutcome) -> String {
     }
 }
 
-fn manual_result_label(entry: &TaskEntry, outcome: &RunOutcome) -> String {
-    if is_check_only(entry)
+fn manual_result_label(action_kind: TaskActionKind, outcome: &RunOutcome) -> String {
+    if action_kind.is_check_only()
         && let Some(check) = outcome.check()
     {
         return check_result_label(check);
@@ -577,10 +591,6 @@ fn manual_result_label(entry: &TaskEntry, outcome: &RunOutcome) -> String {
         label.push_str(&exit_label);
     }
     label
-}
-
-fn is_check_only(entry: &TaskEntry) -> bool {
-    entry.check.is_some() && entry.agent.is_none() && entry.wake.is_none()
 }
 
 fn check_result_label(check: &CheckRecord) -> String {
@@ -624,11 +634,7 @@ fn write_check_trip_line(
         " {}",
         ui::paint(
             ui::palette::ACCENT,
-            &format!(
-                "→ {} {}",
-                render::action_progressive_verb(entry),
-                task_subject(entry)
-            )
+            &format!("→ {}", render::action_progressive_phrase(entry))
         )
     )
 }
@@ -839,7 +845,18 @@ mod tests {
         outcome: &RunOutcome,
     ) -> String {
         let mut out = Vec::new();
-        write_run_summary(&mut out, name, entry, duration_ms, mode, keep, outcome).unwrap();
+        let action_kind = TaskAction::from_entry(name, entry).unwrap().kind();
+        write_run_summary(
+            &mut out,
+            name,
+            entry,
+            action_kind,
+            duration_ms,
+            mode,
+            keep,
+            outcome,
+        )
+        .unwrap();
         String::from_utf8(out).unwrap()
     }
 

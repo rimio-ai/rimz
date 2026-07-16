@@ -35,6 +35,28 @@ pub enum TaskAction<'a> {
     CheckOnly,
 }
 
+/// Semantic action shape encoded by one loop task entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskActionKind {
+    Spawn,
+    Deliver,
+    CheckOnly,
+}
+
+impl TaskActionKind {
+    pub const fn has_effect(self) -> bool {
+        matches!(self, Self::Spawn | Self::Deliver)
+    }
+
+    pub const fn is_spawn(self) -> bool {
+        matches!(self, Self::Spawn)
+    }
+
+    pub const fn is_check_only(self) -> bool {
+        matches!(self, Self::CheckOnly)
+    }
+}
+
 /// Invalid combinations of loop task action fields.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TaskActionErr {
@@ -90,8 +112,12 @@ impl<'a> TaskAction<'a> {
         }
     }
 
-    pub const fn is_check_only(self) -> bool {
-        matches!(self, Self::CheckOnly)
+    pub const fn kind(self) -> TaskActionKind {
+        match self {
+            Self::Spawn(_) => TaskActionKind::Spawn,
+            Self::Deliver(_) => TaskActionKind::Deliver,
+            Self::CheckOnly => TaskActionKind::CheckOnly,
+        }
     }
 }
 
