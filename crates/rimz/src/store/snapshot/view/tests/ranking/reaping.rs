@@ -31,6 +31,12 @@ fn with_origin(mut agent: AgentState, origin: SessionOrigin) -> AgentState {
     agent
 }
 
+fn resting(mut agent: AgentState) -> AgentState {
+    agent.status = AgentStatus::Success;
+    agent.phase = TurnPhase::Idle;
+    agent
+}
+
 fn with_pane_start(mut agent: AgentState, age_secs: i64) -> AgentState {
     agent
         .pane
@@ -144,7 +150,10 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
     assert_survivors(
         "fresh same-pane roots replace older roots but preserve forks",
         vec![
-            with_origin(pane_session("codex", "older", "%1", 120), Fresh),
+            resting(with_origin(
+                pane_session("codex", "older", "%1", 120),
+                Fresh,
+            )),
             with_origin(pane_session("codex", "fork", "%1", 90), Forked),
             with_origin(pane_session("codex", "newer", "%1", 60), Fresh),
         ],
@@ -194,7 +203,7 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
     assert_survivors(
         "follow-latest providers replace same-process conversations",
         vec![
-            follow_latest("antigravity", "older", 120, "process-a"),
+            resting(follow_latest("antigravity", "older", 120, "process-a")),
             follow_latest("antigravity", "newer", 60, "process-a"),
         ],
         &["newer"],
@@ -202,7 +211,7 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
     assert_survivors(
         "opencode follows the latest same-process conversation",
         vec![
-            follow_latest("opencode", "older", 120, "process-a"),
+            resting(follow_latest("opencode", "older", 120, "process-a")),
             follow_latest("opencode", "newer", 60, "process-a"),
         ],
         &["newer"],

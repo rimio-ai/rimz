@@ -2,7 +2,7 @@
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentState, SamePaneSessionPolicy, SessionOrigin};
+use crate::agents::{AgentState, AgentStatus, SamePaneSessionPolicy, SessionOrigin};
 use crate::pane::RuntimeOwnerKind;
 
 /// Age in seconds after which a pidless agent session is reaped as a ghost.
@@ -43,8 +43,16 @@ pub(crate) fn supersedes(older: &AgentState, newer: &AgentState) -> bool {
 
 /// A provider that follows its latest conversation can prove an in-place
 /// session switch when both records name the same pane incarnation and agent
-/// process. The outer activity guard establishes which record is newer.
+/// process. The outer activity guard establishes which record is newer. A
+/// running, waiting, or paused owner remains authoritative because same-process
+/// child hooks can carry a distinct conversation ID while its turn is open.
 pub(crate) fn same_process_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+    if matches!(
+        older.status,
+        AgentStatus::Running | AgentStatus::Waiting | AgentStatus::Paused
+    ) {
+        return false;
+    }
     if crate::agents::descriptor_by_kind(older.kind.as_str()).is_none_or(|descriptor| {
         descriptor.capabilities.same_pane_session != SamePaneSessionPolicy::FollowLatest
     }) {
@@ -106,9 +114,17 @@ pub(crate) fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool 
 /// Whether `newer` is a fresh `/clear` / `/new` conversation superseding
 /// `older` in their shared pane. Both roots carrying `Fresh` rollout lineage
 /// on one stamped pane are sequential conversations of a single terminal; the
-/// older ended when the newer began, live pane or not. A fork carries `Forked`
-/// lineage and survives; unknown lineage keeps both.
+/// older ended when the newer began, live pane or not. A running, waiting, or
+/// paused owner remains authoritative because same-process child hooks can
+/// carry a distinct conversation ID while its turn is open. A fork carries
+/// `Forked` lineage and survives; unknown lineage keeps both.
 pub(crate) fn cleared_conversation_supersedes(older: &AgentState, newer: &AgentState) -> bool {
+    if matches!(
+        older.status,
+        AgentStatus::Running | AgentStatus::Waiting | AgentStatus::Paused
+    ) {
+        return false;
+    }
     older.origin == Some(SessionOrigin::Fresh)
         && newer.origin == Some(SessionOrigin::Fresh)
         && matches!(
@@ -132,5 +148,64 @@ pub(crate) fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool
     match (agent_owner_pid(older), agent_owner_pid(newer)) {
         (Some(older_pid), Some(newer_pid)) => older_pid != newer_pid,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::{MuxName, PaneId};
+    use crate::pane::{PaneRef, RuntimeOwner};
+
+    fn conversation_pair(status: AgentStatus) -> (AgentState, AgentState) {
+        let older_at = Timestamp::UNIX_EPOCH;
+        let newer_at = older_at + std::time::Duration::from_secs(1);
+        let pane = PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, "%1"));
+        let owner = RuntimeOwner::new(RuntimeOwnerKind::Agent, "agy", 42, Some("start".to_owned()));
+        let mut older = crate::testkit::agent_state("antigravity", "older", older_at);
+        older.status = status;
+        older.pane = Some(pane.clone());
+        older.runtime_owner = Some(owner.clone());
+        older.origin = Some(SessionOrigin::Fresh);
+        let mut newer = crate::testkit::agent_state("antigravity", "newer", newer_at);
+        newer.pane = Some(pane);
+        newer.runtime_owner = Some(owner);
+        newer.origin = Some(SessionOrigin::Fresh);
+        (older, newer)
+    }
+
+    #[test]
+    fn mid_turn_session_death_keeps_same_process_owner_authoritative() {
+        for status in [
+            AgentStatus::Running,
+            AgentStatus::Waiting,
+            AgentStatus::Paused,
+        ] {
+            let (older, newer) = conversation_pair(status);
+            assert!(!same_process_conversation_supersedes(&older, &newer));
+            assert!(!cleared_conversation_supersedes(&older, &newer));
+            assert!(!supersedes(&older, &newer));
+        }
+    }
+
+    #[test]
+    fn resting_session_death_still_follows_latest_conversation() {
+        let (older, newer) = conversation_pair(AgentStatus::Success);
+        assert!(same_process_conversation_supersedes(&older, &newer));
+        assert!(cleared_conversation_supersedes(&older, &newer));
+        assert!(supersedes(&older, &newer));
+    }
+
+    #[test]
+    fn mid_turn_session_death_still_yields_to_a_relaunched_process() {
+        let (older, mut newer) = conversation_pair(AgentStatus::Running);
+        newer.runtime_owner = Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "agy",
+            43,
+            Some("replacement".to_owned()),
+        ));
+        assert!(older_yields_pane(&older, &newer));
+        assert!(supersedes(&older, &newer));
     }
 }

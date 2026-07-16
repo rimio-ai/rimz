@@ -557,6 +557,32 @@ fn invoke_subagent_results_pair_ordered_child_metadata() {
         "Search {}/AGENTS.md for references to nextest and summarize the testing requirements related to it.",
         workspace.display()
     );
+    let spawned = session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace);
+    assert_eq!(
+        spawned
+            .iter()
+            .map(|child| (
+                child.child_agent_id.as_str(),
+                child.agent_name.as_deref(),
+                child.role.as_deref(),
+                child.prompt.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                CHILD_ALPHA,
+                Some("summary_agent"),
+                Some("Security Document Summarizer"),
+                Some(alpha_prompt.as_str()),
+            ),
+            (
+                CHILD_BETA,
+                Some("research"),
+                Some("Codebase Researcher"),
+                Some(beta_prompt.as_str()),
+            ),
+        ]
+    );
     assert_eq!(
         (
             alpha.type_name.as_str(),
@@ -608,6 +634,12 @@ fn nested_child_relation_uses_its_immediate_parent_transcript() {
     assert_eq!(nested.type_name, "explore");
     assert_eq!(nested.role, "Nested researcher");
     assert_eq!(nested.prompt, "Trace the nested call.");
+    let spawned = session::spawned_subagents_under(dir.path(), &parent, CHILD_ALPHA, &workspace);
+    assert_eq!(spawned.len(), 1);
+    assert_eq!(spawned[0].child_agent_id.as_str(), NESTED_CHILD);
+    assert_eq!(spawned[0].agent_name.as_deref(), Some("explore"));
+    assert_eq!(spawned[0].role.as_deref(), Some("Nested researcher"));
+    assert_eq!(spawned[0].prompt.as_deref(), Some("Trace the nested call."));
 }
 
 #[test]
@@ -695,6 +727,10 @@ fn subagent_correlation_rejects_torn_mismatched_and_duplicate_results() {
             )
             .is_none()
         );
+        assert!(
+            session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace,)
+                .is_empty()
+        );
     };
     let mismatched = rewrite_subagent_result(fixture, |content| {
         content
@@ -733,6 +769,9 @@ fn subagent_correlation_rejects_torn_mismatched_and_duplicate_results() {
             &workspace,
         )
         .is_none()
+    );
+    assert!(
+        session::spawned_subagents_under(dir.path(), &parent, SESSION_ID, &workspace,).is_empty()
     );
 }
 

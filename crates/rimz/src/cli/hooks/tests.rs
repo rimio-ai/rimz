@@ -138,6 +138,44 @@ impl rimz::agents::AgentAdapter for CorrelationTestAdapter {
             prompt: Some(format!("prompt-{child}")),
         })
     }
+
+    fn spawned_subagents(
+        &self,
+        input: rimz::agents::SubagentSpawnInput<'_>,
+    ) -> Vec<rimz::agents::SpawnedSubagent> {
+        let child =
+            |id: &'static str, name: &'static str, role: &'static str, prompt: &'static str| {
+                rimz::agents::SpawnedSubagent {
+                    child_agent_id: AgentSessionId::from(id),
+                    agent_name: Some(name.to_owned()),
+                    role: Some(role.to_owned()),
+                    prompt: Some(prompt.to_owned()),
+                }
+            };
+        match input.parent_agent_id.as_str() {
+            "late-root" => vec![
+                child(
+                    "late-child-clean",
+                    "clean-name",
+                    "clean-role",
+                    "clean prompt",
+                ),
+                child(
+                    "late-child-failed",
+                    "failed-name",
+                    "failed-role",
+                    "failed prompt",
+                ),
+            ],
+            "reaped-root" => vec![child(
+                "late-child-reaped",
+                "reaped-name",
+                "reaped-role",
+                "reaped prompt",
+            )],
+            _ => Vec::new(),
+        }
+    }
 }
 
 fn antigravity_payload(agent_id: &str) -> serde_json::Value {
@@ -652,6 +690,132 @@ fn copilot_child_prompt_and_stop_join_to_the_parent_transcript() {
             LifecycleSignal::SubagentStopped { errored: false },
         ]
     );
+}
+
+#[test]
+fn antigravity_parent_stop_adopts_children_after_late_transcript_flush() {
+    let (_dir, store) = hooks_test_store();
+    let adapter = CorrelationTestAdapter::default();
+    let mut root = antigravity_payload("late-root");
+    root["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", root.clone());
+
+    let mut clean = antigravity_payload("late-child-clean");
+    clean["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", clean.clone());
+    clean["fullyIdle"] = serde_json::json!(true);
+    clean["terminationReason"] = serde_json::json!("model_stop");
+    feed_antigravity(&store, &adapter, "Stop", clean);
+
+    let mut failed = antigravity_payload("late-child-failed");
+    failed["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", failed.clone());
+    failed["fullyIdle"] = serde_json::json!(true);
+    failed["terminationReason"] = serde_json::json!("max_steps_exceeded");
+    feed_antigravity(&store, &adapter, "Stop", failed);
+
+    let before = store.snapshot_cached().unwrap().agents;
+    let failed = before
+        .iter()
+        .find(|state| state.agent_id == "late-child-failed")
+        .unwrap();
+    assert_eq!(failed.parent_agent_id, None);
+    assert_ne!(failed.name.as_deref(), Some("failed-name"));
+
+    root["fullyIdle"] = serde_json::json!(true);
+    root["terminationReason"] = serde_json::json!("model_stop");
+    feed_antigravity(&store, &adapter, "Stop", root.clone());
+
+    let agents = store.snapshot_cached().unwrap().agents;
+    let clean = agents
+        .iter()
+        .find(|state| state.agent_id == "late-child-clean")
+        .unwrap();
+    assert_eq!(clean.parent_agent_id.as_deref(), Some("late-root"));
+    assert_eq!(clean.status, rimz::agents::AgentStatus::Success);
+    assert_eq!(clean.name.as_deref(), Some("clean-name"));
+    assert_eq!(clean.role.as_deref(), Some("clean-role"));
+    assert_eq!(clean.task.as_deref(), Some("clean-role"));
+    assert_eq!(clean.prompt.as_deref(), Some("clean prompt"));
+    let failed = agents
+        .iter()
+        .find(|state| state.agent_id == "late-child-failed")
+        .unwrap();
+    assert_eq!(failed.parent_agent_id.as_deref(), Some("late-root"));
+    assert_eq!(failed.status, rimz::agents::AgentStatus::Failed);
+    assert_eq!(failed.name.as_deref(), Some("failed-name"));
+    assert_eq!(failed.role.as_deref(), Some("failed-role"));
+
+    let adoption_count = || {
+        store
+            .read_events()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event.kind(),
+                    rimz::store::event::EventKind::AgentLifecycle(payload)
+                        if payload.event_name.as_deref() == Some("SubagentAdopted")
+                )
+            })
+            .count()
+    };
+    assert_eq!(adoption_count(), 2);
+    feed_antigravity(&store, &adapter, "Stop", root);
+    assert_eq!(adoption_count(), 2, "a repeated parent Stop is idempotent");
+}
+
+#[test]
+fn antigravity_parent_stop_rematerializes_a_reaped_child() {
+    let (_dir, store) = hooks_test_store();
+    let adapter = CorrelationTestAdapter::default();
+    let mut root = antigravity_payload("reaped-root");
+    root["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", root.clone());
+
+    let mut child = antigravity_payload("late-child-reaped");
+    child["invocationNum"] = serde_json::json!(0);
+    feed_antigravity(&store, &adapter, "PreInvocation", child.clone());
+    child["fullyIdle"] = serde_json::json!(true);
+    child["terminationReason"] = serde_json::json!("model_stop");
+    feed_antigravity(&store, &adapter, "Stop", child);
+    let ended = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("late-child-reaped")),
+        LifecycleSignal::Ended,
+    );
+    store
+        .append_agent_lifecycle(rimz::store::AgentLifecycleIntent {
+            session_name: "hooks-test",
+            agent_kind: rimz::ids::AgentKind::new_unchecked("antigravity"),
+            event_name: "ReapedSuperseded",
+            observation: &ended,
+            transition: None,
+        })
+        .unwrap();
+    assert!(
+        store
+            .snapshot_cached()
+            .unwrap()
+            .agents
+            .iter()
+            .all(|state| state.agent_id != "late-child-reaped")
+    );
+
+    root["fullyIdle"] = serde_json::json!(true);
+    root["terminationReason"] = serde_json::json!("model_stop");
+    feed_antigravity(&store, &adapter, "Stop", root);
+
+    let snapshot = store.snapshot_cached().unwrap();
+    let child = snapshot
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "late-child-reaped")
+        .unwrap();
+    assert_eq!(child.parent_agent_id.as_deref(), Some("reaped-root"));
+    assert_eq!(child.status, rimz::agents::AgentStatus::Success);
+    assert_eq!(child.name.as_deref(), Some("reaped-name"));
+    assert_eq!(child.role.as_deref(), Some("reaped-role"));
+    assert_eq!(child.task.as_deref(), Some("reaped-role"));
 }
 
 #[test]

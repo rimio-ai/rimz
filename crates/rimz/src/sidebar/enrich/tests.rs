@@ -672,6 +672,7 @@ fn cached_enrich_binds_reaped_codex_clear_session() {
     let (_dir, runtime, _) = runtime();
     let now = Timestamp::now();
     let mut old = codex_root("old", "/repo/main", "terminal_1");
+    old.status = AgentStatus::Success;
     old.last_activity = now - SignedDuration::from_secs(120);
     old.origin = Some(SessionOrigin::Fresh);
     let mut new = codex_root("new", "/repo/main", "terminal_1");

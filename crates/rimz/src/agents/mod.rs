@@ -95,8 +95,8 @@ pub use locate::locate_binary;
 pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use managed_source::ManagedSource;
 pub use observation::{
-    AgentLifecycleObservation, LaunchParams, SessionOrigin, SubagentCorrelation,
-    SubagentCorrelationInput,
+    AgentLifecycleObservation, LaunchParams, SessionOrigin, SpawnedSubagent, SubagentCorrelation,
+    SubagentCorrelationInput, SubagentSpawnInput,
 };
 pub use open_ask::{OpenAskDetail, OpenAskReadErr, read_open_ask};
 pub(crate) use payload::{
@@ -837,6 +837,13 @@ pub trait AgentAdapter: Send + Sync {
         _input: SubagentCorrelationInput<'_>,
     ) -> Option<SubagentCorrelation> {
         None
+    }
+
+    /// Enumerate the children a completed root turn spawned through
+    /// provider-owned durable records. The shared hook path adopts validated
+    /// children whose earlier hooks arrived before that evidence was readable.
+    fn spawned_subagents(&self, _input: SubagentSpawnInput<'_>) -> Vec<SpawnedSubagent> {
+        Vec::new()
     }
 
     /// Translate a raw out-of-band context payload into the normalized

@@ -97,6 +97,25 @@ pub struct SubagentCorrelation {
     pub prompt: Option<String>,
 }
 
+/// One root turn whose durable provider transcript may name spawned children.
+/// The hook path supplies the already-observed parent identity and paths; the
+/// adapter validates its native transcript before returning any relation.
+#[derive(Clone, Copy, Debug)]
+pub struct SubagentSpawnInput<'a> {
+    pub parent_agent_id: &'a AgentSessionId,
+    pub parent_transcript_path: Option<&'a Path>,
+    pub parent_workspace: Option<&'a Path>,
+}
+
+/// One child recovered from validated provider-owned spawn evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpawnedSubagent {
+    pub child_agent_id: AgentSessionId,
+    pub agent_name: Option<String>,
+    pub role: Option<String>,
+    pub prompt: Option<String>,
+}
+
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
 /// event carries plus the enrichment it reports. Returned by
 /// [`AgentAdapter::observe_lifecycle`](super::AgentAdapter::observe_lifecycle)

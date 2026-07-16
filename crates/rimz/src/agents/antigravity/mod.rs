@@ -26,8 +26,9 @@ use super::lifecycle::LifecycleSignal;
 use super::{
     AgentAdapter, AgentContext, AgentHookClass, AgentLifecycleObservation, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, LocalSessionObservation, Result,
-    SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity, TranscriptMessage,
-    non_empty_trimmed, resolve_subagent_identity, sanitize_user_prompt,
+    SpawnedSubagent, SubagentCorrelation, SubagentCorrelationInput, SubagentIdentity,
+    SubagentSpawnInput, TranscriptMessage, non_empty_trimmed, resolve_subagent_identity,
+    sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -373,6 +374,24 @@ impl AgentAdapter for AntigravityAdapter {
             task: role.or_else(|| prompt.clone()),
             prompt,
         })
+    }
+
+    fn spawned_subagents(&self, input: SubagentSpawnInput<'_>) -> Vec<SpawnedSubagent> {
+        let Some(parent_workspace) = input.parent_workspace else {
+            return Vec::new();
+        };
+        let Some(parent_transcript) = input
+            .parent_transcript_path
+            .map(Path::to_path_buf)
+            .or_else(|| session::transcript_for_session(input.parent_agent_id.as_str()))
+        else {
+            return Vec::new();
+        };
+        session::spawned_subagents(
+            &parent_transcript,
+            input.parent_agent_id.as_str(),
+            parent_workspace,
+        )
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {

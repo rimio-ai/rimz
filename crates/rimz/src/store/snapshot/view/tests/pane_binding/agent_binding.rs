@@ -216,7 +216,7 @@ fn cleared_fresh_session_reap_repins_shared_pane_but_fork_keeps_primary() {
             "main-sess",
         ),
     ] {
-        let mut main = agent("codex", "main-sess", AgentStatus::Running, 1_000)
+        let mut main = agent("codex", "main-sess", AgentStatus::Success, 1_000)
             .worktree("/repo/main")
             .in_pane("%1")
             .active_ago(120);

@@ -12,8 +12,8 @@ use url::Url;
 use crate::agents::lifecycle::TurnPhase;
 use crate::agents::{
     AgentStatus, LocalSessionObservation, LocalSessionProjection, LocalSessionState,
-    TranscriptMessage, TranscriptRole, read_transcript_tail, read_transcript_tail_with_status,
-    sanitize_user_prompt,
+    SpawnedSubagent, TranscriptMessage, TranscriptRole, read_transcript_tail,
+    read_transcript_tail_with_status, sanitize_user_prompt,
 };
 use crate::ids::{AgentKind, AgentSessionId};
 
@@ -98,6 +98,12 @@ struct InvokeSubagentResult {
     log_absolute_uri: String,
     #[serde(rename = "workspaceUris")]
     workspace_uris: Option<Vec<String>>,
+}
+
+struct ValidatedSubagent {
+    spec: InvokeSubagentSpec,
+    result: InvokeSubagentResult,
+    expected_workspace: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -209,6 +215,17 @@ pub(super) fn correlate_subagent(
     )
 }
 
+pub(super) fn spawned_subagents(
+    parent_transcript: &Path,
+    parent_id: &str,
+    parent_workspace: &Path,
+) -> Vec<SpawnedSubagent> {
+    let Some(home) = home() else {
+        return Vec::new();
+    };
+    spawned_subagents_under(&home, parent_transcript, parent_id, parent_workspace)
+}
+
 pub(super) fn correlate_subagent_under(
     home: &Path,
     parent_transcript: &Path,
@@ -217,16 +234,56 @@ pub(super) fn correlate_subagent_under(
     child_id: &str,
     child_workspace: &Path,
 ) -> Option<CorrelatedSubagent> {
-    valid_transcript_under(home, parent_transcript, parent_id).then_some(())?;
     valid_conversation_id(child_id).then_some(())?;
-    let parent_workspace = fs::canonicalize(parent_workspace).ok()?;
     let child_workspace = fs::canonicalize(child_workspace).ok()?;
+    let mut matched =
+        validated_subagents_under(home, parent_transcript, parent_id, parent_workspace)?
+            .into_iter()
+            .filter(|pair| {
+                pair.result.conversation_id.trim() == child_id
+                    && pair.expected_workspace == child_workspace
+            })
+            .map(|pair| CorrelatedSubagent {
+                type_name: pair.spec.type_name.trim().to_owned(),
+                role: pair.spec.role.trim().to_owned(),
+                prompt: pair.spec.prompt.trim().to_owned(),
+            });
+    let first = matched.next()?;
+    matched.next().is_none().then_some(first)
+}
+
+pub(super) fn spawned_subagents_under(
+    home: &Path,
+    parent_transcript: &Path,
+    parent_id: &str,
+    parent_workspace: &Path,
+) -> Vec<SpawnedSubagent> {
+    validated_subagents_under(home, parent_transcript, parent_id, parent_workspace)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|pair| SpawnedSubagent {
+            child_agent_id: AgentSessionId::from(pair.result.conversation_id.trim()),
+            agent_name: normalized(Some(&pair.spec.type_name)),
+            role: normalized(Some(&pair.spec.role)),
+            prompt: sanitize_user_prompt(Some(&pair.spec.prompt)),
+        })
+        .collect()
+}
+
+fn validated_subagents_under(
+    home: &Path,
+    parent_transcript: &Path,
+    parent_id: &str,
+    parent_workspace: &Path,
+) -> Option<Vec<ValidatedSubagent>> {
+    valid_transcript_under(home, parent_transcript, parent_id).then_some(())?;
+    let parent_workspace = fs::canonicalize(parent_workspace).ok()?;
     let tail = read_transcript_tail_with_status(parent_transcript)?;
     (!tail.torn_suffix).then_some(())?;
 
     let mut pending = std::collections::VecDeque::<Vec<InvokeSubagentSpec>>::new();
     let mut seen_ids = std::collections::BTreeSet::<String>::new();
-    let mut matched = Vec::new();
+    let mut validated = Vec::new();
     for line in tail.text.lines().filter(|line| !line.trim().is_empty()) {
         let record = serde_json::from_str::<CorrelationRecord>(line).ok()?;
         if record.source == "MODEL"
@@ -264,22 +321,15 @@ pub(super) fn correlate_subagent_under(
                 }
             };
             validate_result_workspaces(result.workspace_uris.as_deref(), &expected_workspace)?;
-            if result_id != child_id {
-                continue;
-            }
-            (child_workspace == expected_workspace).then_some(())?;
-            matched.push(CorrelatedSubagent {
-                type_name: spec.type_name.trim().to_owned(),
-                role: spec.role.trim().to_owned(),
-                prompt: spec.prompt.trim().to_owned(),
+            validated.push(ValidatedSubagent {
+                spec,
+                result,
+                expected_workspace,
             });
         }
     }
     pending.is_empty().then_some(())?;
-    let [matched] = matched.as_slice() else {
-        return None;
-    };
-    Some(matched.clone())
+    Some(validated)
 }
 
 pub(super) fn resumed_session_id(cmdline: &str) -> Option<AgentSessionId> {
