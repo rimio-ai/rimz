@@ -514,7 +514,11 @@ mod tests {
         }
 
         fn depth_bound() -> Self {
-            Self::chain((10..=19).map(|pid| (pid, "zsh")))
+            Self::chain((10..=19).map(|pid| (pid, if pid == 19 { "qwen" } else { "zsh" }))).live(
+                19,
+                timestamp("2026-07-01T10:00:00Z"),
+                None,
+            )
         }
 
         fn uids(mut self, pids: impl IntoIterator<Item = u32>, uid: u32) -> Self {
