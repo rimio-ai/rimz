@@ -66,9 +66,8 @@ pub struct AgentContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
     /// Short provider-owned thread summary. Codex fills this from app-server
-    /// `thread/read` / `thread/list` `preview`; Kimi uses the `state.json`
-    /// title, and Qwen uses its `custom_title` record or first genuine prompt.
-    /// Renderers prefer it for the activity description when present.
+    /// `thread/read` / `thread/list` `preview`, and Kimi uses the `state.json`
+    /// title. Renderers prefer it for the activity description when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_preview: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
