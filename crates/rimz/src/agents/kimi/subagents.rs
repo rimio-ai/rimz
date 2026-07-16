@@ -15,6 +15,7 @@ const START_RETRY_BACKOFF: [Duration; 5] = [
     Duration::from_millis(80),
     Duration::from_millis(100),
 ];
+const STOP_CONFIRM_BACKOFF: [Duration; 5] = START_RETRY_BACKOFF;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ChildMatch {
@@ -201,6 +202,19 @@ pub(super) fn has_subagents(session_dir: &Path) -> bool {
 }
 
 pub(super) fn main_turn_mid_step(session_dir: &Path) -> bool {
+    if !main_turn_mid_step_once(session_dir) {
+        return false;
+    }
+    for delay in STOP_CONFIRM_BACKOFF {
+        std::thread::sleep(delay);
+        if !main_turn_mid_step_once(session_dir) {
+            return false;
+        }
+    }
+    true
+}
+
+fn main_turn_mid_step_once(session_dir: &Path) -> bool {
     let Some((records, _)) = wire::read_records(&session_dir.join("agents/main/wire.jsonl"), 0)
     else {
         return false;

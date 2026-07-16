@@ -394,6 +394,34 @@ fn main_turn_mid_step_is_fail_open_and_closes_at_step_end() {
 }
 
 #[test]
+fn main_turn_mid_step_waits_for_a_queued_step_end_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    let main = session.join("agents/main/wire.jsonl");
+    std::fs::create_dir_all(main.parent().unwrap()).unwrap();
+    std::fs::write(
+        &main,
+        "{\"type\":\"llm.request\",\"time\":1,\"kind\":\"loop\"}\n",
+    )
+    .unwrap();
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        use std::io::Write;
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(main)
+                .unwrap(),
+            "{{\"type\":\"context.append_loop_event\",\"time\":2,\"event\":{{\"type\":\"step.end\",\"uuid\":\"s1\"}}}}"
+        )
+        .unwrap();
+    });
+
+    assert!(!subagents::main_turn_mid_step(&session));
+    writer.join().unwrap();
+}
+
+#[test]
 fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
     let dir = tempfile::tempdir().unwrap();
     let session = dir.path().join("session-1");
