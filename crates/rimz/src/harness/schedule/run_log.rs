@@ -716,6 +716,79 @@ mod tests {
     }
 
     #[test]
+    fn terminal_outcomes_keep_durable_and_presentation_fields_separate() {
+        for result in [
+            LoopRunResult::Completed,
+            LoopRunResult::Failed,
+            LoopRunResult::VerifyFailed,
+            LoopRunResult::TimedOut,
+            LoopRunResult::BudgetSkipped,
+            LoopRunResult::Overlapped,
+            LoopRunResult::CheckSkipped,
+            LoopRunResult::TargetGone,
+            LoopRunResult::Expired,
+            LoopRunResult::SkippedWindow,
+            LoopRunResult::Errored,
+            LoopRunResult::Canceled,
+        ] {
+            let record =
+                LoopRunOutcome::terminal(result).record("matrix", LoopRunMode::Scheduled, 17);
+            assert_eq!(record.task, "matrix");
+            assert_eq!(record.result, result);
+            assert_eq!(record.mode, Some(LoopRunMode::Scheduled));
+            assert_eq!(record.duration_ms, Some(17));
+            assert_eq!(
+                (
+                    record.error,
+                    record.check,
+                    record.run_id,
+                    record.transcript_path,
+                    record.last_message,
+                    record.target,
+                    record.cost_usd,
+                    record.input_tokens,
+                    record.output_tokens,
+                ),
+                (None, None, None, None, None, None, None, None, None)
+            );
+        }
+
+        let check = CheckRecord {
+            code: Some(7),
+            timed_out: false,
+            output: "check output".to_owned(),
+        };
+        let outcome = LoopRunOutcome::terminal(LoopRunResult::Failed)
+            .with_record_error(Some("durable error".to_owned()))
+            .with_check(Some(check.clone()))
+            .with_run_id(Some("run_1".to_owned()))
+            .with_transcript_path(Some("/tmp/transcript".to_owned()))
+            .with_failure_tail(Some("presentation tail".to_owned()))
+            .with_last_message(Some("last message".to_owned()))
+            .with_target(Some("@coder".to_owned()))
+            .with_exit_code(Some(7))
+            .with_cost(Some(1.25), Some(10), Some(20))
+            .with_skip_reason(Some("presentation skip".to_owned()))
+            .with_streamed(true);
+        let record = outcome.record("matrix", LoopRunMode::Manual, 19);
+
+        assert_eq!(record.error.as_deref(), Some("durable error"));
+        assert_eq!(record.check, Some(check));
+        assert_eq!(record.run_id.as_deref(), Some("run_1"));
+        assert_eq!(record.transcript_path.as_deref(), Some("/tmp/transcript"));
+        assert_eq!(record.last_message.as_deref(), Some("last message"));
+        assert_eq!(record.target.as_deref(), Some("@coder"));
+        assert_eq!(
+            (record.cost_usd, record.input_tokens, record.output_tokens),
+            (Some(1.25), Some(10), Some(20))
+        );
+        assert_eq!(outcome.failure_tail(), Some("presentation tail"));
+        assert_eq!(outcome.exit_code(), Some(7));
+        assert_eq!(outcome.skip_reason(), Some("presentation skip"));
+        assert!(outcome.streamed());
+    }
+
+    #[test]
     fn verify_failed_run_status_keeps_its_distinct_loop_result() {
         assert_eq!(
             LoopRunResult::from(RunStatus::VerifyFailed),

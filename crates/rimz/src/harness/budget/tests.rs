@@ -488,6 +488,11 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
             at: Timestamp::from_second(100).expect("timestamp"),
         }),
     };
+    let legacy_fleet: FleetBudgetLedger = serde_json::from_str(
+        r#"{"override_spec":{"cap_usd":20.0,"window":"day"},"raised_cap_usd":25.0,"parked":{"at_cost":25.5,"at":"1970-01-01T00:01:40Z"}}"#,
+    )
+    .expect("legacy fleet ledger");
+    assert_eq!(legacy_fleet, fleet);
     write_fleet_ledger(&runtime, &fleet).expect("fleet write");
     assert_eq!(read_fleet_ledger(&runtime), fleet);
     fleet_scope_file(&runtime)
@@ -508,6 +513,19 @@ fn scope_ledgers_round_trip_and_labels_name_the_binding_scope() {
         disabled: false,
         parked: fleet.parked.clone(),
     };
+    let legacy_account: AccountBudgetLedger = serde_json::from_str(
+        r#"{"raised_cap_usd":100.0,"parked":{"at_cost":25.5,"at":"1970-01-01T00:01:40Z"}}"#,
+    )
+    .expect("legacy account ledger");
+    assert_eq!(legacy_account, account);
+    assert!(
+        !serde_json::to_value(&account)
+            .expect("account json")
+            .as_object()
+            .expect("account object")
+            .contains_key("override_spec"),
+        "account ledgers do not invent a fleet override"
+    );
     write_account_ledger(&runtime, &kind, &account).expect("account write");
     assert_eq!(read_account_ledger(&runtime, &kind), account);
     account_scope_file(&runtime, &kind)

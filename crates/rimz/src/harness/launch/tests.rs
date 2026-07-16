@@ -201,7 +201,7 @@ fn exec_argv_renders_maximal_launch_identity() {
             channel: Some("design"),
             model: Some("opus"),
             effort: Some("high"),
-            budget: None,
+            budget: Some("$12.50/day"),
         },
     };
 
@@ -237,6 +237,8 @@ fn exec_argv_renders_maximal_launch_identity() {
             "opus",
             "--agent-effort",
             "high",
+            "--agent-budget",
+            "$12.50/day",
             "--exit-on-run-completion",
             "--close-pane-on-exit",
             "--worktree-path",
@@ -372,6 +374,7 @@ fn exec_identity_env_maps_identity_fields() {
             channel: Some("design"),
             model: Some("opus"),
             effort: Some("high"),
+            budget: Some("$12.50/day"),
             ..ExecIdentity::default()
         },
     };
@@ -420,7 +423,36 @@ fn exec_identity_env_maps_identity_fields() {
                 crate::harness::run::ENV_AGENT_EFFORT.to_owned(),
                 "high".to_owned()
             ),
+            (
+                crate::harness::run::ENV_AGENT_BUDGET.to_owned(),
+                "$12.50/day".to_owned()
+            ),
         ])
+    );
+    assert!(!exec_identity_env(&invocation).contains_key("RIMZ_AGENT_MODE"));
+}
+
+#[test]
+fn launch_id_without_a_name_is_not_emitted() {
+    let invocation = ExecInvocation {
+        kind: "claude",
+        action: ExecAction::Launch {
+            prompt: None,
+            extra_args: &[],
+        },
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: ExecIdentity {
+            launch_id: Some("launch_orphan"),
+            ..ExecIdentity::default()
+        },
+    };
+
+    assert_eq!(
+        exec_argv(Path::new("/bin/rimz"), &invocation),
+        argv(&["/bin/rimz", "agents", "exec", "claude"])
     );
 }
 

@@ -473,6 +473,14 @@ mod parse {
                 "{command}"
             );
         }
+
+        let args = parse_exec(&["rimz", "exec", "claude", "--launch-id", "launch_orphan"]);
+        assert_eq!(
+            super::exec::exec_launch_identity(&args)
+                .expect_err("launch id requires a name")
+                .to_string(),
+            "--launch-id requires --agent-name"
+        );
     }
 }
 

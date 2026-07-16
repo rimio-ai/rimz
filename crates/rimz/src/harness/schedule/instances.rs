@@ -93,9 +93,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_file_loads_empty() {
+    fn missing_or_corrupt_file_loads_empty() {
         let dir = tempfile::tempdir().expect("tempdir");
 
+        assert!(load_from(dir.path()).0.is_empty());
+        std::fs::create_dir_all(dir.path().join("rimz")).expect("state dir");
+        std::fs::write(path(dir.path()), b"not json").expect("corrupt state");
         assert!(load_from(dir.path()).0.is_empty());
     }
 
@@ -105,6 +108,12 @@ mod tests {
         let entry = task();
 
         insert_into(dir.path(), "wake", &entry).expect("insert");
+        let encoded = std::fs::read_to_string(path(dir.path())).expect("serialized instances");
+        let value: serde_json::Value = serde_json::from_str(&encoded).expect("instances json");
+        assert_eq!(value["wake"]["agent"], "claude");
+        assert_eq!(value["wake"]["prompt"], "wake");
+        assert_eq!(value["wake"]["root"], "/repo");
+        assert_eq!(value["wake"]["at"], "07:00");
         assert_eq!(
             load_from(dir.path())
                 .0

@@ -1047,6 +1047,81 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
 }
 
 #[test]
+fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
+    let layout = LayoutSpec {
+        columns: vec![Column {
+            rows: vec![
+                Cell::agent(AgentKind::new_unchecked("claude")),
+                Cell::Command {
+                    argv: vec!["watch".to_owned()],
+                },
+                Cell::agent(AgentKind::new_unchecked("codex")),
+            ],
+            stacked: false,
+        }],
+    };
+    let mut resumed = crate::testkit::agent_state("claude", "sess-resume", Timestamp::now());
+    resumed.name = Some("steady-beacon".to_owned());
+    resumed.channel = None;
+    let seeds = vec![CohortSeed::Resume(Box::new(resumed)), CohortSeed::Fresh];
+    let fresh = AgentLaunchIdentity {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: AgentSessionId::from("launch_fresh"),
+        name: "bright-river".to_owned(),
+        name_explicit: false,
+        launch: crate::agents::LaunchParams {
+            channel: Some("fallback".to_owned()),
+            ..Default::default()
+        },
+        run_id: None,
+        prompt: None,
+    };
+
+    let panes = layout_panes_with_names(
+        &layout,
+        LayoutPaneParams {
+            cwd: Path::new("/repo"),
+            prompt: Some("fresh prompt"),
+            prompt_agent_index: Some(1),
+            cleanup_worktree: false,
+            in_place: false,
+            team: None,
+            channel: Some("fallback"),
+            resume_seeds: Some(&seeds),
+        },
+        &[fresh],
+    )
+    .expect("mixed panes");
+
+    let panes = &panes.columns[0].panes;
+    assert_arg_pair(&panes[0].argv, "--resume", "sess-resume");
+    assert_arg_pair(&panes[0].argv, "--agent-channel", "fallback");
+    assert_eq!(panes[1].argv, vec!["watch"]);
+    assert_arg_pair(&panes[2].argv, "--agent-name", "bright-river");
+    assert_arg_pair(&panes[2].argv, "--prompt", "fresh prompt");
+
+    let err = layout_panes_with_names(
+        &layout,
+        LayoutPaneParams {
+            cwd: Path::new("/repo"),
+            prompt: None,
+            prompt_agent_index: None,
+            cleanup_worktree: false,
+            in_place: false,
+            team: None,
+            channel: None,
+            resume_seeds: Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
+        },
+        &[],
+    )
+    .expect_err("identity count mismatch");
+    assert_eq!(
+        err.to_string(),
+        "launch plan missing identity for agent cell 0"
+    );
+}
+
+#[test]
 fn pane_command_stamps_cli_identity_and_close_policy() {
     let cell = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),

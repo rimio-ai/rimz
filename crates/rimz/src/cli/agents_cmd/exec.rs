@@ -433,7 +433,7 @@ fn run_exec_context(
     }))
 }
 
-fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
+pub(super) fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
     match (args.launch_id.as_deref(), args.agent_name.as_deref()) {
         (None, None) => Ok(None),
         (Some(_), None) => bail!("--launch-id requires --agent-name"),
