@@ -775,6 +775,56 @@ fn current_wire_reconstructs_visible_conversation_without_duplicate_prompts() {
 }
 
 #[test]
+fn unknown_and_malformed_wire_records_do_not_block_following_facts() {
+    let lines = concat!(
+        "{\"type\":\"future.record\",\"time\":1,\"payload\":{\"nested\":true}}\n",
+        "{\"type\":\"turn.prompt\",\"time\":2,\"input\":\"malformed\",\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":3,\"event\":\"malformed\"}\n",
+        "{\"type\":\"usage.record\",\"time\":4,\"usage\":\"malformed\"}\n",
+        "{\"type\":\"turn.prompt\",\"time\":5,\"input\":[{\"type\":\"text\",\"text\":\"valid prompt\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":6,\"event\":{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{\"type\":\"text\",\"text\":\"valid answer\"}}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":7,\"event\":{\"type\":\"step.end\",\"uuid\":\"s1\",\"usage\":{\"inputOther\":10}}}\n",
+        "{\"type\":\"usage.record\",\"time\":8,\"model\":\"moonshot/kimi-k2.5\",\"usageScope\":\"turn\",\"usage\":{\"inputOther\":10}}\n",
+    );
+
+    let records = wire::records_from_bytes(lines.as_bytes());
+    let messages = transcript::normalize(&records);
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
+        ["valid prompt", "valid answer"]
+    );
+    assert_eq!(wire::latest_context_tokens(&records), Some(10));
+    assert_eq!(wire::usage_records(&records).len(), 1);
+}
+
+#[test]
+fn interleaved_assistant_steps_keep_completion_and_flush_order() {
+    let lines = concat!(
+        "{\"type\":\"context.append_loop_event\",\"time\":1,\"event\":{\"type\":\"step.begin\",\"uuid\":\"pending\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":2,\"event\":{\"type\":\"content.part\",\"stepUuid\":\"pending\",\"part\":{\"type\":\"text\",\"text\":\"pending first\"}}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":3,\"event\":{\"type\":\"step.begin\",\"uuid\":\"completed\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":4,\"event\":{\"type\":\"content.part\",\"stepUuid\":\"completed\",\"part\":{\"type\":\"text\",\"text\":\"completed first\"}}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":5,\"event\":{\"type\":\"step.end\",\"uuid\":\"completed\"}}\n",
+        "{\"type\":\"turn.prompt\",\"time\":6,\"input\":[{\"type\":\"text\",\"text\":\"next\"}],\"origin\":{\"kind\":\"user\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":7,\"event\":{\"type\":\"content.part\",\"stepUuid\":\"orphan\",\"part\":{\"type\":\"text\",\"text\":\"orphan\"}}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":8,\"event\":{\"type\":\"step.begin\",\"uuid\":\"last\"}}\n",
+        "{\"type\":\"context.append_loop_event\",\"time\":9,\"event\":{\"type\":\"content.part\",\"stepUuid\":\"last\",\"part\":{\"type\":\"text\",\"text\":\"last\"}}}\n",
+    );
+
+    let messages = transcript::parse_messages(lines);
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
+        ["completed first", "pending first", "next", "orphan", "last"]
+    );
+}
+
+#[test]
 fn incremental_assistant_pages_keep_torn_lines_and_accept_mid_step_pages() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("wire.jsonl");
