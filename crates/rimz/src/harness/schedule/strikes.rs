@@ -215,6 +215,10 @@ mod tests {
             note_in(dir.path(), "nightly", Signal::Strike).expect("strike"),
             1
         );
+        let encoded: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path(dir.path())).expect("serialized strikes"))
+                .expect("strikes json");
+        assert_eq!(encoded, serde_json::json!({"nightly": 1}));
         assert_eq!(
             note_in(dir.path(), "nightly", Signal::Strike).expect("strike"),
             2

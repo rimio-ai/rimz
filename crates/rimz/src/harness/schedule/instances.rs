@@ -8,15 +8,15 @@
 
 use std::path::{Path, PathBuf};
 
+use super::overlay_store::{OverlayStore, Result};
 use crate::config::{TaskEntry, Tasks};
-use crate::store::atomic::{Result, write_temp_then_rename_cache};
 use crate::store::paths::state_home;
 use anyhow::Context;
 
-const NAME: &str = "loop-instances.json";
+const STORE: OverlayStore = OverlayStore::new("loop-instances.json", "loop-instances.lock");
 
 pub(super) fn path(state_root: &Path) -> PathBuf {
-    state_root.join("rimz").join(NAME)
+    STORE.path(state_root)
 }
 
 pub(super) fn load() -> Tasks {
@@ -36,10 +36,7 @@ pub(super) fn rename(old: &str, new: &str) -> Result<bool> {
 }
 
 pub(super) fn load_from(state_root: &Path) -> Tasks {
-    let Ok(bytes) = std::fs::read(path(state_root)) else {
-        return Tasks::default();
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
+    Tasks(STORE.load(state_root))
 }
 
 pub(super) fn load_strict_from(state_root: &Path) -> anyhow::Result<Tasks> {
@@ -54,28 +51,18 @@ pub(super) fn load_strict_from(state_root: &Path) -> anyhow::Result<Tasks> {
 }
 
 fn insert_into(state_root: &Path, name: &str, entry: &TaskEntry) -> Result<()> {
-    let mut tasks = load_from(state_root);
-    tasks.0.insert(name.to_owned(), entry.clone());
-    write_temp_then_rename_cache(&path(state_root), &tasks)
+    STORE.mutate(state_root, |tasks| {
+        tasks.insert(name.to_owned(), entry.clone());
+        ((), true)
+    })
 }
 
 fn remove_from(state_root: &Path, name: &str) -> Result<bool> {
-    let mut tasks = load_from(state_root);
-    let removed = tasks.0.remove(name).is_some();
-    if removed {
-        write_temp_then_rename_cache(&path(state_root), &tasks)?;
-    }
-    Ok(removed)
+    STORE.remove::<TaskEntry>(state_root, name)
 }
 
 fn rename_from(state_root: &Path, old: &str, new: &str) -> Result<bool> {
-    let mut tasks = load_from(state_root);
-    let Some(entry) = tasks.0.remove(old) else {
-        return Ok(false);
-    };
-    tasks.0.insert(new.to_owned(), entry);
-    write_temp_then_rename_cache(&path(state_root), &tasks)?;
-    Ok(true)
+    STORE.rename::<TaskEntry>(state_root, old, new)
 }
 
 #[cfg(test)]
@@ -142,5 +129,28 @@ mod tests {
             Some(Some("wake"))
         );
         assert!(!rename_from(dir.path(), "wake", "later").expect("rename absent"));
+    }
+
+    #[test]
+    fn concurrent_inserts_preserve_both_instances() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().to_path_buf();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let writers = ["first", "second"].map(|name| {
+            let root = root.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                insert_into(&root, name, &task()).expect("insert instance");
+            })
+        });
+        barrier.wait();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let tasks = load_from(&root);
+        assert!(tasks.0.contains_key("first"));
+        assert!(tasks.0.contains_key("second"));
     }
 }
