@@ -94,6 +94,8 @@ The `event` hook and the server event stream carry one tagged union — `{ id, t
 | `todo.updated` | `sessionID`, `todos: Todo[]` | todo list (`content`, `status`, `priority` per item) |
 | `file.edited` | `file` | a file-writing signal (no session id — session attribution rides tool parts instead) |
 
+OpenCode 1.18.2 emits an aborted assistant `message.updated` with `input`, `output`, `cache.read`, and `cache.write` all zero and `tokens.total` omitted. This live-verified shape represents an unavailable streaming measurement; it does not report a fresh zero-usage call.
+
 ### Event index (the rest)
 
 `message.removed`, `message.part.removed`, `command.executed`, `file.watcher.updated`, `installation.updated` / `installation.update-available`, `lsp.updated` / `lsp.client.diagnostics`, `pty.{created,updated,exited,deleted}`, `server.connected`, `server.instance.disposed`, `tui.{prompt.append,command.execute,toast.show,session.select}`, `vcs.branch.updated`, and workspace/worktree state events. The v2 SDK also exposes experimental durable `session.next.*` events; the compatibility plugin API does not require an adapter to bind to them.

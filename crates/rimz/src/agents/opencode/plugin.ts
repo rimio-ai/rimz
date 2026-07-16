@@ -164,18 +164,22 @@ export const RimzPlugin: Plugin = async (input) => {
       return;
     }
     const cache = tokens.cache || {};
-    const prior = gauge.get(sessionID);
-    const model = info?.modelID ?? prior?.model;
-    const providerID = info?.providerID ?? prior?.providerID;
-    gauge.set(sessionID, {
-      model,
-      providerID,
-      effort: info?.variant ?? prior?.effort,
+    const tokenGauge = {
       input: numberOrUndefined(tokens.input),
       output: numberOrUndefined(tokens.output),
       cacheRead: numberOrUndefined(cache.read),
       cacheWrite: numberOrUndefined(cache.write),
       total: numberOrUndefined(tokens.total),
+    };
+    const hasMeasuredUsage = Object.values(tokenGauge).some((value) => (value ?? 0) > 0);
+    const prior = gauge.get(sessionID);
+    const model = info?.modelID ?? prior?.model;
+    const providerID = info?.providerID ?? prior?.providerID;
+    gauge.set(sessionID, {
+      ...(hasMeasuredUsage ? tokenGauge : prior),
+      model,
+      providerID,
+      effort: info?.variant ?? prior?.effort,
       // keep the resolved window across token updates; re-resolve on a model switch
       contextWindow: prior?.model === model ? prior?.contextWindow : undefined,
     });

@@ -645,6 +645,8 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("context_window: currentGauge?.contextWindow"));
     assert!(PLUGIN_SOURCE.contains("input.client.config.providers()"));
     assert!(PLUGIN_SOURCE.contains("limit?.input ?? limit?.context"));
+    assert!(PLUGIN_SOURCE.contains("const hasMeasuredUsage ="));
+    assert!(PLUGIN_SOURCE.contains("(value) => (value ?? 0) > 0"));
 
     for event in WIRED_EVENTS {
         assert!(
