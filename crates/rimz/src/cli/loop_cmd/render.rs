@@ -91,7 +91,7 @@ pub(super) fn list(globals: &GlobalFlags) -> Result<()> {
     let now_zoned = now.to_zoned(MachineConfig::load_lenient().time_zone());
     let stats = run_log::stats(&state_home(), &now_zoned);
     let mut blocked_count = 0;
-    let groups = grouped_tasks(&tasks, &pause_entries, &now_zoned, false);
+    let groups = grouped_tasks(tasks, &pause_entries, &now_zoned, false);
     for (idx, group) in groups.into_iter().enumerate() {
         if idx > 0 {
             writeln!(out)?;

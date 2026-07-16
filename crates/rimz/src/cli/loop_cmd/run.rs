@@ -382,37 +382,21 @@ fn print_run_summary(
     outcome: &RunOutcome,
 ) -> Result<()> {
     let mut out = ui::out();
-    write_run_summary(
-        &mut out,
-        name,
-        entry,
-        action_kind,
-        duration_ms,
-        mode,
-        keep,
-        outcome,
-    )?;
-    Ok(())
-}
-
-fn write_run_summary(
-    out: &mut impl Write,
-    name: &str,
-    entry: &TaskEntry,
-    action_kind: TaskActionKind,
-    duration_ms: u64,
-    mode: LoopRunMode,
-    keep: bool,
-    outcome: &RunOutcome,
-) -> std::io::Result<()> {
     match mode {
-        LoopRunMode::Manual => {
-            write_manual_run_summary(out, name, entry, action_kind, duration_ms, keep, outcome)
-        }
+        LoopRunMode::Manual => write_manual_run_summary(
+            &mut out,
+            name,
+            entry,
+            action_kind,
+            duration_ms,
+            keep,
+            outcome,
+        )?,
         LoopRunMode::Scheduled => {
-            write_scheduled_run_summary(out, name, entry, duration_ms, outcome)
+            write_scheduled_run_summary(&mut out, name, entry, duration_ms, outcome)?;
         }
     }
+    Ok(())
 }
 
 fn write_manual_run_summary(
@@ -846,16 +830,20 @@ mod tests {
     ) -> String {
         let mut out = Vec::new();
         let action_kind = TaskAction::from_entry(name, entry).unwrap().kind();
-        write_run_summary(
-            &mut out,
-            name,
-            entry,
-            action_kind,
-            duration_ms,
-            mode,
-            keep,
-            outcome,
-        )
+        match mode {
+            LoopRunMode::Manual => write_manual_run_summary(
+                &mut out,
+                name,
+                entry,
+                action_kind,
+                duration_ms,
+                keep,
+                outcome,
+            ),
+            LoopRunMode::Scheduled => {
+                write_scheduled_run_summary(&mut out, name, entry, duration_ms, outcome)
+            }
+        }
         .unwrap();
         String::from_utf8(out).unwrap()
     }
