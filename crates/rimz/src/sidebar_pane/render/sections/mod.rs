@@ -33,9 +33,9 @@ mod provider;
 mod worktree;
 
 pub(in crate::sidebar_pane::render) use agent_card::awaiting_first_prompt_affordance;
-pub(super) use cockpit::{cockpit_spend_line, cockpit_summary_line};
+pub(super) use cockpit::{CockpitBadges, cockpit_spend_line, cockpit_summary_line};
 pub(super) use fleet::{fleet_header_lines, fleet_size, open_pr_total};
-pub(crate) use fleet::{status_total, unread_total};
+pub(crate) use fleet::{open_pr_rows_total, status_total, unread_total};
 #[cfg(test)]
 pub(super) use process::proc_stats_spans;
 pub(super) use provider::dashboard_panel_lines_with_footer;

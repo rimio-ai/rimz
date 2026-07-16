@@ -14,7 +14,7 @@ use super::chrome::{
     truth_notice_lines,
 };
 use super::sections::{
-    RowCtx, Tier, cockpit_spend_line, cockpit_summary_line, content_width,
+    CockpitBadges, RowCtx, Tier, cockpit_spend_line, cockpit_summary_line, content_width,
     dashboard_panel_lines_with_footer, fleet_header_lines, fleet_size, fleet_store_lines,
     fleet_total_lines, open_pr_total, trim_spans_to_width, unread_total,
     worktree_group_lines_projected,
@@ -656,11 +656,11 @@ pub(super) fn scroll_thumb(offset: usize, scroll_len: usize, viewport: usize) ->
 /// Populated rooms end this fixed zone with a separator blank, so scrolled
 /// cards never touch the cockpit make-up line.
 /// Identity, summary, and the make-up line are never jump targets, so they map
-/// to `None`; the make-up line's status buckets and the summary's unread count
-/// are *filter* targets, returned as [`HitRegion`]s already translated to this
-/// zone's line indices and the chrome-gutter column space. Fixed height for a
-/// given room population, never windowed, so the scroll zone below starts at a
-/// stable row.
+/// to `None`; the make-up line's status buckets and the summary's unread and
+/// open-PR counts are *filter* targets, returned as [`HitRegion`]s already
+/// translated to this zone's line indices and the chrome-gutter column space.
+/// Fixed height for a given room population, never windowed, so the scroll zone
+/// below starts at a stable row.
 pub(super) fn top_lines(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
@@ -706,10 +706,15 @@ pub(super) fn top_lines(
     let today_usd = ui.spend_ratchet.display(spend_epoch, today_usd);
     let spend_line = header.len();
     let unread_picked = ui.make_up_filter == Some(BodyFilter::Unread);
-    let (spend, unread_range) = cockpit_spend_line(
+    let (spend, chip_hits) = cockpit_spend_line(
         theme,
         live_agents,
-        (unread_agents, unread_picked, open_prs),
+        CockpitBadges {
+            unread_agents,
+            unread_picked,
+            open_prs,
+            pr_picked: ui.make_up_filter == Some(BodyFilter::OpenPr),
+        },
         (today_usd, tripped),
         &ui.tally,
         ui.animation_phase,
@@ -718,19 +723,25 @@ pub(super) fn top_lines(
     header.push(spend);
     header.push(hairline_rule(theme, inner));
     let header_len = header.len();
-    let unread_hits = unread_range
-        .map(|(start, end)| {
-            vec![HitRegion::line(
-                spend_line,
-                start + 1..end + 1,
-                HitTarget::BodyFilter(BodyFilter::Unread),
-            )]
-        })
-        .unwrap_or_default();
+    let mut cockpit_hits = Vec::with_capacity(2);
+    if let Some((start, end)) = chip_hits.unread {
+        cockpit_hits.push(HitRegion::line(
+            spend_line,
+            start + 1..end + 1,
+            HitTarget::BodyFilter(BodyFilter::Unread),
+        ));
+    }
+    if let Some((start, end)) = chip_hits.open_pr {
+        cockpit_hits.push(HitRegion::line(
+            spend_line,
+            start + 1..end + 1,
+            HitTarget::BodyFilter(BodyFilter::OpenPr),
+        ));
+    }
     let mut top = RenderedBlock::from_parts(
         header.into_iter().map(pad_chrome).collect(),
         vec![None; header_len],
-        unread_hits,
+        cockpit_hits,
     );
 
     // The fleet header (the cockpit make-up line) is always present and a fixed

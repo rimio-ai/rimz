@@ -58,7 +58,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
 ) -> (Vec<Line<'static>>, Vec<HitRegion>) {
     let status_filter = match filter {
         Some(BodyFilter::Status(status)) => Some(status),
-        Some(BodyFilter::Unread) | None => None,
+        Some(BodyFilter::Unread | BodyFilter::OpenPr) | None => None,
     };
     let buckets = [
         (AgentStatus::Waiting, BucketCluster::Left),
@@ -326,6 +326,14 @@ pub(crate) fn unread_total(groups: &[SidebarWorktreeGroup]) -> usize {
         .flat_map(|group| &group.rows)
         .filter(|row| row.unread)
         .count()
+}
+
+pub(crate) fn open_pr_rows_total(groups: &[SidebarWorktreeGroup]) -> usize {
+    groups
+        .iter()
+        .filter(|group| group.pr_state == Some(WorktreePrState::Open))
+        .map(|group| group.rows.len())
+        .sum()
 }
 
 pub(in crate::sidebar_pane::render) fn open_pr_total(groups: &[SidebarWorktreeGroup]) -> usize {

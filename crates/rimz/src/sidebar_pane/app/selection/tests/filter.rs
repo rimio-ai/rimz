@@ -276,6 +276,92 @@ fn unread_count_click_toggles_the_unread_lens() {
     );
 }
 
+#[test]
+fn pr_count_click_toggles_the_open_pr_lens() {
+    let ws = workspace();
+    let mut snapshot = filterable_snapshot(&ws);
+    snapshot.worktree_groups[1].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.worktree_groups[1].pr_number = Some(91);
+    let mut ui = UiState::default();
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let texts: Vec<String> = composed
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        })
+        .collect();
+    let pr_hit = composed
+        .interactions
+        .regions()
+        .iter()
+        .find(|hit| hit.target == HitTarget::BodyFilter(BodyFilter::OpenPr))
+        .expect("open PR count emits a hit when an open PR lane exists");
+    assert_eq!(
+        text_cell_range(
+            &texts[pr_hit.rows.start],
+            pr_hit.columns.start,
+            pr_hit.columns.end
+        ),
+        "⑃ 1",
+        "open PR hit covers only the glyph and count, not its leading space"
+    );
+    let pr_column = pr_hit.columns.start;
+    let pr_row = u16::try_from(pr_hit.rows.start).unwrap();
+
+    ui.interactions = composed.interactions;
+    let outcome = handle_mouse_click(pr_column, pr_row, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(outcome.effect, None);
+    assert_eq!(ui.make_up_filter, Some(BodyFilter::OpenPr));
+
+    let theme = ui.theme(&snapshot.theme);
+    let picked = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    let glyph_index = picked.lines[usize::from(pr_row)]
+        .spans
+        .iter()
+        .position(|span| span.content.as_ref() == "⑃")
+        .expect("picked open PR glyph is its own span");
+    for span in &picked.lines[usize::from(pr_row)].spans[glyph_index..=glyph_index + 1] {
+        assert!(
+            span.style.bg.is_some()
+                || span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::REVERSED),
+            "picked open PR glyph and count read as one chip"
+        );
+        assert!(
+            span.style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD),
+            "picked open PR chip keeps the count weight"
+        );
+    }
+
+    let outcome = handle_mouse_click(pr_column, pr_row, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.make_up_filter, None);
+
+    snapshot.worktree_groups[1].pr_state = None;
+    snapshot.worktree_groups[1].pr_number = None;
+    let mut ui = UiState::default();
+    let theme = ui.theme(&snapshot.theme);
+    let composed = render::compose_lines(&snapshot, None, &ui, theme.as_ref(), 54, 64);
+    assert!(
+        composed
+            .interactions
+            .regions()
+            .iter()
+            .all(|hit| hit.target != HitTarget::BodyFilter(BodyFilter::OpenPr)),
+        "zero open PR lanes leave the cockpit count inert"
+    );
+}
+
 fn text_cell_range(text: &str, start: u16, end: u16) -> String {
     let start = byte_index_at_cell(text, usize::from(start));
     let end = byte_index_at_cell(text, usize::from(end));
@@ -315,6 +401,13 @@ fn make_up_filter_auto_clears_when_its_bucket_empties() {
     assert_eq!(
         ui.make_up_filter,
         Some(BodyFilter::Status(AgentStatus::Failed))
+    );
+
+    ui.make_up_filter = Some(BodyFilter::OpenPr);
+    reconcile_selection(&mut ui, &snapshot, None);
+    assert_eq!(
+        ui.make_up_filter, None,
+        "a stale open PR lens clears after its last PR resolves"
     );
 }
 #[test]

@@ -9,7 +9,8 @@ use crate::{SidebarSnapshot, triage_key};
 use crate::sidebar_pane::render::HitTarget;
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, ManualScroll, UiState, active_dashboard_tab,
-    dashboard_tabbed, dashboard_tabs, selected_agent_kind, status_total, unread_total,
+    dashboard_tabbed, dashboard_tabs, open_pr_rows_total, selected_agent_kind, status_total,
+    unread_total,
 };
 use crate::sidebar_pane::view::VisibleRoster;
 
@@ -708,6 +709,7 @@ fn filter_total(snapshot: &SidebarSnapshot, filter: BodyFilter) -> usize {
     match filter {
         BodyFilter::Status(status) => status_total(&snapshot.worktree_groups, status),
         BodyFilter::Unread => unread_total(&snapshot.worktree_groups),
+        BodyFilter::OpenPr => open_pr_rows_total(&snapshot.worktree_groups),
     }
 }
 

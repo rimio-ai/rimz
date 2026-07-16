@@ -5,13 +5,14 @@ use std::ops::Range;
 
 use crate::agents::AgentStatus;
 use crate::ids::PaneId;
-use crate::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup};
+use crate::{SidebarRow, SidebarSnapshot, SidebarWorktreeGroup, WorktreePrState};
 
 /// Transient cockpit lens applied only to body membership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BodyFilter {
     Status(AgentStatus),
     Unread,
+    OpenPr,
 }
 
 /// Maximum calm rows painted before overflow moves behind `+K more`.
@@ -200,7 +201,8 @@ fn project_group<'a>(
     expanded: bool,
     held: Option<&HashSet<String>>,
 ) -> GroupProjection<'a> {
-    project_rows(&group.rows, group.finished, filter, expanded, held)
+    let pr_open = group.pr_state == Some(WorktreePrState::Open);
+    project_rows(&group.rows, group.finished, filter, expanded, held, pr_open)
 }
 
 fn project_rows<'a>(
@@ -209,6 +211,7 @@ fn project_rows<'a>(
     filter: Option<BodyFilter>,
     expanded: bool,
     held: Option<&HashSet<String>>,
+    pr_open: bool,
 ) -> GroupProjection<'a> {
     let process_is_only_live_member = process_is_only_live_member(source);
     let liveness_process_id = process_is_only_live_member
@@ -244,7 +247,7 @@ fn project_rows<'a>(
         natural_visible += usize::from(natural);
 
         let visible = match filter {
-            Some(filter) => row_passes_filter(row, Some(filter)),
+            Some(filter) => row_passes_filter(row, Some(filter), pr_open),
             None if expanded => true,
             None if finished => revealed,
             None => {
@@ -273,11 +276,16 @@ fn process_is_only_live_member(rows: &[SidebarRow]) -> bool {
 }
 
 /// One body filter predicate shared by projection and cockpit behavior.
-pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<BodyFilter>) -> bool {
+pub(crate) fn row_passes_filter(
+    row: &SidebarRow,
+    filter: Option<BodyFilter>,
+    pr_open: bool,
+) -> bool {
     match filter {
         None => true,
         Some(BodyFilter::Status(status)) => row.status() == Some(status),
         Some(BodyFilter::Unread) => row.unread,
+        Some(BodyFilter::OpenPr) => pr_open,
     }
 }
 
@@ -286,7 +294,7 @@ pub fn capped_visible_rows<'a>(
     rows: &'a [SidebarRow],
     held: Option<&HashSet<String>>,
 ) -> Vec<&'a SidebarRow> {
-    project_rows(rows, false, None, false, held).rows
+    project_rows(rows, false, None, false, held, false).rows
 }
 
 fn row_band(row: &SidebarRow) -> u8 {
@@ -402,6 +410,27 @@ mod tests {
             None,
         );
         assert_eq!(ids(&filtered), ["done-unread", "done-focused"]);
+    }
+
+    #[test]
+    fn open_pr_filter_keeps_every_row_in_open_pr_groups() {
+        let mut open = group(idle_rows(8));
+        open.key = "open".to_owned();
+        open.rows.push(process_row("open-shell"));
+        open.pr_state = Some(WorktreePrState::Open);
+        open.pr_number = Some(91);
+
+        let mut closed = group(vec![agent_row("closed", AgentStatus::Failed)]);
+        closed.key = "closed".to_owned();
+        closed.pr_state = Some(WorktreePrState::Closed);
+        let snapshot = snapshot(vec![open, closed]);
+
+        let filtered =
+            VisibleRoster::new(&snapshot, Some(BodyFilter::OpenPr), &BTreeSet::new(), None);
+
+        assert_eq!(filtered.len(), 9, "the PR lens bypasses the calm row cap");
+        assert!(ids(&filtered).contains(&"open-shell"));
+        assert!(!ids(&filtered).contains(&"closed"));
     }
 
     fn snapshot(groups: Vec<SidebarWorktreeGroup>) -> SidebarSnapshot {
