@@ -20,7 +20,7 @@ pub const LINUX_X86_64_ARCHIVE: &str = "rimz-x86_64-unknown-linux-gnu.tar.gz";
 pub const DARWIN_AARCH64_ARCHIVE: &str = "rimz-aarch64-apple-darwin.tar.gz";
 pub const DARWIN_X86_64_ARCHIVE: &str = "rimz-x86_64-apple-darwin.tar.gz";
 
-const RELEASES_URL: &str = "https://github.com/rimio-ai/rimz/releases/";
+const RELEASES_URL: &str = "https://github.com/rimio-ai/rimz/releases";
 const LATEST_URL: &str = "https://github.com/rimio-ai/rimz/releases/latest";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 const ARCHIVE_MAX_BYTES: u64 = 128 * 1024 * 1024;
@@ -170,6 +170,7 @@ pub fn release_archive() -> Option<&'static str> {
 pub fn resolve_latest_tag() -> Result<String> {
     let agent = ureq::Agent::config_builder()
         .max_redirects(0)
+        .http_status_as_error(false)
         .timeout_global(Some(HTTP_TIMEOUT))
         .build()
         .new_agent();
@@ -305,10 +306,6 @@ pub fn install_over(staged: &Path, dest: &Path) -> Result<()> {
         path: temp.clone(),
         source,
     })?;
-    output.sync_all().map_err(|source| UpdateError::Install {
-        path: temp.clone(),
-        source,
-    })?;
     drop(output);
     #[cfg(unix)]
     {
@@ -322,12 +319,6 @@ pub fn install_over(staged: &Path, dest: &Path) -> Result<()> {
     }
     fs::rename(&temp, dest).map_err(|source| install_error(dir, dest, source))?;
     guard.disarm();
-    File::open(dir)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| UpdateError::Install {
-            path: dir.to_path_buf(),
-            source,
-        })?;
     Ok(())
 }
 
@@ -406,6 +397,7 @@ fn release_asset_url(tag: &str, asset: &str) -> Result<Url> {
 
 fn download_to(url: &Url, path: &Path, max_bytes: u64) -> Result<()> {
     let agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
         .timeout_global(Some(HTTP_TIMEOUT))
         .build()
         .new_agent();
@@ -432,11 +424,6 @@ fn download_to(url: &Url, path: &Path, max_bytes: u64) -> Result<()> {
         path: path.to_path_buf(),
         source,
     })?;
-    file.sync_all()
-        .map_err(|source| UpdateError::SaveDownload {
-            path: path.to_path_buf(),
-            source,
-        })?;
     Ok(())
 }
 
@@ -795,6 +782,14 @@ mod tests {
         );
         assert!(parse_latest_tag("https://example.com/releases/latest").is_err());
         assert!(parse_latest_tag("https://example.com/rimio-ai/rimz/releases/tag/v0.3").is_err());
+    }
+
+    #[test]
+    fn release_asset_url_has_one_download_separator() {
+        assert_eq!(
+            release_asset_url("v0.3", "SHA256SUMS").unwrap().as_str(),
+            "https://github.com/rimio-ai/rimz/releases/download/v0.3/SHA256SUMS"
+        );
     }
 
     fn write_archive(path: &Path, entry_path: &str, bytes: &[u8]) {

@@ -49,9 +49,6 @@ pub fn run(args: UpdateArgs, _globals: &GlobalFlags) -> Result<()> {
         writeln!(render::out(), "Reloading running RimZ surfaces…")?;
         let status = Command::new(&active_exe)
             .arg("reload")
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
             .status()
             .with_context(|| format!("starting {} reload", active_exe.display()))?;
         if !status.success() {
@@ -155,9 +152,6 @@ fn update_standalone(tag: Option<&str>, current_exe: &Path, before_id: &str) -> 
 
 fn run_inherited(command: &mut Command, display: &str) -> Result<()> {
     let status = command
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
         .status()
         .with_context(|| format!("starting `{display}`; install its package manager and retry"))?;
     if !status.success() {
