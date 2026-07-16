@@ -256,9 +256,13 @@ pub(super) fn correlate_subagent_under(
             if result_id != child_id {
                 continue;
             }
-            let expected_workspace = match spec.workspace.as_deref() {
-                Some(path) => fs::canonicalize(Path::new(path.trim())).ok()?,
-                None => parent_workspace.clone(),
+            let expected_workspace = match spec.workspace.as_deref().map(str::trim) {
+                None | Some("inherit") => parent_workspace.clone(),
+                Some(path) => {
+                    let path = Path::new(path);
+                    path.is_absolute().then_some(())?;
+                    fs::canonicalize(path).ok()?
+                }
             };
             (child_workspace == expected_workspace).then_some(())?;
             matched.push(CorrelatedSubagent {

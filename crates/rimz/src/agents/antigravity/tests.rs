@@ -650,6 +650,14 @@ fn subagent_correlation_rejects_unsafe_identity_uri_and_workspace() {
     });
     let remote_parent = write_subagent_fixture(dir.path(), SESSION_ID, &remote);
     assert!(correlate(&remote_parent, SESSION_ID, &workspace).is_none());
+
+    let relative_workspace = fixture.replacen(
+        "\"TypeName\":\"explore\"}",
+        "\"TypeName\":\"explore\",\"Workspace\":\"relative\"}",
+        1,
+    );
+    let relative_parent = write_subagent_fixture(dir.path(), SESSION_ID, &relative_workspace);
+    assert!(correlate(&relative_parent, SESSION_ID, &workspace).is_none());
 }
 
 #[test]

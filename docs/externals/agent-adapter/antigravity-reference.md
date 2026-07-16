@@ -451,7 +451,7 @@ The statusline schema exposes active subagents with `name`, `role`, and `status`
 A live 1.1.2 two-child run resolves the stable relation through hooks and transcripts:
 
 - Every child receives the ordinary command hooks with its own stable `conversationId`, first workspace path, and dedicated transcript path. Child hooks do not carry a parent ID.
-- Before either child's first hook, the parent appends a completed `MODEL` / `PLANNER_RESPONSE` record whose `invoke_subagent.args.Subagents[]` entries carry `Prompt`, `Role`, `TypeName`, and optional `Workspace` in request order.
+- Before either child's first hook, the parent appends a completed `MODEL` / `PLANNER_RESPONSE` record whose `invoke_subagent.args.Subagents[]` entries carry `Prompt`, `Role`, `TypeName`, and optional `Workspace` in request order; nested inherited workspaces use the literal `inherit`.
 - The following completed `MODEL` / `INVOKE_SUBAGENT` record contains consecutive JSON objects in `content`, one per requested child in the same order. Each object carries `conversationId` and a `file:` `logAbsoluteUri` naming that child's transcript beneath `brain/<conversationId>`.
 - `manage_subagents(Action=list)` returns the same child IDs after completion but no lifecycle state. Child `PreInvocation`, tool, and `Stop` hooks remain lifecycle authority.
 
