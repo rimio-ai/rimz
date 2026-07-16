@@ -120,6 +120,11 @@ const childCtx = {{
   getContextUsage: () => ({{ percent: 5, contextWindow: 1000, tokens: 50 }}),
   model: {{ id: "gpt-5-mini" }},
 }};
+globalThis[Symbol.for("pi-subagents:manager")] = {{
+  getRecord: (id) => id === "tint-1"
+    ? {{ session: {{ sessionManager: {{ getSessionId: () => "sess-child" }} }} }}
+    : undefined,
+}};
 rimz(pi);
 rimz(childPi);
 
@@ -163,6 +168,11 @@ busHandlers.get("subagents:started")({{
   type: "general-purpose",
   description: "Check the parser",
 }});
+busHandlers.get("subagents:started")({{
+  id: "tint-fallback",
+  type: "Explore",
+  description: "Check degradation",
+}});
 childHandlers.get("session_start")({{ reason: "in-process-child" }}, childCtx);
 busHandlers.get("subagent:async-complete")({{
   runId: "run-1",
@@ -180,6 +190,12 @@ busHandlers.get("subagents:completed")({{
   type: "general-purpose",
   description: "Check the parser",
   tokens: {{ total: 77 }},
+}});
+busHandlers.get("subagents:completed")({{
+  id: "tint-fallback",
+  type: "Explore",
+  description: "Check degradation",
+  tokens: {{ total: 88 }},
 }});
 handlers.get("session_shutdown")({{ reason: "quit" }}, ctx);
 if (busHandlers.size !== 0) {{
@@ -201,11 +217,11 @@ const readPayloads = async () => {{
 let payloads = [];
 for (let i = 0; i < 250; i += 1) {{
   payloads = await readPayloads();
-  if (payloads.length >= 14) break;
+  if (payloads.length >= 16) break;
   await new Promise((resolve) => setTimeout(resolve, 20));
 }}
-if (payloads.length < 14) {{
-  throw new Error(`expected 14 forwarded payloads, got ${{payloads.length}}`);
+if (payloads.length < 16) {{
+  throw new Error(`expected 16 forwarded payloads, got ${{payloads.length}}`);
 }}
 const byEvent = Object.fromEntries(payloads.map((payload) => [payload.hook_event_name, payload]));
 if (byEvent.tool_call?.tool_call_id !== "ask-call") {{
@@ -232,7 +248,7 @@ if ("total_cost_usd" in byEvent.session_shutdown) {{
 }}
 const childStarts = payloads.filter((payload) => payload.hook_event_name === "subagent_started");
 const childStops = payloads.filter((payload) => payload.hook_event_name === "subagent_stopped");
-if (childStarts.length !== 4 || childStops.length !== 4) {{
+if (childStarts.length !== 5 || childStops.length !== 5) {{
   throw new Error(`unexpected child fanout: ${{JSON.stringify({{ childStarts, childStops }})}}`);
 }}
 for (const child of [...childStarts, ...childStops]) {{
@@ -248,9 +264,13 @@ const unnamed = childStarts.find((child) => child.subagent_id === "run-1#2");
 if (unnamed?.subagent_label !== "subagent") {{
   throw new Error(`unnamed parallel child was ${{JSON.stringify(unnamed)}}`);
 }}
-const tint = childStops.find((child) => child.subagent_id === "tint-1");
-if (tint?.subagent_label !== "general-purpose: Check the parser" || tint.total_tokens !== 77) {{
-  throw new Error(`tintinweb mapping was ${{JSON.stringify(tint)}}`);
+const tint = childStops.find((child) => child.subagent_id === "sess-child");
+if (tint?.subagent_label !== "general-purpose: Check the parser" || "total_tokens" in tint) {{
+  throw new Error(`tintinweb session mapping was ${{JSON.stringify(tint)}}`);
+}}
+const fallback = childStops.find((child) => child.subagent_id === "tint-fallback");
+if (fallback?.subagent_label !== "Explore: Check degradation" || fallback.total_tokens !== 88) {{
+  throw new Error(`tintinweb fallback was ${{JSON.stringify(fallback)}}`);
 }}
 "#,
             serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),

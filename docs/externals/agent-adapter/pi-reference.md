@@ -137,7 +137,9 @@ RimZ consumes the public bus events from [`pi-subagents` 0.34.0](https://github.
 
 ### `@tintinweb/pi-subagents` per-agent lifecycle
 
-RimZ consumes the public bus events from [`@tintinweb/pi-subagents` 0.14.1](https://github.com/tintinweb/pi-subagents/tree/v0.14.1). `subagents:started` carries `id`, `type`, and `description`; `subagents:completed` and `subagents:failed` add terminal `status`, result or error detail, tool-use count, duration, and optional `tokens.{input,output,total}`. These bus payloads omit the parent session, so the RimZ extension associates them with the UUID owned by that Pi API factory and forwards only the child identity, label, outcome, optional total tokens, source tag, and cwd.
+RimZ consumes the public bus events from [`@tintinweb/pi-subagents` 0.14.1](https://github.com/tintinweb/pi-subagents/tree/v0.14.1). `subagents:started` carries `id`, `type`, and `description`; `subagents:completed` and `subagents:failed` add terminal `status`, result or error detail, tool-use count, duration, and optional `tokens.{input,output,total}`. These bus payloads omit the parent session, so the RimZ extension associates them with the UUID owned by that Pi API factory.
+
+Tintinweb also publishes its root-owned manager through the stable cross-package registry key [`Symbol.for("pi-subagents:manager")`](https://github.com/tintinweb/pi-subagents/blob/v0.14.1/src/index.ts#L459-L477). The registry's `getRecord(id)` returns the manager record; once created, `record.session` is a Pi SDK `AgentSession`, whose `sessionManager.getSessionId()` supplies the child's real Pi session key. The manager emits its started callback synchronously before calling `runAgent`, while [`onSessionCreated` assigns `record.session` asynchronously](https://github.com/tintinweb/pi-subagents/blob/v0.14.1/src/agent-manager.ts#L224-L284), so consumers defer the lookup rather than assuming the session exists during `subagents:started`.
 
 ## Session JSONL
 

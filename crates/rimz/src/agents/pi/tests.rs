@@ -1133,6 +1133,14 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains("compaction_will_retry"));
     assert!(EXTENSION_SOURCE.contains("has_ui: ctx?.hasUI === true"));
     assert!(EXTENSION_SOURCE.contains("lastSessionId ?? text(data?.sessionId)"));
+    assert!(EXTENSION_SOURCE.contains(r#"Symbol.for("pi-subagents:manager")"#));
+    assert!(EXTENSION_SOURCE.contains("getRecord?.(id)"));
+    assert!(EXTENSION_SOURCE.contains("getSessionId?.()"));
+    assert!(
+        EXTENSION_SOURCE.contains("state?.key ?? text(tintinwebSessionId(childId)) ?? childId")
+    );
+    assert!(EXTENSION_SOURCE.contains("feedTintinwebStart(childId, state, key)"));
+    assert!(EXTENSION_SOURCE.contains("key === childId && totalTokens != null"));
     assert!(EXTENSION_SOURCE.contains("busUnsubscribers.splice(0)"));
     assert!(EXTENSION_SOURCE.contains("unsubscribe();"));
     assert!(EXTENSION_SOURCE.contains("tool_details:"));

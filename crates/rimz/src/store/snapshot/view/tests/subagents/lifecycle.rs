@@ -1,4 +1,83 @@
 use super::*;
+use crate::agents::AgentLifecycleObservation;
+use crate::store::event::EventEnvelope;
+
+#[test]
+fn pi_session_envelopes_and_bridge_events_converge_on_one_rich_child() {
+    for bridge_first in [true, false] {
+        let mut parent = AgentLifecycleObservation::new(
+            Some("parent-session".into()),
+            LifecycleSignal::Registered,
+        );
+        parent.worktree_path = Some("/repo/main".to_owned());
+
+        let mut child_start = AgentLifecycleObservation::new(
+            Some("child-session".into()),
+            LifecycleSignal::Registered,
+        );
+        child_start.launch.model = Some("gpt-5.6-sol".to_owned());
+        child_start.launch.effort = Some("xhigh".to_owned());
+        child_start.total_tokens = Some(12_345);
+
+        let mut child_settled = AgentLifecycleObservation::new(
+            Some("child-session".into()),
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+        );
+        child_settled.launch.model = Some("gpt-5.6-sol".to_owned());
+        child_settled.launch.effort = Some("xhigh".to_owned());
+        child_settled.total_tokens = Some(12_345);
+
+        let mut bridge = AgentLifecycleObservation::new(
+            Some("child-session".into()),
+            LifecycleSignal::SubagentStarted,
+        );
+        bridge.parent_agent_id = Some("parent-session".into());
+        bridge.task = Some("general-purpose: inspect the bridge".to_owned());
+
+        let event = |event_name, observation| {
+            let mut event = EventEnvelope::agent_lifecycle(
+                workspace(),
+                "session",
+                "pi",
+                event_name,
+                &observation,
+            );
+            event.timestamp = epoch();
+            event
+        };
+        let parent = event("session_start", parent);
+        let child_start = event("session_start", child_start);
+        let child_settled = event("agent_settled", child_settled);
+        let adoption = event("SubagentAdopted", bridge.clone());
+        let bridge = event("subagent_started", bridge);
+        let events = if bridge_first {
+            vec![parent, bridge, child_start, child_settled]
+        } else {
+            vec![parent, child_start, bridge, adoption, child_settled]
+        };
+
+        let agents = reduce_agent_states(&events);
+        assert_eq!(
+            agents
+                .iter()
+                .filter(|agent| agent.agent_id == "child-session")
+                .count(),
+            1,
+            "bridge_first={bridge_first}",
+        );
+        let snapshot = room_with_agent_panes(agents);
+        assert_eq!(rows(&snapshot).len(), 1, "bridge_first={bridge_first}");
+        let children = row(&snapshot, "parent-session").sub_agents();
+        assert_eq!(children.len(), 1, "bridge_first={bridge_first}");
+        assert_eq!(children[0].id, "child-session");
+        assert_eq!(children[0].model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(children[0].effort.as_deref(), Some("xhigh"));
+        assert_eq!(children[0].total_tokens, Some(12_345));
+    }
+}
 
 #[test]
 fn sub_agent_nests_under_parent_and_orphans_drop() {

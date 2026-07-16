@@ -26,7 +26,10 @@
 //! blocking tool as a native question and returns neutral so pi can open its
 //! UI. The managed extension also normalizes async child runs from the
 //! `pi-subagents` and `@tintinweb/pi-subagents` event buses into shared child
-//! lifecycle rows. Background tasks stay declared off.
+//! lifecycle rows. Tintinweb children use their in-process Pi session id when
+//! its manager registry resolves it, so their own model, effort, context, and
+//! usage envelopes enrich the same nested row; its bus id remains the fallback
+//! key. Background tasks stay declared off.
 
 pub(crate) mod account;
 mod ask;
@@ -169,7 +172,7 @@ const PI_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "session_before_compact/session_compact",
     },
     subagents: ConcernCoverage::Wired {
-        via: "native subagent_started/subagent_stopped bus events bridged in full by the rimz extension",
+        via: "native subagent_started/subagent_stopped bus events, with tintinweb children joined to their in-process pi session envelopes by session id",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no background-task parking",

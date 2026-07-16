@@ -36,6 +36,20 @@ const numberMaybe = (value) =>
   value == null || !Number.isFinite(Number(value)) ? undefined : Number(value);
 
 const sessionId = (ctx) => ctx?.sessionManager?.getSessionId?.();
+const tintinwebRecord = (id) => {
+  try {
+    return globalThis[Symbol.for("pi-subagents:manager")]?.getRecord?.(id);
+  } catch {
+    return undefined;
+  }
+};
+const tintinwebSessionId = (id) => {
+  try {
+    return tintinwebRecord(id)?.session?.sessionManager?.getSessionId?.();
+  } catch {
+    return undefined;
+  }
+};
 
 const visibleAssistantText = (message) => {
   const content = message?.content;
@@ -91,6 +105,7 @@ export default function rimz(pi) {
   const messagePushBySession = new Map();
   const runAgents = new Map();
   const runLabels = new Map();
+  const tintinwebChildren = new Map();
   let lastSessionId;
   let latestWindows = [];
   const busUnsubscribers = [];
@@ -244,6 +259,29 @@ export default function rimz(pi) {
     typeof value === "string" && value.trim() ? value.trim() : undefined;
   const label = (...candidates) => candidates.map(text).find(Boolean)?.slice(0, 80);
 
+  const feedTintinwebStart = (childId, state, key) => {
+    if (state.startedFed || tintinwebChildren.get(childId) !== state) return;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = undefined;
+    state.key = key;
+    state.startedFed = true;
+    feedSubagent("subagent_started", state.parentId, undefined, {
+      subagent_id: key,
+      subagent_label: state.label,
+      subagent_source: "tintinweb-subagents",
+    });
+  };
+
+  const resolveTintinwebStart = (childId, state, attempt = 0) => {
+    if (state.startedFed || tintinwebChildren.get(childId) !== state) return;
+    const key = text(tintinwebSessionId(childId));
+    if (key || attempt >= 50) {
+      feedTintinwebStart(childId, state, key ?? childId);
+      return;
+    }
+    state.timer = setTimeout(() => resolveTintinwebStart(childId, state, attempt + 1), 100);
+  };
+
   const nicobailonRunErrored = (data, results) =>
     data?.state === "paused"
       ? false
@@ -383,6 +421,10 @@ export default function rimz(pi) {
         // Cleanup is best-effort; shutdown must continue.
       }
     }
+    for (const state of tintinwebChildren.values()) {
+      if (state.timer) clearTimeout(state.timer);
+    }
+    tintinwebChildren.clear();
     // A /reload tears down and re-registers the SAME session id; both
     // children are fire-and-forget, so an end signal racing the re-register
     // could hide the fresh row. Skip the end signal — the reloaded
@@ -480,28 +522,39 @@ export default function rimz(pi) {
       [label(data?.type), label(data?.description)].filter(Boolean).join(": "),
     );
     if (!childId || !childLabel || !lastSessionId) return;
-    feedSubagent("subagent_started", lastSessionId, undefined, {
-      subagent_id: childId,
-      subagent_label: childLabel,
-      subagent_source: "tintinweb-subagents",
-    });
+    const previous = tintinwebChildren.get(childId);
+    if (previous?.timer) clearTimeout(previous.timer);
+    const state = {
+      parentId: lastSessionId,
+      label: childLabel,
+      startedFed: false,
+    };
+    tintinwebChildren.set(childId, state);
+    resolveTintinwebStart(childId, state);
   }));
 
   for (const event of ["subagents:completed", "subagents:failed"]) {
     busUnsubscribers.push(pi.events.on(event, (data) => {
       const childId = text(data?.id);
-      const childLabel = label(
+      const state = tintinwebChildren.get(childId);
+      const childLabel = state?.label ?? label(
         [label(data?.type), label(data?.description)].filter(Boolean).join(": "),
       );
-      if (!childId || !childLabel || !lastSessionId) return;
+      const parentId = state?.parentId ?? lastSessionId;
+      if (!childId || !childLabel || !parentId) return;
+      const key = state?.key ?? text(tintinwebSessionId(childId)) ?? childId;
+      if (state && !state.startedFed) feedTintinwebStart(childId, state, key);
       const totalTokens = numberMaybe(data?.tokens?.total);
-      feedSubagent("subagent_stopped", lastSessionId, undefined, {
-        subagent_id: childId,
+      feedSubagent("subagent_stopped", parentId, undefined, {
+        subagent_id: key,
         subagent_label: childLabel,
         subagent_source: "tintinweb-subagents",
         errored: event === "subagents:failed",
-        total_tokens: totalTokens == null ? undefined : Math.max(0, Math.round(totalTokens)),
+        ...(key === childId && totalTokens != null
+          ? { total_tokens: Math.max(0, Math.round(totalTokens)) }
+          : {}),
       });
+      tintinwebChildren.delete(childId);
     }));
   }
 

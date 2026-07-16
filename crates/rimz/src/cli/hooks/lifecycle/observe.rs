@@ -116,11 +116,17 @@ fn record_mapped_lifecycle_observation(
         );
     }
     let waiting_cleared = transition.is_some_and(|transition| transition.waiting_cleared);
-    // Capture child rows before a parent Stop can make a resting provisional
-    // root look superseded in the freshly rebuilt view. Adoption still appends
-    // after the parent event below.
-    let pre_adoption_snapshot = (observation.parent_agent_id.is_none()
+    // Capture child rows before the triggering event changes their shape. A
+    // parent Stop can make a resting provisional root look superseded, while
+    // keyed child evidence can update a self-registered root before the
+    // guarded adoption append below reparents it.
+    let pre_adoption_snapshot = ((observation.parent_agent_id.is_none()
         && matches!(observation.signal, LifecycleSignal::TurnEnded { .. }))
+        || (observation.parent_agent_id.is_some()
+            && matches!(
+                observation.signal,
+                LifecycleSignal::SubagentStarted | LifecycleSignal::SubagentStopped { .. }
+            )))
     .then(|| store.snapshot_cached().ok())
     .flatten();
     let (rotation_due, observation_recorded) =
@@ -146,6 +152,13 @@ fn record_mapped_lifecycle_observation(
             }
         };
     if observation_recorded {
+        adopt_observed_subagent(
+            workspace,
+            store,
+            agent,
+            &observation,
+            pre_adoption_snapshot.as_ref(),
+        );
         adopt_spawned_subagents(
             workspace,
             store,
@@ -160,6 +173,45 @@ fn record_mapped_lifecycle_observation(
         rotation_due,
         waiting_cleared,
     }
+}
+
+fn adopt_observed_subagent(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    observation: &AgentLifecycleObservation,
+    pre_adoption_snapshot: Option<&rimz::store::snapshot::SidebarSnapshot>,
+) {
+    if !matches!(
+        observation.signal,
+        LifecycleSignal::SubagentStarted | LifecycleSignal::SubagentStopped { .. }
+    ) {
+        return;
+    }
+    let (Some(child_id), Some(parent_id), Some(snapshot)) = (
+        observation.agent_id.as_ref(),
+        observation.parent_agent_id.as_ref(),
+        pre_adoption_snapshot,
+    ) else {
+        return;
+    };
+    let child_is_unparented_root = snapshot.agents.iter().any(|state| {
+        state.kind.as_str() == agent.descriptor().kind
+            && state.agent_id == *child_id
+            && state.parent_agent_id.is_none()
+    });
+    if !child_is_unparented_root {
+        return;
+    }
+    append_subagent_adoption(
+        workspace,
+        store,
+        agent,
+        snapshot,
+        parent_id,
+        observation.clone(),
+        observation.signal.clone(),
+    );
 }
 
 fn adopt_spawned_subagents(
@@ -193,6 +245,60 @@ fn adopt_spawned_subagents(
         );
         return;
     };
+    for child in spawned {
+        let child_state = snapshot.agents.iter().find(|state| {
+            state.kind.as_str() == agent.descriptor().kind && state.agent_id == child.child_agent_id
+        });
+        let errored =
+            child_state.is_some_and(|state| state.status == rimz::agents::AgentStatus::Failed);
+        let mut observation = AgentLifecycleObservation::new(
+            Some(child.child_agent_id),
+            LifecycleSignal::SubagentStopped { errored },
+        );
+        observation.agent_name = child.agent_name;
+        observation.launch.role = child.role.clone();
+        observation.task = child.role.or_else(|| child.prompt.clone());
+        observation.prompt = child.prompt;
+        observation.pane_id = parent_observation.pane_id.clone();
+        append_subagent_adoption(
+            workspace,
+            store,
+            agent,
+            snapshot,
+            parent_id,
+            observation,
+            LifecycleSignal::SubagentStopped { errored },
+        );
+    }
+}
+
+fn append_subagent_adoption(
+    workspace: &ResolvedWorkspace,
+    store: &Store,
+    agent: &dyn AgentAdapter,
+    snapshot: &rimz::store::snapshot::SidebarSnapshot,
+    parent_id: &rimz::ids::AgentSessionId,
+    mut observation: AgentLifecycleObservation,
+    signal: LifecycleSignal,
+) {
+    let Some(child_id) = observation.agent_id.as_ref() else {
+        return;
+    };
+    if child_id == parent_id {
+        return;
+    }
+    let child_state = snapshot.agents.iter().find(|state| {
+        state.kind.as_str() == agent.descriptor().kind && state.agent_id == *child_id
+    });
+    if child_state.is_some_and(|state| state.parent_agent_id.is_some()) {
+        return;
+    }
+    if child_state
+        .and_then(|state| state.pane.as_ref())
+        .is_some_and(|pane| observation.pane_id.as_ref() != Some(&pane.pane_id))
+    {
+        return;
+    }
     let root_parent_id = snapshot
         .agents
         .iter()
@@ -201,52 +307,23 @@ fn adopt_spawned_subagents(
         })
         .and_then(|state| state.parent_agent_id.clone())
         .unwrap_or_else(|| parent_id.clone());
-
-    for child in spawned {
-        if child.child_agent_id == *parent_id {
-            continue;
-        }
-        let child_state = snapshot.agents.iter().find(|state| {
-            state.kind.as_str() == agent.descriptor().kind && state.agent_id == child.child_agent_id
-        });
-        if child_state.is_some_and(|state| state.parent_agent_id.is_some()) {
-            continue;
-        }
-        if child_state
-            .and_then(|state| state.pane.as_ref())
-            .is_some_and(|pane| parent_observation.pane_id.as_ref() != Some(&pane.pane_id))
-        {
-            continue;
-        }
-
-        let errored =
-            child_state.is_some_and(|state| state.status == rimz::agents::AgentStatus::Failed);
-        let mut observation = AgentLifecycleObservation::new(
-            Some(child.child_agent_id),
-            LifecycleSignal::SubagentStopped { errored },
+    observation.signal = signal;
+    observation.parent_agent_id = Some(root_parent_id);
+    let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
+    if let Err(err) = store.append_agent_lifecycle(AgentLifecycleIntent {
+        session_name: &workspace.session_name,
+        agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
+        event_name: "SubagentAdopted",
+        observation: &observation,
+        transition,
+    }) {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = "SubagentAdopted",
+            child_id = observation.agent_id.as_deref().unwrap_or(""),
+            error = %err,
+            "lifecycle: failed to record retroactive subagent adoption",
         );
-        observation.parent_agent_id = Some(root_parent_id.clone());
-        observation.agent_name = child.agent_name;
-        observation.launch.role = child.role.clone();
-        observation.task = child.role.or_else(|| child.prompt.clone());
-        observation.prompt = child.prompt;
-        observation.pane_id = parent_observation.pane_id.clone();
-        let transition = log_lifecycle_transition(store, agent.descriptor().kind, &observation);
-        if let Err(err) = store.append_agent_lifecycle(AgentLifecycleIntent {
-            session_name: &workspace.session_name,
-            agent_kind: rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind),
-            event_name: "SubagentAdopted",
-            observation: &observation,
-            transition,
-        }) {
-            warn!(
-                agent = agent.descriptor().kind,
-                event = "SubagentAdopted",
-                child_id = observation.agent_id.as_deref().unwrap_or(""),
-                error = %err,
-                "lifecycle: failed to record retroactive subagent adoption",
-            );
-        }
     }
 }
 

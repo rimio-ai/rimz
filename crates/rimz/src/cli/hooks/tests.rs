@@ -255,6 +255,94 @@ fn feed_copilot(store: &rimz::Store, event_name: &str, payload: serde_json::Valu
     .unwrap();
 }
 
+struct PiAdoptionTestAdapter {
+    pane_id: PaneId,
+}
+
+impl rimz::agents::AgentAdapter for PiAdoptionTestAdapter {
+    fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
+        rimz::agents::PiAdapter.descriptor()
+    }
+
+    fn classify_hook(
+        &self,
+        event_name: &str,
+        payload: &serde_json::Value,
+    ) -> rimz::agents::ClassifiedHook {
+        rimz::agents::PiAdapter.classify_hook(event_name, payload)
+    }
+
+    fn render_neutral(&self, event_name: &str) -> rimz::agents::Result<Option<serde_json::Value>> {
+        rimz::agents::PiAdapter.render_neutral(event_name)
+    }
+
+    fn observe_lifecycle(
+        &self,
+        event_name: &str,
+        payload: &serde_json::Value,
+    ) -> Option<AgentLifecycleObservation> {
+        let mut observation = rimz::agents::PiAdapter.observe_lifecycle(event_name, payload)?;
+        observation.pane_id = Some(self.pane_id.clone());
+        Some(observation)
+    }
+}
+
+fn feed_pi(
+    store: &rimz::Store,
+    adapter: &dyn rimz::agents::AgentAdapter,
+    event_name: &str,
+    payload: serde_json::Value,
+) {
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        store,
+        adapter,
+        event_name,
+        &payload,
+        Some(std::process::id()),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+}
+
+fn pi_session_payload(session_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session_id,
+        "cwd": "/tmp/hooks-test",
+        "model": "gpt-5.6-sol",
+        "effort": "xhigh",
+        "context_pct": 12,
+        "context_window": 200_000,
+        "total_tokens": 24_000,
+    })
+}
+
+fn pi_bridge_payload(parent_id: &str, child_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": parent_id,
+        "cwd": "/tmp/hooks-test",
+        "subagent_id": child_id,
+        "subagent_label": "general-purpose: inspect the bridge",
+        "subagent_source": "tintinweb-subagents",
+    })
+}
+
+fn adoption_signals(store: &rimz::Store) -> Vec<LifecycleSignal> {
+    store
+        .read_events()
+        .unwrap()
+        .iter()
+        .filter_map(|event| match event.kind() {
+            rimz::store::event::EventKind::AgentLifecycle(payload)
+                if payload.event_name.as_deref() == Some("SubagentAdopted") =>
+            {
+                Some(payload.observation.signal.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn seed_subagent_candidate(store: &rimz::Store, agent_id: &str, parent_id: &str) {
     let mut candidate = AgentLifecycleObservation::new(
         Some(AgentSessionId::from(agent_id)),
@@ -690,6 +778,120 @@ fn copilot_child_prompt_and_stop_join_to_the_parent_transcript() {
             LifecycleSignal::SubagentStopped { errored: false },
         ]
     );
+}
+
+#[test]
+fn pi_bridge_adopts_an_existing_rich_root_with_the_live_signal() {
+    let (_dir, store) = hooks_test_store();
+    let adapter = PiAdoptionTestAdapter {
+        pane_id: id("terminal_pi"),
+    };
+    feed_pi(
+        &store,
+        &adapter,
+        "session_start",
+        pi_session_payload("parent-session"),
+    );
+    feed_pi(
+        &store,
+        &adapter,
+        "session_start",
+        pi_session_payload("child-session"),
+    );
+    feed_pi(
+        &store,
+        &adapter,
+        "subagent_started",
+        pi_bridge_payload("parent-session", "child-session"),
+    );
+
+    assert_eq!(
+        adoption_signals(&store),
+        vec![LifecycleSignal::SubagentStarted]
+    );
+    let snapshot = store.snapshot_cached().unwrap();
+    let child = snapshot
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "child-session")
+        .unwrap();
+    assert_eq!(child.parent_agent_id.as_deref(), Some("parent-session"));
+    assert_eq!(child.status, rimz::agents::AgentStatus::Running);
+    assert_eq!(child.model.as_deref(), Some("gpt-5.6-sol"));
+    assert_eq!(child.effort.as_deref(), Some("xhigh"));
+    assert_eq!(child.context_pct, Some(12));
+    assert_eq!(child.total_tokens, Some(24_000));
+}
+
+#[test]
+fn pi_bridge_adoption_preserves_parented_and_foreign_pane_roots() {
+    let parent_adapter = PiAdoptionTestAdapter {
+        pane_id: id("terminal_parent"),
+    };
+
+    let (_dir, parented_store) = hooks_test_store();
+    let mut parented = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("parented-child")),
+        LifecycleSignal::SubagentStarted,
+    );
+    parented.parent_agent_id = Some(AgentSessionId::from("original-parent"));
+    parented.task = Some("existing child".to_owned());
+    parented.pane_id = Some(parent_adapter.pane_id.clone());
+    parented_store
+        .append_agent_lifecycle(rimz::store::AgentLifecycleIntent {
+            session_name: "hooks-test",
+            agent_kind: rimz::ids::AgentKind::new_unchecked("pi"),
+            event_name: "seed-parented",
+            observation: &parented,
+            transition: None,
+        })
+        .unwrap();
+    feed_pi(
+        &parented_store,
+        &parent_adapter,
+        "subagent_started",
+        pi_bridge_payload("new-parent", "parented-child"),
+    );
+    let snapshot = parented_store.snapshot_cached().unwrap();
+    let child = snapshot
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "parented-child")
+        .unwrap();
+    assert_eq!(child.parent_agent_id.as_deref(), Some("original-parent"));
+    assert!(adoption_signals(&parented_store).is_empty());
+
+    let (_dir, foreign_store) = hooks_test_store();
+    let foreign_adapter = PiAdoptionTestAdapter {
+        pane_id: id("terminal_foreign"),
+    };
+    feed_pi(
+        &foreign_store,
+        &parent_adapter,
+        "session_start",
+        pi_session_payload("parent-session"),
+    );
+    feed_pi(
+        &foreign_store,
+        &foreign_adapter,
+        "session_start",
+        pi_session_payload("foreign-child"),
+    );
+    feed_pi(
+        &foreign_store,
+        &parent_adapter,
+        "subagent_started",
+        pi_bridge_payload("parent-session", "foreign-child"),
+    );
+    let snapshot = foreign_store.snapshot_cached().unwrap();
+    let child = snapshot
+        .agents
+        .iter()
+        .find(|state| state.agent_id == "foreign-child")
+        .unwrap();
+    assert_eq!(child.parent_agent_id, None);
+    assert_eq!(child.model.as_deref(), Some("gpt-5.6-sol"));
+    assert!(adoption_signals(&foreign_store).is_empty());
 }
 
 #[test]
