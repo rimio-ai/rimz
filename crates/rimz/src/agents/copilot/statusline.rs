@@ -5,8 +5,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::context::{
-    AgentContext, AgentCost, AgentCurrentUsage, AgentSessionUsage, AgentTokenUsage, clamp_pct,
+    AgentContext, AgentCost, AgentCurrentUsage, AgentSessionUsage, AgentTokenUsage, CostCoverage,
+    clamp_pct,
 };
+use crate::agents::pricing::PriceBook;
 use crate::agents::transcript_fs::{
     deserialize_optional_f64_lossy, deserialize_optional_object_lossy,
     deserialize_optional_string_lossy, deserialize_optional_u64_lossy,
@@ -123,9 +125,53 @@ impl StatuslinePayload {
             || context.cost.is_some())
         .then_some(context)
     }
+
+    pub(super) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
+        let model = priceable_model(self.model.as_ref()?)?;
+        let usage = self.context_window.as_ref()?.session_usage()?;
+        let price = prices.price(model)?;
+        let total_cost_usd = price.cost(
+            usage.input_tokens.unwrap_or(0),
+            usage
+                .output_tokens
+                .unwrap_or(0)
+                .saturating_add(usage.thinking_tokens.unwrap_or(0)),
+            usage.cache_creation_input_tokens.unwrap_or(0),
+            0,
+            usage.cache_read_input_tokens.unwrap_or(0),
+            false,
+        );
+        (total_cost_usd.is_finite() && total_cost_usd > 0.0).then(|| AgentCost {
+            total_cost_usd: Some(total_cost_usd),
+            coverage: CostCoverage::Session,
+            ..AgentCost::default()
+        })
+    }
 }
 
 impl ContextWindow {
+    fn session_usage(&self) -> Option<AgentSessionUsage> {
+        let cached_input = self
+            .total_cache_write_tokens
+            .unwrap_or(0)
+            .saturating_add(self.total_cache_read_tokens.unwrap_or(0));
+        let usage = AgentSessionUsage {
+            input_tokens: self
+                .total_input_tokens
+                .map(|total| total.saturating_sub(cached_input)),
+            output_tokens: self.total_output_tokens,
+            cache_creation_input_tokens: self.total_cache_write_tokens,
+            cache_read_input_tokens: self.total_cache_read_tokens,
+            thinking_tokens: self.total_reasoning_tokens,
+        };
+        (self.total_input_tokens.is_some()
+            || self.total_output_tokens.is_some()
+            || self.total_cache_write_tokens.is_some()
+            || self.total_cache_read_tokens.is_some()
+            || self.total_reasoning_tokens.is_some())
+        .then_some(usage)
+    }
+
     fn into_usage(self) -> Option<AgentTokenUsage> {
         let context_window_size = self.displayed_context_limit.or(self.context_window_size);
         let used_percentage = clamp_pct(
@@ -137,32 +183,21 @@ impl ContextWindow {
                     Some(used as f64 * 100.0 / denominator as f64)
                 }),
         );
+        let current_context_tokens = self.current_context_tokens;
+        let session_usage = self.session_usage();
         let current_usage = self.current_usage.and_then(CurrentUsage::into_usage);
-        let session_usage = AgentSessionUsage {
-            input_tokens: self.total_input_tokens,
-            output_tokens: self.total_output_tokens,
-            cache_creation_input_tokens: self.total_cache_write_tokens,
-            cache_read_input_tokens: self.total_cache_read_tokens,
-            thinking_tokens: self.total_reasoning_tokens,
-        };
-        let session_usage = (!session_usage.is_zero()
-            || self.total_input_tokens.is_some()
-            || self.total_output_tokens.is_some()
-            || self.total_cache_write_tokens.is_some()
-            || self.total_cache_read_tokens.is_some()
-            || self.total_reasoning_tokens.is_some())
-        .then_some(session_usage);
         let usage = AgentTokenUsage {
             context_window_size,
             used_percentage,
             remaining_percentage: clamp_pct(self.remaining_percentage),
-            current_context_tokens: None,
+            current_context_tokens,
             current_usage,
             session_usage,
         };
         (usage.context_window_size.is_some()
             || usage.used_percentage.is_some()
             || usage.remaining_percentage.is_some()
+            || usage.current_context_tokens.is_some()
             || usage.current_usage.is_some()
             || usage.session_usage.is_some())
         .then_some(usage)
@@ -232,6 +267,44 @@ fn split_effort(display_name: Option<String>) -> (Option<String>, Option<String>
     )
 }
 
+fn priceable_model(model: &Model) -> Option<&str> {
+    if let Some(id) = model
+        .id
+        .as_deref()
+        .filter(|id| !id.eq_ignore_ascii_case("auto"))
+    {
+        return Some(id);
+    }
+    let mut model = model.display_name.as_deref()?.rsplit('→').next()?.trim();
+    while let Some((label, qualifier)) = terminal_qualifier(model) {
+        if !is_effort(qualifier) && !is_multiplier(qualifier) {
+            break;
+        }
+        model = label;
+    }
+    (!model.is_empty()).then_some(model)
+}
+
+fn terminal_qualifier(value: &str) -> Option<(&str, &str)> {
+    let prefix = value.strip_suffix(')')?;
+    let (label, qualifier) = prefix.rsplit_once(" (")?;
+    (!label.is_empty() && !qualifier.is_empty()).then_some((label, qualifier))
+}
+
+fn is_effort(value: &str) -> bool {
+    matches!(
+        value.to_ascii_lowercase().as_str(),
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+    )
+}
+
+fn is_multiplier(value: &str) -> bool {
+    value
+        .strip_suffix('x')
+        .or_else(|| value.strip_suffix('X'))
+        .is_some_and(|value| !value.is_empty() && value.parse::<f64>().is_ok())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -248,6 +321,11 @@ mod tests {
         let payload: Value =
             serde_json::from_str(include_str!("tests/fixtures/statusline-modern.json")).unwrap();
 
+        let estimated_cost = StatuslinePayload::parse(&payload)
+            .unwrap()
+            .cost(&PriceBook::embedded())
+            .unwrap();
+
         let context = context(payload).unwrap();
 
         assert_eq!(context.session_name.as_deref(), Some("Fixing auth retry"));
@@ -262,12 +340,12 @@ mod tests {
         assert_eq!(tokens.context_window_size, Some(128_000));
         assert_eq!(tokens.used_percentage, Some(38));
         assert_eq!(tokens.remaining_percentage, Some(65));
-        assert_eq!(tokens.used_tokens(), Some(48_000));
+        assert_eq!(tokens.used_tokens(), Some(48_600));
         assert_eq!(tokens.current_usage.unwrap().output_tokens, Some(900));
         assert_eq!(
             tokens.session_usage,
             Some(AgentSessionUsage {
-                input_tokens: Some(82_000),
+                input_tokens: Some(6_000),
                 output_tokens: Some(6_100),
                 cache_creation_input_tokens: Some(7_000),
                 cache_read_input_tokens: Some(69_000),
@@ -275,6 +353,8 @@ mod tests {
             })
         );
         assert_eq!(context.cost.unwrap().total_cost_usd, None);
+        assert!(estimated_cost.total_cost_usd.is_some_and(|cost| cost > 0.0));
+        assert_eq!(estimated_cost.coverage, CostCoverage::Session);
     }
 
     #[test]
@@ -293,6 +373,7 @@ mod tests {
         .unwrap();
         assert_eq!(derived.context_window_size, Some(200_000));
         assert_eq!(derived.used_percentage, Some(26));
+        assert_eq!(derived.current_context_tokens, Some(51_000));
         assert_eq!(derived.current_usage, None);
 
         let clamped = context(json!({
@@ -387,6 +468,34 @@ mod tests {
             let context = context(json!({"model":{"display_name":raw}})).unwrap();
             assert_eq!(context.model_display_name.as_deref(), display, "{raw}");
             assert_eq!(context.effort.as_deref(), effort, "{raw}");
+        }
+    }
+
+    #[test]
+    fn cost_prefers_concrete_ids_and_resolves_auto_display_targets() {
+        let prices = PriceBook::embedded();
+        for model in [
+            json!({"id":"claude-haiku-4.5","display_name":"ignored"}),
+            json!({"id":"auto","display_name":"Auto → claude-haiku-4.5 (1x) (medium)"}),
+        ] {
+            let payload = json!({
+                "model": model,
+                "context_window": {
+                    "total_input_tokens": 100,
+                    "total_output_tokens": 20,
+                    "total_cache_write_tokens": 30,
+                    "total_cache_read_tokens": 40,
+                    "total_reasoning_tokens": 5
+                }
+            });
+            assert!(
+                StatuslinePayload::parse(&payload)
+                    .unwrap()
+                    .cost(&prices)
+                    .and_then(|cost| cost.total_cost_usd)
+                    .is_some_and(|cost| cost > 0.0),
+                "{model}"
+            );
         }
     }
 }

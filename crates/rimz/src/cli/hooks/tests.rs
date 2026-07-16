@@ -166,6 +166,57 @@ fn feed_antigravity(
     .unwrap();
 }
 
+struct CopilotCorrelationAdapter;
+
+impl rimz::agents::AgentAdapter for CopilotCorrelationAdapter {
+    fn descriptor(&self) -> &'static rimz::agents::AgentDescriptor {
+        rimz::agents::CopilotAdapter.descriptor()
+    }
+
+    fn classify_hook(
+        &self,
+        event_name: &str,
+        payload: &serde_json::Value,
+    ) -> rimz::agents::ClassifiedHook {
+        rimz::agents::CopilotAdapter.classify_hook(event_name, payload)
+    }
+
+    fn render_neutral(&self, event_name: &str) -> rimz::agents::Result<Option<serde_json::Value>> {
+        rimz::agents::CopilotAdapter.render_neutral(event_name)
+    }
+
+    fn observe_lifecycle(
+        &self,
+        event_name: &str,
+        payload: &serde_json::Value,
+    ) -> Option<AgentLifecycleObservation> {
+        let mut observation =
+            rimz::agents::CopilotAdapter.observe_lifecycle(event_name, payload)?;
+        observation.pane_id = Some(id("terminal_88"));
+        Some(observation)
+    }
+
+    fn correlate_subagent(
+        &self,
+        input: rimz::agents::SubagentCorrelationInput<'_>,
+    ) -> Option<rimz::agents::SubagentCorrelation> {
+        rimz::agents::CopilotAdapter.correlate_subagent(input)
+    }
+}
+
+fn feed_copilot(store: &rimz::Store, event_name: &str, payload: serde_json::Value) {
+    handle_lifecycle_hook(
+        &hooks_test_workspace(Some("main")),
+        store,
+        &CopilotCorrelationAdapter,
+        event_name,
+        &payload,
+        Some(std::process::id()),
+        &hooks_test_globals(),
+    )
+    .unwrap();
+}
+
 fn seed_subagent_candidate(store: &rimz::Store, agent_id: &str, parent_id: &str) {
     let mut candidate = AgentLifecycleObservation::new(
         Some(AgentSessionId::from(agent_id)),
@@ -515,6 +566,92 @@ fn correlated_antigravity_children_keep_independent_lifecycle_and_root_parent() 
         Some("root")
     );
     assert_eq!(state("unrelated-root").parent_agent_id, None);
+}
+
+#[test]
+fn copilot_child_prompt_and_stop_join_to_the_parent_transcript() {
+    let (_store_dir, store) = hooks_test_store();
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let parent_dir = transcript_dir.path().join("parent-session");
+    std::fs::create_dir(&parent_dir).unwrap();
+    let transcript = parent_dir.join("events.jsonl");
+    std::fs::write(
+        &transcript,
+        include_str!("../../agents/copilot/tests/fixtures/subagents.jsonl"),
+    )
+    .unwrap();
+    feed_copilot(
+        &store,
+        "sessionStart",
+        serde_json::json!({
+            "sessionId":"parent-session",
+            "source":"startup",
+            "cwd":"/tmp/hooks-test",
+            "transcriptPath":transcript,
+        }),
+    );
+    feed_copilot(
+        &store,
+        "userPromptSubmitted",
+        serde_json::json!({
+            "sessionId":"parent-session",
+            "cwd":"/tmp/hooks-test",
+            "prompt":"delegate this",
+            "transcriptPath":transcript,
+        }),
+    );
+    feed_copilot(
+        &store,
+        "userPromptSubmitted",
+        serde_json::json!({
+            "sessionId":"toolu_alpha",
+            "cwd":"/tmp/hooks-test",
+            "prompt":"Trace the retry flow",
+            "transcriptPath":"",
+        }),
+    );
+    feed_copilot(
+        &store,
+        "agentStop",
+        serde_json::json!({
+            "sessionId":"toolu_alpha",
+            "cwd":"/tmp/hooks-test",
+            "transcriptPath":"",
+        }),
+    );
+
+    let child = store
+        .snapshot_cached()
+        .unwrap()
+        .agents
+        .into_iter()
+        .find(|state| state.agent_id == "toolu_alpha")
+        .unwrap();
+    assert_eq!(child.parent_agent_id.as_deref(), Some("parent-session"));
+    assert_eq!(child.name.as_deref(), Some("researcher"));
+    assert_eq!(child.task.as_deref(), Some("Inspect auth retry"));
+    assert_eq!(child.status, rimz::agents::AgentStatus::Success);
+
+    let signals = store
+        .read_events()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.kind() {
+            rimz::store::event::EventKind::AgentLifecycle(payload)
+                if payload.observation.agent_id.as_deref() == Some("toolu_alpha") =>
+            {
+                Some(payload.observation.signal)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        signals,
+        vec![
+            LifecycleSignal::SubagentStarted,
+            LifecycleSignal::SubagentStopped { errored: false },
+        ]
+    );
 }
 
 #[test]

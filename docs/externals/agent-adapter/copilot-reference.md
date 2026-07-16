@@ -4,7 +4,7 @@
 
 This is the single home for the **GitHub Copilot CLI upstream protocol surface** relevant to RimZ — lifecycle hooks and their decision channel, session identity and persistence, the statusline command, OpenTelemetry, programmatic and ACP modes, authentication, remote control, configuration, and permission modes. It is an implementation research record, not a claim that RimZ currently supports Copilot.
 
-Refresh baseline: GitHub Copilot CLI **1.0.70** (`758c2c9`, released 2026-07-10) and the official GitHub documentation available on **2026-07-10**. GitHub publishes the CLI executable and changelog in [`github/copilot-cli`](https://github.com/github/copilot-cli), but the runtime implementation and its session-event types are not published there. Treat the official hook, configuration, ACP, and OTel references as contracts; undocumented `events.jsonl`, `--output-format=json`, and custom-statusline fields are compatibility evidence only where a version-pinned capture below names them.
+Refresh baseline: GitHub Copilot CLI **1.0.70** (`758c2c9`, released 2026-07-10), a live **1.0.71** compatibility capture, and the official GitHub documentation available on **2026-07-10**. GitHub publishes the CLI executable and changelog in [`github/copilot-cli`](https://github.com/github/copilot-cli), but the runtime implementation and its session-event types are not published there. Treat the official hook, configuration, ACP, and OTel references as contracts; undocumented `events.jsonl`, `--output-format=json`, and custom-statusline fields are compatibility evidence only where a version-pinned capture below names them.
 
 Coverage is **depth on the surfaces an adapter should wire, breadth as an index**. The hook inputs and outputs are documented in full because they are the stable lifecycle and blocking seam. The local state, telemetry, launch, authentication, and remote-control sections identify the exact source of every RimZ concern and mark gaps where GitHub publishes no schema.
 
@@ -44,7 +44,7 @@ copilot help providers
 
 Use **command hooks** as the lifecycle and decision seam. They are local, session-scoped, carry the session ID and cwd on every event, expose synchronous permission decisions, and preserve Copilot's stock interactive UI. This matches RimZ's existing pane-first contract.
 
-Use the **custom statusline command** for live context, model, duration, and token enrichment, with file-exported OTel as the fallback when the managed command is absent or unhealthy. The statusline is the selected lighter UI-owned transport; GitHub documents its session-JSON stdin contract, while the field schema remains version-pinned compatibility evidence. OTel has a published schema but is asynchronous telemetry and remains enrichment rather than lifecycle truth. Copilot dollar cost and account usage stay unsupported; AI credits, the internal response, and official billing endpoints below do not establish an adapter-grade USD ledger.
+Use the **custom statusline command** for live context, model, duration, token enrichment, and a locally priced session estimate, with file-exported OTel as the fallback when the managed command is absent or unhealthy. The statusline is the selected lighter UI-owned transport; GitHub documents its session-JSON stdin contract, while the field schema remains version-pinned compatibility evidence. OTel has a published schema but is asynchronous telemetry and remains enrichment rather than lifecycle truth. Account usage, historical spend, and authoritative provider dollars stay unsupported; AI credits, the internal response, and official billing endpoints below do not establish an adapter-grade USD ledger.
 
 Use **`-i, --interactive <prompt>`** for RimZ prompt-seeded panes and supervised runs: it submits the initial prompt while preserving the stock interactive UI, native asks, and the hook-driven completion path shared with other adapters. Native `-p` prompt mode is a future alternative if RimZ adds a process-output supervised backend. Evaluate **ACP** when RimZ needs structured streaming, permission requests, or session control for a supervised run. Do not replace the interactive pane with ACP: ACP changes RimZ from observing the user's stock CLI into hosting the agent protocol itself.
 
@@ -57,10 +57,10 @@ The candidate transport matrix is:
 | user question | `preToolUse` on `ask_user` plus `notification(elicitation_dialog)` | hook protocol has no dedicated synchronous elicitation-answer event |
 | compaction start | `preCompact` | OTel has start and complete events; hooks have no post-compact event |
 | compaction end | OTel `session.compaction_complete`, or derived next activity | no native post-compact hook |
-| subagents | `subagentStart` / `subagentStop` | built-in `general-purpose` emits neither event |
+| subagents | child `userPromptSubmitted` / `agentStop` joined to parent `subagent.started` | no child tool/permission hooks; token totals stay on the parent |
 | model, effort, context | managed custom statusline in `settings.json` | metadata-only OTel when the managed setting is absent or unhealthy |
 | plan and account usage | no supported adapter transport | internal response and official billing endpoints remain unimplemented research |
-| tokens and non-dollar duration/line counters | managed custom statusline | OTel supplies latest-call tokens only; AI credits remain unmodeled |
+| tokens, estimated dollars, and duration/line counters | managed custom statusline | cumulative totals use the currently resolved model; premium-request billing remains unmodeled |
 | session resume | `--resume`, `--continue`, `--session-id` | session ID is present in hooks |
 | authentication | environment and `copilot login` | no documented machine-readable auth-status command |
 | remote control | `--remote`, `/remote on`, `remoteSessions` | requires a GitHub-hosted repository and eligible account |
@@ -160,7 +160,9 @@ The 1.0.44 changelog says `userPromptSubmitted` hooks can handle a request direc
 
 `agentStop` and `subagentStop` use `transcriptPath`, but the hooks reference does not define the transcript format or promise that the path is the local `session-state/<id>/events.jsonl`. Capture and compare before binding them.
 
-The built-in `general-purpose` agent emits neither `subagentStart` nor `subagentStop`. Other documented built-ins — `explore`, `task`, `code-review`, `rubber-duck`, `research`, and `security-review` — and user custom agents emit both. The payload exposes an agent definition name, not a unique child-run ID; concurrent children with the same `agentName` cannot be durably distinguished from hooks alone. OTel spans provide invocation structure but still require a captured trace/span-to-row identity strategy.
+The built-in `general-purpose` agent emits neither `subagentStart` nor `subagentStop`. Other documented built-ins — `explore`, `task`, `code-review`, `rubber-duck`, `research`, and `security-review` — and user custom agents emit both. Those native payloads expose an agent definition name rather than a unique child-run ID, so RimZ leaves both events uninstalled.
+
+Copilot CLI 1.0.71 instead fires the ordinary installed `userPromptSubmitted` and `agentStop` hooks once per `general-purpose` child. Each child payload sets `sessionId` to the parent's task `toolCallId`, retains the parent `cwd`, and carries an empty `transcriptPath`; two simultaneous children produced distinct `toolu_…` IDs. This standard-hook identity is the durable child key RimZ joins to the parent transcript.
 
 ### Hook outputs and decision channel
 
@@ -315,7 +317,9 @@ Copilot CLI 1.0.70 capture shows root `user.message` and `assistant.message` rec
 
 The captured hook order for a fresh prompt-seeded turn is `userPromptSubmitted`, `sessionStart`, `agentStop`, `sessionEnd`; `sessionStart.initialPrompt` repeats the already-submitted prompt. RimZ uses a non-empty `initialPrompt` only to normalize that start as the duplicate turn edge, while promptless starts retain ordinary registration semantics.
 
-The captured `agentStop` hook input names the same file in `transcriptPath`. RimZ validates the filename and session-ID parent, normalizes only visible user/assistant content, and ignores transformed/encrypted content, reasoning, systems, hooks, tools, and unknown events. Child-session filtering stays deferred until a child capture proves its identity shape.
+The captured root `agentStop` hook input names the same file in `transcriptPath`. RimZ validates the filename and session-ID parent, normalizes only visible user/assistant content, and ignores transformed/encrypted content, reasoning, systems, hooks, tools, and unknown events. A derived path publishes only once the file exists, so the empty child hook path does not create a phantom `session-state/toolu_…/events.jsonl` source.
+
+Copilot CLI 1.0.71 records the parent side of each child relation in three typed records. `tool.execution_start.data` carries `toolCallId`, `toolName: "task"`, and `arguments.name`/`description`/`prompt`/`agent_type`; `subagent.started.data` carries the same `toolCallId` plus `agentName` and `agentDisplayName`; `subagent.completed.data` repeats the same identity at completion. RimZ requires the matching `subagent.started` record, uses its sibling task record for display metadata, and tolerates malformed or unrelated JSONL lines during the bounded scan.
 
 Local session data contains prompts, responses, tools, and modified-file details. It syncs to the user's GitHub account by default when policy permits. `remoteExport: false` opts out. Reading local files for RimZ enrichment stays local and read-only; diagnostics must not copy prompt content unless the user enabled an explicit privacy setting.
 
@@ -335,9 +339,9 @@ User setting `statusLine` runs a command that receives **session JSON on stdin**
 
 The footer can display model/effort, directory, branch, context window, quota, agent, AI used, code changes, username, sandbox, yolo state, and custom content. This proves the TUI maintains the main enrichment values, but the official docs do not publish the statusline input fields, update triggers, timeout, environment, exit handling, ANSI rules, or command-chaining semantics.
 
-A sanitized 1.0.70 capture observed stable top-level `session_id`, `version`, `model`, `context_window`, `cost`, and `ai_used` objects. After one auto-model turn, `model` was `{id: "auto", display_name: "Auto → gpt-5-mini"}` and `context_window` added `current_context_tokens`, `displayed_context_limit`, and `current_context_used_percentage`, while its nominal `context_window_size`, `used_percentage`, `remaining_percentage`, and `remaining_tokens` stayed null. A 1.0.71 compatibility check retained the transport and added latest-call plus cumulative token fields.
+A sanitized 1.0.70 capture observed stable top-level `session_id`, `version`, `model`, `context_window`, `cost`, and `ai_used` objects. After one auto-model turn, `model` was `{id: "auto", display_name: "Auto → gpt-5-mini"}` and `context_window` added `current_context_tokens`, `displayed_context_limit`, and `current_context_used_percentage`, while its nominal `context_window_size`, `used_percentage`, `remaining_percentage`, and `remaining_tokens` stayed null. A 1.0.71 compatibility check retained the transport and added latest-call plus cumulative token fields; the pinned fixture reports `total_input_tokens = 82,000`, exactly `7,000` cache-write + `69,000` cache-read + `6,000` fresh input, while the live capture reports `92,641 = 34,784` cache-write + `57,824` cache-read + `33` fresh input.
 
-RimZ selects `$COPILOT_HOME/settings.json` as the transport and installs `RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source copilot`. `displayed_context_limit` wins over `context_window_size`, `current_context_used_percentage` wins over `used_percentage`, and a missing fill derives only from positive selected denominator plus `current_context_tokens`. `current_usage` is latest-call composition; the five `total_*` token categories are cumulative session counters and do not establish occupancy. `total_tokens`, `last_call_input_tokens`, `ai_used`, premium requests, and remote state stay outside the normalized mapping.
+RimZ selects `$COPILOT_HOME/settings.json` as the transport and installs `RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source copilot`. `displayed_context_limit` wins over `context_window_size`, `current_context_used_percentage` wins over `used_percentage`, and `current_context_tokens` publishes the occupied-window scalar and derives a missing fill against a positive selected denominator. `current_usage` is latest-call composition; the cumulative session split subtracts cache creation and cache reads from `total_input_tokens` to publish fresh input. The feed prices the normalized cumulative split at the concrete `model.id`, or at the resolved arrow target in an `Auto → …` display label, and merges a positive finite estimate into the session sidecar. `total_tokens`, `last_call_input_tokens`, `ai_used`, premium requests, and remote state stay outside the normalized mapping.
 
 The managed object retains rendering options such as `padding`, stores the complete prior statusline JSON value, and restores it on uninstall. The feed forwards the original stdin bytes to the wrapped command and forwards its stdout and exit status, preserving the user's rendered line. Hook readiness requires both this canonical statusline and the marked `$COPILOT_HOME/hooks/rimz.json`; either half remains a removable partial artifact.
 
@@ -389,7 +393,7 @@ The 1.0.70 concurrency gate ran three overlapping turns in each of two direct pr
 
 New RimZ rooms set a private room-runtime file exporter for direct and managed launches and pin `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false`. An ambient `COPILOT_OTEL_FILE_EXPORTER_PATH` is preserved. An OTLP endpoint or explicitly non-file exporter is not redirected; file enrichment remains unavailable unless the user also selects a file exporter. Exact conversation filtering isolates concurrent sessions.
 
-Captured `github.copilot.cost` was finite but `0.0` on each `chat` span, and the aggregate `invoke_agent` span exposed no session-cumulative dollar. This fails the positive cumulative-value and replacement/dedup gates, so RimZ publishes no live session dollars and keeps historical/account Copilot spend unsupported.
+Captured `github.copilot.cost` was finite but `0.0` on each `chat` span, and the aggregate `invoke_agent` span exposed no session-cumulative dollar. This fails the positive cumulative-value and replacement/dedup gates, so OTel publishes no live dollars. The separate statusline token estimate supplies partial realtime cost; historical and account Copilot spend remain unsupported.
 
 The docs publish no rate-limit/quota attributes in the OTel schema. Quota is visible in the native footer; RimZ reads it separately through the bounded undocumented account-usage surface below and does not infer it from telemetry.
 
@@ -498,18 +502,18 @@ The official prerequisite says the cwd must be a Git repository hosted on GitHub
 
 ## Implementation footprints and open gaps
 
-The hooks-first adapter implements the lifecycle, transcript, selected statusline, and narrow OTel fallback documented in [copilot.md](../../internals/agents/copilot.md). Version-pinned Copilot CLI 1.0.70 fixtures cover a clean prompt-mode turn, hook/system noise, final output, and metadata-only OTel; a sanitized 1.0.71 fixture pins the modern statusline field scopes. The remaining live-verification items follow.
+The hooks-first adapter implements the lifecycle, transcript correlation, selected statusline, and narrow OTel fallback documented in [copilot.md](../../internals/agents/copilot.md). Version-pinned Copilot CLI 1.0.70 fixtures cover a clean prompt-mode turn, hook/system noise, final output, and metadata-only OTel; sanitized 1.0.71 fixtures pin child correlation and the modern statusline field scopes. The remaining live-verification items follow.
 
 1. Install a user hook file containing every native camelCase event; prove discovery in interactive and `-p` modes, `disableAllHooks`, `COPILOT_HOME`, path quoting, cwd, environment inheritance, timeout, stderr, neutral stdout, and uninstall.
-2. Record hook payloads for new/resume/new-session switching, prompt, success/failure tool calls, every permission choice, `ask_user`, stop, errors, manual/auto compaction, all built-in subagents, simultaneous same-name subagents, and every session-end reason.
+2. Record hook payloads for new/resume/new-session switching, prompt, success/failure tool calls, every permission choice, `ask_user`, stop, errors, manual/auto compaction, non-`general-purpose` built-ins, nested children, and every session-end reason.
 3. Prove whether `permissionRequest` input contains permission kind, tool arguments, path/URL/command subject, or a stable request ID; the current official reference omits its input schema.
 4. Determine whether `preToolUse(ask_user)` carries the question/options and whether any hook output can answer it; otherwise map answers exclusively through pane send.
 5. Expand the selected statusline capture matrix across model/effort/context tiers, compaction, remote mode, concurrency, provider timeout, and stderr handling without promoting those display signals to lifecycle truth.
-6. Capture child and resumed `events.jsonl` shapes plus `--output-format=json`; keep the reader on guarded visible root messages until those identities are proven.
+6. Capture resumed `events.jsonl` shapes plus `--output-format=json`; keep visible-message parsing root-only and the child join limited to the pinned typed relation records.
 7. Extend OTel only after shared-file interactive concurrency, cumulative-versus-turn replacement, `github.copilot.cost` units, subagent span identity, compaction close, and long-running flush behavior are pinned.
 8. Confirm process names, argv, parent/child tree, cwd, and environment stamping under normal, resume, remote, `-p`, ACP, worktree, and auto-update/restart paths for PID attribution.
 9. Keep the two-file hook/statusline install reversible across provider schema changes; strict writes reject JSONC while read-only health and pass-through discovery tolerate it.
-10. Keep coverage honest: Context Usage and Rich Context are wired through the statusline with OTel fallback, while plan/quota/dollar cost/spend/subagent/remote control remain unsupported until their own sources are proven.
+10. Keep coverage honest: Context Usage and Rich Context are wired through the statusline with OTel fallback; subagents and realtime cost are partial; plan, quota, historical spend, and remote control remain unsupported until their own sources are proven.
 
 The expected initial lifecycle mapping is:
 
@@ -524,7 +528,7 @@ agentStop               -> TurnCompleted
 errorOccurred           -> TurnError
 preCompact              -> CompactionStarted
 OTel compaction_complete-> CompactionEnded (enrichment-backed close)
-subagentStart/Stop      -> child lifecycle (partial identity)
+child prompt/stop      -> child lifecycle after parent transcript join
 sessionEnd              -> SessionEnded
 ```
 

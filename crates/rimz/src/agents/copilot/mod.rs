@@ -13,6 +13,7 @@ mod otel;
 mod paths;
 pub(crate) mod payloads;
 mod statusline;
+mod subagent;
 mod transcript;
 
 use std::collections::BTreeMap;
@@ -35,8 +36,9 @@ use super::managed_statusline::{ManagedStatusLineSpec, RenderingOptions, WrapPol
 use super::{
     AgentAdapter, AgentContext, AgentLifecycleObservation, AgentTurnError, AskKind, ClassifiedHook,
     HookInstallPreview, HookInstallReport, HookUninstallReport, LocalContextRefresh,
-    LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, TranscriptMessage,
-    TurnErrorClass, classify_agent_hook, sanitize_user_prompt,
+    LocalContextRefreshCtx, RefreshTrigger, Result, SessionOrigin, SubagentCorrelation,
+    SubagentCorrelationInput, SubagentIdentity, TranscriptMessage, TurnErrorClass,
+    classify_agent_hook, resolve_subagent_identity, sanitize_user_prompt,
 };
 #[cfg(test)]
 use crate::harness::run::PermissionMode;
@@ -136,8 +138,9 @@ const COPILOT_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         via: "preCompact + next lifecycle signal",
         gap: "no native post-compact hook",
     },
-    subagents: ConcernCoverage::Unsupported {
-        reason: "hooks publish no unique child instance id",
+    subagents: ConcernCoverage::Partial {
+        via: "child prompt/stop hooks joined to the parent transcript's subagent.started toolCallId",
+        gap: "no child tool/permission hooks; token totals stay on the parent",
     },
     background_parking: ConcernCoverage::Unsupported {
         reason: "no parked-on-background signal",
@@ -148,10 +151,11 @@ const COPILOT_COVERAGE: IntegrationCoverage = IntegrationCoverage {
         gap: "notification(agent_idle) is not wired",
     },
     context_usage: ConcernCoverage::Wired {
-        via: "statusline window/fill/current and cumulative token scopes",
+        via: "statusline window/fill/occupied/current and cumulative token scopes",
     },
-    realtime_cost: ConcernCoverage::Unsupported {
-        reason: "OTel chat spans expose token counts but no authoritative session cost",
+    realtime_cost: ConcernCoverage::Partial {
+        via: "statusline cumulative token scopes priced by the local book",
+        gap: "estimated: totals priced at the currently-resolved model; premium-request billing is not modeled",
     },
     rich_context: ConcernCoverage::Wired {
         via: "command statusline payload with metadata-only OTel fallback",
@@ -181,11 +185,13 @@ const COPILOT_LIFECYCLE_HOOKS: LifecycleCoverage = LifecycleCoverage {
     awaiting_input: HookCoverage::Native {
         event: "permissionRequest",
     },
-    subagent_started: HookCoverage::Absent {
-        reason: "hooks publish no unique child instance id",
+    subagent_started: HookCoverage::Derived {
+        via: "child userPromptSubmitted joined to the parent's subagent.started record",
+        gap: "no child tool/permission hooks; token totals stay on the parent",
     },
-    subagent_stopped: HookCoverage::Absent {
-        reason: "hooks publish no unique child instance id",
+    subagent_stopped: HookCoverage::Derived {
+        via: "child agentStop joined to the parent's subagent.started record",
+        gap: "no child tool/permission hooks; token totals stay on the parent",
     },
     compacting: HookCoverage::Native {
         event: "preCompact",
@@ -258,6 +264,14 @@ pub struct CopilotAdapter;
 impl AgentAdapter for CopilotAdapter {
     fn descriptor(&self) -> &'static AgentDescriptor {
         &COPILOT_DESCRIPTOR
+    }
+
+    #[cfg(test)]
+    fn context_cost_fixture(&self) -> Option<super::ContextCostFixture> {
+        Some(super::ContextCostFixture {
+            payload: serde_json::from_str(include_str!("tests/fixtures/statusline-modern.json"))
+                .expect("valid Copilot statusline fixture"),
+        })
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
@@ -426,7 +440,9 @@ impl AgentAdapter for CopilotAdapter {
                 .transcript_path
                 .as_deref()
                 .and_then(|path| paths::validated_transcript_path(Path::new(path), session_id))
-                .or_else(|| paths::session_transcript_path(session_id))
+                .or_else(|| {
+                    paths::session_transcript_path(session_id).filter(|path| path.is_file())
+                })
                 .map(|path| path.to_string_lossy().into_owned());
         }
         if event_name == "sessionStart"
@@ -439,6 +455,37 @@ impl AgentAdapter for CopilotAdapter {
             observation.prompt = sanitize_user_prompt(parsed.prompt.as_deref());
         }
         Some(observation)
+    }
+
+    fn correlate_subagent(
+        &self,
+        input: SubagentCorrelationInput<'_>,
+    ) -> Option<SubagentCorrelation> {
+        let (child_id, parent_id) = match resolve_subagent_identity(
+            self.descriptor().kind,
+            "transcript_correlation",
+            Some(input.child_agent_id.as_str()),
+            Some(input.parent_agent_id.as_str()),
+            &Value::Null,
+        ) {
+            SubagentIdentity::Resolved {
+                agent_id,
+                parent_agent_id,
+            } => (agent_id, parent_agent_id),
+            SubagentIdentity::Quarantined => return None,
+        };
+        let parent_transcript = input
+            .parent_transcript_path
+            .map(Path::to_path_buf)
+            .or_else(|| paths::session_transcript_path(parent_id.as_str()))?;
+        let correlated =
+            subagent::correlate(&parent_transcript, parent_id.as_str(), child_id.as_str())?;
+        Some(SubagentCorrelation {
+            agent_name: correlated.agent_name,
+            role: None,
+            task: correlated.task,
+            prompt: sanitize_user_prompt(correlated.prompt.as_deref()),
+        })
     }
 
     fn observe_turn_error_from_hook(
@@ -527,6 +574,10 @@ impl AgentAdapter for CopilotAdapter {
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
         statusline::StatuslinePayload::parse(payload)?.into_context(source, Timestamp::now())
+    }
+
+    fn context_cost(&self, payload: &Value, prices: &super::PriceBook) -> Option<super::AgentCost> {
+        statusline::StatuslinePayload::parse(payload)?.cost(prices)
     }
 
     fn local_context_refresh(

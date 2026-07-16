@@ -202,6 +202,46 @@ fn agent_stop_accepts_a_matching_native_transcript_and_reads_final_text() {
 }
 
 #[test]
+fn child_hook_without_a_transcript_does_not_publish_a_phantom_path() {
+    let stopped = observation(
+        "agentStop",
+        json!({
+            "sessionId":"toolu_child-with-no-session-state-rimz-test",
+            "transcriptPath":""
+        }),
+    );
+
+    assert_eq!(stopped.transcript_path, None);
+}
+
+#[test]
+fn adapter_correlates_child_hook_ids_through_the_parent_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let session_dir = dir.path().join("parent-session");
+    std::fs::create_dir(&session_dir).unwrap();
+    let path = session_dir.join("events.jsonl");
+    std::fs::write(&path, include_str!("tests/fixtures/subagents.jsonl")).unwrap();
+    let child_id = AgentSessionId::from("toolu_alpha");
+    let parent_id = AgentSessionId::from("parent-session");
+
+    assert_eq!(
+        CopilotAdapter.correlate_subagent(SubagentCorrelationInput {
+            child_agent_id: &child_id,
+            child_workspace: Some(dir.path()),
+            parent_agent_id: &parent_id,
+            parent_workspace: Some(dir.path()),
+            parent_transcript_path: Some(&path),
+        }),
+        Some(SubagentCorrelation {
+            agent_name: Some("researcher".to_owned()),
+            role: None,
+            task: Some("Inspect auth retry".to_owned()),
+            prompt: Some("Trace the retry flow".to_owned()),
+        })
+    );
+}
+
+#[test]
 fn session_start_marks_only_fresh_identity_sources() {
     for (source, expected) in [
         ("startup", Some(SessionOrigin::Fresh)),

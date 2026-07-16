@@ -279,13 +279,13 @@ fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
             .and_then(|tokens| tokens.used_percentage),
         Some(38)
     );
-    assert_eq!(
+    assert!(
         contexts[0]
             .context
             .cost
             .as_ref()
-            .and_then(|cost| cost.total_cost_usd),
-        None
+            .and_then(|cost| cost.total_cost_usd)
+            .is_some_and(|cost| cost > 0.0)
     );
 
     assert_hook_succeeded_neutral(
