@@ -99,6 +99,7 @@ Read that as: ready for personal, daily use today; for production workflows that
 
 ```sh
 # 1 — Install
+curl -fsSL https://raw.githubusercontent.com/rimio-ai/rimz/main/scripts/install.sh | sh
 brew install rimio-ai/rimz/rimz             # Homebrew
 cargo install --locked rimz                 # or Cargo, from crates.io
 
@@ -236,6 +237,12 @@ rimz config set remote_control.codex true     # ensure codex's remote-control da
 Both are off by default, and setting one back to `false` undoes it. The [remote guide](./docs/guide/remote.md#answer-asks-from-your-phone) shows exactly what each toggle runs.
 
 ## Install
+
+`install script`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rimio-ai/rimz/main/scripts/install.sh | sh
+```
 
 `homebrew`:
 

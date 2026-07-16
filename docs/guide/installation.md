@@ -1,6 +1,6 @@
 # Installation
 
-RimZ is a single binary for macOS and Linux. Pick one install path: [Homebrew](#install-with-homebrew-macos) on macOS, a [prebuilt binary](#install-a-prebuilt-binary) from the releases page, or [Cargo](#install-with-cargo). [Building from source](#build-from-source) is for working on RimZ itself or for platforms the prebuilt paths miss.
+RimZ is a single binary for macOS and Linux. Pick one install path: the [install script](#install-with-the-script), [Homebrew](#install-with-homebrew-macos) on macOS, a [prebuilt binary](#install-a-prebuilt-binary) from the releases page, or [Cargo](#install-with-cargo). [Building from source](#build-from-source) is for working on RimZ itself or for platforms the prebuilt paths miss.
 
 ## Prerequisites
 
@@ -12,6 +12,16 @@ RimZ is a single binary for macOS and Linux. Pick one install path: [Homebrew](#
 RimZ refuses to start against a multiplexer below the minimum supported version, and `rimz doctor` reports the installed version and whether it clears that floor. On tmux, 3.6 or newer gives the best experience ([why](#rimz-doctor-flags-the-multiplexer-as-unsupported)).
 
 The multiplexer needs no configuration for RimZ: every room sets its own options on session start and reattach, and your existing Zellij or tmux config keeps owning your theme, shell, and keybinds. The room's essential settings are in [set up your machine](./setup.md#configure-your-multiplexer), and a full baseline for your own sessions is [Zellij and tmux baselines](./multiplexer.md).
+
+## Install with the script
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/rimio-ai/rimz/main/scripts/install.sh | sh
+```
+
+The script detects the platform, downloads the latest release, verifies it against `SHA256SUMS`, and installs RimZ to `/usr/local/bin` when that directory is writable or `~/.local/bin` otherwise.
+
+Pass `RIMZ_INSTALL_DIR` or `RIMZ_VERSION` to the `sh` command on the right side of the pipe to choose the destination or install a specific tag such as `v0.3` or the rolling `latest-main` build. Unsupported prebuilt platforms, including ARM Linux and musl Linux, are directed to the [Cargo install](#install-with-cargo).
 
 ## Install with Homebrew (macOS)
 
