@@ -288,7 +288,13 @@ jobs:
           repo="${GITHUB_REPOSITORY#*/}"
           tap_url="${GITHUB_SERVER_URL}/${owner}/homebrew-rimz.git"
           tap_dir="$(mktemp -d)"
-          auth_header="Authorization: token ${TOKEN}"
+          # Git-over-HTTPS wants Basic auth (username + PAT-as-password); the
+          # API-style `token` scheme is rejected and git falls back to an
+          # interactive prompt, which dies in CI. Mask the base64 form since
+          # only the raw secret is auto-masked.
+          basic_auth="$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')"
+          printf '::add-mask::%s\n' "$basic_auth"
+          auth_header="Authorization: Basic ${basic_auth}"
 
           git -c "http.extraheader=${auth_header}" clone --depth 1 "$tap_url" "$tap_dir"
 
