@@ -1,7 +1,8 @@
 //! Worktree group composition: the bold pod header with its linked-PR identity
 //! and right-pinned git story, the dim `external` divider, and the row roster
 //! with its parallel hit-test map entries. Finished pods collapse hidden agents
-//! into a status-and-name receipt with the accepted work's cost pinned right.
+//! into a status-and-soft-brand-name receipt with the accepted work's cost
+//! pinned right.
 
 use std::collections::HashSet;
 
@@ -23,7 +24,7 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 use crate::sidebar_pane::render::{HitRegion, HitTarget};
 use crate::sidebar_pane::view::{VisibleGroup, VisibleRoster};
 
-use super::agent_card::{row_lines, session_cost_usd};
+use super::agent_card::{brand_tone, row_lines, session_cost_usd};
 use super::{Gutter, RowCtx, content_width, with_gutter};
 
 /// Compose one worktree group's lines, appending to `lines`, and tag each
@@ -169,7 +170,8 @@ fn finished_roster_line(
         spans.push(Span::styled(glyph, status_rest_style(ctx.theme, *status)));
         spans.push(Span::styled(
             format!(" {}", row.display_name()),
-            ctx.theme.muted(),
+            ctx.theme
+                .body_brand(brand_tone(ctx.theme, ctx.providers, &row.name)),
         ));
         roster_width += separator_width + chip_width;
         placed += 1;

@@ -1,5 +1,6 @@
 use super::*;
 use crate::sidebar_pane::render::fmt::dollars2;
+use crate::sidebar_pane::render::theme::Component;
 use std::collections::HashSet;
 
 #[test]
@@ -264,6 +265,46 @@ fn finished_group_collapses_unread_success_until_revealed() {
         map,
         [None, None],
         "finished header and roster have only the toggle meaning"
+    );
+}
+
+#[test]
+fn finished_roster_names_keep_soft_provider_brand_tones() {
+    let mut planner = agent_row("planner", AgentStatus::Success);
+    planner.name = "claude".to_owned();
+    planner.as_agent_mut().expect("agent row").handle = Some("planner".to_owned());
+    let mut mystery = agent_row("mystery", AgentStatus::Success);
+    mystery.name = "unregistered".to_owned();
+    mystery.as_agent_mut().expect("agent row").handle = Some("mystery".to_owned());
+    let mut finished = group(vec![planner, mystery]);
+    finished.finished = true;
+
+    let mut snapshot = snapshot_with(Vec::new());
+    snapshot.worktree_groups = vec![finished];
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    let receipt = lines.last().expect("finished roster receipt");
+    let name_fg = |name: &str| {
+        receipt
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == name)
+            .unwrap_or_else(|| panic!("missing name span {name:?}: {receipt:?}"))
+            .style
+            .fg
+    };
+
+    assert_eq!(
+        name_fg(" planner"),
+        theme.body_brand(theme.clay()).fg,
+        "registered kinds keep their softened descriptor brand"
+    );
+    assert_eq!(
+        name_fg(" mystery"),
+        theme
+            .body_brand(theme.component(Component::UnknownBrand))
+            .fg,
+        "unregistered kinds keep the softened unknown-brand fallback"
     );
 }
 

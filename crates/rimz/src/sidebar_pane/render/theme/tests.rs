@@ -486,14 +486,14 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 LaneSpine => p.selection,
                 WorktreeHeader | BranchDelta => p.body,
                 WorktreePristine | WindowSmall => p.faint,
-                WorktreeMerged | ProcMem | CacheRead | RemoteControl => p.good,
+                ProcMem | CacheRead | RemoteControl => p.good,
                 WorktreeReconciling | Compaction => p.warn,
                 WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu
                 | WindowLarge => p.cool,
                 SubagentHeader | ProcIo | CacheWrite => p.meta,
-                RemoteControlDown => p.alarm,
+                RemoteControlDown | WorktreePrClosed => p.alarm,
                 Input => p.expense,
-                WorktreePrClosed | WindowMedium | UnknownBrand => p.muted,
+                WorktreeMerged | WindowMedium | UnknownBrand => p.muted,
             };
             let got = theme.component(component);
             assert_eq!(got, expected, "{component:?} resolves to its named slot");

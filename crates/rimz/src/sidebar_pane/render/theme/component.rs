@@ -43,13 +43,14 @@ pub(crate) enum Component {
     BranchDelta,
     /// A pristine worktree at the trunk tip — faint baseline chrome.
     WorktreePristine,
-    /// A landed worktree ready to remove — bright positive action tone.
+    /// A landed worktree ready to remove — muted resting verdict; the merge
+    /// glyph carries the state and dollar green stays the right rail's green.
     WorktreeMerged,
     /// A local rebase/merge/cherry-pick in progress — warning tone.
     WorktreeReconciling,
     /// An open pull request for the worktree branch — cool link tone.
     WorktreePrOpen,
-    /// A closed pull request for the worktree branch — muted historical tone.
+    /// A closed, unmerged pull request for the worktree branch — alarm verdict.
     WorktreePrClosed,
     /// The `◌` cache-read token marker.
     CacheRead,
@@ -144,15 +145,15 @@ impl Component {
             LaneSpine => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
             WorktreePristine | WindowSmall => palette.faint,
-            WorktreeMerged | ProcMem | CacheRead | RemoteControl => palette.good,
+            ProcMem | CacheRead | RemoteControl => palette.good,
             WorktreeReconciling | Compaction => palette.warn,
             WorktreePrBadge | WorktreePrOpen | StoreLabel | TokenTotal | ProcCpu | WindowLarge => {
                 palette.cool
             }
             SubagentHeader | ProcIo | CacheWrite => palette.meta,
-            RemoteControlDown => palette.alarm,
+            RemoteControlDown | WorktreePrClosed => palette.alarm,
             Input => palette.expense,
-            WorktreePrClosed | WindowMedium | UnknownBrand => palette.muted,
+            WorktreeMerged | WindowMedium | UnknownBrand => palette.muted,
         }
     }
 }

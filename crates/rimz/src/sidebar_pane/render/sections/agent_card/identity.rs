@@ -10,14 +10,12 @@ use super::*;
 /// The tone resolves from a matched provider panel, then the registered kind's
 /// descriptor brand, then mid-gray chrome for a kind with no registered
 /// descriptor.
-pub(super) fn attention_name_spans(
+pub(in crate::sidebar_pane::render) fn brand_tone(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
-    display: &str,
     kind: &str,
-    attention: CardAttention,
-) -> Vec<Span<'static>> {
-    let brand = providers
+) -> Color {
+    providers
         .iter()
         .find(|panel| panel.kind == kind)
         .map(|panel| theme.brand_tone(panel))
@@ -26,7 +24,17 @@ pub(super) fn attention_name_spans(
                 theme.brand_rgb_tone(descriptor.brand.color, Some(descriptor.brand.color_rgb))
             })
         })
-        .unwrap_or_else(|| theme.component(Component::UnknownBrand));
+        .unwrap_or_else(|| theme.component(Component::UnknownBrand))
+}
+
+pub(super) fn attention_name_spans(
+    theme: &Theme,
+    providers: &[SidebarProviderPanel],
+    display: &str,
+    kind: &str,
+    attention: CardAttention,
+) -> Vec<Span<'static>> {
+    let brand = brand_tone(theme, providers, kind);
     let text = ellipsize(display, NAME_MAX);
     match attention.emphasis {
         CardEmphasis::Blink => unread_run_spans(theme, Some(brand), attention.anim, &text),

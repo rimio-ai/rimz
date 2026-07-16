@@ -30,7 +30,9 @@ mod description;
 mod gauge;
 mod identity;
 
-use self::{description::*, gauge::*, identity::*};
+use self::{description::*, gauge::*};
+pub(in crate::sidebar_pane::render) use identity::brand_tone;
+use identity::{display_context_window, identity_line};
 
 use super::process::{process_detail_line, process_row_line};
 use super::{Gutter, RowCtx, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
