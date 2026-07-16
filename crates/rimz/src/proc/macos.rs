@@ -78,6 +78,19 @@ pub fn process_start_token(pid: u32) -> Option<String> {
     })
 }
 
+pub fn process_is_live(pid: u32, expected_start: Option<&str>) -> bool {
+    let Some(metrics) = stat_metrics(pid) else {
+        return super::unix_kill_probe(pid);
+    };
+    if metrics.state == 'Z' {
+        return false;
+    }
+    match expected_start {
+        Some(expected) => process_start_token(pid).as_deref() == Some(expected),
+        None => true,
+    }
+}
+
 pub fn cwd(pid: u32) -> Option<PathBuf> {
     process_with(
         pid,

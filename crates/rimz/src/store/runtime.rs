@@ -65,7 +65,7 @@ pub fn current_process_owner(
     subject_id: impl Into<String>,
 ) -> RuntimeOwner {
     let pid = std::process::id();
-    RuntimeOwner::new(kind, subject_id, pid, process_start_token(pid))
+    RuntimeOwner::new(kind, subject_id, pid, crate::proc::process_start_token(pid))
 }
 
 pub fn process_owner(
@@ -73,11 +73,11 @@ pub fn process_owner(
     subject_id: impl Into<String>,
     pid: u32,
 ) -> RuntimeOwner {
-    RuntimeOwner::new(kind, subject_id, pid, process_start_token(pid))
+    RuntimeOwner::new(kind, subject_id, pid, crate::proc::process_start_token(pid))
 }
 
 pub fn owner_is_live(owner: &RuntimeOwner) -> bool {
-    process_is_live(owner.pid, owner.process_start.as_deref())
+    crate::proc::process_is_live(owner.pid, owner.process_start.as_deref())
 }
 
 pub fn agent_liveness(agent: &AgentState) -> AgentLiveness {
@@ -96,93 +96,6 @@ pub fn agent_liveness(agent: &AgentState) -> AgentLiveness {
         };
     }
     AgentLiveness::Unknown
-}
-
-#[cfg(target_os = "linux")]
-pub fn process_start_token(pid: u32) -> Option<String> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    linux_process_start_from_stat(&stat).map(ToOwned::to_owned)
-}
-
-#[cfg(target_os = "macos")]
-pub fn process_start_token(pid: u32) -> Option<String> {
-    crate::proc::process_start_token(pid)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn process_start_token(_pid: u32) -> Option<String> {
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn process_is_live(pid: u32, expected_start: Option<&str>) -> bool {
-    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(stat) => stat,
-        Err(_) => return false,
-    };
-    linux_process_stat_is_live(&stat, expected_start)
-}
-
-#[cfg(target_os = "macos")]
-fn process_is_live(pid: u32, expected_start: Option<&str>) -> bool {
-    let Some(metrics) = crate::proc::stat_metrics(pid) else {
-        return unix_kill_probe(pid);
-    };
-    if metrics.state == 'Z' {
-        return false;
-    }
-    match expected_start {
-        Some(expected) => crate::proc::process_start_token(pid).as_deref() == Some(expected),
-        None => true,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_process_stat_is_live(stat: &str, expected_start: Option<&str>) -> bool {
-    if matches!(linux_process_state_from_stat(stat), Some("Z" | "X")) {
-        return false;
-    }
-    match expected_start {
-        Some(expected) => linux_process_start_from_stat(stat) == Some(expected),
-        None => true,
-    }
-}
-
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
-fn process_is_live(pid: u32, _expected_start: Option<&str>) -> bool {
-    unix_kill_probe(pid)
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-fn unix_kill_probe(pid: u32) -> bool {
-    use nix::errno::Errno;
-    use nix::sys::signal::kill;
-    use nix::unistd::Pid;
-
-    let Ok(pid) = i32::try_from(pid) else {
-        return false;
-    };
-    if pid <= 0 {
-        return false;
-    }
-    matches!(kill(Pid::from_raw(pid), None), Ok(()) | Err(Errno::EPERM))
-}
-
-#[cfg(not(unix))]
-fn process_is_live(_pid: u32, _expected_start: Option<&str>) -> bool {
-    true
-}
-
-#[cfg(target_os = "linux")]
-fn linux_process_start_from_stat(stat: &str) -> Option<&str> {
-    let after_comm = stat.rsplit_once(") ")?.1;
-    after_comm.split_whitespace().nth(19)
-}
-
-#[cfg(target_os = "linux")]
-fn linux_process_state_from_stat(stat: &str) -> Option<&str> {
-    let after_comm = stat.rsplit_once(") ")?.1;
-    after_comm.split_whitespace().next()
 }
 
 #[cfg(test)]
@@ -287,16 +200,5 @@ mod tests {
 
         let daemon = RuntimeOwner::new(RuntimeOwnerKind::Daemon, "sess-daemon", u32::MAX, None);
         assert_eq!(agent_liveness(&agent(Some(daemon))), AgentLiveness::Dead);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_process_stat_liveness_rejects_zombies() {
-        let running = "123 (codex) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 12345";
-        let zombie = "123 (codex) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 12345";
-
-        assert_eq!(linux_process_state_from_stat(zombie), Some("Z"));
-        assert!(linux_process_stat_is_live(running, Some("12345")));
-        assert!(!linux_process_stat_is_live(zombie, Some("12345")));
     }
 }

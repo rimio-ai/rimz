@@ -26,7 +26,8 @@ pub use pane_probe::{
 #[cfg(target_os = "macos")]
 pub use macos::{
     argv, children, clk_tck, cmdline, comm, comm_and_ppid, cwd, env_var, exe_path, io_bytes,
-    list_processes, process_start, process_start_token, real_uid, stat_metrics, write_bytes,
+    list_processes, process_is_live, process_start, process_start_token, real_uid, stat_metrics,
+    write_bytes,
 };
 
 fn git_binary() -> &'static Path {
@@ -408,6 +409,42 @@ pub fn process_start_token(_pid: u32) -> Option<String> {
     None
 }
 
+/// Whether `pid` still names the expected live process. The optional start
+/// token comes from [`process_start_token`] and rejects pid reuse where the
+/// platform exposes process identity.
+#[cfg(target_os = "linux")]
+pub fn process_is_live(pid: u32, expected_start: Option<&str>) -> bool {
+    let Some(metrics) = stat_metrics(pid) else {
+        return false;
+    };
+    stat_metrics_is_live(metrics, expected_start)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+pub fn process_is_live(pid: u32, _expected_start: Option<&str>) -> bool {
+    unix_kill_probe(pid)
+}
+
+#[cfg(not(unix))]
+pub fn process_is_live(_pid: u32, _expected_start: Option<&str>) -> bool {
+    true
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn unix_kill_probe(pid: u32) -> bool {
+    use nix::errno::Errno;
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    matches!(kill(Pid::from_raw(pid), None), Ok(()) | Err(Errno::EPERM))
+}
+
 /// The working directory of `pid` from the `/proc/<pid>/cwd` symlink. The sidebar
 /// matches this against a pane's reported cwd to find the in-pane agent process
 /// that backs the pane. `None` on a non-Linux target or an unreadable link.
@@ -561,6 +598,14 @@ fn parse_stat_metrics(stat: &str, page_kb: u64) -> Option<StatMetrics> {
         rss_kb: rss_pages.saturating_mul(page_kb),
         start_ticks,
     })
+}
+
+#[cfg(target_os = "linux")]
+fn stat_metrics_is_live(metrics: StatMetrics, expected_start: Option<&str>) -> bool {
+    if matches!(metrics.state, 'Z' | 'X') {
+        return false;
+    }
+    expected_start.is_none_or(|expected| metrics.start_ticks.to_string() == expected)
 }
 
 /// The system page size in KiB, for scaling stat's `rss` page count. An
@@ -965,16 +1010,33 @@ Uid:\t1000\t1000\t1000\t1000
         // `comm` can carry spaces and nested parens; anchoring on the last `)`
         // keeps every field index correct.
         let stat = "1 (rust (1) :)) S 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 500 3 0";
+        let metrics = parse_stat_metrics(stat, 4).expect("stat metrics");
         assert_eq!(
-            parse_stat_metrics(stat, 4),
-            Some(StatMetrics {
+            metrics,
+            StatMetrics {
                 state: 'S',
                 cpu_ticks: 15, // 10 + 5
                 child_cpu_ticks: 0,
                 rss_kb: 12, // 3 pages × 4 KiB
                 start_ticks: 100,
-            })
+            }
         );
+        assert!(stat_metrics_is_live(metrics, Some("100")));
+        assert!(!stat_metrics_is_live(metrics, Some("101")));
+    }
+
+    #[test]
+    fn process_start_liveness_rejects_zombie_and_dead_states() {
+        let stat = |state| {
+            format!("1 (rust (1) :)) {state} 1 1 1 0 -1 0 0 0 0 0 10 5 0 0 20 0 1 0 100 500 3 0")
+        };
+
+        let running = parse_stat_metrics(&stat('S'), 4).expect("running stat");
+        let zombie = parse_stat_metrics(&stat('Z'), 4).expect("zombie stat");
+        let dead = parse_stat_metrics(&stat('X'), 4).expect("dead stat");
+        assert!(stat_metrics_is_live(running, None));
+        assert!(!stat_metrics_is_live(zombie, Some("100")));
+        assert!(!stat_metrics_is_live(dead, Some("100")));
     }
 
     #[test]
