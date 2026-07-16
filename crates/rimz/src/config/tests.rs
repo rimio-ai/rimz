@@ -254,7 +254,7 @@ fn lenient_load_falls_back_to_defaults_plus_agents_home() {
     let agents_home = tempdir().expect("agents home");
     write_agents_home_fragment(
         agents_home.path(),
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         "claude-planner",
         AGENT_FRAGMENT_FILE,
         "[agents.profiles.claude-planner]\nagent = \"claude\"\n",
@@ -357,7 +357,7 @@ fn agents_home_fragments_merge_profiles_commands_and_teams() {
     let root = tempdir().expect("tempdir");
     write_agents_home_fragment(
         root.path(),
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         "codex-coder",
         AGENT_FRAGMENT_FILE,
         "[agents.commands]\n\
@@ -435,7 +435,7 @@ fn agents_toml_entries_override_agents_home_fragments() {
     let root = tempdir().expect("tempdir");
     write_agents_home_fragment(
         root.path(),
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         "planner",
         AGENT_FRAGMENT_FILE,
         "[agents.profiles.planner]\nagent = \"codex\"\n",
@@ -467,14 +467,14 @@ fn agents_home_fragment_name_clashes_are_sorted_last_wins() {
     let root = tempdir().expect("tempdir");
     write_agents_home_fragment(
         root.path(),
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         "alpha",
         AGENT_FRAGMENT_FILE,
         "[agents.profiles.shared]\nagent = \"claude\"\n",
     );
     write_agents_home_fragment(
         root.path(),
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         "zulu",
         AGENT_FRAGMENT_FILE,
         "[agents.profiles.shared]\nagent = \"codex\"\n",
@@ -497,7 +497,7 @@ fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
     let root = tempdir().expect("tempdir");
     write_agents_home_fragment(
         root.path(),
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         "planner",
         AGENT_FRAGMENT_FILE,
         "[agents.profiles.planner]\nagent = \"claude\"\n",
@@ -548,7 +548,7 @@ fn absent_agents_home_is_noop_and_malformed_fragment_leaves_config_unchanged() {
 
     write_agents_home_fragment(
         root.path(),
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         "broken",
         AGENT_FRAGMENT_FILE,
         "not = = toml",
@@ -581,7 +581,7 @@ fn strict_load_validates_teams_after_agents_home_profiles_merge() {
     let agents_home = tempdir().expect("agents home");
     write_agents_home_fragment(
         agents_home.path(),
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         "claude-planner",
         AGENT_FRAGMENT_FILE,
         "[agents.profiles.claude-planner]\nagent = \"claude\"\n",

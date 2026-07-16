@@ -1,6 +1,6 @@
 //! Per-machine settings, loaded from `~/.config/rimz/config.toml`, `theme.toml`, `agents.toml`, and `loop.toml`. [`MachineConfigFiles`] is the ordered file registry, and [`ConfigEditor`] provides strict effective reads plus comment-preserving writes and template merges. This module also owns selectable theme-scheme lookup and validation.
 //!
-//! Agent and team fragments discovered under `~/.agents/{agents,teams}` are the base layer for `agents.toml`, whose entries take precedence on name clashes. Strict and lenient load paths merge fragments before validating the agents view.
+//! Agent and team fragments discovered under `~/.agents/{profiles,teams}` are the base layer for `agents.toml`, whose entries take precedence on name clashes. Strict and lenient load paths merge fragments before validating the agents view.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in
@@ -109,7 +109,7 @@ const THEME_FILE: &str = "theme.toml";
 const AGENTS_FILE: &str = "agents.toml";
 const LOOP_FILE: &str = "loop.toml";
 const RIMZ_CONFIG_SUBDIR: &str = "rimz";
-const AGENTS_HOME_AGENTS_SUBDIR: &str = "agents";
+const AGENTS_HOME_PROFILES_SUBDIR: &str = "profiles";
 const AGENTS_HOME_TEAMS_SUBDIR: &str = "teams";
 const AGENT_FRAGMENT_FILE: &str = "agent.toml";
 const TEAM_FRAGMENT_FILE: &str = "team.toml";
@@ -695,7 +695,7 @@ impl ConfigStamp {
         let mut fragments = Vec::new();
         collect_agents_home_fragment_stamps(
             agents_home,
-            AGENTS_HOME_AGENTS_SUBDIR,
+            AGENTS_HOME_PROFILES_SUBDIR,
             AGENT_FRAGMENT_FILE,
             &mut fragments,
         )?;
@@ -948,7 +948,7 @@ fn discover_agents_home(root: &Path) -> Result<AgentsFragment> {
     let mut fragment = AgentsFragment::default();
     discover_agents_home_subdir(
         root,
-        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENTS_HOME_PROFILES_SUBDIR,
         AGENT_FRAGMENT_FILE,
         &mut fragment,
     )?;
