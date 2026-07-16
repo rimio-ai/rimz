@@ -1,4 +1,6 @@
 use super::*;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 #[test]
 fn dashboard_mode_is_selected_once_from_display_and_pet_settings() {
@@ -13,8 +15,6 @@ fn dashboard_mode_is_selected_once_from_display_and_pet_settings() {
     snapshot.theme.pets.enabled = true;
     assert_eq!(dashboard_mode(&snapshot), DashboardMode::Pet);
 }
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
 
 fn copilot_panel() -> crate::SidebarProviderPanel {
     let descriptor = crate::agents::descriptor_by_kind("copilot").expect("copilot descriptor");
