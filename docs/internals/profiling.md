@@ -70,6 +70,93 @@ Verify which build is actually running before trusting absolute numbers. Frames 
 - **`pidstat` needs `-t`.** Per-process rows report the main thread only and badly understate a multi-threaded renderer — the same producer read 2.4% as a process row and 38% summed over `-t` thread rows. Parse columns by header name rather than position: a 12-hour locale inserts an AM/PM field and shifts every column.
 - **Cross-check with `/proc/<pid>/stat`.** Delta `utime + stime` (fields 14 and 15) over a fixed window and divide by `CLK_TCK` ticks/s for a scheduler-truth core count, immune to sampling-tool quirks.
 
+## Capture one producer and one hidden consumer
+
+Make process selection part of the evidence instead of choosing the busiest two PIDs. Build one inventory from exact argv slots, worker environment, heartbeat identity, producer ordering, and the published client view; then attach tools only to one proven producer and one consumer whose own tab is not viewed. Treat an absent heartbeat, missing pane-to-tab match, or unknown client view as `unknown`, never as proof that a renderer is hidden.
+
+Start a capture in a temporary directory and keep every raw input there. The inventory below uses the full `RIMZ_SIDEBAR_INSTANCE_ID` rather than the heartbeat filename's short display id; UUIDv7 instance strings sort by birth, and the lexically oldest current-protocol instance in each workspace is the elected producer.
+
+```bash
+capture=$(mktemp -d /tmp/rimz-fleet-profile.XXXXXX)
+raw=$capture/inventory.raw.tsv
+printf 'pid\tthreads\tworkspace\tprotocol\tinstance\tmux\tpane\twatch\tfocused\tbuild\texe\n' > "$raw"
+now=$(date +%s)
+
+for f in /proc/[0-9]*/cmdline; do
+  mapfile -d '' -t argv < "$f" 2>/dev/null || continue
+  [[ ${argv[0]##*/} == rimz && ${argv[1]-} == sidebar && ${argv[2]-} == serve ]] || continue
+  pid=${f#/proc/}; pid=${pid%/cmdline}
+  env_lines=$({ tr '\0' '\n' < "/proc/$pid/environ"; } 2>/dev/null) || continue
+  grep -q '^RIMZ_SIDEBAR_WORKER=' <<< "$env_lines" || continue
+  workspace=$(sed -n 's/^RIMZ_WORKSPACE_ID=//p' <<< "$env_lines" | head -1)
+  instance=$(sed -n 's/^RIMZ_SIDEBAR_INSTANCE_ID=//p' <<< "$env_lines" | head -1)
+  [[ -n $workspace && -n $instance ]] || continue
+  runtime=$(sed -n 's/^XDG_RUNTIME_DIR=//p' <<< "$env_lines" | head -1)
+  runtime=${runtime:-/run/user/$(id -u)}
+  heartbeat=$runtime/rimz/$workspace/heartbeat/sidebar.$instance.json
+  snapshot=$runtime/rimz/$workspace/snapshot.json
+  [[ -r $heartbeat ]] || continue
+  heartbeat_mtime=$(stat -c %Y "$heartbeat")
+  (( now - heartbeat_mtime <= 5 )) || continue # SIDEBAR_HEARTBEAT_TTL
+  protocol=$(jq -r '.protocol_version' "$heartbeat")
+  mux=$(jq -r '.mux' "$heartbeat")
+  pane=$(jq -r '.pane_id // "-"' "$heartbeat")
+  build=$(jq -r '.build // "-"' "$heartbeat")
+  focused=$(jq -r '.focused_pane // "-"' "$snapshot" 2>/dev/null || printf '%s' unknown)
+  watch=unknown
+  if [[ $pane != - && -r $snapshot ]]; then
+    watch=$(jq -r --arg pane "$pane" '
+      . as $frame
+      | ([.tabs[]? | select(any(.panes[]?; .pane_id == $pane)) | .panes[]?.pane_id]) as $tab_panes
+      | if ($tab_panes | length) == 0 then "unknown"
+        elif any($frame.viewed_panes[]?; . as $viewed | $tab_panes | index($viewed)) then "watched"
+        else "hidden" end
+    ' "$snapshot")
+  fi
+  threads=$(awk '/^Threads:/{print $2}' "/proc/$pid/status")
+  exe=$(readlink "/proc/$pid/exe" 2>/dev/null || printf '%s' unreadable)
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$threads" "$workspace" "$protocol" "$instance" "$mux" "$pane" "$watch" "$focused" "$build" "$exe" >> "$raw"
+done
+
+{
+  printf 'pid\tthreads\tworkspace\tprotocol\tinstance\trole\tmux\tpane\twatch\tfocused\tbuild\texe\n'
+  tail -n +2 "$raw" | sort -t $'\t' -k3,3 -k4,4 -k5,5 | awk -F '\t' 'BEGIN{OFS=FS} {key=$3 FS $4; role=(key!=prior ? "producer" : "consumer"); prior=key; print $1,$2,$3,$4,$5,role,$6,$7,$8,$9,$10,$11}'
+} > "$capture/inventory.tsv"
+column -ts $'\t' "$capture/inventory.tsv"
+```
+
+The `watch` derivation mirrors renderer policy: find the heartbeat's pane in the published tab topology, then ask whether any attached client's `viewed_panes` entry belongs to that tab. Preserve `.focused_pane` separately as a consistency check. Pick a `role=producer` row and a `role=consumer,watch=hidden` row from the same workspace/protocol; an `unknown` row stays out of the comparison.
+
+Write a manifest before attaching. Record the date, fixed sample durations, backend, workspace id, selected PIDs and thread counts, instance ids and roles, watch verdict, heartbeat/pane/metrics/store/sidecar timestamps, heartbeat protocol and pane-cache build ids, and whether `/proc/<pid>/exe` ends in ` (deleted)`. Count room shape from the same capture: tabs and viewed/focused panes from the published `snapshot.json`, agents from `rimz sidebar snapshot --json --no-produce`, and live renderers from `inventory.tsv`. Copy the exact selected `/proc/<pid>/exe` inode into the capture directory and record its SHA-256 before symbols disappear; use that artifact and build id for every profiler report.
+
+Measure scheduler CPU and proportional memory over the same fixed window. Save `utime`/`stime` and `smaps_rollup` for both PIDs at each endpoint, sleep once, then sample both again; divide each tick delta by `getconf CLK_TCK` and the elapsed seconds for cores. Report `Pss` from `smaps_rollup`, and compute USS as `Private_Clean + Private_Dirty + Private_Hugetlb`; aggregate PSS rather than RSS across workers because shared mappings make summed RSS double-count memory. Compare memory only on newly started workers after at least two producer refresh cycles: glibc arenas retain historical high-water allocations, so an old process does not answer what the changed steady state allocates.
+
+```bash
+secs=12
+for phase in before after; do
+  for pid in "$producer" "$consumer"; do
+    awk '{print $14, $15}' "/proc/$pid/stat" > "$capture/$pid.$phase.stat"
+    cp "/proc/$pid/smaps_rollup" "$capture/$pid.$phase.smaps_rollup"
+  done
+  [[ $phase == before ]] && sleep "$secs"
+done
+for pid in "$producer" "$consumer"; do
+  awk '/^Pss:/{pss=$2} /^Private_(Clean|Dirty|Hugetlb):/{uss+=$2} END{printf "pid=%s pss_kib=%d uss_kib=%d\n", pid, pss, uss}' pid="$pid" "$capture/$pid.after.smaps_rollup"
+done
+```
+
+Correlate publications before opening a CPU profiler. Record timestamp sequences for `snapshot.json`, `metrics-sample.json`, the durable store checkpoint/log, and the runtime sidecar directories, then compare them with the consumer's `PaneFramePublished` datagrams and snapshot reads. The datagram's topology, metrics, or presence intent names the changed lane: hidden topology and store work may dispatch once per one-second clamp, hidden metrics once per three-second background window, and presence dispatches immediately. Count actual snapshot opens or diagnostic fold records rather than wake datagrams when deriving fold rate, because several pending events can merge into one fetch at the earliest deadline.
+
+Pair an all-syscall summary with a short timestamped path trace. Run these sequentially because two ptrace clients cannot attach to the same worker; `-f -c` ranks syscall classes, while `-ff -ttt -e trace=%file,process,recvfrom -s 512` separates worker threads/children, preserves `execve` outcomes, exposes publication payloads, and identifies the exact repeated paths. Check consumer traces explicitly for `.git`, `rimz-worktree.json`, provider configuration, `agent_context`/`subagent_context`, read marks, messages, budget/auto-continue sidecars, and failed `execve`; classify each path by topology, metrics, store, or sidecar mtime before proposing a cache.
+
+```bash
+timeout "$secs" strace -f -c -p "$consumer" -o "$capture/consumer.syscalls.txt"
+timeout 4s strace -ff -ttt -s 512 -e trace=%file,process,recvfrom -p "$consumer" -o "$capture/consumer.file"
+rg -n '\.git|rimz-worktree\.json|agent_context|subagent_context|read-marks|messages|budget|auto-continue|execve' "$capture"/consumer.file*
+```
+
+> **Capture pitfalls.** Preflight `kernel.perf_event_paranoid` and ptrace permissions before promising `perf` or live attach; use sudo only under the operator's policy. Build with `cargo xtask profile-build` so frame-pointer call graphs resolve. Copy deleted executable inodes and retain their build ids. Read `pidstat -t` thread totals instead of the process-main-thread row. Aggregate PSS and computed USS instead of summing RSS. Keep shell counters out of pipeline/subshell scope, and inspect the generated files before trusting an aggregation. Write every trace under the temporary capture directory and preserve the exact binary beside it.
+
 ## Symbols from a replaced binary
 
 An atomic reinstall leaves every long-lived process executing a deleted inode: `/proc/<pid>/exe` readlinks to `.../rimz (deleted)`, and `perf` resolves no RimZ symbols because the on-disk binary no longer matches. Recover the symbols from the inode itself:
@@ -121,3 +208,5 @@ Dated live captures, newest last. Each entry names the session shape, the findin
 **July 15, 2026 — Codex rollout-scan reduction (Zellij room).** Each Codex worktree independently traversed the provider-global `~/.codex/sessions` rollout tree. Fix, pinned by the multi-workspace Codex test that admits the requested roots and excludes an unrequested one from a bounded candidate pass: over matched scheduler-truth windows, tracked-worker CPU fell ~73%, a common consumer's syscalls ~85%, and its rollout-tree path operations ~86%, despite a slightly larger feature-side input set; a `perf stat` window corroborated the scheduler result. Publication freshness stayed live; the monotonic cadence boundary, failed-attempt throttle, forced bypass, and post-publication consumer memo are pinned by focused state-machine tests rather than inferred from traffic-dependent counts. Allocator-retained arenas are unchanged and remain separate follow-up work.
 
 **July 15, 2026 — duplicated sidebar cost follow-up (mixed Zellij/tmux fleet).** Consumer call graphs still showed account-global spending aggregation and provider-local session discovery, while cache-refresh exec traces showed Claude preflight plus authoritative pane listings on every healthy daemon-maintenance cadence. Fix: consumers read only published spending aggregates, the spending walker retains dedup winner locations instead of cloned entries, the room producer publishes one exact-input local-session batch, and a long-lived daemon tracker classifies fresh frames before authoritative repair. Deterministic guards pin compact memo size and generation invalidation, published-only consumer inputs and exact observation binding, one adapter call per kind with parse-cache reuse and write-before-wake semantics, and zero-child stable daemon maintenance with failed-repair retry. The qualitative result is that the three measured costs move off consumers or disappear from healthy steady state while topology mismatches, producer failover, cache races, and daemon damage retain explicit recovery paths.
+
+**July 16, 2026 — hidden-consumer fold amplification (mixed live fleet).** Background metrics writes used the same unit pane-frame wakeup as topology and presence, so every renderer folded at the metrics rate; consumer diff and PR projection independently reopened checkout metadata and repeated provider/runtime sidecar reads, while accepted fetches cloned full previous and incoming snapshots around allocation-heavy enrichment. Ordinary consumers were individually small but multiplied across the fleet, and the few producers retained much larger PSS high-water marks, so fresh-worker proportional memory remains the comparison that matters. Fix: pane publications carry topology/metrics/presence intent with one-second topology and three-second metrics coalescing for hidden consumers, earliest-deadline merging preserves stronger work, the producer publishes exact channel marker classifications for both git projections, adapter wiring is read once per fold, and accepted snapshots transfer ownership while diagnostics retain only the pane stamp. Presence, watched tabs, producers, focus resume, mixed-build topology fallback, cache upgrade, and rejection/failure gates keep their immediate or last-known-good behavior under deterministic protocol, scheduling, projection, and ownership tests.
