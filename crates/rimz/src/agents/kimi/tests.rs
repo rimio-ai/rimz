@@ -350,6 +350,8 @@ fn subagent_stop_join_requires_a_unique_response_match() {
     assert_eq!(matched.id, "agent-1");
     assert_eq!(matched.task.as_deref(), Some("inspect renderer"));
     assert_eq!(matched.profile.as_deref(), Some("coder"));
+    assert_eq!(matched.model.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(matched.effort.as_deref(), Some("high"));
     assert!(subagents::resolve_stop(&session, Some("Done:")).is_none());
     assert!(subagents::resolve_stop(&session, None).is_none());
 
@@ -519,6 +521,15 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
         "Parser traced",
         "explore",
     );
+    use std::io::Write as _;
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(child.join("wire.jsonl"))
+            .unwrap(),
+        "{{\"type\":\"llm.request\",\"modelAlias\":\"kimi-code/kimi-k2.5\",\"thinkingEffort\":\"xhigh\"}}"
+    )
+    .unwrap();
     let stop_payload = json!({
         "session_id": "session-1",
         "agent_name": "explore",
@@ -535,23 +546,93 @@ fn subagent_observations_namespace_identity_and_keep_the_parent_link() {
     assert_eq!(stop.agent_id.as_deref(), Some("session-1:agent-0"));
     assert_eq!(stop.parent_agent_id.as_deref(), Some("session-1"));
     assert_eq!(stop.task.as_deref(), Some("trace the parser"));
+    assert_eq!(stop.launch.model.as_deref(), Some("kimi-k2.5"));
+    assert_eq!(stop.launch.effort.as_deref(), Some("xhigh"));
     assert_eq!(
         stop.signal,
         LifecycleSignal::SubagentStopped { errored: false }
     );
 }
 
+#[test]
+fn subagent_start_observation_carries_configured_attribution() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("session-1");
+    let child = session.join("agents/agent-0");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::create_dir_all(session.join("agents/main")).unwrap();
+    std::fs::write(
+        session.join("state.json"),
+        serde_json::to_vec(&json!({
+            "agents": {
+                "agent-0": {"homedir": child, "type": "sub", "parentAgentId": "main"}
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        child.join("wire.jsonl"),
+        "{\"type\":\"config.update\",\"modelAlias\":\"kimi-code/deepseek-v4-pro\",\"thinkingEffort\":\"high\"}\n",
+    )
+    .unwrap();
+    let payload = json!({
+        "session_id": "session-1",
+        "agent_name": "explore",
+        "prompt": "trace attribution"
+    });
+
+    let observation = KimiAdapter
+        .observe_subagent_lifecycle(
+            "SubagentStart",
+            &payload,
+            &payloads::parse(&payload),
+            &session,
+        )
+        .unwrap();
+    assert_eq!(observation.launch.model.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(observation.launch.effort.as_deref(), Some("high"));
+}
+
 fn write_child_wire(path: &Path, prompt: &str, response: &str, profile: &str) {
     std::fs::write(
         path,
         format!(
-            "{{\"type\":\"config.update\",\"profileName\":{profile}}}\n{{\"type\":\"turn.prompt\",\"input\":[{{\"type\":\"text\",\"text\":{prompt}}}],\"origin\":{{\"kind\":\"system_trigger\"}}}}\n{{\"type\":\"context.append_loop_event\",\"event\":{{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{{\"type\":\"text\",\"text\":{response}}}}}}}\n{{\"type\":\"context.append_loop_event\",\"event\":{{\"type\":\"step.end\",\"uuid\":\"s1\"}}}}\n",
+            "{{\"type\":\"config.update\",\"profileName\":{profile},\"modelAlias\":\"kimi-code/deepseek-v4-pro\",\"thinkingEffort\":\"high\"}}\n{{\"type\":\"turn.prompt\",\"input\":[{{\"type\":\"text\",\"text\":{prompt}}}],\"origin\":{{\"kind\":\"system_trigger\"}}}}\n{{\"type\":\"context.append_loop_event\",\"event\":{{\"type\":\"content.part\",\"stepUuid\":\"s1\",\"part\":{{\"type\":\"text\",\"text\":{response}}}}}}}\n{{\"type\":\"context.append_loop_event\",\"event\":{{\"type\":\"step.end\",\"uuid\":\"s1\"}}}}\n",
             profile = serde_json::to_string(profile).unwrap(),
             prompt = serde_json::to_string(prompt).unwrap(),
             response = serde_json::to_string(response).unwrap(),
         ),
     )
     .unwrap();
+}
+
+#[test]
+fn refresh_publishes_the_state_title_as_session_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let session = dir.path().join("s1");
+    let path = session.join("agents/main/wire.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{\"type\":\"metadata\"}\n").unwrap();
+    std::fs::write(session.join("state.json"), r#"{"title":"  Stable task  "}"#).unwrap();
+    let cache = dir.path().join("prices.json");
+    let ctx = LocalContextRefreshCtx {
+        agent_id: "s1",
+        model_hint: None,
+        current_transcript_path: None,
+        prior_transcript_path: None,
+        prior_transcript_stat: None,
+        shared_pricing_cache_path: &cache,
+    };
+
+    let refresh =
+        refresh_wire_path(&path, "s1", TranscriptStat::from_path(&path).unwrap(), &ctx).unwrap();
+    assert_eq!(refresh.session_preview.as_deref(), Some("Stable task"));
+
+    std::fs::write(session.join("state.json"), r#"{"title":"  "}"#).unwrap();
+    assert_eq!(subagents::session_title(&session), None);
+    std::fs::remove_file(session.join("state.json")).unwrap();
+    assert_eq!(subagents::session_title(&session), None);
 }
 
 #[test]

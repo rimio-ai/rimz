@@ -558,6 +558,9 @@ pub struct LocalContextRefreshCtx<'a> {
 /// sidecar.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalContextRefresh {
+    /// Stable provider-owned session title published as the card's short
+    /// activity description instead of tracking the latest prompt.
+    pub session_preview: Option<String>,
     pub model_id: Option<String>,
     pub model_display_name: Option<String>,
     pub effort: Option<String>,

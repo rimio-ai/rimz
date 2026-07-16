@@ -246,6 +246,9 @@ pub fn merge_local_context(
     } else if refresh.model_display_name.is_some() {
         record.context.model_display_name = refresh.model_display_name;
     }
+    if refresh.session_preview.is_some() {
+        record.context.session_preview = refresh.session_preview;
+    }
     if refresh.effort.is_some() {
         record.context.effort = refresh.effort;
     }

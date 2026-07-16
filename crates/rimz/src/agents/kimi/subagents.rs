@@ -22,13 +22,22 @@ pub(super) struct ChildMatch {
     pub(super) id: String,
     pub(super) task: Option<String>,
     pub(super) profile: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) effort: Option<String>,
     pub(super) transcript_path: PathBuf,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct SessionState {
+    title: Option<String>,
     agents: BTreeMap<String, SessionAgent>,
+}
+
+pub(super) fn session_title(session_dir: &Path) -> Option<String> {
+    let state: SessionState =
+        serde_json::from_slice(&std::fs::read(session_dir.join("state.json")).ok()?).ok()?;
+    non_empty(state.title)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -242,10 +251,13 @@ fn child_match(
     records: &[wire::WireRecord],
     task: Option<String>,
 ) -> ChildMatch {
+    let attribution = wire::effective_attribution(records);
     ChildMatch {
         id: child.id.clone(),
         task,
         profile: latest_profile(records),
+        model: attribution.display_model(),
+        effort: attribution.thinking_effort,
         transcript_path: child.transcript_path.clone(),
     }
 }

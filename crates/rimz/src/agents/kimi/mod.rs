@@ -716,6 +716,8 @@ impl KimiAdapter {
         )
         .with_worktree_from_payload(payload);
         observation.parent_agent_id = Some(AgentSessionId::from(session_id));
+        observation.launch.model = matched.model;
+        observation.launch.effort = matched.effort;
         observation.agent_name = parsed
             .agent_name
             .as_deref()
@@ -843,7 +845,13 @@ fn refresh_wire_path(
     };
     let prices = super::pricing::cached_book(ctx.shared_pricing_cache_path);
     let cost = super::spending::session_cost_usd(&KimiAdapter, session_id, path, &prices);
+    let session_preview = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(subagents::session_title);
     Some(LocalContextRefresh {
+        session_preview,
         model_id,
         effort: attribution.thinking_effort,
         tokens,

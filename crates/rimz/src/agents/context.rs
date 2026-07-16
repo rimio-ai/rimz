@@ -65,9 +65,10 @@ pub struct AgentContext {
     /// over the task descriptor only when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
-    /// Short provider-generated thread summary. Codex fills this from
-    /// app-server `thread/read` / `thread/list` `preview`; renderers prefer it
-    /// for the activity description when present.
+    /// Short provider-owned thread summary. Codex fills this from app-server
+    /// `thread/read` / `thread/list` `preview`; Kimi uses the `state.json`
+    /// title, and Qwen uses its `custom_title` record or first genuine prompt.
+    /// Renderers prefer it for the activity description when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_preview: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

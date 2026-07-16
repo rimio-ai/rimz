@@ -240,6 +240,7 @@ mod tests {
             "opencode",
             "sess-1",
             LocalContextRefresh {
+                session_preview: None,
                 model_id: Some("gpt-5".to_owned()),
                 model_display_name: None,
                 effort: Some("xhigh".to_owned()),

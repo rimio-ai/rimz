@@ -31,6 +31,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
         }),
     });
     let refresh = LocalContextRefresh {
+        session_preview: None,
         model_id: Some("deepseek-v4-pro".to_owned()),
         model_display_name: Some("DeepSeek V4 Pro".to_owned()),
         effort: Some("high".to_owned()),
@@ -81,6 +82,7 @@ fn droid_local_merge_replaces_current_call_and_keeps_session_usage_monotonic() {
     );
 
     let unresolved_model = LocalContextRefresh {
+        session_preview: None,
         model_id: None,
         model_display_name: Some("Other Model".to_owned()),
         effort: None,
@@ -162,6 +164,37 @@ fn merge_local_context_preserves_prior_fields_by_case() {
         assert_eq!(merged.agent_id.as_str(), "sess-1", "{}", case.name);
         (case.assert)(&merged, prior_at, local_at);
     }
+}
+
+#[test]
+fn local_session_preview_updates_only_when_the_refresh_has_one() {
+    let (_dir, runtime) = runtime();
+    let observed_at = observed_at();
+    let mut prior = codex_record(observed_at);
+    prior.context.session_preview = Some("Old title".to_owned());
+    write_record(&runtime, &prior).unwrap();
+
+    let mut refresh = unpriced_refresh();
+    refresh.session_preview = Some("New title".to_owned());
+    merge_local_context(&runtime, "codex", "sess-1", refresh, observed_at).unwrap();
+    assert_eq!(
+        read_one(&runtime, "codex", "sess-1")
+            .unwrap()
+            .context
+            .session_preview
+            .as_deref(),
+        Some("New title")
+    );
+
+    merge_local_context(&runtime, "codex", "sess-1", unpriced_refresh(), observed_at).unwrap();
+    assert_eq!(
+        read_one(&runtime, "codex", "sess-1")
+            .unwrap()
+            .context
+            .session_preview
+            .as_deref(),
+        Some("New title")
+    );
 }
 
 #[test]
@@ -457,6 +490,7 @@ fn prior_exact_codex_window(observed_at: Timestamp) -> AgentContextRecord {
 
 fn full_local_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
+        session_preview: None,
         model_id: Some("gpt-5.5".to_owned()),
         model_display_name: None,
         effort: Some("xhigh".to_owned()),
@@ -484,6 +518,7 @@ fn full_local_refresh() -> LocalContextRefresh {
 
 fn unpriced_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
+        session_preview: None,
         model_id: Some("gpt-5".to_owned()),
         model_display_name: None,
         effort: Some("high".to_owned()),
@@ -515,6 +550,7 @@ fn unknown_effort_refresh() -> LocalContextRefresh {
 
 fn fresh_zero_codex_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
+        session_preview: None,
         model_id: None,
         model_display_name: None,
         effort: Some("high".to_owned()),
@@ -535,6 +571,7 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
 
 fn fallback_window_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
+        session_preview: None,
         model_id: None,
         model_display_name: None,
         effort: Some("high".to_owned()),
