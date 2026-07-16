@@ -4,13 +4,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
+use crate::agents::ProviderAccountBinding;
 use crate::agents::account::file_mtime_ms;
 use crate::agents::context::{AgentAccount, ProviderAccountScope};
 
 const ALIBABA_KEY: &str = "BAILIAN_CODING_PLAN_API_KEY";
 const ALIBABA_INTL_ENDPOINT: &str = "https://coding-intl.dashscope.aliyuncs.com/v1";
 const ALIBABA_CN_ENDPOINT: &str = "https://coding.dashscope.aliyuncs.com/v1";
+const ACCOUNT_KEY_DOMAIN: &[u8] = b"rimz:qwen-provider-account:v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AlibabaRegion {
@@ -84,18 +87,6 @@ impl CredentialSource {
             Self::Dotenv { mtime_ms, .. } | Self::Settings { mtime_ms, .. } => *mtime_ms,
         }
     }
-
-    fn account_fact(&self) -> String {
-        match self {
-            Self::ProcessEnvironment => "process-env".to_owned(),
-            Self::Dotenv { path, mtime_ms } => {
-                format!("dotenv:{}:{}", path.display(), mtime_ms.unwrap_or(0))
-            }
-            Self::Settings { path, mtime_ms } => {
-                format!("settings:{}:{}", path.display(), mtime_ms.unwrap_or(0))
-            }
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -126,21 +117,24 @@ impl Selection {
     }
 
     pub(crate) fn account_key(&self) -> String {
-        format!(
-            "provider={};variant={};key={};source={}",
-            match self.provider {
-                SelectedProvider::Alibaba(_) => "alibaba",
-                SelectedProvider::OpenAi => "openai",
-                SelectedProvider::Anthropic => "anthropic",
-                SelectedProvider::Gemini => "gemini",
-            },
-            match self.provider {
-                SelectedProvider::Alibaba(region) => region.variant(),
-                _ => "direct",
-            },
-            self.credential_key,
-            self.credential_source.account_fact(),
-        )
+        let (provider, variant) = match self.provider {
+            SelectedProvider::Alibaba(region) => ("alibaba", region.variant()),
+            SelectedProvider::OpenAi => ("openai", "direct"),
+            SelectedProvider::Anthropic => ("anthropic", "direct"),
+            SelectedProvider::Gemini => ("gemini", "direct"),
+        };
+        let mut hasher = Sha256::new();
+        for value in [
+            ACCOUNT_KEY_DOMAIN,
+            provider.as_bytes(),
+            variant.as_bytes(),
+            self.credential_key.as_bytes(),
+            self.credential.as_bytes(),
+        ] {
+            hasher.update(value);
+            hasher.update([0]);
+        }
+        hex::encode(hasher.finalize())
     }
 
     pub(crate) fn account_usage_identity(&self) -> crate::agents::AccountUsageIdentity {
@@ -219,14 +213,188 @@ pub(crate) fn resolve() -> SelectionState {
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(".env");
-    resolve_at(&settings_path, &dotenv_path, |name| {
+    resolve_at(&settings_path, &dotenv_path, None, |name| {
         std::env::var(name).ok()
     })
+}
+
+/// Prove the exact Alibaba account selected by one fresh managed launch.
+/// Unsupported Qwen configuration layers and mutable provider overrides stay
+/// unbound rather than borrowing the passive dashboard selection.
+pub(crate) fn resolve_managed_launch(
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    model: Option<&str>,
+    argv: &[String],
+) -> Option<ProviderAccountBinding> {
+    if unsupported_config_layer(cwd, env) || has_provider_override(env) {
+        return None;
+    }
+    let argv_model = parse_launch_model(argv).ok()?;
+    let settings_path = settings_path(env)?;
+    let dotenv_path = settings_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".env");
+    let configured_model = managed_model_override(&settings_path, &dotenv_path, env)?;
+    let model = unique_value(
+        [model, argv_model.as_deref(), configured_model.as_deref()]
+            .into_iter()
+            .flatten(),
+    )?;
+    let SelectionState::Found(selection) =
+        resolve_at(&settings_path, &dotenv_path, model.as_deref(), |name| {
+            env.get(name).cloned()
+        })
+    else {
+        return None;
+    };
+    matches!(selection.provider, SelectedProvider::Alibaba(_))
+        .then(|| selection.account_usage_identity().binding())
+        .flatten()
+}
+
+fn managed_model_override(
+    settings_path: &Path,
+    dotenv_path: &Path,
+    env: &BTreeMap<String, String>,
+) -> Option<Option<String>> {
+    let bytes = std::fs::read(settings_path).ok()?;
+    let settings: Settings = crate::agents::jsonc::from_slice(&bytes).ok()?;
+    for key in ["OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"] {
+        if resolve_config_value(key, &settings.env, dotenv_path, &|name| {
+            env.get(name).cloned()
+        })
+        .ok()?
+        .is_some()
+        {
+            return None;
+        }
+    }
+    let values = ["QWEN_MODEL", "OPENAI_MODEL"]
+        .into_iter()
+        .map(|key| {
+            resolve_config_value(key, &settings.env, dotenv_path, &|name| {
+                env.get(name).cloned()
+            })
+        })
+        .collect::<Result<Vec<_>, ()>>()
+        .ok()?;
+    unique_value(values.iter().filter_map(|value| value.as_deref()))
+}
+
+fn settings_path(env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    if let Some(path) = env
+        .get("RIMZ_QWEN_SETTINGS")
+        .and_then(|path| non_empty(Some(path)))
+    {
+        return Some(PathBuf::from(path));
+    }
+    if let Some(home) = env.get("QWEN_HOME").and_then(|path| non_empty(Some(path))) {
+        return Some(PathBuf::from(home).join("settings.json"));
+    }
+    env.get("HOME")
+        .and_then(|path| non_empty(Some(path)))
+        .map(|home| PathBuf::from(home).join(".qwen/settings.json"))
+        .or_else(|| super::install::qwen_settings_path().ok())
+}
+
+fn unsupported_config_layer(cwd: &Path, env: &BTreeMap<String, String>) -> bool {
+    if [
+        "QWEN_CODE_SYSTEM_DEFAULTS_PATH",
+        "QWEN_CODE_SYSTEM_SETTINGS_PATH",
+    ]
+    .into_iter()
+    .any(|key| env.get(key).is_some_and(|value| !value.trim().is_empty()))
+    {
+        return true;
+    }
+    let Some(user_settings) = settings_path(env) else {
+        return true;
+    };
+    cwd.ancestors()
+        .map(|root| root.join(".qwen/settings.json"))
+        .any(|path| path != user_settings && path.is_file())
+}
+
+fn has_provider_override(env: &BTreeMap<String, String>) -> bool {
+    [
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "QWEN_CODE_SYSTEM_DEFAULTS_PATH",
+        "QWEN_CODE_SYSTEM_SETTINGS_PATH",
+    ]
+    .into_iter()
+    .any(|key| env.get(key).is_some_and(|value| !value.trim().is_empty()))
+}
+
+fn parse_launch_model(argv: &[String]) -> Result<Option<String>, ()> {
+    let mut model = None;
+    let mut index = usize::from(argv.first().is_some_and(|arg| !arg.starts_with('-')));
+    while index < argv.len() {
+        let arg = &argv[index];
+        if arg == "--" {
+            break;
+        }
+        if ["-i", "-p"].contains(&arg.as_str()) {
+            index += 1;
+            argv.get(index).ok_or(())?;
+            index += 1;
+            continue;
+        }
+        if [
+            "--continue",
+            "--resume",
+            "--fork-session",
+            "--openai-api-key",
+            "--api-key",
+            "--provider",
+            "--base-url",
+            "--auth-type",
+        ]
+        .into_iter()
+        .any(|flag| arg == flag || arg.starts_with(&format!("{flag}=")))
+        {
+            return Err(());
+        }
+        let value = if arg == "--model" {
+            index += 1;
+            Some(argv.get(index).ok_or(())?.as_str())
+        } else {
+            arg.strip_prefix("--model=")
+        };
+        if let Some(value) = value {
+            let value = non_empty(Some(value)).ok_or(())?;
+            match model.as_deref() {
+                Some(prior) if prior != value => return Err(()),
+                Some(_) => {}
+                None => model = Some(value.to_owned()),
+            }
+        }
+        index += 1;
+    }
+    Ok(model)
+}
+
+fn unique_value<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<Option<String>> {
+    let mut selected: Option<&str> = None;
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if selected.is_some_and(|prior| prior != value) {
+            return None;
+        }
+        selected = Some(value);
+    }
+    Some(selected.map(ToOwned::to_owned))
 }
 
 fn resolve_at(
     settings_path: &Path,
     dotenv_path: &Path,
+    model_override: Option<&str>,
     process_env: impl Fn(&str) -> Option<String>,
 ) -> SelectionState {
     let bytes = match std::fs::read(settings_path) {
@@ -243,7 +411,8 @@ fn resolve_at(
     let Some(selected_type) = non_empty(settings.security.auth.selected_type.as_deref()) else {
         return SelectionState::LoggedOut;
     };
-    let model_name = non_empty(settings.model.name.as_deref());
+    let model_name =
+        non_empty(model_override).or_else(|| non_empty(settings.model.name.as_deref()));
 
     let provider_selection = selected_model_provider(&settings, selected_type, model_name);
     let (protocol, base_url, credential_key) = match provider_selection {
@@ -511,7 +680,7 @@ mod tests {
         if let Some(dotenv) = dotenv {
             std::fs::write(&dotenv_path, dotenv).unwrap();
         }
-        resolve_at(&settings_path, &dotenv_path, |_| None)
+        resolve_at(&settings_path, &dotenv_path, None, |_| None)
     }
 
     fn alibaba_settings(endpoint: &str, secret: &str) -> String {
@@ -527,6 +696,29 @@ mod tests {
                 }}]}},
                 "env": {{"{ALIBABA_KEY}": "{secret}"}}
             }}"#
+        )
+    }
+
+    fn managed_binding(
+        settings: &str,
+        model: Option<&str>,
+        argv: &[&str],
+    ) -> Option<ProviderAccountBinding> {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        std::fs::write(&settings_path, settings).unwrap();
+        let env = BTreeMap::from([(
+            "RIMZ_QWEN_SETTINGS".to_owned(),
+            settings_path.display().to_string(),
+        )]);
+        resolve_managed_launch(
+            dir.path(),
+            &env,
+            model,
+            &argv
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>(),
         )
     }
 
@@ -567,7 +759,7 @@ mod tests {
         };
         assert_eq!(selection.credential, "dotenv-secret");
         assert!(selection.credentials_stamp().is_some());
-        assert!(selection.account_key().contains("dotenv:"));
+        assert_eq!(selection.account_key().len(), 64);
     }
 
     #[test]
@@ -618,7 +810,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(&dotenv_path, format!("{ALIBABA_KEY}=dotenv-secret\n")).unwrap();
-        let state = resolve_at(&settings_path, &dotenv_path, |name| {
+        let state = resolve_at(&settings_path, &dotenv_path, None, |name| {
             (name == ALIBABA_KEY).then(|| "process-secret".to_owned())
         });
         let SelectionState::Found(selection) = state else {
@@ -626,8 +818,155 @@ mod tests {
         };
         assert_eq!(selection.credential, "process-secret");
         assert!(selection.credentials_stamp().is_none());
-        assert!(selection.account_key().contains("process-env"));
+        assert_eq!(selection.account_key().len(), 64);
         assert!(!format!("{selection:?}").contains("process-secret"));
+    }
+
+    #[test]
+    fn credential_fingerprint_tracks_account_not_supported_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        let dotenv_path = dir.path().join(".env");
+        std::fs::write(
+            &settings_path,
+            alibaba_settings(ALIBABA_INTL_ENDPOINT, "same-secret"),
+        )
+        .unwrap();
+        let SelectionState::Found(from_settings) =
+            resolve_at(&settings_path, &dotenv_path, None, |_| None)
+        else {
+            panic!("settings selection");
+        };
+        let SelectionState::Found(from_process) =
+            resolve_at(&settings_path, &dotenv_path, None, |name| {
+                (name == ALIBABA_KEY).then(|| "same-secret".to_owned())
+            })
+        else {
+            panic!("process selection");
+        };
+        let SelectionState::Found(rotated) =
+            resolve_at(&settings_path, &dotenv_path, None, |name| {
+                (name == ALIBABA_KEY).then(|| "rotated-secret".to_owned())
+            })
+        else {
+            panic!("rotated selection");
+        };
+        assert_eq!(from_settings.account_key(), from_process.account_key());
+        assert_ne!(from_process.account_key(), rotated.account_key());
+        assert_eq!(from_process.account_key().len(), 64);
+    }
+
+    #[test]
+    fn managed_launch_requires_exact_fresh_unambiguous_alibaba_selection() {
+        let settings = alibaba_settings(ALIBABA_INTL_ENDPOINT, "sentinel-secret");
+        let binding = managed_binding(
+            &settings,
+            Some("qwen3-coder-plus"),
+            &["qwen", "--model", "qwen3-coder-plus", "-i", "work"],
+        )
+        .expect("exact managed binding");
+        assert_eq!(binding.scope(), &AlibabaRegion::International.scope());
+        assert!(!format!("{binding:?}").contains("sentinel-secret"));
+        assert!(
+            !serde_json::to_string(&binding)
+                .unwrap()
+                .contains("sentinel-secret")
+        );
+
+        for argv in [
+            vec!["qwen", "--resume", "session"],
+            vec!["qwen", "--continue"],
+            vec!["qwen", "--fork-session"],
+            vec!["qwen", "--openai-api-key", "sentinel-secret"],
+            vec!["qwen", "--provider=custom"],
+        ] {
+            assert_eq!(managed_binding(&settings, None, &argv), None, "{argv:?}");
+        }
+        assert_eq!(
+            managed_binding(
+                &settings,
+                Some("qwen3-coder-plus"),
+                &["qwen", "--model", "different"]
+            ),
+            None
+        );
+        assert!(managed_binding(&settings, None, &["qwen", "-i", "--model=prompt-text"]).is_some());
+        assert!(managed_binding(&settings, None, &["qwen", "-i", "--model"]).is_some());
+    }
+
+    #[test]
+    fn managed_model_override_must_select_one_configured_provider() {
+        let settings = alibaba_settings(ALIBABA_INTL_ENDPOINT, "secret").replace(
+            r#""model": {"name": "qwen3-coder-plus"}"#,
+            r#""model": {"name": "default-model"}"#,
+        );
+        assert!(
+            managed_binding(
+                &settings,
+                Some("qwen3-coder-plus"),
+                &["qwen", "--model=qwen3-coder-plus"]
+            )
+            .is_some()
+        );
+        let ambiguous = format!(
+            r#"{{
+                "security":{{"auth":{{"selectedType":"openai"}}}},
+                "model":{{"name":"default-model"}},
+                "modelProviders":{{"openai":[
+                    {{"id":"qwen3-coder-plus","baseUrl":"{ALIBABA_INTL_ENDPOINT}","envKey":"{ALIBABA_KEY}"}},
+                    {{"id":"qwen3-coder-plus","baseUrl":"{ALIBABA_CN_ENDPOINT}","envKey":"{ALIBABA_KEY}"}}
+                ]}},
+                "env":{{"{ALIBABA_KEY}":"secret"}}
+            }}"#
+        );
+        assert_eq!(
+            managed_binding(
+                &ambiguous,
+                Some("qwen3-coder-plus"),
+                &["qwen", "--model", "qwen3-coder-plus"]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn managed_launch_rejects_conflicting_dotenv_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_path = dir.path().join("settings.json");
+        std::fs::write(
+            &settings_path,
+            alibaba_settings(ALIBABA_INTL_ENDPOINT, "secret"),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(".env"), "QWEN_MODEL=other-model\n").unwrap();
+        let env = BTreeMap::from([(
+            "RIMZ_QWEN_SETTINGS".to_owned(),
+            settings_path.display().to_string(),
+        )]);
+        assert_eq!(
+            resolve_managed_launch(
+                dir.path(),
+                &env,
+                Some("qwen3-coder-plus"),
+                &["qwen".to_owned(), "--model=qwen3-coder-plus".to_owned()],
+            ),
+            None
+        );
+
+        std::fs::write(
+            dir.path().join(".env"),
+            format!("OPENAI_BASE_URL={ALIBABA_INTL_ENDPOINT}\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_managed_launch(
+                dir.path(),
+                &env,
+                Some("qwen3-coder-plus"),
+                &["qwen".to_owned(), "--model=qwen3-coder-plus".to_owned()],
+            ),
+            None
+        );
     }
 
     #[test]

@@ -6,6 +6,8 @@ Read the support level honestly. **Claude Code and Codex are the supported daily
 
 Every integration is declared cell by cell, not assumed. Each adapter states its own coverage, conformance tests cross-check that declaration against the code that backs it, and `rimz coverage` prints the same matrices this page annotates — so what RimZ claims to read is a thing you verify on your own machine rather than take on faith:
 
+Qwen's experimental Alibaba Coding Plan integration also enforces an exact managed-launch boundary outside the coverage score. Fresh supervised and loop launches bind the final official region and API key to an opaque account fingerprint, then use only that account's authoritative cached windows for exhaustion, priming, surplus, and reset recurrence. Exhaustion stops before a pane or loop check runs; interactive launches, resume, fork, wake, and mid-run auto-continue remain outside that boundary.
+
 ```sh
 rimz coverage          # the wired / partial / unsupported grid, per agent, with a reason on every cell
 rimz coverage --json   # the same, machine-readable

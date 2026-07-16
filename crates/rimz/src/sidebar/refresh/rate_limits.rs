@@ -4,11 +4,13 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
+#[cfg(test)]
+use crate::agents::ProviderAccountScope;
 use crate::agents::account::{
     PendingRefill, RateLimitCacheEntry, RateLimitsCache, read_rate_limits_cache,
 };
 use crate::agents::context::RateLimitWindowKey;
-use crate::agents::{AgentRateLimits, ProviderAccountScope, RateLimitWindow};
+use crate::agents::{AccountUsageIdentity, AgentRateLimits, RateLimitWindow};
 use crate::sidebar::timing::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot};
 
@@ -63,7 +65,7 @@ pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
 pub fn merge_account_rate_limits(
     runtime: &RuntimePaths,
     kind: &str,
-    scope: ProviderAccountScope,
+    identity: AccountUsageIdentity,
     windows: AgentRateLimits,
 ) {
     let path = runtime.shared_rate_limits_path();
@@ -83,14 +85,15 @@ pub fn merge_account_rate_limits(
     let prior = cache
         .entries
         .get(kind)
-        .filter(|entry| entry.scope == scope)
+        .filter(|entry| entry.scope == identity.scope && entry.account_key == identity.account_key)
         .map(|entry| entry.limits.windows.as_slice())
         .unwrap_or_default();
     complete_omitted_duration_windows(prior, &mut windows);
     cache.entries.insert(
         kind.to_owned(),
         RateLimitCacheEntry {
-            scope,
+            scope: identity.scope,
+            account_key: identity.account_key,
             limits: windows,
             pending: Vec::new(),
         },
@@ -413,16 +416,24 @@ fn apply_rate_limit_cache_with(
         // in-flight refill. Display-only reset projections and unknown windows
         // below are recomputed each frame.
         if persist && (!truth.is_empty() || !pending.is_empty()) {
-            next.entries.insert(
-                panel.kind.clone(),
-                RateLimitCacheEntry {
-                    scope: panel.account_scope.clone(),
-                    limits: AgentRateLimits {
-                        windows: truth.values().cloned().collect(),
+            if let Some(prior) = prior_entry.filter(|entry| entry.account_key.is_some()) {
+                // A provider panel carries display scope but no credential
+                // identity. Keep exact-account control truth owned by the
+                // authoritative account probe while still fusing it for paint.
+                next.entries.insert(panel.kind.clone(), prior.clone());
+            } else {
+                next.entries.insert(
+                    panel.kind.clone(),
+                    RateLimitCacheEntry {
+                        scope: panel.account_scope.clone(),
+                        account_key: None,
+                        limits: AgentRateLimits {
+                            windows: truth.values().cloned().collect(),
+                        },
+                        pending,
                     },
-                    pending,
-                },
-            );
+                );
+            }
         }
 
         // Display: roll every fused window's reset-to-max projection forward to

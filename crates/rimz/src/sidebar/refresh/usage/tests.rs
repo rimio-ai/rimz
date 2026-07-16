@@ -272,7 +272,7 @@ fn owned_usage_runtime(owner: &str) -> (tempfile::TempDir, RuntimePaths) {
     super::super::merge_account_rate_limits(
         &runtime,
         "antigravity",
-        ProviderAccountScope::KindWide,
+        usage_identity(Some(owner)),
         AgentRateLimits {
             windows: vec![RateLimitWindow {
                 duration_mins: Some(300),

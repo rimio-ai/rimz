@@ -133,6 +133,7 @@ struct PreparedRun {
     prompt: String,
     output_format: OutputFormat,
     stream_text: bool,
+    provider_account_binding: Option<rimz::agents::ProviderAccountBinding>,
 }
 
 struct PresentationWaiter {
@@ -304,14 +305,22 @@ fn prepare_supervised(
     let agent_cell = agent_cells[0];
     let adapter = rimz::agents::find_adapter(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
+    let launch = rimz::worktree::resolve_launch_checkout(
+        &workspace,
+        &machine_config.agents.worktree,
+        request.worktree.as_deref(),
+        request.from_pr.as_ref(),
+    )?;
     let mut preflight_launch = agent_cell.launch.clone();
     preflight_launch.channel.clone_from(&request.channel);
     let launch_invocation = rimz::harness::launch::ExecInvocation {
         kind: agent_cell.kind.as_str(),
         action: rimz::harness::launch::ExecAction::Launch {
             prompt: Some(&request.prompt),
-            extra_args: &[],
+            extra_args: &agent_cell.args,
         },
+        provider_account_binding: None,
+        provider_account_binding_finalized: false,
         run_id: None,
         worktree_path: None,
         close_pane_on_exit: false,
@@ -325,16 +334,20 @@ fn prepare_supervised(
         &workspace.project_root,
         machine_config.harness.rtk,
         &launch_invocation,
-        &workspace.worktree_root,
+        &launch.cwd,
     )?;
+    let provider_account_binding = if request.managed_provider_binding_resolved {
+        request.managed_provider_binding.clone()
+    } else {
+        adapter.resolve_managed_launch(
+            &launch.cwd,
+            &rimz::harness::launch::effective_launch_env(&process.env),
+            agent_cell.launch.model.as_deref(),
+            &process.provider_argv,
+        )
+    };
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(&process)?;
-    let launch = rimz::worktree::resolve_launch_checkout(
-        &workspace,
-        &machine_config.agents.worktree,
-        request.worktree.as_deref(),
-        request.from_pr.as_ref(),
-    )?;
     let store = crate::cli::open_store(&workspace)?;
     let kind = AgentKind::new_unchecked(adapter.descriptor().kind);
     if let Some(channel) = request.channel.as_deref() {
@@ -360,6 +373,7 @@ fn prepare_supervised(
         prompt: request.prompt.clone(),
         output_format: presentation.output_format,
         stream_text: presentation.stream_text,
+        provider_account_binding,
     })
 }
 
@@ -431,6 +445,7 @@ fn execute_attempt(
         cleanup_worktree: (request.worktree.is_some() || request.from_pr.is_some()) && retries == 0,
         permission_args: &agent_cell.args,
         self_cleanup_on_completion: request.background && !request.keep,
+        provider_account_binding: prepared.provider_account_binding.as_ref(),
     })?;
     let waiter = if request.background {
         None
@@ -594,6 +609,16 @@ pub(in crate::cli) fn run_supervised(
     globals: &GlobalFlags,
 ) -> Result<SupervisedRunOutcome> {
     let prepared = prepare_supervised(&request, &presentation, globals)?;
+    if let Some(binding) = prepared.provider_account_binding.as_ref()
+        && let Some(reason) = rimz::agents::provider_budget_gate(
+            prepared.store.runtime_paths(),
+            prepared.kind.as_str(),
+            binding,
+            jiff::Timestamp::now(),
+        )
+    {
+        return Ok(SupervisedRunOutcome::BudgetExceeded { reason });
+    }
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let mut room = rimz::room::RoomContext::from_resolved(
         &prepared.workspace,
@@ -621,6 +646,16 @@ pub(in crate::cli) fn run_supervised(
     let mut retry_of = None;
     let mut attempt = 0;
     loop {
+        if let Some(binding) = prepared.provider_account_binding.as_ref()
+            && let Some(reason) = rimz::agents::provider_budget_gate(
+                prepared.store.runtime_paths(),
+                prepared.kind.as_str(),
+                binding,
+                jiff::Timestamp::now(),
+            )
+        {
+            return Ok(SupervisedRunOutcome::BudgetExceeded { reason });
+        }
         if let Some(reason) = rimz::harness::budget::scope_gate(
             prepared.store.runtime_paths(),
             &prepared.kind,

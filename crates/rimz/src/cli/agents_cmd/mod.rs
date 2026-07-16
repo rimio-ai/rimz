@@ -468,6 +468,10 @@ struct ExecArgs {
     worktree_path: Option<PathBuf>,
     #[arg(long)]
     prompt: Option<String>,
+    #[arg(long, hide = true)]
+    provider_account_binding: Option<String>,
+    #[arg(long, hide = true)]
+    provider_account_binding_finalized: bool,
     #[arg(last = true)]
     extra_args: Vec<String>,
 }
@@ -609,6 +613,8 @@ fn into_supervised_request(
         loop_zone: args.loop_zone,
         loop_task: args.loop_task,
         passthrough: args.passthrough,
+        managed_provider_binding: None,
+        managed_provider_binding_resolved: false,
     };
     Ok((
         request,

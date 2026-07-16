@@ -9,6 +9,16 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let launch_params = launch_params(&args);
     let launch_identity = exec_launch_identity(&args, &launch_params)?;
     let action = exec_action(&args);
+    let provider_account_binding = provider_account_binding(&args)?;
+    if args.provider_account_binding_finalized && provider_account_binding.is_none() {
+        bail!("finalized provider-account launch is missing its expected binding");
+    }
+    if provider_account_binding.is_some()
+        && (args.kind != "qwen"
+            || !matches!(action, rimz::harness::launch::ExecAction::Launch { .. }))
+    {
+        bail!("provider-account binding applies only to fresh managed Qwen launches");
+    }
     let entered_worktree = match args.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
             Ok(path) => Some(path),
@@ -32,21 +42,65 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .clone()
             .unwrap_or_else(|| workspace.worktree_root.clone()),
     };
-    let exec_invocation = exec_invocation(&args, action, &launch_params);
+    let exec_invocation = exec_invocation(
+        &args,
+        action,
+        &launch_params,
+        provider_account_binding.as_ref(),
+    );
     let process = rimz::harness::launch::compile_agent_process(
         &workspace.project_root,
         machine_config.harness.rtk,
         &exec_invocation,
         &provider_cwd,
     )?;
+    if let Some(expected) = provider_account_binding.as_ref() {
+        if args.provider_account_binding_finalized {
+            let adapter = rimz::agents::find_adapter(&args.kind)
+                .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
+            let actual = adapter.resolve_managed_launch(
+                &provider_cwd,
+                &rimz::harness::launch::effective_launch_env(&process.env),
+                args.agent_model.as_deref(),
+                &process.provider_argv,
+            );
+            if !provider_account_binding_matches(expected, actual.as_ref()) {
+                mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
+                fail_run_on_exec_precondition(run_context.as_ref());
+                bail!(
+                    "Qwen provider account changed after launch preflight; retry the managed run so quota can be checked against the final account"
+                );
+            }
+        } else {
+            let finalized = rimz::harness::launch::ExecInvocation {
+                provider_account_binding_finalized: true,
+                ..exec_invocation
+            };
+            let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &finalized);
+            let argv = rimz::harness::launch::login_shell_argv(&process.env, &argv);
+            let (program, rest) = argv.split_first().ok_or_else(|| {
+                anyhow::anyhow!("finalized Qwen launch produced an empty command")
+            })?;
+            if let Err(err) = exec_agent_command(program, rest, &process.env) {
+                mark_launch_failed_if_provisional(&workspace, launch_identity.as_ref());
+                fail_run_on_exec_precondition(run_context.as_ref());
+                return Err(err);
+            }
+            return Ok(());
+        }
+    }
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
     }
     if let Some(identity) = launch_identity.as_ref() {
         record_own_launch_pane(&workspace, identity);
     }
-    let (program, rest) = process
-        .argv
+    let argv = if args.provider_account_binding_finalized {
+        &process.provider_argv
+    } else {
+        &process.argv
+    };
+    let (program, rest) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
     if should_exec_agent_directly(&args) {
@@ -108,10 +162,13 @@ pub(super) fn exec_invocation<'a>(
     args: &'a ExecArgs,
     action: rimz::harness::launch::ExecAction<'a>,
     params: &'a rimz::agents::LaunchParams,
+    provider_account_binding: Option<&'a rimz::agents::ProviderAccountBinding>,
 ) -> rimz::harness::launch::ExecInvocation<'a> {
     rimz::harness::launch::ExecInvocation {
         kind: &args.kind,
         action,
+        provider_account_binding,
+        provider_account_binding_finalized: args.provider_account_binding_finalized,
         run_id: args.run_id.as_ref().map(|run_id| run_id.as_str()),
         worktree_path: args.worktree_path.as_deref(),
         close_pane_on_exit: args.close_pane_on_exit,
@@ -123,6 +180,25 @@ pub(super) fn exec_invocation<'a>(
             ..rimz::harness::launch::ExecIdentity::default()
         },
     }
+}
+
+fn provider_account_binding(
+    args: &ExecArgs,
+) -> Result<Option<rimz::agents::ProviderAccountBinding>> {
+    args.provider_account_binding
+        .as_deref()
+        .map(|value| {
+            rimz::agents::ProviderAccountBinding::decode(value)
+                .context("parsing hidden provider-account launch binding")
+        })
+        .transpose()
+}
+
+pub(super) fn provider_account_binding_matches(
+    expected: &rimz::agents::ProviderAccountBinding,
+    actual: Option<&rimz::agents::ProviderAccountBinding>,
+) -> bool {
+    actual == Some(expected)
 }
 
 fn settle_after_exit(

@@ -15,14 +15,14 @@ rimz agents claude "Summarize what changed on this branch." -p    # the claude -
 rimz agents codex "Prepare the release checklist." -p             # the same grammar, any agent
 ```
 
-- **One grammar for every fully scripted adapter.** The same flags, exit codes, and output formats drive Claude, Codex, Amp, Pi, OpenCode, and Droid; swapping the model behind a pipeline is a one-word change. (Kiro's CLI exposes no verified turn-completion signal yet, so `rimz agents kiro -p` refuses before opening a pane rather than hanging.)
+- **One grammar for every fully scripted adapter.** The same flags, exit codes, and output formats drive Claude, Codex, Amp, Pi, OpenCode, Droid, and Qwen; swapping the model behind a pipeline is a one-word change. (Kiro's CLI exposes no verified turn-completion signal yet, so `rimz agents kiro -p` refuses before opening a pane rather than hanging.)
 - **A pane instead of a headless process.** The turn runs the stock CLI in your room with a live card in the sidebar, so a scripted run is exactly as observable — and as steerable — as one you launched by hand ([a real agent, not a background job](#a-real-agent-not-a-background-job)).
 
 ## What a run does on your machine
 
 `-p` adds no engine of its own; it sequences pieces this guide set already covers:
 
-1. It writes a durable run record — a JSON file under `~/.local/state/rimz/workspaces/<id>/runs/` — before anything opens.
+1. It checks pre-launch dollar gates and any exact managed-launch provider quota, then writes a durable run record — a JSON file under `~/.local/state/rimz/workspaces/<id>/runs/` — before anything opens.
 2. It opens one pane in your Zellij or tmux (a split beside you when you run it inside the room, a new tab when the caller is outside it) running the official agent CLI with your prompt: the same launch as an interactive `rimz agents <kind>`, one supervised turn instead of a session.
 3. It blocks until the agent's own reporting hooks say the root turn ended — hooks are the completion signal, which is why they are the one [prerequisite](#prerequisites).
 4. It prints the answer, exits with the run's code, and closes the pane. The agent's session file stays where the CLI always puts it, so `claude --resume` and the provider's own apps keep working, and `rimz agents show` and `rimz transcript` read the run back after it ends.
@@ -39,7 +39,7 @@ Nothing else moves: no daemon, no forked agent, no RimZ-private copy of the sess
 | `1` | The run failed. |
 | `123` | The run exhausted `--max-attempts` while its `--verify` command was still red. |
 | `124` | The run hit its `--timeout`. |
-| `125` | The run reached its `--budget`. |
+| `125` | The run reached its `--budget` or an exact managed-launch provider quota. |
 | `130` | The run was canceled (Ctrl+C on a blocking `-p`). |
 
 ```sh
@@ -59,6 +59,8 @@ rimz agents codex "Update dependencies and run the test suite." -p --timeout 30m
 ```
 
 **Cap the dollars.** `--budget 2` records `budget_exceeded` and exits `125`, distinct from a timeout or agent failure. The cap model behind the flag is the [budgets guide](./budget.md).
+
+**Honor the exact Qwen account.** A fresh managed Qwen run resolves the final Alibaba region and API key chosen by the launch environment, compares only that opaque account binding with cached Coding Plan windows, and exits `125` before recording the run or opening a pane when any authoritative window is spent. Missing quota data permits the run; a cache entry for another region or key cannot block it. Interactive launches, resume, fork, and wake keep their existing behaviour.
 
 Two more flags, `--verify` and `--retries`, gate what counts as done and rerun what failed; they have [their own section below](#verify-and-retry).
 

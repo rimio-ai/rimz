@@ -710,6 +710,8 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
                         prompt: launch.prompt.as_deref(),
                         extra_args: &cell.args,
                     },
+                    provider_account_binding: None,
+                    provider_account_binding_finalized: false,
                     run_id: None,
                     worktree_path: options.cleanup_worktree.then_some(options.cwd),
                     close_pane_on_exit: !options.cleanup_worktree && !options.in_place,

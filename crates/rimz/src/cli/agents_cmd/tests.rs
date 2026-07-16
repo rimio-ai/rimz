@@ -78,6 +78,8 @@ fn minimal_exec_invocation<'a>(kind: &'a str, action: ExecAction<'a>) -> ExecInv
     ExecInvocation {
         kind,
         action,
+        provider_account_binding: None,
+        provider_account_binding_finalized: false,
         run_id: None,
         worktree_path: None,
         close_pane_on_exit: false,
@@ -373,6 +375,8 @@ mod parse {
                 prompt: Some("fix it"),
                 extra_args: &launch_extra,
             },
+            provider_account_binding: None,
+            provider_account_binding_finalized: false,
             run_id: Some("run_0123456789abcdef0123456789abcdef"),
             worktree_path: Some(Path::new("/repo/worktree")),
             close_pane_on_exit: true,
@@ -388,7 +392,7 @@ mod parse {
         let args = parse_exec_invocation(&input);
         let action = exec_action(&args);
         let actual_params = launch_params(&args);
-        let actual = exec_invocation(&args, action, &actual_params);
+        let actual = exec_invocation(&args, action, &actual_params, None);
         assert_eq!(
             (
                 actual.kind,
@@ -461,7 +465,7 @@ mod parse {
         ] {
             let args = parse_exec_invocation(&input);
             let params = launch_params(&args);
-            let actual = exec_invocation(&args, exec_action(&args), &params);
+            let actual = exec_invocation(&args, exec_action(&args), &params, None);
             assert_eq!(actual.kind, input.kind);
             assert_eq!(
                 resume_or_fork_contract(actual.action),
@@ -1143,6 +1147,23 @@ mod automation {
         assert!(!is_launchable_type("vim", &profiles));
         assert!(!is_launchable_type("swift-otter", &profiles));
     }
+}
+
+#[test]
+fn qwen_finalizer_requires_the_exact_preflight_binding() {
+    let binding = |key: &str| {
+        rimz::agents::ProviderAccountBinding::decode(&format!(
+            r#"{{"scope":{{"kind":"sub_provider","provider":"alibaba","variant":"international"}},"account_key":"{key}"}}"#
+        ))
+        .expect("binding")
+    };
+    let expected = binding("owner");
+    let matching = binding("owner");
+    let other = binding("other");
+    assert!(provider_account_binding_matches(&expected, Some(&matching)));
+    assert!(!provider_account_binding_matches(&expected, Some(&other)));
+    assert!(!provider_account_binding_matches(&expected, None));
+    assert!(!format!("{expected:?}").contains("owner"));
 }
 
 fn bare_exec_args() -> ExecArgs {

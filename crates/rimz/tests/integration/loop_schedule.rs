@@ -10,6 +10,7 @@ use jiff::{SignedDuration, Timestamp};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 
+use rimz::agents::{AgentRateLimits, RateLimitCacheEntry, RateLimitWindow, RateLimitsCache};
 use rimz::config::{CheckOn, LoopConfig, TaskEntry, TaskTarget, Tasks};
 use rimz::harness::budget::{BudgetLedger, DayBaseline, write_ledger};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
@@ -20,6 +21,8 @@ use rimz::harness::schedule::strikes;
 use rimz::ids::{AgentKind, AgentSessionId};
 use rimz::message::MessageStatus;
 
+#[cfg(unix)]
+use crate::common::write_fake_login_shell;
 use crate::common::{Env, ScrubSessionEnvExt};
 
 #[test]
@@ -627,6 +630,126 @@ fn loop_rename_rejects_collisions_and_reports_missing() {
 }
 
 #[test]
+fn loop_qwen_exact_quota_skip_precedes_check_command() {
+    let env = Env::new();
+    let settings = env.agent_config_path("qwen");
+    std::fs::create_dir_all(settings.parent().expect("Qwen config parent"))
+        .expect("create Qwen config");
+    std::fs::write(
+        &settings,
+        r#"{
+            "security":{"auth":{"selectedType":"openai"}},
+            "model":{"name":"qwen3-coder-plus"},
+            "modelProviders":{"openai":[{
+                "id":"qwen3-coder-plus",
+                "baseUrl":"https://coding-intl.dashscope.aliyuncs.com/v1",
+                "envKey":"BAILIAN_CODING_PLAN_API_KEY"
+            }]},
+            "env":{"BAILIAN_CODING_PLAN_API_KEY":"sentinel-loop-secret"}
+        }"#,
+    )
+    .expect("write Qwen settings");
+    env.install_agent_hooks("qwen");
+
+    let launch_env = BTreeMap::from([(
+        "RIMZ_QWEN_SETTINGS".to_owned(),
+        settings.display().to_string(),
+    )]);
+    let adapter = rimz::agents::find_adapter("qwen").expect("Qwen adapter");
+    let argv = adapter
+        .launch_command(&[], Some("work"))
+        .expect("Qwen launch argv");
+    let binding = adapter
+        .resolve_managed_launch(&env.project_root, &launch_env, None, &argv)
+        .expect("exact Qwen binding");
+    let encoded = serde_json::to_value(&binding).expect("serialize binding");
+    let account_key = encoded["account_key"]
+        .as_str()
+        .expect("binding account key")
+        .to_owned();
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    rimz::store::atomic::write_temp_then_rename_cache(
+        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache {
+            entries: [(
+                "qwen".to_owned(),
+                RateLimitCacheEntry {
+                    scope: binding.scope().clone(),
+                    account_key: Some(account_key.clone()),
+                    limits: AgentRateLimits {
+                        windows: vec![
+                            RateLimitWindow {
+                                used_percentage: Some(20),
+                                resets_at: Some(
+                                    Timestamp::now() + jiff::SignedDuration::from_hours(2),
+                                ),
+                                duration_mins: Some(7 * 24 * 60),
+                                ..RateLimitWindow::default()
+                            },
+                            RateLimitWindow {
+                                used_percentage: Some(100),
+                                resets_at: Some(
+                                    Timestamp::now() + jiff::SignedDuration::from_hours(1),
+                                ),
+                                duration_mins: Some(30 * 24 * 60),
+                                ..RateLimitWindow::default()
+                            },
+                        ],
+                    },
+                    pending: Vec::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..RateLimitsCache::default()
+        },
+    )
+    .expect("write exact quota cache");
+    assert!(
+        rimz::agents::provider_budget_gate(&runtime, "qwen", &binding, Timestamp::now()).is_some(),
+        "the exact cache must close the provider gate before the loop runner starts"
+    );
+
+    let marker = env.project_root.join("check-ran");
+    qwen_loop_ok(
+        &env,
+        &settings,
+        &[
+            "loop",
+            "add",
+            "qwen-bounded",
+            "--check",
+            &format!("touch {}", marker.display()),
+            "--on",
+            "success",
+            "--agent",
+            "qwen",
+            "--prompt",
+            "work",
+            "--every",
+            "15m",
+        ],
+    );
+    qwen_loop_ok(&env, &settings, &["loop", "run", "qwen-bounded"]);
+
+    assert!(
+        !marker.exists(),
+        "provider quota must gate before the check"
+    );
+    let records = read_loop_run_records(&env);
+    let skip = records.last().expect("Qwen budget skip record");
+    assert_eq!(skip.result, LoopRunResult::BudgetSkipped);
+    let reason = skip.error.as_deref().expect("skip reason");
+    assert!(
+        reason.contains("Qwen Alibaba International 30d window exhausted"),
+        "{reason}"
+    );
+    assert!(!reason.contains("sentinel-loop-secret"), "{reason}");
+    assert!(!reason.contains(&account_key), "{reason}");
+}
+
+#[test]
 fn loop_check_failure_records_and_renders_history() {
     let env = Env::new();
     loop_ok(
@@ -841,8 +964,10 @@ fn loop_scheduled_one_shot_consumption_follows_preflight_boundary() {
     );
     let empty_path = dispatch.home_root.join("empty-path");
     std::fs::create_dir_all(&empty_path).expect("empty PATH");
+    let shell = write_fake_login_shell(&dispatch, "loop-preflight-test-sh", &[]);
     let output = dispatch
         .rimz()
+        .env("SHELL", shell)
         .env("PATH", &empty_path)
         .args(["loop", "run", "dispatch-fails"])
         .output()
@@ -1505,6 +1630,21 @@ fn loop_add_rejects_invalid_action_shapes() {
 
 fn loop_ok(env: &Env, args: &[&str]) -> String {
     let output = env.rimz().args(args).output().expect("rimz loop");
+    assert!(
+        output.status.success(),
+        "rimz {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("stdout")
+}
+
+fn qwen_loop_ok(env: &Env, settings: &Path, args: &[&str]) -> String {
+    let output = env
+        .rimz()
+        .env("RIMZ_QWEN_SETTINGS", settings)
+        .args(args)
+        .output()
+        .expect("rimz Qwen loop");
     assert!(
         output.status.success(),
         "rimz {args:?} failed: {}",

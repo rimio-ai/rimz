@@ -70,7 +70,12 @@ use crate::mux::NamedKey;
 use crate::transcript::{AskAnswer, AskOption, AskQuestion};
 
 pub(crate) use account::WindowSurplus;
-pub use account::{AccountUsageIdentity, ProviderCapacity};
+#[doc(hidden)]
+pub use account::provider_budget_gate;
+pub use account::{
+    AccountUsageIdentity, PendingRefill, ProviderAccountBinding, ProviderCapacity,
+    RateLimitCacheEntry, RateLimitsCache,
+};
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentSessionUsage, AgentTokenUsage, AgentTurnError, CostCoverage, ProviderAccountScope,
@@ -1135,6 +1140,19 @@ pub trait AgentAdapter: Send + Sync {
     /// means this adapter has no source, so the producer creates no claim or
     /// helper. `Some` may still carry an unknown account owner.
     fn account_usage_identity(&self) -> Option<AccountUsageIdentity> {
+        None
+    }
+
+    /// Resolve an exact provider-account binding for a fresh managed launch.
+    /// Multi-provider adapters return `None` whenever the final launch inputs
+    /// do not prove one official account identity.
+    fn resolve_managed_launch(
+        &self,
+        _cwd: &Path,
+        _env: &BTreeMap<String, String>,
+        _model: Option<&str>,
+        _argv: &[String],
+    ) -> Option<ProviderAccountBinding> {
         None
     }
 

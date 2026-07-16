@@ -113,6 +113,8 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
                 extra_args: &extra_args,
             },
         },
+        provider_account_binding: None,
+        provider_account_binding_finalized: false,
         run_id: None,
         worktree_path: None,
         close_pane_on_exit: true,

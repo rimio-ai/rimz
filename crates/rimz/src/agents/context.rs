@@ -45,6 +45,13 @@ impl ProviderAccountScope {
     pub fn is_kind_wide(&self) -> bool {
         matches!(self, Self::KindWide)
     }
+
+    pub(crate) fn sub_provider_parts(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::SubProvider { provider, variant } => Some((provider, variant)),
+            Self::KindWide => None,
+        }
+    }
 }
 
 /// Rich per-session enrichment that has no first-class home on

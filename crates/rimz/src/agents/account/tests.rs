@@ -31,16 +31,24 @@ fn write_cache(runtime: &RuntimePaths, cache: &RateLimitsCache) {
 }
 
 #[test]
-fn sub_provider_windows_are_display_only_for_capacity_policy() {
+fn sub_provider_windows_require_an_exact_binding_for_launch_controls() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
-    let reset = now + SignedDuration::from_secs(3_600);
+    let pacing_reset = now + SignedDuration::from_secs(2 * 86_400);
+    let scope = ProviderAccountScope::sub_provider("alibaba", "international");
+    let binding = ProviderAccountBinding::new(scope.clone(), "owner".to_owned()).unwrap();
+    let other = ProviderAccountBinding::new(scope.clone(), "other".to_owned()).unwrap();
     let mut cache = RateLimitsCache {
         entries: BTreeMap::from([(
             "qwen".to_owned(),
             RateLimitCacheEntry {
-                scope: ProviderAccountScope::sub_provider("alibaba", "international"),
+                scope,
+                account_key: Some("owner".to_owned()),
                 limits: AgentRateLimits {
-                    windows: vec![window(now, Some(100), 3_600, Some(300))],
+                    windows: vec![
+                        window(now, Some(20), 3_600, Some(300)),
+                        window(now, Some(50), 2 * 86_400, Some(7 * 24 * 60)),
+                        window(now, Some(100), 20 * 86_400, Some(30 * 24 * 60)),
+                    ],
                 },
                 pending: Vec::new(),
             },
@@ -51,11 +59,33 @@ fn sub_provider_windows_are_display_only_for_capacity_policy() {
     write_cache(&runtime, &cache);
     assert!(ProviderCapacity::read(&runtime, "qwen").is_none());
     assert!(ProviderCapacity::read_all(&runtime).is_empty());
+    let capacity = ProviderCapacity::read_bound(&runtime, "qwen", &binding).unwrap();
+    assert_eq!(capacity.shortest_window_running(now), Some(true));
+    assert_eq!(capacity.longest_window_running(now), Some(true));
+    assert_eq!(capacity.longest_window_reset_at(), Some(pacing_reset));
+    assert!(capacity.longest_window_surplus(now).is_some());
+    assert!(capacity.spent_window(now).is_some());
+    assert!(ProviderCapacity::read_bound(&runtime, "qwen", &other).is_none());
+    assert_eq!(
+        ProviderCapacity::binding_cache_matches(&runtime, "qwen", &binding),
+        Some(true)
+    );
+    assert_eq!(
+        ProviderCapacity::binding_cache_matches(&runtime, "qwen", &other),
+        Some(false)
+    );
+    let reason = provider_budget_gate(&runtime, "qwen", &binding, now).unwrap();
+    assert!(reason.contains("Qwen Alibaba International 30d window exhausted"));
+    assert!(!reason.contains("owner"));
 
     cache.entries.get_mut("qwen").unwrap().scope = ProviderAccountScope::KindWide;
+    cache.entries.get_mut("qwen").unwrap().account_key = None;
     write_cache(&runtime, &cache);
     let capacity = ProviderCapacity::read(&runtime, "qwen").unwrap();
-    assert_eq!(capacity.longest_window_reset_at(), Some(reset));
+    assert_eq!(
+        capacity.longest_window_reset_at(),
+        Some(now + SignedDuration::from_secs(20 * 86_400))
+    );
     assert!(ProviderCapacity::read_all(&runtime).contains_key("qwen"));
 }
 
@@ -185,6 +215,20 @@ fn cache_read_cold_drops_corrupt_and_unknown_versions() {
         read_rate_limits_cache(&runtime.shared_rate_limits_path())
             .entries
             .is_empty()
+    );
+    write_cache(
+        &runtime,
+        &RateLimitsCache {
+            version: 3,
+            entries: BTreeMap::from([("qwen".to_owned(), Default::default())]),
+            ..Default::default()
+        },
+    );
+    assert!(
+        read_rate_limits_cache(&runtime.shared_rate_limits_path())
+            .entries
+            .is_empty(),
+        "the pre-binding v3 schema must cold-drop"
     );
 }
 

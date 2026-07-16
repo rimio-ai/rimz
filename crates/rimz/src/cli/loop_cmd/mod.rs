@@ -33,9 +33,10 @@ use rimz::harness::schedule::run_log::{
 };
 use rimz::harness::schedule::runner::{
     CheckEcho, ResolvedTaskSpec, RunLockInfo, RunLockState, SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL,
-    StopAction, newest_active_run, newest_active_run_for_entry, next_stop_action, parse_mode,
-    parse_task_timeout, ping_kind_supported, preflight_entry, probe_run_lock, resolve_task_spec,
-    run_lock_path, signal_run_lock_holder, tail_output, wait_for_run_lock_release, window_reset_at,
+    StopAction, managed_ping_binding, newest_active_run, newest_active_run_for_entry,
+    next_stop_action, parse_mode, parse_task_timeout, ping_kind_supported, preflight_entry,
+    probe_run_lock, resolve_task_spec, run_lock_path, signal_run_lock_holder, tail_output,
+    wait_for_run_lock_release, window_reset_at,
 };
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,
@@ -322,7 +323,12 @@ fn window_reset_for(entry: &TaskEntry) -> Option<Timestamp> {
         .agent
         .as_deref()
         .and_then(rimz::harness::spec::ping_kind)?;
-    window_reset_at(entry, kind).ok().flatten()
+    let binding = (kind == "qwen")
+        .then(|| managed_ping_binding(entry, kind))
+        .flatten();
+    window_reset_at(entry, kind, binding.as_ref())
+        .ok()
+        .flatten()
 }
 
 fn observe_task_timing(

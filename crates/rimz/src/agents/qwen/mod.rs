@@ -572,6 +572,15 @@ impl AgentAdapter for QwenAdapter {
             }
         })
     }
+    fn resolve_managed_launch(
+        &self,
+        cwd: &Path,
+        env: &std::collections::BTreeMap<String, String>,
+        model: Option<&str>,
+        argv: &[String],
+    ) -> Option<super::ProviderAccountBinding> {
+        selection::resolve_managed_launch(cwd, env, model, argv)
+    }
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::all_jsonl_files()
     }
@@ -582,6 +591,10 @@ impl AgentAdapter for QwenAdapter {
         prices: &PriceBook,
     ) -> super::spending::SpendParse {
         spend::parse_qwen_spend(path, resume, prices)
+    }
+
+    fn ping_args(&self) -> Option<Vec<String>> {
+        Some(Vec::new())
     }
 }
 

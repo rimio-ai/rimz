@@ -144,7 +144,13 @@ fn reset_occurrences(
                 .agent
                 .as_deref()
                 .and_then(crate::harness::spec::ping_kind)?;
-            ProviderCapacity::read(runtime, kind)
+            let capacity = if kind == "qwen" {
+                super::runner::managed_ping_binding(entry, kind)
+                    .and_then(|binding| ProviderCapacity::read_bound(runtime, kind, &binding))
+            } else {
+                ProviderCapacity::read(runtime, kind)
+            };
+            capacity
                 .and_then(|capacity| capacity.longest_window_reset_at())
                 .map(|reset| (name.clone(), reset))
         })

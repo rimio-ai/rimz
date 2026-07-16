@@ -43,6 +43,64 @@ pub(crate) const INFORMATIONAL_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 #[cfg(test)]
 mod tests;
 
+/// Exact identity of one provider account whose authoritative usage may drive
+/// launch-time controls.
+///
+/// The account key is an opaque, non-secret fingerprint. Its value stays out
+/// of `Debug` and user-facing output; equality is the only control operation.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderAccountBinding {
+    scope: ProviderAccountScope,
+    account_key: String,
+}
+
+impl std::fmt::Debug for ProviderAccountBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderAccountBinding")
+            .field("scope", &self.scope)
+            .field("account_key", &"<redacted>")
+            .finish()
+    }
+}
+
+impl ProviderAccountBinding {
+    pub(crate) fn new(scope: ProviderAccountScope, account_key: String) -> Option<Self> {
+        (!account_key.trim().is_empty()).then_some(Self { scope, account_key })
+    }
+
+    pub fn scope(&self) -> &ProviderAccountScope {
+        &self.scope
+    }
+
+    pub(crate) fn account_key(&self) -> &str {
+        &self.account_key
+    }
+
+    pub(crate) fn encode(&self) -> Option<String> {
+        serde_json::to_string(self).ok()
+    }
+
+    #[doc(hidden)]
+    pub fn decode(value: &str) -> Option<Self> {
+        serde_json::from_str(value)
+            .ok()
+            .filter(|binding: &Self| !binding.account_key.trim().is_empty())
+    }
+
+    pub(crate) fn display_label(&self, kind: &str) -> String {
+        let kind = match kind {
+            "qwen" => "Qwen",
+            other => other,
+        };
+        match self.scope.sub_provider_parts() {
+            Some(("alibaba", "international")) => format!("{kind} Alibaba International"),
+            Some(("alibaba", "china")) => format!("{kind} Alibaba China"),
+            Some((provider, variant)) => format!("{kind} {provider} {variant}"),
+            None => kind.to_owned(),
+        }
+    }
+}
+
 /// Cache identity of the credentials behind one provider usage probe.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountUsageIdentity {
@@ -51,12 +109,20 @@ pub struct AccountUsageIdentity {
     pub credentials_stamp: Option<u64>,
 }
 
-/// Provider-account subscription capacity for one agent kind. Only kind-wide
-/// windows enter harness policy; named and durationless quotas remain display
-/// data in the cache.
+impl AccountUsageIdentity {
+    pub(crate) fn binding(&self) -> Option<ProviderAccountBinding> {
+        ProviderAccountBinding::new(self.scope.clone(), self.account_key.clone()?)
+    }
+}
+
+/// Provider-account subscription capacity for one agent kind. Kind-wide
+/// windows drive general harness policy; exact bindings opt a managed launch
+/// into account-specific controls. Named and durationless quotas remain
+/// display data in the cache.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProviderCapacity {
     pub(crate) windows: Vec<RateLimitWindow>,
+    pacing_max_mins: Option<u32>,
 }
 
 impl ProviderCapacity {
@@ -66,7 +132,33 @@ impl ProviderCapacity {
         let entry = cache.entries.get(kind)?;
         entry.scope.is_kind_wide().then(|| Self {
             windows: entry.limits.windows.clone(),
+            pacing_max_mins: None,
         })
+    }
+
+    /// Read capacity only when the cache belongs to this exact provider
+    /// account. Bound Qwen pacing uses its sliding 5-hour/7-day windows while
+    /// all authoritative windows remain available to the exhaustion gate.
+    pub(crate) fn read_bound(
+        runtime: &RuntimePaths,
+        kind: &str,
+        binding: &ProviderAccountBinding,
+    ) -> Option<Self> {
+        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        let entry = cache.entries.get(kind)?;
+        entry_matches_binding(entry, binding).then(|| Self {
+            windows: entry.limits.windows.clone(),
+            pacing_max_mins: Some(7 * 24 * 60),
+        })
+    }
+
+    pub(crate) fn binding_cache_matches(
+        runtime: &RuntimePaths,
+        kind: &str,
+        binding: &ProviderAccountBinding,
+    ) -> Option<bool> {
+        let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+        Some(entry_matches_binding(cache.entries.get(kind)?, binding))
     }
 
     /// Read all kind-wide capacities from the shared provider cache once.
@@ -80,6 +172,7 @@ impl ProviderCapacity {
                     AgentKind::new_unchecked(kind),
                     Self {
                         windows: entry.limits.windows,
+                        pacing_max_mins: None,
                     },
                 )
             })
@@ -88,7 +181,10 @@ impl ProviderCapacity {
 
     #[cfg(test)]
     pub(crate) fn from_windows(windows: Vec<RateLimitWindow>) -> Self {
-        Self { windows }
+        Self {
+            windows,
+            pacing_max_mins: None,
+        }
     }
 
     pub(crate) fn projected_windows(
@@ -157,6 +253,19 @@ impl ProviderCapacity {
         })
     }
 
+    /// Earliest future reset among currently exhausted authoritative windows.
+    pub(crate) fn spent_window(&self, now: Timestamp) -> Option<RateLimitWindow> {
+        self.windows
+            .iter()
+            .filter(|window| {
+                window.scope.is_none()
+                    && window.is_spent()
+                    && window.resets_at.is_some_and(|reset| reset > now)
+            })
+            .min_by_key(|window| window.resets_at)
+            .cloned()
+    }
+
     fn duration_window(&self, longest: bool) -> Option<&RateLimitWindow> {
         let windows = self.duration_windows();
         if longest {
@@ -168,7 +277,10 @@ impl ProviderCapacity {
 
     fn duration_windows(&self) -> impl Iterator<Item = &RateLimitWindow> {
         self.windows.iter().filter(|window| {
-            window.scope.is_none() && window.duration_mins.is_some_and(|mins| mins > 0)
+            window.scope.is_none()
+                && window.duration_mins.is_some_and(|mins| {
+                    mins > 0 && self.pacing_max_mins.is_none_or(|maximum| mins <= maximum)
+                })
         })
     }
 
@@ -179,6 +291,40 @@ impl ProviderCapacity {
         self.duration_windows()
             .cloned()
             .map(move |window| window.projected_at(now))
+    }
+}
+
+fn entry_matches_binding(entry: &RateLimitCacheEntry, binding: &ProviderAccountBinding) -> bool {
+    &entry.scope == binding.scope() && entry.account_key.as_deref() == Some(binding.account_key())
+}
+
+#[doc(hidden)]
+pub fn provider_budget_gate(
+    runtime: &RuntimePaths,
+    kind: &str,
+    binding: &ProviderAccountBinding,
+    now: Timestamp,
+) -> Option<String> {
+    let window = ProviderCapacity::read_bound(runtime, kind, binding)?.spent_window(now)?;
+    let reset = window.resets_at?;
+    let used_percentage = window.used_percentage.unwrap_or(100);
+    let window_label = window
+        .duration_mins
+        .map(window_duration_label)
+        .unwrap_or_else(|| "quota".to_owned());
+    Some(format!(
+        "{} {window_label} window exhausted ({used_percentage}% used); resets at {reset}",
+        binding.display_label(kind),
+    ))
+}
+
+fn window_duration_label(mins: u32) -> String {
+    if mins.is_multiple_of(24 * 60) {
+        format!("{}d", mins / (24 * 60))
+    } else if mins.is_multiple_of(60) {
+        format!("{}h", mins / 60)
+    } else {
+        format!("{mins}m")
     }
 }
 
@@ -207,7 +353,7 @@ fn window_running_verdict(window: &RateLimitWindow, now: Timestamp) -> Option<bo
 }
 
 /// Producer-published per-provider rate-limit windows.
-const RATE_LIMITS_CACHE_VERSION: u32 = 3;
+const RATE_LIMITS_CACHE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitsCache {
@@ -227,14 +373,30 @@ impl Default for RateLimitsCache {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitCacheEntry {
     #[serde(default)]
     pub scope: ProviderAccountScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_key: Option<String>,
     #[serde(default)]
     pub limits: AgentRateLimits,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<PendingRefill>,
+}
+
+impl std::fmt::Debug for RateLimitCacheEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimitCacheEntry")
+            .field("scope", &self.scope)
+            .field(
+                "account_key",
+                &self.account_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("limits", &self.limits)
+            .field("pending", &self.pending)
+            .finish()
+    }
 }
 
 /// A best-effort drop awaiting confirmation by rate-limit fusion.

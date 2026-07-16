@@ -288,6 +288,8 @@ pub enum ExecAction<'a> {
 pub struct ExecInvocation<'a> {
     pub kind: &'a str,
     pub action: ExecAction<'a>,
+    pub provider_account_binding: Option<&'a crate::agents::ProviderAccountBinding>,
+    pub provider_account_binding_finalized: bool,
     pub run_id: Option<&'a str>,
     pub worktree_path: Option<&'a Path>,
     pub close_pane_on_exit: bool,
@@ -444,6 +446,8 @@ pub fn preflight_agent_kind(
                 prompt: None,
                 extra_args: &[],
             },
+            provider_account_binding: None,
+            provider_account_binding_finalized: false,
             run_id: None,
             worktree_path: None,
             close_pane_on_exit: false,
@@ -469,6 +473,15 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
             argv.extend(["--fork".to_owned(), session_id.to_owned()]);
         }
         ExecAction::Launch { .. } => {}
+    }
+    if let Some(binding) = inv
+        .provider_account_binding
+        .and_then(crate::agents::ProviderAccountBinding::encode)
+    {
+        argv.extend(["--provider-account-binding".to_owned(), binding]);
+    }
+    if inv.provider_account_binding_finalized {
+        argv.push("--provider-account-binding-finalized".to_owned());
     }
     if let Some(run_id) = inv.run_id {
         argv.extend(["--run-id".to_owned(), run_id.to_owned()]);
@@ -539,6 +552,17 @@ pub fn exec_identity_env(inv: &ExecInvocation<'_>) -> BTreeMap<String, String> {
             env.insert(key.to_owned(), value);
         }
     }
+    env
+}
+
+/// Process environment after applying RimZ's launch overrides. Non-Unicode
+/// ambient values stay inherited by the child but cannot affect Qwen's textual
+/// provider selection.
+pub fn effective_launch_env(overrides: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut env = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect::<BTreeMap<_, _>>();
+    env.extend(overrides.clone());
     env
 }
 

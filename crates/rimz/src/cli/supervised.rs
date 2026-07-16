@@ -129,6 +129,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
     pub(super) cleanup_worktree: bool,
     pub(super) permission_args: &'a [String],
     pub(super) self_cleanup_on_completion: bool,
+    pub(super) provider_account_binding: Option<&'a rimz::agents::ProviderAccountBinding>,
 }
 
 pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
@@ -141,6 +142,8 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
                 prompt: Some(args.prompt),
                 extra_args: args.permission_args,
             },
+            provider_account_binding: args.provider_account_binding,
+            provider_account_binding_finalized: false,
             run_id: Some(args.run_id.as_str()),
             worktree_path: args.cleanup_worktree.then_some(args.cwd),
             close_pane_on_exit: args.self_cleanup_on_completion,

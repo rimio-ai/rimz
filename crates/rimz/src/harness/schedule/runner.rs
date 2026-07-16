@@ -21,8 +21,8 @@ use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{
-    HookPreflightErr, ProviderCapacity, TurnLifecycleNeed, WindowSurplus, find_adapter,
-    preflight_hooks,
+    HookPreflightErr, ProviderAccountBinding, ProviderCapacity, TurnLifecycleNeed, WindowSurplus,
+    find_adapter, preflight_hooks,
 };
 use crate::config::{CheckOn, MachineConfig, TaskEntry, TaskTarget};
 use crate::harness::run::{PermissionMode, RunRecord, SupervisedRunOutcome, SupervisedRunRequest};
@@ -126,6 +126,7 @@ struct FireScope {
     workspace_id: WorkspaceId,
     scope_runtime: RuntimePaths,
     resolved: Option<ResolvedTaskSpec>,
+    provider_account_binding: Option<ProviderAccountBinding>,
     capacity: OnceCell<Option<ProviderCapacity>>,
     #[cfg(test)]
     capacity_reads: std::cell::Cell<usize>,
@@ -145,6 +146,7 @@ impl FireScope {
             workspace_id,
             scope_runtime,
             resolved,
+            provider_account_binding: None,
             capacity: OnceCell::new(),
             #[cfg(test)]
             capacity_reads: std::cell::Cell::new(0),
@@ -157,19 +159,25 @@ impl FireScope {
         if self.capacity.get().is_none() {
             #[cfg(test)]
             self.capacity_reads.set(self.capacity_reads.get() + 1);
-            #[cfg(test)]
-            let runtime = self.capacity_runtime.clone();
-            #[cfg(not(test))]
-            let runtime = None;
-            let runtime = runtime.map_or_else(
-                || RuntimePaths::under(self.workspace_id.clone(), &runtime_home()),
-                Ok,
-            )?;
-            let _ = self
-                .capacity
-                .set(ProviderCapacity::read(&runtime, self.kind.as_str()));
+            let runtime = self.capacity_runtime()?;
+            let capacity = match self.provider_account_binding.as_ref() {
+                Some(binding) => {
+                    ProviderCapacity::read_bound(&runtime, self.kind.as_str(), binding)
+                }
+                None if self.kind.as_str() == "qwen" => None,
+                None => ProviderCapacity::read(&runtime, self.kind.as_str()),
+            };
+            let _ = self.capacity.set(capacity);
         }
         Ok(self.capacity.get().and_then(Option::as_ref))
+    }
+
+    fn capacity_runtime(&self) -> Result<RuntimePaths> {
+        #[cfg(test)]
+        if let Some(runtime) = self.capacity_runtime.clone() {
+            return Ok(runtime);
+        }
+        RuntimePaths::for_workspace(self.workspace_id.clone()).map_err(Into::into)
     }
 
     fn surplus_gate(&self, entry: &TaskEntry, now: Timestamp) -> Result<Option<String>> {
@@ -184,19 +192,46 @@ impl FireScope {
         ))
     }
 
+    #[cfg(test)]
     fn window_running(&self, longest: bool, now: Timestamp) -> Result<bool> {
+        Ok(self.window_running_state(longest, now)? == Some(true))
+    }
+
+    fn window_running_state(&self, longest: bool, now: Timestamp) -> Result<Option<bool>> {
         Ok(self.capacity()?.and_then(|capacity| {
             if longest {
                 capacity.longest_window_running(now)
             } else {
                 capacity.shortest_window_running(now)
             }
-        }) == Some(true))
+        }))
+    }
+
+    fn ping_gate_reason(&self, entry: &TaskEntry, now: Timestamp) -> Result<Option<String>> {
+        let kind = self.kind.as_str();
+        let binding_state = if kind == "qwen" {
+            let Some(binding) = self.provider_account_binding.as_ref() else {
+                return Ok(qwen_ping_cache_reason(false, None, None));
+            };
+            let runtime = self.capacity_runtime()?;
+            let state = ProviderCapacity::binding_cache_matches(&runtime, kind, binding);
+            if state == Some(false) {
+                return Ok(qwen_ping_cache_reason(true, state, None));
+            }
+            state
+        } else {
+            None
+        };
+        let running = self.window_running_state(entry.every.as_deref() == Some("reset"), now)?;
+        if kind == "qwen" {
+            return Ok(qwen_ping_cache_reason(true, binding_state, running));
+        }
+        Ok((running == Some(true)).then(|| format!("{kind} budget window already counting down")))
     }
 }
 
 impl FireContext {
-    fn resolve(entry: &TaskEntry, action: TaskAction) -> Result<Self> {
+    fn resolve(entry: &TaskEntry, action: TaskAction, config: &MachineConfig) -> Result<Self> {
         let root = entry.resolved_root();
         if action.is_check_only() {
             return Ok(Self {
@@ -211,12 +246,16 @@ impl FireContext {
         let scope = match &action {
             TaskAction::Spawn(spec) => {
                 let resolved = resolve_task_spec(spec, &workspace)?;
-                FireScope::new(
+                let provider_account_binding =
+                    resolve_managed_spawn_binding(entry, &workspace, &resolved, config)?;
+                let mut scope = FireScope::new(
                     crate::ids::AgentKind::new_unchecked(resolved.kind.clone()),
                     workspace_id,
                     runtime,
                     Some(resolved),
-                )
+                );
+                scope.provider_account_binding = provider_account_binding;
+                scope
             }
             TaskAction::Deliver(target) => FireScope::new(
                 crate::ids::AgentKind::new_unchecked(target.kind.clone()),
@@ -360,7 +399,7 @@ impl<'a> TaskFire<'a> {
             .action
             .take()
             .context("loop task action already prepared")?;
-        let context = FireContext::resolve(&self.entry, action)?;
+        let context = FireContext::resolve(&self.entry, action, &self.config)?;
         if let Some(scope) = &context.scope
             && let Some(reason) = crate::harness::budget::scope_gate(
                 &scope.scope_runtime,
@@ -372,11 +411,41 @@ impl<'a> TaskFire<'a> {
             return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
         }
         if let Some(scope) = &context.scope
+            && let Some(binding) = scope.provider_account_binding.as_ref()
+            && let Some(reason) = crate::agents::provider_budget_gate(
+                &scope.scope_runtime,
+                scope.kind.as_str(),
+                binding,
+                self.now,
+            )
+        {
+            return Ok(Some(self.record_gate(LoopRunResult::BudgetSkipped, reason)));
+        }
+        if let Some(scope) = &context.scope
             && let Some(reason) = scope.surplus_gate(&self.entry, self.now)?
         {
             return Ok(Some(
                 self.record_gate(LoopRunResult::SurplusSkipped, reason),
             ));
+        }
+        if let Some(scope) = &context.scope
+            && scope
+                .resolved
+                .as_ref()
+                .is_some_and(|resolved| resolved.is_ping)
+            && let Some(reason) = scope.ping_gate_reason(&self.entry, self.now)?
+        {
+            let kind = scope.kind.as_str().to_owned();
+            return Ok(Some(self.record_terminal_with(
+                LoopRunResult::SkippedWindow,
+                LoopRunPresentation {
+                    skip_reason: Some(reason),
+                    ..LoopRunPresentation::default()
+                },
+                TaskFireNotice::PingWindow { kind },
+                Some(self.now),
+                |_| {},
+            )));
         }
         self.context = Some(context);
         Ok(None)
@@ -533,12 +602,31 @@ impl<'a> TaskFire<'a> {
         spec: String,
         fired_check: Option<FiredCheck>,
     ) -> Result<TaskFirePlan> {
-        let is_ping = agents_spec::virtual_ping_shape(&spec);
-        if let Some(done) = self.prepare_spawn_preflight(&spec, fired_check.as_ref())? {
-            return Ok(TaskFirePlan::Done(done));
-        }
+        let (resolved_kind, is_ping, provider_account_binding) = {
+            let scope = self
+                .context
+                .as_ref()
+                .and_then(|context| context.scope.as_ref())
+                .context("loop spawn context missing provider scope")?;
+            let resolved = scope
+                .resolved
+                .as_ref()
+                .context("loop spawn context missing resolved task spec")?;
+            preflight_resolved_task(&spec, resolved)?;
+            (
+                resolved.kind.clone(),
+                resolved.is_ping,
+                scope.provider_account_binding.clone(),
+            )
+        };
         let prompt = self.resolve_effect_prompt(fired_check.as_ref())?;
-        let request = self.compile_spawn_request(spec, prompt, is_ping)?;
+        let request = self.compile_spawn_request(
+            spec,
+            prompt,
+            is_ping,
+            &resolved_kind,
+            provider_account_binding.as_ref(),
+        )?;
         self.consume_ephemeral()?;
         let check = fired_check.as_ref().map(|check| check.record.clone());
         let stream = self.mode == LoopRunMode::Manual;
@@ -553,57 +641,13 @@ impl<'a> TaskFire<'a> {
         }))
     }
 
-    fn prepare_spawn_preflight(
-        &mut self,
-        spec: &str,
-        fired_check: Option<&FiredCheck>,
-    ) -> Result<Option<TaskFireFinished>> {
-        let (kind, window_running) = {
-            let context = self
-                .context
-                .as_ref()
-                .context("loop task context missing for spawn")?;
-            let scope = context
-                .scope
-                .as_ref()
-                .context("loop spawn context missing provider scope")?;
-            let resolved = scope
-                .resolved
-                .as_ref()
-                .context("loop spawn context missing resolved task spec")?;
-            preflight_resolved_task(spec, resolved)?;
-            let is_ping = agents_spec::virtual_ping_shape(spec);
-            (
-                resolved.kind().to_owned(),
-                is_ping
-                    && scope.window_running(
-                        self.entry.every.as_deref() == Some("reset"),
-                        Timestamp::now(),
-                    )?,
-            )
-        };
-        if !window_running {
-            return Ok(None);
-        }
-        let check = fired_check.map(|check| check.record.clone());
-        let reason = format!("{kind} budget window already counting down");
-        Ok(Some(self.record_terminal_with(
-            LoopRunResult::SkippedWindow,
-            LoopRunPresentation {
-                skip_reason: Some(reason),
-                ..LoopRunPresentation::default()
-            },
-            TaskFireNotice::PingWindow { kind },
-            None,
-            |record| record.check = check,
-        )))
-    }
-
     fn compile_spawn_request(
         &self,
         spec: String,
         prompt: String,
         is_ping: bool,
+        resolved_kind: &str,
+        provider_account_binding: Option<&ProviderAccountBinding>,
     ) -> Result<SupervisedRunRequest> {
         let system_prompt_file = self
             .entry
@@ -635,11 +679,12 @@ impl<'a> TaskFire<'a> {
             .transpose()
             .map_err(anyhow::Error::msg)?;
         let timeout = effective_spawn_timeout(self.mode, task_timeout, configured_timeout);
-        let effort = self
-            .entry
-            .effort
-            .clone()
-            .or_else(|| is_ping.then(|| "low".to_owned()));
+        let effort = self.entry.effort.clone().or_else(|| {
+            (is_ping
+                && find_adapter(resolved_kind)
+                    .is_some_and(|adapter| adapter.descriptor().launch.presets.effort.is_some()))
+            .then(|| "low".to_owned())
+        });
         let budget = self
             .entry
             .budget
@@ -671,6 +716,8 @@ impl<'a> TaskFire<'a> {
             loop_zone: self.mode == LoopRunMode::Scheduled,
             loop_task: Some(self.name.clone()),
             passthrough: Vec::new(),
+            managed_provider_binding: provider_account_binding.cloned(),
+            managed_provider_binding_resolved: resolved_kind == "qwen",
         })
     }
 
@@ -883,6 +930,9 @@ fn relative_age(ts: Timestamp, now: Timestamp) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedTaskSpec {
     kind: String,
+    args: Vec<String>,
+    model: Option<String>,
+    is_ping: bool,
 }
 
 impl ResolvedTaskSpec {
@@ -933,6 +983,9 @@ fn single_agent_cell(spec: &str, layout: &LayoutSpec) -> Result<ResolvedTaskSpec
     };
     Ok(ResolvedTaskSpec {
         kind: cell.kind.as_str().to_owned(),
+        args: cell.args.clone(),
+        model: cell.launch.model.clone(),
+        is_ping: agents_spec::virtual_ping_shape(spec),
     })
 }
 
@@ -940,7 +993,9 @@ pub fn ping_kind_supported(kind: &str) -> Result<()> {
     let adapter =
         find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     if adapter.ping_args().is_none() {
-        anyhow::bail!("agent kind `{kind}` does not support a ping turn; use `claude` or `codex`");
+        anyhow::bail!(
+            "agent kind `{kind}` does not support a ping turn; use `claude`, `codex`, or `qwen`"
+        );
     }
     Ok(())
 }
@@ -1060,6 +1115,52 @@ fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+fn resolve_managed_spawn_binding(
+    entry: &TaskEntry,
+    workspace: &crate::workspace::ResolvedWorkspace,
+    resolved: &ResolvedTaskSpec,
+    config: &MachineConfig,
+) -> Result<Option<ProviderAccountBinding>> {
+    if resolved.kind != "qwen" || entry.worktree.is_some() {
+        return Ok(None);
+    }
+    let adapter = find_adapter(&resolved.kind)
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", resolved.kind))?;
+    let launch = crate::agents::LaunchParams {
+        model: resolved.model.clone(),
+        ..crate::agents::LaunchParams::default()
+    };
+    let invocation = crate::harness::launch::ExecInvocation {
+        kind: &resolved.kind,
+        action: crate::harness::launch::ExecAction::Launch {
+            prompt: None,
+            extra_args: &resolved.args,
+        },
+        provider_account_binding: None,
+        provider_account_binding_finalized: false,
+        run_id: None,
+        worktree_path: None,
+        close_pane_on_exit: false,
+        exit_on_run_completion: false,
+        identity: crate::harness::launch::ExecIdentity {
+            params: Some(&launch),
+            ..Default::default()
+        },
+    };
+    let process = crate::harness::launch::compile_agent_process(
+        &workspace.project_root,
+        config.harness.rtk,
+        &invocation,
+        &workspace.worktree_root,
+    )?;
+    Ok(adapter.resolve_managed_launch(
+        &workspace.worktree_root,
+        &crate::harness::launch::effective_launch_env(&process.env),
+        resolved.model.as_deref(),
+        &process.provider_argv,
+    ))
 }
 
 /// Newest durable supervised run still active for one loop task.
@@ -1505,6 +1606,101 @@ pub fn tail_output(bytes: &[u8], cap: usize) -> String {
     String::from_utf8_lossy(&bytes[start..]).into_owned()
 }
 
+/// Whether `entry`'s provider already has a budget window counting down, read
+/// from the shared account-scoped cache. The window state is account-scoped, so
+/// the entry's workspace is resolved only to reach this user's runtime root.
+pub fn window_already_running(
+    entry: &TaskEntry,
+    kind: &str,
+    binding: Option<&ProviderAccountBinding>,
+) -> Result<Option<bool>> {
+    let runtime = entry_runtime(entry)?;
+    Ok(capacity_for(&runtime, kind, binding)
+        .and_then(|capacity| capacity.shortest_window_running(Timestamp::now())))
+}
+
+/// Whether `entry`'s provider already has its longest budget window counting
+/// down, read from the shared account-scoped cache.
+pub fn reset_window_already_running(
+    entry: &TaskEntry,
+    kind: &str,
+    binding: Option<&ProviderAccountBinding>,
+) -> Result<Option<bool>> {
+    let runtime = entry_runtime(entry)?;
+    Ok(capacity_for(&runtime, kind, binding)
+        .and_then(|capacity| capacity.longest_window_running(Timestamp::now())))
+}
+
+pub fn binding_cache_matches(
+    entry: &TaskEntry,
+    kind: &str,
+    binding: &ProviderAccountBinding,
+) -> Result<Option<bool>> {
+    let runtime = entry_runtime(entry)?;
+    Ok(ProviderCapacity::binding_cache_matches(
+        &runtime, kind, binding,
+    ))
+}
+
+/// Resolve the exact provider account a fresh ping task would launch with.
+pub fn managed_ping_binding(entry: &TaskEntry, kind: &str) -> Option<ProviderAccountBinding> {
+    if kind != "qwen" || entry.worktree.is_some() {
+        return None;
+    }
+    let config = MachineConfig::load_lenient();
+    let result = (|| -> Result<Option<ProviderAccountBinding>> {
+        let workspace = WorkspaceResolver::resolve(entry.resolved_root(), None)?;
+        let resolved = resolve_task_spec("qwen-ping", &workspace)?;
+        if resolved.kind() != kind {
+            return Ok(None);
+        }
+        resolve_managed_spawn_binding(entry, &workspace, &resolved, &config)
+    })();
+    result
+        .inspect_err(|err| {
+            tracing::debug!(error = %err, "Qwen ping account binding skipped: launch resolution failed");
+        })
+        .ok()
+        .flatten()
+}
+
+fn qwen_ping_cache_reason(
+    binding_resolved: bool,
+    binding_state: Option<bool>,
+    running: Option<bool>,
+) -> Option<String> {
+    if !binding_resolved {
+        return Some("Qwen launch has no exact Alibaba account binding".to_owned());
+    }
+    match (binding_state, running) {
+        (Some(false), _) => {
+            Some("Qwen cached quota belongs to a different Alibaba account".to_owned())
+        }
+        (Some(true), None) => Some("matching Qwen budget-window reading is incomplete".to_owned()),
+        (_, Some(true)) => Some("qwen budget window already counting down".to_owned()),
+        _ => None,
+    }
+}
+
+/// Decide whether a task's provider-window surplus gate keeps this fire closed.
+pub fn surplus_gate(
+    entry: &TaskEntry,
+    kind: &str,
+    binding: Option<&ProviderAccountBinding>,
+    now: Timestamp,
+) -> Result<Option<String>> {
+    if entry.surplus.is_none() && entry.surplus_after.is_none() {
+        return Ok(None);
+    }
+    let runtime = entry_runtime(entry)?;
+    Ok(surplus_gate_in(
+        entry,
+        kind,
+        capacity_for(&runtime, kind, binding)
+            .and_then(|capacity| capacity.longest_window_surplus(now)),
+    ))
+}
+
 fn surplus_gate_in(
     entry: &TaskEntry,
     kind: &str,
@@ -1586,10 +1782,26 @@ fn elapsed_label(elapsed: jiff::SignedDuration) -> String {
 }
 
 /// Raw reset stamp for `entry`'s provider longest budget window.
-pub fn window_reset_at(entry: &TaskEntry, kind: &str) -> Result<Option<Timestamp>> {
+pub fn window_reset_at(
+    entry: &TaskEntry,
+    kind: &str,
+    binding: Option<&ProviderAccountBinding>,
+) -> Result<Option<Timestamp>> {
     let runtime = entry_runtime(entry)?;
-    Ok(ProviderCapacity::read(&runtime, kind)
+    Ok(capacity_for(&runtime, kind, binding)
         .and_then(|capacity| capacity.longest_window_reset_at()))
+}
+
+fn capacity_for(
+    runtime: &RuntimePaths,
+    kind: &str,
+    binding: Option<&ProviderAccountBinding>,
+) -> Option<ProviderCapacity> {
+    match binding {
+        Some(binding) => ProviderCapacity::read_bound(runtime, kind, binding),
+        None if kind == "qwen" => None,
+        None => ProviderCapacity::read(runtime, kind),
+    }
 }
 
 fn entry_runtime(entry: &TaskEntry) -> Result<RuntimePaths> {

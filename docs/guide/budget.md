@@ -19,6 +19,8 @@ A cap is a dollar amount (`5`, `$4.50`), optionally windowed with `/day`, which 
 
 Every scope is checked independently, so the first cap crossed is the one that parks.
 
+Qwen's experimental Alibaba Coding Plan reading adds a launch-only provider quota boundary beside those four dollar scopes. A fresh managed supervised or loop launch binds its final Qwen process to the exact official region and an opaque fingerprint of the selected API key, then reads only that account's cached `5h`, `7d`, and `30d` windows. An exhausted window exits `125` or records `budget skipped` before a run record, pane, or loop `--check` command exists. Missing quota data permits an ordinary fresh launch; surplus and priming require complete data for that exact account and fail closed. Interactive hand launches, resume, fork, wake, and mid-run auto-continue stay outside this boundary.
+
 ### Cap one agent
 
 `--budget` at launch caps the session; `/day` measures each local calendar day instead, so a long-lived agent resumes with fresh headroom at midnight:
@@ -93,7 +95,7 @@ Two honest limits. Cost arrives with provider responses, so the last tool call c
 
 Dollar caps guard one direction: spend you never meant to authorize. A subscription plan fails in the other direction too. The weekly window expires whether you use it or not, so whatever is left on the `7d` bar at reset is capacity you paid for and gave back. You already manage this by eye: a glance at the bar on a Thursday shows plenty left, so you let a background refactor run; on a heavy Tuesday everything waits for the real work. A scheduled task firing at 03:00 cannot make that judgment call, unless the schedule can read the bar.
 
-The surplus gate is that glance, computed. Before a gated fire, RimZ reads the provider's longest budget window (the weekly bar on today's Claude and Codex plans) and computes forward headroom: the share of budget remaining divided by the share of time remaining. `1.0x` means the current pace lands exactly on the reset; anything above it is budget the rest of the window does not need. Three days into a 7-day window with 40% used, 60% of the budget remains against 57% of the time, and headroom reads `1.05x`: sustainable, but no real slack. With only 20% used, the same clock reads `1.4x`, and a task gated at `--surplus 1.4x` or below fires.
+The surplus gate is that glance, computed. Before a gated fire, RimZ reads the provider's longest pacing window — the weekly bar on today's Claude and Codex plans, and the exact account's `7d` Alibaba window for Qwen — and computes forward headroom: the share of budget remaining divided by the share of time remaining. Longer Alibaba windows still block a launch when exhausted, but the `30d` window does not set pacing or reset recurrence. `1.0x` means the current pace lands exactly on the reset; anything above it is budget the rest of the window does not need. Three days into a 7-day window with 40% used, 60% of the budget remains against 57% of the time, and headroom reads `1.05x`: sustainable, but no real slack. With only 20% used, the same clock reads `1.4x`, and a task gated at `--surplus 1.4x` or below fires.
 
 Two task flags arm the gate, and they compose:
 

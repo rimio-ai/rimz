@@ -102,6 +102,35 @@ fn write_recovered_window(runtime: &RuntimePaths) {
     );
 }
 
+#[test]
+fn exact_qwen_cache_does_not_arm_session_resume_controls() {
+    let (_dir, runtime) = temp_runtime();
+    write_rate_limits_cache(
+        &runtime,
+        &RateLimitsCache {
+            entries: [(
+                "qwen".to_owned(),
+                crate::agents::RateLimitCacheEntry {
+                    scope: crate::agents::ProviderAccountScope::sub_provider(
+                        "alibaba",
+                        "international",
+                    ),
+                    account_key: Some("opaque-fingerprint".to_owned()),
+                    limits: AgentRateLimits {
+                        windows: vec![window(20, 9_000)],
+                    },
+                    pending: Vec::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        },
+    );
+    assert!(ProviderCapacity::read(&runtime, "qwen").is_none());
+    assert!(ProviderCapacity::read_all(&runtime).is_empty());
+}
+
 fn park_path(runtime: &RuntimePaths) -> PathBuf {
     park_record_path(runtime, &AgentKind::new_unchecked("claude"), &"sess".into())
 }

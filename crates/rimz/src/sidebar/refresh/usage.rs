@@ -355,7 +355,7 @@ fn complete_direct_account_usage(
         publish_account_usage_windows(
             runtime,
             kind,
-            completion.identity.scope,
+            completion.identity,
             snapshot.rate_limits,
             merge_windows,
         );
@@ -379,21 +379,30 @@ fn publish_account_usage_snapshot(
     if has_credits {
         merge_provider_realtime_usage(runtime, kind, scope.clone(), snapshot);
     }
-    let has_windows = publish_account_usage_windows(runtime, kind, scope, windows, publish_windows);
+    let has_windows = publish_account_usage_windows(
+        runtime,
+        kind,
+        AccountUsageIdentity {
+            scope,
+            ..AccountUsageIdentity::default()
+        },
+        windows,
+        publish_windows,
+    );
     has_credits || has_windows
 }
 
 fn publish_account_usage_windows(
     runtime: &RuntimePaths,
     kind: &str,
-    scope: ProviderAccountScope,
+    identity: AccountUsageIdentity,
     windows: Option<crate::agents::AgentRateLimits>,
     publish: bool,
 ) -> bool {
     let Some(windows) = windows.filter(|_| publish) else {
         return false;
     };
-    merge_account_rate_limits(runtime, kind, scope, windows);
+    merge_account_rate_limits(runtime, kind, identity, windows);
     true
 }
 

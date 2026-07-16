@@ -4,15 +4,123 @@ use crate::common::{
     CommandTimeoutExt, path_with_front, write_failing_agent_shim, write_fake_login_shell,
 };
 use jiff::Timestamp;
-use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::agents::{
+    AgentLifecycleObservation, AgentRateLimits, LifecycleSignal, RateLimitCacheEntry,
+    RateLimitWindow, RateLimitsCache,
+};
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, ViewKind};
 use rimz::store::event::EventEnvelope;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+#[test]
+fn qwen_supervised_run_exits_125_before_recording_when_exact_quota_is_spent() {
+    let env = Env::new();
+    let settings = env.agent_config_path("qwen");
+    std::fs::create_dir_all(settings.parent().expect("Qwen config parent"))
+        .expect("create Qwen config");
+    std::fs::write(
+        &settings,
+        r#"{
+            "security":{"auth":{"selectedType":"openai"}},
+            "model":{"name":"qwen3-coder-plus"},
+            "modelProviders":{"openai":[{
+                "id":"qwen3-coder-plus",
+                "baseUrl":"https://coding-intl.dashscope.aliyuncs.com/v1",
+                "envKey":"BAILIAN_CODING_PLAN_API_KEY"
+            }]},
+            "env":{"BAILIAN_CODING_PLAN_API_KEY":"sentinel-qwen-secret"}
+        }"#,
+    )
+    .expect("write Qwen settings");
+    env.install_agent_hooks("qwen");
+
+    let launch_env = BTreeMap::from([("HOME".to_owned(), env.home_root.display().to_string())]);
+    let adapter = rimz::agents::find_adapter("qwen").expect("Qwen adapter");
+    let argv = adapter
+        .launch_command(&[], Some("work"))
+        .expect("Qwen launch argv");
+    let binding = adapter
+        .resolve_managed_launch(&env.project_root, &launch_env, None, &argv)
+        .expect("exact Qwen binding");
+    let encoded = serde_json::to_value(&binding).expect("serialize binding");
+    let account_key = encoded["account_key"]
+        .as_str()
+        .expect("binding account key")
+        .to_owned();
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    rimz::store::atomic::write_temp_then_rename_cache(
+        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache {
+            entries: [(
+                "qwen".to_owned(),
+                RateLimitCacheEntry {
+                    scope: binding.scope().clone(),
+                    account_key: Some(account_key.clone()),
+                    limits: AgentRateLimits {
+                        windows: vec![RateLimitWindow {
+                            used_percentage: Some(100),
+                            resets_at: Some(Timestamp::now() + jiff::SignedDuration::from_hours(1)),
+                            duration_mins: Some(5 * 60),
+                            ..RateLimitWindow::default()
+                        }],
+                    },
+                    pending: Vec::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..RateLimitsCache::default()
+        },
+    )
+    .expect("write exact quota cache");
+    assert!(
+        rimz::agents::provider_budget_gate(&runtime, "qwen", &binding, Timestamp::now()).is_some(),
+        "the exact cache must close the provider gate before the subprocess runs"
+    );
+
+    let agent_bin = write_failing_agent_shim(&env, "qwen", 1);
+    let shell = write_fake_login_shell(&env, "qwen-quota-test-sh", &[]);
+    let out = env
+        .rimz()
+        .args(["agents", "qwen", "work", "-p"])
+        .env("SHELL", shell)
+        .env("PATH", path_with_front(&agent_bin))
+        .env_remove("OPENAI_BASE_URL")
+        .env_remove("OPENAI_MODEL")
+        .env_remove("QWEN_MODEL")
+        .env_remove("QWEN_CODE_SYSTEM_DEFAULTS_PATH")
+        .env_remove("QWEN_CODE_SYSTEM_SETTINGS_PATH")
+        .bounded_output()
+        .expect("spawn Qwen print run");
+
+    assert_eq!(
+        out.status.code(),
+        Some(125),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Qwen Alibaba International 5h window exhausted"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("sentinel-qwen-secret"), "{stderr}");
+    assert!(!stderr.contains(&account_key), "{stderr}");
+    assert!(
+        rimz::harness::run::list(env.store().paths())
+            .expect("list runs")
+            .is_empty(),
+        "quota must gate before recording a run"
+    );
+}
 
 #[test]
 fn kiro_supervised_run_fails_before_recording_or_launching() {

@@ -29,6 +29,7 @@ fn kind_wide_cache(
     for (kind, limits) in windows {
         let entry = RateLimitCacheEntry {
             scope: Default::default(),
+            account_key: None,
             limits,
             pending: pending.remove(&kind).unwrap_or_default(),
         };
@@ -186,6 +187,7 @@ fn account_scope_isolates_cached_windows() {
                 "qwen".to_owned(),
                 RateLimitCacheEntry {
                     scope: international.clone(),
+                    account_key: None,
                     limits: AgentRateLimits {
                         windows: vec![
                             rl_window_mins(20, None, 300),
@@ -504,6 +506,63 @@ fn authoritative_omissions_track_lifted_duration_windows() {
     );
 }
 #[test]
+fn authoritative_account_identity_survives_publication_and_rotates_by_key() {
+    let (_dir, workspace, runtime) = runtime();
+    let scope = ProviderAccountScope::sub_provider("alibaba", "international");
+
+    super::merge_account_rate_limits(
+        &runtime,
+        "qwen",
+        AccountUsageIdentity {
+            scope: scope.clone(),
+            account_key: Some("first".to_owned()),
+            credentials_stamp: Some(1),
+        },
+        AgentRateLimits {
+            windows: vec![rl_window_mins(20, None, 300)],
+        },
+    );
+    let first = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(first.entries["qwen"].account_key.as_deref(), Some("first"));
+
+    super::merge_account_rate_limits(
+        &runtime,
+        "qwen",
+        AccountUsageIdentity {
+            scope: scope.clone(),
+            account_key: Some("second".to_owned()),
+            credentials_stamp: Some(2),
+        },
+        AgentRateLimits {
+            windows: vec![rl_window_mins(70, None, 300)],
+        },
+    );
+    let rotated = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(
+        rotated.entries["qwen"].account_key.as_deref(),
+        Some("second")
+    );
+    assert_eq!(rotated.entries["qwen"].limits.windows.len(), 1);
+
+    let mut snapshot = snapshot_with_panels(
+        workspace,
+        vec![provider_panel("qwen", vec![rl_window_mins(10, None, 300)])],
+    );
+    snapshot.providers[0].account_scope = scope;
+    apply_rate_limit_cache(&mut snapshot, &runtime, true);
+    let after_display_fusion = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    assert_eq!(
+        after_display_fusion.entries["qwen"].account_key.as_deref(),
+        Some("second")
+    );
+    assert_eq!(
+        after_display_fusion.entries["qwen"].limits.windows[0].used_percentage,
+        Some(70),
+        "a scope-only panel cannot rewrite exact-account control truth"
+    );
+}
+
+#[test]
 fn omission_completion_requires_matching_authoritative_duration_truth() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let future = Timestamp::from_second(4_000_000_000).unwrap();
@@ -572,6 +631,7 @@ fn omission_completion_requires_matching_authoritative_duration_truth() {
                 "pi".to_owned(),
                 RateLimitCacheEntry {
                     scope: openai.clone(),
+                    account_key: None,
                     limits: AgentRateLimits {
                         windows: vec![
                             stamped(authoritative(rl_window_mins(20, None, 300))),
