@@ -75,6 +75,27 @@ fn classifies_native_asks_and_lifecycle_events() {
             native_key: None,
         })
     );
+
+    let batched_question = json!({
+        "sessionId":"s",
+        "toolCalls":[
+            {"name":"view","args":{"path":"a.rs"}},
+            {"name":"ask_user","args":"{\"question\":\"Proceed?\"}"}
+        ]
+    });
+    assert_eq!(
+        CopilotAdapter
+            .classify_hook("preToolUse", &batched_question)
+            .ask_kind,
+        Some(AskKind::Question)
+    );
+    assert_eq!(
+        CopilotAdapter
+            .ask_question_detail("preToolUse", &batched_question)
+            .unwrap()[0]
+            .question,
+        "Proceed?"
+    );
 }
 
 #[test]
@@ -114,6 +135,32 @@ fn lifecycle_signals_drive_the_shared_state_machine() {
     let ended = observation("sessionEnd", json!({"sessionId":"s"}));
     state = step(Some(&state), None, &ended.signal).next;
     assert_eq!(state.status, AgentStatus::Success);
+}
+
+#[test]
+fn batched_ask_waits_and_post_tool_completion_clears_before_assistant_output() {
+    let mut state = step(None, None, &LifecycleSignal::TurnStarted).next;
+    let ask = observation(
+        "preToolUse",
+        json!({"sessionId":"s","toolCalls":[{"name":"view"},{"name":"ask_user"}]}),
+    );
+    state = step(Some(&state), None, &ask.signal).next;
+    assert_eq!(state.status, AgentStatus::Waiting);
+
+    let answered = observation(
+        "postToolUse",
+        json!({"sessionId":"s","toolCalls":[{"name":"ask_user","args":{"answer":"yes"}}]}),
+    );
+    assert_eq!(
+        answered.signal,
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            native_key: None,
+        }
+    );
+    state = step(Some(&state), None, &answered.signal).next;
+    assert_eq!(state.status, AgentStatus::Running);
 }
 
 #[test]
@@ -269,13 +316,43 @@ fn tool_mapping_uses_camel_case_names() {
                 &json!({"sessionId":"s","toolName":tool,"error":"tool failed"}),
             )
             .map(|observation| observation.signal);
-        let expected = expected.map(|(mutates, edits)| LifecycleSignal::ToolUsed {
-            mutates,
-            edits,
-            native_key: None,
-        });
-        assert_eq!(signal, expected, "{tool}");
+        let (mutates, edits) = expected.unwrap_or((false, false));
+        assert_eq!(
+            signal,
+            Some(LifecycleSignal::ToolUsed {
+                mutates,
+                edits,
+                native_key: None,
+            }),
+            "{tool}"
+        );
     }
+
+    let signal = CopilotAdapter
+        .observe_lifecycle(
+            "postToolUse",
+            &json!({"sessionId":"s","toolCalls":[{"name":"view"},{"name":"bash"},{"name":"edit"}]}),
+        )
+        .map(|observation| observation.signal);
+    assert_eq!(
+        signal,
+        Some(LifecycleSignal::ToolUsed {
+            mutates: true,
+            edits: true,
+            native_key: None,
+        })
+    );
+
+    assert_eq!(
+        CopilotAdapter
+            .observe_lifecycle("postToolUseFailure", &json!({"sessionId":"s"}))
+            .map(|observation| observation.signal),
+        Some(LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+            native_key: None,
+        })
+    );
 }
 
 #[test]

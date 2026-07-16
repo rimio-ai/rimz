@@ -441,10 +441,10 @@ fn copilot_native_order_routes_camel_case_identity_context_and_cleanup() {
     let contexts = env.agent_contexts();
     assert_eq!(contexts.len(), 1);
     assert_eq!(contexts[0].agent_id.as_str(), session_id);
-    assert_eq!(contexts[0].context.model_id.as_deref(), Some("auto"));
+    assert_eq!(contexts[0].context.model_id.as_deref(), Some("gpt-5-mini"));
     assert_eq!(
         contexts[0].context.model_display_name.as_deref(),
-        Some("Auto → gpt-5-mini (1x)")
+        Some("gpt-5-mini")
     );
     assert_eq!(contexts[0].context.effort.as_deref(), Some("medium"));
     assert_eq!(

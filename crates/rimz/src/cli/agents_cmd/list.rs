@@ -255,7 +255,15 @@ pub(super) fn phase_label(phase: rimz::agents::TurnPhase) -> &'static str {
 }
 
 pub(super) fn model_label(agent: &AgentState) -> String {
-    match (agent.model.as_deref(), agent.effort.as_deref()) {
+    let context = agent.context.as_ref();
+    let model = context
+        .and_then(|context| context.model_display_name.as_deref())
+        .or_else(|| context.and_then(|context| context.model_id.as_deref()))
+        .or(agent.model.as_deref());
+    let effort = context
+        .and_then(|context| context.effort.as_deref())
+        .or(agent.effort.as_deref());
+    match (model, effort) {
         (Some(model), Some(effort)) => format!("{model}@{effort}"),
         (Some(model), None) => model.to_owned(),
         (None, Some(effort)) => format!("auto@{effort}"),
@@ -375,6 +383,31 @@ mod tests {
         }
 
         assert_eq!(brand_style("unknown"), None);
+    }
+
+    #[test]
+    fn model_label_prefers_live_context_then_durable_launch_fields() {
+        let mut agent = test_agent("model-precedence");
+        agent.model = Some("launch-model".to_owned());
+        agent.effort = Some("launch-effort".to_owned());
+        let mut context = rimz::agents::AgentContext::new("copilot", jiff::Timestamp::UNIX_EPOCH);
+        context.model_id = Some("context-id".to_owned());
+        context.model_display_name = Some("Context Display".to_owned());
+        context.effort = Some("high".to_owned());
+        agent.context = Some(context);
+        assert_eq!(model_label(&agent), "Context Display@high");
+
+        agent.context.as_mut().unwrap().model_display_name = None;
+        assert_eq!(model_label(&agent), "context-id@high");
+
+        agent.context.as_mut().unwrap().model_id = None;
+        assert_eq!(model_label(&agent), "launch-model@high");
+
+        agent.context.as_mut().unwrap().effort = None;
+        assert_eq!(model_label(&agent), "launch-model@launch-effort");
+
+        agent.context = None;
+        assert_eq!(model_label(&agent), "launch-model@launch-effort");
     }
 
     fn test_agent(id: &str) -> AgentState {

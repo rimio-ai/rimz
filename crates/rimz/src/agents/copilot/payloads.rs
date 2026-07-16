@@ -3,6 +3,8 @@
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
+use crate::agents::transcript_fs::deserialize_optional_string_lossy;
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CopilotHookPayload {
@@ -14,6 +16,7 @@ pub(crate) struct CopilotHookPayload {
     #[serde(alias = "initial_prompt")]
     pub initial_prompt: Option<String>,
     pub prompt: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_lossy")]
     #[serde(alias = "tool_name")]
     pub tool_name: Option<String>,
     #[serde(
@@ -23,9 +26,77 @@ pub(crate) struct CopilotHookPayload {
         default
     )]
     pub tool_args: Option<Value>,
+    #[serde(default, alias = "tool_calls")]
+    pub tool_calls: Vec<CopilotToolCall>,
     pub source: Option<String>,
     pub recoverable: Option<bool>,
     pub error: Option<CopilotHookError>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct CopilotToolCall {
+    #[serde(
+        alias = "toolName",
+        alias = "tool_name",
+        deserialize_with = "deserialize_optional_string_lossy"
+    )]
+    name: Option<String>,
+    #[serde(
+        alias = "toolArgs",
+        alias = "tool_args",
+        alias = "toolInput",
+        alias = "tool_input",
+        deserialize_with = "deserialize_optional_tool_args"
+    )]
+    args: Option<Value>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct NormalizedToolCall<'a> {
+    pub name: Option<&'a str>,
+    pub args: Option<&'a Value>,
+}
+
+pub(crate) struct NormalizedToolCalls<'a> {
+    calls: Vec<NormalizedToolCall<'a>>,
+}
+
+impl CopilotHookPayload {
+    /// Present both Copilot hook wire shapes through one adapter-local view.
+    /// A batched ask wins selection so lifecycle and detail extraction agree
+    /// even when another call appears first.
+    pub(crate) fn normalized_tool_calls(&self) -> NormalizedToolCalls<'_> {
+        let legacy =
+            (self.tool_name.is_some() || self.tool_args.is_some()).then_some(NormalizedToolCall {
+                name: self.tool_name.as_deref(),
+                args: self.tool_args.as_ref(),
+            });
+        let calls = legacy
+            .into_iter()
+            .chain(self.tool_calls.iter().map(|call| NormalizedToolCall {
+                name: call.name.as_deref(),
+                args: call.args.as_ref(),
+            }))
+            .collect();
+        NormalizedToolCalls { calls }
+    }
+}
+
+impl<'a> NormalizedToolCalls<'a> {
+    pub(crate) fn selected(&self) -> Option<NormalizedToolCall<'a>> {
+        self.calls
+            .iter()
+            .copied()
+            .find(|call| call.name == Some("ask_user"))
+            .or_else(|| self.calls.first().copied())
+    }
+
+    pub(crate) fn any_named(&self, names: &[&str]) -> bool {
+        self.calls
+            .iter()
+            .any(|call| call.name.is_some_and(|name| names.contains(&name)))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,5 +185,36 @@ mod tests {
                 .as_deref(),
             Some("command failed")
         );
+    }
+
+    #[test]
+    fn normalizes_singular_batched_and_mixed_tool_calls() {
+        let singular = parse_payload(&json!({
+            "toolName": "bash",
+            "toolArgs": "{\"command\":\"true\"}"
+        }));
+        let selected = singular.normalized_tool_calls().selected().unwrap();
+        assert_eq!(selected.name, Some("bash"));
+        assert_eq!(selected.args, Some(&json!({"command":"true"})));
+
+        let batched = parse_payload(&json!({
+            "toolCalls": [
+                {"name":"edit","args":{"path":"a.rs"}},
+                {"toolName":"ask_user","toolArgs":"{\"question\":\"Ship?\"}"}
+            ]
+        }));
+        let calls = batched.normalized_tool_calls();
+        let selected = calls.selected().unwrap();
+        assert_eq!(selected.name, Some("ask_user"));
+        assert_eq!(selected.args, Some(&json!({"question":"Ship?"})));
+        assert!(calls.any_named(&["edit"]));
+
+        let mixed = parse_payload(&json!({
+            "toolName":"view",
+            "toolCalls":[{"name":"create","args":"{\"path\":\"b.rs\"}"}]
+        }));
+        let calls = mixed.normalized_tool_calls();
+        assert_eq!(calls.selected().unwrap().name, Some("view"));
+        assert!(calls.any_named(&["create", "edit"]));
     }
 }

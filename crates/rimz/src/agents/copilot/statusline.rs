@@ -103,14 +103,14 @@ impl StatuslinePayload {
 
     pub(super) fn into_context(self, source: &str, observed_at: Timestamp) -> Option<AgentContext> {
         let model = self.model.unwrap_or_default();
-        let (model_display_name, effort) = split_effort(model.display_name);
+        let model = resolve_model(&model);
         let tokens = self.context_window.and_then(ContextWindow::into_usage);
         let cost = self.cost.and_then(Cost::into_cost);
         let context = AgentContext {
             session_name: self.session_name,
             model_id: model.id,
-            model_display_name,
-            effort,
+            model_display_name: model.display_name,
+            effort: model.effort,
             agent_version: self.version,
             tokens,
             cost,
@@ -127,7 +127,8 @@ impl StatuslinePayload {
     }
 
     pub(super) fn cost(&self, prices: &PriceBook) -> Option<AgentCost> {
-        let model = priceable_model(self.model.as_ref()?)?;
+        let model = resolve_model(self.model.as_ref()?);
+        let model = model.id.as_deref()?;
         let usage = self.context_window.as_ref()?.session_usage()?;
         let price = prices.price(model)?;
         let total_cost_usd = price.cost(
@@ -267,28 +268,72 @@ fn split_effort(display_name: Option<String>) -> (Option<String>, Option<String>
     )
 }
 
-fn priceable_model(model: &Model) -> Option<&str> {
-    if let Some(id) = model
+struct ResolvedModel {
+    id: Option<String>,
+    display_name: Option<String>,
+    effort: Option<String>,
+}
+
+fn resolve_model(model: &Model) -> ResolvedModel {
+    if model
         .id
         .as_deref()
-        .filter(|id| !id.eq_ignore_ascii_case("auto"))
+        .is_some_and(|id| id.eq_ignore_ascii_case("auto"))
+        && let Some((target, effort)) = model.display_name.as_deref().and_then(auto_target)
     {
-        return Some(id);
+        return ResolvedModel {
+            id: Some(target.clone()),
+            display_name: Some(target),
+            effort,
+        };
     }
-    let mut model = model.display_name.as_deref()?.rsplit('→').next()?.trim();
-    while let Some((label, qualifier)) = terminal_qualifier(model) {
-        if !is_effort(qualifier) && !is_multiplier(qualifier) {
+
+    let (display_name, effort) = if model
+        .id
+        .as_deref()
+        .is_some_and(|id| id.eq_ignore_ascii_case("auto"))
+    {
+        // An unresolved selector is still useful provider data. Keep it byte
+        // for byte instead of publishing part of a malformed target.
+        (model.display_name.clone(), None)
+    } else {
+        split_effort(model.display_name.clone())
+    };
+    ResolvedModel {
+        id: model.id.clone(),
+        display_name,
+        effort,
+    }
+}
+
+fn auto_target(display_name: &str) -> Option<(String, Option<String>)> {
+    let unicode = display_name.rfind('→').map(|index| (index, '→'.len_utf8()));
+    let ascii = display_name.rfind("->").map(|index| (index, 2));
+    let (index, arrow_len) = match (unicode, ascii) {
+        (Some(unicode), Some(ascii)) => unicode.max(ascii),
+        (Some(unicode), None) => unicode,
+        (None, Some(ascii)) => ascii,
+        (None, None) => return None,
+    };
+    let mut target = display_name[index + arrow_len..].trim();
+    let mut effort = None;
+    while let Some((label, qualifier)) = terminal_qualifier(target) {
+        if is_effort(qualifier) {
+            effort.get_or_insert_with(|| qualifier.to_ascii_lowercase());
+        } else if !is_multiplier(qualifier) {
             break;
         }
-        model = label;
+        target = label.trim_end();
     }
-    (!model.is_empty()).then_some(model)
+    (!target.is_empty()).then(|| (target.to_owned(), effort))
 }
 
 fn terminal_qualifier(value: &str) -> Option<(&str, &str)> {
     let prefix = value.strip_suffix(')')?;
-    let (label, qualifier) = prefix.rsplit_once(" (")?;
-    (!label.is_empty() && !qualifier.is_empty()).then_some((label, qualifier))
+    let (label, qualifier) = prefix
+        .rsplit_once(" (")
+        .or_else(|| prefix.strip_prefix('(').map(|qualifier| ("", qualifier)))?;
+    (!qualifier.is_empty()).then_some((label, qualifier))
 }
 
 fn is_effort(value: &str) -> bool {
@@ -329,10 +374,10 @@ mod tests {
         let context = context(payload).unwrap();
 
         assert_eq!(context.session_name.as_deref(), Some("Fixing auth retry"));
-        assert_eq!(context.model_id.as_deref(), Some("auto"));
+        assert_eq!(context.model_id.as_deref(), Some("claude-sonnet-4.6"));
         assert_eq!(
             context.model_display_name.as_deref(),
-            Some("Auto → claude-sonnet-4.6 (1x)")
+            Some("claude-sonnet-4.6")
         );
         assert_eq!(context.effort.as_deref(), Some("medium"));
         assert_eq!(context.agent_version.as_deref(), Some("1.0.71"));
@@ -497,5 +542,49 @@ mod tests {
                 "{model}"
             );
         }
+    }
+
+    #[test]
+    fn auto_targets_resolve_across_arrow_and_qualifier_forms() {
+        for (raw, expected, effort) in [
+            ("Auto → gpt-5-mini", "gpt-5-mini", None),
+            (
+                "Auto -> claude-haiku-4.5 (2x) (HIGH)",
+                "claude-haiku-4.5",
+                Some("high"),
+            ),
+            (
+                "selector -> stale → gpt-5-mini (medium) (1.5X)",
+                "gpt-5-mini",
+                Some("medium"),
+            ),
+        ] {
+            let context = context(json!({"model":{"id":"AUTO","display_name":raw}})).unwrap();
+            assert_eq!(context.model_id.as_deref(), Some(expected), "{raw}");
+            assert_eq!(
+                context.model_display_name.as_deref(),
+                Some(expected),
+                "{raw}"
+            );
+            assert_eq!(context.effort.as_deref(), effort, "{raw}");
+        }
+    }
+
+    #[test]
+    fn malformed_auto_and_concrete_models_preserve_provider_identity() {
+        for raw in ["Auto", "Auto ->", "Auto → (medium)"] {
+            let context = context(json!({"model":{"id":"auto","display_name":raw}})).unwrap();
+            assert_eq!(context.model_id.as_deref(), Some("auto"), "{raw}");
+            assert_eq!(context.model_display_name.as_deref(), Some(raw), "{raw}");
+            assert_eq!(context.effort, None, "{raw}");
+        }
+
+        let concrete = context(json!({
+            "model":{"id":"gpt-5-mini","display_name":"GPT 5 Mini (high)"}
+        }))
+        .unwrap();
+        assert_eq!(concrete.model_id.as_deref(), Some("gpt-5-mini"));
+        assert_eq!(concrete.model_display_name.as_deref(), Some("GPT 5 Mini"));
+        assert_eq!(concrete.effort.as_deref(), Some("high"));
     }
 }

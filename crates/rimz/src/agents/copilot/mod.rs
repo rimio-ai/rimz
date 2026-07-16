@@ -276,11 +276,12 @@ impl AgentAdapter for CopilotAdapter {
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let parsed = payloads::parse_payload(payload);
+        let tool = parsed.normalized_tool_calls().selected();
         let ask_kind = if event_name == "permissionRequest" {
             Some(AskKind::Permission)
         } else if event_name == "preToolUse" {
             self.descriptor()
-                .blocking_tool_kind(parsed.tool_name.as_deref())
+                .blocking_tool_kind(tool.and_then(|tool| tool.name))
         } else {
             None
         };
@@ -376,6 +377,8 @@ impl AgentAdapter for CopilotAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         let parsed = payloads::parse_payload(payload);
+        let tools = parsed.normalized_tool_calls();
+        let selected_tool = tools.selected();
         let signal = match event_name {
             "sessionStart"
                 if parsed
@@ -395,7 +398,7 @@ impl AgentAdapter for CopilotAdapter {
             },
             "preToolUse" => match self
                 .descriptor()
-                .blocking_tool_kind(parsed.tool_name.as_deref())
+                .blocking_tool_kind(selected_tool.and_then(|tool| tool.name))
             {
                 Some(kind) => LifecycleSignal::AwaitingInput {
                     kind,
@@ -409,21 +412,11 @@ impl AgentAdapter for CopilotAdapter {
                     native_key: None,
                 },
             },
-            "postToolUse" | "postToolUseFailure"
-                if parsed
-                    .tool_name
-                    .as_deref()
-                    .is_some_and(|name| self.descriptor().tools.mutating.contains(&name)) =>
-            {
-                LifecycleSignal::ToolUsed {
-                    mutates: true,
-                    edits: parsed
-                        .tool_name
-                        .as_deref()
-                        .is_some_and(|name| self.descriptor().tools.editing.contains(&name)),
-                    native_key: None,
-                }
-            }
+            "postToolUse" | "postToolUseFailure" => LifecycleSignal::ToolUsed {
+                mutates: tools.any_named(self.descriptor().tools.mutating),
+                edits: tools.any_named(self.descriptor().tools.editing),
+                native_key: None,
+            },
             "agentStop" => LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
@@ -523,11 +516,11 @@ impl AgentAdapter for CopilotAdapter {
             return None;
         }
         let parsed = payloads::parse_payload(payload);
-        if parsed.tool_name.as_deref() != Some("ask_user") {
+        let tool = parsed.normalized_tool_calls().selected()?;
+        if tool.name != Some("ask_user") {
             return None;
         }
-        let tool_args = parsed.tool_args?;
-        let args = tool_args.as_object()?;
+        let args = tool.args?.as_object()?;
         let question = ["question", "prompt", "message"]
             .into_iter()
             .find_map(|key| args.get(key).and_then(Value::as_str))
@@ -546,9 +539,12 @@ impl AgentAdapter for CopilotAdapter {
 
     fn ask_detail(&self, event_name: &str, payload: &Value) -> Option<String> {
         if event_name == "permissionRequest" {
-            return payloads::parse_payload(payload)
-                .tool_name
-                .map(|name| name.trim().to_owned())
+            let parsed = payloads::parse_payload(payload);
+            return parsed
+                .normalized_tool_calls()
+                .selected()
+                .and_then(|tool| tool.name)
+                .map(str::to_owned)
                 .filter(|name| !name.is_empty());
         }
         self.ask_question_detail(event_name, payload)
