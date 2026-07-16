@@ -10,6 +10,8 @@
 //! answers and clear waiting after the user responds in OpenCode's own TUI.
 //! A root `session_idle` after a plan-agent turn derives a native plan-approval
 //! wait that the next prompt clears after the user switches modes in the TUI.
+//! `/new` registers a fresh root inside the same live process; follow-latest
+//! succession hands pane and card ownership to the new conversation.
 //! `session.deleted` and the server-scoped `dispose` sweep normalize to one
 //! per-session `session_ended` event, with pane liveness as the crash backstop.
 
@@ -67,7 +69,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         registers_lazily: true,
         local_session_discovery: false,
         daemon_hooked_sessions: false,
-        same_pane_session: super::SamePaneSessionPolicy::KeepPrimary,
+        same_pane_session: super::SamePaneSessionPolicy::FollowLatest,
         realtime_usage: RealtimeUsageChannel {
             windows_defer_to_fresh_realtime: false,
         },

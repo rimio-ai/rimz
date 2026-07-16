@@ -14,7 +14,7 @@ The process matcher recognizes `agy`; it leaves desktop processes named `antigra
 
 A live `agy` pane renders as an identity-less idle Antigravity card before a conversation binds. This preserves its known agent identity and pane routing without borrowing state from a stale or ambiguous provider conversation.
 
-Antigravity follows the latest conversation ID inside one live `agy` pane. A first `PreInvocation` carrying a new ID can take over a uniquely focused or sole resting same-kind pane while process, cwd, and pane-incarnation evidence still match; running or waiting owners and ambiguous candidates remain authoritative. RimZ records no `Fresh` lineage for this switch because the hook wire does not distinguish `/clear` from `/fork` parentage.
+Antigravity follows the latest conversation ID inside one live `agy` pane. A `PreInvocation` carrying an ID without a pane stamp can take over a uniquely focused or sole resting same-kind pane while process, cwd, and pane-incarnation evidence still match; running or waiting owners and ambiguous candidates remain authoritative. RimZ records no `Fresh` lineage for this switch because the hook wire does not distinguish `/clear` from `/fork` parentage.
 
 ## Local store and transcript
 

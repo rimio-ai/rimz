@@ -114,8 +114,8 @@ pub enum LazyAgentPairingMethod {
     DeterministicFallback,
 }
 
-/// Lifecycle phase whose hook may recover a missing pane stamp. Occupied-pane
-/// adoption belongs only to the first turn-start signal.
+/// Lifecycle phase whose hook may recover a missing pane stamp. Follow-latest
+/// registrations and first turn-start signals may adopt an occupied pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HookPaneRecoveryPhase {
     Registered,
@@ -249,14 +249,16 @@ impl<'a> HookPaneRecoveryContext<'a> {
         candidates: &mut [HookCandidate<'_, '_>],
         client_focus: Option<&[PaneId]>,
     ) -> HookCandidatePool {
-        if self.phase != HookPaneRecoveryPhase::TurnStarted || !self.can_share_occupied_pane() {
+        let follows_latest = self.follows_latest();
+        let may_adopt = self.phase == HookPaneRecoveryPhase::TurnStarted
+            || (follows_latest && self.phase == HookPaneRecoveryPhase::Registered);
+        if !may_adopt || !self.can_share_occupied_pane() {
             return HookCandidatePool {
                 indices: Vec::new(),
                 candidate_count: 0,
                 occupied_sole: false,
             };
         }
-        let follows_latest = self.follows_latest();
         let mut indices = selectable_candidate_indices(candidates, true)
             .into_iter()
             .filter(|index| pane_has_focus_evidence(candidates[*index].evidence.pane, client_focus))
@@ -346,14 +348,22 @@ impl<'a> HookPaneRecoveryContext<'a> {
         }
     }
 
+    /// Daemon-hooked kinds adopt only on an unknown id's first event.
+    /// Follow-latest kinds may retry until the incoming id carries a pane stamp.
     fn can_share_occupied_pane(&self) -> bool {
-        crate::agents::descriptor_by_kind(self.kind.as_str()).is_some_and(|descriptor| {
-            descriptor.capabilities.daemon_hooked_sessions
-                || descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest
-        }) && !self
-            .prior_agents
-            .iter()
-            .any(|agent| agent.kind == *self.kind && agent.agent_id == *self.agent_id)
+        let Some(descriptor) = crate::agents::descriptor_by_kind(self.kind.as_str()) else {
+            return false;
+        };
+        if descriptor.capabilities.same_pane_session == SamePaneSessionPolicy::FollowLatest {
+            return !self.prior_agents.iter().any(|agent| {
+                agent.kind == *self.kind && agent.agent_id == *self.agent_id && agent.pane.is_some()
+            });
+        }
+        descriptor.capabilities.daemon_hooked_sessions
+            && !self
+                .prior_agents
+                .iter()
+                .any(|agent| agent.kind == *self.kind && agent.agent_id == *self.agent_id)
     }
 
     fn follows_latest(&self) -> bool {

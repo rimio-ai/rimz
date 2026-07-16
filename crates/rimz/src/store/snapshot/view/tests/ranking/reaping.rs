@@ -183,9 +183,9 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
         &["newer", "older"],
     );
 
-    let follow_latest = |id, age, token| {
+    let follow_latest = |kind, id, age, token| {
         with_owner(
-            pane_session("antigravity", id, "%1", age),
+            pane_session(kind, id, "%1", age),
             RuntimeOwnerKind::Agent,
             9_999,
             Some(token),
@@ -194,24 +194,32 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
     assert_survivors(
         "follow-latest providers replace same-process conversations",
         vec![
-            follow_latest("older", 120, "process-a"),
-            follow_latest("newer", 60, "process-a"),
+            follow_latest("antigravity", "older", 120, "process-a"),
+            follow_latest("antigravity", "newer", 60, "process-a"),
+        ],
+        &["newer"],
+    );
+    assert_survivors(
+        "opencode follows the latest same-process conversation",
+        vec![
+            follow_latest("opencode", "older", 120, "process-a"),
+            follow_latest("opencode", "newer", 60, "process-a"),
         ],
         &["newer"],
     );
     assert_survivors(
         "follow-latest process identity mismatch fails safe",
         vec![
-            follow_latest("older", 120, "process-a"),
-            follow_latest("newer", 60, "process-b"),
+            follow_latest("antigravity", "older", 120, "process-a"),
+            follow_latest("antigravity", "newer", 60, "process-b"),
         ],
         &["newer", "older"],
     );
     assert_survivors(
         "follow-latest pane incarnation mismatch fails safe",
         vec![
-            with_pane_start(follow_latest("older", 120, "process-a"), 600),
-            with_pane_start(follow_latest("newer", 60, "process-a"), 300),
+            with_pane_start(follow_latest("antigravity", "older", 120, "process-a"), 600),
+            with_pane_start(follow_latest("antigravity", "newer", 60, "process-a"), 300),
         ],
         &["newer", "older"],
     );

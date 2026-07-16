@@ -495,6 +495,79 @@ fn antigravity_turn_start_follows_the_sole_resting_conversation_without_lineage(
 }
 
 #[test]
+fn opencode_registration_and_turn_start_follow_the_resting_conversation() {
+    let pane_id = id("terminal_30");
+    let resting = prior(
+        "opencode",
+        "old",
+        Some(pane_id.clone()),
+        AgentStatus::Success,
+        None,
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let occupied = pane("terminal_30", "opencode", "/repo/main", true);
+    let focus = [pane_id.clone()];
+
+    let selected = select_kind(
+        "opencode",
+        std::slice::from_ref(&resting),
+        std::slice::from_ref(&occupied),
+        Some(&focus),
+        None,
+        HookPaneRecoveryPhase::Registered,
+    );
+    assert_eq!(selected.pane_id.as_ref(), Some(&pane_id));
+    assert_eq!(selected.method, SingleCandidate);
+    assert!(selected.candidates[0].reject_reasons.is_empty());
+
+    let known_paneless = prior(
+        "opencode",
+        "new",
+        None,
+        AgentStatus::Running,
+        None,
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    let selected = select_kind(
+        "opencode",
+        &[resting.clone(), known_paneless.clone()],
+        std::slice::from_ref(&occupied),
+        Some(&focus),
+        None,
+        HookPaneRecoveryPhase::TurnStarted,
+    );
+    assert_eq!(selected.pane_id.as_ref(), Some(&pane_id));
+    assert_eq!(selected.method, SingleCandidate);
+    assert!(selected.candidates[0].reject_reasons.is_empty());
+
+    let running = prior(
+        "opencode",
+        "old",
+        Some(pane_id),
+        AgentStatus::Running,
+        None,
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    for (phase, prior_agents) in [
+        (HookPaneRecoveryPhase::Registered, vec![running.clone()]),
+        (
+            HookPaneRecoveryPhase::TurnStarted,
+            vec![running.clone(), known_paneless.clone()],
+        ),
+    ] {
+        let selected = select_kind(
+            "opencode",
+            &prior_agents,
+            std::slice::from_ref(&occupied),
+            Some(&focus),
+            None,
+            phase,
+        );
+        assert_eq!(selected.pane_id, None, "{phase:?} keeps the running owner");
+    }
+}
+
+#[test]
 fn occupied_pane_without_focus_requires_clear_lineage_and_resting_owner() {
     let pane_id = id("terminal_30");
     for (label, status, owner_origin, incoming_origin) in [
