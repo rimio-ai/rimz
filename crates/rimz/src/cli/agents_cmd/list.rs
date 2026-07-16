@@ -245,15 +245,6 @@ pub(super) fn agent_status_projection(
     }
 }
 
-pub(super) fn phase_label(phase: rimz::agents::TurnPhase) -> &'static str {
-    match phase {
-        rimz::agents::TurnPhase::Idle => "idle",
-        rimz::agents::TurnPhase::Reasoning => "reasoning",
-        rimz::agents::TurnPhase::Acting => "acting",
-        rimz::agents::TurnPhase::Parked => "parked",
-    }
-}
-
 pub(super) fn model_label(agent: &AgentState) -> String {
     let context = agent.context.as_ref();
     let model = context

@@ -2,7 +2,7 @@ use super::*;
 
 use super::list::{
     agent_status_label, agent_status_projection, agent_status_style, context_cell, model_label,
-    phase_label, worktree_label,
+    worktree_label,
 };
 use super::runs_lookup::{agent_name, newest_run_by_ref, newest_run_for_agent, print_run_line};
 use crate::cli::render;
@@ -288,7 +288,7 @@ pub(super) fn render_activity_section(
     );
     let (_, phase) = agent_status_projection(agent);
     if phase != rimz::agents::TurnPhase::Idle {
-        kv.push("phase", render::cell(phase_label(phase)));
+        kv.push("phase", render::cell(phase.as_str()));
     }
     if let Some(started) = agent.turn_started_at {
         kv.push("turn_started", render::cell(started.to_string()));

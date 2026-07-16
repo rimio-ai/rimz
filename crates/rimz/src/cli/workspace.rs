@@ -242,7 +242,10 @@ fn parse_byte_size(raw: &str) -> std::result::Result<u64, String> {
 }
 
 fn parse_retention_duration(raw: &str) -> std::result::Result<Duration, String> {
-    super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
+    rimz::harness::schedule::parse_duration_units(
+        raw,
+        &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)],
+    )
 }
 
 fn split_suffix(raw: &str) -> (&str, &str) {

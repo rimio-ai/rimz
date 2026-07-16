@@ -37,8 +37,6 @@ pub(super) fn resume_lane(
         RoomSizing::OrdinaryTab,
     )?;
     let backend = room.backend();
-    crate::cli::record_workspace(&workspace)?;
-
     let store = crate::cli::open_store(&workspace)?;
     let projection = store
         .runtime_projection(rimz::RuntimeScope::Audit)

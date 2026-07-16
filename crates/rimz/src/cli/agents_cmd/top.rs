@@ -191,7 +191,7 @@ fn top_rows(previous: &TopSample, current: &TopSample, elapsed_hint: Duration) -
             };
             TopRow {
                 handle: current.handle.clone(),
-                status: status_label(current.status),
+                status: current.status.as_str().to_owned(),
                 cpu_pct,
                 mem_bytes: current
                     .metrics
@@ -332,10 +332,6 @@ fn channel_filter(
     }
 }
 
-fn status_label(status: AgentStatus) -> String {
-    status.as_str().to_owned()
-}
-
 fn fmt_cpu(value: Option<f64>) -> String {
     value
         .map(|value| format!("{value:.1}%"))
@@ -349,7 +345,7 @@ fn parse_interval(raw: &str) -> std::result::Result<Duration, String> {
             .map_err(|_| format!("invalid interval `{raw}`"))?;
         return Ok(Duration::from_millis(ms));
     }
-    crate::cli::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("", 1)])
+    rimz::harness::schedule::parse_duration_units(raw, &[("s", 1), ("m", 60), ("", 1)])
 }
 
 #[cfg(test)]

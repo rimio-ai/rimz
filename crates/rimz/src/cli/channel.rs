@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use super::{GlobalFlags, machine_config, open_store, record_workspace};
+use super::{GlobalFlags, machine_config, open_store};
 use crate::cli::render;
 use rimz::agents::AgentState;
 use rimz::mux::{LayoutColumn, LayoutPanes, PaneCmd, TabOptions};
@@ -46,7 +46,6 @@ pub fn run(args: ChannelArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace =
         WorkspaceResolver::resolve(".", globals.root.clone()).context("resolving current room")?;
     let store = open_store(&workspace)?;
-    record_workspace(&workspace)?;
     match args.command {
         ChannelSubcmd::New { name } => {
             ensure_named_channel_available(&workspace, &name)?;

@@ -185,7 +185,10 @@ fn install_run_interrupt_handlers(_cancellation: RunCancellation) -> Result<()> 
 }
 
 pub(super) fn parse_timeout(raw: &str) -> std::result::Result<Duration, String> {
-    crate::cli::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
+    rimz::harness::schedule::parse_duration_units(
+        raw,
+        &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)],
+    )
 }
 
 /// Extract the prompt from stream-json user messages on stdin. Each non-empty

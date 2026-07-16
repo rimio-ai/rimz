@@ -394,7 +394,7 @@ fn print_compacted_if_needed(label: &str, compacted: &[String]) {
 }
 
 fn parse_wait_duration(raw: &str) -> std::result::Result<Duration, String> {
-    super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600)])
+    rimz::harness::schedule::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600)])
 }
 
 fn env_string(key: &str) -> Option<String> {

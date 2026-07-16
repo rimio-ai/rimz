@@ -1,7 +1,7 @@
 //! List and show loop tasks plus recorded run details.
 
 use super::*;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 const NOTE_MAX: usize = 60;
 const WATCH_NARROW: usize = 44;
@@ -501,7 +501,7 @@ fn render_dashboard(
         writeln!(
             out,
             "{}",
-            clip_watch_text("no loop tasks; add one with `rimz loop add …`", cols)
+            ui::clip_to_width("no loop tasks; add one with `rimz loop add …`", cols)
         )?;
         return Ok(());
     }
@@ -552,15 +552,15 @@ fn render_watch_rows(out: &mut impl Write, rows: &[&WatchRow], cols: usize) -> s
             RowState::Due => ui::palette::WARN,
             RowState::Upcoming(_) => anstyle::Style::new(),
         };
-        let name = clip_watch_text(&row.name, (cols / 4).max(1));
-        let next = clip_watch_text(&row.next_text, (cols / 4).max(1));
+        let name = ui::clip_to_width(&row.name, (cols / 4).max(1));
+        let next = ui::clip_to_width(&row.next_text, (cols / 4).max(1));
         let mut cells = vec![
             ui::cell(row.glyph).fg(row.glyph_style),
             ui::cell(name).fg(ui::palette::ACCENT),
             ui::cell(next).fg(next_style),
         ];
         if cols >= WATCH_NARROW {
-            cells.push(ui::cell(clip_watch_text(&row.last_text, 12)));
+            cells.push(ui::cell(ui::clip_to_width(&row.last_text, 12)));
         }
         if cols >= WATCH_WIDE {
             cells.push(ui::cell(&row.status_text).fg(row.glyph_style));
@@ -584,7 +584,10 @@ fn write_watch_band(
         writeln!(
             out,
             "{}",
-            ui::paint(ui::palette::ACCENT.bold(), &clip_watch_text(&prefix, cols))
+            ui::paint(
+                ui::palette::ACCENT.bold(),
+                &ui::clip_to_width(&prefix, cols),
+            )
         )?;
         return Ok(());
     }
@@ -656,7 +659,7 @@ fn write_dashboard_heading(
         "{}",
         ui::paint(
             ui::palette::ACCENT.bold(),
-            &clip_watch_text(&root, root_budget)
+            &ui::clip_to_width(&root, root_budget)
         )
     )?;
     if root_budget > 0 && suffix.width() <= cols {
@@ -666,32 +669,8 @@ fn write_dashboard_heading(
 }
 
 fn write_more(out: &mut impl Write, count: usize, cols: usize) -> std::io::Result<()> {
-    let text = clip_watch_text(&format!("+{count} more"), cols);
+    let text = ui::clip_to_width(&format!("+{count} more"), cols);
     writeln!(out, "{}", ui::paint(ui::palette::FAINT, &text))
-}
-
-fn clip_watch_text(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_owned();
-    }
-    if width == 0 {
-        return String::new();
-    }
-    if width == 1 {
-        return "…".to_owned();
-    }
-    let mut clipped = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let char_width = ch.width().unwrap_or(0);
-        if used + char_width > width - 1 {
-            break;
-        }
-        clipped.push(ch);
-        used += char_width;
-    }
-    clipped.push('…');
-    clipped
 }
 
 fn write_root_heading(

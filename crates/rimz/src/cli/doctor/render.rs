@@ -952,7 +952,7 @@ fn render_agents(w: &mut impl Write, report: &DoctorReport, tally: &mut Tally) -
                     cell(agent.kind.as_str()),
                     cell(agent.agent_id.as_str()).fg(palette::ACCENT),
                     cell(agent.branch.as_deref().unwrap_or("-")).dash(),
-                    cell(status_label(agent.status)).fg(style),
+                    cell(agent.status.as_str()).fg(style),
                     cell(age_short(now, agent.last_seen)),
                 ]);
             }
@@ -1201,17 +1201,6 @@ fn status_health(status: AgentStatus) -> Health {
         AgentStatus::Waiting | AgentStatus::Paused => Health::Warn,
         AgentStatus::Failed => Health::Alarm,
         AgentStatus::Idle => Health::Neutral,
-    }
-}
-
-fn status_label(status: AgentStatus) -> &'static str {
-    match status {
-        AgentStatus::Running => "running",
-        AgentStatus::Waiting => "waiting",
-        AgentStatus::Idle => "idle",
-        AgentStatus::Success => "success",
-        AgentStatus::Failed => "failed",
-        AgentStatus::Paused => "paused",
     }
 }
 

@@ -114,19 +114,10 @@ fn render_replay(w: &mut impl Write, replay: &ReplayCheckReport) -> std::io::Res
                 "  {}: status={}, phase={}, compacting={}",
                 state.agent_id,
                 state.status.as_str(),
-                phase_label(state.phase),
+                state.phase.as_str(),
                 state.compacting
             )?;
         }
     }
     Ok(())
-}
-
-fn phase_label(phase: rimz::agents::TurnPhase) -> &'static str {
-    match phase {
-        rimz::agents::TurnPhase::Idle => "idle",
-        rimz::agents::TurnPhase::Reasoning => "reasoning",
-        rimz::agents::TurnPhase::Acting => "acting",
-        rimz::agents::TurnPhase::Parked => "parked",
-    }
 }

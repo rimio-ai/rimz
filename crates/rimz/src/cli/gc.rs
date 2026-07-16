@@ -1295,7 +1295,7 @@ fn plural(count: usize, singular: &str, plural: &str) -> String {
 }
 
 fn parse_duration(raw: &str) -> std::result::Result<Duration, String> {
-    super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600)])
+    rimz::harness::schedule::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600)])
 }
 
 #[cfg(test)]

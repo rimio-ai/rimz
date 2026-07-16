@@ -633,7 +633,7 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn clip_to_width(text: &str, max_width: usize) -> String {
+pub(crate) fn clip_to_width(text: &str, max_width: usize) -> String {
     if text.width() <= max_width {
         return text.to_owned();
     }

@@ -24,7 +24,6 @@ mod loop_cmd;
 mod message;
 mod opencode;
 mod pane;
-mod parse;
 mod reload;
 mod remote;
 mod render;
@@ -91,11 +90,15 @@ pub fn dispatch() -> Result<()> {
     reject_removed_top_level_tokens()?;
     let cmd = help::customize(<Cli as CommandFactory>::command());
     let mut matches = cmd.get_matches();
+    let canonical_command = matches.subcommand_name().unwrap_or("start").to_owned();
     let cli = Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|err| err.exit());
     let mut globals = cli.global;
     globals.normalize()?;
     globals.color.write_global();
-    rimz::observability::set_command_scope(scope_facts(cli.subcommand.as_ref()));
+    rimz::observability::set_command_scope(scope_facts(
+        &canonical_command,
+        cli.subcommand.as_ref(),
+    ));
     match cli.subcommand {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
@@ -199,33 +202,13 @@ where
 /// label every event in this process inherits, plus the agent kind and session
 /// when the command serves exactly one. The label is the command verb only,
 /// never argument values, so it stays a stable Sentry facet.
-fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
+fn scope_facts<'a>(
+    canonical_command: &'a str,
+    sub: Option<&'a Subcmd>,
+) -> rimz::observability::ScopeFacts<'a> {
     let (command, session, agent) = match sub {
-        None | Some(Subcmd::Start(_)) => ("start", None, None),
-        Some(Subcmd::Attach(_)) => ("attach", None, None),
         Some(Subcmd::Remote(args)) => (args.command_label(), None, None),
-        Some(Subcmd::Web(_)) => ("web", None, None),
-        Some(Subcmd::Workspace(_)) => ("workspace", None, None),
-        Some(Subcmd::List(_)) => ("list", None, None),
-        Some(Subcmd::Stats(_)) => ("stats", None, None),
-        Some(Subcmd::Budget(_)) => ("budget", None, None),
-        Some(Subcmd::ListPets(_)) => ("list-pets", None, None),
-        Some(Subcmd::ListThemes(_)) => ("list-themes", None, None),
-        Some(Subcmd::Gc(_)) => ("gc", None, None),
-        Some(Subcmd::Uninstall(_)) => ("uninstall", None, None),
-        Some(Subcmd::Update(_)) => ("update", None, None),
-        Some(Subcmd::Channel(_)) => ("channel", None, None),
-        Some(Subcmd::Worktree(_)) => ("worktree", None, None),
-        Some(Subcmd::Agents(_)) => ("agents", None, None),
-        Some(Subcmd::Asks(_)) => ("asks", None, None),
-        Some(Subcmd::Answer(_)) => ("answer", None, None),
-        Some(Subcmd::Loop(_)) => ("loop", None, None),
-        Some(Subcmd::Reload(_)) => ("reload", None, None),
-        Some(Subcmd::Reset(_)) => ("reset", None, None),
-        Some(Subcmd::Pane(_)) => ("pane", None, None),
-        Some(Subcmd::Message(_)) => ("message", None, None),
         Some(Subcmd::Sidebar(args)) => (args.command_label(), None, None),
-        Some(Subcmd::Statusline(_)) => ("statusline", None, None),
         Some(Subcmd::Hooks(args)) => {
             let (command, agent) = args.scope();
             (command, None, agent)
@@ -238,14 +221,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
             let (command, session) = args.scope();
             (command, session, Some("opencode"))
         }
-        Some(Subcmd::Daemon(_)) => ("daemon", None, None),
-        Some(Subcmd::Config(_)) => ("config", None, None),
-        Some(Subcmd::Coverage(_)) => ("coverage", None, None),
-        Some(Subcmd::Trust(_)) => ("trust", None, None),
-        Some(Subcmd::Transcript(_)) => ("transcript", None, None),
-        Some(Subcmd::Doctor(_)) => ("doctor", None, None),
-        Some(Subcmd::Setup(_)) => ("setup", None, None),
-        Some(Subcmd::Ping) => ("ping", None, None),
+        _ => (canonical_command, None, None),
     };
     rimz::observability::ScopeFacts {
         command,
@@ -718,10 +694,6 @@ pub(crate) fn apply_cached_daemon_reap(
     });
 }
 
-pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()> {
-    open_store(workspace).map(|_| ())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,13 +704,11 @@ mod tests {
             .unwrap();
         let canonical = matches.subcommand_name().unwrap_or("start").to_owned();
         let cli = Cli::from_arg_matches_mut(&mut matches).unwrap();
-        let facts = scope_facts(cli.subcommand.as_ref());
-        (
-            canonical,
-            facts.command.to_owned(),
-            facts.session.map(ToOwned::to_owned),
-            facts.agent.map(ToOwned::to_owned),
-        )
+        let facts = scope_facts(&canonical, cli.subcommand.as_ref());
+        let command = facts.command.to_owned();
+        let session = facts.session.map(ToOwned::to_owned);
+        let agent = facts.agent.map(ToOwned::to_owned);
+        (canonical, command, session, agent)
     }
 
     fn workspace(
