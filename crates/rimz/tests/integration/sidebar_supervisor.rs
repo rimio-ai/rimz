@@ -82,6 +82,7 @@ fn sidebar_supervisor_reaps_stray_children_while_worker_runs() {
     let env = Env::new();
     let stray_pid_path = env.home_root.join("stray.pid");
     let worker_exit_path = env.home_root.join("worker.exit");
+    std::fs::write(&stray_pid_path, b"").expect("seed empty stray pid file");
     let mut cmd = env.rimz();
     cmd.args([
         "sidebar",
@@ -121,11 +122,19 @@ fn sidebar_supervisor_reaps_stray_children_while_worker_runs() {
 #[cfg(target_os = "linux")]
 fn read_pid_file(path: &Path, timeout: Duration) -> u32 {
     let deadline = Instant::now() + timeout;
+    let mut last_raw = None;
     loop {
         if let Ok(raw) = std::fs::read_to_string(path) {
-            return raw.trim().parse().expect("stray pid file contains a pid");
+            if let Ok(pid) = raw.trim().parse() {
+                return pid;
+            }
+            last_raw = Some(raw);
         }
-        assert!(Instant::now() < deadline, "stray pid file was not written");
+        assert!(
+            Instant::now() < deadline,
+            "stray pid file did not contain a pid: {:?}",
+            last_raw.as_deref()
+        );
         thread::sleep(Duration::from_millis(10));
     }
 }
