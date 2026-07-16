@@ -105,6 +105,7 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::CockpitWorkspace => "⌘",
         GlyphRole::CockpitSessions => "◎",
         GlyphRole::CockpitAgents => "¤",
+        GlyphRole::CockpitPrOpen => "⑃",
         GlyphRole::TokensTotal => "◇",
         GlyphRole::TokensInput => "↘",
         GlyphRole::TokensOutput => "↗",
@@ -199,12 +200,13 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         | GlyphRole::StatusDelegating
         | GlyphRole::StatusResolving
         | GlyphRole::StatusCompacting => return None,
-        // cockpit identity row. Every icon ships single-cell to match the "Mono"
+        // cockpit summary rows. Every icon ships single-cell to match the "Mono"
         // Nerd Font builds; a face that draws them double-width pads per-glyph with a
         // trailing space (see docs/guide/theme.md#glyphs).
         GlyphRole::CockpitWorkspace => "\u{eda7}", // nf-fa-seedling
         GlyphRole::CockpitSessions => "\u{ee83}",  // nf-fa-splotch
         GlyphRole::CockpitAgents => "\u{ee9c}",    // nf-fa-brain
+        GlyphRole::CockpitPrOpen => "\u{efa0}",    // nf-fa-git_alt
         // token-accounting markers.
         GlyphRole::TokensTotal => "\u{ed58}",  // nf-fa-ethereum
         GlyphRole::TokensInput => "\u{f103}",  // nf-fa-angle_double_down
@@ -375,6 +377,7 @@ mod tests {
         // The curated icons are real Nerd Font codepoints, distinct from Unicode.
         for role in [
             GlyphRole::CockpitWorkspace,
+            GlyphRole::CockpitPrOpen,
             GlyphRole::TokensTotal,
             GlyphRole::StatusIdle,
             GlyphRole::WorktreeBranch,
@@ -419,6 +422,13 @@ mod tests {
     fn channel_hash_has_unicode_and_nerd_font_glyphs() {
         assert_eq!(unicode_glyph(GlyphRole::ChannelHash), "#");
         assert_eq!(nerd_font_glyph(GlyphRole::ChannelHash), Some("\u{f292}"));
+    }
+
+    #[test]
+    fn cockpit_open_pr_has_its_own_nerd_font_glyph() {
+        assert_eq!(unicode_glyph(GlyphRole::CockpitPrOpen), "⑃");
+        assert_eq!(nerd_font_glyph(GlyphRole::CockpitPrOpen), Some("\u{efa0}"));
+        assert_eq!(nerd_font_glyph(GlyphRole::WorktreePrOpen), Some("\u{f407}"));
     }
 
     #[test]

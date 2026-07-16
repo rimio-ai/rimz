@@ -154,6 +154,7 @@
 ## workspace = "⌘"
 ## sessions = "◎"
 ## agents = "¤"
+## pr_open = "⑃"
 
 [theme.glyphs.unicode.tokens]
 ## total = "◇"
@@ -255,6 +256,7 @@
 ## workspace = ""
 ## sessions = ""
 ## agents = ""
+## pr_open = ""
 
 [theme.glyphs.nerd_font.tokens]
 ## total = ""

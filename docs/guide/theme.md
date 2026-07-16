@@ -210,7 +210,7 @@ total = "◇"
 | group | controls |
 | --- | --- |
 | `status` | the leading status heads |
-| `cockpit` | `workspace`, `sessions`, `agents` |
+| `cockpit` | `workspace`, `sessions`, `agents`, `pr_open` |
 | `tokens` | the token-accounting markers |
 | `meter` | the drawn gauges and bars |
 | `clock` | the last-activity age faces |

@@ -7,7 +7,7 @@ use super::validate_glyph_cells;
 
 /// A configurable sidebar glyph role. The namespaces mirror the on-screen
 /// reading order, so `[theme.glyphs.<set>.<namespace>]` groups the glyphs the
-/// way the sidebar lays them out: `status` heads, the `cockpit` identity row,
+/// way the sidebar lays them out: `status` heads, the `cockpit` summaries,
 /// `tokens`, `meter` bars, the age `clock`, the `worktree` header, the agent
 /// `card`, `process` rows, help `keys`, and `chrome`.
 macro_rules! glyph_roles {
@@ -57,6 +57,7 @@ glyph_roles! {
         CockpitWorkspace => "workspace",
         CockpitSessions => "sessions",
         CockpitAgents => "agents",
+        CockpitPrOpen => "pr_open",
     }
     "tokens" {
         TokensTotal => "total",

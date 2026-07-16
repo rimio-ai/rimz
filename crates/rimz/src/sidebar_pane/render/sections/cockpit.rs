@@ -117,7 +117,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         left.push(Span::styled(" ".to_owned(), theme.body()));
         left.extend(metric_spans(
             theme,
-            theme.glyph(GlyphRole::WorktreePrOpen),
+            theme.glyph(GlyphRole::CockpitPrOpen),
             theme.component(Component::WorktreePrOpen),
             &open_prs.to_string(),
         ));

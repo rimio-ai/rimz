@@ -662,6 +662,24 @@ fn render_cockpit_counts_open_prs_including_finished_lanes() {
 }
 
 #[test]
+fn render_cockpit_uses_dedicated_nerd_font_pr_glyph() {
+    let mut snapshot = make_up_snapshot();
+    snapshot.worktree_groups[0].pr_state = Some(crate::WorktreePrState::Open);
+    snapshot.theme.glyphs.set = Some("nerd_font".to_owned());
+
+    let screen = snapshot_to_screen(&snapshot, 38, 20);
+    let spend = screen
+        .lines()
+        .find(|line| line.contains('\u{ee9c}'))
+        .expect("cockpit spend line");
+    assert!(spend.contains("\u{efa0} 1"), "git-alt PR tally:\n{screen}");
+    assert!(
+        !spend.contains("\u{f407}"),
+        "worktree PR octicon stays out of the cockpit:\n{screen}"
+    );
+}
+
+#[test]
 fn render_cockpit_hides_zero_open_prs() {
     let screen = snapshot_to_screen(&make_up_snapshot(), 38, 20);
     let spend = screen
