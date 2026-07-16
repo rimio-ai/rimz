@@ -606,9 +606,23 @@ fn cursor_chats_store_derives_running_finished_and_errored_children() {
             json!({"type":"turn_ended","status":"error"}),
         ],
     );
+    fixture.add_child(
+        "child-completed",
+        Some("parent-1"),
+        Some("generalPurpose"),
+        1_735_689_603_000,
+        1,
+    );
+    fixture.write_transcript(
+        "child-completed",
+        &[
+            cursor_child_user_message("check completion alias"),
+            json!({"type":"turn_ended","status":"completed"}),
+        ],
+    );
 
     let observations = fixture.observations();
-    assert_eq!(observations.len(), 5);
+    assert_eq!(observations.len(), 7);
     let running = observations
         .iter()
         .find(|observation| observation.agent_id.as_deref() == Some("child-running"))
@@ -646,6 +660,17 @@ fn cursor_chats_store_derives_running_finished_and_errored_children() {
     assert_eq!(
         errored.signal,
         LifecycleSignal::SubagentStopped { errored: true }
+    );
+    let completed = observations
+        .iter()
+        .find(|observation| {
+            observation.agent_id.as_deref() == Some("child-completed")
+                && matches!(observation.signal, LifecycleSignal::SubagentStopped { .. })
+        })
+        .expect("completed child stop");
+    assert_eq!(
+        completed.signal,
+        LifecycleSignal::SubagentStopped { errored: false }
     );
 }
 

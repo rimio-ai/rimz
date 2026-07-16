@@ -489,7 +489,10 @@ fn read_subagent_transcript(
         match serde_json::from_str::<TranscriptTerminal>(line) {
             Ok(record) if record.r#type.as_deref() != Some("turn_ended") => None,
             Ok(record) => Some(CursorSubagentTerminal {
-                errored: !matches!(record.status.as_deref(), Some("success" | "aborted")),
+                errored: !matches!(
+                    record.status.as_deref(),
+                    Some("success" | "completed" | "aborted")
+                ),
             }),
             Err(_) => Some(CursorSubagentTerminal { errored: true }),
         }
