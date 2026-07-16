@@ -49,6 +49,18 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
     pin_right(left, right, width)
 }
 
+pub(in crate::sidebar_pane::render) struct CockpitBadges {
+    pub unread_agents: usize,
+    pub unread_picked: bool,
+    pub open_prs: usize,
+    pub pr_picked: bool,
+}
+
+pub(in crate::sidebar_pane::render) struct CockpitChipHits {
+    pub unread: Option<(u16, u16)>,
+    pub open_pr: Option<(u16, u16)>,
+}
+
 /// The cockpit's second summary line: `¤ {live} ({unread}) {⑃ open-PRs}` — the
 /// agents in the room right now, the glyph in the agents' own working clay —
 /// on the left, with headline fleet spend pinned to the right edge, counting up
@@ -62,18 +74,6 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 /// room reads `¤ 0` with `$0.00` on the right edge. A tripped room cap switches
 /// the right edge to alarm-red local-day spend plus `of $CAP/day`, independent
 /// of the headline window.
-pub(in crate::sidebar_pane::render) struct CockpitBadges {
-    pub unread_agents: usize,
-    pub unread_picked: bool,
-    pub open_prs: usize,
-    pub pr_picked: bool,
-}
-
-pub(in crate::sidebar_pane::render) struct CockpitChipHits {
-    pub unread: Option<(u16, u16)>,
-    pub open_pr: Option<(u16, u16)>,
-}
-
 pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     theme: &Theme,
     live_agents: usize,
