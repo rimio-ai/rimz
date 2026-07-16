@@ -67,9 +67,7 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
 use self::animation::ResolvedAnimations;
-pub(crate) use self::sections::{
-    DashboardMode, open_pr_rows_total, status_total, unread_total,
-};
+pub(crate) use self::sections::DashboardMode;
 use self::theme::Theme;
 
 #[cfg(test)]

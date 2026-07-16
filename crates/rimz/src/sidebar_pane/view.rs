@@ -15,6 +15,37 @@ pub(crate) enum BodyFilter {
     OpenPr,
 }
 
+impl BodyFilter {
+    pub(crate) fn matches(self, row: &SidebarRow, pr_open: bool) -> bool {
+        match self {
+            Self::Status(status) => row.status() == Some(status),
+            Self::Unread => row.unread,
+            Self::OpenPr => pr_open,
+        }
+    }
+
+    pub(crate) fn total(self, groups: &[SidebarWorktreeGroup]) -> usize {
+        match self {
+            Self::Status(status) => groups
+                .iter()
+                .flat_map(|group| &group.status_counts)
+                .filter(|count| count.status == status)
+                .map(|count| count.count)
+                .sum(),
+            Self::Unread => groups
+                .iter()
+                .flat_map(|group| &group.rows)
+                .filter(|row| row.unread)
+                .count(),
+            Self::OpenPr => groups
+                .iter()
+                .filter(|group| group.pr_state == Some(WorktreePrState::Open))
+                .map(|group| group.rows.len())
+                .sum(),
+        }
+    }
+}
+
 /// Maximum calm rows painted before overflow moves behind `+K more`.
 pub const WORKTREE_ROW_CAP: usize = 6;
 
@@ -247,7 +278,7 @@ fn project_rows<'a>(
         natural_visible += usize::from(natural);
 
         let visible = match filter {
-            Some(filter) => row_passes_filter(row, Some(filter), pr_open),
+            Some(filter) => filter.matches(row, pr_open),
             None if expanded => true,
             None if finished => revealed,
             None => {
@@ -273,20 +304,6 @@ fn process_is_only_live_member(rows: &[SidebarRow]) -> bool {
             .iter()
             .filter(|row| row_band(row) == 0)
             .all(SidebarRow::is_process)
-}
-
-/// One body filter predicate shared by projection and cockpit behavior.
-pub(crate) fn row_passes_filter(
-    row: &SidebarRow,
-    filter: Option<BodyFilter>,
-    pr_open: bool,
-) -> bool {
-    match filter {
-        None => true,
-        Some(BodyFilter::Status(status)) => row.status() == Some(status),
-        Some(BodyFilter::Unread) => row.unread,
-        Some(BodyFilter::OpenPr) => pr_open,
-    }
 }
 
 /// Rows surviving the calm-tail cap, including held exemptions.

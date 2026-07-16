@@ -9,12 +9,11 @@ use crate::{SidebarSnapshot, triage_key};
 use crate::sidebar_pane::render::HitTarget;
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, ManualScroll, UiState, active_dashboard_tab,
-    dashboard_tabbed, dashboard_tabs, open_pr_rows_total, selected_agent_kind, status_total,
-    unread_total,
+    dashboard_tabbed, dashboard_tabs, selected_agent_kind,
 };
 use crate::sidebar_pane::view::VisibleRoster;
 
-use super::input::{FilterAction, KeyAction};
+use super::input::KeyAction;
 
 /// Content lines a wheel tick moves the viewport — about one card line-group
 /// per notch, so a flick traverses cards rather than crawling line by line.
@@ -375,14 +374,11 @@ fn toggle_group_expanded(ui: &mut UiState, snapshot: &SidebarSnapshot, group_key
 fn apply_make_up_filter(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    action: FilterAction,
+    filter: Option<BodyFilter>,
 ) -> InputOutcome {
-    let changed = match action {
-        FilterAction::All => set_make_up_filter(ui, snapshot, None),
-        FilterAction::Status(status) => {
-            toggle_make_up_filter(ui, snapshot, BodyFilter::Status(status))
-        }
-        FilterAction::Unread => toggle_make_up_filter(ui, snapshot, BodyFilter::Unread),
+    let changed = match filter {
+        None => set_make_up_filter(ui, snapshot, None),
+        Some(filter) => toggle_make_up_filter(ui, snapshot, filter),
     };
     if changed {
         InputOutcome::redraw()
@@ -394,7 +390,7 @@ fn apply_make_up_filter(
 fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, filter: BodyFilter) -> bool {
     let target = if ui.make_up_filter == Some(filter) {
         None
-    } else if filter_total(snapshot, filter) > 0 {
+    } else if filter.total(&snapshot.worktree_groups) > 0 {
         Some(filter)
     } else {
         return false;
@@ -544,7 +540,7 @@ fn reconcile_filter_and_baseline(
     derived: Option<PaneId>,
 ) {
     if let Some(filter) = ui.make_up_filter
-        && filter_total(snapshot, filter) == 0
+        && filter.total(&snapshot.worktree_groups) == 0
     {
         ui.make_up_filter = None;
     }
@@ -703,14 +699,6 @@ fn active_roster<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> VisibleRost
         &ui.expanded_groups,
         ui.held_visible(),
     )
-}
-
-fn filter_total(snapshot: &SidebarSnapshot, filter: BodyFilter) -> usize {
-    match filter {
-        BodyFilter::Status(status) => status_total(&snapshot.worktree_groups, status),
-        BodyFilter::Unread => unread_total(&snapshot.worktree_groups),
-        BodyFilter::OpenPr => open_pr_rows_total(&snapshot.worktree_groups),
-    }
 }
 
 #[cfg(test)]

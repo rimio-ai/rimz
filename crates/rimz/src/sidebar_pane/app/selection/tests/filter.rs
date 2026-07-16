@@ -80,7 +80,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
     let mut ui = UiState::default();
 
     let outcome = handle_key(
-        KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)),
+        KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Failed))),
         &mut ui,
         &snapshot,
     );
@@ -92,7 +92,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
     );
 
     let outcome = handle_key(
-        KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)),
+        KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Failed))),
         &mut ui,
         &snapshot,
     );
@@ -100,7 +100,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
     assert_eq!(ui.make_up_filter, None, "the active key toggles to all");
 
     let outcome = handle_key(
-        KeyAction::Filter(FilterAction::Status(AgentStatus::Waiting)),
+        KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Waiting))),
         &mut ui,
         &snapshot,
     );
@@ -112,7 +112,7 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
     assert_eq!(ui.make_up_filter, None);
 
     handle_key(
-        KeyAction::Filter(FilterAction::Status(AgentStatus::Running)),
+        KeyAction::Filter(Some(BodyFilter::Status(AgentStatus::Running))),
         &mut ui,
         &snapshot,
     );
@@ -121,11 +121,11 @@ fn make_up_filter_keys_pick_toggle_clear_and_ignore_empty_buckets() {
         Some(BodyFilter::Status(AgentStatus::Running))
     );
 
-    let outcome = handle_key(KeyAction::Filter(FilterAction::All), &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.make_up_filter, None);
 
-    let outcome = handle_key(KeyAction::Filter(FilterAction::All), &mut ui, &snapshot);
+    let outcome = handle_key(KeyAction::Filter(None), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 }
 #[test]
@@ -477,7 +477,11 @@ fn unread_filter_narrows_to_unread_rows() {
     assert_eq!(roster_len(&snapshot, filter, &Default::default()), 2);
 
     let mut ui = UiState::default();
-    let outcome = handle_key(KeyAction::Filter(FilterAction::Unread), &mut ui, &snapshot);
+    let outcome = handle_key(
+        KeyAction::Filter(Some(BodyFilter::Unread)),
+        &mut ui,
+        &snapshot,
+    );
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.make_up_filter, filter);
 
@@ -491,7 +495,11 @@ fn unread_filter_narrows_to_unread_rows() {
         "only the unread failed row is an unread needs-a-look target"
     );
 
-    let outcome = handle_key(KeyAction::Filter(FilterAction::Unread), &mut ui, &snapshot);
+    let outcome = handle_key(
+        KeyAction::Filter(Some(BodyFilter::Unread)),
+        &mut ui,
+        &snapshot,
+    );
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(ui.make_up_filter, None);
 
@@ -502,7 +510,11 @@ fn unread_filter_narrows_to_unread_rows() {
     {
         row.unread = false;
     }
-    let outcome = handle_key(KeyAction::Filter(FilterAction::Unread), &mut ui, &snapshot);
+    let outcome = handle_key(
+        KeyAction::Filter(Some(BodyFilter::Unread)),
+        &mut ui,
+        &snapshot,
+    );
     assert_eq!(outcome, InputOutcome::default());
     assert_eq!(ui.make_up_filter, None);
 }

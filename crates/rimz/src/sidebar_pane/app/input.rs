@@ -8,6 +8,7 @@ use std::os::unix::net::UnixDatagram;
 
 use crate::agents::AgentStatus;
 use crate::sidebar::events::{RELOAD_CONTROL_WORD, SidebarEventEnvelope};
+use crate::sidebar_pane::view::BodyFilter;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 use super::NavKeymap;
@@ -72,7 +73,7 @@ pub(super) enum KeyAction {
     MarkAllRead,
     Help,
     Dismiss,
-    Filter(FilterAction),
+    Filter(Option<BodyFilter>),
     Digit(u8),
     /// `←`/`→` — cycle the provider dashboard's tab.
     TabPrev,
@@ -80,13 +81,6 @@ pub(super) enum KeyAction {
     /// Otherwise-unbound keypress. Closes the help overlay; no-op when it is
     /// already closed.
     Other,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum FilterAction {
-    All,
-    Status(AgentStatus),
-    Unread,
 }
 
 /// The control word the background fetch worker sends to the loop's wakeup
@@ -200,26 +194,26 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "key:mark_toggle" => Wakeup::Key(KeyAction::MarkToggle),
         "key:mark_all_read" => Wakeup::Key(KeyAction::MarkAllRead),
         "key:help" => Wakeup::Key(KeyAction::Help),
-        "key:filter:all" => Wakeup::Key(KeyAction::Filter(FilterAction::All)),
-        "key:filter:unread" => Wakeup::Key(KeyAction::Filter(FilterAction::Unread)),
-        "key:filter:waiting" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+        "key:filter:all" => Wakeup::Key(KeyAction::Filter(None)),
+        "key:filter:unread" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Unread))),
+        "key:filter:waiting" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
             AgentStatus::Waiting,
-        ))),
-        "key:filter:failed" => {
-            Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)))
-        }
-        "key:filter:idle" => {
-            Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Idle)))
-        }
-        "key:filter:paused" => {
-            Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Paused)))
-        }
-        "key:filter:running" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+        )))),
+        "key:filter:failed" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+            AgentStatus::Failed,
+        )))),
+        "key:filter:idle" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+            AgentStatus::Idle,
+        )))),
+        "key:filter:paused" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+            AgentStatus::Paused,
+        )))),
+        "key:filter:running" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
             AgentStatus::Running,
-        ))),
-        "key:filter:success" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+        )))),
+        "key:filter:success" => Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
             AgentStatus::Success,
-        ))),
+        )))),
         "key:dismiss" => Wakeup::Key(KeyAction::Dismiss),
         "scroll:up" => Wakeup::Scroll { down: false },
         "scroll:down" => Wakeup::Scroll { down: true },
@@ -513,61 +507,69 @@ mod tests {
                 "A → all",
                 KeyCode::Char('A'),
                 KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::Filter(FilterAction::All)),
+                Wakeup::Key(KeyAction::Filter(None)),
             ),
             (
                 "u → unread",
                 KeyCode::Char('u'),
                 KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(FilterAction::Unread)),
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Unread))),
             ),
             (
                 "q → waiting",
                 KeyCode::Char('q'),
                 KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
                     AgentStatus::Waiting,
-                ))),
+                )))),
             ),
             (
                 "! → failed",
                 KeyCode::Char('!'),
                 KeyModifiers::SHIFT,
-                Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Failed))),
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+                    AgentStatus::Failed,
+                )))),
             ),
             (
                 "e → failed",
                 KeyCode::Char('e'),
                 KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Failed))),
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+                    AgentStatus::Failed,
+                )))),
             ),
             (
                 "o → idle",
                 KeyCode::Char('o'),
                 KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Idle))),
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+                    AgentStatus::Idle,
+                )))),
             ),
             (
                 "p → paused",
                 KeyCode::Char('p'),
                 KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Paused))),
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
+                    AgentStatus::Paused,
+                )))),
             ),
             (
                 "w → running",
                 KeyCode::Char('w'),
                 KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
                     AgentStatus::Running,
-                ))),
+                )))),
             ),
             (
                 "s → success",
                 KeyCode::Char('s'),
                 KeyModifiers::NONE,
-                Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+                Wakeup::Key(KeyAction::Filter(Some(BodyFilter::Status(
                     AgentStatus::Success,
-                ))),
+                )))),
             ),
         ];
         for (label, key, mods, wakeup) in cases {

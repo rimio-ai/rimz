@@ -70,7 +70,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     ];
     let total = buckets
         .iter()
-        .map(|(status, _)| status_total(groups, *status))
+        .map(|(status, _)| BodyFilter::Status(*status).total(groups))
         .sum::<usize>();
 
     // An empty (or process-only) room has no make-up line — the `¤ 0  ◎ 0` summary
@@ -95,7 +95,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         cluster.push_count(
             status,
             status_chip_color(theme, status),
-            status_total(groups, status),
+            BodyFilter::Status(status).total(groups),
             bucket_style(
                 theme,
                 groups,
@@ -305,35 +305,6 @@ fn bucket_style(
         };
     }
     rest_style
-}
-
-/// The full-fleet count for one make-up bucket — the sum of every group's
-/// `status_counts` entry for `status`, exactly the figure the make-up line
-/// displays. The auto-clear in `app::reconcile_selection` reads the same sum,
-/// so a filter ends in the same fold its bucket reads zero.
-pub(crate) fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus) -> usize {
-    groups
-        .iter()
-        .flat_map(|group| &group.status_counts)
-        .filter(|count| count.status == status)
-        .map(|count| count.count)
-        .sum()
-}
-
-pub(crate) fn unread_total(groups: &[SidebarWorktreeGroup]) -> usize {
-    groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row.unread)
-        .count()
-}
-
-pub(crate) fn open_pr_rows_total(groups: &[SidebarWorktreeGroup]) -> usize {
-    groups
-        .iter()
-        .filter(|group| group.pr_state == Some(WorktreePrState::Open))
-        .map(|group| group.rows.len())
-        .sum()
 }
 
 pub(in crate::sidebar_pane::render) fn open_pr_total(groups: &[SidebarWorktreeGroup]) -> usize {
