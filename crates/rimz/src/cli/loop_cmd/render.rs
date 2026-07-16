@@ -513,7 +513,8 @@ fn render_dashboard(
         let mut ranked = group.rows.iter().collect::<Vec<_>>();
         ranked.sort_by_key(|row| row.rank_key());
         let full_section_rows = ranked.len() + 2;
-        if full_section_rows <= remaining_rows {
+        let more_rows = usize::from(remaining_tasks > ranked.len());
+        if full_section_rows + more_rows <= remaining_rows {
             write_dashboard_heading(out, &group.root, group.room_is_open, cols)?;
             render_watch_rows(out, &ranked, cols)?;
             remaining_rows -= full_section_rows;
@@ -521,9 +522,7 @@ fn render_dashboard(
             continue;
         }
         if remaining_rows < 4 {
-            if remaining_rows > 0 {
-                write_more(out, remaining_tasks, cols)?;
-            }
+            write_more(out, remaining_tasks, cols)?;
             break;
         }
         write_dashboard_heading(out, &group.root, group.room_is_open, cols)?;

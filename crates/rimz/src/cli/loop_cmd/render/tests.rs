@@ -261,6 +261,25 @@ fn watch_dashboard_uses_only_more_line_below_partial_section_minimum() {
 }
 
 #[test]
+fn watch_dashboard_reserves_more_line_when_first_group_exactly_fills_budget() {
+    let groups = [
+        dashboard_group("/repo/first", &["one", "two"]),
+        dashboard_group("/repo/second", &["three"]),
+    ];
+
+    let rendered = dashboards(&groups, 80, 6);
+
+    assert_eq!(rendered.lines().count(), 6, "{rendered}");
+    assert!(rendered.contains("one"), "{rendered}");
+    assert!(
+        !rendered.contains("two") && !rendered.contains("three"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("+2 more"), "{rendered}");
+    assert_dashboard_bounds(&rendered, 80, 6);
+}
+
+#[test]
 fn task_rules_and_check_rows_use_action_specific_verbs() {
     let spawn = TaskEntry {
         agent: Some("codex".to_owned()),
