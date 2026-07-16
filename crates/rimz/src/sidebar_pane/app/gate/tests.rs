@@ -277,25 +277,21 @@ fn gate_releases_held_regression_by_count_or_timeout() {
 }
 
 #[test]
-fn reject_holds_prior_frame_as_render_and_baseline() {
+fn reject_holds_prior_frame_as_committed_render() {
     let ws = workspace();
     let prior = agent_snapshot(&ws);
     let computed = compute_next_state(
-        &ws,
-        None,
         Ok(process_on(&ws, "terminal_9")),
-        Some(prior.clone()),
+        &prior,
         &Health::default(),
     );
     let (state, gate, rejected, released_via_escape_hatch) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
     assert!(rejected);
     assert!(!released_via_escape_hatch);
-    // Both the rendered frame AND the next-tick baseline stay the good
-    // frame, so the cache never advances onto the demotion.
+    // The committed render stays on the good frame, so the cache never
+    // advances onto the demotion.
     assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
-    let baseline = state.last_snapshot.expect("baseline retained");
-    assert!(baseline.worktree_groups[0].rows[0].is_agent());
     assert_eq!(gate.reject_streak, 1);
     assert!(gate.rejecting_since.is_some());
     // Orthogonal to Health: a held regression is a *successful* fetch, so it
@@ -303,13 +299,7 @@ fn reject_holds_prior_frame_as_render_and_baseline() {
     assert!(state.health.alert.is_none());
     assert_eq!(state.health.failure_streak, 0);
 
-    let computed = compute_next_state(
-        &ws,
-        None,
-        Ok(snapshot(&ws)),
-        Some(prior.clone()),
-        &Health::default(),
-    );
+    let computed = compute_next_state(Ok(snapshot(&ws)), &prior, &Health::default());
 
     let (state, gate, rejected, released_via_escape_hatch) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
@@ -329,10 +319,8 @@ fn rejected_snapshot_then_failure_keeps_prior_frame_and_gate_episode() {
     let ws = workspace();
     let prior = agent_snapshot(&ws);
     let computed = compute_next_state(
-        &ws,
-        None,
         Ok(process_on(&ws, "terminal_9")),
-        Some(prior.clone()),
+        &prior,
         &Health::default(),
     );
     let (held, gate, rejected, _) =
@@ -340,10 +328,8 @@ fn rejected_snapshot_then_failure_keeps_prior_frame_and_gate_episode() {
     assert!(rejected);
 
     let failed = compute_next_state(
-        &ws,
-        None,
         Err("store not found".to_owned()),
-        held.last_snapshot,
+        &held.snapshot,
         &held.health,
     );
     let (failed, next_gate, rejected, released) =
@@ -362,13 +348,7 @@ fn accept_carries_collapsed_spend_without_touching_roster() {
     prior.today_spend_live_usd = Some(8.25);
     let incoming = spend_snapshot(&ws, None, None, None, 0);
     let incoming_row_id = incoming.worktree_groups[0].rows[0].id.clone();
-    let computed = compute_next_state(
-        &ws,
-        None,
-        Ok(incoming),
-        Some(prior.clone()),
-        &Health::default(),
-    );
+    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
 
     let (state, gate, rejected, released_via_escape_hatch) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
@@ -408,14 +388,6 @@ fn accept_carries_collapsed_spend_without_touching_roster() {
         state.snapshot.worktree_groups[0].rows[0].id,
         incoming_row_id
     );
-    assert_eq!(
-        state
-            .last_snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.value_tally.as_ref())
-            .map(|tally| tally.year.usd),
-        Some(12.50)
-    );
     assert_eq!(gate.spend_carry_since, Some(gate_now()));
 }
 
@@ -424,13 +396,7 @@ fn accept_keeps_different_nonzero_spend() {
     let ws = workspace();
     let prior = spend_snapshot(&ws, Some(12.50), Some(7.25), Some(4.00), 50);
     let incoming = spend_snapshot(&ws, Some(20.00), Some(18.00), Some(9.00), 0);
-    let computed = compute_next_state(
-        &ws,
-        None,
-        Ok(incoming),
-        Some(prior.clone()),
-        &Health::default(),
-    );
+    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
 
     let (state, gate, rejected, released_via_escape_hatch) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
@@ -460,13 +426,7 @@ fn spend_carry_escape_hatch_commits_sustained_zero() {
     let ws = workspace();
     let prior = spend_snapshot(&ws, Some(12.50), Some(7.25), Some(4.00), 50);
     let incoming = spend_snapshot(&ws, None, None, None, 0);
-    let computed = compute_next_state(
-        &ws,
-        None,
-        Ok(incoming),
-        Some(prior.clone()),
-        &Health::default(),
-    );
+    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
     let base = 1_700_000_000;
     let prev_gate = GateState {
         spend_carry_since: Some(Timestamp::from_second(base).unwrap()),
@@ -494,10 +454,8 @@ fn failed_fetch_keeps_a_gate_episode_open() {
     let ws = workspace();
     let prior = agent_snapshot(&ws);
     let computed = compute_next_state(
-        &ws,
-        None,
         Err("pane discovery failed".to_owned()),
-        Some(prior.clone()),
+        &prior,
         &Health::default(),
     );
     let prev_gate = GateState {
@@ -523,13 +481,7 @@ fn failed_fetch_keeps_a_gate_episode_open() {
 fn accept_resets_the_gate() {
     let ws = workspace();
     let prior = agent_snapshot(&ws);
-    let computed = compute_next_state(
-        &ws,
-        None,
-        Ok(agent_snapshot(&ws)),
-        Some(prior.clone()),
-        &Health::default(),
-    );
+    let computed = compute_next_state(Ok(agent_snapshot(&ws)), &prior, &Health::default());
     // Carry a prior reject episode in; a clean accept clears it.
     let prev_gate = GateState {
         reject_streak: 2,
@@ -550,13 +502,7 @@ fn escape_release_reports_escape_hatch() {
     let ws = workspace();
     let prior = agent_snapshot(&ws);
     let incoming = process_on(&ws, "terminal_9");
-    let computed = compute_next_state(
-        &ws,
-        None,
-        Ok(incoming),
-        Some(prior.clone()),
-        &Health::default(),
-    );
+    let computed = compute_next_state(Ok(incoming), &prior, &Health::default());
     let prev_gate = GateState {
         reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
         rejecting_since: Some(gate_now()),

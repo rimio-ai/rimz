@@ -314,7 +314,6 @@ fn maintenance_drains_ready_snapshot_outcomes_without_snapshot_wakeup() {
 
     assert_eq!(state.current.worktree_groups.len(), 1);
     assert_eq!(state.current.worktree_groups[0].rows[0].name, "claude");
-    assert!(state.last_snapshot.is_some());
     assert!(state.dirty, "the folded snapshot is paint-pending");
 }
 
@@ -1858,7 +1857,6 @@ fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
     let (mut fetch, _request_rx) = fetch_dispatcher();
     let mut prior = agent_snapshot(&ws);
     prior.panes_observed_at_ms = Some(90);
-    state.last_snapshot = Some(prior.clone());
     state.current = prior;
     state.paint_hold.engage(Instant::now(), 100);
 

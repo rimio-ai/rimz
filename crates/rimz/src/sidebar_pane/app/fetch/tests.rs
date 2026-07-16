@@ -71,7 +71,11 @@ fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
 #[test]
 fn refresh_override_stamps_folded_snapshot() {
     let workspace_id = workspace();
-    let mut folded = super::super::state::placeholder_snapshot(workspace_id.clone());
+    let mut folded = SidebarSnapshot::build_with_agents(
+        workspace_id.clone(),
+        Vec::new(),
+        jiff::Timestamp::UNIX_EPOCH,
+    );
     folded.theme.display.refresh_ms = 250;
     let (tx, rx) = std::sync::mpsc::channel();
     let mut sink = ResultSink::new(tx, PathBuf::from("missing.sock"), Some(50));

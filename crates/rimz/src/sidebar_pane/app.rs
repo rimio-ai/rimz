@@ -2,9 +2,9 @@
 //!
 //! `serve` owns the fixed-timestep event loop shell and wiring; [`loop_state`]
 //! dispatches wakeups, and each concern the loop folds lives in its own
-//! submodule — [`fetch`] (the two-speed off-thread
-//! fetch cycle), [`state`] (the pure `compute_next_state` reducer and the fold
-//! integrator), [`gate`] (the last-known-good regression hold), [`health`]
+//! submodule — [`fetch`] (the two-speed off-thread fetch cycle), [`state`]
+//! (fetch-state and unread-fold reducers), [`gate`] (the last-known-good
+//! regression hold), [`health`]
 //! (failure debounce and give-up), [`lifecycle`] (self-close and the bounded
 //! resize-grow paint hold), [`order_hold`] (renderer-local row/group order
 //! freeze), [`reload`] (binary-change detection), and [`selection`] (the
@@ -74,12 +74,10 @@ use lifecycle::{PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
 use selection::{
     InputEffect, InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane,
 };
-use state::placeholder_snapshot;
 
 pub use demo::{serve_fixture, serve_gallery};
 pub use health::Health;
 pub use keymap::NavKeymap;
-pub use state::{RenderState, compute_next_state};
 
 thread_local! {
     static PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED: Cell<bool> = const { Cell::new(false) };

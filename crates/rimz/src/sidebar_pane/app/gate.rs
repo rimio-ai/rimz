@@ -148,9 +148,8 @@ pub(super) fn gate_held_ms(gate: &GateState, now: Timestamp) -> u64 {
 /// A *failed* fetch already fell back to the prior snapshot inside
 /// [`compute_next_state`](super::state::compute_next_state), so it is never
 /// gated here. A *successful* fetch that [`gate_commit`] judges a transient
-/// regression is held: the prior good frame becomes both the rendered snapshot
-/// and the next-tick baseline (`last_snapshot`), so the cache never advances
-/// onto bad data and the next comparison is still against the last good frame.
+/// regression is held: the prior committed frame remains rendered, so the cache
+/// never advances onto bad data and the next comparison still uses that frame.
 /// Returns the possibly-held state, the next gate state, whether this fetch was
 /// rejected (the loop fires one self-heal refetch on a reject), and whether a
 /// held regression was accepted by the escape hatch.
@@ -167,7 +166,6 @@ pub(super) fn apply_gate(
     match gate_commit(prev_good, &state.snapshot, gate, now) {
         CommitDecision::KeepPrior(rule) => {
             state.snapshot = prev_good.clone();
-            state.last_snapshot = Some(prev_good.clone());
             let next = GateState {
                 reject_streak: gate.reject_streak.saturating_add(1),
                 rejecting_since: gate.rejecting_since.or(Some(now)),
@@ -179,9 +177,6 @@ pub(super) fn apply_gate(
         CommitDecision::AcceptViaEscapeHatch => {
             let spend_carry_since =
                 repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
-            if spend_carry_since.is_some() {
-                state.last_snapshot = Some(state.snapshot.clone());
-            }
             (
                 state,
                 GateState {
@@ -195,9 +190,6 @@ pub(super) fn apply_gate(
         CommitDecision::Accept => {
             let spend_carry_since =
                 repair_collapsed_spend(prev_good, &mut state.snapshot, gate, now);
-            if spend_carry_since.is_some() {
-                state.last_snapshot = Some(state.snapshot.clone());
-            }
             (
                 state,
                 GateState {

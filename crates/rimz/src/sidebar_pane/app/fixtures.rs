@@ -5,14 +5,12 @@ use crate::pane::PaneRef;
 use crate::{MuxName, SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 
-use super::state::placeholder_snapshot;
-
 pub(crate) fn workspace() -> WorkspaceId {
     WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap()
 }
 
 pub(crate) fn snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
-    placeholder_snapshot(ws.clone())
+    SidebarSnapshot::build_with_agents(ws.clone(), Vec::new(), Timestamp::UNIX_EPOCH)
 }
 
 pub(crate) fn pane(raw: &str, view: &str, focused: bool) -> PaneRef {

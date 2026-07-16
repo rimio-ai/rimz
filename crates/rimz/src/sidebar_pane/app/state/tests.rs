@@ -11,7 +11,7 @@ use crate::sidebar_pane::pets::PixelRenderCaps;
 use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::{
     AgentCard, PaneId, RowCard, RuntimePaths, SidebarInstanceId, SidebarStatusCount,
-    SidebarWorktreeGroup,
+    SidebarWorktreeGroup, WorkspaceId,
 };
 
 fn degraded_health(reason: &str) -> Health {
@@ -42,13 +42,8 @@ fn fixed_time(second: i64) -> jiff::Timestamp {
     jiff::Timestamp::from_second(second).expect("fixed timestamp")
 }
 
-fn fetch_failed(
-    ws: &WorkspaceId,
-    reason: &str,
-    previous: Option<SidebarSnapshot>,
-    health: &Health,
-) -> RenderState {
-    compute_next_state(ws, None, Err(reason.to_owned()), previous, health)
+fn fetch_failed(reason: &str, committed: &SidebarSnapshot, health: &Health) -> RenderState {
+    compute_next_state(Err(reason.to_owned()), committed, health)
 }
 
 fn active_alert(health: &Health) -> &Alert {
@@ -553,66 +548,35 @@ fn diagnostics_scope_group_migrations_to_elder_only() {
 #[test]
 fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
     let ws = workspace();
-    let ok = compute_next_state(&ws, None, Ok(snapshot(&ws)), None, &Health::default());
+    let committed = snapshot(&ws);
+    let ok = compute_next_state(Ok(snapshot(&ws)), &committed, &Health::default());
     assert!(ok.health.alert.is_none());
     assert_eq!(ok.health.failure_streak, 0);
-    assert!(ok.last_snapshot.is_some());
     assert_eq!(ok.snapshot.workspace_id, ws);
 
     let previous = snapshot(&ws);
-    let first_failure = fetch_failed(
-        &ws,
-        "store not found",
-        Some(previous.clone()),
-        &Health::default(),
-    );
+    let first_failure = fetch_failed("store not found", &previous, &Health::default());
     assert!(first_failure.health.alert.is_none());
     assert_eq!(first_failure.health.failure_streak, 1);
     assert_eq!(first_failure.snapshot.workspace_id, previous.workspace_id);
-    assert!(first_failure.last_snapshot.is_some());
 
     let second_failure = fetch_failed(
-        &ws,
         "store not found",
-        first_failure.last_snapshot,
+        &first_failure.snapshot,
         &first_failure.health,
     );
     let alert = active_alert(&second_failure.health);
     assert!(alert.reason.contains("snapshot failed"));
     assert!(alert.reason.contains("store not found"));
 
-    let cold_first = fetch_failed(&ws, "store not found", None, &Health::default());
-    let cold_second = fetch_failed(&ws, "store not found", None, &cold_first.health);
-    active_alert(&cold_second.health);
-    assert!(cold_second.last_snapshot.is_none());
-    assert_eq!(cold_second.snapshot.workspace_id, ws);
-
-    let heartbeat_first = compute_next_state(
-        &ws,
-        Some("hb failed".to_owned()),
-        Ok(snapshot(&ws)),
-        None,
-        &Health::default(),
-    );
-    let heartbeat_second = compute_next_state(
-        &ws,
-        Some("hb failed".to_owned()),
-        Ok(snapshot(&ws)),
-        heartbeat_first.last_snapshot,
-        &heartbeat_first.health,
-    );
-    let alert = active_alert(&heartbeat_second.health);
-    assert!(alert.reason.contains("heartbeat failed"));
-    assert!(heartbeat_second.last_snapshot.is_some());
-
     let armed = degraded_health("snapshot failed: first");
     let first_since = armed.alert.as_ref().unwrap().since;
-    let still_degraded = fetch_failed(&ws, "second", Some(snapshot(&ws)), &armed);
+    let still_degraded = fetch_failed("second", &previous, &armed);
     let alert = still_degraded.health.alert.expect("still degraded");
     assert_eq!(alert.since, first_since, "since must remain pinned");
     assert!(alert.reason.contains("second"));
 
-    let recovered = compute_next_state(&ws, None, Ok(snapshot(&ws)), None, &armed);
+    let recovered = compute_next_state(Ok(snapshot(&ws)), &previous, &armed);
     let alert = recovered.health.alert.expect("recovered alert lingers");
     assert!(!alert.is_active());
     assert!(alert.recovered_at.is_some());
@@ -671,7 +635,7 @@ fn interim_success_does_not_recover_health_and_final_failure_advances_once() {
 }
 
 #[test]
-fn focused_read_clear_failure_keeps_visible_state_but_duplicates_trace() {
+fn focused_read_clear_survives_failure_without_duplicate_trace() {
     let ws = workspace();
     let (dir, runtime) = runtime_for(&ws);
     let instance_id = SidebarInstanceId::new();
@@ -717,15 +681,16 @@ fn focused_read_clear_failure_keeps_visible_state_but_duplicates_trace() {
                 crate::diag::notify::NotifyTraceEvent::UnreadCleared { .. }
             ))
             .count(),
-        2,
-        "known bug: failure restores the stale internal unread bit and clears it again"
+        1
     );
 }
 
 #[test]
 fn cold_start_failure_uses_snapshot_builder_defaults() {
     let ws = workspace();
-    let failed = fetch_failed(&ws, "store not found", None, &Health::default());
+    let committed =
+        SidebarSnapshot::build_with_agents(ws.clone(), Vec::new(), Timestamp::UNIX_EPOCH);
+    let failed = fetch_failed("store not found", &committed, &Health::default());
     let expected = SidebarSnapshot::build_with_agents(ws, Vec::new(), failed.snapshot.now);
 
     assert_eq!(
@@ -1128,7 +1093,6 @@ fn manual_unread_guard_suppresses_focused_read_until_revisit() {
 fn non_final_fast_success_keeps_refresh_alert_active() {
     let ws = workspace();
     let (_dir, mut h) = ApplyHarness::new(&ws);
-    h.last_snapshot = Some(snapshot(&ws));
     h.health = degraded_health("snapshot failed: produce");
 
     let applied = h.apply_outcome(FetchUpdate::Snapshot {
@@ -1157,7 +1121,6 @@ fn gate_hold_notice_arms_and_clears_with_gate_state() {
     let (_dir, mut h) = ApplyHarness::new(&ws);
     h.current = row_snapshot(&ws, AgentStatus::Running, false);
     h.current.panes_produced_at_ms = Some(10);
-    h.last_snapshot = Some(h.current.clone());
     let mut empty = snapshot(&ws);
     empty.panes_produced_at_ms = Some(11);
 

@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 
+use crate::SidebarSnapshot;
 use crate::diag::record::{DiagEvent, GroupIdentity};
 use crate::ids::PaneId;
-use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 
 use crate::sidebar::unread::{self, ClearedUnread, UnreadClearCause};
@@ -17,88 +17,30 @@ use super::gate::{GateState, gate_held_ms};
 use super::health::{Health, next_health};
 use super::selection::row_index_of_pane;
 
-/// Decide what to render next given the latest heartbeat + snapshot outcomes.
+/// Decide what to render next given the latest snapshot outcome.
 /// Pure data, no I/O — extracted so the loop's recovery rules are testable.
-pub fn compute_next_state(
-    workspace_id: &WorkspaceId,
-    heartbeat_failure: Option<String>,
+pub(super) fn compute_next_state(
     snapshot: std::result::Result<SidebarSnapshot, String>,
-    previous_snapshot: Option<SidebarSnapshot>,
+    committed: &SidebarSnapshot,
     previous_health: &Health,
 ) -> RenderState {
-    let (last_snapshot, snapshot_failure) = match snapshot {
-        Ok(snapshot) => (Some(snapshot), None),
-        Err(reason) => (previous_snapshot, Some(reason)),
-    };
-
-    // A failed snapshot is the headline; a heartbeat-only failure still keeps
-    // the fresh snapshot but reports its own reason.
-    let failure = snapshot_failure
-        .map(|reason| format!("snapshot failed: {reason}"))
-        .or_else(|| heartbeat_failure.map(|reason| format!("heartbeat failed: {reason}")));
-
-    let health = next_health(previous_health, failure);
-
-    let snapshot_to_render = last_snapshot
-        .clone()
-        .unwrap_or_else(|| placeholder_snapshot(workspace_id.clone()));
-
-    RenderState {
-        snapshot: snapshot_to_render,
-        health,
-        last_snapshot,
-    }
-}
-
-pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot {
-    let display_name = workspace_id.as_str().to_owned();
-    let now = Timestamp::now();
-    SidebarSnapshot {
-        snapshot_version: crate::store::snapshot::SNAPSHOT_VERSION,
-        workspace_id,
-        display_name,
-        generated_at: now,
-        panes_produced_at_ms: None,
-        panes_observed_at_ms: None,
-        viewed_panes: Vec::new(),
-        focused_pane: None,
-        presence: None,
-        truth_degraded: None,
-        now,
-        worktree_groups: Vec::new(),
-        agents: Vec::new(),
-        wired_kinds: Vec::new(),
-        wired_default_models: std::collections::BTreeMap::new(),
-        agent_panes: Vec::new(),
-        own_view: None,
-        only_daemon_view_remains: false,
-        project_root: None,
-        worktree_roots: Vec::new(),
-        worktree_home: None,
-        root_class: crate::workspace::RootClass::Repo,
-        sidebar: crate::config::SidebarConfig::default(),
-        theme: crate::config::ThemeConfig::default(),
-        attention: crate::config::AttentionConfig::default(),
-        providers: Vec::new(),
-        value_tally: None,
-        workspace_value_tally: None,
-        today_spend_live_usd: None,
-        today_spend_epoch_secs: None,
-        fleet_day_spend_usd: None,
-        fleet_day_spend_epoch_secs: None,
-        fleet_budget: None,
-        link: None,
-        reflects_log: None,
-        resume_outcomes: Some(Vec::new()),
+    match snapshot {
+        Ok(snapshot) => RenderState {
+            snapshot,
+            health: next_health(previous_health, None),
+        },
+        Err(reason) => RenderState {
+            snapshot: committed.clone(),
+            health: next_health(previous_health, Some(format!("snapshot failed: {reason}"))),
+        },
     }
 }
 
 /// Bundle returned by [`compute_next_state`]; the loop applies it verbatim.
 #[derive(Clone, Debug)]
-pub struct RenderState {
-    pub snapshot: SidebarSnapshot,
-    pub health: Health,
-    pub last_snapshot: Option<SidebarSnapshot>,
+pub(super) struct RenderState {
+    pub(super) snapshot: SidebarSnapshot,
+    pub(super) health: Health,
 }
 
 /// What [`apply_fetch_outcome`] reports back to the loop: whether to exit,

@@ -118,7 +118,6 @@ fn own_tab_viewed(
 }
 
 pub(super) struct LoopState {
-    pub(super) last_snapshot: Option<SidebarSnapshot>,
     pub(super) current: SidebarSnapshot,
     last_pulled: SidebarSnapshot,
     own_pane: Option<PaneId>,
@@ -206,7 +205,8 @@ impl LoopState {
         pet_render_caps: PixelRenderCaps,
         pixel_wrap: bool,
     ) -> Self {
-        let current = placeholder_snapshot(workspace_id);
+        let snapshot_now = Timestamp::now();
+        let current = SidebarSnapshot::build_with_agents(workspace_id, Vec::new(), snapshot_now);
         let now = Instant::now();
         let width_cap = crate::config::MachineConfig::load_lenient()
             .theme
@@ -214,7 +214,6 @@ impl LoopState {
             .max_cols;
         let width_override = crate::sidebar::width_override::load(read_marks.runtime());
         Self {
-            last_snapshot: None,
             last_pulled: current.clone(),
             current,
             own_pane,
@@ -1350,7 +1349,7 @@ impl LoopState {
                 });
             }
         };
-        let (prev_good, rejected, now) = self.commit_fetch(config, application, diag);
+        let (prev_good, rejected, now) = self.commit_fetch(application, diag);
         let prev_selected = self.ui.selected_pane.clone();
         let (focused_pane, cleared) = self.sweep_read_receipts(now, diag);
         self.reconcile_selection_and_order(
@@ -1415,7 +1414,6 @@ impl LoopState {
 
     fn commit_fetch(
         &mut self,
-        config: &ServeConfig,
         application: FetchApplication,
         diag: &crate::diag::DiagSink,
     ) -> (SidebarSnapshot, bool, Timestamp) {
@@ -1425,13 +1423,7 @@ impl LoopState {
         let fetch_was_ok = application.snapshot.is_ok();
         let fetch_failure = application.snapshot.as_ref().err().cloned();
         let final_for_request = application.phase == FetchPhase::Final;
-        let mut computed = compute_next_state(
-            &config.workspace_id,
-            None,
-            application.snapshot,
-            self.last_snapshot.take(),
-            &self.health,
-        );
+        let mut computed = compute_next_state(application.snapshot, &self.current, &self.health);
         if fetch_was_ok && !final_for_request {
             // A fast-lane frame inside an open fetch cycle is paintable data, not a
             // health verdict. Let the final produce outcome recover or extend the
@@ -1475,7 +1467,6 @@ impl LoopState {
         {
             warn!(target: SIDEBAR_HEALTH_TARGET, reason = %alert.reason, "sidebar refresh degraded");
         }
-        self.last_snapshot = state.last_snapshot;
         self.health = state.health;
         std::mem::replace(&mut self.current, state.snapshot)
     }
