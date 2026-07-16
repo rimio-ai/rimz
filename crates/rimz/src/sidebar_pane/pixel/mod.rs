@@ -604,6 +604,24 @@ mod tests {
     }
 
     #[test]
+    fn disabled_pets_release_process_payload_but_retain_resident_ids() {
+        let mut painter = PixelPainter::with_id_base(0x120000, true);
+        painter.pet_id = Some("codex".to_owned());
+        painter.transmitted.insert(3, 0);
+        painter
+            .png
+            .insert(3, std::sync::Arc::<[u8]>::from(vec![1_u8]));
+        painter.resident.insert(3);
+
+        painter.release_process_payload();
+
+        assert!(painter.pet_id.is_none());
+        assert!(painter.transmitted.is_empty());
+        assert!(painter.png.is_empty());
+        assert_eq!(painter.resident, std::collections::BTreeSet::from([3]));
+    }
+
+    #[test]
     fn ensure_transmitted_places_each_sprite_once_then_writes_nothing_on_repeat() {
         let mut painter = PixelPainter::with_id_base(0x120000, true);
         let pixel = pixel_view("codex", 0, 3, 2);

@@ -592,6 +592,7 @@ mod tests {
         });
 
         assert_eq!(actual.provider.spending, direct.provider.spending);
+        assert_eq!(actual.provider.days, direct.provider.days);
         assert_eq!(actual.workspace.tally, direct.workspace.tally);
         assert!((actual.workspace.tally.year.usd - 2.5).abs() < 1e-9);
     }
