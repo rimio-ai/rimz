@@ -20,100 +20,193 @@ pub(super) fn wait_agent(
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let current_channel = crate::cli::current_channel(&workspace);
     if stream_output {
-        let reference = references.first().context("wait requires a reference")?;
-        let target = resolve_wait_target(&store, &snapshot, reference, current_channel.as_deref())?;
-        return match target {
-            WaitTarget::Run { run_id, .. } => {
-                let run = rimz::harness::run::load(store.paths(), &run_id)?;
-                wait_run_stream(&store, &run, timeout, from_start, json)
-            }
-            WaitTarget::Agent { reference, kind } => wait_interactive_agent_stream(
-                &store,
-                &reference,
-                &kind,
-                snapshot,
-                current_channel.as_deref(),
-                timeout,
-                from_start,
-                json,
-            ),
-        };
+        return wait_stream_request(
+            &store,
+            snapshot,
+            references.first().context("wait requires a reference")?,
+            current_channel.as_deref(),
+            timeout,
+            from_start,
+            json,
+        );
     }
 
+    wait_non_stream(
+        &store,
+        &snapshot,
+        references,
+        any,
+        timeout,
+        json,
+        current_channel.as_deref(),
+    )
+}
+
+fn wait_stream_request(
+    store: &rimz::Store,
+    snapshot: rimz::SidebarSnapshot,
+    reference: &str,
+    current_channel: Option<&str>,
+    timeout: Option<Duration>,
+    from_start: bool,
+    json: bool,
+) -> Result<()> {
+    match resolve_wait_target(store, &snapshot, reference, current_channel)? {
+        WaitTarget::Run { run_id, .. } => {
+            let run = rimz::harness::run::load(store.paths(), &run_id)?;
+            wait_run_stream(store, &run, timeout, from_start, json)
+        }
+        WaitTarget::Agent { reference, kind } => wait_interactive_agent_stream(
+            store,
+            &reference,
+            &kind,
+            snapshot,
+            current_channel,
+            timeout,
+            from_start,
+            json,
+        ),
+    }
+}
+
+fn wait_non_stream(
+    store: &rimz::Store,
+    snapshot: &rimz::SidebarSnapshot,
+    references: Vec<String>,
+    any: bool,
+    timeout: Option<Duration>,
+    json: bool,
+    current_channel: Option<&str>,
+) -> Result<()> {
     let targets = references
         .iter()
-        .map(|reference| {
-            resolve_wait_target(&store, &snapshot, reference, current_channel.as_deref())
-        })
+        .map(|reference| resolve_wait_target(store, snapshot, reference, current_channel))
         .collect::<Result<Vec<_>>>()?;
-    let single = targets.len() == 1 && !any;
+    let style = WaitStyle::new(targets.len(), any, json);
     let mut waits = WaitSet::new(
         targets,
         if any { JoinMode::Any } else { JoinMode::All },
         timeout,
     );
     loop {
-        match waits.poll(&store, current_channel.as_deref())? {
+        match waits.poll(store, current_channel)? {
             WaitPoll::Pending { settled } => {
-                if !single {
-                    report_settled_disappearances(&waits, &settled)?;
-                }
-                if !single && !json {
-                    print_settled_statuses(&waits, &settled)?;
-                }
+                style.report_progress(&waits, &settled)?;
             }
             WaitPoll::Settled { selected, settled } => {
-                if single {
-                    let outcome = waits
-                        .outcome(selected)
-                        .context("settled wait without outcome")?;
-                    if matches!(&outcome.payload, TerminalPayload::Disappeared) {
-                        let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
-                        crate::cli::resolve_agent_one(
-                            &snapshot,
-                            waits.targets[selected].name(),
-                            None,
-                            current_channel.as_deref(),
-                        )?;
-                    }
-                    print_single_outcome(outcome, json)?;
-                    std::process::exit(outcome.exit_code());
-                }
-                if waits.mode == JoinMode::Any {
-                    let outcome = waits
-                        .outcome(selected)
-                        .context("settled wait without outcome")?;
-                    report_disappearance(&waits.targets[selected], outcome)?;
-                    if json {
-                        print_wait_json(std::iter::once(outcome))?;
-                    } else {
-                        writeln!(render::out(), "{}", outcome.name)?;
-                        print_wait_status(&mut render::err(), outcome)?;
-                    }
-                    std::process::exit(outcome.exit_code());
-                }
-                report_settled_disappearances(&waits, &settled)?;
-                if !json {
-                    print_settled_statuses(&waits, &settled)?;
-                } else {
-                    print_wait_json(waits.outcomes.iter().flatten())?;
-                }
-                std::process::exit(waits.all_exit_code());
+                style.report_settled(store, current_channel, &waits, selected, &settled)?;
+                std::process::exit(style.exit_code(&waits, selected)?);
             }
             WaitPoll::TimedOut { settled } => {
-                if !single {
-                    report_settled_disappearances(&waits, &settled)?;
-                }
-                if !single && !json {
-                    print_settled_statuses(&waits, &settled)?;
-                } else if !single {
-                    print_timeout_json(&waits)?;
-                }
+                style.report_timeout(&waits, &settled)?;
                 std::process::exit(RunStatus::TimedOut.exit_code());
             }
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+#[derive(Clone, Copy)]
+enum WaitStyle {
+    Single { json: bool },
+    Any { json: bool },
+    All { json: bool },
+}
+
+impl WaitStyle {
+    fn new(target_count: usize, any: bool, json: bool) -> Self {
+        if target_count == 1 && !any {
+            Self::Single { json }
+        } else if any {
+            Self::Any { json }
+        } else {
+            Self::All { json }
+        }
+    }
+
+    fn report_progress(self, waits: &WaitSet, settled: &[usize]) -> Result<()> {
+        match self {
+            Self::Single { .. } => Ok(()),
+            Self::Any { json } | Self::All { json } => {
+                report_settled_disappearances(waits, settled)?;
+                if !json {
+                    print_settled_statuses(waits, settled)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn report_settled(
+        self,
+        store: &rimz::Store,
+        current_channel: Option<&str>,
+        waits: &WaitSet,
+        selected: usize,
+        settled: &[usize],
+    ) -> Result<()> {
+        match self {
+            Self::Single { json } => {
+                let outcome = settled_outcome(waits, selected)?;
+                if matches!(&outcome.payload, TerminalPayload::Disappeared) {
+                    let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
+                    crate::cli::resolve_agent_one(
+                        &snapshot,
+                        waits.targets[selected].name(),
+                        None,
+                        current_channel,
+                    )?;
+                }
+                print_single_outcome(outcome, json)
+            }
+            Self::Any { json } => {
+                let outcome = settled_outcome(waits, selected)?;
+                report_disappearance(&waits.targets[selected], outcome)?;
+                if json {
+                    print_wait_json(std::iter::once(outcome))
+                } else {
+                    writeln!(render::out(), "{}", outcome.name)?;
+                    print_wait_status(&mut render::err(), outcome)?;
+                    Ok(())
+                }
+            }
+            Self::All { json } => {
+                report_settled_disappearances(waits, settled)?;
+                if json {
+                    print_wait_json(waits.outcomes.iter().flatten())
+                } else {
+                    print_settled_statuses(waits, settled)
+                }
+            }
+        }
+    }
+
+    fn report_timeout(self, waits: &WaitSet, settled: &[usize]) -> Result<()> {
+        match self {
+            Self::Single { .. } => Ok(()),
+            Self::Any { json } | Self::All { json } => {
+                report_settled_disappearances(waits, settled)?;
+                if json {
+                    print_timeout_json(waits)
+                } else {
+                    print_settled_statuses(waits, settled)
+                }
+            }
+        }
+    }
+
+    fn exit_code(self, waits: &WaitSet, selected: usize) -> Result<i32> {
+        match self {
+            Self::Single { .. } | Self::Any { .. } => {
+                Ok(settled_outcome(waits, selected)?.exit_code())
+            }
+            Self::All { .. } => Ok(waits.all_exit_code()),
+        }
+    }
+}
+
+fn settled_outcome(waits: &WaitSet, index: usize) -> Result<&TargetOutcome> {
+    waits.outcome(index).context("settled wait without outcome")
 }
 
 enum WaitTarget {
