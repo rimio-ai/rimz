@@ -48,6 +48,10 @@ fn provider_compiler_preserves_action_and_trailing_argument_order() {
 #[test]
 fn process_compiler_composes_adapter_identity_and_rtk_environment() {
     let project = tempfile::tempdir().expect("project");
+    let params = crate::agents::LaunchParams {
+        channel: Some("design".to_owned()),
+        ..Default::default()
+    };
     let invocation = ExecInvocation {
         kind: "copilot",
         action: ExecAction::Launch {
@@ -59,7 +63,7 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         identity: ExecIdentity {
-            channel: Some("design"),
+            params: Some(&params),
             ..ExecIdentity::default()
         },
     };
@@ -106,6 +110,10 @@ fn process_compiler_composes_adapter_identity_and_rtk_environment() {
 #[test]
 fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
     let adapter = crate::agents::find_adapter("copilot").expect("copilot");
+    let params = crate::agents::LaunchParams {
+        channel: Some("identity".to_owned()),
+        ..Default::default()
+    };
     let invocation = ExecInvocation {
         kind: "copilot",
         action: ExecAction::Launch {
@@ -117,7 +125,7 @@ fn launch_environment_precedence_is_project_adapter_identity_then_rtk() {
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         identity: ExecIdentity {
-            channel: Some("identity"),
+            params: Some(&params),
             ..ExecIdentity::default()
         },
     };
@@ -178,6 +186,19 @@ fn argv(args: &[&str]) -> Vec<String> {
 #[test]
 fn exec_argv_renders_maximal_launch_identity() {
     let extra_args = argv(&["--dangerously-skip-permissions"]);
+    let params = crate::agents::LaunchParams {
+        profile: Some("planner".to_owned()),
+        mode: Some(crate::harness::run::PermissionMode::Yolo),
+        role: Some("coder".to_owned()),
+        team: Some("forge".to_owned()),
+        launch_group: Some("launch_group_1".to_owned()),
+        launch_ordinal: Some(2),
+        channel: Some("design".to_owned()),
+        model: Some("opus".to_owned()),
+        effort: Some("high".to_owned()),
+        budget: Some("$12.50/day".to_owned()),
+        kind_ordinal: Some(99),
+    };
     let invocation = ExecInvocation {
         kind: "claude",
         action: ExecAction::Launch {
@@ -192,16 +213,7 @@ fn exec_argv_renders_maximal_launch_identity() {
             name: Some("swift-otter"),
             name_explicit: true,
             launch_id: Some("launch_123"),
-            profile: Some("planner"),
-            mode: Some(crate::harness::run::PermissionMode::Yolo),
-            role: Some("coder"),
-            team: Some("forge"),
-            launch_group: Some("launch_group_1"),
-            launch_ordinal: Some(2),
-            channel: Some("design"),
-            model: Some("opus"),
-            effort: Some("high"),
-            budget: Some("$12.50/day"),
+            params: Some(&params),
         },
     };
 
@@ -254,6 +266,15 @@ fn exec_argv_renders_maximal_launch_identity() {
 #[test]
 fn exec_argv_renders_resume() {
     let extra_args = argv(&["--dangerously-skip-permissions"]);
+    let params = crate::agents::LaunchParams {
+        profile: Some("planner".to_owned()),
+        role: Some("coder".to_owned()),
+        team: Some("forge".to_owned()),
+        launch_group: Some("launch_group_1".to_owned()),
+        launch_ordinal: Some(2),
+        channel: Some("design".to_owned()),
+        ..Default::default()
+    };
     let invocation = ExecInvocation {
         kind: "claude",
         action: ExecAction::Resume {
@@ -266,12 +287,7 @@ fn exec_argv_renders_resume() {
         exit_on_run_completion: false,
         identity: ExecIdentity {
             name: Some("swift-otter"),
-            profile: Some("planner"),
-            role: Some("coder"),
-            team: Some("forge"),
-            launch_group: Some("launch_group_1"),
-            launch_ordinal: Some(2),
-            channel: Some("design"),
+            params: Some(&params),
             ..ExecIdentity::default()
         },
     };
@@ -309,6 +325,12 @@ fn exec_argv_renders_resume() {
 #[test]
 fn exec_argv_renders_fork() {
     let extra_args = argv(&["--dangerously-bypass-approvals-and-sandbox"]);
+    let params = crate::agents::LaunchParams {
+        profile: Some("planner".to_owned()),
+        mode: Some(crate::harness::run::PermissionMode::Yolo),
+        channel: Some("design".to_owned()),
+        ..Default::default()
+    };
     let invocation = ExecInvocation {
         kind: "codex",
         action: ExecAction::Fork {
@@ -321,9 +343,7 @@ fn exec_argv_renders_fork() {
         exit_on_run_completion: false,
         identity: ExecIdentity {
             name: Some("swift-otter"),
-            profile: Some("planner"),
-            mode: Some(crate::harness::run::PermissionMode::Yolo),
-            channel: Some("design"),
+            params: Some(&params),
             ..ExecIdentity::default()
         },
     };
@@ -354,6 +374,18 @@ fn exec_argv_renders_fork() {
 
 #[test]
 fn exec_identity_env_maps_identity_fields() {
+    let params = crate::agents::LaunchParams {
+        profile: Some("planner".to_owned()),
+        role: Some("coder".to_owned()),
+        team: Some("forge".to_owned()),
+        launch_group: Some("launch_group_1".to_owned()),
+        launch_ordinal: Some(2),
+        channel: Some("design".to_owned()),
+        model: Some("opus".to_owned()),
+        effort: Some("high".to_owned()),
+        budget: Some("$12.50/day".to_owned()),
+        ..Default::default()
+    };
     let invocation = ExecInvocation {
         kind: "claude",
         action: ExecAction::Launch {
@@ -366,15 +398,7 @@ fn exec_identity_env_maps_identity_fields() {
         exit_on_run_completion: false,
         identity: ExecIdentity {
             name: Some("swift-otter"),
-            profile: Some("planner"),
-            role: Some("coder"),
-            team: Some("forge"),
-            launch_group: Some("launch_group_1"),
-            launch_ordinal: Some(2),
-            channel: Some("design"),
-            model: Some("opus"),
-            effort: Some("high"),
-            budget: Some("$12.50/day"),
+            params: Some(&params),
             ..ExecIdentity::default()
         },
     };

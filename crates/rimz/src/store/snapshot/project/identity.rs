@@ -420,9 +420,5 @@ impl CardIdentityAllocator {
 }
 
 pub(super) fn usable_name(name: &str) -> bool {
-    crate::harness::petname::valid_name(name)
-        && !crate::harness::petname::collides_with_reserved_prefix(
-            name,
-            crate::agents::known_kinds(),
-        )
+    crate::harness::petname::valid_agent_name(name)
 }

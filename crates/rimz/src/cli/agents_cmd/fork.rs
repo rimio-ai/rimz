@@ -142,9 +142,7 @@ pub(super) fn run_fork(args: ForkArgs, globals: &GlobalFlags) -> Result<()> {
                 name: Some(launch.name.as_str()),
                 name_explicit: launch.name_explicit,
                 launch_id: Some(launch.agent_id.as_str()),
-                profile: launch.launch.profile.as_deref(),
-                mode: launch.launch.mode,
-                channel: channel.as_deref(),
+                params: Some(&launch.launch),
                 ..rimz::harness::launch::ExecIdentity::default()
             },
         },

@@ -54,7 +54,18 @@ pub fn mint_for_session(
     mint_from_seed(agent_id.as_str(), taken)
 }
 
-pub fn valid_name(name: &str) -> bool {
+/// Accept one durable agent handle at every allocation, fold, and hook boundary.
+pub fn valid_agent_name(name: &str) -> bool {
+    basic_valid_name(name)
+        && !crate::agents::known_kinds().any(|kind| {
+            name == kind
+                || name
+                    .strip_prefix(kind)
+                    .is_some_and(|tail| tail.starts_with('-'))
+        })
+}
+
+fn basic_valid_name(name: &str) -> bool {
     !name.trim().is_empty()
         && name == name.trim()
         && name
@@ -62,19 +73,6 @@ pub fn valid_name(name: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
         && name != "all"
         && !RESERVED_AGENT_WORDS.contains(&name)
-}
-
-pub fn collides_with_reserved_prefix(
-    name: &str,
-    known_kinds: impl IntoIterator<Item = impl AsRef<str>>,
-) -> bool {
-    known_kinds.into_iter().any(|kind| {
-        let kind = kind.as_ref();
-        name == kind
-            || name
-                .strip_prefix(kind)
-                .is_some_and(|tail| tail.starts_with('-'))
-    })
 }
 
 fn mint_from_seed(seed: &str, taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
@@ -91,7 +89,7 @@ fn mint_from_seed(seed: &str, taken: impl IntoIterator<Item = impl AsRef<str>>) 
         } else {
             format!("{adjective}-{noun}-{attempt}")
         };
-        if valid_name(&candidate) && !taken.contains(&candidate) {
+        if valid_agent_name(&candidate) && !taken.contains(&candidate) {
             return candidate;
         }
     }
@@ -126,12 +124,23 @@ mod tests {
 
     #[test]
     fn validates_cli_safe_names() {
-        assert!(valid_name("amber-atlas"));
-        assert!(!valid_name("show"));
-        assert!(!valid_name("fork"));
-        // `all` is the @all fan-out keyword; the generator must never mint it.
-        assert!(!valid_name("all"));
-        assert!(!valid_name("two words"));
-        assert!(collides_with_reserved_prefix("claude-1", ["claude"]));
+        for (name, valid) in [
+            ("amber-atlas", true),
+            ("show", false),
+            ("fork", false),
+            // `all` is the @all fan-out keyword; the generator must never mint it.
+            ("all", false),
+            ("two words", false),
+            ("claude", false),
+            ("claude-1", false),
+            ("codex-12", false),
+            ("claudette-1", true),
+        ] {
+            assert_eq!(valid_agent_name(name), valid, "{name}");
+        }
+        assert!(valid_agent_name(&mint_for_session(
+            &AgentSessionId::from("session-matrix"),
+            std::iter::empty::<&str>(),
+        )));
     }
 }

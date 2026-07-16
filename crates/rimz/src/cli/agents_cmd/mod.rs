@@ -39,8 +39,8 @@ use crate::cli::supervised;
 use rimz::agents::AgentAdapter;
 use rimz::agents::AgentState;
 use rimz::harness::plan::{
-    LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, apply_in_place_downgrade,
-    cohort_cells, fresh_resume_launch_requests, launch_identity_requests, layout_panes_with_names,
+    LaunchFinalizeOptions, LayoutPaneParams, Placement, ResolvedLaunch, agent_pane_plans,
+    apply_in_place_downgrade, cohort_cells, launch_identity_requests, layout_panes_with_names,
     mint_launch_id, resolve_placement, validate_agent_name,
 };
 use rimz::harness::run::{PermissionMode, RunRecord, RunStatus};

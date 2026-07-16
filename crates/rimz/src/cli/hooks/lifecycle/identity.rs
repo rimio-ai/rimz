@@ -81,9 +81,7 @@ pub(in crate::cli::hooks) fn fill_root_launch_identity(
 }
 
 pub(super) fn validate_agent_name_env(raw: String, source: &str, _var: &str) -> Option<String> {
-    if rimz::harness::petname::valid_name(&raw)
-        && !rimz::harness::petname::collides_with_reserved_prefix(&raw, rimz::agents::known_kinds())
-    {
+    if rimz::harness::petname::valid_agent_name(&raw) {
         Some(raw)
     } else {
         warn!(

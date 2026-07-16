@@ -22,7 +22,8 @@ use crate::agents::find_adapter;
 use crate::agents::{AgentState, LocalSessionObservation};
 use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::harness::plan::{
-    LayoutPaneParams, cohort_cells, fresh_resume_launch_requests, layout_panes_with_names,
+    LayoutPaneParams, agent_pane_plans, cohort_cells, launch_identity_requests,
+    layout_panes_with_names,
 };
 use crate::harness::spec::LayoutSpec;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
@@ -961,12 +962,15 @@ pub fn materialize_team_restore_tab(
     use anyhow::Context;
 
     let team_roles = teams.0.get(&planned.team).map(|team| team.roles.as_slice());
-    let launch_requests = fresh_resume_launch_requests(
+    let launch_requests = launch_identity_requests(
         &planned.layout,
-        &planned.cohort,
+        None,
+        None,
         Some(&planned.team),
         team_roles,
         planned.channel.as_deref(),
+        None,
+        Some(&planned.cohort),
     )?;
     let batch = if launch_requests.is_empty() {
         None
@@ -982,19 +986,23 @@ pub fn materialize_team_restore_tab(
             },
         )?)
     };
+    let identities = batch
+        .as_ref()
+        .map_or(&[] as &[_], |batch| batch.identities());
+    let pane_plans = agent_pane_plans(
+        &planned.layout,
+        Some(&planned.cohort.seeds),
+        identities,
+        planned.channel.as_deref(),
+    )?;
     let layout = layout_panes_with_names(
         &planned.layout,
         LayoutPaneParams {
             cwd: &planned.cwd,
-            prompt: None,
-            prompt_agent_index: None,
             cleanup_worktree: false,
             in_place: false,
-            team: Some(&planned.team),
-            channel: planned.channel.as_deref(),
-            resume_seeds: Some(&planned.cohort.seeds),
         },
-        batch.as_ref().map_or(&[], |batch| batch.identities()),
+        &pane_plans,
     )
     .context("building team restore layout")?;
     Ok(ResumeTab {
@@ -1719,6 +1727,16 @@ fn candidate_resume_command(
         .as_deref()
         .filter(|channel| !channel.is_empty())
         .or_else(|| channel.filter(|channel| !channel.is_empty()));
+    let params = crate::agents::LaunchParams {
+        profile: candidate.profile.clone(),
+        role: candidate.role.clone(),
+        team: candidate.team.clone(),
+        launch_group: candidate.launch_group.clone(),
+        launch_ordinal: candidate.launch_ordinal,
+        channel: channel.map(ToOwned::to_owned),
+        // Resume intentionally omits mode, model, effort, and budget.
+        ..Default::default()
+    };
     crate::harness::launch::exec_argv(
         rimz_bin,
         &crate::harness::launch::ExecInvocation {
@@ -1734,17 +1752,7 @@ fn candidate_resume_command(
             identity: crate::harness::launch::ExecIdentity {
                 name: candidate.name.as_deref(),
                 name_explicit: candidate.name_explicit,
-                profile: candidate.profile.as_deref(),
-                mode: None,
-                role: candidate.role.as_deref(),
-                team: candidate.team.as_deref(),
-                launch_group: candidate.launch_group.as_deref(),
-                launch_ordinal: candidate.launch_ordinal,
-                channel,
-                // Resume did not replay model/effort before the wrapper grammar
-                // moved here; keep argv behavior stable.
-                model: None,
-                effort: None,
+                params: Some(&params),
                 ..crate::harness::launch::ExecIdentity::default()
             },
         },

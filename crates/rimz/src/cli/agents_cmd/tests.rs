@@ -354,6 +354,19 @@ mod parse {
     #[test]
     fn exec_argv_round_trips_identity_actions_and_conflicts() {
         let launch_extra = vec!["--dangerously-skip-permissions".to_owned()];
+        let input_params = LaunchParams {
+            profile: Some("planner".to_owned()),
+            mode: Some(PermissionMode::Yolo),
+            role: Some("coder".to_owned()),
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+            budget: Some("$12.50/day".to_owned()),
+            team: Some("forge".to_owned()),
+            launch_group: Some("launch_group_1".to_owned()),
+            launch_ordinal: Some(2),
+            channel: Some("design".to_owned()),
+            kind_ordinal: None,
+        };
         let input = ExecInvocation {
             kind: "claude",
             action: ExecAction::Launch {
@@ -368,22 +381,14 @@ mod parse {
                 name: Some("swift-otter"),
                 name_explicit: true,
                 launch_id: Some("launch_0123456789abcdef0123456789abcdef"),
-                profile: Some("planner"),
-                mode: Some(PermissionMode::Yolo),
-                role: Some("coder"),
-                team: Some("forge"),
-                launch_group: Some("launch_group_1"),
-                launch_ordinal: Some(2),
-                channel: Some("design"),
-                model: Some("opus"),
-                effort: Some("high"),
-                budget: Some("$12.50/day"),
+                params: Some(&input_params),
             },
         };
 
         let args = parse_exec_invocation(&input);
         let action = exec_action(&args);
-        let actual = exec_invocation(&args, action);
+        let actual_params = launch_params(&args);
+        let actual = exec_invocation(&args, action, &actual_params);
         assert_eq!(
             (
                 actual.kind,
@@ -455,7 +460,8 @@ mod parse {
             ),
         ] {
             let args = parse_exec_invocation(&input);
-            let actual = exec_invocation(&args, exec_action(&args));
+            let params = launch_params(&args);
+            let actual = exec_invocation(&args, exec_action(&args), &params);
             assert_eq!(actual.kind, input.kind);
             assert_eq!(
                 resume_or_fork_contract(actual.action),
@@ -476,7 +482,7 @@ mod parse {
 
         let args = parse_exec(&["rimz", "exec", "claude", "--launch-id", "launch_orphan"]);
         assert_eq!(
-            super::exec::exec_launch_identity(&args)
+            super::exec::exec_launch_identity(&args, &launch_params(&args))
                 .expect_err("launch id requires a name")
                 .to_string(),
             "--launch-id requires --agent-name"
@@ -580,8 +586,12 @@ mod launch_options {
             &MachineConfig::default(),
         )
         .expect("prepare supervised launch");
-        let [Cell::Agent(rimz::harness::spec::AgentCell { model, effort, .. })] =
-            prepared.columns[0].rows.as_slice()
+        let [
+            Cell::Agent(rimz::harness::spec::AgentCell {
+                launch: LaunchParams { model, effort, .. },
+                ..
+            }),
+        ] = prepared.columns[0].rows.as_slice()
         else {
             panic!("one agent")
         };

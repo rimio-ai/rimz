@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 
 use super::*;
-use crate::agents::AgentStatus;
+use crate::agents::{AgentStatus, LaunchParams};
 use crate::config::{MachineConfig, Profile, Team, TeamsConfig};
 use crate::harness::run::PermissionMode;
 use crate::harness::spec::Column;
@@ -28,14 +28,13 @@ fn agent_cell_with_role(role: Option<&str>) -> Cell {
     Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
         args: Vec::new(),
-        mode: None,
         system_prompt_file: None,
         append_system_prompt_file: None,
-        profile: role.map(|role| format!("{role}-profile")),
-        role: role.map(ToOwned::to_owned),
-        model: None,
-        effort: None,
-        budget: None,
+        launch: LaunchParams {
+            profile: role.map(|role| format!("{role}-profile")),
+            role: role.map(ToOwned::to_owned),
+            ..Default::default()
+        },
     })
 }
 
@@ -51,14 +50,14 @@ fn preset_cell(kind: &str, args: &[&str], model: Option<&str>, effort: Option<&s
     Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked(kind),
         args: args.iter().map(|value| (*value).to_owned()).collect(),
-        mode: None,
         system_prompt_file: None,
         append_system_prompt_file: None,
-        profile: Some(format!("{kind}-coder")),
-        role: None,
-        model: model.map(str::to_owned),
-        effort: effort.map(str::to_owned),
-        budget: None,
+        launch: LaunchParams {
+            profile: Some(format!("{kind}-coder")),
+            model: model.map(str::to_owned),
+            effort: effort.map(str::to_owned),
+            ..Default::default()
+        },
     })
 }
 
@@ -207,10 +206,14 @@ fn resolved_launch_finalizes_profile_cli_and_passthrough_precedence() {
     let [
         Cell::Agent(AgentCell {
             args,
-            mode,
-            model,
-            effort,
-            budget,
+            launch:
+                LaunchParams {
+                    mode,
+                    model,
+                    effort,
+                    budget,
+                    ..
+                },
             ..
         }),
     ] = resolved.layout.columns[0].rows.as_slice()
@@ -267,7 +270,7 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
     let modes = resolved
         .layout
         .agent_cells()
-        .map(|cell| cell.mode)
+        .map(|cell| cell.launch.mode)
         .collect::<Vec<_>>();
     assert_eq!(
         modes,
@@ -287,7 +290,13 @@ fn resolved_launch_retains_profile_mode_and_wires_turn_limits() {
         },
     )
     .expect("finalize supervised launch");
-    let [Cell::Agent(AgentCell { args, model, .. })] = resolved.layout.columns[0].rows.as_slice()
+    let [
+        Cell::Agent(AgentCell {
+            args,
+            launch: LaunchParams { model, .. },
+            ..
+        }),
+    ] = resolved.layout.columns[0].rows.as_slice()
     else {
         panic!("one agent")
     };
@@ -319,14 +328,16 @@ fn launch_options_apply_without_overwriting_spec_identity() {
         Cell::Agent(AgentCell {
             kind: AgentKind::new_unchecked("codex"),
             args,
-            mode,
             system_prompt_file: None,
             append_system_prompt_file: None,
-            profile: Some("codex-coder".to_owned()),
-            role: Some("coder".to_owned()),
-            model: Some("profile-model".to_owned()),
-            effort: Some("medium".to_owned()),
-            budget: None,
+            launch: LaunchParams {
+                profile: Some("codex-coder".to_owned()),
+                mode,
+                role: Some("coder".to_owned()),
+                model: Some("profile-model".to_owned()),
+                effort: Some("medium".to_owned()),
+                ..Default::default()
+            },
         })
     };
     let mut layout = LayoutSpec::single(cell(vec!["--model".into(), "profile-model".into()], None));
@@ -351,16 +362,24 @@ fn launch_options_apply_without_overwriting_spec_identity() {
     let [
         Cell::Agent(AgentCell {
             args: unset_args,
-            mode: unset_mode,
-            model: unset_model,
-            effort: unset_effort,
+            launch:
+                LaunchParams {
+                    mode: unset_mode,
+                    model: unset_model,
+                    effort: unset_effort,
+                    ..
+                },
             ..
         }),
         Cell::Agent(AgentCell {
             args: preset_args,
-            mode: preset_mode,
-            model: preset_model,
-            effort: preset_effort,
+            launch:
+                LaunchParams {
+                    mode: preset_mode,
+                    model: preset_model,
+                    effort: preset_effort,
+                    ..
+                },
             ..
         }),
     ] = layout.columns[0].rows.as_slice()
@@ -401,14 +420,12 @@ fn default_launch_models_stamp_only_cells_without_models() {
     let explicit = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "o3".to_owned()],
-        mode: None,
         system_prompt_file: None,
         append_system_prompt_file: None,
-        profile: None,
-        role: None,
-        model: Some("o3".to_owned()),
-        effort: None,
-        budget: None,
+        launch: LaunchParams {
+            model: Some("o3".to_owned()),
+            ..Default::default()
+        },
     });
     let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
     layout.columns[0]
@@ -416,10 +433,10 @@ fn default_launch_models_stamp_only_cells_without_models() {
         .extend([explicit, Cell::agent(AgentKind::new_unchecked("claude"))]);
     finalize(&mut layout, &Default::default(), &[]).expect("finalize launch");
     assert!(matches!(&layout.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, model: Some(model), .. })
+        Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
             if model == &codex_default && args == &["--model", codex_default.as_str()]));
     assert!(matches!(&layout.columns[0].rows[1],
-        Cell::Agent(AgentCell { args, model: Some(model), .. })
+        Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
             if model == "o3" && args == &["--model", "o3"]));
     assert_eq!(
         layout.columns[0].rows[2],
@@ -441,7 +458,7 @@ fn args_only_model_becomes_identity_and_suppresses_default() {
             .is_empty()
     );
     assert!(matches!(&layout.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, model: Some(model), .. })
+        Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
             if model == "gpt-5.6-sol"
                 && args == &["--debug", "--model", "gpt-5.6-sol"]));
 }
@@ -497,7 +514,7 @@ fn args_only_model_uses_last_short_or_joined_occurrence() {
         1
     );
     assert!(matches!(&layout.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, model: Some(model), .. })
+        Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
             if model == "second" && args == &["--debug", "-m", "second"]));
 }
 
@@ -520,7 +537,7 @@ fn launch_model_override_wins_over_profile_and_args_models() {
     .expect("finalize launch");
     assert_eq!(warnings.len(), 2);
     assert!(matches!(&layout.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, model: Some(model), .. })
+        Cell::Agent(AgentCell { args, launch: LaunchParams { model: Some(model), .. }, .. })
             if model == "override" && args == &["--model", "override"]));
 }
 
@@ -566,7 +583,7 @@ fn config_key_effort_reconciles_without_touching_unrelated_or_undeclared_flags()
             .is_empty()
     );
     assert!(matches!(&claude.columns[0].rows[0],
-        Cell::Agent(AgentCell { args, effort: None, .. }) if args == &["--effort", "high"]));
+        Cell::Agent(AgentCell { args, launch: LaunchParams { effort: None, .. }, .. }) if args == &["--effort", "high"]));
 }
 
 #[test]
@@ -664,13 +681,13 @@ fn finalization_handles_mixed_cells_without_leaking_state() {
         panic!("mixed cells")
     };
     assert!(matches!(profile,
-        Cell::Agent(AgentCell { model: Some(model), budget: Some(budget), .. })
+        Cell::Agent(AgentCell { launch: LaunchParams { model: Some(model), budget: Some(budget), .. }, .. })
             if model == "profile" && budget == "$2.00/day"));
     assert!(matches!(bare,
-        Cell::Agent(AgentCell { model: Some(model), budget: Some(budget), .. })
+        Cell::Agent(AgentCell { launch: LaunchParams { model: Some(model), budget: Some(budget), .. }, .. })
             if model == &codex_default && budget == "$2.00/day"));
     assert!(matches!(no_default,
-        Cell::Agent(AgentCell { model: None, budget: Some(budget), .. })
+        Cell::Agent(AgentCell { launch: LaunchParams { model: None, budget: Some(budget), .. }, .. })
             if budget == "$2.00/day"));
     assert_eq!(actual_command, &command);
 }
@@ -883,14 +900,16 @@ fn launch_request_names_and_metadata() {
     let layout = LayoutSpec::single(Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("codex"),
         args: Vec::new(),
-        mode: Some(PermissionMode::Yolo),
         system_prompt_file: None,
         append_system_prompt_file: None,
-        profile: Some("codex-coder".to_owned()),
-        role: Some("coder".to_owned()),
-        model: Some("gpt-5-codex".to_owned()),
-        effort: Some("high".to_owned()),
-        budget: None,
+        launch: LaunchParams {
+            profile: Some("codex-coder".to_owned()),
+            mode: Some(PermissionMode::Yolo),
+            role: Some("coder".to_owned()),
+            model: Some("gpt-5-codex".to_owned()),
+            effort: Some("high".to_owned()),
+            ..Default::default()
+        },
     }));
 
     let requests = launch_identity_requests(
@@ -901,6 +920,7 @@ fn launch_request_names_and_metadata() {
         None,
         Some("design"),
         Some(("draft it", 0)),
+        None,
     )
     .unwrap();
     assert_eq!(requests.len(), 1);
@@ -918,22 +938,40 @@ fn launch_request_names_and_metadata() {
     assert_eq!(requests[0].launch.channel.as_deref(), Some("design"));
     assert_eq!(requests[0].prompt.as_deref(), Some("draft it"));
 
-    let requests =
-        launch_identity_requests(&layout, None, Some("my_feature"), None, None, None, None)
-            .unwrap();
+    let requests = launch_identity_requests(
+        &layout,
+        None,
+        Some("my_feature"),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(
         requests[0].name,
         AgentLaunchName::Soft("my_feature".to_owned())
     );
     assert_eq!(
-        launch_identity_requests(&layout, None, None, None, None, None, None).unwrap()[0].name,
+        launch_identity_requests(&layout, None, None, None, None, None, None, None).unwrap()[0]
+            .name,
         AgentLaunchName::Mint
     );
     assert!(
-        launch_identity_requests(&layout, Some("my_feature"), None, None, None, None, None)
-            .unwrap_err()
-            .to_string()
-            .contains("invalid agent name")
+        launch_identity_requests(
+            &layout,
+            Some("my_feature"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("invalid agent name")
     );
 }
 
@@ -963,6 +1001,7 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
         Some(&team_roles),
         None,
         Some(("implement", 1)),
+        None,
     )
     .unwrap();
     assert_eq!(requests[0].launch.launch_ordinal, Some(1));
@@ -982,7 +1021,8 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
         &crate::config::CommandsConfig::default(),
     )
     .unwrap();
-    let requests = launch_identity_requests(&inline, None, None, None, None, None, None).unwrap();
+    let requests =
+        launch_identity_requests(&inline, None, None, None, None, None, None, None).unwrap();
     let group = requests[0].launch.launch_group.as_deref().unwrap();
     assert!(group.starts_with("launch_"));
     assert_eq!(requests[1].launch.launch_group.as_deref(), Some(group));
@@ -990,7 +1030,8 @@ fn launch_identity_requests_stamp_team_and_inline_cohort_order() {
     assert_eq!(requests[1].launch.launch_ordinal, Some(1));
 
     let single = LayoutSpec::single(agent_cell_with_role(None));
-    let requests = launch_identity_requests(&single, None, None, None, None, None, None).unwrap();
+    let requests =
+        launch_identity_requests(&single, None, None, None, None, None, None, None).unwrap();
     assert_eq!(requests[0].launch.launch_group, None);
     assert_eq!(requests[0].launch.launch_ordinal, None);
 }
@@ -1021,19 +1062,17 @@ fn layout_panes_put_the_prompt_only_on_the_leader_agent() {
         run_id: None,
         prompt: None,
     };
+    let mut identities = [identity("claude", "first"), identity("codex", "leader")];
+    identities[1].prompt = Some("lead this".to_owned());
+    let plans = agent_pane_plans(&layout, None, &identities, None).expect("pane plans");
     let panes = layout_panes_with_names(
         &layout,
         LayoutPaneParams {
             cwd: Path::new("/tmp/project"),
-            prompt: Some("lead this"),
-            prompt_agent_index: Some(1),
             cleanup_worktree: false,
             in_place: false,
-            team: None,
-            channel: None,
-            resume_seeds: None,
         },
-        &[identity("claude", "first"), identity("codex", "leader")],
+        &plans,
     )
     .unwrap();
 
@@ -1074,22 +1113,20 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
             ..Default::default()
         },
         run_id: None,
-        prompt: None,
+        prompt: Some("fresh prompt".to_owned()),
     };
 
+    let fresh = [fresh];
+    let plans =
+        agent_pane_plans(&layout, Some(&seeds), &fresh, Some("fallback")).expect("pane plans");
     let panes = layout_panes_with_names(
         &layout,
         LayoutPaneParams {
             cwd: Path::new("/repo"),
-            prompt: Some("fresh prompt"),
-            prompt_agent_index: Some(1),
             cleanup_worktree: false,
             in_place: false,
-            team: None,
-            channel: Some("fallback"),
-            resume_seeds: Some(&seeds),
         },
-        &[fresh],
+        &plans,
     )
     .expect("mixed panes");
 
@@ -1100,19 +1137,11 @@ fn mixed_resume_and_fresh_panes_stay_aligned_in_layout_order() {
     assert_arg_pair(&panes[2].argv, "--agent-name", "bright-river");
     assert_arg_pair(&panes[2].argv, "--prompt", "fresh prompt");
 
-    let err = layout_panes_with_names(
+    let err = agent_pane_plans(
         &layout,
-        LayoutPaneParams {
-            cwd: Path::new("/repo"),
-            prompt: None,
-            prompt_agent_index: None,
-            cleanup_worktree: false,
-            in_place: false,
-            team: None,
-            channel: None,
-            resume_seeds: Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
-        },
+        Some(&[CohortSeed::Fresh, CohortSeed::Fresh]),
         &[],
+        None,
     )
     .expect_err("identity count mismatch");
     assert_eq!(
@@ -1126,14 +1155,9 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
     let cell = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
         args: Vec::new(),
-        mode: None,
         system_prompt_file: None,
         append_system_prompt_file: None,
-        profile: Some("claude-planner".to_owned()),
-        role: Some("planner".to_owned()),
-        model: Some("claude-sonnet".to_owned()),
-        effort: Some("high".to_owned()),
-        budget: None,
+        launch: LaunchParams::default(),
     });
     let launch = AgentLaunchIdentity {
         kind: AgentKind::new_unchecked("claude"),
@@ -1141,26 +1165,29 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
         name: "swift-otter".to_owned(),
         name_explicit: false,
         launch: crate::agents::LaunchParams {
+            profile: Some("claude-planner".to_owned()),
+            role: Some("planner".to_owned()),
+            team: Some("forge".to_owned()),
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(2),
+            channel: Some("design".to_owned()),
+            model: Some("claude-sonnet".to_owned()),
+            effort: Some("high".to_owned()),
             ..Default::default()
         },
         run_id: None,
         prompt: None,
     };
+    let plan = AgentPanePlan::Fresh(&launch);
 
     let pane = pane_cmd_with_name(
         &cell,
         PaneCmdOptions {
             rimz_bin: Path::new("/usr/bin/rimz"),
             cwd: Path::new("/tmp/project"),
-            prompt: None,
             cleanup_worktree: false,
             in_place: false,
-            team: Some("forge"),
-            channel: Some("design"),
-            launch: Some(&launch),
-            resume_seed: None,
+            plan: Some(&plan),
         },
     )
     .unwrap();
@@ -1187,13 +1214,9 @@ fn pane_command_stamps_cli_identity_and_close_policy() {
             PaneCmdOptions {
                 rimz_bin: Path::new("/usr/bin/rimz"),
                 cwd: Path::new("/tmp/project"),
-                prompt: None,
                 cleanup_worktree,
                 in_place,
-                team: Some("forge"),
-                channel: None,
-                launch: Some(&launch),
-                resume_seed: None,
+                plan: Some(&plan),
             },
         )
         .unwrap();
@@ -1206,14 +1229,15 @@ fn pane_command_resume_replays_prior_identity_without_launch_preset() {
     let cell = Cell::Agent(AgentCell {
         kind: AgentKind::new_unchecked("claude"),
         args: vec!["--ignored".to_owned()],
-        mode: None,
         system_prompt_file: None,
         append_system_prompt_file: None,
-        profile: Some("new-profile".to_owned()),
-        role: Some("new-role".to_owned()),
-        model: Some("new-model".to_owned()),
-        effort: Some("new-effort".to_owned()),
-        budget: None,
+        launch: LaunchParams {
+            profile: Some("new-profile".to_owned()),
+            role: Some("new-role".to_owned()),
+            model: Some("new-model".to_owned()),
+            effort: Some("new-effort".to_owned()),
+            ..Default::default()
+        },
     });
     let mut agent = crate::testkit::agent_state("claude", "sess-1", Timestamp::now());
     agent.status = AgentStatus::Idle;
@@ -1227,19 +1251,22 @@ fn pane_command_resume_replays_prior_identity_without_launch_preset() {
     agent.model = Some("old-model".to_owned());
     agent.effort = Some("old-effort".to_owned());
     let seed = CohortSeed::Resume(Box::new(agent));
+    let CohortSeed::Resume(agent) = &seed else {
+        unreachable!()
+    };
+    let plan = AgentPanePlan::Resume {
+        agent,
+        fallback_channel: Some("new-channel"),
+    };
 
     let pane = pane_cmd_with_name(
         &cell,
         PaneCmdOptions {
             rimz_bin: Path::new("/usr/bin/rimz"),
             cwd: Path::new("/tmp/project"),
-            prompt: Some("ignored prompt"),
             cleanup_worktree: false,
             in_place: false,
-            team: Some("new-team"),
-            channel: Some("new-channel"),
-            launch: None,
-            resume_seed: Some(&seed),
+            plan: Some(&plan),
         },
     )
     .unwrap();

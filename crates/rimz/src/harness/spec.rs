@@ -84,21 +84,12 @@ pub struct Column {
 pub struct AgentCell {
     pub kind: AgentKind,
     pub args: Vec<String>,
-    pub mode: Option<PermissionMode>,
     pub system_prompt_file: Option<PathBuf>,
     /// The profile or role prompt file whose contents append to the adapter's
     /// base system prompt. Launch pre-flight checks it before spawning the pane.
     pub append_system_prompt_file: Option<PathBuf>,
-    /// Named profile identity stamped into launch events and wrapper env.
-    pub profile: Option<String>,
-    /// Named-team or inline role identity stamped into launch events and wrapper env.
-    pub role: Option<String>,
-    /// Launch model selected by profile, role, CLI override, or adapter default.
-    pub model: Option<String>,
-    /// Launch reasoning effort selected by profile, role, or CLI override.
-    pub effort: Option<String>,
-    /// Canonical dollar cap carried into the launched session.
-    pub budget: Option<String>,
+    /// Canonical shared launch identity selected by profiles, roles, and CLI overlays.
+    pub launch: crate::agents::LaunchParams,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,14 +103,9 @@ impl Cell {
         Self::Agent(AgentCell {
             kind,
             args: Vec::new(),
-            mode: None,
             system_prompt_file: None,
             append_system_prompt_file: None,
-            profile: None,
-            role: None,
-            model: None,
-            effort: None,
-            budget: None,
+            launch: crate::agents::LaunchParams::default(),
         })
     }
 
@@ -132,10 +118,7 @@ impl Cell {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProfile {
     pub kind: AgentKind,
-    pub mode: Option<PermissionMode>,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-    pub budget: Option<String>,
+    pub launch: crate::agents::LaunchParams,
     pub system_prompt_file: Option<PathBuf>,
     pub append_system_prompt_file: Option<PathBuf>,
     pub args: Option<String>,
@@ -145,13 +128,60 @@ impl ResolvedProfile {
     fn bare(kind: &str) -> Self {
         Self {
             kind: AgentKind::new_unchecked(kind),
-            mode: None,
-            model: None,
-            effort: None,
-            budget: None,
+            launch: crate::agents::LaunchParams::default(),
             system_prompt_file: None,
             append_system_prompt_file: None,
             args: None,
+        }
+    }
+
+    fn fill_missing(&mut self, layer: &Profile) {
+        self.launch.mode = self.launch.mode.or(layer.mode);
+        if self.launch.model.is_none() {
+            self.launch.model.clone_from(&layer.model);
+        }
+        if self.launch.effort.is_none() {
+            self.launch.effort.clone_from(&layer.effort);
+        }
+        if self.launch.budget.is_none() {
+            self.launch.budget.clone_from(&layer.budget);
+        }
+        if self.system_prompt_file.is_none() {
+            self.system_prompt_file
+                .clone_from(&layer.system_prompt_file);
+        }
+        if self.append_system_prompt_file.is_none() {
+            self.append_system_prompt_file
+                .clone_from(&layer.append_system_prompt_file);
+        }
+        if self.args.is_none() {
+            self.args.clone_from(&layer.args);
+        }
+    }
+
+    fn apply_role(&mut self, binding: &RoleBinding) {
+        if let Some(mode) = binding.mode {
+            self.launch.mode = Some(mode);
+        }
+        for (target, source) in [
+            (&mut self.launch.model, &binding.model),
+            (&mut self.launch.effort, &binding.effort),
+            (&mut self.launch.budget, &binding.budget),
+        ] {
+            if source.is_some() {
+                target.clone_from(source);
+            }
+        }
+        if binding.system_prompt_file.is_some() {
+            self.system_prompt_file
+                .clone_from(&binding.system_prompt_file);
+        }
+        if binding.append_system_prompt_file.is_some() {
+            self.append_system_prompt_file
+                .clone_from(&binding.append_system_prompt_file);
+        }
+        if binding.args.is_some() {
+            self.args.clone_from(&binding.args);
         }
     }
 }
@@ -438,7 +468,7 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
             } else {
                 agent_cells
                     .iter()
-                    .position(|cell| cell.role.as_deref() == Some(leader))
+                    .position(|cell| cell.launch.role.as_deref() == Some(leader))
             };
             // Team validation proves a configured leader is present exactly once.
             return Ok(index.expect("validated team leader is placed in the resolved layout"));
@@ -447,13 +477,13 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
             // Team validation proves every declared role is placed exactly once.
             return Ok(agent_cells
                 .iter()
-                .position(|cell| cell.role.as_deref() == Some(first_role.role.as_str()))
+                .position(|cell| cell.launch.role.as_deref() == Some(first_role.role.as_str()))
                 .expect("validated first team role is placed in the resolved layout"));
         }
     }
 
     let first = agent_cells[0];
-    if first.role.is_some() {
+    if first.launch.role.is_some() {
         return Ok(0);
     }
     let token = prompt_leader_token(first).expect("agent cells have a profile or kind token");
@@ -470,7 +500,7 @@ pub fn prompt_leader(layout: &LayoutSpec, team: Option<&Team>) -> Result<usize> 
 }
 
 fn prompt_leader_token(cell: &AgentCell) -> Option<&str> {
-    Some(cell.profile.as_deref().unwrap_or(cell.kind.as_str()))
+    Some(cell.launch.profile.as_deref().unwrap_or(cell.kind.as_str()))
 }
 
 fn resolve_team_role(
@@ -525,13 +555,13 @@ fn compile_team(
 ) -> Result<CompiledTeam> {
     let mut role_cells = BTreeMap::new();
     for mut role in prepared.roles {
-        normalize_budget(&mut role.resolved.budget, &role.profile)?;
+        normalize_budget(&mut role.resolved.launch.budget, &role.profile)?;
         let cell = agent_cell_from(
             &role.resolved,
             role.args,
             Some(role.profile),
             Some(role.role.clone()),
-            role.resolved.mode,
+            role.resolved.launch.mode,
         );
         let Cell::Agent(cell) = cell else {
             unreachable!("agent_cell_from always returns an agent cell");
@@ -650,35 +680,11 @@ fn compile_team_layout(
     Ok(LayoutSpec { columns })
 }
 
-fn apply_role_overrides(resolved: &mut ResolvedProfile, binding: &RoleBinding) {
-    if let Some(mode) = binding.mode {
-        resolved.mode = Some(mode);
-    }
-    if let Some(model) = binding.model.as_ref() {
-        resolved.model = Some(model.clone());
-    }
-    if let Some(effort) = binding.effort.as_ref() {
-        resolved.effort = Some(effort.clone());
-    }
-    if let Some(budget) = binding.budget.as_ref() {
-        resolved.budget = Some(budget.clone());
-    }
-    if let Some(path) = binding.system_prompt_file.as_ref() {
-        resolved.system_prompt_file = Some(path.clone());
-    }
-    if let Some(path) = binding.append_system_prompt_file.as_ref() {
-        resolved.append_system_prompt_file = Some(path.clone());
-    }
-    if let Some(args) = binding.args.as_ref() {
-        resolved.args = Some(args.clone());
-    }
-}
-
 /// Resolve `name` through profile inheritance to a concrete built-in kind.
 pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<ResolvedProfile> {
     let mut cur = name.to_owned();
     let mut seen = Vec::<String>::new();
-    let mut layers = Vec::<Profile>::new();
+    let mut layers = Vec::<&Profile>::new();
     let terminal_kind = loop {
         if layers.len() >= MAX_PROFILE_DEPTH {
             return Err(LayoutErr::ProfileChainTooDeep {
@@ -695,7 +701,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             });
         };
         seen.push(cur.clone());
-        layers.push(profile.clone());
+        layers.push(profile);
         let next = profile.agent.as_str();
         if next == cur && crate::agents::find_adapter(next).is_some() {
             break next.to_owned();
@@ -721,28 +727,8 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
     };
 
     let mut resolved = ResolvedProfile::bare(&terminal_kind);
-    for layer in &layers {
-        if resolved.mode.is_none() {
-            resolved.mode = layer.mode;
-        }
-        if resolved.model.is_none() {
-            resolved.model = layer.model.clone();
-        }
-        if resolved.effort.is_none() {
-            resolved.effort = layer.effort.clone();
-        }
-        if resolved.budget.is_none() {
-            resolved.budget = layer.budget.clone();
-        }
-        if resolved.system_prompt_file.is_none() {
-            resolved.system_prompt_file = layer.system_prompt_file.clone();
-        }
-        if resolved.append_system_prompt_file.is_none() {
-            resolved.append_system_prompt_file = layer.append_system_prompt_file.clone();
-        }
-        if resolved.args.is_none() {
-            resolved.args = layer.args.clone();
-        }
+    for layer in layers {
+        resolved.fill_missing(layer);
     }
     let adapter = crate::agents::find_adapter(resolved.kind.as_str())
         .expect("resolved profile terminal kind is known");
@@ -752,7 +738,7 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
             profile: name.to_owned(),
             reason: err.to_string(),
         })?;
-    normalize_budget(&mut resolved.budget, name)?;
+    normalize_budget(&mut resolved.launch.budget, name)?;
     Ok(resolved)
 }
 
@@ -839,7 +825,7 @@ fn parse_layout_spec_validated(
                         role: role.to_owned(),
                     });
                 };
-                agent.role = Some(role.to_owned());
+                agent.launch.role = Some(role.to_owned());
             }
             rows.push(cell);
         }
@@ -954,7 +940,7 @@ fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<Cell> {
         render_profile_args(name, resolved)?,
         Some(name.to_owned()),
         None,
-        resolved.mode,
+        resolved.launch.mode,
     ))
 }
 
@@ -968,14 +954,14 @@ fn agent_cell_from(
     Cell::Agent(AgentCell {
         kind: resolved.kind.clone(),
         args,
-        mode,
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_file: resolved.append_system_prompt_file.clone(),
-        profile,
-        role,
-        model: resolved.model.clone(),
-        effort: resolved.effort.clone(),
-        budget: resolved.budget.clone(),
+        launch: crate::agents::LaunchParams {
+            profile,
+            mode,
+            role,
+            ..resolved.launch.clone()
+        },
     })
 }
 
@@ -988,7 +974,7 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
             profile: name.to_owned(),
             reason: err.to_string(),
         })?;
-    if let Some(mode) = resolved.mode {
+    if let Some(mode) = resolved.launch.mode {
         argv.extend(adapter.permission_args(mode));
     }
     if let Some(raw) = resolved
@@ -1007,8 +993,8 @@ fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<Str
 
 fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
     crate::agents::LaunchPreset {
-        model: resolved.model.clone(),
-        effort: resolved.effort.clone(),
+        model: resolved.launch.model.clone(),
+        effort: resolved.launch.effort.clone(),
         system_prompt_file: resolved.system_prompt_file.clone(),
         append_system_prompt_file: resolved.append_system_prompt_file.clone(),
     }
@@ -1083,7 +1069,7 @@ fn virtual_cell_from(
     let mut args = match profile_name.as_deref() {
         Some(profile) => {
             let mut base = resolved.clone();
-            base.mode = None;
+            base.launch.mode = None;
             render_profile_args(profile, &base)?
         }
         None => Vec::new(),
@@ -1268,7 +1254,7 @@ fn prepare_team<'a>(
             });
         }
         let mut resolved = resolve_profile(&binding.profile, profiles)?;
-        apply_role_overrides(&mut resolved, binding);
+        resolved.apply_role(binding);
         let args = render_profile_args(&binding.profile, &resolved)?;
         roles.push(PreparedRole {
             role: binding.role.clone(),

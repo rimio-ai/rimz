@@ -136,19 +136,19 @@ fn inline_roles_compose_and_validate() {
 
     assert!(matches!(
         agent_at(&spec, 0, 0),
-        AgentCell { kind, role, profile, .. }
+        AgentCell { kind, launch: crate::agents::LaunchParams { role, profile, .. }, .. }
             if kind.as_str() == "claude"
                 && role.as_deref() == Some("planner")
                 && profile.is_none()
     ));
     assert!(matches!(
         agent_at(&spec, 1, 0),
-        AgentCell { role, profile, .. }
+        AgentCell { launch: crate::agents::LaunchParams { role, profile, .. }, .. }
             if role.as_deref() == Some("lead") && profile.as_deref() == Some("planner")
     ));
     assert!(matches!(
         agent_at(&spec, 2, 0),
-        AgentCell { mode, role, .. }
+        AgentCell { launch: crate::agents::LaunchParams { mode, role, .. }, .. }
             if *mode == Some(PermissionMode::Auto) && role.as_deref() == Some("coder")
     ));
 
@@ -298,19 +298,19 @@ fn profile_inheritance_and_builtin_overrides_resolve() {
     );
     let child = resolve_profile("child", &profiles).expect("child");
     assert_eq!(child.kind.as_str(), "codex");
-    assert_eq!(child.model.as_deref(), Some("base-model"));
-    assert_eq!(child.effort.as_deref(), Some("high"));
+    assert_eq!(child.launch.model.as_deref(), Some("base-model"));
+    assert_eq!(child.launch.effort.as_deref(), Some("high"));
     assert_eq!(child.args.as_deref(), Some("--child"));
 
     let inherited = resolve_profile("inherits-args", &profiles).expect("inherited");
-    assert_eq!(inherited.model.as_deref(), Some("child-model"));
-    assert_eq!(inherited.effort.as_deref(), Some("medium"));
+    assert_eq!(inherited.launch.model.as_deref(), Some("child-model"));
+    assert_eq!(inherited.launch.effort.as_deref(), Some("medium"));
     assert_eq!(inherited.args.as_deref(), Some("--base"));
 
     for name in ["claude", "claude-child"] {
         let resolved = resolve_profile(name, &profiles).expect("override");
         assert_eq!(resolved.kind.as_str(), "claude");
-        assert_eq!(resolved.effort.as_deref(), Some("high"));
+        assert_eq!(resolved.launch.effort.as_deref(), Some("high"));
     }
 }
 
@@ -362,13 +362,13 @@ fn profile_cells_render_fields_in_contract_order() {
     );
     expected.extend(["--profile".to_owned(), "reviewer".to_owned()]);
     assert_eq!(codex.args, expected);
-    assert_eq!(codex.mode, Some(PermissionMode::Auto));
-    assert_eq!(codex.profile.as_deref(), Some("codex-deep"));
-    assert_eq!(codex.model.as_deref(), Some("gpt-5-codex"));
-    assert_eq!(codex.effort.as_deref(), Some("high"));
+    assert_eq!(codex.launch.mode, Some(PermissionMode::Auto));
+    assert_eq!(codex.launch.profile.as_deref(), Some("codex-deep"));
+    assert_eq!(codex.launch.model.as_deref(), Some("gpt-5-codex"));
+    assert_eq!(codex.launch.effort.as_deref(), Some("high"));
 
     let prompt = agent_at(&spec, 1, 0);
-    assert_eq!(prompt.profile.as_deref(), Some("prompt-child"));
+    assert_eq!(prompt.launch.profile.as_deref(), Some("prompt-child"));
     assert_eq!(
         prompt.system_prompt_file.as_deref(),
         Some(Path::new("/prompts/planner.md"))
@@ -455,7 +455,7 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
     ] {
         let cell = agent_cell(raw, &no_profiles(), &no_commands());
         assert_eq!(cell.kind.as_str(), "pi");
-        assert_eq!(cell.mode, Some(mode));
+        assert_eq!(cell.launch.mode, Some(mode));
         assert!(cell.args.is_empty());
     }
 
@@ -488,13 +488,13 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
             .permission_args(PermissionMode::Auto),
     );
     assert_eq!(auto.kind.as_str(), "claude");
-    assert_eq!(auto.profile.as_deref(), Some("claude"));
-    assert_eq!(auto.mode, Some(PermissionMode::Auto));
+    assert_eq!(auto.launch.profile.as_deref(), Some("claude"));
+    assert_eq!(auto.launch.mode, Some(PermissionMode::Auto));
     assert_eq!(auto.args, expected_auto);
 
     let ask = agent_cell("pi-ask", &profiles, &no_commands());
-    assert_eq!(ask.profile.as_deref(), Some("pi"));
-    assert_eq!(ask.mode, Some(PermissionMode::Ask));
+    assert_eq!(ask.launch.profile.as_deref(), Some("pi"));
+    assert_eq!(ask.launch.mode, Some(PermissionMode::Ask));
     assert_eq!(ask.args, vec!["--profile-arg".to_owned()]);
 
     let ping = agent_cell("claude-ping", &profiles, &no_commands());
@@ -505,8 +505,8 @@ fn virtual_cells_obey_adapter_capabilities_and_profile_overrides() {
             .ping_args()
             .expect("claude ping"),
     );
-    assert_eq!(ping.profile.as_deref(), Some("claude"));
-    assert_eq!(ping.mode, None);
+    assert_eq!(ping.launch.profile.as_deref(), Some("claude"));
+    assert_eq!(ping.launch.mode, None);
     assert_eq!(ping.args, expected_ping);
     assert!(!ping.args.iter().any(|arg| arg == "ping"));
 
@@ -639,11 +639,11 @@ fn named_teams_compile_roles_and_apply_overrides() {
 
     let coder = agent_at(&spec, 0, 0);
     assert_eq!(coder.kind.as_str(), "codex");
-    assert_eq!(coder.profile.as_deref(), Some("coder-base"));
-    assert_eq!(coder.role.as_deref(), Some("coder"));
-    assert_eq!(coder.mode, Some(PermissionMode::Ask));
-    assert_eq!(coder.model.as_deref(), Some("role-model"));
-    assert_eq!(coder.effort.as_deref(), Some("high"));
+    assert_eq!(coder.launch.profile.as_deref(), Some("coder-base"));
+    assert_eq!(coder.launch.role.as_deref(), Some("coder"));
+    assert_eq!(coder.launch.mode, Some(PermissionMode::Ask));
+    assert_eq!(coder.launch.model.as_deref(), Some("role-model"));
+    assert_eq!(coder.launch.effort.as_deref(), Some("high"));
     assert_eq!(
         coder.system_prompt_file.as_deref(),
         Some(Path::new("/prompts/coder.md"))
@@ -653,8 +653,8 @@ fn named_teams_compile_roles_and_apply_overrides() {
 
     let planner = agent_at(&spec, 1, 0);
     assert_eq!(planner.kind.as_str(), "claude");
-    assert_eq!(planner.profile.as_deref(), Some("planner-base"));
-    assert_eq!(planner.role.as_deref(), Some("planner"));
+    assert_eq!(planner.launch.profile.as_deref(), Some("planner-base"));
+    assert_eq!(planner.launch.role.as_deref(), Some("planner"));
     assert_eq!(
         planner.append_system_prompt_file.as_deref(),
         Some(Path::new("/prompts/role-extra.md"))
@@ -687,14 +687,17 @@ fn team_role_specs_preserve_identity_and_disambiguate_dots() {
     assert_eq!(planner.columns.len(), 1);
     assert!(matches!(
         agent_at(&planner, 0, 0),
-        AgentCell { kind, profile, role, .. }
+        AgentCell { kind, launch: crate::agents::LaunchParams { profile, role, .. }, .. }
             if kind.as_str() == "codex"
                 && profile.as_deref() == Some("planner-profile")
                 && role.as_deref() == Some("planner")
     ));
     let dotted = resolve_spec(Some("forge.sub.planner"), &profiles, &no_commands(), &teams)
         .expect("dotted role");
-    assert_eq!(agent_at(&dotted, 0, 0).role.as_deref(), Some("sub.planner"));
+    assert_eq!(
+        agent_at(&dotted, 0, 0).launch.role.as_deref(),
+        Some("sub.planner")
+    );
     assert!(matches!(
         resolve_spec(Some("forge.bogus"), &profiles, &no_commands(), &teams),
         Err(LayoutErr::UnknownRoleInTeam { team, role, valid_roles })
@@ -706,7 +709,7 @@ fn team_role_specs_preserve_identity_and_disambiguate_dots() {
     let profile_spec = resolve_spec(Some("notateam.planner"), &profiles, &no_commands(), &teams)
         .expect("dotted profile");
     assert_eq!(
-        agent_at(&profile_spec, 0, 0).profile.as_deref(),
+        agent_at(&profile_spec, 0, 0).launch.profile.as_deref(),
         Some("notateam.planner")
     );
     assert_eq!(spec_team("forge", &teams), Some("forge"));
@@ -754,9 +757,15 @@ fn explicit_team_layouts_place_roles_and_roleless_cells() {
     let spec = resolve_spec(Some("review"), &profiles, &commands, &teams).expect("team");
     assert_eq!(spec.columns.len(), 2);
     assert!(spec.columns[0].stacked);
-    assert_eq!(agent_at(&spec, 0, 0).role.as_deref(), Some("reviewer"));
-    assert_eq!(agent_at(&spec, 0, 1).role.as_deref(), Some("planner"));
-    assert_eq!(agent_at(&spec, 1, 0).role.as_deref(), Some("coder"));
+    assert_eq!(
+        agent_at(&spec, 0, 0).launch.role.as_deref(),
+        Some("reviewer")
+    );
+    assert_eq!(
+        agent_at(&spec, 0, 1).launch.role.as_deref(),
+        Some("planner")
+    );
+    assert_eq!(agent_at(&spec, 1, 0).launch.role.as_deref(), Some("coder"));
     assert_eq!(spec.columns[1].rows[1], Cell::shell());
     assert_eq!(
         spec.columns[1].rows[2],
@@ -865,14 +874,14 @@ fn team_roles_accept_implicit_builtin_profiles() {
         .expect("built-in profiles resolve");
     assert!(matches!(
         agent_at(&spec, 0, 0),
-        AgentCell { kind, profile, role, .. }
+        AgentCell { kind, launch: crate::agents::LaunchParams { profile, role, .. }, .. }
             if kind.as_str() == "claude"
                 && profile.as_deref() == Some("claude")
                 && role.as_deref() == Some("planner")
     ));
     assert!(matches!(
         agent_at(&spec, 1, 0),
-        AgentCell { kind, profile, role, .. }
+        AgentCell { kind, launch: crate::agents::LaunchParams { profile, role, .. }, .. }
             if kind.as_str() == "codex"
                 && profile.as_deref() == Some("codex")
                 && role.as_deref() == Some("coder")

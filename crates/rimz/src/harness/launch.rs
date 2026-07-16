@@ -171,16 +171,101 @@ pub struct ExecIdentity<'a> {
     /// Provisional launch row id; rendered only alongside `name`
     /// (`--launch-id` requires `--agent-name` at the parse side).
     pub launch_id: Option<&'a str>,
-    pub profile: Option<&'a str>,
-    pub mode: Option<crate::harness::run::PermissionMode>,
-    pub role: Option<&'a str>,
-    pub team: Option<&'a str>,
-    pub launch_group: Option<&'a str>,
-    pub launch_ordinal: Option<u32>,
-    pub channel: Option<&'a str>,
-    pub model: Option<&'a str>,
-    pub effort: Option<&'a str>,
-    pub budget: Option<&'a str>,
+    /// Canonical launch parameters. `kind_ordinal` remains display-only and is
+    /// deliberately absent from wrapper argv and environment wiring.
+    pub params: Option<&'a crate::agents::LaunchParams>,
+}
+
+#[derive(Clone, Copy)]
+enum LaunchFieldValue<'a> {
+    Text(Option<&'a str>),
+    Mode(Option<crate::harness::run::PermissionMode>),
+    Ordinal(Option<u32>),
+}
+
+impl LaunchFieldValue<'_> {
+    fn push_argv(self, argv: &mut Vec<String>, flag: &'static str) {
+        let value = match self {
+            Self::Text(Some(value)) => value.to_owned(),
+            Self::Mode(Some(value)) => value.to_string(),
+            Self::Ordinal(Some(value)) => value.to_string(),
+            Self::Text(None) | Self::Mode(None) | Self::Ordinal(None) => return,
+        };
+        argv.extend([flag.to_owned(), value]);
+    }
+
+    fn into_env(self) -> Option<String> {
+        match self {
+            Self::Text(value) => value.map(ToOwned::to_owned),
+            Self::Mode(value) => value.map(|value| value.to_string()),
+            Self::Ordinal(value) => value.map(|value| value.to_string()),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LaunchField<'a> {
+    flag: &'static str,
+    env: Option<&'static str>,
+    value: LaunchFieldValue<'a>,
+}
+
+fn launch_fields(params: Option<&crate::agents::LaunchParams>) -> [LaunchField<'_>; 10] {
+    let text = |field: fn(&crate::agents::LaunchParams) -> Option<&str>| {
+        LaunchFieldValue::Text(params.and_then(field))
+    };
+    [
+        LaunchField {
+            flag: "--agent-profile",
+            env: Some(crate::harness::run::ENV_AGENT_PROFILE),
+            value: text(|params| params.profile.as_deref()),
+        },
+        LaunchField {
+            flag: "--agent-mode",
+            env: None,
+            value: LaunchFieldValue::Mode(params.and_then(|params| params.mode)),
+        },
+        LaunchField {
+            flag: "--agent-role",
+            env: Some(crate::harness::run::ENV_AGENT_ROLE),
+            value: text(|params| params.role.as_deref()),
+        },
+        LaunchField {
+            flag: "--agent-team",
+            env: Some(crate::harness::run::ENV_TEAM),
+            value: text(|params| params.team.as_deref()),
+        },
+        LaunchField {
+            flag: "--launch-group",
+            env: Some(crate::harness::run::ENV_LAUNCH_GROUP),
+            value: text(|params| params.launch_group.as_deref()),
+        },
+        LaunchField {
+            flag: "--launch-ordinal",
+            env: Some(crate::harness::run::ENV_LAUNCH_ORDINAL),
+            value: LaunchFieldValue::Ordinal(params.and_then(|params| params.launch_ordinal)),
+        },
+        LaunchField {
+            flag: "--agent-channel",
+            env: Some(crate::harness::run::ENV_CHANNEL),
+            value: text(|params| params.channel.as_deref()),
+        },
+        LaunchField {
+            flag: "--agent-model",
+            env: Some(crate::harness::run::ENV_AGENT_MODEL),
+            value: text(|params| params.model.as_deref()),
+        },
+        LaunchField {
+            flag: "--agent-effort",
+            env: Some(crate::harness::run::ENV_AGENT_EFFORT),
+            value: text(|params| params.effort.as_deref()),
+        },
+        LaunchField {
+            flag: "--agent-budget",
+            env: Some(crate::harness::run::ENV_AGENT_BUDGET),
+            value: text(|params| params.budget.as_deref()),
+        },
+    ]
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -397,35 +482,8 @@ pub fn exec_argv(rimz_bin: &Path, inv: &ExecInvocation<'_>) -> Vec<String> {
             argv.extend(["--launch-id".to_owned(), launch_id.to_owned()]);
         }
     }
-    if let Some(profile) = inv.identity.profile {
-        argv.extend(["--agent-profile".to_owned(), profile.to_owned()]);
-    }
-    if let Some(mode) = inv.identity.mode {
-        argv.extend(["--agent-mode".to_owned(), mode.to_string()]);
-    }
-    if let Some(role) = inv.identity.role {
-        argv.extend(["--agent-role".to_owned(), role.to_owned()]);
-    }
-    if let Some(team) = inv.identity.team {
-        argv.extend(["--agent-team".to_owned(), team.to_owned()]);
-    }
-    if let Some(launch_group) = inv.identity.launch_group {
-        argv.extend(["--launch-group".to_owned(), launch_group.to_owned()]);
-    }
-    if let Some(launch_ordinal) = inv.identity.launch_ordinal {
-        argv.extend(["--launch-ordinal".to_owned(), launch_ordinal.to_string()]);
-    }
-    if let Some(channel) = inv.identity.channel {
-        argv.extend(["--agent-channel".to_owned(), channel.to_owned()]);
-    }
-    if let Some(model) = inv.identity.model {
-        argv.extend(["--agent-model".to_owned(), model.to_owned()]);
-    }
-    if let Some(effort) = inv.identity.effort {
-        argv.extend(["--agent-effort".to_owned(), effort.to_owned()]);
-    }
-    if let Some(budget) = inv.identity.budget {
-        argv.extend(["--agent-budget".to_owned(), budget.to_owned()]);
+    for field in launch_fields(inv.identity.params) {
+        field.value.push_argv(&mut argv, field.flag);
     }
     if inv.exit_on_run_completion {
         argv.push("--exit-on-run-completion".to_owned());
@@ -476,56 +534,10 @@ pub fn exec_identity_env(inv: &ExecInvocation<'_>) -> BTreeMap<String, String> {
             name.to_owned(),
         );
     }
-    if let Some(profile) = inv.identity.profile {
-        env.insert(
-            crate::harness::run::ENV_AGENT_PROFILE.to_owned(),
-            profile.to_owned(),
-        );
-    }
-    if let Some(role) = inv.identity.role {
-        env.insert(
-            crate::harness::run::ENV_AGENT_ROLE.to_owned(),
-            role.to_owned(),
-        );
-    }
-    if let Some(team) = inv.identity.team {
-        env.insert(crate::harness::run::ENV_TEAM.to_owned(), team.to_owned());
-    }
-    if let Some(launch_group) = inv.identity.launch_group {
-        env.insert(
-            crate::harness::run::ENV_LAUNCH_GROUP.to_owned(),
-            launch_group.to_owned(),
-        );
-    }
-    if let Some(launch_ordinal) = inv.identity.launch_ordinal {
-        env.insert(
-            crate::harness::run::ENV_LAUNCH_ORDINAL.to_owned(),
-            launch_ordinal.to_string(),
-        );
-    }
-    if let Some(channel) = inv.identity.channel {
-        env.insert(
-            crate::harness::run::ENV_CHANNEL.to_owned(),
-            channel.to_owned(),
-        );
-    }
-    if let Some(model) = inv.identity.model {
-        env.insert(
-            crate::harness::run::ENV_AGENT_MODEL.to_owned(),
-            model.to_owned(),
-        );
-    }
-    if let Some(effort) = inv.identity.effort {
-        env.insert(
-            crate::harness::run::ENV_AGENT_EFFORT.to_owned(),
-            effort.to_owned(),
-        );
-    }
-    if let Some(budget) = inv.identity.budget {
-        env.insert(
-            crate::harness::run::ENV_AGENT_BUDGET.to_owned(),
-            budget.to_owned(),
-        );
+    for field in launch_fields(inv.identity.params) {
+        if let (Some(key), Some(value)) = (field.env, field.value.into_env()) {
+            env.insert(key.to_owned(), value);
+        }
     }
     env
 }

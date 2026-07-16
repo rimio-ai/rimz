@@ -196,6 +196,7 @@ pub(super) fn launch_layout(
             .map(|team| team.roles.as_slice()),
         room_channel.as_deref(),
         prompt.zip(prompt_agent_index),
+        None,
     )?;
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,
@@ -221,19 +222,15 @@ pub(super) fn launch_layout(
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
+    let pane_plans = agent_pane_plans(&layout, None, launch_batch.identities(), None)?;
     let panes = layout_panes_with_names(
         &layout,
         LayoutPaneParams {
             cwd: &cwd,
-            prompt,
-            prompt_agent_index,
             cleanup_worktree: worktree_launch,
             in_place,
-            team: team_name.as_deref(),
-            channel: room_channel.as_deref(),
-            resume_seeds: None,
         },
-        launch_batch.identities(),
+        &pane_plans,
     )?;
     super::placement::execute(
         backend,
@@ -339,15 +336,18 @@ fn launch_resume_layout(
     )?;
     let backend = room.backend();
     rimz::room::require_live_session(backend, &workspace.session_name)?;
-    let launch_requests = fresh_resume_launch_requests(
+    let launch_requests = launch_identity_requests(
         &layout,
-        &plan,
+        None,
+        None,
         team_name.as_deref(),
         team_name
             .as_deref()
             .and_then(|name| teams.0.get(name))
             .map(|team| team.roles.as_slice()),
         channel.as_deref(),
+        None,
+        Some(&plan),
     )?;
     let launch_batch = store.begin_agent_launch_batch(
         &launch_requests,
@@ -365,19 +365,20 @@ fn launch_resume_layout(
         |channel| format!("#{channel}"),
     );
     let sidebar = room.sidebar_options(&cwd, Vec::new(), None);
+    let pane_plans = agent_pane_plans(
+        &layout,
+        Some(&plan.seeds),
+        launch_batch.identities(),
+        channel.as_deref(),
+    )?;
     let panes = layout_panes_with_names(
         &layout,
         LayoutPaneParams {
             cwd: &cwd,
-            prompt: None,
-            prompt_agent_index: None,
             cleanup_worktree: false,
             in_place,
-            team: team_name.as_deref(),
-            channel: channel.as_deref(),
-            resume_seeds: Some(&plan.seeds),
         },
-        launch_batch.identities(),
+        &pane_plans,
     )?;
     if in_place {
         report_cohort_resume(&plan);

@@ -565,7 +565,8 @@ fn allocate_agent_launch_identities(
                 name.clone()
             }
             AgentLaunchName::Soft(name)
-                if valid_agent_launch_name(name) && !name_taken(name, &taken, &session_ids) =>
+                if crate::harness::petname::valid_agent_name(name)
+                    && !name_taken(name, &taken, &session_ids) =>
             {
                 name.clone()
             }
@@ -588,21 +589,13 @@ fn allocate_agent_launch_identities(
 }
 
 fn validate_agent_launch_name(name: &str) -> Result<()> {
-    if valid_agent_launch_name(name) {
+    if crate::harness::petname::valid_agent_name(name) {
         Ok(())
     } else {
         Err(StoreErr::AgentLaunchIdentity(format!(
             "invalid agent name `{name}`; use ASCII letters, numbers, and `-`"
         )))
     }
-}
-
-fn valid_agent_launch_name(name: &str) -> bool {
-    crate::harness::petname::valid_name(name)
-        && !crate::harness::petname::collides_with_reserved_prefix(
-            name,
-            crate::agents::known_kinds(),
-        )
 }
 
 fn name_taken(name: &str, taken: &BTreeSet<String>, session_ids: &[&str]) -> bool {
@@ -612,7 +605,9 @@ fn name_taken(name: &str, taken: &BTreeSet<String>, session_ids: &[&str]) -> boo
 fn mint_available_agent_name(taken: &BTreeSet<String>, session_ids: &[&str]) -> String {
     loop {
         let candidate = crate::harness::petname::mint(taken.iter().map(String::as_str));
-        if valid_agent_launch_name(&candidate) && !name_taken(&candidate, taken, session_ids) {
+        if crate::harness::petname::valid_agent_name(&candidate)
+            && !name_taken(&candidate, taken, session_ids)
+        {
             return candidate;
         }
     }

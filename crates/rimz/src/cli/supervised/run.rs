@@ -304,6 +304,8 @@ fn prepare_supervised(
     let agent_cell = agent_cells[0];
     let adapter = rimz::agents::find_adapter(&agent_cell.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
+    let mut preflight_launch = agent_cell.launch.clone();
+    preflight_launch.channel.clone_from(&request.channel);
     let launch_invocation = rimz::harness::launch::ExecInvocation {
         kind: agent_cell.kind.as_str(),
         action: rimz::harness::launch::ExecAction::Launch {
@@ -315,13 +317,7 @@ fn prepare_supervised(
         close_pane_on_exit: false,
         exit_on_run_completion: false,
         identity: rimz::harness::launch::ExecIdentity {
-            profile: agent_cell.profile.as_deref(),
-            mode: agent_cell.mode,
-            role: agent_cell.role.as_deref(),
-            channel: request.channel.as_deref(),
-            model: agent_cell.model.as_deref(),
-            effort: agent_cell.effort.as_deref(),
-            budget: agent_cell.budget.as_deref(),
+            params: Some(&preflight_launch),
             ..rimz::harness::launch::ExecIdentity::default()
         },
     };
@@ -381,7 +377,7 @@ fn execute_attempt(
         .agent_cells()
         .next()
         .expect("prepared supervised layout has one agent cell");
-    let permission_mode = agent_cell.mode.unwrap_or(prepared.mode);
+    let permission_mode = agent_cell.launch.mode.unwrap_or(prepared.mode);
     let mut record = RunRecord::new(
         prepared.workspace.workspace_id.clone(),
         AgentKind::new_unchecked(prepared.adapter.descriptor().kind),
@@ -389,7 +385,7 @@ fn execute_attempt(
         prompt.to_owned(),
         prepared.launch.cwd.clone(),
     );
-    record.budget.clone_from(&agent_cell.budget);
+    record.budget.clone_from(&agent_cell.launch.budget);
     record.retry_of = retry_of.cloned();
     record.loop_task.clone_from(&request.loop_task);
     let run_id = record.run_id.clone();
@@ -401,6 +397,7 @@ fn execute_attempt(
         None,
         prepared.room_channel.as_deref(),
         Some((prompt, 0)),
+        None,
     )?;
     for request in &mut launch_requests {
         if attempt > 0
@@ -427,13 +424,7 @@ fn execute_attempt(
         run_id: &run_id,
         agent_name: Some(&launch_identity.name),
         agent_name_explicit: launch_identity.name_explicit,
-        agent_profile: agent_cell.profile.as_deref(),
-        agent_mode: agent_cell.mode,
-        agent_role: agent_cell.role.as_deref(),
-        agent_channel: prepared.room_channel.as_deref(),
-        agent_model: agent_cell.model.as_deref(),
-        agent_effort: agent_cell.effort.as_deref(),
-        agent_budget: agent_cell.budget.as_deref(),
+        launch: &launch_identity.launch,
         launch_id: Some(&launch_identity.agent_id),
         cwd: &prepared.launch.cwd,
         prompt,

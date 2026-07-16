@@ -650,7 +650,9 @@ fn soft_launch_name_falls_back_when_it_collides() {
 
     assert_eq!(identities.len(), 1);
     assert_ne!(identities[0].name, "lucid-atlas");
-    assert!(valid_agent_launch_name(&identities[0].name));
+    assert!(crate::harness::petname::valid_agent_name(
+        &identities[0].name
+    ));
 }
 
 #[test]
@@ -671,7 +673,9 @@ fn launch_identity_tracks_explicit_name_provenance() {
     assert!(identities[0].name_explicit);
     assert_eq!(identities[1].name, "docs");
     assert!(!identities[1].name_explicit);
-    assert!(valid_agent_launch_name(&identities[2].name));
+    assert!(crate::harness::petname::valid_agent_name(
+        &identities[2].name
+    ));
     assert!(!identities[2].name_explicit);
 }
 

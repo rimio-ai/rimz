@@ -455,7 +455,7 @@ fn repo_profiles_resolve_repo_and_builtin_bases() {
 
     let child = crate::harness::spec::resolve_profile("child", &effective).expect("resolve child");
     assert_eq!(child.kind.as_str(), "codex");
-    assert_eq!(child.mode, Some(PermissionMode::Ask));
+    assert_eq!(child.launch.mode, Some(PermissionMode::Ask));
     assert_eq!(child.args.as_deref(), Some("--child"));
 }
 

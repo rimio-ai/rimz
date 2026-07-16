@@ -94,7 +94,7 @@ pub fn validate_profile_prompt_files(
             if std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
                 continue;
             }
-            let origin = match (cell.role.as_deref(), cell.profile.as_deref()) {
+            let origin = match (cell.launch.role.as_deref(), cell.launch.profile.as_deref()) {
                 (Some(role), Some(profile)) => format!("role `{role}` profile `{profile}`"),
                 (Some(role), None) => format!("role `{role}`"),
                 (None, Some(profile)) => format!("profile `{profile}`"),
@@ -242,11 +242,11 @@ fn finalize_agent_cell(
 ) -> std::result::Result<(), LaunchFinalizeError> {
     let adapter = crate::agents::find_adapter(&cell.kind);
     if let Some(permission_mode) = options.permission_mode
-        && cell.mode.is_none()
+        && cell.launch.mode.is_none()
         && let Some(adapter) = adapter
     {
         cell.args.extend(adapter.permission_args(permission_mode));
-        cell.mode = Some(permission_mode);
+        cell.launch.mode = Some(permission_mode);
     }
     if !options.preset.is_empty() {
         let adapter = adapter.ok_or_else(|| LaunchFinalizeError::UnknownAdapter {
@@ -263,7 +263,7 @@ fn finalize_agent_cell(
             .as_ref()
             .filter(|value| !value.is_empty())
         {
-            cell.model = Some(model.clone());
+            cell.launch.model = Some(model.clone());
         }
         if let Some(effort) = options
             .preset
@@ -271,16 +271,16 @@ fn finalize_agent_cell(
             .as_ref()
             .filter(|value| !value.is_empty())
         {
-            cell.effort = Some(effort.clone());
+            cell.launch.effort = Some(effort.clone());
         }
     }
     cell.args.extend(options.passthrough.iter().cloned());
     if let Some(budget) = options.budget {
-        cell.budget = Some(budget.to_string());
+        cell.launch.budget = Some(budget.to_string());
     }
     if let Some(adapter) = adapter {
         reconcile_preset_args(cell, adapter, warnings)?;
-        if cell.model.is_none()
+        if cell.launch.model.is_none()
             && let Some(default) = adapter.default_launch_model()
         {
             cell.args.extend(
@@ -291,7 +291,7 @@ fn finalize_agent_cell(
                     })
                     .map_err(unsupported_preset_error)?,
             );
-            cell.model = Some(default);
+            cell.launch.model = Some(default);
         }
     }
     Ok(())
@@ -305,13 +305,14 @@ fn reconcile_preset_args(
     use crate::agents::PresetField;
 
     let label = cell
+        .launch
         .profile
         .as_deref()
         .unwrap_or(cell.kind.as_str())
         .to_owned();
     let declared = [
-        (PresetField::Model, cell.model.clone()),
-        (PresetField::Effort, cell.effort.clone()),
+        (PresetField::Model, cell.launch.model.clone()),
+        (PresetField::Effort, cell.launch.effort.clone()),
         (
             PresetField::SystemPromptFile,
             cell.system_prompt_file
@@ -344,7 +345,7 @@ fn reconcile_preset_args(
                         });
                     }
                 }
-                cell.model = Some(winner.value.clone());
+                cell.launch.model = Some(winner.value.clone());
                 remove_occurrences(&mut cell.args, &occurrences[..occurrences.len() - 1]);
             }
             continue;
@@ -391,35 +392,9 @@ pub fn cohort_cells(layout: &LayoutSpec) -> Vec<CohortCell> {
         .agent_cells()
         .map(|cell| CohortCell {
             kind: cell.kind.clone(),
-            role: cell.role.clone(),
+            role: cell.launch.role.clone(),
         })
         .collect()
-}
-
-/// Build fresh launch requests for the cells a cohort resume cannot restore.
-pub fn fresh_resume_launch_requests(
-    layout: &LayoutSpec,
-    plan: &CohortResumePlan,
-    team: Option<&str>,
-    team_roles: Option<&[RoleBinding]>,
-    channel: Option<&str>,
-) -> Result<Vec<AgentLaunchRequest>> {
-    let mut requests =
-        launch_identity_requests(layout, None, None, team, team_roles, channel, None)?;
-    if team.is_none() {
-        for request in &mut requests {
-            if request.launch.launch_group.is_some()
-                && let Some(group) = plan.launch_group.as_ref()
-            {
-                request.launch.launch_group = Some(group.clone());
-            }
-        }
-    }
-    Ok(requests
-        .into_iter()
-        .zip(plan.seeds.iter())
-        .filter_map(|(request, seed)| matches!(seed, CohortSeed::Fresh).then_some(request))
-        .collect())
 }
 
 /// Where a launch lands. The resolver derives it from the per-launch flags, the
@@ -502,14 +477,31 @@ pub fn launch_identity_requests(
     team_roles: Option<&[RoleBinding]>,
     channel: Option<&str>,
     prompt: Option<(&str, usize)>,
+    resume: Option<&CohortResumePlan>,
 ) -> Result<Vec<AgentLaunchRequest>> {
     let agent_cells: Vec<&AgentCell> = layout.agent_cells().collect();
     let agent_count = agent_cells.len();
-    let inline_launch_group = (team.is_none() && agent_count >= 2).then(mint_launch_group);
+    if let Some(resume) = resume
+        && resume.seeds.len() != agent_count
+    {
+        bail!(
+            "resume plan has {} seeds for {agent_count} agent cells",
+            resume.seeds.len()
+        );
+    }
+    let inline_launch_group = (team.is_none() && agent_count >= 2).then(|| {
+        resume
+            .and_then(|plan| plan.launch_group.clone())
+            .unwrap_or_else(mint_launch_group)
+    });
     let mut requests = Vec::with_capacity(agent_cells.len());
     for (index, cell) in agent_cells.into_iter().enumerate() {
+        if resume.is_some_and(|plan| matches!(plan.seeds[index], CohortSeed::Resume(_))) {
+            continue;
+        }
         let launch_ordinal = match team {
             Some(_) => cell
+                .launch
                 .role
                 .as_deref()
                 .and_then(|role| team_role_ordinal(team_roles, role)),
@@ -529,23 +521,17 @@ pub fn launch_identity_requests(
         } else {
             AgentLaunchName::Mint
         };
+        let mut launch = cell.launch.clone();
+        launch.team = team.map(ToOwned::to_owned);
+        launch.launch_group.clone_from(&inline_launch_group);
+        launch.launch_ordinal = launch_ordinal;
+        launch.channel = channel.map(ToOwned::to_owned);
+        launch.kind_ordinal = None;
         requests.push(AgentLaunchRequest {
             kind: cell.kind.clone(),
             agent_id: mint_launch_id(),
             name,
-            launch: crate::agents::LaunchParams {
-                profile: cell.profile.clone(),
-                mode: cell.mode,
-                role: cell.role.clone(),
-                model: cell.model.clone(),
-                effort: cell.effort.clone(),
-                budget: cell.budget.clone(),
-                team: team.map(ToOwned::to_owned),
-                launch_group: inline_launch_group.clone(),
-                launch_ordinal,
-                channel: channel.map(ToOwned::to_owned),
-                kind_ordinal: None,
-            },
+            launch,
             run_id: None,
             prompt: prompt
                 .filter(|(_, leader_index)| *leader_index == index)
@@ -576,15 +562,65 @@ fn index_to_launch_ordinal(index: usize) -> u32 {
     u32::try_from(index).unwrap_or(u32::MAX)
 }
 
+#[derive(Debug)]
+enum AgentPanePlan<'a> {
+    Fresh(&'a AgentLaunchIdentity),
+    Resume {
+        agent: &'a crate::agents::AgentState,
+        fallback_channel: Option<&'a str>,
+    },
+}
+
+/// Layout-aligned agent pane inputs. Construction validates every count before
+/// pane compilation can reach mux orchestration.
+#[derive(Debug)]
+pub struct AgentPanePlans<'a>(Vec<AgentPanePlan<'a>>);
+
+pub fn agent_pane_plans<'a>(
+    layout: &LayoutSpec,
+    resume_seeds: Option<&'a [CohortSeed]>,
+    launch_identities: &'a [AgentLaunchIdentity],
+    fallback_channel: Option<&'a str>,
+) -> Result<AgentPanePlans<'a>> {
+    let agent_count = layout.agent_cells().count();
+    if let Some(seeds) = resume_seeds
+        && seeds.len() != agent_count
+    {
+        bail!(
+            "resume plan has {} seeds for {agent_count} agent cells",
+            seeds.len()
+        );
+    }
+    let mut launches = launch_identities.iter();
+    let mut plans = Vec::with_capacity(agent_count);
+    for index in 0..agent_count {
+        match resume_seeds.map(|seeds| &seeds[index]) {
+            Some(CohortSeed::Resume(agent)) => plans.push(AgentPanePlan::Resume {
+                agent,
+                fallback_channel,
+            }),
+            Some(CohortSeed::Fresh) | None => {
+                let Some(launch) = launches.next() else {
+                    bail!("launch plan missing identity for agent cell {index}");
+                };
+                plans.push(AgentPanePlan::Fresh(launch));
+            }
+        }
+    }
+    if launches.next().is_some() {
+        bail!("launch plan has more identities than fresh agent cells");
+    }
+    Ok(AgentPanePlans(plans))
+}
+
 /// Compile backend-neutral pane commands for a resolved layout.
 pub fn layout_panes_with_names(
     layout: &LayoutSpec,
     params: LayoutPaneParams<'_>,
-    launch_identities: &[AgentLaunchIdentity],
+    plans: &AgentPanePlans<'_>,
 ) -> Result<LayoutPanes> {
     let rimz_bin = crate::proc::rimz_exe();
     let mut agent_index = 0usize;
-    let mut launch_index = 0usize;
     let columns = layout
         .columns
         .iter()
@@ -593,45 +629,23 @@ pub fn layout_panes_with_names(
                 .rows
                 .iter()
                 .map(|cell| {
-                    let cell_agent_index = matches!(cell, Cell::Agent(_)).then_some(agent_index);
-                    let (resume_seed, launch) = if matches!(cell, Cell::Agent(_)) {
-                        let resume_seed = params
-                            .resume_seeds
-                            .map(|seeds| {
-                                seeds.get(agent_index).with_context(|| {
-                                    format!("resume plan missing seed for agent cell {agent_index}")
-                                })
-                            })
-                            .transpose()?;
-                        let resumes = matches!(resume_seed, Some(CohortSeed::Resume(_)));
-                        let launch = if resumes {
-                            None
-                        } else {
-                            let Some(launch) = launch_identities.get(launch_index) else {
-                                bail!("launch plan missing identity for agent cell {agent_index}");
-                            };
-                            launch_index = launch_index.saturating_add(1);
-                            Some(launch)
-                        };
+                    let plan = if matches!(cell, Cell::Agent(_)) {
+                        let plan = plans.0.get(agent_index).with_context(|| {
+                            format!("pane plan missing agent cell {agent_index}")
+                        })?;
                         agent_index = agent_index.saturating_add(1);
-                        (resume_seed, launch)
+                        Some(plan)
                     } else {
-                        (None, None)
+                        None
                     };
                     pane_cmd_with_name(
                         cell,
                         PaneCmdOptions {
                             rimz_bin: &rimz_bin,
                             cwd: params.cwd,
-                            prompt: (params.prompt_agent_index == cell_agent_index)
-                                .then_some(params.prompt)
-                                .flatten(),
                             cleanup_worktree: params.cleanup_worktree,
                             in_place: params.in_place,
-                            team: params.team,
-                            channel: params.channel,
-                            launch,
-                            resume_seed,
+                            plan,
                         },
                     )
                 })
@@ -648,25 +662,16 @@ pub fn layout_panes_with_names(
 #[derive(Clone, Copy)]
 pub struct LayoutPaneParams<'a> {
     pub cwd: &'a Path,
-    pub prompt: Option<&'a str>,
-    pub prompt_agent_index: Option<usize>,
     pub cleanup_worktree: bool,
     pub in_place: bool,
-    pub team: Option<&'a str>,
-    pub channel: Option<&'a str>,
-    pub resume_seeds: Option<&'a [CohortSeed]>,
 }
 
 pub struct PaneCmdOptions<'a> {
     pub rimz_bin: &'a Path,
     pub cwd: &'a Path,
-    pub prompt: Option<&'a str>,
     pub cleanup_worktree: bool,
     pub in_place: bool,
-    pub team: Option<&'a str>,
-    pub channel: Option<&'a str>,
-    pub launch: Option<&'a AgentLaunchIdentity>,
-    pub resume_seed: Option<&'a CohortSeed>,
+    plan: Option<&'a AgentPanePlan<'a>>,
 }
 
 pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<PaneCmd> {
@@ -676,24 +681,29 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
         }
         Cell::Command { argv } => argv.clone(),
         Cell::Agent(cell) => {
-            if let Some(CohortSeed::Resume(agent)) = options.resume_seed {
-                return Ok(PaneCmd {
-                    argv: crate::harness::resume::resume_command(
-                        options.rimz_bin,
-                        agent,
-                        options.channel,
-                    ),
-                });
-            }
-            if let Some(launch) = options.launch {
-                validate_agent_name(&launch.name)?;
-            }
+            let plan = options.plan.context("agent cell has no pane plan")?;
+            let launch = match plan {
+                AgentPanePlan::Fresh(launch) => launch,
+                AgentPanePlan::Resume {
+                    agent,
+                    fallback_channel,
+                } => {
+                    return Ok(PaneCmd {
+                        argv: crate::harness::resume::resume_command(
+                            options.rimz_bin,
+                            agent,
+                            *fallback_channel,
+                        ),
+                    });
+                }
+            };
+            validate_agent_name(&launch.name)?;
             crate::harness::launch::exec_argv(
                 options.rimz_bin,
                 &crate::harness::launch::ExecInvocation {
                     kind: cell.kind.as_str(),
                     action: crate::harness::launch::ExecAction::Launch {
-                        prompt: options.prompt,
+                        prompt: launch.prompt.as_deref(),
                         extra_args: &cell.args,
                     },
                     run_id: None,
@@ -701,23 +711,10 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
                     close_pane_on_exit: !options.cleanup_worktree && !options.in_place,
                     exit_on_run_completion: false,
                     identity: crate::harness::launch::ExecIdentity {
-                        name: options.launch.map(|launch| launch.name.as_str()),
-                        name_explicit: options.launch.is_some_and(|launch| launch.name_explicit),
-                        launch_id: options.launch.map(|launch| launch.agent_id.as_str()),
-                        profile: cell.profile.as_deref(),
-                        mode: cell.mode,
-                        role: cell.role.as_deref(),
-                        team: options.team,
-                        launch_group: options
-                            .launch
-                            .and_then(|launch| launch.launch.launch_group.as_deref()),
-                        launch_ordinal: options
-                            .launch
-                            .and_then(|launch| launch.launch.launch_ordinal),
-                        channel: options.channel,
-                        model: cell.model.as_deref(),
-                        effort: cell.effort.as_deref(),
-                        budget: cell.budget.as_deref(),
+                        name: Some(launch.name.as_str()),
+                        name_explicit: launch.name_explicit,
+                        launch_id: Some(launch.agent_id.as_str()),
+                        params: Some(&launch.launch),
                     },
                 },
             )
@@ -727,18 +724,10 @@ pub fn pane_cmd_with_name(cell: &Cell, options: PaneCmdOptions<'_>) -> Result<Pa
 }
 
 pub fn validate_agent_name(name: &str) -> Result<()> {
-    if !valid_agent_name_candidate(name) {
+    if !crate::harness::petname::valid_agent_name(name) {
         bail!("invalid agent name `{name}`; use ASCII letters, numbers, and `-`");
     }
     Ok(())
-}
-
-pub fn valid_agent_name_candidate(name: &str) -> bool {
-    crate::harness::petname::valid_name(name)
-        && !crate::harness::petname::collides_with_reserved_prefix(
-            name,
-            crate::agents::known_kinds(),
-        )
 }
 
 #[cfg(test)]

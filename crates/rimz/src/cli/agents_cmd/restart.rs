@@ -47,8 +47,8 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
         bail!("restart profile did not resolve to an agent");
     };
     let extra_args = std::mem::take(&mut agent_cell.args);
-    let mode = agent_cell.mode;
-    let budget = agent_cell.budget.clone();
+    let mode = agent_cell.launch.mode;
+    let budget = agent_cell.launch.budget.clone();
 
     // Fail at the entry point if this project's configured launch environment
     // is not trusted, before the old pane is touched.
@@ -87,6 +87,20 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
     let identity_name = fresh_identity.map_or(agent.name.as_deref(), |identity| {
         Some(identity.name.as_str())
     });
+    let restart_params = rimz::agents::LaunchParams {
+        profile: agent.profile.clone(),
+        mode,
+        role: agent.role.clone(),
+        budget,
+        team: agent.team.clone(),
+        launch_group: agent.launch_group.clone(),
+        launch_ordinal: agent.launch_ordinal,
+        channel: agent.channel.clone(),
+        // Restart intentionally omits one-off model and effort selections.
+        model: None,
+        effort: None,
+        kind_ordinal: None,
+    };
     let invocation = rimz::harness::launch::ExecInvocation {
         kind: agent.kind.as_str(),
         action: match fresh_identity {
@@ -108,17 +122,7 @@ pub(super) fn restart_agent(reference: String, globals: &GlobalFlags) -> Result<
             name_explicit: fresh_identity
                 .map_or(agent.name_explicit, |identity| identity.name_explicit),
             launch_id: fresh_identity.map(|identity| identity.agent_id.as_str()),
-            profile: agent.profile.as_deref(),
-            mode,
-            role: agent.role.as_deref(),
-            team: agent.team.as_deref(),
-            launch_group: agent.launch_group.as_deref(),
-            launch_ordinal: agent.launch_ordinal,
-            channel: agent.channel.as_deref(),
-            // One-off model and effort flags were not durable launch identity.
-            model: None,
-            effort: None,
-            budget: budget.as_deref(),
+            params: Some(&restart_params),
         },
     };
     let argv = rimz::harness::launch::exec_argv(&rimz::proc::rimz_exe(), &invocation);
@@ -232,15 +236,15 @@ fn restart_cell(
         .unwrap_or_default();
     let (replayed_args, replayed_mode) = replay_posture(
         std::mem::take(&mut agent_cell.args),
-        agent_cell.mode,
+        agent_cell.launch.mode,
         agent.mode,
         &permission_args,
     );
     agent_cell.args = replayed_args;
-    agent_cell.mode = replayed_mode;
-    agent_cell.profile.clone_from(&agent.profile);
-    agent_cell.role.clone_from(&agent.role);
-    agent_cell.budget.clone_from(&agent.budget);
+    agent_cell.launch.mode = replayed_mode;
+    agent_cell.launch.profile.clone_from(&agent.profile);
+    agent_cell.launch.role.clone_from(&agent.role);
+    agent_cell.launch.budget.clone_from(&agent.budget);
     Ok(cell)
 }
 
@@ -300,6 +304,7 @@ fn append_fresh_launch(
         agent.team.as_deref(),
         None,
         agent.channel.as_deref(),
+        None,
         None,
     )?;
     let request = requests
@@ -419,7 +424,12 @@ mod tests {
 
         let cell = resolve_restart_profile_cell("codex-plain", &launch, &machine.agents.commands)
             .expect("restart profile cell");
-        let Cell::Agent(rimz::harness::spec::AgentCell { args, model, .. }) = cell else {
+        let Cell::Agent(rimz::harness::spec::AgentCell {
+            args,
+            launch: rimz::agents::LaunchParams { model, .. },
+            ..
+        }) = cell
+        else {
             panic!("agent cell");
         };
 

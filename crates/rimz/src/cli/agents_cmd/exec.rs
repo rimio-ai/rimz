@@ -6,7 +6,8 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
     let run_context = run_exec_context(&args, &workspace)?;
-    let launch_identity = exec_launch_identity(&args)?;
+    let launch_params = launch_params(&args);
+    let launch_identity = exec_launch_identity(&args, &launch_params)?;
     let action = exec_action(&args);
     let entered_worktree = match args.worktree_path.as_deref() {
         Some(path) => match enter_worktree(path) {
@@ -31,7 +32,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .clone()
             .unwrap_or_else(|| workspace.worktree_root.clone()),
     };
-    let exec_invocation = exec_invocation(&args, action);
+    let exec_invocation = exec_invocation(&args, action, &launch_params);
     let process = rimz::harness::launch::compile_agent_process(
         &workspace.project_root,
         machine_config.harness.rtk,
@@ -106,6 +107,7 @@ pub(super) fn exec_action(args: &ExecArgs) -> rimz::harness::launch::ExecAction<
 pub(super) fn exec_invocation<'a>(
     args: &'a ExecArgs,
     action: rimz::harness::launch::ExecAction<'a>,
+    params: &'a rimz::agents::LaunchParams,
 ) -> rimz::harness::launch::ExecInvocation<'a> {
     rimz::harness::launch::ExecInvocation {
         kind: &args.kind,
@@ -117,16 +119,7 @@ pub(super) fn exec_invocation<'a>(
         identity: rimz::harness::launch::ExecIdentity {
             name: args.agent_name.as_deref(),
             name_explicit: args.agent_name_explicit,
-            profile: args.agent_profile.as_deref(),
-            mode: args.agent_mode,
-            role: args.agent_role.as_deref(),
-            team: args.agent_team.as_deref(),
-            launch_group: args.launch_group.as_deref(),
-            launch_ordinal: args.launch_ordinal,
-            channel: args.agent_channel.as_deref(),
-            model: args.agent_model.as_deref(),
-            effort: args.agent_effort.as_deref(),
-            budget: args.agent_budget.as_deref(),
+            params: Some(params),
             ..rimz::harness::launch::ExecIdentity::default()
         },
     }
@@ -433,7 +426,10 @@ fn run_exec_context(
     }))
 }
 
-pub(super) fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
+pub(super) fn exec_launch_identity(
+    args: &ExecArgs,
+    params: &rimz::agents::LaunchParams,
+) -> Result<Option<LaunchIdentity>> {
     match (args.launch_id.as_deref(), args.agent_name.as_deref()) {
         (None, None) => Ok(None),
         (Some(_), None) => bail!("--launch-id requires --agent-name"),
@@ -445,7 +441,7 @@ pub(super) fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdent
                 agent_id: AgentSessionId::from(launch_id),
                 name: name.to_owned(),
                 name_explicit: args.agent_name_explicit,
-                launch: launch_params(args),
+                launch: params.clone(),
                 run_id: args.run_id.clone(),
                 prompt: args.prompt.clone(),
             }))
