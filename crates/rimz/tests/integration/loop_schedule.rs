@@ -1430,6 +1430,13 @@ fn loop_add_rejects_invalid_action_shapes() {
         ),
         (
             vec![
+                "loop", "add", "until-in", "--agent", "claude", "--until", "1h", "--check", "true",
+                "--in", "15m", "--prompt", "x",
+            ],
+            "--until requires --every",
+        ),
+        (
+            vec![
                 "loop",
                 "add",
                 "until-action",
