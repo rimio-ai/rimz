@@ -707,8 +707,11 @@ fn failed_launch_event_does_not_resurrect_a_consumed_provisional() {
     ];
 
     let agents = reduce_agent_states(&events);
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id.as_str(), "real-session");
+    assert!(agents[0].ended_at.is_some());
     assert!(
-        agents.is_empty(),
+        agents.iter().all(|agent| agent.agent_id != "launch_a"),
         "late wrapper failure must not recreate a failed provisional card: {agents:#?}"
     );
 }
@@ -807,7 +810,7 @@ fn rebirth_registration_with_new_session_id_adopts_prior_named_card() {
 }
 
 #[test]
-fn ended_session_releases_card_name_for_later_launch() {
+fn ended_session_keeps_card_name_bound_and_blocks_colliding_provisional() {
     let events = vec![
         raw_launch(
             AgentLaunchState::Bound,
@@ -843,12 +846,15 @@ fn ended_session_releases_card_name_for_later_launch() {
 
     let agents = reduce_agent_states(&events);
     assert_eq!(agents.len(), 1);
-    let agent = &agents[0];
-    assert_eq!(agent.agent_id.as_str(), "launch_b");
-    assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
-    assert_eq!(
-        agent.pane.as_ref().map(|pane| pane.pane_id.to_string()),
-        Some("zellij:terminal_2".to_owned())
+    let ended = agents
+        .iter()
+        .find(|agent| agent.agent_id == "real-session")
+        .expect("retained ended session");
+    assert_eq!(ended.name.as_deref(), Some("lucid-atlas"));
+    assert!(ended.ended_at.is_some());
+    assert!(
+        agents.iter().all(|agent| agent.agent_id != "launch_b"),
+        "the retained name cannot ambiguously bind a second provisional card"
     );
 }
 

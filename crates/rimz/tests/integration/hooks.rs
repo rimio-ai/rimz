@@ -1332,7 +1332,7 @@ fn cursor_transcript_recovery_does_not_settle_a_new_active_turn() {
 }
 
 #[test]
-fn duplicate_cursor_session_end_is_idempotent_beyond_audit_tombstones() {
+fn duplicate_cursor_session_end_is_idempotent_beyond_audit_end_stamps() {
     let env = Env::new();
     let transcript_path = env.project_root.join("conv-cursor-end.jsonl");
     std::fs::write(
@@ -1450,7 +1450,7 @@ fn duplicate_cursor_session_end_is_idempotent_beyond_audit_tombstones() {
     assert_eq!(
         lifecycle_event_count(&env),
         3,
-        "sessionStart plus two audit tombstones remain durable",
+        "sessionStart plus two audit end observations remain durable",
     );
 }
 

@@ -69,11 +69,7 @@ fn assemble_snapshot(
     // Apply the same runtime liveness expel the live read does, so the
     // persisted `latest.json` matches what a reader would have projected —
     // never resurrecting a dead-pid agent.
-    let projection = RuntimeProjection::from_parts(
-        std::collections::BTreeSet::new(),
-        agents,
-        RuntimeScope::Runtime,
-    );
+    let projection = RuntimeProjection::from_parts(agents, RuntimeScope::Runtime);
     let mut snapshot =
         SidebarSnapshot::build_with_agents(paths.workspace_id.clone(), projection.agents, now);
     snapshot.reap_stale_sessions();
@@ -211,8 +207,21 @@ mod tests {
         // A pid that cannot be live (u32::MAX): the rollup derives a dead owner,
         // which the runtime expel must suppress.
         let dead = lifecycle(&workspace, "sess-dead", Some(u32::MAX));
+        let ended_start = lifecycle(&workspace, "sess-ended", None);
+        let ended = EventEnvelope::agent_lifecycle(
+            workspace.clone(),
+            "session",
+            "claude",
+            "SessionEnd",
+            &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("sess-ended")),
+                LifecycleSignal::Ended,
+            ),
+        );
         event_log::append(&paths.events_log, &alive).unwrap();
         event_log::append(&paths.events_log, &dead).unwrap();
+        event_log::append(&paths.events_log, &ended_start).unwrap();
+        event_log::append(&paths.events_log, &ended).unwrap();
 
         let snapshot = build_from(&paths).unwrap();
         let ids: Vec<&str> = snapshot
@@ -227,6 +236,10 @@ mod tests {
         assert!(
             !ids.contains(&"sess-dead"),
             "a dead-pid agent must be expelled so latest.json matches the live read: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"sess-ended"),
+            "an ended durable row must stay out of latest.json: {ids:?}"
         );
     }
 

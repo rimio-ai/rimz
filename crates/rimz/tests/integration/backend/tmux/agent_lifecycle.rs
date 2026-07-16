@@ -105,7 +105,7 @@ fn wait_for_path_state(path: &Path, exists: bool, message: &str) {
     panic!("{message}: {}", path.display());
 }
 
-fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
+fn wait_for_agent_end_observation(env: &Env, agent_id: &str) {
     let key = (AgentKind::new_unchecked("claude"), agent_id.into());
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -118,7 +118,7 @@ fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
         }
         thread::sleep(Duration::from_millis(25));
     }
-    panic!("agent.ended tombstone was not recorded for {agent_id}");
+    panic!("agent.ended observation was not recorded for {agent_id}");
 }
 
 fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {
@@ -257,7 +257,7 @@ fn closing_agent_tab_records_end_and_disposes_clean_worktree() {
             .contains(&workspace.session_name),
         "closing one tab must leave the room alive"
     );
-    wait_for_agent_tombstone(&env, agent_id);
+    wait_for_agent_end_observation(&env, agent_id);
     assert!(
         plan_from_env(&env).is_empty(),
         "closed agent is removed from resume plan",

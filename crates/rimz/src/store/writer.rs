@@ -79,7 +79,7 @@ fn invalidate_snapshot_caches(paths: &StatePaths, rollup: RollupInvalidation) ->
     Ok(())
 }
 
-/// Preserve every non-tombstoned agent within retention across log rotation.
+/// Preserve every agent within retention across log rotation, including ended rows.
 ///
 /// Rotation and soft reset are storage boundaries, so they keep the audit
 /// rollup's resumable identity even when an agent's runtime owner has exited.
@@ -541,9 +541,8 @@ fn allocate_agent_launch_identities(
     requests: &[AgentLaunchRequest],
     agents: &[crate::agents::AgentState],
 ) -> Result<Vec<AgentLaunchIdentity>> {
-    // Pet names are live-card handles, not permanent ids: ended cards release
-    // them so long-lived rooms do not grow a retired-name set. Kind ordinals
-    // stay monotonic in the reducer for history/script-stable references.
+    // Retained ended rows keep their names reserved so an address stays
+    // unambiguous until rotation prunes the row at the retention boundary.
     let mut taken: BTreeSet<String> = agents
         .iter()
         .filter_map(|agent| agent.name.clone())

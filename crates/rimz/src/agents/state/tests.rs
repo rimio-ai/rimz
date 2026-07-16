@@ -45,10 +45,12 @@ fn legacy_agent_pid_deserializes_to_runtime_owner() {
     assert_eq!(owner.subject_id, "sess-1");
     assert_eq!(owner.pid, 4242);
     assert_eq!(owner.process_start.as_deref(), Some("12345"));
+    assert_eq!(agent.ended_at, None);
 
     let encoded = serde_json::to_value(&agent).expect("encode");
     assert!(encoded.get("agent_pid").is_none());
     assert!(encoded.get("agent_process_start").is_none());
+    assert!(encoded.get("ended_at").is_none());
 }
 
 #[test]

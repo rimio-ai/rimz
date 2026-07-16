@@ -1,7 +1,7 @@
 //! The resumable event-log fold: the persisted rollup cache, its extent
 //! stamp, and the carryover that survives log rotation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -93,17 +93,11 @@ pub(crate) fn agent_rollup_with_carryover(
     .merged
 }
 
-pub(super) fn merge_agent_rollups_with_tombstones(
-    base: &[AgentState],
-    live: &[AgentState],
-    tombstones: &BTreeSet<(AgentKind, AgentSessionId)>,
-) -> Vec<AgentState> {
+pub(super) fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentState> {
     let mut map: BTreeMap<(AgentKind, AgentSessionId), AgentState> = BTreeMap::new();
     for entry in base {
         let key = (entry.kind.clone(), entry.agent_id.clone());
-        if !tombstones.contains(&key) {
-            map.insert(key, entry.clone());
-        }
+        map.insert(key, entry.clone());
     }
     for entry in live {
         let key = (entry.kind.clone(), entry.agent_id.clone());
@@ -121,36 +115,15 @@ pub(super) fn merge_agent_rollups_with_tombstones(
     map.into_values().collect()
 }
 
-fn agent_tombstones_for_decoded_events(
-    events: &[FoldEvent<'_>],
-) -> BTreeSet<(AgentKind, AgentSessionId)> {
-    let mut tombstones = BTreeSet::new();
-    for event in events {
-        if let EventKind::AgentLifecycle(payload) = &event.kind {
-            if !matches!(payload.observation.signal, LifecycleSignal::Ended) {
-                continue;
-            }
-            let Some(agent_id) = payload.observation.agent_id.clone() else {
-                continue;
-            };
-            tombstones.insert((
-                AgentKind::new_unchecked(event.envelope.source.clone()),
-                agent_id,
-            ));
-        }
-    }
-    tombstones
-}
-
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 12;
+const ROLLUP_CACHE_VERSION: u32 = 13;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
-/// the raw pre-projection fold map and this generation's tombstones, stamped
-/// with the log extent folded so far. Cache-class — reconstructible from the
-/// event log and the carryover at any time, so it renames atomically without
-/// fsync and any read failure falls back to the full fold.
+/// the raw pre-projection fold map stamped with the log extent folded so far.
+/// Cache-class — reconstructible from the event log and the carryover at any
+/// time, so it renames atomically without fsync and any read failure falls back
+/// to the full fold.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RollupCache {
     pub version: u32,
@@ -162,7 +135,6 @@ pub(crate) struct RollupCache {
     pub agent_identity: AgentIdentityState,
     #[serde(default)]
     pub saw_session_rebirth: bool,
-    pub tombstones: Vec<(AgentKind, AgentSessionId)>,
 }
 
 fn read_rollup_cache(path: &Path) -> Option<Arc<RollupCache>> {
@@ -199,7 +171,6 @@ pub(super) fn write_rollup_cache(path: &Path, cache: &RollupCache) -> Result<()>
 struct FoldedDelta {
     raw_agents: Vec<AgentState>,
     agent_identity: AgentIdentityState,
-    tombstones: BTreeSet<(AgentKind, AgentSessionId)>,
     saw_session_rebirth: bool,
     merged: Vec<AgentState>,
     resume_outcomes: Vec<ResumeOutcome>,
@@ -210,7 +181,6 @@ struct FoldedDelta {
 struct FoldDeltaSeed {
     agents: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     identity: AgentIdentityState,
-    tombstones: BTreeSet<(AgentKind, AgentSessionId)>,
     resume_outcomes: BTreeMap<(AgentKind, AgentSessionId), ResumeOutcome>,
     saw_session_rebirth: bool,
 }
@@ -226,22 +196,48 @@ fn fold_delta(
     stamp_compact_commands_in_agents(&mut carryover.agents, events);
     seed.saw_session_rebirth |= events_have_rebirth(events);
 
+    // An end can be the first event after rotation. Hydrate that key from the
+    // carryover before reducing so the partial lifecycle observation preserves
+    // the same identity and launch fields it would have kept without rotation.
+    for event in events {
+        let EventKind::AgentLifecycle(payload) = &event.kind else {
+            continue;
+        };
+        if !matches!(payload.observation.signal, LifecycleSignal::Ended) {
+            continue;
+        }
+        let Some(agent_id) = payload.observation.agent_id.clone() else {
+            continue;
+        };
+        let key = (
+            AgentKind::new_unchecked(event.envelope.source.clone()),
+            agent_id,
+        );
+        if seed.agents.contains_key(&key) {
+            continue;
+        }
+        if let Some(carried) = carryover
+            .agents
+            .iter()
+            .find(|agent| agent.kind == key.0 && agent.agent_id == key.1)
+        {
+            seed.agents.insert(key, carried.clone());
+        }
+    }
+
     let (map, mut agent_identity) =
         reduce_agent_states_seeded_with_identity(seed.agents, seed.identity, events);
     let resume_outcomes: Vec<ResumeOutcome> =
         reduce_resume_outcomes_seeded(seed.resume_outcomes, events, now)
             .into_values()
             .collect();
-    seed.tombstones
-        .extend(agent_tombstones_for_decoded_events(events));
     let mut raw_agents: Vec<AgentState> = map.into_values().collect();
     if seed.saw_session_rebirth {
         unstamp_for_rebirth(&mut carryover.agents);
         carryover.agent_identity = carryover.agent_identity.with_ordinals_reset();
         agent_identity = backfill_agent_identities(&mut raw_agents, agent_identity);
     }
-    let mut merged =
-        merge_agent_rollups_with_tombstones(&carryover.agents, &raw_agents, &seed.tombstones);
+    let mut merged = merge_agent_rollups(&carryover.agents, &raw_agents);
     let merged_resume_outcomes =
         merge_resume_outcomes(&carryover.resume_outcomes, &resume_outcomes, now);
     if seed.saw_session_rebirth {
@@ -251,7 +247,6 @@ fn fold_delta(
     FoldedDelta {
         raw_agents,
         agent_identity,
-        tombstones: seed.tombstones,
         saw_session_rebirth: seed.saw_session_rebirth,
         merged,
         resume_outcomes,
@@ -301,15 +296,12 @@ fn catch_up_from(
             resume_outcomes,
             agent_identity,
             saw_session_rebirth,
-            tombstones,
             ..
         }) => {
             let seed: BTreeMap<(AgentKind, AgentSessionId), AgentState> = raw_agents
                 .into_iter()
                 .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent))
                 .collect();
-            let tombstones: BTreeSet<(AgentKind, AgentSessionId)> =
-                tombstones.into_iter().collect();
             let resume_seed = resume_outcomes
                 .into_iter()
                 .map(|outcome| ((outcome.kind.clone(), outcome.agent_id.clone()), outcome))
@@ -318,7 +310,6 @@ fn catch_up_from(
                 FoldDeltaSeed {
                     agents: seed,
                     identity: agent_identity,
-                    tombstones,
                     resume_outcomes: resume_seed,
                     saw_session_rebirth,
                 },
@@ -348,7 +339,6 @@ fn catch_up_from(
         resume_outcomes: folded.resume_outcomes,
         agent_identity: folded.agent_identity,
         saw_session_rebirth: folded.saw_session_rebirth,
-        tombstones: folded.tombstones.into_iter().collect(),
     };
     Ok((refreshed, folded.merged, folded.merged_resume_outcomes))
 }
@@ -460,7 +450,6 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
             resume_outcomes: Vec::new(),
             agent_identity: carryover.agent_identity.without_consumed_launches(),
             saw_session_rebirth: false,
-            tombstones: Vec::new(),
         },
     )
 }

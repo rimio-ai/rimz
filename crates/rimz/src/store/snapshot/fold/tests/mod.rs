@@ -9,12 +9,6 @@ use crate::message::{DeliveryGate, MessageBody, MessageRecord, MessageStatus};
 use crate::store::event::{EventEnvelope, MessageEventMethod};
 use crate::store::snapshot::testkit::*;
 
-/// Test-local shorthand over [`merge_agent_rollups_with_tombstones`]
-/// with no tombstones in play.
-fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentState> {
-    merge_agent_rollups_with_tombstones(base, live, &BTreeSet::new())
-}
-
 fn recent(secs_ago: u64) -> jiff::Timestamp {
     jiff::Timestamp::now() - std::time::Duration::from_secs(secs_ago)
 }

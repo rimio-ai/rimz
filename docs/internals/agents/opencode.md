@@ -20,8 +20,8 @@ Native surface → internal mapping; the upstream hooks, bus payloads, SQLite sc
 | `session.idle` / `session.error` child | `SubagentStop` | lifecycle | `SubagentStopped { errored }` | child `session_id`, `parent_session_id` |
 | `experimental.session.compacting` | `session_compacting` | lifecycle | `Compacting` | leading compaction head |
 | `session.compacted` | `session_compacted` | lifecycle | `CompactionEnded { auto: None }` | clears the compaction head |
-| `session.deleted` root | `session_ended` | lifecycle | `Ended` → removed (`ends_session`) | `reason: "deleted"` |
-| `dispose` root sweep | `session_ended` | lifecycle | `Ended` → removed (`ends_session`) | `reason: "dispose"`; all tracked roots, bounded to 1.5 seconds overall |
+| `session.deleted` root | `session_ended` | lifecycle | `Ended` → stamps `ended_at`; runtime hides the retained row (`ends_session`) | `reason: "deleted"` |
+| `dispose` root sweep | `session_ended` | lifecycle | `Ended` → stamps `ended_at`; runtime hides the retained row (`ends_session`) | `reason: "dispose"`; all tracked roots, bounded to 1.5 seconds overall |
 | `permission.asked` bus event; legacy `permission.ask` hook | `permission_ask` | **awaiting-user** (`Permission`) | `AwaitingInput { Permission }` → `waiting` | permission name and matched patterns; the native prompt owns the answer |
 | `question.asked` | `question_ask` | **awaiting-user** (`Question`) | `AwaitingInput { Question }` → `waiting` | full questions, headers, options, multi-select/custom flags, joined title, and request id |
 | `permission.replied` | `permission_replied` | lifecycle | `ToolUsed { mutates: false, edits: false }` → clears `waiting` | request id and `once`/`always`/`reject` answer recorded |

@@ -594,7 +594,7 @@ fn failed_supervised_run_retries_with_failure_context() {
     let mut completed = retry.clone();
     completed.status = RunStatus::Completed;
     completed.last_message = Some("fixed".to_owned());
-    tombstone_retry_agents(&env, &store);
+    end_retry_agents(&env, &store);
     finish_run(&store, &mut completed);
 
     let out = child.wait_with_output().expect("wait retrying print");
@@ -972,10 +972,10 @@ fn git_ok(cwd: &std::path::Path, args: &[&str]) -> bool {
 }
 
 #[cfg(unix)]
-fn tombstone_retry_agents(env: &Env, store: &rimz::Store) {
+fn end_retry_agents(env: &Env, store: &rimz::Store) {
     let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
     // The trace backend opens no real wrapper process, so drain the provisional
-    // launch cards an exiting wrapper would tombstone before cleanup.
+    // launch cards an exiting wrapper would stamp ended before cleanup.
     for _ in 0..3 {
         let agents = store.snapshot().expect("snapshot agents").agents;
         if agents.is_empty() {
@@ -994,10 +994,10 @@ fn tombstone_retry_agents(env: &Env, store: &rimz::Store) {
                     "rimz.agent-ended",
                     &observation,
                 ))
-                .expect("tombstone retry agent");
+                .expect("stamp retry agent ended");
         }
     }
-    panic!("retry launch cards did not tombstone");
+    panic!("retry launch cards did not end");
 }
 
 #[cfg(unix)]
@@ -1228,7 +1228,7 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
 }
 
 #[test]
-fn agents_show_converges_stale_pidless_audit_card_and_keeps_fresh_context() {
+fn agents_show_retains_ended_pidless_audit_card_and_keeps_fresh_context() {
     let env = Env::new();
     let store = env.store();
     std::fs::write(store.paths().locks_dir.join("dead-reap.stamp"), b"")
@@ -1285,20 +1285,20 @@ fn agents_show_converges_stale_pidless_audit_card_and_keeps_fresh_context() {
 
     let after_reap = env
         .rimz()
-        .args(["agents", "show", "lucid-atlas"])
+        .args(["agents", "show", "lucid-atlas", "--json"])
         .output()
         .expect("spawn agents show after reap");
     assert!(
-        !after_reap.status.success(),
-        "tombstoned stale card should no longer resolve\nstdout:\n{}\nstderr:\n{}",
+        after_reap.status.success(),
+        "ended audit card should remain inspectable\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&after_reap.stdout),
         String::from_utf8_lossy(&after_reap.stderr)
     );
-    let after_reap_stderr = String::from_utf8_lossy(&after_reap.stderr);
-    assert!(
-        after_reap_stderr.contains("no agent matches") && after_reap_stderr.contains("lucid-atlas"),
-        "show should report the converged card as unknown: {after_reap_stderr}"
-    );
+    let after_reap: serde_json::Value =
+        serde_json::from_slice(&after_reap.stdout).expect("show json after reap");
+    assert_eq!(after_reap["agent"]["agent_id"], "sess-stale");
+    assert!(after_reap["agent"]["ended_at"].is_string());
+    assert_eq!(after_reap["stale"], true);
 
     // A fresh session remains runtime-visible, and its rich statusline sidecar
     // still reaches the `show --json` payload.

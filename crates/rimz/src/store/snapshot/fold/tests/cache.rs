@@ -33,7 +33,6 @@ fn write_rollup_cache_emits_compact_json_and_sweeps_stale_temp_siblings() {
             resume_outcomes: Vec::new(),
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
-            tombstones: Vec::new(),
         },
     )
     .unwrap();
@@ -80,7 +79,6 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
         resume_outcomes: Vec::new(),
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
-        tombstones: Vec::new(),
     };
     let assert_cold = |label: &str| {
         let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
@@ -120,6 +118,54 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
 }
 
 #[test]
+fn version_twelve_tombstone_cache_refolds_ended_row_from_live_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    for event in [
+        lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            "resumable",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+        lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionEnd",
+            "resumable",
+            lifecycle::LifecycleSignal::Ended,
+        ),
+    ] {
+        event_log::append(&paths.events_log, &event).unwrap();
+    }
+    let full_len = std::fs::metadata(&paths.events_log).unwrap().len();
+    std::fs::write(
+        &paths.rollup_cache,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 12,
+            "extent": { "generation": 0, "offset": full_len },
+            "raw_agents": [],
+            "resume_outcomes": [],
+            "agent_identity": {},
+            "saw_session_rebirth": false,
+            "tombstones": [["claude", "resumable"]],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let (cache, agents, _) = catch_up_rollup(&paths).unwrap();
+
+    assert_eq!(cache.version, ROLLUP_CACHE_VERSION);
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id, "resumable");
+    assert!(agents[0].ended_at.is_some());
+}
+
+#[test]
 fn rollup_parse_cache_hits_on_identity_and_misses_on_republish() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollup.json");
@@ -133,7 +179,6 @@ fn rollup_parse_cache_hits_on_identity_and_misses_on_republish() {
         resume_outcomes: Vec::new(),
         agent_identity: AgentIdentityState::default(),
         saw_session_rebirth: false,
-        tombstones: Vec::new(),
     };
     write_rollup_cache(&path, &cache_with("aaaa")).unwrap();
     let first = read_rollup_cache(&path).unwrap();
@@ -205,7 +250,6 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
             resume_outcomes: Vec::new(),
             agent_identity: AgentIdentityState::default(),
             saw_session_rebirth: false,
-            tombstones: Vec::new(),
         },
     )
     .unwrap();

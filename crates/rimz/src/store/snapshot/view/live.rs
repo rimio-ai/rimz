@@ -475,6 +475,7 @@ fn empty_local_agent(observation: &LocalSessionObservation) -> AgentState {
         launch_group: None,
         launch_ordinal: None,
         channel: None,
+        ended_at: None,
         status: AgentStatus::Idle,
         phase: TurnPhase::Idle,
         pane: None,

@@ -19,7 +19,7 @@ GitHub Copilot CLI reports through native camelCase command hooks installed as o
 | child `agentStop` | lifecycle | `SubagentStopped` after transcript correlation | the prior child relation supplies the parent after the first join |
 | `preCompact` | lifecycle | `Compacting` | opens the compaction bracket |
 | `errorOccurred` | lifecycle enrichment | — | non-recoverable errors become display-only turn-error markers |
-| `sessionEnd` | lifecycle | `Ended` | tombstones the session |
+| `sessionEnd` | lifecycle | `Ended` | stamps `ended_at`; runtime hides the retained resumable row |
 
 Copilot publishes no post-compaction hook. `preCompact` opens the bracket and the shared state machine closes it on the next lifecycle signal; the display window is the missed-edge backstop. This makes compaction partial rather than fully wired.
 
@@ -87,7 +87,7 @@ Realtime cost is partial and estimated. The statusline's cumulative token scopes
 
 ## Deferred integration
 
-Wired now: the turn lifecycle (`sessionStart`/`userPromptSubmitted`/`agentStop`), transcript-correlated child start/stop, permission and batched/singular `ask_user` asks with immediate post-tool completion, mutating-tool activity and the acting-phase edge, the `preCompact` bracket, the non-recoverable `errorOccurred` marker, `sessionEnd` tombstoning, two-file hook/statusline install and reversible uninstall, resolved-model statusline occupancy and rich session context with OTel fallback, estimated live cost, interactive and prompt-seeded launch with permission-mode and model/effort presets, `--resume` restore, provider-native transcript/history/final output, the host-safe login probe, and named monthly plan quotas. Deferred: child tool/permission detail, dollar/extra-credit and historical spend, official billing reports, and remote control.
+Wired now: the turn lifecycle (`sessionStart`/`userPromptSubmitted`/`agentStop`), transcript-correlated child start/stop, permission and batched/singular `ask_user` asks with immediate post-tool completion, mutating-tool activity and the acting-phase edge, the `preCompact` bracket, the non-recoverable `errorOccurred` marker, `sessionEnd` durable end stamping, two-file hook/statusline install and reversible uninstall, resolved-model statusline occupancy and rich session context with OTel fallback, estimated live cost, interactive and prompt-seeded launch with permission-mode and model/effort presets, `--resume` restore, provider-native transcript/history/final output, the host-safe login probe, and named monthly plan quotas. Deferred: child tool/permission detail, dollar/extra-credit and historical spend, official billing reports, and remote control.
 
 A logged-in Copilot CLI 1.0.70 prompt-mode capture verified successful-turn ordering, `agentStop.transcriptPath`, visible transcript message shapes, metadata-only OTel `chat` spans, resolved/requested model fields, token fields, and asynchronous exporter shutdown. Permission variants, `ask_user` options, resume PID ancestry, multi-turn interactive streaming, and remote sessions remain live-verification gaps.
 

@@ -3,7 +3,7 @@ use std::cell::Cell;
 use serde_json::json;
 
 use super::*;
-use crate::agents::AgentState;
+use crate::agents::{AgentLifecycleObservation, AgentState, LifecycleSignal};
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
 use crate::store::event::MessageEventMethod;
@@ -427,7 +427,7 @@ fn rotate_event_log_writes_carryover_before_archiving_active_log() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn rotation_carryover_keeps_recent_dead_runtime_owner_agents() {
+fn rotation_carryover_keeps_live_and_recently_ended_agents() {
     let dir = tempfile::tempdir().expect("tempdir");
     let workspace_id = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
@@ -470,6 +470,20 @@ fn rotation_carryover_keeps_recent_dead_runtime_owner_agents() {
         &launch("sess-dead", "solid-lumen", u32::MAX),
     )
     .expect("append dead launch");
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            "rimz-test",
+            "claude",
+            "ReapedDead",
+            &AgentLifecycleObservation::new(
+                Some(AgentSessionId::from("sess-dead")),
+                LifecycleSignal::Ended,
+            ),
+        ),
+    )
+    .expect("append end observation");
 
     store.rotate_event_log(1, None).expect("rotate event log");
 
@@ -485,7 +499,13 @@ fn rotation_carryover_keeps_recent_dead_runtime_owner_agents() {
     );
     assert!(
         ids.contains(&"sess-dead"),
-        "recent dead-owner identity must survive rotation carryover: {ids:?}"
+        "recent ended identity must survive rotation carryover: {ids:?}"
+    );
+    assert!(
+        carryover
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == "sess-dead" && agent.ended_at.is_some())
     );
 }
 
@@ -499,6 +519,7 @@ fn prune_carryover_drops_old_agents_without_live_owner() {
     let mut old = agent_state("claude", "old", Some("lucid-atlas"));
     old.last_seen = jiff::Timestamp::now() - Duration::from_secs(30 * 86_400);
     old.last_activity = old.last_seen;
+    old.ended_at = Some(old.last_seen);
     let fresh = agent_state("claude", "fresh", Some("solid-lumen"));
     snapshot::write_carryover(
         &paths.agents_carryover,

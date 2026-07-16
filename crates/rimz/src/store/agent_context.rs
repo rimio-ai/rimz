@@ -734,7 +734,7 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
     CONTEXT_PARSE_CACHE.with(|cache| sidecar::read_all(&runtime.agent_context_dir, cache))
 }
 
-/// Remove a session's sidecar (a `SessionEnd` tombstone, or reap). Best-effort:
+/// Remove a session's sidecar on `SessionEnd` or reap. Best-effort:
 /// a missing file is success.
 pub fn remove(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> std::io::Result<()> {
     let _lock = RecordLock::acquire(runtime, kind, agent_id).map_err(|error| match error {

@@ -486,7 +486,7 @@ fn record_worktree_gone_tombstones(
             &observation,
         );
         if let Err(err) = store.append_event(&event) {
-            tracing::warn!(workspace = %workspace_id, kind = %kind, agent_id = %agent_id, error = %err, "resume: could not tombstone missing-worktree agent");
+            tracing::warn!(workspace = %workspace_id, kind = %kind, agent_id = %agent_id, error = %err, "resume: could not stamp missing-worktree agent ended");
         }
     }
 }

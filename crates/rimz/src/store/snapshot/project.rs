@@ -206,11 +206,6 @@ fn reduce_lifecycle_event(
     let event_parent_agent_id =
         non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
     let event_task = non_empty_string(observation.task.as_deref());
-    if matches!(&signal, lifecycle::LifecycleSignal::Ended) {
-        identity.release_key(&key);
-        map.remove(&key);
-        return;
-    }
     let prior = map.get(&key).or(provisional_prior.as_ref());
     if let Some(reason) = quarantine_reason(
         &signal,
@@ -466,6 +461,7 @@ fn carried_base(
         launch_group: prior.and_then(|state| state.launch_group.clone()),
         launch_ordinal: prior.and_then(|state| state.launch_ordinal),
         channel: prior.and_then(|state| state.channel.clone()),
+        ended_at: None,
         status: AgentStatus::Idle,
         phase: lifecycle::TurnPhase::Idle,
         pane: prior.and_then(|state| state.pane.clone()),
@@ -551,6 +547,8 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         input.event.timestamp,
     );
     fold_launch_params(&mut state, &input.observation.launch);
+    let ended_at =
+        matches!(&input.signal, lifecycle::LifecycleSignal::Ended).then_some(input.event.timestamp);
     let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
     let enrichment = enrichment_projection(input.observation, input.prior, input.kind);
     // Established lineage stays authoritative. The explicit adoption event is
@@ -578,6 +576,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     state.name = Some(input.card_identity.name);
     state.name_explicit = input.card_identity.name_explicit;
     state.kind_ordinal = Some(input.card_identity.kind_ordinal);
+    state.ended_at = ended_at;
     state.status = lifecycle.status;
     state.phase = lifecycle.phase;
     state.pane = pane_projection(input.observation, input.prior);

@@ -459,6 +459,11 @@ pub struct AgentState {
     /// basename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// When this session explicitly ended or the store proved its root process
+    /// dead. Runtime views hide stamped rows; audit views retain them so an
+    /// explicit resume can recover the provider session within retention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<Timestamp>,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
@@ -638,6 +643,8 @@ struct AgentStateWire {
     launch_group: Option<String>,
     launch_ordinal: Option<u32>,
     channel: Option<String>,
+    #[serde(default)]
+    ended_at: Option<Timestamp>,
     status: AgentStatus,
     #[serde(default)]
     phase: TurnPhase,
@@ -714,6 +721,7 @@ impl From<AgentStateWire> for AgentState {
             launch_group: wire.launch_group,
             launch_ordinal: wire.launch_ordinal,
             channel: wire.channel,
+            ended_at: wire.ended_at,
             status: wire.status,
             phase: wire.phase,
             pane: wire.pane,
@@ -787,6 +795,7 @@ impl AgentState {
             launch_group: None,
             launch_ordinal: None,
             channel: None,
+            ended_at: None,
             status,
             phase: match status {
                 AgentStatus::Running => TurnPhase::Reasoning,

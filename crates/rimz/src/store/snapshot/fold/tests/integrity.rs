@@ -58,7 +58,7 @@ proptest::proptest! {
     /// The keystone fold invariant, generalized from the hand-built case
     /// above: over arbitrary lifecycle sequences and an arbitrary
     /// prefix/delta split, resuming from a persisted base equals folding
-    /// the whole log cold — agents, tombstones, and extent alike.
+    /// the whole log cold — agents and extent alike.
     #[test]
     fn fold_seed_delta_equals_fold_empty_all_over_arbitrary_sequences(
         seq in proptest::collection::vec((0usize..2, 0usize..4, 0usize..3), 1..12),
@@ -125,16 +125,6 @@ proptest::proptest! {
             sorted_value(cold_cache.raw_agents)
         );
         prop_assert_eq!(incremental_cache.extent, cold_cache.extent);
-        prop_assert_eq!(
-            incremental_cache
-                .tombstones
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>(),
-            cold_cache
-                .tombstones
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-        );
     }
 }
 
@@ -151,7 +141,7 @@ fn rebirth_boundary_unstamps_carryover_agents() {
     assert_eq!(
         merged.len(),
         1,
-        "the boundary unstamps, it never tombstones"
+        "the boundary unstamps, it never ends a session"
     );
     assert!(
         merged[0].pane.is_none(),

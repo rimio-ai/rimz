@@ -392,7 +392,7 @@ impl EventEnvelope {
     /// exists — the agent rollup fold clears them all at this point in the
     /// log ([`crate::store::snapshot`]'s reducer), keeping a prior
     /// incarnation's session off a reused pane id. The sessions themselves
-    /// stay: the boundary unstamps, it never tombstones.
+    /// stay: the boundary unstamps, it never ends a session.
     pub fn session_rebirth(workspace_id: WorkspaceId, session_name: impl Into<String>) -> Self {
         Self::new(
             workspace_id,

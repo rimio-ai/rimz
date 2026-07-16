@@ -157,9 +157,8 @@ pub enum LifecycleSignal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         auto: Option<bool>,
     },
-    /// The session ended (Claude `SessionEnd`/`offline`). Handled as removal by
-    /// the reducer's tombstone path, so it is never routed through [`step`];
-    /// the variant exists only so an adapter can name the event.
+    /// The session ended (Claude `SessionEnd`/`offline`). The reducer stamps
+    /// the durable row while [`step`] preserves its last lifecycle state.
     Ended,
     /// The agent's pane disappeared because its mux session died. Retained so
     /// old `rimz.agent-lost` records remain parseable during log replay.
@@ -302,9 +301,9 @@ pub fn step(
     let was_compacting = prev.is_some_and(|p| p.compacting);
     let mut kind = TransitionKind::Normal;
 
-    // `Ended` is handled by the tombstone reducer and `Lost` is kept for
-    // backward-compatible log replay. If either reaches the state machine, keep
-    // prior state intact and flag the no-op.
+    // `Ended` stamps row state in the reducer and `Lost` is kept for
+    // backward-compatible log replay. Both preserve the lifecycle state and
+    // report an ignored transition.
     if matches!(signal, LifecycleSignal::Ended | LifecycleSignal::Lost) {
         return Transition {
             next: LifecycleState {

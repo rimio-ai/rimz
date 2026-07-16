@@ -758,8 +758,8 @@ fn message_add_does_not_resolve_reaped_dead_owner_agent() {
             .expect("audit projection")
             .agents
             .iter()
-            .all(|agent| agent.agent_id != "sess-audit-reviewer"),
-        "write-path reap should tombstone the dead-owner agent before audit fallback"
+            .any(|agent| { agent.agent_id == "sess-audit-reviewer" && agent.ended_at.is_some() }),
+        "write-path reap should retain an ended audit row before address fallback"
     );
 
     let out = env

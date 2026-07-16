@@ -37,6 +37,7 @@ pub fn agent_state(kind: &str, agent_id: &str, at: jiff::Timestamp) -> crate::ag
         launch_group: None,
         launch_ordinal: None,
         channel: None,
+        ended_at: None,
         status: crate::agents::AgentStatus::Idle,
         phase: crate::agents::TurnPhase::Idle,
         pane: None,

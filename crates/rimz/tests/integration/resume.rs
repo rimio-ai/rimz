@@ -387,14 +387,11 @@ fn an_agent_ended_trace_is_not_resumed() {
         .expect("append ended");
 
     let plan = plan_from_rollup(&h);
-    assert!(
-        plan.is_empty(),
-        "ended agents leave the resume candidate set"
-    );
+    assert!(plan.is_empty(), "rebirth auto-resume excludes ended agents");
 }
 
 #[test]
-fn missing_worktree_candidate_is_tombstoned_not_reported() {
+fn missing_worktree_candidate_is_stamped_ended_not_reported() {
     let h = Harness::new();
     let obs = registered(
         "sess-claude",
@@ -432,9 +429,9 @@ fn missing_worktree_candidate_is_tombstoned_not_reported() {
     let ended = AgentLifecycleObservation::new(Some("sess-claude".into()), LifecycleSignal::Ended);
     h.store
         .append_event(&lifecycle(&h, "claude", "rimz.worktree-gone", &ended))
-        .expect("append tombstone");
+        .expect("append end observation");
     assert!(
         plan_from_rollup(&h).is_empty(),
-        "a follow-up plan sees the durable tombstone"
+        "a follow-up rebirth plan sees the durable end stamp"
     );
 }

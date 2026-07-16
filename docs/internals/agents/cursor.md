@@ -17,7 +17,7 @@ Cursor runs as `agent` or its `cursor-agent` alias; `cursor` names the IDE and i
 | `subagentStart` | `SubagentStarted` | exact child/parent IDs, type, task, child model, branch |
 | `subagentStop` | `SubagentStopped` | exact child/parent IDs, status, task fallback, child transcript |
 | `preCompact` | `Compacting` | context percentage and window |
-| `sessionEnd` | `Ended` | tombstones the session |
+| `sessionEnd` | `Ended` | stamps `ended_at`; runtime hides the retained resumable row |
 
 Live verification against Cursor CLI `2026.07.09-a3815c0` shows that `/clear` fires no hook: the next `beforeSubmitPrompt` is the first event carrying the new `conversation_id`, in the same process and pane. Cursor therefore uses the shared `FollowLatest` same-pane policy to collapse each superseded root conversation. On process exit, `sessionEnd` still names the conversation that the process started with; later conversations without their own end hook leave through same-process supersession or dead-process reaping.
 

@@ -108,7 +108,7 @@ fn closing_agent_pane_records_end_trace_when_session_survives_without_sidebar() 
             .contains(&workspace.session_name),
         "closing one agent pane must leave the room alive",
     );
-    wait_for_agent_tombstone(&env, agent_id);
+    wait_for_agent_end_observation(&env, agent_id);
 
     let after = plan_from_env(&env);
     assert!(
@@ -270,7 +270,7 @@ fn wait_for_path(path: &Path, message: &str) {
     panic!("{message}: {}", path.display());
 }
 
-fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
+fn wait_for_agent_end_observation(env: &Env, agent_id: &str) {
     let key = (
         rimz::ids::AgentKind::new_unchecked("claude"),
         agent_id.into(),
@@ -286,7 +286,7 @@ fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
-    panic!("agent.ended tombstone was not recorded for {agent_id}");
+    panic!("agent.ended observation was not recorded for {agent_id}");
 }
 
 fn plan_from_env(env: &Env) -> rimz::harness::resume::ResumePlan {

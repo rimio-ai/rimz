@@ -16,7 +16,7 @@ Native event → internal mapping. The table says *which native events are wired
 | `SubagentStop`                | lifecycle     | `SubagentStopped { errored: false }` - child row; upstream supplies no outcome field, so the adapter closes the bracket without inventing failure; keeps the type label and parent link |
 | `Stop`                        | lifecycle     | `TurnEnded { errored, parked_on_background }` - refresh context/tokens; pending `background_tasks` or `session_crons` paint a `⋯ bg` marker |
 | `StopFailure`                 | lifecycle     | no lifecycle envelope - writes `AgentContext.turn_error`; rollup stays `running`                                             |
-| `SessionEnd`                  | lifecycle     | `Ended` → removed (`ends_session`)                                                                                           |
+| `SessionEnd`                  | lifecycle     | `Ended` → stamps `ended_at`; runtime hides the retained resumable row (`ends_session`)                                      |
 | `Notification`                | lifecycle     | none (silent)                                                                                                                |
 | `PreToolUse` (broad)          | lifecycle     | `ToolUsed { mutates: false, edits: false }` as proof-of-work only; persisted when it reconciles a resting row, clears waiting, or closes a compaction bracket |
 | `PostToolUse`                 | lifecycle     | `ToolUsed { mutates, edits }` for every tool; non-mutating tools use proof-of-work persistence, including answered asks; `edits` for a file-writing tool; context/tokens |

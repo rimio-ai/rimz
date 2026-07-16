@@ -22,7 +22,7 @@ The permission path observes Amp's own UI without joining its decision chain. `a
 
 `agent.end` carries a three-way `status`: `done` folds to a clean `TurnEnded`, while both `error` and `cancelled` currently fold to `TurnEnded { errored: true }` and settle the row to `failed`. The shared lifecycle now has `TurnInterrupted`, used by captured Cursor and Pi native aborts, so Amp can adopt the idle cancellation landing once its plugin fixture pins `cancelled` as user cancellation rather than a broader provider-failure bucket. See [Deferred edges](#deferred-edges).
 
-Amp has no session-end, notification, compaction, or interactive subagent events. Pane liveness plus the rollup reaper derive session removal, and turn-end plus permission waiting plus the stall window cover the attention-bearing portion of idle. Automatic compaction has no manual command or lifecycle bracket.
+Amp has no session-end, notification, compaction, or interactive subagent events. Pane liveness plus the rollup reaper derive the durable end stamp and runtime hiding, and turn-end plus permission waiting plus the stall window cover the attention-bearing portion of idle. Automatic compaction has no manual command or lifecycle bracket.
 
 ## Context and transcript
 

@@ -69,9 +69,21 @@ fn live_winner_backfills_trimmed_carryover_enrichment() {
 }
 
 #[test]
-fn carryover_session_end_tombstones_older_agent_state() {
+fn carryover_session_end_stamps_and_preserves_resumable_identity() {
     let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-    let carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
+    let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
+    carried.name = Some("lucid-atlas".to_owned());
+    carried.name_explicit = true;
+    carried.kind_ordinal = Some(7);
+    carried.worktree_path = Some("/repo/forge".to_owned());
+    carried.worktree_branch = Some("feature/forge".to_owned());
+    carried.role = Some("planner".to_owned());
+    carried.team = Some("forge".to_owned());
+    carried.launch_group = Some("launch_forge".to_owned());
+    carried.launch_ordinal = Some(0);
+    carried.channel = Some("forge".to_owned());
+    carried.profile = Some("claude-planner".to_owned());
+    carried.transcript_path = Some("/provider/agent-1.jsonl".to_owned());
     let ended = lifecycle_at(
         &workspace,
         "claude",
@@ -80,12 +92,25 @@ fn carryover_session_end_tombstones_older_agent_state() {
         lifecycle::LifecycleSignal::Ended,
     );
 
-    let merged = agent_rollup_with_carryover(&[ended], vec![carried]);
+    let ended_at = ended.timestamp;
+    let merged = agent_rollup_with_carryover(&[ended], vec![carried.clone()]);
 
-    assert!(
-        merged.is_empty(),
-        "active-log SessionEnd must tombstone older carryover state"
-    );
+    assert_eq!(merged.len(), 1);
+    let retained = &merged[0];
+    assert_eq!(retained.ended_at, Some(ended_at));
+    assert_eq!(retained.last_seen, ended_at);
+    assert_eq!(retained.name, carried.name);
+    assert_eq!(retained.name_explicit, carried.name_explicit);
+    assert_eq!(retained.kind_ordinal, carried.kind_ordinal);
+    assert_eq!(retained.worktree_path, carried.worktree_path);
+    assert_eq!(retained.worktree_branch, carried.worktree_branch);
+    assert_eq!(retained.role, carried.role);
+    assert_eq!(retained.team, carried.team);
+    assert_eq!(retained.launch_group, carried.launch_group);
+    assert_eq!(retained.launch_ordinal, carried.launch_ordinal);
+    assert_eq!(retained.channel, carried.channel);
+    assert_eq!(retained.profile, carried.profile);
+    assert_eq!(retained.transcript_path, carried.transcript_path);
 }
 
 #[test]

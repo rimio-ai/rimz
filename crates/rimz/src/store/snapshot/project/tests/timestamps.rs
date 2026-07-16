@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn registered_at_stamps_first_event_and_restamps_after_tombstone() {
+fn registered_at_stamps_first_event_and_survives_end_and_restart() {
     let start = raw_lifecycle_at(
         "claude",
         0,
@@ -30,6 +30,12 @@ fn registered_at_stamps_first_event_and_restamps_after_tombstone() {
         10,
         serde_json::json!({ "event_name": "SessionEnd", "agent_id": "s1", "signal": { "signal": "ended" } }),
     );
+    let ended = reduce_agent_states(&[start.clone(), end.clone()]);
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0].registered_at, Some(born));
+    assert_eq!(ended[0].last_seen, end.timestamp);
+    assert_eq!(ended[0].ended_at, Some(end.timestamp));
+
     let reborn = raw_lifecycle_at(
         "claude",
         20,
@@ -39,11 +45,12 @@ fn registered_at_stamps_first_event_and_restamps_after_tombstone() {
 
     let agents = reduce_agent_states(&[start, end, reborn]);
 
-    // The one exception to set-once: `Ended` tombstones the key, so a later
-    // event under the same id is a genuinely new session and stamps fresh —
-    // the spawn key names the session, not the id's whole history.
+    // Ending retains the durable session row, so a later lifecycle event under
+    // the same provider id clears the end stamp without replacing its identity.
     assert_eq!(agents.len(), 1);
-    assert_eq!(agents[0].registered_at, Some(reborn_ts));
+    assert_eq!(agents[0].registered_at, Some(born));
+    assert_eq!(agents[0].last_seen, reborn_ts);
+    assert_eq!(agents[0].ended_at, None);
 }
 
 #[test]

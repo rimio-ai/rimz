@@ -314,15 +314,23 @@ fn cohort_resume_uses_filtered_worktree_even_when_older_than_same_team_elsewhere
 }
 
 #[test]
-fn cohort_resume_includes_cleanly_ended_members() {
-    let mut ended_agent = agent("claude", "ended", "/code/forge", Some("forge"), 1);
-    ended_agent.team = Some("forge".to_owned());
-    ended_agent.role = Some("planner".to_owned());
+fn cohort_resume_includes_every_ended_session_backed_member() {
+    let mut planner = agent("claude", "planner", "/code/forge", Some("forge"), 1);
+    planner.team = Some("forge".to_owned());
+    planner.role = Some("planner".to_owned());
+    planner.ended_at = Some(planner.last_seen);
+    let mut coder = agent("codex", "coder", "/code/forge", Some("forge"), 2);
+    coder.team = Some("forge".to_owned());
+    coder.role = Some("coder".to_owned());
+    coder.ended_at = Some(coder.last_seen);
 
     let plan = plan_cohort_resume(
-        &[ended_agent],
+        &[planner, coder],
         dead,
-        &[cohort_cell("claude", Some("planner"))],
+        &[
+            cohort_cell("claude", Some("planner")),
+            cohort_cell("codex", Some("coder")),
+        ],
         Some("forge"),
         |_| true,
         |_| true,
@@ -331,7 +339,7 @@ fn cohort_resume_includes_cleanly_ended_members() {
 
     assert_eq!(
         plan.seeds.iter().map(resume_id).collect::<Vec<_>>(),
-        [Some("ended")]
+        [Some("planner"), Some("coder")]
     );
 }
 
@@ -786,7 +794,7 @@ fn dedups_paneless_records_by_provider_session_identity() {
 }
 
 #[test]
-fn tombstones_a_missing_worktree() {
+fn stamps_a_missing_worktree_session_ended() {
     let agents = vec![agent("claude", "a1", "/code/gone", Some("dead-branch"), 1)];
     let plan = plan_resume(
         &agents,

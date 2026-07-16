@@ -263,9 +263,8 @@ impl Store {
         &self,
         scope: runtime::RuntimeScope,
     ) -> Result<runtime::RuntimeProjection> {
-        let (cache, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
-        let ended = cache.tombstones.into_iter().collect();
-        Ok(runtime::RuntimeProjection::from_parts(ended, agents, scope))
+        let (_, agents, _) = snapshot::catch_up_rollup(&self.inner.paths)?;
+        Ok(runtime::RuntimeProjection::from_parts(agents, scope))
     }
 
     /// Build a fresh snapshot in memory (no disk write). Lock-free and

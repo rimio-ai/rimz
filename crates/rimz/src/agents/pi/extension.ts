@@ -384,8 +384,8 @@ export default function rimz(pi) {
       }
     }
     // A /reload tears down and re-registers the SAME session id; both
-    // children are fire-and-forget, so a tombstone racing the re-register
-    // could drop the fresh row. Skip the tombstone — the reloaded
+    // children are fire-and-forget, so an end signal racing the re-register
+    // could hide the fresh row. Skip the end signal — the reloaded
     // extension's session_start re-registers in place. quit/new/resume/fork
     // genuinely end this session.
     if (ev?.reason === "reload") return;

@@ -31,8 +31,8 @@ impl Store {
     pub(crate) fn reap_dead_sessions(&self) -> Result<usize> {
         // The persisted roster protects crash-recovery candidates until room
         // rebirth consumes it. The remaining scan stays lock-free: a live
-        // same-id session that races the append re-inserts itself on its next
-        // lifecycle event because tombstones only suppress older rollup state.
+        // same-id session that races the append clears its end stamp on its
+        // next lifecycle event.
         let projection = self.runtime_projection(RuntimeScope::Audit)?;
         let protected = live_roster::read(&self.inner.paths.live_roster)
             .map(|roster| roster.agents)
@@ -42,6 +42,7 @@ impl Store {
             .agents
             .iter()
             .filter(|agent| agent.parent_agent_id.is_none())
+            .filter(|agent| agent.ended_at.is_none())
             .filter(|agent| !protected.contains(&(agent.kind.clone(), agent.agent_id.clone())))
             .filter_map(|agent| {
                 let event_name = if runtime::agent_liveness(agent) == AgentLiveness::Dead {
@@ -52,7 +53,9 @@ impl Store {
                 {
                     "ReapedStale"
                 } else if projection.agents.iter().any(|newer| {
-                    newer.parent_agent_id.is_none() && session_death::supersedes(agent, newer)
+                    newer.parent_agent_id.is_none()
+                        && newer.ended_at.is_none()
+                        && session_death::supersedes(agent, newer)
                 }) {
                     "ReapedSuperseded"
                 } else {
@@ -207,7 +210,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn reap_dead_sessions_tombstones_store_provable_roots() {
+    fn reap_dead_sessions_stamps_store_provable_roots_once() {
         let (_dir, store, workspace_id) = store();
         let now = Timestamp::now();
         let mut stale_ownerless = lifecycle(&workspace_id, "stale-ownerless", None, None);
@@ -250,18 +253,24 @@ mod tests {
             .map(|agent| agent.agent_id.as_str())
             .collect::<Vec<_>>();
         assert!(
-            !ids.contains(&"dead-root")
-                && !ids.contains(&"stale-ownerless")
-                && !ids.contains(&"stale-daemon")
-                && !ids.contains(&"cleared"),
-            "dead, stale, daemon-owned, and superseded roots should be tombstoned: {ids:?}"
-        );
-        assert!(
             ids.contains(&"fresh-ownerless")
                 && ids.contains(&"live-root")
-                && ids.contains(&"replacement"),
-            "fresh and live roots should survive: {ids:?}"
+                && ids.contains(&"replacement")
+                && ids.contains(&"dead-root")
+                && ids.contains(&"stale-ownerless")
+                && ids.contains(&"stale-daemon")
+                && ids.contains(&"cleared"),
+            "audit retains active and ended roots: {ids:?}"
         );
+        for agent_id in ["dead-root", "stale-ownerless", "stale-daemon", "cleared"] {
+            assert!(
+                projection
+                    .agents
+                    .iter()
+                    .any(|agent| agent.agent_id == agent_id && agent.ended_at.is_some()),
+                "missing end stamp for {agent_id}"
+            );
+        }
         let events = store.read_events().expect("read reap events");
         for (agent_id, event_name) in [
             ("dead-root", "ReapedDead"),
@@ -278,7 +287,7 @@ mod tests {
                                 && payload.observation.agent_id.as_deref() == Some(agent_id)
                     )
                 }),
-                "missing {event_name} tombstone for {agent_id}"
+                "missing {event_name} end stamp event for {agent_id}"
             );
         }
         assert_eq!(
@@ -305,13 +314,21 @@ mod tests {
         let after_a_to_b = store
             .runtime_projection(RuntimeScope::Audit)
             .expect("projection after A to B");
-        assert_eq!(
+        assert!(
             after_a_to_b
                 .agents
                 .iter()
-                .map(|agent| agent.agent_id.as_str())
-                .collect::<Vec<_>>(),
-            ["T-b"]
+                .any(|agent| { agent.agent_id == "T-a" && agent.ended_at.is_some() }),
+            "expected T-a ended in {:#?}",
+            after_a_to_b.agents
+        );
+        assert!(
+            after_a_to_b
+                .agents
+                .iter()
+                .any(|agent| { agent.agent_id == "T-b" && agent.ended_at.is_none() }),
+            "expected T-b active in {:#?}",
+            after_a_to_b.agents
         );
 
         let mut thread_a = amp_focus_lifecycle(&workspace_id, "T-a", "%1");
@@ -322,13 +339,17 @@ mod tests {
         let after_b_to_a = store
             .runtime_projection(RuntimeScope::Audit)
             .expect("projection after B to A");
-        assert_eq!(
+        assert!(
             after_b_to_a
                 .agents
                 .iter()
-                .map(|agent| agent.agent_id.as_str())
-                .collect::<Vec<_>>(),
-            ["T-a"]
+                .any(|agent| { agent.agent_id == "T-a" && agent.ended_at.is_none() })
+        );
+        assert!(
+            after_b_to_a
+                .agents
+                .iter()
+                .any(|agent| { agent.agent_id == "T-b" && agent.ended_at.is_some() })
         );
     }
 
@@ -363,7 +384,12 @@ mod tests {
         let reaped = store
             .runtime_projection(RuntimeScope::Audit)
             .expect("reaped projection");
-        assert!(!reaped.agents.iter().any(|agent| agent.agent_id == key.1));
+        assert!(
+            reaped
+                .agents
+                .iter()
+                .any(|agent| agent.agent_id == key.1 && agent.ended_at.is_some())
+        );
         assert!(reaped.ended.contains(&key));
     }
 

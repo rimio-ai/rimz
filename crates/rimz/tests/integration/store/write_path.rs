@@ -140,7 +140,12 @@ fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
         .store
         .runtime_projection(RuntimeScope::Audit)
         .expect("reaped audit projection");
-    assert!(!reaped.agents.iter().any(|agent| agent.agent_id == key.1));
+    assert!(
+        reaped
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == key.1 && agent.ended_at.is_some())
+    );
     assert!(reaped.ended.contains(&key));
 
     let events = h.store.read_events().expect("events");
@@ -155,12 +160,12 @@ fn publishing_reap_preserves_rostered_crash_candidate_until_boundary() {
                 false
             }
         }),
-        "post-boundary publishing commit should append the reconstructed SessionEnd tombstone"
+        "post-boundary publishing commit should append the reconstructed SessionEnd observation"
     );
 }
 
 #[test]
-fn launch_allocation_reuses_name_after_stale_rollup_converges() {
+fn launch_allocation_reserves_ended_name_until_retention_prunes_it() {
     let h = crate::common::Harness::new();
     let mut ghost = named_codex_lifecycle(&h, "SessionStart", "ghost-session", "ghost-pet");
     ghost.timestamp = jiff::Timestamp::now() - std::time::Duration::from_secs(4 * 60 * 60);
@@ -202,10 +207,19 @@ fn launch_allocation_reuses_name_after_stale_rollup_converges() {
 
     assert_eq!(batch.identities().len(), 1);
     let launched = &batch.identities()[0];
-    assert_eq!(
+    assert_ne!(
         launched.name, "ghost-pet",
-        "durably reaped ghosts no longer reserve names in the audit rollup"
+        "a retained ended row keeps its handle unambiguous"
     );
+    let audit = h
+        .store
+        .runtime_projection(RuntimeScope::Audit)
+        .expect("audit projection");
+    assert!(audit.agents.iter().any(|agent| {
+        agent.agent_id == "ghost-session"
+            && agent.name.as_deref() == Some("ghost-pet")
+            && agent.ended_at.is_some()
+    }));
     let snapshot = h.store.snapshot().expect("snapshot with launch");
     let card = snapshot
         .agents

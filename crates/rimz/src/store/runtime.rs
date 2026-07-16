@@ -30,11 +30,15 @@ pub struct RuntimeProjection {
 }
 
 impl RuntimeProjection {
-    pub fn from_parts(
-        ended: BTreeSet<(AgentKind, AgentSessionId)>,
-        agents: Vec<AgentState>,
-        scope: RuntimeScope,
-    ) -> Self {
+    pub fn from_parts(agents: Vec<AgentState>, scope: RuntimeScope) -> Self {
+        let ended = agents
+            .iter()
+            .filter_map(|agent| {
+                agent
+                    .ended_at
+                    .map(|_| (agent.kind.clone(), agent.agent_id.clone()))
+            })
+            .collect();
         match scope {
             RuntimeScope::Audit => Self { ended, agents },
             RuntimeScope::Runtime => Self {
@@ -53,7 +57,7 @@ impl RuntimeProjection {
 /// liveness — see `docs/internals/agents/model.md`); a known owner that is known-dead
 /// suppresses the stale overlay.
 fn agent_is_runtime_visible(agent: &AgentState) -> bool {
-    agent.runtime_owner.as_ref().is_none_or(owner_is_live)
+    agent.ended_at.is_none() && agent.runtime_owner.as_ref().is_none_or(owner_is_live)
 }
 
 pub fn current_process_owner(
@@ -210,14 +214,33 @@ mod tests {
             agents
         };
 
-        let projection =
-            RuntimeProjection::from_parts(BTreeSet::new(), agents, RuntimeScope::Runtime);
+        let projection = RuntimeProjection::from_parts(agents, RuntimeScope::Runtime);
 
         assert_eq!(
             projection.agents.len(),
             1,
             "unknown pid abstains while known-dead owners suppress stale overlays"
         );
+    }
+
+    #[test]
+    fn runtime_projection_hides_ended_rows_while_audit_retains_them() {
+        let active = agent(None);
+        let mut ended = agent(None);
+        ended.agent_id = AgentSessionId::from("sess-ended");
+        ended.ended_at = Some(Timestamp::UNIX_EPOCH);
+        let key = (ended.kind.clone(), ended.agent_id.clone());
+
+        let runtime = RuntimeProjection::from_parts(
+            vec![active.clone(), ended.clone()],
+            RuntimeScope::Runtime,
+        );
+        assert_eq!(runtime.agents, vec![active]);
+        assert_eq!(runtime.ended, [key.clone()].into_iter().collect());
+
+        let audit = RuntimeProjection::from_parts(vec![ended.clone()], RuntimeScope::Audit);
+        assert_eq!(audit.agents, vec![ended]);
+        assert_eq!(audit.ended, [key].into_iter().collect());
     }
 
     #[test]

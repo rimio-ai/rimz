@@ -420,7 +420,7 @@ fn durable_target_agents(store: &Store) -> Result<Vec<AgentState>> {
         .runtime_projection(crate::RuntimeScope::Audit)?
         .agents
         .into_iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter(|agent| agent.parent_agent_id.is_none() && agent.ended_at.is_none())
         .collect())
 }
 

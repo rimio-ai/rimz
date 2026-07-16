@@ -14,7 +14,7 @@ Factory Droid reports basic lifecycle through native `settings.json` hooks. RimZ
 | `PostToolUse` | `ToolUsed { mutates, edits }` | `Create`, `Edit`, and `ApplyPatch` edit; `Execute` mutates without ending the reasoning phase. |
 | `Stop` | `TurnEnded { errored: false, parked_on_background: false }` | Droid exposes no structured failure or background-work field. The displayed-status ladder and stall window surface failures without guessing from silence. |
 | `PreCompact` | `Compacting` | Opens the compaction bracket; `trigger` is retained by the typed wire but the close cannot report it. |
-| `SessionEnd` | `Ended` | Eagerly tombstones the session. |
+| `SessionEnd` | `Ended` | Eagerly stamps `ended_at`; runtime hides the retained resumable row. |
 | `Notification` | — | Silent idle enrichment: either a permission attention nudge or 60-second input idle, with no structured discriminator. |
 
 Droid draws native permission and question prompts, but its stock hooks expose no permission request, question, plan-approval, or answer event. `Notification` carries only display text, so RimZ does not invent an `AwaitingInput` signal from it. The validated local transcript instead projects an active `AskUser` tool call as a display-only native wait; it creates no durable ask and keeps Droid's pane as the answer surface. `SubagentStop` similarly carries no child identity, so the adapter does not install it or render child rows. Ctrl+C has no guaranteed `Stop`; pane liveness and the stall window settle that path.

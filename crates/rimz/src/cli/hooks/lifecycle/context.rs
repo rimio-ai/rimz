@@ -19,8 +19,8 @@ pub(super) fn manage_agent_context(ctx: AgentContextHook<'_>) {
         turn_ended,
         observed_turn_error,
     } = context;
-    // Tombstone the session's statusline context sidecar so it cannot pin stale
-    // enrichment to a session the rollup has dropped.
+    // Remove the session's statusline context sidecar so a retained ended row
+    // cannot rejoin stale enrichment.
     if agent.ends_session(event_name)
         && let Err(err) = rimz::store::agent_context::remove(
             store.runtime_paths(),

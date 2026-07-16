@@ -157,7 +157,7 @@ fn settle_after_exit(
         record_own_agent_end_trace(workspace, args);
     }
     if should_drop_to_shell(args, abrupt) {
-        // The trace above tombstones the agent; gc reclaims any worktree later.
+        // The trace above stamps the agent ended; gc reclaims any worktree later.
         drop_to_shell_after_agent_exit(args, &outcome.status, startup_failure);
     }
     if let Some(path) = entered_worktree
@@ -540,12 +540,12 @@ fn record_own_agent_end_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecAr
             agent_id,
             rimz::agents::LifecycleSignal::Ended,
             "rimz.agent-ended",
-            "agent exit tombstone",
+            "agent exit end stamp",
         ),
-        Ok(None) => tracing::debug!("agent exit produced no pane binding to tombstone"),
+        Ok(None) => tracing::debug!("agent exit produced no pane binding to stamp ended"),
         Err(err) => tracing::debug!(
             error = %err,
-            "could not resolve agent exit tombstone",
+            "could not resolve agent exit end stamp",
         ),
     }
 }
@@ -555,10 +555,10 @@ fn resolve_own_agent_end_trace(
     args: &ExecArgs,
 ) -> Result<Option<(AgentKind, AgentSessionId)>> {
     if let Some(pane_id) = rimz::mux::ambient_pane_id() {
-        let store = open_store(workspace).context("opening store for agent exit tombstone")?;
+        let store = open_store(workspace).context("opening store for agent exit end stamp")?;
         let projection = store
             .runtime_projection(rimz::RuntimeScope::Audit)
-            .context("reading audit projection for agent exit tombstone")?;
+            .context("reading audit projection for agent exit end stamp")?;
         let pane = rimz::pane::PaneRef::from_id(pane_id);
         if let Some(agent) =
             rimz::store::snapshot::stamped_agent_for_pane(&pane, &projection.agents)
@@ -569,7 +569,7 @@ fn resolve_own_agent_end_trace(
     }
     // A resumed pane owns the resumed session and can safely fall back to its
     // argv id. A fork's provider-assigned id is unknown here; falling back to
-    // the source id would tombstone the original session when the fork exits.
+    // the source id would stamp the original session ended when the fork exits.
     Ok(args.resume.as_ref().map(|session_id| {
         (
             AgentKind::new_unchecked(args.kind.clone()),
